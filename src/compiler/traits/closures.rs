@@ -138,7 +138,12 @@ impl ValidatedTraitWorld {
             self.validate_ty_metadata_with(ty, env, 0, &mut replays)?;
         }
         if let Some(receipt) = closure.result_receipt() {
-            let expected_result = if receipt.argument_origin().is_some() {
+            let expected_result = if receipt.is_projected_input() {
+                charged(
+                    &self.budget,
+                    receipt.projected_result(closure.params(), &self.budget),
+                )?
+            } else if receipt.argument_origin().is_some() {
                 charged(
                     &self.budget,
                     receipt.realize_result(

@@ -337,6 +337,7 @@ impl CarrierEffectTable {
     }
     /// Reuse the exact universal-body ingress. An unproved empty-looking value
     /// never reaches this path, and only an owned stored-element row can vanish.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn empty_result(
         &self,
         target: &super::ir::Callee,
@@ -345,8 +346,9 @@ impl CarrierEffectTable {
         view: &super::traits::CarrierContractView,
         signature: &super::ir::Signature,
         location: &super::ir::CarrierLocation,
+        caller_validated: bool,
     ) -> Result<bool, FactsError> {
-        let Some(proof) = self.lookup_proof(target, caller, facts, view, false)? else {
+        let Some(proof) = self.lookup_proof(target, caller, facts, view, caller_validated)? else {
             return Ok(false);
         };
         let Some(empty) = &proof.empty_result else {
@@ -5578,15 +5580,66 @@ mod tests {
                     &parent.facts,
                     &view,
                     &signature,
-                    &location
+                    &location,
+                    false
                 )
                 .unwrap()
+        );
+        caller.validate_provenance(&parent.facts, &budget).unwrap();
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &location,
+                    true
+                )
+                .unwrap()
+        );
+        let mut changed_caller = caller.clone();
+        changed_caller.result = Ty::Bool;
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &changed_caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &location,
+                    false
+                )
+                .is_err()
+        );
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &caller,
+                    template.facts(),
+                    &view,
+                    &signature,
+                    &location,
+                    false
+                )
+                .is_err()
         );
         let mut wrong = signature.clone();
         wrong.result = Ty::Bool;
         assert!(
             table
-                .empty_result(&callee, &caller, &parent.facts, &view, &wrong, &location)
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &wrong,
+                    &location,
+                    false
+                )
                 .is_err()
         );
         let mut wrong = location.clone();
@@ -5596,7 +5649,15 @@ mod tests {
         ]));
         assert!(
             table
-                .empty_result(&callee, &caller, &parent.facts, &view, &signature, &wrong)
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &wrong,
+                    false
+                )
                 .is_err()
         );
         budget
@@ -5610,7 +5671,23 @@ mod tests {
                     &parent.facts,
                     &view,
                     &signature,
-                    &location
+                    &location,
+                    false
+                )
+                .unwrap_err()
+                .is_resource()
+        );
+        budget.poison_ledger_for_tests();
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &location,
+                    true
                 )
                 .unwrap_err()
                 .is_resource()

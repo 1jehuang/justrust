@@ -1,5 +1,5 @@
-//! Exact straight-line required-call result receipts, owned by the parent.
-//! This slice deliberately does not infer fixed or nested reference contracts.
+//! Exact straight-line result origins, sealed by the original parent.
+//! Projected borrows retain only input occurrences, never inferred captures.
 use super::super::type_check::Checker;
 use super::*;
 #[cfg(test)]
@@ -77,6 +77,54 @@ impl Checker<'_> {
         if locations.is_empty() {
             return Ok(None);
         }
+        if let Some(tail) = body.tail
+            && matches!(
+                self.exprs.get(tail.0).map(|e| &e.kind),
+                Some(ir::ExprKind::Borrow { .. })
+            )
+        {
+            let facts = self
+                .facts()
+                .validated()
+                .ok_or("projected closure result requires canonical facts")?;
+            let (declaration, borrow, place, argument, depth) = argument_borrow_origin(
+                &self.exprs,
+                &self.locals,
+                prefix,
+                &body.statements,
+                tuple,
+                tail,
+                facts,
+            )?;
+            if !body.statements.is_empty() {
+                return Err(
+                    "unsupported: projected closure result requires a straight-line body".into(),
+                );
+            }
+            if declaration.is_some() {
+                return Err("projected closure result changed borrow occurrence".into());
+            }
+            let receipt = ir::ClosureResultReceipt::projected_input(
+                owner,
+                provider,
+                site,
+                tail,
+                argument,
+                tuple,
+                borrow,
+                place,
+                depth,
+                &plan.budget,
+            )?;
+            let Some(ir::Ty::Tuple(params)) = self.locals.get(tuple.0).map(|local| &local.ty)
+            else {
+                return Err("projected closure result lost canonical argument tuple".into());
+            };
+            if receipt.projected_result(params, &plan.budget)? != *result {
+                return Err("projected closure result differs from exact input field type".into());
+            }
+            return Ok(Some(Arc::new(receipt)));
+        }
         if matches!(result, ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent } if matches!(referent.as_ref(), ir::Ty::Str))
         {
             let tail = body.tail.ok_or("closure argument result has no tail")?;
@@ -84,7 +132,7 @@ impl Checker<'_> {
                 .facts()
                 .validated()
                 .ok_or("closure argument result requires canonical facts")?;
-            let (declaration, borrow, place, argument, depth) = argument_str_origin(
+            let (declaration, borrow, place, argument, depth) = argument_borrow_origin(
                 &self.exprs,
                 &self.locals,
                 prefix,
@@ -110,7 +158,7 @@ impl Checker<'_> {
                 provider,
                 site,
                 tail,
-                declaration,
+                declaration.ok_or("closure argument call origin is missing")?,
                 argument,
                 place.local,
                 tuple,
@@ -216,7 +264,7 @@ pub(in crate::compiler) fn validate_source(
             );
         }
         budget.charge_work(source.call_evidence.len())?;
-        let (declaration, borrow, place, argument, depth) = argument_str_origin(
+        let (declaration, borrow, place, argument, depth) = argument_borrow_origin(
             &source.exprs,
             &source.locals,
             &source.body.statements,
@@ -226,9 +274,33 @@ pub(in crate::compiler) fn validate_source(
             facts,
         )?;
         let Some(ir::Callee::Direct(expected_call)) = receipt.argument_callee(budget)? else {
+            if receipt.is_projected_input() && declaration.is_none() {
+                if borrow != origin.borrow
+                    || place != origin.place
+                    || place.local != origin.local
+                    || argument != origin.argument
+                    || depth != origin.depth
+                    || source.params[1] != origin.tuple
+                    || borrow != receipt.tail()
+                {
+                    return Err("projected closure result changed exact input occurrence".into());
+                }
+                let expected = receipt.projected_result(closure.params(), budget)?;
+                if expected != source.result
+                    || source
+                        .exprs
+                        .get(borrow.0)
+                        .is_none_or(|expr| expr.ty != expected)
+                {
+                    return Err(
+                        "projected closure result changed canonical input field type".into(),
+                    );
+                }
+                return Ok(());
+            }
             return Err("closure argument result lost its exact direct callee".into());
         };
-        if expected_call.declaration != declaration
+        if Some(expected_call.declaration) != declaration
             || !expected_call.type_args.is_empty()
             || borrow != origin.borrow
             || place != origin.place
@@ -317,11 +389,11 @@ pub(in crate::compiler) fn validate_source(
     Ok(())
 }
 
-/// Deliberately bounded: a checked direct shared-reference call whose receiver
-/// borrows a field reached exclusively through a real shared input parameter.
+/// A direct shared borrow, or checked shared-str call borrowing that place,
+/// reached exclusively through a real shared input parameter.
 /// No captured storage, local-owned temporary, static or inferred type match
 /// can provide this origin.
-fn argument_str_origin(
+fn argument_borrow_origin(
     exprs: &[ir::TypedExpr],
     locals: &[ir::LocalDecl],
     prefix: &[ir::TypedStmt],
@@ -329,7 +401,7 @@ fn argument_str_origin(
     tuple: ir::LocalId,
     tail: ir::ExprId,
     facts: &tr::ValidatedFacts,
-) -> Result<(ir::DeclId, ir::ExprId, ir::Place, usize, u8), String> {
+) -> Result<(Option<ir::DeclId>, ir::ExprId, ir::Place, usize, u8), String> {
     let budget = facts.budget();
     budget.charge_work(
         prefix
@@ -337,53 +409,60 @@ fn argument_str_origin(
             .checked_add(1)
             .ok_or("closure argument origin work overflow")?,
     )?;
-    let Some(ir::TypedExpr {
-        kind:
-            ir::ExprKind::Call {
-                target: target @ ir::Callee::Direct(call),
-                args,
-                signature,
-                ..
-            },
-        ..
-    }) = exprs.get(tail.0)
-    else {
-        return Err(
-            "unsupported: closure reference result needs an exact direct call origin".into(),
-        );
+    let (declaration, borrow) = if matches!(
+        exprs.get(tail.0).map(|e| &e.kind),
+        Some(ir::ExprKind::Borrow { .. })
+    ) {
+        (None, tail)
+    } else {
+        let Some(ir::TypedExpr {
+            kind:
+                ir::ExprKind::Call {
+                    target: target @ ir::Callee::Direct(call),
+                    args,
+                    signature,
+                    ..
+                },
+            ..
+        }) = exprs.get(tail.0)
+        else {
+            return Err(
+                "unsupported: closure reference result needs an exact direct call origin".into(),
+            );
+        };
+        if !call.type_args.is_empty()
+            || args.len() != 1
+            || !matches!(&signature.result, ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent } if matches!(referent.as_ref(), ir::Ty::Str))
+        {
+            return Err("unsupported: closure argument reference result call shape".into());
+        }
+        facts
+            .validate_signature(ir::SignatureSubject::Call(target), signature)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        let view = facts
+            .carrier_contract(ir::SignatureSubject::Call(target))
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        view.validate_for(facts)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        budget.retain_bytes(2 * std::mem::size_of::<usize>())?;
+        let root = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        let expected = ir::InputCarrier {
+            param: 0,
+            location: root.clone(),
+        };
+        if view.contract().results.len() != 1
+            || view.contract().results[0].location != root
+            || view.contract().results[0].sources.as_ref() != [expected]
+        {
+            return Err(
+                "closure argument result lacks an exact checked receiver return contract".into(),
+            );
+        }
+        (Some(call.declaration), args[0])
     };
-    if !call.type_args.is_empty()
-        || args.len() != 1
-        || !matches!(&signature.result, ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent } if matches!(referent.as_ref(), ir::Ty::Str))
-    {
-        return Err("unsupported: closure argument reference result call shape".into());
-    }
-    facts
-        .validate_signature(ir::SignatureSubject::Call(target), signature)
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    let view = facts
-        .carrier_contract(ir::SignatureSubject::Call(target))
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    view.validate_for(facts)
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    budget.retain_bytes(2 * std::mem::size_of::<usize>())?;
-    let root = ir::CarrierLocation {
-        path: ir::CarrierPath(Arc::from([])),
-        channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
-    };
-    let expected = ir::InputCarrier {
-        param: 0,
-        location: root.clone(),
-    };
-    if view.contract().results.len() != 1
-        || view.contract().results[0].location != root
-        || view.contract().results[0].sources.as_ref() != [expected]
-    {
-        return Err(
-            "closure argument result lacks an exact checked receiver return contract".into(),
-        );
-    }
-    let borrow = args[0];
     let Some(ir::TypedExpr {
         kind:
             ir::ExprKind::Borrow {
@@ -489,5 +568,5 @@ fn argument_str_origin(
             .checked_mul(std::mem::size_of::<ir::Projection>())
             .ok_or("closure argument projection allocation overflow")?,
     )?;
-    Ok((call.declaration, borrow, place.clone(), argument, depth))
+    Ok((declaration, borrow, place.clone(), argument, depth))
 }

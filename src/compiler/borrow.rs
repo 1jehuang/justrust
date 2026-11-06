@@ -5498,7 +5498,29 @@ impl CarrierBuilder<'_, '_> {
                     self.authority.clone(),
                     view.as_ref(),
                 ) {
-                match table.empty_result(&target, self.f, &facts, view, &signature, &location) {
+                let caller_validated = match self.function.clone() {
+                    Some(function) if std::ptr::eq(Arc::as_ptr(&function), self.f) => {
+                        match self.ensure_provenance(&function, &facts) {
+                            Ok(()) => true,
+                            Err(message)
+                                if message.contains("limit") || message.contains("exhaust") =>
+                            {
+                                return Err(Exhausted);
+                            }
+                            Err(_) => false,
+                        }
+                    }
+                    _ => false,
+                };
+                match table.empty_result(
+                    &target,
+                    self.f,
+                    &facts,
+                    view,
+                    &signature,
+                    &location,
+                    caller_validated,
+                ) {
                     Ok(empty) => empty,
                     Err(error) if error.is_resource() => return Err(Exhausted),
                     Err(error) => {
@@ -8107,17 +8129,26 @@ impl BodyValidationReceipt {
                 &mut false,
             );
         }
-        // This local flag is not authority: the exact constructor-issued typed
-        // receipt above is. The existing guard still rechecks actual subject,
-        // signature, location and facts.validate_signature on every result.
-        result_flow_problem(
-            Some(view),
-            Some(facts),
-            ir::SignatureSubject::Body,
-            signature,
-            location,
-            &mut true,
-        )
+        // The constructor validated every result row against this exact
+        // immutable function, view, facts and signature before issuing its
+        // private witness. Reuse that proof only for an original canonical
+        // location. Reconstructing the declaration signature here on every
+        // dataflow visit repeats the already-proved module/token traversal.
+        for row in self.view.contract().results.iter() {
+            self.facts
+                .budget()
+                .charge_work(add(
+                    row.location.path.0.len(),
+                    add(location.path.0.len(), 1)?,
+                )?)
+                .map_err(|_| Exhausted)?;
+            if row.location == *location {
+                return Ok(None);
+            }
+        }
+        Ok(Some(Problem::Invalid(
+            "body replay result location was not validated by its constructor".into(),
+        )))
     }
 }
 
@@ -9724,6 +9755,24 @@ mod parameter_equality_tests {
     }
 
     #[test]
+    fn body_receipt_changed_constructor_signature_never_issues_reuse() {
+        let (template, _) = body_receipt_fixture();
+        let mut changed = template.function().as_ref().clone();
+        changed.result = Ty::Bool;
+        let result = Plan::build_validated(
+            &Arc::new(changed),
+            template.facts(),
+            None,
+            &mut Budget::new(32_000_000),
+            128 * 1024 * 1024,
+        );
+        if let Ok(plan) = result {
+            assert!(!plan.problems.is_empty());
+            assert!(plan.body_validation.is_none());
+        }
+    }
+
+    #[test]
     fn body_receipt_exact_foreign_signature_location_and_missing_controls() {
         let (template, mut plan) = body_receipt_fixture();
         let receipt = plan.body_validation.as_ref().unwrap();
@@ -9848,17 +9897,17 @@ mod parameter_equality_tests {
                 // authority merely by pointing a receipt at fresh facts.
                 plan.body_validation.as_mut().unwrap().facts = foreign.facts().clone();
             }
-            let mut held = None;
             if control == 2 {
-                held = Some(
-                    ledger
-                        .reserve_bytes(ledger.limits().bytes - before.bytes)
-                        .unwrap(),
-                );
+                // Exact immutable replay allocates no scratch. Exhaust its
+                // actual metered work rather than assuming reconstruction
+                // must allocate declaration metadata again.
+                ledger
+                    .charge_work(ledger.limits().work - before.work)
+                    .unwrap();
                 let full = ledger.usage_snapshot();
                 assert!(full.first_failure.is_none());
                 assert!(!full.poisoned);
-                assert_eq!(full.bytes, ledger.limits().bytes);
+                assert_eq!(full.work, ledger.limits().work);
             } else if control == 3 {
                 ledger.poison_ledger_for_tests();
                 assert!(ledger.usage_snapshot().poisoned);
@@ -9879,7 +9928,7 @@ mod parameter_equality_tests {
                 2 => {
                     assert!(result.is_err());
                     let failure = ledger.first_resource_failure().unwrap();
-                    assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+                    assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
                     assert_eq!(failure.used, failure.limit);
                 }
                 3 => {
@@ -9899,7 +9948,6 @@ mod parameter_equality_tests {
                 }
                 _ => unreachable!(),
             }
-            drop(held);
             drop(plan);
             // Neither receipt drop nor the new reuse refunds retained evidence.
             assert!(ledger.usage_snapshot().bytes >= before.bytes);

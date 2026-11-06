@@ -56,6 +56,95 @@ fn closure_shared_argument_results_match_stock() {
 }
 
 #[test]
+fn closure_projected_input_results_match_stock() {
+    oracle::check(
+        "closure_projected_input_result",
+        &[
+            Case {
+                name: "noncopy_two_fields_keep_exact_projection",
+                source: "struct Item{first:String,second:String}fn main(){let items=vec![Item{first:String::from(\"apple\"),second:String::from(\"pear\")},Item{first:String::from(\"plum\"),second:String::from(\"fig\")}];let first:Vec<&String>=items.iter().map(|i|&i.first).collect();let second:Vec<&String>=items.iter().map(|i|&i.second).collect();println!(\"{} {} {} {}\",first[0],second[0],first[1],second[1]);}",
+                expect: Expect::Run("apple pear plum fig\n"),
+            },
+            Case {
+                name: "inner_shared_input_outlives_temporary_outer_iterator",
+                source: "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let names:Vec<&String>;{let refs=vec![&item];names=refs.iter().map(|i|&i.name).collect();}println!(\"{}\",names[0]);}",
+                expect: Expect::Run("apple\n"),
+            },
+            Case {
+                name: "unused_owned_argument_field_cannot_escape",
+                source: "struct Item{name:String}fn unused(){let items=vec![Item{name:String::from(\"apple\")}];let names:Vec<&String>=items.into_iter().map(|i|&i.name).collect();println!(\"{}\",names[0]);}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "projected_result_cannot_escape_original_owner",
+                source: "struct Item{name:String}fn main(){let names:Vec<&String>;{let items=vec![Item{name:String::from(\"apple\")}];names=items.iter().map(|i|&i.name).collect();}println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "projected_result_prevents_owner_mutation",
+                source: "struct Item{name:String}fn main(){let mut items=vec![Item{name:String::from(\"apple\")}];let names:Vec<&String>=items.iter().map(|i|&i.name).collect();items.clear();println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "unused_projected_local_cannot_escape",
+                source: "struct Item{name:String}fn unused(){let item=Item{name:String::from(\"apple\")};let items=vec![&item];let names:Vec<&String>=items.iter().map(|i|{let local=Item{name:String::from(\"pear\")}; &local.name}).collect();println!(\"{}\",names[0]);}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn projected_input_authority_does_not_admit_escaping_captured_storage() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const SOURCE: &str = "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let items=vec![&item];let names:Vec<&String>;{let foreign=Item{name:String::from(\"pear\")};names=items.iter().map(|i|&foreign.name).collect();}println!(\"{}\",names[0]);}";
+    let compiler = oracle::pinned_stock::stock_rustc();
+    oracle::pinned_stock::verify_compiler(std::path::Path::new(&compiler)).unwrap();
+    let mut stock = Command::new(compiler)
+        .args([
+            "--edition=2024",
+            "--crate-name",
+            "projected_capture_escape",
+            "--emit=metadata",
+            "-o",
+            "/dev/null",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    stock
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(SOURCE.as_bytes())
+        .unwrap();
+    let stock = stock.wait_with_output().unwrap();
+    assert!(!stock.status.success());
+    assert!(String::from_utf8_lossy(&stock.stderr).contains("E0597"));
+    // Capture result contracts are deliberately unsupported, not input origins.
+    // Do not count that support limit as a completed semantic borrow proof.
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let failure =
+                justrust_engine::compiler::compile_observed(SOURCE.into(), workers, check_only)
+                    .err()
+                    .expect("captured reference result must not be admitted");
+            assert!(
+                failure.to_string().contains(
+                    "unsupported: closure reference result originates in capture or local storage"
+                ),
+                "{failure}"
+            );
+            assert!(failure.resource_usage.first_failure.is_none());
+        }
+    }
+}
+
+#[test]
 fn stored_vector_reference_elements_retain_source_loans() {
     oracle::check(
         "stored-vector-reference-loans",

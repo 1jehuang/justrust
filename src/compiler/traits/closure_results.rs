@@ -195,19 +195,6 @@ impl ValidatedTraitWorld {
                     "closure argument result is outside the actual tuple carrier domain",
                 ));
             }
-            let callee =
-                charged(&self.budget, receipt.argument_callee(&self.budget))?.ok_or_else(|| {
-                    FactsError::invalid(
-                        &self.budget,
-                        "closure argument result lacks checked source callee",
-                    )
-                })?;
-            let Callee::Direct(target) = &callee else {
-                unreachable!()
-            };
-            let proof = self.discharge_direct(target, facts)?;
-            let view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
-            view.validate_for(facts)?;
             charged(
                 &self.budget,
                 self.budget.retain_bytes(2 * std::mem::size_of::<usize>()),
@@ -216,19 +203,45 @@ impl ValidatedTraitWorld {
                 path: ir::CarrierPath(Arc::from([])),
                 channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
             };
-            let incoming = ir::InputCarrier {
-                param: 0,
-                location: root.clone(),
-            };
-            if !self.eq_ty(&proof.signature.result, &signature.result, 0)?
-                || view.contract().results.len() != 1
-                || view.contract().results[0].location != root
-                || view.contract().results[0].sources.as_ref() != [incoming]
-            {
-                return Err(FactsError::invalid(
+            if receipt.is_projected_input() {
+                let expected = charged(
                     &self.budget,
-                    "closure argument result changed canonical callee return authority",
-                ));
+                    receipt.projected_result(closure.params(), &self.budget),
+                )?;
+                if !self.eq_ty(&expected, &signature.result, 0)? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure projected result changed canonical input field",
+                    ));
+                }
+            } else {
+                let callee = charged(&self.budget, receipt.argument_callee(&self.budget))?
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "closure argument result lacks checked source callee",
+                        )
+                    })?;
+                let Callee::Direct(target) = &callee else {
+                    unreachable!()
+                };
+                let proof = self.discharge_direct(target, facts)?;
+                let view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
+                view.validate_for(facts)?;
+                let incoming = ir::InputCarrier {
+                    param: 0,
+                    location: root.clone(),
+                };
+                if !self.eq_ty(&proof.signature.result, &signature.result, 0)?
+                    || view.contract().results.len() != 1
+                    || view.contract().results[0].location != root
+                    || view.contract().results[0].sources.as_ref() != [incoming]
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure argument result changed canonical callee return authority",
+                    ));
+                }
             }
             retain::<ir::CarrierReturn>(&self.budget, 1)?;
             retain::<ir::InputCarrier>(&self.budget, 1)?;

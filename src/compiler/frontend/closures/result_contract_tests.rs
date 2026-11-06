@@ -3,6 +3,176 @@ use super::*;
 const ARGUMENT_STR_SOURCE: &str = "struct Item{name:String}fn inspect(items:Vec<&Item>){let _names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}";
 
 #[test]
+fn projected_noncopy_collection_builds_with_default_budget() {
+    let budget = ir::PlanBudget::default();
+    let source = "struct Item{first:String,second:String}fn main(){let items=vec![Item{first:String::from(\"apple\"),second:String::from(\"pear\")}];let first:Vec<&String>=items.iter().map(|i|&i.first).collect();let second:Vec<&String>=items.iter().map(|i|&i.second).collect();println!(\"{} {}\",first[0],second[0]);}";
+    crate::compiler::compile_input_with_budget(
+        crate::compiler::Input::Text(source.into()),
+        1,
+        false,
+        budget.clone(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error}; actual={:?}; first={:?}; usage={:?}",
+            error.resource_usage,
+            budget.first_resource_failure(),
+            budget.usage_snapshot()
+        )
+    });
+}
+
+#[test]
+fn projected_argument_result_replays_exact_field_and_borrow_for_all_modes() {
+    const SOURCE: &str = "struct Item{first:String,second:String}fn inspect(items:Vec<&Item>){let _names:Vec<&String>=items.iter().map(|i|&i.first).collect();}fn main(){}";
+    let (plan, checked, _) = fixture_graph_source(SOURCE);
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    assert!(receipt.is_projected_input());
+    let input = receipt.argument_origin().unwrap();
+    assert_eq!(input.depth, 1);
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(
+            view.contract().results[0].sources[0].location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+        );
+        for mutation in 0..6 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[input.borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    *place.projection.last_mut().unwrap() = ir::Projection::Field(1);
+                }
+                1 => {
+                    let ir::ExprKind::Borrow { kind, .. } = &mut forged.exprs[input.borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                2 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[input.borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    place.local = forged.params[0];
+                }
+                3 => {
+                    let ir::TypedStmt::Let { value, .. } = &forged.body.statements[0] else {
+                        panic!("entry")
+                    };
+                    let ir::ExprKind::Field { index, .. } = &mut forged.exprs[value.0].kind else {
+                        panic!("field")
+                    };
+                    *index = 1;
+                }
+                4 => forged.body.tail = Some(ir::ExprId(receipt.tail().0 + 1)),
+                5 => forged.exprs[input.borrow.0].ty = ir::Ty::Unit,
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_source(receipt, &forged, &facts).is_err(),
+                "mode={mode:?}, mutation={mutation}"
+            );
+            assert!(
+                facts
+                    .validate_closure_body_source(&checked.ty, mode, &forged)
+                    .is_err()
+            );
+        }
+        let template =
+            crate::compiler::cfg::lower_closure_template(body, facts, &checked, mode, &plan.budget)
+                .unwrap();
+        crate::compiler::ownership::verify_template(template).unwrap();
+    }
+    for (owner, provider, site) in [
+        (
+            checked.ty.provider(),
+            checked.ty.provider(),
+            checked.ty.site(),
+        ),
+        (checked.ty.owner(), checked.ty.owner(), checked.ty.site()),
+        (
+            checked.ty.owner(),
+            checked.ty.provider(),
+            checked.ty.site() + 1,
+        ),
+    ] {
+        let receipt = Arc::new(
+            ir::ClosureResultReceipt::projected_input(
+                owner,
+                provider,
+                site,
+                receipt.tail(),
+                input.argument,
+                input.tuple,
+                input.borrow,
+                input.place.clone(),
+                input.depth,
+                &plan.budget,
+            )
+            .unwrap(),
+        );
+        let forged = Arc::new(
+            checked
+                .ty
+                .as_ref()
+                .clone()
+                .with_result_receipt(Some(receipt)),
+        );
+        assert!(
+            world
+                .closure_callable_facts_for(forged, ir::ClosureKind::Fn)
+                .is_err()
+        );
+    }
+    let (foreign_plan, foreign_checked, _) = fixture_graph_source(SOURCE);
+    let foreign = foreign_plan
+        .trait_world()
+        .unwrap()
+        .closure_callable_facts_for(foreign_checked.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    assert!(
+        validate_source(
+            receipt,
+            &checked.body_for(ir::ClosureKind::Fn).unwrap(),
+            &foreign
+        )
+        .is_err()
+    );
+    let (other_plan, other_checked, _) = fixture_graph_source(
+        "struct Item{first:String,second:String}fn inspect(items:Vec<&Item>){let _names:Vec<&String>=items.iter().map(|i|&i.second).collect();}fn main(){}",
+    );
+    let other = other_plan
+        .trait_world()
+        .unwrap()
+        .closure_callable_facts_for(other_checked.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    assert!(
+        validate_source(
+            receipt,
+            &other_checked.body_for(ir::ClosureKind::Fn).unwrap(),
+            &other
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn shared_argument_result_replays_exact_tuple_channel_for_all_modes() {
     let (plan, checked, _) = fixture_graph_source(ARGUMENT_STR_SOURCE);
     let world = plan.trait_world().unwrap();

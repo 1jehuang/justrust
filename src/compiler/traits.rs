@@ -10556,6 +10556,7 @@ impl ValidatedTraitWorld {
                 self.require_in(predicate, context, scratch)?,
             )?;
         }
+        self.canonicalize_projected_closure_direct(target, &mut instantiated.signature, context)?;
         Ok(DirectCallProof {
             target: target.clone(),
             signature: instantiated.signature,

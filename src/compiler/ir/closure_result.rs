@@ -6,6 +6,7 @@ enum ResultTypeWitness {
     Parameter(ParamId),
     Unit,
     SharedStr,
+    ProjectedInput,
     Tuple(Arc<[ResultTypeWitness]>),
 }
 impl ResultTypeWitness {
@@ -43,6 +44,9 @@ impl ResultTypeWitness {
                     referent: Arc::new(Ty::Str),
                 })
             }
+            Self::ProjectedInput => {
+                Err("projected closure result requires canonical input types".into())
+            }
             Self::Tuple(fields) => Ok(Ty::Tuple(
                 fields
                     .iter()
@@ -73,7 +77,7 @@ enum ResultCallWitness {
         method_args: Arc<[ResultTypeWitness]>,
     },
     Argument {
-        declaration: DeclId,
+        declaration: Option<DeclId>,
         origin: ClosureArgumentOrigin,
     },
 }
@@ -157,7 +161,7 @@ impl ClosureResultReceipt {
             site,
             tail,
             call: ResultCallWitness::Argument {
-                declaration,
+                declaration: Some(declaration),
                 origin: ClosureArgumentOrigin {
                     argument,
                     local,
@@ -177,12 +181,111 @@ impl ClosureResultReceipt {
             _ => None,
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::compiler) fn projected_input(
+        owner: DeclId,
+        provider: DeclId,
+        site: u32,
+        tail: ExprId,
+        argument: usize,
+        tuple: LocalId,
+        borrow: ExprId,
+        place: Place,
+        depth: u8,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        Ok(Self {
+            owner,
+            provider,
+            site,
+            tail,
+            call: ResultCallWitness::Argument {
+                declaration: None,
+                origin: ClosureArgumentOrigin {
+                    argument,
+                    local: place.local,
+                    tuple,
+                    borrow,
+                    place,
+                    depth,
+                },
+            },
+            result: ResultTypeWitness::ProjectedInput,
+            arguments: Arc::from([]),
+        })
+    }
+    pub(in crate::compiler) fn is_projected_input(&self) -> bool {
+        matches!(
+            self.call,
+            ResultCallWitness::Argument {
+                declaration: None,
+                ..
+            }
+        )
+    }
+    /// Derive the result from the exact canonical argument, never a retained Ty.
+    pub(in crate::compiler) fn projected_result(
+        &self,
+        params: &[Ty],
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        if !self.is_projected_input() {
+            return Err("closure result is not a projected input".into());
+        }
+        let origin = self
+            .argument_origin()
+            .ok_or("missing projected input origin")?;
+        let mut ty = params
+            .get(origin.argument)
+            .ok_or("foreign projected input argument")?
+            .clone();
+        let mut derefs = 0usize;
+        for (position, projection) in origin.place.projection.iter().enumerate() {
+            budget.charge_work(1)?;
+            match (projection, &ty) {
+                (
+                    Projection::Deref,
+                    Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent,
+                    },
+                ) if position == derefs => {
+                    derefs += 1;
+                    ty = referent.as_ref().clone();
+                }
+                (Projection::Field(index), _) if derefs != 0 => {
+                    ty = ty
+                        .field_ty(*index, budget)?
+                        .ok_or("invalid projected input field")?;
+                    if matches!(ty, Ty::Ref { .. }) {
+                        return Err("unsupported: closure projected reference-valued field".into());
+                    }
+                }
+                _ => return Err("unsupported: closure projected input path".into()),
+            }
+        }
+        if derefs != usize::from(origin.depth) + 1 {
+            return Err("projected closure result changed reference depth".into());
+        }
+        if !carrier_locations(&ty, budget)?.is_empty() {
+            return Err("unsupported: closure projected result contains nested carriers".into());
+        }
+        budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+        Ok(Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        })
+    }
     pub(in crate::compiler) fn argument_callee(
         &self,
         budget: &PlanBudget,
     ) -> Result<Option<Callee>, String> {
         match &self.call {
-            ResultCallWitness::Argument { declaration, .. } => {
+            ResultCallWitness::Argument {
+                declaration: Some(declaration),
+                ..
+            } => {
                 budget.retain_bytes(2 * std::mem::size_of::<usize>())?;
                 Ok(Some(Callee::Direct(CallTarget {
                     declaration: *declaration,

@@ -1,7 +1,107 @@
 //! Closed callable tuple inputs use the checked closure's exact structural ABI.
 use super::*;
 
+// Only called after exact sealed closure/adapter replay. This cannot authorize
+// any fixed input origin. Actual tuple origins live in the separate receipt.
+fn canonicalize_empty_projected_result(
+    signature: &mut Signature,
+    budget: &PlanBudget,
+) -> Result<()> {
+    let empty = |row: &ir::ResultReference| match &row.returns {
+        ir::ReturnContract::SharedInputEnvelopes(inputs) => inputs.is_empty(),
+        ir::ReturnContract::SharedInputPaths(inputs) => inputs.is_empty(),
+        _ => false,
+    };
+    charged(
+        budget,
+        budget.charge_work(signature.ref_contract.results.len()),
+    )?;
+    if signature.ref_contract.results.len() != 1
+        || !signature.ref_contract.results.iter().all(empty)
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "projected closure adapter has foreign fixed result origins",
+        ));
+    }
+    let results = charged(
+        budget,
+        ir::derive_return_contracts(
+            &signature.params,
+            &signature.result,
+            &signature.ref_contract,
+            budget,
+        ),
+    )?;
+    if results.len() != signature.ref_contract.results.len()
+        || results
+            .iter()
+            .zip(signature.ref_contract.results.iter())
+            .any(|(new, old)| {
+                new.position != old.position || new.region != old.region || !empty(new)
+            })
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "projected closure adapter normalization added result authority",
+        ));
+    }
+    if results != signature.ref_contract.results {
+        retain::<ir::RefContract>(budget, 1)?;
+        signature.ref_contract = Arc::new(ir::RefContract {
+            results,
+            ..(*signature.ref_contract).clone()
+        });
+    }
+    Ok(())
+}
+
 impl ValidatedTraitWorld {
+    // Called only after the direct producer discharged the exact canonical
+    // source schema and all predicates. Recheck its sealed structural ABI
+    // before applying the same origin-free representation normalization used
+    // by the required callable producer.
+    pub(super) fn canonicalize_projected_closure_direct(
+        &self,
+        target: &CallTarget,
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+    ) -> Result<()> {
+        self.check_context(context)?;
+        if self
+            .schema
+            .closure_owner_site(target.declaration)?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let adapter = self.decode_closure_adapter(target)?;
+        self.validate_closure_metadata(adapter.closure, context.env())?;
+        if !adapter
+            .closure
+            .result_receipt()
+            .is_some_and(|receipt| receipt.is_projected_input())
+        {
+            return Ok(());
+        }
+        let prefix = self.closure_provider_prefix(target.declaration)?;
+        let [receiver, arguments, result] = &target.type_args[prefix..] else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected direct adapter lost its canonical domain",
+            ));
+        };
+        if !self.eq_types(&signature.params, &[receiver.clone(), arguments.clone()], 0)?
+            || !self.eq_ty(&signature.result, result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected direct adapter changed its sealed ABI",
+            ));
+        }
+        canonicalize_empty_projected_result(signature, &self.budget)
+    }
+
     /// The required Fn output projection may acquire reference layers only from
     /// the exact parent-sealed closure adapter selected for this application.
     pub(super) fn closed_closure_argument_result_signature(
@@ -98,6 +198,9 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "closure result differs from its authenticated adapter ABI",
             ));
+        }
+        if receipt.is_projected_input() {
+            canonicalize_empty_projected_result(&mut provider.signature, &self.budget)?;
         }
         Ok(Some(provider.signature))
     }
@@ -207,6 +310,122 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend;
+
+    #[test]
+    fn projected_empty_topology_preserves_regions_and_rejects_new_origins() {
+        let budget = PlanBudget::default();
+        let reference = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+        };
+        let signature = Signature {
+            params: Vec::new(),
+            result: reference.clone(),
+            ref_contract: Arc::new(ir::RefContract {
+                region_count: 1,
+                results: Arc::from([ir::ResultReference {
+                    position: ir::ReferencePosition { depth: 0 },
+                    region: ir::RegionParamId(0),
+                    returns: ir::ReturnContract::SharedInputEnvelopes(Arc::from([])),
+                }]),
+                ..ir::RefContract::default()
+            }),
+        };
+        let mut canonical = signature.clone();
+        canonicalize_empty_projected_result(&mut canonical, &budget).unwrap();
+        assert_eq!(
+            canonical.ref_contract.region_count,
+            signature.ref_contract.region_count
+        );
+        assert!(
+            matches!(&canonical.ref_contract.results[0].returns, ir::ReturnContract::SharedInputPaths(rows) if rows.is_empty())
+        );
+        let original = canonical.ref_contract.clone();
+        canonicalize_empty_projected_result(&mut canonical, &budget).unwrap();
+        assert!(Arc::ptr_eq(&original, &canonical.ref_contract));
+        let input = ir::InputReference {
+            param: 0,
+            position: ir::ReferencePosition { depth: 0 },
+        };
+        let mut forged = signature.clone();
+        Arc::make_mut(&mut Arc::make_mut(&mut forged.ref_contract).results)[0].returns =
+            ir::ReturnContract::SharedInputEnvelopes(Arc::from([ir::InputEnvelope { input }]));
+        assert!(canonicalize_empty_projected_result(&mut forged, &budget).is_err());
+        let mut new_origin = signature;
+        new_origin.params.push(reference);
+        Arc::make_mut(&mut new_origin.ref_contract).input_regions = Arc::from([ir::InputRegion {
+            input,
+            region: ir::RegionParamId(0),
+        }]);
+        assert!(canonicalize_empty_projected_result(&mut new_origin, &budget).is_err());
+    }
+
+    #[test]
+    fn projected_direct_adapter_preserves_exact_source_and_empty_origins() {
+        use crate::compiler::{
+            ClosureBodiesFact, CompilerProvider, Input, Snapshot, TEMPLATE_BODY, keys,
+        };
+        use crate::engine::Engine;
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text(r#"struct Item{first:String,second:String}fn main(){let items=vec![Item{first:String::from("apple"),second:String::from("pear")}];let first:Vec<&String>=items.iter().map(|i|&i.first).collect();let second:Vec<&String>=items.iter().map(|i|&i.second).collect();}"#.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: PlanBudget::default(),
+        });
+        let engine = Engine::new(CompilerProvider(snapshot));
+        let signatures = engine.request(keys::SignaturesDebtRoot.key());
+        let body = engine.request(keys::item(TEMPLATE_BODY, 0));
+        engine.run(1).unwrap();
+        let plan = signatures.fact::<frontend::PlanCtx>(0).unwrap();
+        let closures = body.fact::<ClosureBodiesFact>(1).unwrap();
+        let closure = closures.bodies[0].ty.clone();
+        let world = plan.trait_world().unwrap();
+        let context = ProofContext {
+            original: None,
+            predicates: &world.empty,
+            phase: FactsPhase::Closed,
+        };
+        for mode in [
+            ir::ClosureKind::Fn,
+            ir::ClosureKind::FnMut,
+            ir::ClosureKind::FnOnce,
+        ] {
+            let target = world.closure_target(&closure, mode).unwrap();
+            let direct = world
+                .discharge_in_with_facts(&target, context, &mut ProofScratch::default(), None)
+                .unwrap();
+            assert!(
+                matches!(&direct.signature.ref_contract.results[0].returns, ir::ReturnContract::SharedInputPaths(rows) if rows.is_empty())
+            );
+            let mut same = direct.signature.clone();
+            let original = same.ref_contract.clone();
+            world
+                .canonicalize_projected_closure_direct(&target, &mut same, context)
+                .unwrap();
+            assert!(Arc::ptr_eq(&original, &same.ref_contract));
+            let mut changed = same.clone();
+            changed.result = Ty::Bool;
+            assert!(
+                world
+                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .is_err()
+            );
+            let mut changed = same.clone();
+            changed.params[1] = Ty::Unit;
+            assert!(
+                world
+                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .is_err()
+            );
+            let foreign = world.closure_target(&closures.bodies[1].ty, mode).unwrap();
+            let mut wrong = target.clone();
+            wrong.type_args = foreign.type_args;
+            assert!(
+                world
+                    .canonicalize_projected_closure_direct(&wrong, &mut same, context)
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn projected_argument_result_replays_sealed_adapter_and_tuple_source() {
