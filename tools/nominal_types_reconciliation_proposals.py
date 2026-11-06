@@ -1,0 +1,52 @@
+"""Pinned nominal type proposals, UNREVIEWED and source-only. No compiler support claim."""
+SELECTED = ('src/types/enum.md', 'src/types/struct.md', 'src/types/union.md')
+SOURCE_COMMIT = '86635e30bf861a038dc197d7e16fd09e7e514e7a'
+PAGE_SHA256 = {
+    'src/types/enum.md': 'f64201be5124c2b4b2e5e753af02c7334cb601e574ad9b50420471fb30e4b393',
+    'src/types/struct.md': '5e79e4a28f9690d8999c9263e754240443ca313fb88645068e821f1b8b5d0a9d',
+    'src/types/union.md': '41c02a3c65cd4f6340f77d61d4027508cf7eaedd8d3a6e80ef7e912640926459',
+}
+ALIASES = {
+    'struct': 'reference-types-struct-nominal-structs',
+    'enum': 'reference-types-enum-nominal-enums',
+    'union': 'reference-types-union-union-identity',
+}
+CLASS_NAMES = {'N': 'normative-semantic', 'G': 'grammar', 'I': 'index', 'X': 'cross-reference', 'E': 'edition-context'}
+END_TO_END = (
+    'end-to-end: Missing unchanged-source pinned-stock stable1.98.1 eligibility classification '
+    'and native CHECK/BUILD at workers1/8 in edition2024 on Linux x86-64 with defined runs comparing '
+    'values, effects and exit status. Source identity is not stable eligibility or compiler support. '
+    'Missing unused invalid controls, stage-specific rejection and actual-changing forged-fact controls. '
+    'CHECK must not demand codegen or publish an image; rejected input must not release an executable. '
+    'Distinguish invalid Rust, unsupported valid source, resource limits and infrastructure failures. '
+    'Context-only rows require source review and child attribution, not standalone runtime credit. '
+    'No semantic review, execution or completion credit.')
+LIMITATIONS = (
+    'All 19 labels on complete pinned struct.md (26 lines, 7 labels), enum.md (22 lines, 6 labels) and union.md (20 lines, 6 labels) receive UNREVIEWED source-only proposals. Stable eligibility remains unknown.',
+    'Actual existing aliases are partial routing only, not semantic equivalence, executable evidence or completion credit. Named nominal identities are not structural type equivalence.',
+    'The historical enum.value largest variant plus discriminant wording is not an exact additive byte formula, fixed offsets, a ban on niche optimization or a current stable ABI claim. Independent version, representation and target authority is required before layout assertions.',
+    'Default struct and union layout is unspecified. Union fields need not be at offset 0. Representation-specific rules remain linked contracts, not promises supplied by this profile.',
+    'Unsafe union READ differs from write. Unsafe is not a validity proof, no UB execution or transmute license is supplied, and defined observations require independently established field validity. The linked item allowlist, not an invented field-type constraint, determines applicability.',
+    'Enum constructors distinguish struct, tuple and unit variants. Unit-like structs have one inhabited value, not a promise about all layouts. Construction, visibility, representation and item restrictions need independent linked review.',
+)
+ROWS = r'''
+type.enum|I|Enumerated type heading indexes child contracts without standalone executable credit.|enum|Missing review and child attribution.|Missing applicability review rather than heading-derived invalidity.|Missing nominal identity, variants, construction and historical layout distinctions.
+type.enum.intro|N X|An enumerated type is a nominal heterogeneous disjoint union denoted by its enum item name.|enum|Missing distinct named enum identities with heterogeneous eligible variants.|Missing mismatched nominal enum identities even with matching shapes, including unused invalid bodies.|Missing named identity versus structural similarity and linked enum-item contracts.
+type.enum.declaration|N X|An enum item declares the type and independently named variants with struct, tuple struct or unit-like syntax.|enum|Missing unchanged struct, tuple and unit variant declarations and distinct names.|Missing malformed declarations and independently invalid variant use after stock classification.|Missing variant naming and constructor distinctions without treating all variants as interchangeable constructors.
+type.enum.constructor|N X|Enum instances can be constructed with a struct expression under the linked construction contract.|enum|Missing eligible struct, tuple and unit variant construction with observed values.|Missing wrong variant form, field or arity under separately reviewed construction rules.|Missing constructor namespace and struct-expression linkage rather than a claim that every variant accepts braces.
+type.enum.value|N|The pinned historical wording describes largest variant memory plus discriminant storage, not a verified exact additive byte formula or current stable ABI guarantee.|enum|Missing independent version, representation and target authority before defined layout observations.|Missing unsupported layout assumptions classified separately from invalid Rust rather than manufacturing rejection.|Missing padding, alignment and niche optimization review without fixed offsets, an exact additive byte formula or a current stable ABI claim.
+type.enum.name|N X|Enum types are denoted by named reference to an enum item, not structurally as types.|enum|Missing named enum references and distinct nominal declarations.|Missing structural substitution for a distinct named enum in independently invalid unused bodies.|Missing type aliases versus declaration identity without inferring structural equivalence from equal variants.
+type.struct|I|Struct type heading indexes child contracts without standalone executable credit.|struct|Missing review and child attribution.|Missing applicability review rather than heading-derived invalidity.|Missing product fields, construction, visibility and layout distinctions.
+type.struct.intro|N|A struct type is a heterogeneous product of field types.|struct|Missing eligible heterogeneous named struct fields and observed values.|Missing incompatible field values under linked typing rules including unused invalid bodies.|Missing nominal declaration identities versus merely similar product shapes.
+type.struct.constructor|N X|New struct instances can be constructed with the linked struct expression.|struct|Missing eligible unchanged struct construction and field observations.|Missing independently invalid construction forms under linked expression rules.|Missing declaration versus construction and named, tuple and unit forms.
+type.struct.layout|N X|Default struct layout is unspecified to permit optimizations such as field reordering, with repr-specific rules linked separately; expression field order does not change a given type layout.|struct|Missing same-type reordered field expressions with defined value observations.|Missing independently invalid fields rather than rejection of valid alternate field order.|Missing representation and target authority without default offsets or universal repr guarantees.
+type.struct.field-visibility|N X|Struct fields may carry visibility modifiers controlling access outside a module.|struct|Missing independently eligible public and restricted field accesses.|Missing genuinely inaccessible field use including unused invalid bodies.|Missing module and construction privacy under linked visibility rules rather than invented blanket access.
+type.struct.tuple|N|A tuple struct is like a struct with anonymous fields.|struct|Missing named tuple struct construction and indexed field observations.|Missing incompatible nominal tuple struct values and invalid arity after stock classification.|Missing anonymous fields versus anonymous tuple types and distinct declaration identity.
+type.struct.unit|N X|A unit-like struct has no fields and its associated construction supplies the only inhabited value.|struct|Missing eligible unit-like construction and defined observations of its one value.|Missing invalid field use or distinct nominal unit-like substitution.|Missing one inhabited value versus unit type and representation without a promise about all layouts.
+type.union|I|Union type heading indexes child contracts without standalone executable credit.|union|Missing review and child attribution.|Missing applicability review rather than heading-derived invalidity.|Missing identity, access, safety, constraints and representation distinctions.
+type.union.intro|N X|A union type is a nominal heterogeneous C-like union denoted by its union item name.|union|Missing distinct named eligible union declarations.|Missing incompatible nominal union identities including unused invalid bodies.|Missing named identity versus structural field similarity without importing a C ABI guarantee.
+type.union.access|N|A union has no active-field notion; access interprets the accessed content as the field type under separately established validity constraints.|union|Missing defined accesses with independently established valid field representations.|Missing independently invalid accesses without executing UB or using transmute as an oracle.|Missing no active field versus validity, representation and linked item access rules; no transmute license.
+type.union.safety|N|Reading a union field requires unsafe because interpreting content can cause undefined behavior; this does not equate writes with reads or prove validity.|union|Missing defined unsafe READ and separately classified safe write controls.|Missing safe-context union READ rejection including unused invalid bodies, never UB execution.|Missing unsafe permission versus validity proof and READ versus write distinctions.
+type.union.constraint|N X|Union fields are restricted to a subset ensuring no dropping, with the exact allowlist delegated to the linked item documentation.|union|Missing independently eligible field types classified under the linked item allowlist.|Missing forbidden field types only after independent item and version review, including unused declarations.|Missing dropping, wrapping and linked item restrictions without inventing a Copy-only or other substitute allowlist.
+type.union.layout|N|Default union layout is unspecified, fields need not be at offset 0, and repr-specific layout is a separate linked contract.|union|Missing representation and target-authorized defined layout observations.|Missing unsupported offset assumptions distinguished from invalid Rust rather than presumed compile errors.|Missing independent representation authority without universal zero offsets or C layout promises.
+'''

@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 1000)
-        self.assertEqual(expected['rule_identities_without_proposals'], 1965)
+        self.assertEqual(expected['proposed_rule_identities'], 1019)
+        self.assertEqual(expected['rule_identities_without_proposals'], 1946)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -137,7 +137,7 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(function[field], 0)
         self.assertIsNone(function['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 1005)
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 1024)
         items = expected['profiles']['function-items']
         self.assertEqual(items['selected_pages'], ['src/types/function-item.md'])
         self.assertEqual(items['proposed_rule_identities'], 6)
@@ -158,6 +158,16 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(inferred[field], 0)
         self.assertIsNone(inferred['full_rust_completion_percent'])
+        nominal = expected['profiles']['nominal-types']
+        self.assertEqual(nominal['selected_pages'], ['src/types/enum.md', 'src/types/struct.md', 'src/types/union.md'])
+        self.assertEqual(nominal['proposed_rule_identities'], 19)
+        self.assertEqual(nominal['proposed_classification_counts'], {
+            'normative-semantic': 16, 'grammar': 0, 'index': 3,
+            'cross-reference': 10, 'edition-context': 0})
+        self.assertEqual(nominal['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(nominal[field], 0)
+        self.assertIsNone(nominal['full_rust_completion_percent'])
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
