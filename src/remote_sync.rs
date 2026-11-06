@@ -420,7 +420,7 @@ fn prepare_script_with(remote: &str, wrapper: &str) -> String {
     // and widening the root to it made every later sync fail. Directories
     // inside it that root created on the way are taken over too.
     format!(
-        "{{ mkdir -p {q} && test -w {q} && ! find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" | grep -q .; }} 2>/dev/null \
+        "{{ mkdir -p {q} && {{ test ! -O {q} || chmod u+w {q}; }} && test -w {q} && ! find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" | grep -q .; }} 2>/dev/null \
          || {{ test -x {wq} && sudo -n {wq} {q} && test -w {q} && ! find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" | grep -q .; }} 2>/dev/null \
          || {{ sudo -n install -d -o \"$(id -un)\" -g \"$(id -gn)\" {q} \
                && sudo -n find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" -exec chown \"$(id -un):$(id -gn)\" {{}} + \
@@ -670,6 +670,10 @@ impl Mirror {
         c.args(target_source_filters(root));
         c.args([
             "-a",
+            // A frozen input may have read-only directories. The receiver must
+            // still create children and build outputs without changing sender
+            // permissions or the permissions/executable bits of source files.
+            "--chmod=Du+w",
             "--no-times",
             "--checksum",
             "--delete",
@@ -766,6 +770,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rsync_read_only_source_keeps_source_modes_and_writable_receiver_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let d = std::env::temp_dir().join(format!("jr-readonly-rsync-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let root = d.join("source");
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let source = nested.join("lib.rs");
+        let executable = nested.join("helper.sh");
+        std::fs::write(&source, "pub fn source() {}\n").unwrap();
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        for (path, mode) in [
+            (&source, 0o400),
+            (&executable, 0o500),
+            (&nested, 0o500),
+            (&root, 0o500),
+        ] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let mirror = Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        let destination = PathBuf::from(mirror.remote(&root));
+        mirror.prepare(&root).unwrap();
+        let first = mirror.rsync(&root);
+        let source_modes: Vec<_> = [&root, &nested, &source, &executable]
+            .into_iter()
+            .map(|p| std::fs::metadata(p).unwrap().permissions().mode() & 0o777)
+            .collect();
+        // Restore only this test's owned source directories before any assertion,
+        // so a failing regression does not strand an unremovable scratch tree.
+        for path in [&root, &nested] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let result = (|| -> Result<()> {
+            first?;
+            assert_eq!(source_modes, [0o500, 0o500, 0o400, 0o500]);
+            assert_eq!(
+                std::fs::read(destination.join("nested/lib.rs"))?,
+                b"pub fn source() {}\n"
+            );
+            assert_eq!(
+                std::fs::metadata(destination.join("nested/lib.rs"))?
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o400
+            );
+            assert_eq!(
+                std::fs::metadata(destination.join("nested/helper.sh"))?
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o500
+            );
+            for path in [&destination, &destination.join("nested")] {
+                assert_eq!(std::fs::metadata(path)?.permissions().mode() & 0o777, 0o700);
+            }
+            std::fs::create_dir_all(destination.join("target"))?;
+            std::fs::write(destination.join("target/warm-cache"), b"preserved")?;
+            // Re-mirroring a frozen input must retain warm target artifacts.
+            for path in [&root, &nested] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))?;
+            }
+            let second = mirror.rsync(&root);
+            for path in [&root, &nested] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+            }
+            second?;
+            assert_eq!(
+                std::fs::read(destination.join("target/warm-cache"))?,
+                b"preserved"
+            );
+            Ok(())
+        })();
+        // A baseline failure may also leave read-only receiver directories.
+        for path in [&destination, &destination.join("nested")] {
+            if path.is_dir() {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+        result.unwrap();
     }
 
     fn st(t: i128) -> Stamp {
@@ -1268,6 +1361,17 @@ mod tests {
         let plain = d.join("it's a dir/x");
         assert_eq!(run(&plain, &wrapper), (true, String::new()));
         assert!(plain.is_dir());
+        // A prior frozen-source sync may leave our receiver root read-only.
+        // Recover owner write permission without sudo or broadening other bits.
+        crate::sys::set_mode(&plain, 0o500).unwrap();
+        assert_eq!(run(&plain, &wrapper), (true, String::new()));
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
         // Read-only parent: mkdir fails, the wrapper runs under sudo.
         let ro = d.join("ro");
         std::fs::create_dir_all(&ro).unwrap();
