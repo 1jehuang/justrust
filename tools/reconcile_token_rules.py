@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43), ('expression-core', 46), ('path-expressions', 6), ('never-type', 5), ('coercions', 46), ('subtyping', 12), ('type-expressions', 22), ('primitive-types', 42), ('sequence-types', 19), ('pointer-types', 22), ('function-pointers', 7), ('function-items', 6), ('inferred-types', 4), ('nominal-types', 19))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,), 'operators': (112,), 'closures': (17,), 'calls': (11, 12), 'aggregates': (22, 16), 'fields': (8,), 'literals': (87,), 'grouped': (6,), 'transfers': (5, 9), 'ranges': (5, 5), 'structs': (14,), 'blocks': (43,), 'expression-core': (46,), 'path-expressions': (6,), 'never-type': (5,), 'coercions': (46,), 'subtyping': (12,), 'type-expressions': (22,), 'primitive-types': (23, 10, 5, 4), 'sequence-types': (5, 5, 9), 'pointer-types': (22,), 'function-pointers': (7,), 'function-items': (6,), 'inferred-types': (4,), 'nominal-types': (6, 7, 6)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43), ('expression-core', 46), ('path-expressions', 6), ('never-type', 5), ('coercions', 46), ('subtyping', 12), ('type-expressions', 22), ('primitive-types', 42), ('sequence-types', 19), ('pointer-types', 22), ('function-pointers', 7), ('function-items', 6), ('inferred-types', 4), ('nominal-types', 19), ('type-parameters', 1))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,), 'operators': (112,), 'closures': (17,), 'calls': (11, 12), 'aggregates': (22, 16), 'fields': (8,), 'literals': (87,), 'grouped': (6,), 'transfers': (5, 9), 'ranges': (5, 5), 'structs': (14,), 'blocks': (43,), 'expression-core': (46,), 'path-expressions': (6,), 'never-type': (5,), 'coercions': (46,), 'subtyping': (12,), 'type-expressions': (22,), 'primitive-types': (23, 10, 5, 4), 'sequence-types': (5, 5, 9), 'pointer-types': (22,), 'function-pointers': (7,), 'function-items': (6,), 'inferred-types': (4,), 'nominal-types': (6, 7, 6), 'type-parameters': (1,)}
 
 
 def digest(data):
@@ -97,8 +97,10 @@ def source_only_proposals(profile):
         import function_items_reconciliation_proposals as proposals
     elif profile == 'inferred-types':
         import inferred_types_reconciliation_proposals as proposals
-    else:
+    elif profile == 'nominal-types':
         import nominal_types_reconciliation_proposals as proposals
+    else:
+        import type_parameters_reconciliation_proposals as proposals
     return proposals
 
 
@@ -124,7 +126,7 @@ def proposal_row_id(label, profile):
     # expr.loop.break-label and expr.loop.break.label. A lossy slug merges them.
     # Use reversible UTF-8 bytes for newer profiles, without changing
     # previously published profile artifact identities or canonical bytes.
-    if profile in ('loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types', 'pointer-types', 'function-pointers', 'function-items', 'inferred-types', 'nominal-types'):
+    if profile in ('loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types', 'pointer-types', 'function-pointers', 'function-items', 'inferred-types', 'nominal-types', 'type-parameters'):
         return 'reconcile-' + profile + '-' + label.encode('utf-8').hex()
     return 'reconcile-' + re.sub('[^a-z0-9]+', '-', label)
 
@@ -441,6 +443,10 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
             require(len(matches) == 1, 'foreign proposal rule: ' + label)
             identity = matches[0]
         require(identity in records, 'foreign proposal rule: ' + label)
+        require(all(code in class_names for code in classes.split()),
+                'unknown proposal classification: ' + classes)
+        require(all(alias in aliases_by_name for alias in aliases.split()),
+                'foreign proposal alias: ' + aliases)
         classifications = [class_names[c] for c in classes.split()]
         executable = 'normative-semantic' in classifications or 'grammar' in classifications
         row = {
@@ -559,6 +565,10 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
             require(all(field.strip() for field in fields), 'proposal fields must be nonempty')
             label, classes, rationale, aliases, positive, invalid, interaction = fields
             require(label not in authored, 'duplicate ' + profile + ' proposal rule')
+            require(all(code in proposals.CLASS_NAMES for code in classes.split()),
+                    'unknown proposal classification: ' + classes)
+            require(all(alias in proposals.ALIASES for alias in aliases.split()),
+                    'foreign proposal alias: ' + aliases)
             authored[label] = (
                 [proposals.CLASS_NAMES[c] for c in classes.split()], rationale,
                 [proposals.ALIASES[a] for a in aliases.split()],
