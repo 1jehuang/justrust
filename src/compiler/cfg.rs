@@ -2964,10 +2964,12 @@ impl Function {
         scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
         let source = self.slice_operand_ty(slice, facts, scratch)?;
-        let (_, element) = source
-            .slice_ref_element()
-            .ok_or("CFG subslice requires slice reference")?;
-        ir::validate_shared_slice_element_with_facts(element, facts)?;
+        if !source.is_shared_str() {
+            let (_, element) = source
+                .slice_ref_element()
+                .ok_or("CFG subslice requires slice or str reference")?;
+            ir::validate_shared_slice_element_with_facts(element, facts)?;
+        }
         self.require_operand_with_facts(start, &Ty::Int(IntTy::Usize), facts, scratch)?;
         if let Some(end) = end {
             self.require_operand_with_facts(end, &Ty::Int(IntTy::Usize), facts, scratch)?;

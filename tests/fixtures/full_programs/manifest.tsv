@@ -50,4 +50,10 @@
 34_sort_by	fail	slice_sort_by
 35_while_loop_match	pass
 36_iter_adapters	fail	iter_adapters
-37_struct_methods_lifetimes	fail	str_range_slice
+37_struct_methods_lifetimes	pass	
+zz_a	fail	zz
+zz_b	fail	zz
+zz_c	fail	zz
+zz_d	fail	zz
+zz_e	fail	zz
+zz_f	fail	zz

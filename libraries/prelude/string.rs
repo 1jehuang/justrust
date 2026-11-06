@@ -420,6 +420,19 @@ impl<T: super::fmt::Display> ToString for T {
     }
 }
 
+impl super::ops::Add<&str> for String {
+    type Output = String;
+    fn add(mut self, other: &str) -> String {
+        self.push_str(other);
+        self
+    }
+}
+impl super::ops::AddAssign<&str> for String {
+    fn add_assign(&mut self, other: &str) {
+        self.push_str(other);
+    }
+}
+
 impl super::ops::Deref for String {
     type Target = str;
     fn deref(&self) -> &str {
@@ -554,6 +567,7 @@ impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
 /// like `StrToString`, until inherent `impl str` blocks are supported.
 pub trait StrPattern {
     fn is_contained_in(self, text: &str) -> bool;
+    fn find_in(self, text: &str) -> Option<usize>;
 }
 
 impl StrPattern for char {
@@ -568,11 +582,27 @@ impl StrPattern for char {
         }
         false
     }
+
+    fn find_in(self, text: &str) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        let mut at = 0usize;
+        while at < len {
+            if decode_utf8_at(ptr, at) == self {
+                return Option::Some(at);
+            }
+            at += utf8_width(read_u8(ptr + at));
+        }
+        Option::None
+    }
 }
 
 impl StrPattern for &str {
     fn is_contained_in(self, text: &str) -> bool {
         str_find(text, self).is_some()
+    }
+
+    fn find_in(self, text: &str) -> Option<usize> {
+        str_find(text, self)
     }
 }
 
@@ -586,8 +616,10 @@ pub trait StrMethods {
     fn split<'a>(&'a self, separator: char) -> Split<&'a str>;
     fn starts_with(&self, pattern: &str) -> bool;
     fn ends_with(&self, pattern: &str) -> bool;
-    fn find(&self, pattern: &str) -> Option<usize>;
+    fn find<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn trim(&self) -> &str;
+    fn trim_start(&self) -> &str;
+    fn trim_end(&self) -> &str;
     fn to_lowercase(&self) -> String;
     fn repeat(&self, count: usize) -> String;
     fn replace(&self, from: &str, to: &str) -> String;
@@ -635,12 +667,33 @@ impl StrMethods for str {
         str_ends_with(self, pattern)
     }
 
-    fn find(&self, pattern: &str) -> Option<usize> {
-        str_find(self, pattern)
+    fn find<P: StrPattern>(&self, pattern: P) -> Option<usize> {
+        pattern.find_in(self)
     }
 
     fn trim(&self) -> &str {
         str_trim(self)
+    }
+
+    fn trim_start(&self) -> &str {
+        let (p, n) = str_parts(self);
+        let mut start = 0usize;
+        while start < n && char_is_whitespace(decode_utf8_at(p, start)) {
+            start += utf8_width(read_u8(p + start));
+        }
+        str_from_raw_parts(p + start, n - start)
+    }
+
+    fn trim_end(&self) -> &str {
+        let (p, n) = str_parts(self);
+        let mut end = n;
+        while end > 0usize {
+            let mut at = end - 1usize;
+            while at > 0usize && (read_u8(p + at) & 192u8) == 128u8 { at -= 1usize; }
+            if !char_is_whitespace(decode_utf8_at(p, at)) { break; }
+            end = at;
+        }
+        str_from_raw_parts(p, end)
     }
 
     fn to_lowercase(&self) -> String {

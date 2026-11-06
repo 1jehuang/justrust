@@ -3898,9 +3898,16 @@ impl Emitter<'_> {
                 inclusive,
             } => {
                 let slice_ty = self.function().operand_ty(slice)?;
-                let (_, element) = slice_ty
-                    .slice_ref_element()
-                    .ok_or("subslice requires a slice reference")?;
+                let is_str = slice_ty.is_shared_str();
+                let byte = ir::Ty::Int(ir::IntTy::U8);
+                let element = if is_str {
+                    &byte
+                } else {
+                    slice_ty
+                        .slice_ref_element()
+                        .ok_or("subslice requires a slice or str reference")?
+                        .1
+                };
                 let layout = shared_slice_layout(element, self.concrete.facts().budget())?;
                 for bound in std::iter::once(start).chain(end.iter()) {
                     if self.function().operand_ty(bound)? != ir::Ty::Int(ir::IntTy::Usize) {
@@ -3933,6 +3940,25 @@ impl Emitter<'_> {
                 self.trap_if(0x87); // ja: end > len
                 self.bytes(&[0x4c, 0x39, 0xc1]); // cmp rcx, r8
                 self.trap_if(0x82); // jb: end < start
+                if is_str {
+                    // Stock `str` indexing: each bound must be `len` or a
+                    // byte that is not a UTF-8 continuation (0x80..=0xBF).
+                    // Only bounds `< len` are loaded. Clobbers eax only.
+                    self.bytes(&[0x49, 0x39, 0xd0]); // cmp r8, rdx
+                    let skip = self.jump(&[0x0f, 0x83]); // jae
+                    self.bytes(&[0x42, 0x0f, 0xbe, 0x04, 0x06]); // movsx eax, byte [rsi+r8]
+                    self.bytes(&[0x83, 0xf8, 0xc0]); // cmp eax, -64
+                    self.trap_if(0x8c); // jl: continuation byte
+                    let here = self.position();
+                    self.patch(skip, here)?;
+                    self.bytes(&[0x48, 0x39, 0xd1]); // cmp rcx, rdx
+                    let skip = self.jump(&[0x0f, 0x83]); // jae
+                    self.bytes(&[0x0f, 0xbe, 0x04, 0x0e]); // movsx eax, byte [rsi+rcx]
+                    self.bytes(&[0x83, 0xf8, 0xc0]); // cmp eax, -64
+                    self.trap_if(0x8c); // jl: continuation byte
+                    let here = self.position();
+                    self.patch(skip, here)?;
+                }
                 let stride = i32::try_from(layout.element_stride)
                     .map_err(|_| "slice stride exceeds private layout limit")?;
                 if stride != array_element_stride(element, self.concrete.facts().budget())? {

@@ -8643,17 +8643,24 @@ impl<'a> Checker<'a> {
             flow = self.flow(slice);
         }
         if flow.ty.is_shared_str() {
-            return Err("unsupported: str range slicing".into());
+            if kind != ir::BorrowKind::Shared {
+                return Err("E0596: cannot mutably borrow a shared `str` range receiver".into());
+            }
+        } else {
+            let (source_kind, element) = flow
+                .ty
+                .slice_ref_element()
+                .ok_or("unsupported: range indexing requires a slice, array or str")?;
+            if source_kind != kind {
+                return Err("E0596: range borrow requires matching source mutability".into());
+            }
+            let element = element.clone();
+            ir::validate_shared_slice_element(
+                &element,
+                self.facts(),
+                &self.signatures.plan()?.budget,
+            )?;
         }
-        let (source_kind, element) = flow
-            .ty
-            .slice_ref_element()
-            .ok_or("unsupported: range indexing requires a slice or array")?;
-        if source_kind != kind {
-            return Err("E0596: range borrow requires matching source mutability".into());
-        }
-        let element = element.clone();
-        ir::validate_shared_slice_element(&element, self.facts(), &self.signatures.plan()?.budget)?;
         let mut completes = flow.completes;
         let mut bound =
             |checker: &mut Self, value: Option<&Expr>| -> Result<Option<ir::ExprId>, String> {

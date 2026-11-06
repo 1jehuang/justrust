@@ -12613,10 +12613,12 @@ impl CheckedFunction {
                             return Err("subslice bound requires usize".into());
                         }
                     }
-                    let Some((_, element)) = self.exprs[slice.0].ty.slice_ref_element() else {
-                        return Err("subslice requires slice reference".into());
-                    };
-                    validate_shared_slice_element_with_facts(element, facts)?;
+                    if !self.exprs[slice.0].ty.is_shared_str() {
+                        let Some((_, element)) = self.exprs[slice.0].ty.slice_ref_element() else {
+                            return Err("subslice requires slice or str reference".into());
+                        };
+                        validate_shared_slice_element_with_facts(element, facts)?;
+                    }
                     if !pattern_types_equal_with_facts(
                         &value.ty,
                         &self.exprs[slice.0].ty,

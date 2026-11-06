@@ -166,3 +166,69 @@ fn every_out_of_range_class_traps_before_later_output() {
         101,
     );
 }
+
+#[test]
+fn str_range_kinds_borrow_source_lifetime_and_check_char_boundaries() {
+    // Expected stdout from stock rustc 1.98.1.
+    runs_with_exit(
+        r#"struct P<'a> { s: &'a str, pos: usize }
+impl<'a> P<'a> {
+    fn new(s: &'a str) -> Self { P { s, pos: 0 } }
+    fn rest(&mut self) -> Option<&'a str> { self.pos = 7; Some(&self.s[self.pos..]) }
+}
+fn main() {
+    let mut p = P::new("héllo wörld");
+    while let Some(w) = p.rest() { println!("[{}]", w); break; }
+}"#,
+        "[wörld]\n",
+        0,
+    );
+    runs_with_exit(
+        r#"fn main() {
+    let s = "héllo wörld";
+    let a: &str = &s[0..3];
+    let b: &str = &s[..1];
+    let c: &str = &s[7..];
+    let d: &str = &s[..];
+    println!("[{}] [{}] [{}] [{}]", a, b, c, d);
+}"#,
+        "[hé] [h] [wörld] [héllo wörld]\n",
+        0,
+    );
+    runs_with_exit(
+        r#"fn main() {
+    let s = "héllo wörld";
+    let e: &str = &s[3..=5];
+    let f: &str = &s[12..];
+    let g: &str = &s[1..3];
+    println!("[{}] [{}] {}", e, f, g.len());
+}"#,
+        "[llo] [d] 2\n",
+        0,
+    );
+    // Non-boundary start, non-boundary end, end > len and start > end all
+    // panic before later output (stock exit 101).
+    for range in ["2..4", "0..2", "..99", "5..3", "9..", "..=13"] {
+        let source = format!(
+            "fn main() {{ let s = \"héllo wörld\"; println!(\"before\"); let t: &str = &s[{range}]; println!(\"{{}}\", t.len()); }}"
+        );
+        runs_with_exit(&source, "before\n", 101);
+    }
+}
+
+#[test]
+fn str_range_rejects_mutable_borrow_and_non_usize_bounds() {
+    for body in [
+        "let s: &str = \"abc\"; let t = &mut s[1..]; println!(\"{}\", t.len());",
+        "let s: &str = \"abc\"; let i = 1i32; let t = &s[i..]; println!(\"{}\", t);",
+    ] {
+        let scratch = Scratch::new();
+        let input = scratch.source(&format!("fn main() {{ {body} }}"));
+        let output = scratch.path("program");
+        for check in [true, false] {
+            let result = capture(&mut compiler(&input, &output, 1, check), &scratch, 20);
+            assert!(!result.status.success(), "{body} accepted");
+            assert!(!output.exists());
+        }
+    }
+}
