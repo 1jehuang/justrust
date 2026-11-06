@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 983)
-        self.assertEqual(expected['rule_identities_without_proposals'], 1982)
+        self.assertEqual(expected['proposed_rule_identities'], 990)
+        self.assertEqual(expected['rule_identities_without_proposals'], 1975)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -127,7 +127,17 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(pointer[field], 0)
         self.assertIsNone(pointer['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 988)
+        function = expected['profiles']['function-pointers']
+        self.assertEqual(function['selected_pages'], ['src/types/function-pointer.md'])
+        self.assertEqual(function['proposed_rule_identities'], 7)
+        self.assertEqual(function['proposed_classification_counts'], {
+            'normative-semantic': 5, 'grammar': 1, 'index': 2,
+            'cross-reference': 5, 'edition-context': 0})
+        self.assertEqual(function['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(function[field], 0)
+        self.assertIsNone(function['full_rust_completion_percent'])
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 995)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
