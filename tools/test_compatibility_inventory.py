@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 900)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2065)
+        self.assertEqual(expected['proposed_rule_identities'], 942)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2023)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -98,7 +98,15 @@ class InventoryTests(unittest.TestCase):
                       'completed_rule_rows'):
             self.assertEqual(types[field], 0)
         self.assertIsNone(types['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 905)
+        primitives = expected['profiles']['primitive-types']
+        self.assertEqual(primitives['selected_pages'], [
+            'src/types/boolean.md', 'src/types/numeric.md', 'src/types/char.md', 'src/types/str.md'])
+        self.assertEqual(primitives['proposed_rule_identities'], 42)
+        self.assertEqual(primitives['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(primitives[field], 0)
+        self.assertIsNone(primitives['full_rust_completion_percent'])
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 947)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
