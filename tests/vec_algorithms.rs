@@ -9,6 +9,42 @@ mod iterator_oracle;
 use iterator_oracle::closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn implicit_deref_mut_field_assignments_match_stock() {
+    iterator_oracle::stock_native(
+        r#"
+use std::ops::{Deref,DerefMut};
+struct Value{n:i32}
+struct Owner{value:Value}
+impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{&self.value}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{println!("owner deref");&mut self.value}}
+struct Shadow{value:Value,n:i32}
+impl Deref for Shadow{type Target=Value;fn deref(&self)->&Value{&self.value}}
+impl DerefMut for Shadow{fn deref_mut(&mut self)->&mut Value{println!("shadow deref");&mut self.value}}
+fn rhs(value:i32)->i32{println!("rhs {}",value);value}
+fn main(){let mut owner=Owner{value:Value{n:4i32}};owner.n+=rhs(3i32);owner.n=rhs(11i32);println!("{}",owner.n);let mut shadow=Shadow{value:Value{n:2i32},n:5i32};shadow.n+=1i32;println!("{} {}",shadow.n,shadow.value.n);}
+"#,
+    );
+}
+
+#[test]
+fn implicit_deref_mut_fields_reject_invalid_unused_programs() {
+    let prefix = r#"
+use std::ops::{Deref,DerefMut};
+struct Value{n:i32}
+struct Owner{value:Value}
+impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{&self.value}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{&mut self.value}}
+"#;
+    for body in [
+        "fn unused(){let owner=Owner{value:Value{n:1i32}};owner.n+=1i32;}fn main(){}",
+        "fn unused(){let mut owner=Owner{value:Value{n:1i32}};let loan=&owner.n;owner.n=3i32;println!(\"{}\",loan);}fn main(){}",
+        "fn unused(){let mut owner=Owner{value:Value{n:1i32}};owner.absent=3i32;}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject(&format!("{prefix}{body}"));
+    }
+}
+
+#[test]
 fn unchanged_sort_by_actual_program() {
     iterator_oracle::stock_native(include_str!("fixtures/full_programs/34_sort_by.rs"));
 }

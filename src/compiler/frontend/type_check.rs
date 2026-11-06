@@ -6968,7 +6968,8 @@ impl<'a> Checker<'a> {
         }
         Ok(result)
     }
-    /// `*local... (OP)= value` where `local` is an owned nominal with an
+    /// `*local... (OP)= value` or `local.field (OP)= value` where the field
+    /// is absent from an owned nominal with an
     /// overloaded Deref (Box, guards). Stock order: the value first, then
     /// `DerefMut::deref_mut(&mut local)`, then the write through the result.
     fn deref_mut_place_assignment(
@@ -6979,13 +6980,26 @@ impl<'a> Checker<'a> {
         value: &Expr,
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
-        if !matches!(place.fields.first(), Some(FieldSelector::Deref)) {
-            return Ok(None);
-        }
         let local = self.lookup(place.local)?;
         let owner = self.locals[local.0].ty.clone();
         if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
             return Ok(None);
+        }
+        match place.fields.first() {
+            Some(FieldSelector::Deref) => {}
+            Some(field @ (FieldSelector::Named(_) | FieldSelector::Tuple(_))) => {
+                let ir::Ty::Struct(nominal) = &owner else {
+                    return Ok(None);
+                };
+                // Stored fields take precedence over overloaded dereference.
+                // Only the genuine missing-field case may select DerefMut;
+                // call_place_projection still checks the target field and
+                // preserves its privacy, writability and projection identity.
+                if self.has_member(nominal.def().source_decl, field)? {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(None),
         }
         let Some(target) = self.deref_target_hint(&owner)? else {
             return Ok(None);
@@ -7044,6 +7058,11 @@ impl<'a> Checker<'a> {
         self.record_operator(statement as *const Stmt as usize | 1, call)?;
         let call_flow = self.flow(call);
         self.require(&call_flow, &carrier_ty)?;
+        let carrier_ty = if call_flow.ty == ir::Ty::Never {
+            carrier_ty
+        } else {
+            call_flow.ty.clone()
+        };
         let handle =
             self.temporary(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
         self.plan_budget_guard()?;
