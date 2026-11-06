@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 1039)
-        self.assertEqual(expected['rule_identities_without_proposals'], 1926)
+        self.assertEqual(expected['proposed_rule_identities'], 1063)
+        self.assertEqual(expected['rule_identities_without_proposals'], 1902)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -137,7 +137,7 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(function[field], 0)
         self.assertIsNone(function['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 1044)
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 1068)
         items = expected['profiles']['function-items']
         self.assertEqual(items['selected_pages'], ['src/types/function-item.md'])
         self.assertEqual(items['proposed_rule_identities'], 6)
@@ -178,6 +178,17 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(parameters[field], 0)
         self.assertIsNone(parameters['full_rust_completion_percent'])
+        impl_trait = expected['profiles']['impl-trait']
+        self.assertEqual(len(expected['profiles']), 36)
+        self.assertEqual(impl_trait['selected_pages'], ['src/types/impl-trait.md'])
+        self.assertEqual(impl_trait['proposed_rule_identities'], 24)
+        self.assertEqual(impl_trait['proposed_classification_counts'], {
+            'normative-semantic': 17, 'grammar': 1, 'index': 9,
+            'cross-reference': 3, 'edition-context': 1})
+        self.assertEqual(impl_trait['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(impl_trait[field], 0)
+        self.assertIsNone(impl_trait['full_rust_completion_percent'])
         textual = expected['profiles']['textual-types']
         self.assertEqual(textual['selected_pages'], ['src/types/textual.md'])
         self.assertEqual(textual['proposed_rule_identities'], 9)
