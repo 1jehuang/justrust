@@ -6,6 +6,7 @@ use std::process::Command;
 
 #[path = "support/iterator_oracle.rs"]
 mod iterator_oracle;
+use iterator_oracle::closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
 fn unchanged_sort_by_actual_program() {
@@ -719,6 +720,70 @@ fn main(){let n=13i32;let row=make(&n).take();consume(row);let text=String::from
 }
 
 #[test]
+fn refcell_fallible_borrow_state_transitions_match_stock() {
+    iterator_oracle::stock_native(
+        r#"use std::cell::RefCell;
+fn main(){let c=RefCell::new(vec![1i32]);let a=c.try_borrow().unwrap();let b=c.try_borrow().unwrap();
+println!("{} {} {}",a.len(),b.len(),c.try_borrow_mut().is_err());drop(a);println!("{}",c.try_borrow_mut().is_err());drop(b);
+{let mut w=c.try_borrow_mut().unwrap();w.push(2);println!("{} {}",c.try_borrow().is_err(),c.try_borrow_mut().is_err());}
+println!("{:?}",*c.try_borrow().unwrap());}"#,
+    );
+}
+
+#[test]
+fn refcell_fallible_errors_and_early_return_release_match_stock() {
+    iterator_oracle::stock_native(
+        r#"use std::cell::{RefCell,BorrowError,BorrowMutError};
+fn reader(c:&RefCell<i32>)->Result<i32,BorrowError>{let g=c.try_borrow()?;Ok(*g)}
+fn writer(c:&RefCell<i32>)->Result<(),BorrowMutError>{let mut g=c.try_borrow_mut()?;*g+=1;Ok(())}
+fn main(){let c=RefCell::new(3i32);let g=c.borrow();let e=writer(&c).unwrap_err();println!("{} {:?}",e,e);drop(g);writer(&c).unwrap();
+let w=c.borrow_mut();let e=reader(&c).unwrap_err();println!("{} {:?}",e,e);drop(w);println!("{}",reader(&c).unwrap());}"#,
+    );
+}
+
+#[test]
+fn refcell_fallible_guard_return_tied_to_caller_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"use std::cell::{RefCell,Ref,RefMut,BorrowError,BorrowMutError};
+fn read<'a,T>(c:&'a RefCell<T>)->Result<Ref<'a,T>,BorrowError>{c.try_borrow()}
+fn edit<'a,T>(c:&'a RefCell<T>)->Result<RefMut<'a,T>,BorrowMutError>{c.try_borrow_mut()}
+fn main(){let c=RefCell::new(String::from("a"));{let mut g=edit(&c).unwrap();g.push_str("b");}let g=read(&c).unwrap();println!("{}",*g);}"#,
+    );
+}
+
+#[test]
+fn real_reference_wrapper_return_tied_to_caller_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"struct Owner{value:i32,token:()}struct View<'a>{value:*const i32,life:&'a ()}
+impl Owner{fn view<'a>(&'a self)->View<'a>{View{value:&self.value as *const i32,life:&self.token}}}
+fn view<'a>(o:&'a Owner)->View<'a>{o.view()}
+fn main(){let o=Owner{value:7,token:()};let v=view(&o);println!("{} {:?}",unsafe{*v.value},v.life);}"#,
+    );
+}
+
+#[test]
+fn refcell_fallible_borrows_reject_invalid_unused_programs() {
+    for source in [
+        "use std::cell::RefCell;fn unused(c:&RefCell<i32>){let mut r=c.try_borrow().unwrap();*r=4;}fn main(){}",
+        "use std::cell::{RefCell,Ref};fn unused()->Ref<'static,i32>{let c=RefCell::new(1);c.try_borrow().unwrap()}fn main(){}",
+        "use std::cell::{RefCell,RefMut};fn unused()->RefMut<'static,i32>{let c=RefCell::new(1);c.try_borrow_mut().unwrap()}fn main(){}",
+        "use std::cell::{RefCell,Ref,BorrowError};fn unused()->Result<Ref<'static,i32>,BorrowError>{let c=RefCell::new(1);c.try_borrow()}fn main(){}",
+        "use std::cell::RefCell;fn unused(){let c=RefCell::new(1i32);let g=c.try_borrow().unwrap();drop(c);println!(\"{}\",*g);}fn main(){}",
+        "use std::cell::RefCell;fn unused(){let c=RefCell::new(1i32);let mut g=c.try_borrow_mut().unwrap();let moved=c;*g=2;drop(moved);}fn main(){}",
+        "struct Owner{value:i32,token:()}struct View<'a>{value:*const i32,life:&'a ()}impl Owner{fn view<'a>(&'a self)->View<'a>{View{value:&self.value as *const i32,life:&self.token}}}fn unused()->View<'static>{let o=Owner{value:7,token:()};o.view()}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(failure.resource_usage.first_failure.is_none());
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
 fn field_reads_through_nested_references() {
     compare(
         "struct It{id:u32,q:u32}\nfn f(i:&&It)->u32{i.q}\n\
@@ -953,6 +1018,106 @@ fn main(){
 }
 "#,
     );
+}
+
+#[test]
+fn reference_free_leaf_reborrow_with_copy_token_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"
+struct Owner<'a,T>{token:&'a (),value:T}
+fn leaf<'a,'b,T>(owner:&'b mut Owner<'a,T>)->&'b mut T{&mut owner.value}
+fn main(){
+    let token=();
+    let mut text=Owner{token:&token,value:String::from("account")};
+    leaf(&mut text).push_str(" updated");
+    println!("{}",text.value);
+    let mut numbers=Owner{token:&token,value:vec![2i32,3i32]};
+    leaf(&mut numbers).push(5i32);
+    println!("{:?}",numbers.value);
+}
+"#,
+    );
+}
+
+#[test]
+fn reference_free_leaf_reborrow_drop_leaf_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"
+struct Owner<'a,T>{token:&'a (),value:T}
+fn leaf<'a,'b,T>(owner:&'b mut Owner<'a,T>)->&'b mut T{&mut owner.value}
+struct Notice{value:i32}
+impl Drop for Notice{fn drop(&mut self){println!("drop {}",self.value);}}
+fn main(){let token=();let mut owner=Owner{token:&token,value:Notice{value:7i32}};let r=leaf(&mut owner);*r=Notice{value:11i32};println!("value {}",owner.value.value);}
+"#,
+    );
+}
+
+#[test]
+fn reference_free_leaf_reborrow_excludes_noncopy_carrier_referents() {
+    let source = r#"struct Owner<'a,T>{token:&'a (),value:T}fn leaf<'a,'b,T>(o:&'b mut Owner<'a,T>)->&'b mut T{&mut o.value}fn escape<'a>(token:&'a (),r:&'a i32)->&'static mut Vec<&'a i32>{let mut o=Owner{token,value:vec![r]};leaf(&mut o)}fn main(){}"#;
+    let root = std::env::temp_dir().join(format!(
+        "jr-reference-free-exclusion-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let input = root.join("main.rs");
+    fs::write(&input, source).unwrap();
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "--emit=metadata"])
+        .arg(&input)
+        .arg("-o")
+        .arg(root.join("out.rmeta"))
+        .output()
+        .unwrap();
+    assert!(
+        !stock.status.success() && String::from_utf8_lossy(&stock.stderr).contains("E0515"),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(source.into(), workers, true)
+            .err()
+            .expect("escaping owner must fail CHECK");
+        assert!(checked.resource_usage.first_failure.is_none());
+        iterator_oracle::validate_native_rejection(&checked).unwrap();
+        // BUILD also reaches a deliberately unsupported closed generic family.
+        // That is a fail-closed exclusion, not semantic rejection evidence.
+        let failure = compiler::compile_observed(source.into(), workers, false)
+            .err()
+            .unwrap_or_else(|| {
+                panic!("carrier-bearing non-Copy leaf must not use reference-free admission")
+            });
+        assert!(failure.resource_usage.first_failure.is_none());
+        let report = failure.report.as_ref().expect("completed graph report");
+        assert!(
+            report.node_errors.iter().any(|(_, error)| {
+                let text = format!("{error:?}");
+                text.contains("instance crate::leaf (")
+                    && text.contains(
+                        "unsupported original carrier body requires a complete closed family proof",
+                    )
+            }),
+            "workers={workers}: {failure}"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reference_free_leaf_reborrow_rejects_overlap_and_owner_moves() {
+    for source in [
+        r#"struct Owner<'a,T>{token:&'a (),value:T}fn leaf<'a,'b,T>(o:&'b mut Owner<'a,T>)->&'b mut T{&mut o.value}fn main(){let token=();let mut o=Owner{token:&token,value:String::from("x")};let a=leaf(&mut o);let b=leaf(&mut o);println!("{} {}",&*a,&*b);}"#,
+        r#"struct Owner<'a,T>{token:&'a (),value:T}fn leaf<'a,'b,T>(o:&'b mut Owner<'a,T>)->&'b mut T{&mut o.value}fn main(){let token=();let mut o=Owner{token:&token,value:String::from("x")};let a=leaf(&mut o);drop(o);println!("{}",&*a);}"#,
+        r#"struct Owner<'a,T>{token:&'a (),value:T}fn leaf<'a,'b,T>(o:&'b mut Owner<'a,T>)->&'b mut T{&mut o.value}fn escape<'a>(token:&'a ())->&'static mut &'a i32{let n=7;let mut o=Owner{token,value:&n};leaf(&mut o)}fn main(){}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
 }
 
 #[test]

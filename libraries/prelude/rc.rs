@@ -1,6 +1,7 @@
 // Rc owns separate typed value and count allocations. Pointee unsizing preserves
 // both allocations, without unsized inline-header layout or base reconstruction.
 use super::mem::{raw_alloc, raw_free, storage_stride};
+use core::cell::Cell;
 
 pub struct Rc<T: ?Sized> {
     ptr: *mut T,
@@ -71,59 +72,99 @@ impl<T: ?Sized> super::ops::Deref for Rc<T> {
 
 /// Interior mutability with a dynamic borrow flag: 0 free, n>0 shared
 /// readers, usize::MAX one writer. Conflicts panic, as std's do. Guards hold
-/// raw pointers; the `'b` borrow of the cell is carried by `life`.
+/// raw value pointers and a shared reference to the scalar borrow counter.
+/// The counter reference keeps the cell alive through ordinary carrier analysis.
 pub struct RefCell<T> {
-    flag: usize,
+    flag: Cell<usize>,
     value: T,
 }
 
 pub struct Ref<'b, T> {
-    flag: *mut usize,
+    flag: &'b Cell<usize>,
     value: *const T,
-    life: *const &'b (),
 }
 
 pub struct RefMut<'b, T> {
-    flag: *mut usize,
+    flag: &'b Cell<usize>,
     value: *mut T,
-    life: *const &'b (),
+}
+
+pub struct BorrowError {
+    private: (),
+}
+
+pub struct BorrowMutError {
+    private: (),
+}
+
+impl super::fmt::Debug for BorrowError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("BorrowError")
+    }
+}
+
+impl super::fmt::Display for BorrowError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("RefCell already mutably borrowed")
+    }
+}
+
+impl super::fmt::Debug for BorrowMutError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("BorrowMutError")
+    }
+}
+
+impl super::fmt::Display for BorrowMutError {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.pad("RefCell already borrowed")
+    }
 }
 
 impl<T> RefCell<T> {
     pub fn new(value: T) -> RefCell<T> {
-        RefCell { flag: 0usize, value }
+        RefCell { flag: Cell::new(0usize), value }
     }
 
     pub fn borrow<'b>(&'b self) -> Ref<'b, T> {
-        let flag = &self.flag as *const usize as *mut usize;
-        unsafe {
-            if *flag == 18446744073709551615usize {
-                panic!("already mutably borrowed: BorrowError");
-            }
-            *flag += 1usize;
-        }
-        let value = &self.value as *const T;
-        Ref {
-            flag,
-            value,
-            life: 0usize as *const &'b (),
+        match self.try_borrow() {
+            Ok(guard) => guard,
+            Err(_) => panic!("already mutably borrowed: BorrowError"),
         }
     }
 
-    pub fn borrow_mut<'b>(&'b self) -> RefMut<'b, T> {
-        let flag = &self.flag as *const usize as *mut usize;
-        unsafe {
-            if *flag != 0usize {
-                panic!("already borrowed: BorrowMutError");
-            }
-            *flag = 18446744073709551615usize;
+    pub fn try_borrow<'b>(&'b self) -> Result<Ref<'b, T>, BorrowError> {
+        let readers = self.flag.get();
+        // Match the signed borrow-counter reader limit while reserving
+        // usize::MAX for the writer. Failure never changes the flag.
+        if readers >= 9223372036854775807usize {
+            return Err(BorrowError { private: () });
         }
-        let value = &self.value as *const T as *mut T;
-        RefMut {
-            flag,
+        self.flag.set(readers + 1usize);
+        let value = &self.value as *const T;
+        Ok(Ref {
+            flag: &self.flag,
             value,
-            life: 0usize as *const &'b (),
+        })
+    }
+
+    pub fn borrow_mut<'b>(&'b self) -> RefMut<'b, T> {
+        match self.try_borrow_mut() {
+            Ok(guard) => guard,
+            Err(_) => panic!("already borrowed: BorrowMutError"),
         }
+    }
+
+    pub fn try_borrow_mut<'b>(&'b self) -> Result<RefMut<'b, T>, BorrowMutError> {
+        if self.flag.get() != 0usize {
+            return Err(BorrowMutError { private: () });
+        }
+        self.flag.set(18446744073709551615usize);
+        let value = &self.value as *const T as *mut T;
+        Ok(RefMut {
+            flag: &self.flag,
+            value,
+        })
     }
 
     pub fn into_inner(self) -> T {
@@ -140,9 +181,7 @@ impl<'b, T> super::ops::Deref for Ref<'b, T> {
 
 impl<'b, T> Drop for Ref<'b, T> {
     fn drop(&mut self) {
-        unsafe {
-            *self.flag -= 1usize;
-        }
+        self.flag.set(self.flag.get() - 1usize);
     }
 }
 
@@ -161,9 +200,7 @@ impl<'b, T> super::ops::DerefMut for RefMut<'b, T> {
 
 impl<'b, T> Drop for RefMut<'b, T> {
     fn drop(&mut self) {
-        unsafe {
-            *self.flag = 0usize;
-        }
+        self.flag.set(0usize);
     }
 }
 

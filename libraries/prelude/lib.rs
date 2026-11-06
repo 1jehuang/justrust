@@ -54,7 +54,7 @@ pub mod collections;
 pub mod borrow;
 pub mod rc;
 pub mod cell {
-    pub use super::rc::{Ref, RefCell, RefMut};
+    pub use super::rc::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 }
 pub mod string;
 mod unicode_uppercase;

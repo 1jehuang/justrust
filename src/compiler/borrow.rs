@@ -6366,7 +6366,23 @@ impl CarrierBuilder<'_, '_> {
         let referent_copy = self.copy_permission_in(referent, authority)?;
         let slice_copy = !referent_copy
             && self.identity_copy_slice_reborrow_admitted(params, referent, view, authority)?;
-        if !(referent_copy || slice_copy)
+        let reference_free = if referent_copy || slice_copy {
+            false
+        } else {
+            let facts = authority
+                .or(self.authority.as_deref())
+                .or(match self.facts {
+                    FactsCtx::Validated(facts) => Some(facts),
+                    _ => None,
+                });
+            if facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
+                self.metadata_value(ir::carrier_locations(referent, &self.ledger))?
+                    .is_some_and(|locations| locations.is_empty())
+            } else {
+                false
+            }
+        };
+        if !(referent_copy || slice_copy || reference_free)
             || !exact_identity_write_rows(view.original_contract(), self.budget)?
             || !exact_identity_write_rows(view.contract(), self.budget)?
         {
@@ -9103,8 +9119,9 @@ impl Plan {
                         budget.spend(row.sources.len() + f.params.len() + 1)?;
                         let CanonicalRoot::ParameterReferent(local, location) = &target.place.root
                         else {
-                            return Ok(Some(Problem::Invalid(
-                                "returned carrier escapes owned frame storage".into(),
+                            return Ok(Some(Problem::Conflict(
+                                "E0515: cannot return a value referencing owned frame storage"
+                                    .into(),
                             )));
                         };
                         if !row.sources.iter().any(|input| {
@@ -9138,8 +9155,8 @@ impl Plan {
                             let CanonicalRoot::ParameterReferent(local, location) =
                                 &target.place.root
                             else {
-                                return Ok(Some(Problem::Invalid(
-                                    "returned carrier lifetime depends on owned frame storage"
+                                return Ok(Some(Problem::Conflict(
+                                    "E0515: returned carrier lifetime depends on owned frame storage"
                                         .into(),
                                 )));
                             };
