@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 878)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2087)
+        self.assertEqual(expected['proposed_rule_identities'], 900)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2065)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -90,6 +90,15 @@ class InventoryTests(unittest.TestCase):
                       'completed_rule_rows'):
             self.assertEqual(core[field], 0)
         self.assertIsNone(core['full_rust_completion_percent'])
+        types = expected['profiles']['type-expressions']
+        self.assertEqual(types['selected_pages'], ['src/types.md'])
+        self.assertEqual(types['proposed_rule_identities'], 22)
+        self.assertEqual(types['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence',
+                      'completed_rule_rows'):
+            self.assertEqual(types[field], 0)
+        self.assertIsNone(types['full_rust_completion_percent'])
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 905)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
@@ -324,15 +333,15 @@ class ReferenceRulesTests(unittest.TestCase):
         (self.root / "data").mkdir()
         (self.root / "tests/support").mkdir(parents=True)
         self.candidate = fixture()
-        self.candidate["sections"][0]["source_refs"][0]["section"] = "types.html"
+        self.candidate["sections"][0]["source_refs"][0]["section"] = "type-layout.html"
         for name, value in (("compiler-compatibility-contract.json", contract_fixture()),
                             ("compiler-compatibility-scope.json", scope_fixture()),
                             ("compiler-language-inventory.json", self.candidate)):
             (self.root / "data" / name).write_text(json.dumps(value), encoding="utf-8")
         (self.root / "tests/support/stock_rustc.rs").write_text(VERIFIER, encoding="utf-8")
         self.reference = "b" * 40
-        self.source = {"src/SUMMARY.md": b"# Reference\n[Types](types.md)\n",
-                       "src/types.md": b"# Types\nr[type.one]\n> [!EDITION-2024]\n",
+        self.source = {"src/SUMMARY.md": b"# Reference\n[Types](type-layout.md)\n",
+                       "src/type-layout.md": b"# Types\nr[type.one]\n> [!EDITION-2024]\n",
                        "src/unlinked.md": b"# Extra\nr[type.unlinked]\n"}
         self.archive = self.root / "reference.tar.gz"
         self.write_archive(list(self.source.items()))
@@ -346,7 +355,7 @@ class ReferenceRulesTests(unittest.TestCase):
         pages = []
         for path, raw in self.source.items():
             rules, headings, editions = parse_markdown(raw.decode())
-            linked = path == "src/types.md"
+            linked = path == "src/type-layout.md"
             pages.append({"path": path, "url": "https://github.com/rust-lang/reference/blob/" + self.reference + "/" + path,
                           "sha256": inventory.sha256(raw), "rules": rules, "headings": headings,
                           "edition_note_markers": editions, "candidate_section": "types" if linked else None,
@@ -366,8 +375,8 @@ class ReferenceRulesTests(unittest.TestCase):
                         "chapter_pages_without_candidate_section": 0, "candidate_pages_absent_from_pinned_summary": 0,
                         "rules_with_reviewed_obligation_mapping": 0, "rules_requiring_mapping_review": 2},
                      "pinned_pages_without_candidate_section": [], "candidate_pages_absent_from_pinned_summary": [],
-                     "pages": [p for p in pages if p["path"] == "src/types.md"],
-                     "unlinked_markdown_files": [p for p in pages if p["path"] != "src/types.md"],
+                     "pages": [p for p in pages if p["path"] == "src/type-layout.md"],
+                     "unlinked_markdown_files": [p for p in pages if p["path"] != "src/type-layout.md"],
                      "limitations": ["Synthetic metadata, not semantic or executable coverage."]}
 
     def write_archive(self, entries):
@@ -438,8 +447,8 @@ class ReferenceRulesTests(unittest.TestCase):
         self.reject(self.data)
 
     def test_page_and_global_label_identities(self):
-        for name, bad in (("url", "https://github.com/rust-lang/reference/blob/main/src/types.md"),
-                          ("path", "src/../types.md"), ("path", "/src/types.md"),
+        for name, bad in (("url", "https://github.com/rust-lang/reference/blob/main/src/type-layout.md"),
+                          ("path", "src/../type-layout.md"), ("path", "/src/type-layout.md"),
                           ("sha256", "no"), ("candidate_section", "not-types"),
                           ("candidate_obligations", ["unknown"]), ("candidate_obligations", []),
                           ("rule_obligation_mapping_status", "reviewed")):
@@ -522,8 +531,8 @@ class ReferenceRulesTests(unittest.TestCase):
 
     def test_unsafe_duplicate_and_mismatched_archives(self):
         for entries in ([*self.source.items(), ("../escape.md", b"bad")],
-                        [*self.source.items(), ("src/types.md", b"duplicate")],
-                        [("src/types.md", b"bad")]):
+                        [*self.source.items(), ("src/type-layout.md", b"duplicate")],
+                        [("src/type-layout.md", b"bad")]):
             self.write_archive(entries)
             altered = copy.deepcopy(self.data)
             altered["provenance"]["source_archive_sha256"] = inventory.sha256(self.archive.read_bytes())
