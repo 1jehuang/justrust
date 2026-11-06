@@ -3,6 +3,8 @@
 import contextlib
 import copy
 import io
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -394,6 +396,420 @@ class EvidenceTests(unittest.TestCase):
                 self.assertNotEqual(before, added, filename)
                 path.write_text('{"revision": 2}')
                 self.assertNotEqual(added, c.source_identity(self.root), filename)
+
+
+class SnapshotTests(unittest.TestCase):
+    """Tiny real Git objects and subprocesses, not Rust compatibility proofs."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="conformance-snapshot-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.write("tests/a.rs", "#[test]\nfn accepts() {}\n")
+        self.write("tests/support/stock_rustc.rs", "release commit llvm")
+        self.write("src/input.txt", "committed\n")
+        self.write("run.sh", "#!/bin/sh\n# $Format:%H$\nexit 0\n")
+        (self.repo / "run.sh").chmod(0o755)
+        self.write(".gitattributes", "src/input.txt export-ignore\nrun.sh export-subst\n")
+        self.manifest = {"schema_version": 1, "contract": {
+            "edition": "2024", "target": "x86_64-unknown-linux-gnu", "semantic_inventory": "incomplete",
+            "oracle": {"release": "release", "commit": "commit", "llvm": "llvm",
+                       "verifier": "tests/support/stock_rustc.rs"}},
+            "gates": [{"id": "sample", "kind": "tests", "suites": ["a"], "profiles": ["full"]}],
+            "requirements": [{"id": "sample", "state": "partial", "gates": ["sample"], "remaining": "open"}],
+            "known_gaps": []}
+        self.scope = {"schema_version": 1, "scope": self.manifest["contract"], "areas": [
+            {"id": "sample", "title": "Sample", "requirements": [
+                {"id": "sample", "title": "Sample", "gates": [
+                    {"layer": layer, "tests": [{"suite": "a", "test": "accepts"}]}
+                    for layer in ("feature", "rejection", "interaction", "end_to_end")]}]}]}
+        self.write(str(c.MANIFEST), c.encoded(self.manifest))
+        self.write("data/compiler-compatibility-scope.json", c.encoded(self.scope))
+        self.write("tests/archive_case.py", """import pathlib, unittest
+class ArchivedCase(unittest.TestCase):
+    def test_source(self):
+        self.assertEqual(pathlib.Path('src/input.txt').read_text(), 'committed\\n')
+unittest.main()
+""")
+        self.commit = self.commit_all()
+        self.directory = self.base / "snapshot"
+        self.client_dir = self.base / "bin"
+        self.client_dir.mkdir()
+        self.client = self.client_dir / "justrust"
+        self.client.write_text("#!" + sys.executable + "\n" + """import os, pathlib, subprocess, sys
+root = pathlib.Path.cwd()
+assert root == pathlib.Path(os.environ['EXPECTED_SNAPSHOT_ROOT'])
+assert (root / 'src/input.txt').read_text() == 'committed\\n'
+result = subprocess.run([sys.executable, '-B', 'tests/archive_case.py'])
+if result.returncode:
+    sys.exit(result.returncode)
+if os.environ.get('MUTATE_SNAPSHOT'):
+    path = root / 'src/input.txt'
+    path.chmod(0o644)
+    path.write_text('late drift\\n')
+    path.chmod(0o444)
+print('test result: ok. 1 passed; 0 failed;')
+""")
+        self.client.chmod(0o755)
+        self.environment = patch.dict(os.environ, {
+            "PATH": str(self.client_dir) + os.pathsep + os.environ.get("PATH", ""),
+            "EXPECTED_SNAPSHOT_ROOT": str(self.directory / "source")})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def git(self, *args, payload=None):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], input=payload,
+                                       stderr=subprocess.PIPE)
+
+    def write(self, name, value):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value if isinstance(value, bytes) else value.encode())
+
+    def commit_all(self):
+        self.git("add", ".")
+        self.git("-c", "user.name=Snapshot fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-qm", "fixture")
+        return self.git("rev-parse", "HEAD").decode().strip()
+
+    def snapshot(self, create=True, commit=None):
+        snapshot = c.GitSnapshot(self.directory, self.repo, commit or self.commit)
+        if create:
+            snapshot.create()
+        return snapshot
+
+    def argv(self, action="track", *extra):
+        return [action, "--snapshot", str(self.directory), "--snapshot-repository", str(self.repo),
+                "--snapshot-commit", self.commit, "--target-dir", str(self.base / "target"), *extra]
+
+    def main(self, argv):
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = c.main(argv)
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_exact_objects_attributes_modes_and_live_changes(self):
+        snapshot = self.snapshot()
+        with snapshot:
+            before = snapshot.source_identity()
+            self.assertEqual(before["tree"], self.git("rev-parse", self.commit + "^{tree}").decode().strip())
+            self.assertEqual(before["provenance"], "git-archive-v1")
+            self.assertEqual(before["executed_runner"]["conformance.py"], c.digest(Path(c.__file__).read_bytes()))
+            self.assertEqual((snapshot.ROOT / "src/input.txt").read_text(), "committed\n")
+            self.assertEqual((snapshot.ROOT / "run.sh").stat().st_mode & 0o777, 0o555)
+            self.assertIn("$Format:%H$", (snapshot.ROOT / "run.sh").read_text())
+            self.assertEqual((snapshot.ROOT / "src/input.txt").stat().st_mode & 0o777, 0o444)
+            self.write("src/input.txt", "other owner's live edit\n")
+            self.write("src/extra.txt", "untracked live input\n")
+            self.commit_all()
+            self.assertEqual(snapshot.source_identity(), before)
+            self.assertNotEqual(c.source_identity(self.repo), before)
+            self.assertFalse((snapshot.ROOT / ".git").exists())
+
+    def test_snapshot_rejects_changed_missing_extra_modes_and_symlinks(self):
+        snapshot = self.snapshot()
+        with snapshot:
+            path = snapshot.ROOT / "src/input.txt"
+            parent = path.parent
+            for mutation in ("bytes", "missing", "extra", "mode", "symlink", "directory"):
+                with self.subTest(mutation=mutation):
+                    parent.chmod(0o700)
+                    path.chmod(0o644)
+                    if mutation == "bytes":
+                        path.write_text("forged\n")
+                        path.chmod(0o444)
+                    elif mutation == "missing":
+                        path.unlink()
+                    elif mutation == "extra":
+                        (parent / "extra.rs").write_text("ignored or untracked still forbidden")
+                        path.chmod(0o444)
+                    elif mutation == "mode":
+                        path.chmod(0o555)
+                    elif mutation == "symlink":
+                        path.unlink()
+                        path.symlink_to(self.repo / "src/input.txt")
+                    else:
+                        (parent / "extra-directory").mkdir()
+                        (parent / "extra-directory").chmod(0o500)
+                        path.chmod(0o444)
+                    parent.chmod(0o500)
+                    with self.assertRaises((c.InvalidEvidence, OSError)):
+                        snapshot.source_identity()
+                    parent.chmod(0o700)
+                    if path.exists() or path.is_symlink():
+                        path.unlink()
+                    path.write_text("committed\n")
+                    path.chmod(0o444)
+                    if (parent / "extra.rs").exists():
+                        (parent / "extra.rs").unlink()
+                    if (parent / "extra-directory").exists():
+                        (parent / "extra-directory").rmdir()
+                    parent.chmod(0o500)
+                    snapshot.source_identity()
+
+    def test_lock_excludes_other_campaigns_and_rejects_foreign_lock(self):
+        snapshot = self.snapshot()
+        with snapshot:
+            with self.assertRaises(BlockingIOError):
+                with self.snapshot(create=False):
+                    self.fail("concurrent campaign acquired snapshot")
+        lock = self.directory / "owner.lock"
+        lock.unlink()
+        lock.symlink_to(self.client)
+        with self.assertRaises(c.InvalidEvidence):
+            with self.snapshot(create=False):
+                pass
+
+    def test_lock_inode_replacement_and_foreign_owner_rejected(self):
+        snapshot = self.snapshot()
+        with snapshot:
+            lock = self.directory / "owner.lock"
+            value = lock.read_bytes()
+            lock.rename(self.directory / "old.lock")
+            lock.write_bytes(value)
+            lock.chmod(0o600)
+            with self.assertRaisesRegex(c.InvalidEvidence, "lock replaced"):
+                snapshot.source_identity()
+        with patch.object(c.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaises(c.InvalidEvidence):
+                with self.snapshot(create=False):
+                    pass
+
+    def test_forged_commit_tree_and_git_environment_do_not_select_other_source(self):
+        with self.assertRaises(c.InvalidEvidence):
+            self.snapshot(commit="0" * 40)
+        self.assertFalse(self.directory.exists())
+        for commit in ("HEAD", self.commit + "^{tree}", "../HEAD", "-" * 40):
+            with self.assertRaises(c.InvalidEvidence):
+                c.GitSnapshot(self.directory, self.repo, commit)
+        tree = self.git("rev-parse", self.commit + "^{tree}").decode().strip()
+        with self.assertRaises(c.InvalidEvidence):
+            self.snapshot(commit=tree)
+        self.write("src/input.txt", "replacement\n")
+        replacement = self.commit_all()
+        self.git("replace", self.commit, replacement)
+        with patch.dict(os.environ, {"GIT_DIR": "/absent", "GIT_WORK_TREE": "/absent",
+                                     "GIT_OBJECT_DIRECTORY": "/absent", "GIT_INDEX_FILE": "/absent"}):
+            with self.snapshot() as snapshot:
+                self.assertEqual((snapshot.ROOT / "src/input.txt").read_text(), "committed\n")
+                identity = snapshot.source_identity()
+                self.assertEqual(identity["revision"], self.commit)
+                self.assertEqual(identity["tree"], tree)
+
+    def test_unsupported_symlink_and_gitlink_objects_fail_before_creation(self):
+        (self.repo / "unsafe").symlink_to("/etc/passwd")
+        commit = self.commit_all()
+        with self.assertRaisesRegex(c.InvalidEvidence, "unsupported"):
+            self.snapshot(commit=commit)
+        self.assertFalse(self.directory.exists())
+        (self.repo / "unsafe").unlink()
+        self.git("add", "-u")
+        self.git("update-index", "--add", "--cacheinfo", "160000," + self.commit + ",submodule")
+        self.git("-c", "user.name=Snapshot fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-qm", "gitlink")
+        commit = self.git("rev-parse", "HEAD").decode().strip()
+        with self.assertRaisesRegex(c.InvalidEvidence, "unsupported"):
+            self.snapshot(commit=commit)
+
+    def test_real_tracker_subprocess_and_retained_coverage_after_live_head_changes(self):
+        out = self.base / "receipts"
+        code, _, errors = self.main(self.argv("track", "--create-snapshot", "--out", str(out)))
+        self.assertEqual((code, errors), (0, ""))
+        report = c.load_json(out / "report.json")
+        self.assertEqual(report["source_before"], report["source_after"])
+        self.assertEqual(report["source_before"]["provenance"], "git-archive-v1")
+        self.assertEqual(report["results"][0]["tests_passed"], 1)
+        self.assertIn("Ran 1 test", (out / report["results"][0]["log"]).read_text())
+        self.write("src/input.txt", "different live compiler\n")
+        self.commit_all()
+        code, output, errors = self.main(self.argv("coverage", "--evidence", str(out), "--require-complete", "--json"))
+        self.assertEqual((code, errors), (0, ""))
+        self.assertTrue(json.loads(output)["campaign"]["all_cases_passed"])
+        import compatibility_scope as scope
+        manifest = scope.case_manifest(self.scope, self.manifest, c)
+        runner = scope.runner_identity(c)
+        values = scope.evidence(self.scope, manifest, out, c.source_identity(self.repo), runner, c, self.repo)
+        self.assertTrue(all(row["status"] == "stale" for row in values.values()))
+        report["source_before"]["tree"] = "f" * 40
+        (out / "report.json").write_bytes(c.encoded(report))
+        code, output, _ = self.main(self.argv("coverage", "--evidence", str(out), "--require-measured", "--json"))
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(output)["campaign"]["complete_current_measurement"])
+
+    def test_late_source_drift_never_finalizes_successful_receipt(self):
+        out = self.base / "receipts"
+        with patch.dict(os.environ, {"MUTATE_SNAPSHOT": "1"}):
+            code, _, errors = self.main(self.argv("track", "--create-snapshot", "--out", str(out)))
+        self.assertEqual(code, 2)
+        self.assertIn("source bytes changed", errors)
+        report = c.load_json(out / "report.json")
+        self.assertNotIn("source_after", report)
+        self.assertFalse((out / "coverage.json").exists())
+
+    def test_snapshot_cli_refuses_incomplete_flags_and_unsafe_paths_before_execution(self):
+        invalid = [["track", "--snapshot", str(self.directory)],
+                   ["coverage", "--create-snapshot"],
+                   self.argv("run"),
+                   self.argv("track", "--target-dir", str(self.repo / "target")),
+                   self.argv("track", "--out", str(self.repo / ".git/receipts")),
+                   self.argv("track", "--target-dir", str(self.directory / "source/target"))]
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(c, "execute") as execute:
+                self.assertEqual(self.main(argv)[0], 2)
+                execute.assert_not_called()
+        self.snapshot()
+        code, _, errors = self.main(self.argv("track", "--manifest", str(self.repo / c.MANIFEST),
+                                              "--out", str(self.base / "unused-receipts")))
+        self.assertEqual(code, 2)
+        self.assertIn("manifest/scope", errors)
+
+    def tree_commit(self, tree):
+        return self.git("-c", "user.name=Snapshot fixture", "-c", "user.email=fixture@example.invalid",
+                        "commit-tree", tree, "-p", self.commit, "-m", "adversarial tree").decode().strip()
+
+    def test_empty_committed_subtree_and_parent_traversal_are_explicitly_rejected(self):
+        empty = self.git("mktree", payload=b"").strip()
+        listing = self.git("ls-tree", self.commit) + b"040000 tree " + empty + b"\tempty\n"
+        tree = self.git("mktree", payload=listing).decode().strip()
+        with self.assertRaisesRegex(c.InvalidEvidence, "empty Git subtree"):
+            self.snapshot(commit=self.tree_commit(tree))
+        blob = self.git("rev-parse", self.commit + ":src/input.txt").decode().strip()
+        for name in (b"../escape", b"/absolute", b".git/config"):
+            tree_bytes = b"100644 " + name + b"\0" + bytes.fromhex(blob)
+            tree = self.git("hash-object", "-w", "-t", "tree", "--literally", "--stdin", payload=tree_bytes).decode().strip()
+            with self.subTest(name=name), self.assertRaisesRegex(c.InvalidEvidence, "unsafe"):
+                self.snapshot(commit=self.tree_commit(tree))
+        self.assertFalse(self.directory.exists())
+
+    def test_size_and_disk_limits_fail_before_materialization(self):
+        snapshot = self.snapshot(create=False)
+        real_git = snapshot.git
+        def oversized(*args, **kwargs):
+            value = real_git(*args, **kwargs)
+            if args[0] == "ls-tree":
+                row, rest = value.split(b"\0", 1)
+                header, name = row.split(b"\t", 1)
+                value = header.rsplit(b" ", 1)[0] + b" 536870913\t" + name + b"\0" + rest
+            return value
+        with patch.object(snapshot, "git", side_effect=oversized):
+            with self.assertRaisesRegex(c.InvalidEvidence, "infrastructure limit"):
+                snapshot.create()
+        self.assertFalse(self.directory.exists())
+        from types import SimpleNamespace
+        with patch.object(c.shutil, "disk_usage", return_value=SimpleNamespace(free=0)):
+            with self.assertRaisesRegex(c.InvalidEvidence, "free disk"):
+                snapshot.create()
+        self.assertFalse(self.directory.exists())
+
+    def test_replaced_source_root_and_mutated_lock_token_never_authenticate(self):
+        snapshot = self.snapshot()
+        with snapshot:
+            root = snapshot.ROOT
+            root.chmod(0o700)
+            root.rename(self.base / "old-source")
+            (self.base / "old-source").chmod(0o500)
+            root.mkdir(mode=0o500)
+            with self.assertRaisesRegex(c.InvalidEvidence, "source directory replaced"):
+                snapshot.source_identity()
+            root.rmdir()
+            (self.base / "old-source").chmod(0o700)
+            (self.base / "old-source").rename(root)
+            root.chmod(0o500)
+            lock = self.directory / "owner.lock"
+            value = lock.read_bytes()
+            lock.write_bytes(value[:-2] + (b"0" if value[-2:-1] != b"0" else b"1") + b"\n")
+            with self.assertRaisesRegex(c.InvalidEvidence, "ownership token changed"):
+                snapshot.source_identity()
+
+    def test_wrong_snapshot_cwd_cannot_gain_execution_credit(self):
+        out = self.base / "receipts"
+        with patch.dict(os.environ, {"EXPECTED_SNAPSHOT_ROOT": str(self.repo)}):
+            code, _, errors = self.main(self.argv("track", "--create-snapshot", "--out", str(out)))
+        self.assertEqual((code, errors), (1, ""))
+        report = c.load_json(out / "report.json")
+        self.assertEqual(report["results"][0]["outcome"], "failed")
+        self.assertFalse(c.load_json(out / "coverage.json")["campaign"]["all_cases_passed"])
+
+    def test_invalid_snapshot_does_not_fall_back_to_live_git_identity(self):
+        self.snapshot()
+        (self.directory / "owner.lock").chmod(0o666)
+        with patch.object(c, "source_identity", side_effect=AssertionError("no legacy fallback")):
+            self.assertEqual(self.main(self.argv("coverage", "--evidence", str(self.base / "absent")))[0], 2)
+
+    def test_legacy_identity_function_and_default_receipt_schema_remain_exact(self):
+        # Independent reference for the original legacy wire format.
+        legacy = c.source_identity(self.repo)
+        self.assertEqual(set(legacy), {"revision", "inputs_sha256", "input_files"})
+        self.assertEqual(legacy["revision"], self.commit)
+        self.assertNotIn("provenance", legacy)
+        self.write("src/untracked.rs", "tracked only by legacy source inventory\n")
+        self.assertNotEqual(c.source_identity(self.repo), legacy)
+
+    def test_threaded_tracker_cases_share_one_exclusively_owned_snapshot(self):
+        self.write("tests/a.rs", "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n")
+        for gate in self.scope["areas"][0]["requirements"][0]["gates"]:
+            gate["tests"].append({"suite": "a", "test": "rejects"})
+        self.write("data/compiler-compatibility-scope.json", c.encoded(self.scope))
+        self.commit = self.commit_all()
+        out = self.base / "threaded-receipts"
+        code, _, errors = self.main(self.argv("track", "--create-snapshot", "--jobs", "2", "--out", str(out)))
+        self.assertEqual((code, errors), (0, ""))
+        report = c.load_json(out / "report.json")
+        self.assertEqual(len(report["results"]), 2)
+        self.assertTrue(all(row["outcome"] == "passed" for row in report["results"]))
+        self.assertEqual(report["source_before"], report["source_after"])
+        self.assertTrue(c.load_json(out / "coverage.json")["campaign"]["all_cases_passed"])
+
+    def test_retained_snapshot_authenticates_in_fresh_process_with_different_hash_seed(self):
+        out = self.base / "cross-process-receipts"
+        argv = self.argv("track", "--create-snapshot", "--out", str(out))
+        with patch.dict(os.environ, {"PYTHONHASHSEED": "1"}):
+            process = subprocess.run([sys.executable, "-B", str(Path(c.__file__).resolve()), *argv],
+                                     capture_output=True, text=True)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        argv = self.argv("coverage", "--evidence", str(out), "--require-complete", "--json")
+        with patch.dict(os.environ, {"PYTHONHASHSEED": "2"}):
+            process = subprocess.run([sys.executable, "-B", str(Path(c.__file__).resolve()), *argv],
+                                     capture_output=True, text=True)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertTrue(json.loads(process.stdout)["campaign"]["all_cases_passed"])
+
+    def test_loaded_runner_identity_rejects_foreign_patched_code(self):
+        import compatibility_scope
+        import compatibility_inventory
+        for module, name in ((c, "execute"), (compatibility_scope, "evidence"),
+                             (compatibility_inventory, "load_and_summarize")):
+            with self.subTest(module=module.__name__), patch.object(module, name, lambda *args: None):
+                with self.assertRaisesRegex(c.InvalidEvidence, "foreign loaded runner callable"):
+                    c.loaded_runner_identity(module)
+        with patch.object(c.GitSnapshot, "check_lock", lambda *args: None):
+            with self.assertRaisesRegex(c.InvalidEvidence, "GitSnapshot.check_lock"):
+                c.loaded_runner_identity(c)
+
+    def test_loaded_runner_identity_rejects_source_changed_after_import(self):
+        from types import ModuleType
+        path = self.base / "runner_fixture.py"
+        path.write_text("def run():\n    return 1\n")
+        module = ModuleType("runner_fixture")
+        module.__file__ = str(path)
+        exec(compile(path.read_bytes(), str(path), "exec"), vars(module))
+        before = c.loaded_runner_identity(module)
+        self.assertIn("run", before["loaded_code_sha256"])
+        path.write_text("def run():\n    return 2\n")
+        with self.assertRaisesRegex(c.InvalidEvidence, "stale or foreign"):
+            c.loaded_runner_identity(module)
+
+    def test_pure_invalid_snapshot_flags_never_materialize(self):
+        for flags in (("--require-measured",), ("--require-complete",),
+                      ("--jobs", "9"), ("--timeout", "0"), ("--suite", "a")):
+            with self.subTest(flags=flags), patch.object(c.GitSnapshot, "create") as create:
+                code, _, _ = self.main(self.argv("track", "--create-snapshot", "--out", str(self.base / "absent"), *flags))
+                self.assertEqual(code, 2)
+                create.assert_not_called()
+        self.assertFalse(self.directory.exists())
 
 
 class CatalogTests(unittest.TestCase):
