@@ -536,14 +536,33 @@ def failure_annotation(text: str) -> str:
     return next(iter(found)) if len(found) == 1 else "unannotated"
 
 
+def hosted_admission_refusal(text: str) -> bool:
+    """Recognize only the client's complete, admission-only API refusal log.
+
+    Additional compiler/test output makes this ambiguous and stays failed. This
+    is diagnostic classification, never proof of execution or passing tests.
+    """
+    lines = text.removesuffix("\n").split("\n")
+    lines = [line.removesuffix("\r") for line in lines]
+    return (len(lines) == 2
+            and lines[0] == "justrust: remote (JUSTRUST_REMOTE=force)"
+            and re.fullmatch(
+                r"justrust: remote required, refusing local fallback: "
+                r"Jcode API error [45][0-9]{2} \([a-z][a-z0-9_]*\): [^\r\n]+",
+                lines[1]) is not None)
+
+
 def outcome(returncode: int | None, text: str, kind: str, timed_out: bool = False) -> str:
     if timed_out:
         return "timeout"
     if returncode is None:
         return "infrastructure"
     if returncode != 0:
+        if (returncode == 1 and kind in {"tests", "lib", "all-tests", "case", "clippy"}
+                and hosted_admission_refusal(text)):
+            return "infrastructure"
         return "failed"
-    if client_retried_failures(text):
+    if hosted_admission_refusal(text) or client_retried_failures(text):
         return "unverified"
     if "0 tests matched" in text:
         return "unverified"

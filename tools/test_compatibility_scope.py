@@ -67,6 +67,21 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(result["campaign"]["expected_case_count"], 0)
         self.assertFalse(result["campaign"]["complete_current_measurement"])
 
+    def test_hosted_admission_refusal_is_not_a_measured_semantic_failure(self):
+        text = ("justrust: remote (JUSTRUST_REMOTE=force)\n"
+                "justrust: remote required, refusing local fallback: Jcode API error 404 "
+                "(not_found): no route for POST /internal/builds/charge\n")
+        directory, _ = self.report("hosted-refused", {
+            test: (1, text) for test in ("accepts", "rejects")})
+        for strict in (False, True):
+            code, result = self.measured_coverage([directory], strict=strict)
+            self.assertEqual(code, 1)
+            self.assertFalse(result["campaign"]["complete_current_measurement"])
+            self.assertFalse(result["campaign"]["all_cases_passed"])
+            self.assertEqual(result["campaign"]["measured_case_count"], 0)
+            self.assertEqual(result["exact_case_counts"]["infrastructure"], 2)
+            self.assertEqual(result["exact_case_counts"]["failed"], 0)
+
     def test_require_measured_noncurrent_conflicting_and_unverified_receipts_fail(self):
         for status in ("stale", "conflicting", "timeout", "infrastructure", "unverified"):
             with self.subTest(status=status):

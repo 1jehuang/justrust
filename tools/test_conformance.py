@@ -24,6 +24,13 @@ CLIENT_RETRY_LINES = (
 )
 
 
+HOSTED_REFUSAL = (
+    "justrust: remote (JUSTRUST_REMOTE=force)\n"
+    "justrust: remote required, refusing local fallback: Jcode API error 404 "
+    "(not_found): no route for POST /internal/builds/charge\n"
+)
+
+
 class EvidenceTests(unittest.TestCase):
     def test_require_measured_invalid_combinations_are_rejected_before_manifest_io(self):
         actions = ("validate", "plan", "discover", "run", "assess", "track",
@@ -260,6 +267,64 @@ class EvidenceTests(unittest.TestCase):
                 for kind in ("tests", "lib", "all-tests", "fmt", "clippy"):
                     self.assertEqual(c.outcome(0, text, kind), "unverified")
                     self.assertEqual(c.outcome(1, text, kind), "failed")
+
+    def test_hosted_admission_refusal_is_unmeasured_infrastructure(self):
+        for text in (HOSTED_REFUSAL, HOSTED_REFUSAL.rstrip("\n"),
+                     HOSTED_REFUSAL.replace("\n", "\r\n"),
+                     HOSTED_REFUSAL.replace("404 (not_found)", "503 (unavailable)")):
+            for kind in ("tests", "lib", "all-tests", "case", "clippy"):
+                with self.subTest(text=text, kind=kind):
+                    self.assertTrue(c.hosted_admission_refusal(text))
+                    self.assertEqual(c.outcome(1, text, kind), "infrastructure")
+                    self.assertEqual(c.outcome(1, text, kind, True), "timeout")
+                    self.assertEqual(c.outcome(0, text, kind), "unverified")
+                    self.assertEqual(c.outcome(101, text, kind), "failed")
+        self.assertEqual(c.outcome(1, HOSTED_REFUSAL, "fmt"), "failed")
+
+    def test_ambiguous_or_executed_hosted_failure_stays_failed(self):
+        variants = (HOSTED_REFUSAL.split("\n", 1)[1],
+                    "quoted user source: " + HOSTED_REFUSAL,
+                    HOSTED_REFUSAL.replace("404 (not_found)", "200 (ok)"),
+                    HOSTED_REFUSAL.replace("refusing local fallback", "using local fallback"),
+                    HOSTED_REFUSAL + "\n", HOSTED_REFUSAL.replace("\n", "\u2028"))
+        variants += tuple(HOSTED_REFUSAL + extra for extra in (
+            "running 1 test\n", "test original_case ... FAILED\n",
+            "test result: FAILED. 0 passed; 1 failed;\n",
+            "justrust: ok: 1 test passed in 1s\n", "error: compiler failure\n"))
+        for text in variants:
+            with self.subTest(text=text):
+                self.assertFalse(c.hosted_admission_refusal(text))
+                self.assertEqual(c.outcome(1, text, "case"), "failed")
+
+    def test_hosted_refusal_receipt_reassessment_never_establishes_success(self):
+        report = self.report()
+        payload = HOSTED_REFUSAL.encode()
+        (self.root / "sample.log").write_bytes(payload)
+        row = report["results"][0]
+        row.update(returncode=1, outcome="infrastructure", tests_passed=0,
+                   log_sha256=c.digest(payload))
+        result = self.assess(report)
+        self.assertFalse(result["selected_gates_passed"])
+        self.assertFalse(result["full_rust_support_established"])
+        self.assertIn("sample: infrastructure", result["problems"])
+        row["outcome"] = "passed"
+        self.assertFalse(self.assess(report)["selected_gates_passed"])
+
+    def test_real_hosted_refusal_subprocess_preserves_command_and_full_log(self):
+        payload = HOSTED_REFUSAL.encode()
+        command = [sys.executable, "-c", "import sys; sys.stderr.buffer.write(" + repr(payload)
+                   + "); sys.stderr.flush(); raise SystemExit(1)"]
+        entry = {"id": "refused", "kind": "case", "command": command}
+        visible = io.StringIO()
+        with contextlib.redirect_stdout(visible):
+            result = c.execute(entry, self.root, 5, self.root)
+        self.assertEqual(result["command"], command)
+        self.assertEqual(result["returncode"], 1)
+        self.assertEqual(result["outcome"], "infrastructure")
+        self.assertEqual(result["tests_passed"], 0)
+        self.assertEqual((self.root / result["log"]).read_bytes(), payload)
+        self.assertEqual(result["log_sha256"], c.digest(payload))
+        self.assertIn(HOSTED_REFUSAL, visible.getvalue())
 
     def test_retry_words_user_identifiers_and_quoted_markers_do_not_false_positive(self):
         text = "\n".join([
