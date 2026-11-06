@@ -1765,6 +1765,16 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Dyn(a), Ty::Dyn(b)) => Arc::ptr_eq(a, b),
+        (
+            Ty::DependentArray {
+                element: a,
+                length: x,
+            },
+            Ty::DependentArray {
+                element: b,
+                length: y,
+            },
+        ) => x == y && Arc::ptr_eq(a, b),
         (Ty::Slice { element: a }, Ty::Slice { element: b }) => Arc::ptr_eq(a, b),
         (
             Ty::RawPtr {
@@ -2100,6 +2110,16 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
                 && nominal_same(x, y, |t| t.realization())
         }
         (Ty::Tuple(x), Ty::Tuple(y)) => Arc::ptr_eq(x, y) || all(x, y),
+        (
+            Ty::DependentArray {
+                element: x,
+                length: a,
+            },
+            Ty::DependentArray {
+                element: y,
+                length: b,
+            },
+        ) => a == b && (Arc::ptr_eq(x, y) || same_type_allocation(x, y)),
         (Ty::Array { element: x, len: a }, Ty::Array { element: y, len: b }) => {
             a == b && (Arc::ptr_eq(x, y) || same_type_allocation(x, y))
         }
@@ -3532,6 +3552,30 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        for binder in env.const_binders() {
+            charged(
+                &self.budget,
+                self.budget.charge_work(binder.parameters().len() + 1),
+            )?;
+            if binder.owner().declaration.snapshot != self.registry {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "foreign const binder in trait environment",
+                ));
+            }
+            let declaration = self.schema.declaration_info(binder.owner().declaration)?;
+            if !declaration
+                .env
+                .const_binders()
+                .iter()
+                .any(|original| original.as_ref() == binder.as_ref())
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "const binder differs from original declaration schema",
+                ));
+            }
+        }
         Ok(())
     }
     fn same_env(&self, left: &GenericEnv, right: &GenericEnv) -> Result<bool> {
@@ -3540,7 +3584,8 @@ impl ValidatedTraitWorld {
             self.budget
                 .charge_work(left.scopes().len().saturating_add(right.scopes().len())),
         )?;
-        Ok(left.scopes().len() == right.scopes().len()
+        Ok(left.const_binders() == right.const_binders()
+            && left.scopes().len() == right.scopes().len()
             && left
                 .scopes()
                 .iter()
@@ -3553,7 +3598,8 @@ impl ValidatedTraitWorld {
             self.budget
                 .charge_work(left.total_arity().saturating_add(right.total_arity())),
         )?;
-        Ok(left.ordered_params().eq(right.ordered_params()))
+        Ok(left.const_binders() == right.const_binders()
+            && left.ordered_params().eq(right.ordered_params()))
     }
     fn trait_header(&self, id: DeclId) -> Result<&TraitHeader> {
         if let Some(position) = self.trait_header_index.get(&self.budget, id)? {
@@ -4041,6 +4087,10 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
+            Ty::DependentArray { element, .. } => {
+                child(element)?;
+                true
+            }
             Ty::Array { element, .. } => {
                 child(element)?;
                 true
@@ -4339,6 +4389,22 @@ impl ValidatedTraitWorld {
                         },
                     )?;
                 }
+            }
+            Ty::DependentArray { element, length } => {
+                if env.const_parameter_type(*length) != Some(ir::ConstType::Int(ir::IntTy::Usize)) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dependent array const parameter lacks declaration-owned usize schema",
+                    ));
+                }
+                child(
+                    element,
+                    if usage == TypeUse::Actual {
+                        TypeUse::Actual
+                    } else {
+                        TypeUse::Aggregate
+                    },
+                )?;
             }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_TYPE_LEN {
@@ -4941,7 +5007,7 @@ impl ValidatedTraitWorld {
                         enqueue(field)?;
                     }
                 }
-                Ty::Array { element, .. } => enqueue(element)?,
+                Ty::DependentArray { element, .. } | Ty::Array { element, .. } => enqueue(element)?,
                 Ty::Struct(value) => {
                     for actual in value.def().type_args.iter() {
                         enqueue(actual)?;
@@ -5098,6 +5164,16 @@ impl ValidatedTraitWorld {
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::FnItem(a), Ty::FnItem(b)) => Ok(a.declaration == b.declaration
                 && self.eq_types(&a.type_args, &b.type_args, depth + 1)?),
+            (
+                Ty::DependentArray {
+                    element: a,
+                    length: x,
+                },
+                Ty::DependentArray {
+                    element: b,
+                    length: y,
+                },
+            ) => Ok(x == y && self.eq_ty(a, b, depth + 1)?),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
@@ -6797,9 +6873,9 @@ impl ValidatedTraitWorld {
                     mentions(wrapper.argument(), parameter, budget, depth + 1)?
                 }
                 Ty::Tuple(parts) => all(parts)?,
-                Ty::Array { element, .. } | Ty::Slice { element } => {
-                    mentions(element, parameter, budget, depth + 1)?
-                }
+                Ty::DependentArray { element, .. }
+                | Ty::Array { element, .. }
+                | Ty::Slice { element } => mentions(element, parameter, budget, depth + 1)?,
                 Ty::Ref { referent, .. }
                 | Ty::RawPtr {
                     pointee: referent, ..
@@ -10217,7 +10293,7 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::Array { element, .. } => {
+            Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
                 push(&self.budget, &mut children, element.as_ref().clone())?;
                 true
             }

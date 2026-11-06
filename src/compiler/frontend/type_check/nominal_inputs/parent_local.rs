@@ -206,6 +206,10 @@ fn substitute(
             kind: *kind,
             pointee: child(pointee)?,
         },
+        ir::Ty::DependentArray { element, length } => ir::Ty::DependentArray {
+            element: child(element)?,
+            length: *length,
+        },
         ir::Ty::Array { element, len } => ir::Ty::Array {
             element: child(element)?,
             len: *len,

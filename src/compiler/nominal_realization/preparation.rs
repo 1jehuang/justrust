@@ -539,6 +539,11 @@ pub(in crate::compiler) fn shape(
             Shape::RawPtr(*kind, Arc::new(shape(pointee, budget, depth + 1)?))
         }
         ir::Ty::Slice { element } => Shape::Slice(Arc::new(shape(element, budget, depth + 1)?)),
+        ir::Ty::DependentArray { .. } => {
+            return Err(Error::new(
+                "unsupported: const-dependent nominal realization",
+            ));
+        }
         ir::Ty::Array { element, len } => {
             Shape::Array(Arc::new(shape(element, budget, depth + 1)?), *len)
         }

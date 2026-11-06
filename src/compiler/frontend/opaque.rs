@@ -338,6 +338,7 @@ impl DeclRegistry {
                     referent: inner, ..
                 }
                 | Type::RawPtr { pointee: inner, .. }
+                | Type::DependentArray(inner, _)
                 | Type::Array(inner, _)
                 | Type::Slice(inner) => {
                     return find(inner, site, budget, depth + 1);

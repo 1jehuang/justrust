@@ -39,6 +39,11 @@ pub(super) fn close_term(
         Ok(out)
     };
     Ok(match ty {
+        ir::Ty::DependentArray { .. } => {
+            return Err(Error::new(
+                "unsupported: const-dependent nominal realization",
+            ));
+        }
         ir::Ty::Param(p) => {
             let index = env
                 .ordered_params()

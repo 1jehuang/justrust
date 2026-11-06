@@ -65,6 +65,7 @@ impl Parser<'_, '_> {
             },
             visibility: ir::Visibility::Restricted(declaration.module),
             function: Function {
+                const_params: Vec::new(),
                 embedded_source: None,
                 suspended_source: None,
                 lexical_scope,

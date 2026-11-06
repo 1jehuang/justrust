@@ -179,6 +179,7 @@ impl Parser<'_, '_> {
         }
         self.expect(")")?;
         let function = Function {
+            const_params: Vec::new(),
             embedded_source: None,
             suspended_source: None,
             lexical_scope,

@@ -2890,6 +2890,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
+        Type::DependentArray(..) | Type::ConstArgument(_) => Err("unsupported: const generics require authoritative declaration planning".into()),
         Type::ManuallyDrop(_) => Err("unsupported: ManuallyDrop requires authoritative catalog planning".into()),
         Type::Cell(_) => Err("unsupported: Cell requires authoritative catalog planning".into()),
         Type::PhantomData(_) => Err("unsupported: PhantomData requires authoritative catalog planning".into()),
@@ -9326,6 +9327,21 @@ impl<'a> Checker<'a> {
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
         if let Expr::Apply { path, value } = e {
+            if let Expr::Call { .. } = value.as_ref() {
+                let plan = self.signatures.plan()?;
+                let facts = self
+                    .signatures
+                    .facts
+                    .as_deref()
+                    .ok_or("const call application requires validated caller facts")?;
+                plan.validate_const_call_application(
+                    path,
+                    facts,
+                    self.canonical,
+                    value,
+                    &plan.budget,
+                )?;
+            }
             let previous = self.applications.borrow().len();
             if let Some((key, args)) =
                 self.partial_call_application(path, value, expectation.hard(), true)?
@@ -15643,6 +15659,7 @@ mod checked_identity_tests {
         let main = builder.path("crate::main").unwrap();
         let module = builder.module_root().unwrap();
         builder.functions.push(Function {
+            const_params: Vec::new(),
             embedded_source: None,
             suspended_source: None,
             lexical_scope: None,

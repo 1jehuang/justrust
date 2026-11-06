@@ -471,6 +471,15 @@ impl ValidatedTraitWorld {
                     child(part, replays)?;
                 }
             }
+            Ty::DependentArray { element, length } => {
+                if env.const_parameter_type(*length) != Some(ir::ConstType::Int(ir::IntTy::Usize)) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dependent array metadata changed original const binder",
+                    ));
+                }
+                child(element, replays)?;
+            }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err(FactsError::resource(
@@ -926,6 +935,15 @@ impl ValidatedTraitWorld {
                     self.validate_raw_associated_ty_with(part, env, depth + 1, replays)?;
                 }
             }
+            Ty::DependentArray { element, length } => {
+                if env.const_parameter_type(*length) != Some(ir::ConstType::Int(ir::IntTy::Usize)) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "raw dependent array changed original const binder",
+                    ));
+                }
+                self.validate_raw_associated_ty_with(element, env, depth + 1, replays)?;
+            }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err(FactsError::resource(
@@ -972,7 +990,7 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
-            Ty::Param(_) => return Ok(false),
+            Ty::DependentArray { .. } | Ty::Param(_) => return Ok(false),
             Ty::Cell(marker) => {
                 if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
                     return Ok(false);
@@ -1395,6 +1413,19 @@ impl ValidatedTraitWorld {
                     push(&self.budget, &mut normal, part)?;
                 }
                 Ok(Ty::Tuple(normal.into()))
+            }
+            Ty::DependentArray { element, length } => {
+                retain::<Ty>(&self.budget, 1)?;
+                Ok(Ty::DependentArray {
+                    element: Arc::new(self.normalize_type_in(
+                        element,
+                        context,
+                        stack,
+                        dependencies,
+                        depth + 1,
+                    )?),
+                    length: *length,
+                })
             }
             Ty::Array { element, len } => {
                 retain::<Ty>(&self.budget, 1)?;

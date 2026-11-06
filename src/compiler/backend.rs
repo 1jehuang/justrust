@@ -254,6 +254,9 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
         ir::Ty::Opaque(_) => {
             Err("opaque return representation requires its defining body fact".into())
         }
+        ir::Ty::DependentArray { .. } => {
+            Err("unsupported: dependent array has no native ABI before const instantiation".into())
+        }
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
@@ -5162,6 +5165,7 @@ mod tests {
         builder: &mut frontend::ProgramBuilder,
     ) -> Function {
         Function {
+            const_params: Vec::new(),
             embedded_source: None,
             suspended_source: None,
             constness: crate::compiler::frontend::Constness::Runtime,

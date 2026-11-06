@@ -35,6 +35,9 @@ fn static_elided(ty: Type) -> Type {
             region: Some(region.unwrap_or(RegionName::Static)),
             referent: Box::new(static_elided(*referent)),
         },
+        Type::DependentArray(inner, parameter) => {
+            Type::DependentArray(Box::new(static_elided(*inner)), parameter)
+        }
         Type::Array(inner, n) => Type::Array(Box::new(static_elided(*inner)), n),
         Type::Slice(inner) => Type::Slice(Box::new(static_elided(*inner))),
         Type::Tuple(fields) => Type::Tuple(fields.into_iter().map(static_elided).collect()),
@@ -45,6 +48,7 @@ fn static_elided(ty: Type) -> Type {
 /// Unresolved hidden checker body; resolved with the ordinary functions.
 pub(super) fn checked_body(declaration: &ConstDecl) -> Function {
     Function {
+        const_params: Vec::new(),
         embedded_source: None,
         suspended_source: None,
         lexical_scope: None,

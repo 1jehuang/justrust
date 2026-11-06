@@ -259,7 +259,8 @@ impl<'facts> CoverageMatrix<'facts> {
                 // References stay opaque for inhabitance (`&!` is not treated
                 // as empty, and referents may be recursive). Rows still test
                 // through them with explicit Deref projections.
-                Ty::Param(_)
+                Ty::DependentArray { .. }
+                | Ty::Param(_)
                 | Ty::Ref { .. }
                 | Ty::RawPtr { .. }
                 | Ty::Int(_)

@@ -809,6 +809,9 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Block(&function.body))?;
                 self.push(Visit::Regions(&function.regions))?;
                 self.identifiers(&function.type_params, LookupClass::TypeParameter)?;
+                for parameter in &function.const_params {
+                    self.push(Visit::Ident(parameter.name, LookupClass::TypeParameter))?;
+                }
                 self.many(&function.bounds, Visit::Bound)?;
                 if let Some(module) = generated_debug::signature_module(self.program, function)? {
                     self.work(function.params.len())?;
@@ -865,6 +868,9 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Ident(head.name, LookupClass::Member))?;
                 self.push(Visit::Regions(&head.regions))?;
                 self.identifiers(&head.type_params, LookupClass::TypeParameter)?;
+                for parameter in &head.const_params {
+                    self.push(Visit::Ident(parameter.name, LookupClass::TypeParameter))?;
+                }
                 self.many(&head.bounds, Visit::Bound)?;
                 self.parameters(&head.params)?;
                 self.push(Visit::Type(&head.result))?;
@@ -1068,6 +1074,11 @@ impl<'a> Validator<'a> {
                     }
                     self.push(Visit::Type(referent))?;
                 }
+                Type::DependentArray(element, parameter) => {
+                    self.push(Visit::Ident(*parameter, LookupClass::TypeParameter))?;
+                    self.push(Visit::Type(element))?;
+                }
+                Type::ConstArgument(_) => {}
                 Type::Array(element, _)
                 | Type::Slice(element)
                 | Type::RawPtr {
@@ -1857,6 +1868,7 @@ mod tests {
     }
     fn function(builder: &mut ProgramBuilder) -> Function {
         Function {
+            const_params: Vec::new(),
             embedded_source: None,
             suspended_source: None,
             lexical_scope: None,
@@ -2997,6 +3009,7 @@ mod tests {
     fn active_function_head_checks_all_signature_handles_independently() {
         let input = program();
         let mut head = FunctionHead {
+            const_params: Vec::new(),
             constness: Constness::Runtime,
             unsafety: false,
             name: input.functions[0].name.segments()[0],

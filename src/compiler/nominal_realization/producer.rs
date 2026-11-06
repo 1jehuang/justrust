@@ -398,6 +398,11 @@ fn field<'a>(
         let error = |e: traits::FactsError| Error::new(e.into_legacy_diagnostic(b));
         let mut dependencies = Vec::new();
         let result = match ty {
+            ir::Ty::DependentArray { .. } => {
+                return Err(Error::new(
+                    "unsupported: const-dependent nominal realization",
+                ));
+            }
             ir::Ty::Param(p) => world
                 .nominal_realization_parameter(input, &p)
                 .map_err(error)?,

@@ -2792,6 +2792,22 @@ impl<'s> Solver<'_, '_, 's> {
                 self.constructor(&owner, Some(variant), &fields, depth)
             }
             Expr::Apply { path, value } => {
+                if let Expr::Call { .. } = value.as_ref() {
+                    let plan = self.checker.signatures.plan()?;
+                    let facts = self
+                        .checker
+                        .signatures
+                        .facts
+                        .as_deref()
+                        .ok_or("const call application requires validated caller facts")?;
+                    plan.validate_const_call_application(
+                        path,
+                        facts,
+                        self.checker.canonical,
+                        value,
+                        &plan.budget,
+                    )?;
+                }
                 let actuals = path
                     .segments
                     .iter()
@@ -3574,6 +3590,12 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
             diagnostic_ty(&pointer.output, plan)
         ),
         ir::Ty::Tuple(items) => format!("({})", list(items)),
+        ir::Ty::DependentArray { element, length } => format!(
+            "[{}; const@{}:{}]",
+            diagnostic_ty(element, plan),
+            length.owner.declaration.index,
+            length.index
+        ),
         ir::Ty::Array { element, len } => format!("[{}; {len}]", diagnostic_ty(element, plan)),
         ir::Ty::Slice { element } => format!("[{}]", diagnostic_ty(element, plan)),
         ir::Ty::Struct(t) => nominal(&t.def().name, &t.def().type_args),

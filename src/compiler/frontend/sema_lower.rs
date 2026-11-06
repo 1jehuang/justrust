@@ -259,6 +259,11 @@ impl<'a> Lower<'a> {
             Type::RawPtr { kind, pointee } => {
                 st::mk(st::TyKind::RawPtr(mutbl(*kind), self.ty(pointee)?))
             }
+            Type::DependentArray(..) | Type::ConstArgument(_) => {
+                return Err(Unsupported(
+                    "const generic semantic inference is unsupported".into(),
+                ));
+            }
             Type::Array(e, n) => st::mk(st::TyKind::Array(self.ty(e)?, *n as u64)),
             Type::Slice(e) => st::mk(st::TyKind::Slice(self.ty(e)?)),
             Type::SelfType => self

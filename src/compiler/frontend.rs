@@ -2893,7 +2893,8 @@ fn compare_source_type_work(
             }
             compare_source_type_work(referent, budget, at + 1)?;
         }
-        Type::Array(element, _)
+        Type::DependentArray(element, _)
+        | Type::Array(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
@@ -3124,6 +3125,11 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
                 output: Box::new(copy_source_type(output, budget, at + 1)?),
             }
         }
+        Type::ConstArgument(value) => Type::ConstArgument(value.clone()),
+        Type::DependentArray(element, parameter) => Type::DependentArray(
+            Box::new(copy_source_type(element, budget, at + 1)?),
+            *parameter,
+        ),
         Type::Param(name) => Type::Param(*name),
         Type::Named(name) => Type::Named(name.clone()),
         Type::Ref {
@@ -3243,7 +3249,8 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
             }
             retain_source_type(referent, budget, depth + 1)?;
         }
-        Type::Array(element, _)
+        Type::DependentArray(element, _)
+        | Type::Array(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
@@ -3306,7 +3313,8 @@ fn source_type_mentions_self(
             }
         },
         Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
-        Type::Array(element, _)
+        Type::DependentArray(element, _)
+        | Type::Array(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
@@ -3340,7 +3348,8 @@ fn source_type_mentions_self(
             found
         }
         Type::Named(path) => matches!(path.anchor(), PathAnchor::SelfType),
-        Type::Dyn(_)
+        Type::ConstArgument(_)
+        | Type::Dyn(_)
         | Type::Str
         | Type::Param(_)
         | Type::Int(_)
@@ -5568,6 +5577,7 @@ pub(super) fn replay_nominal_source_id(
         sr::depth(budget, depth)?;
         sr::work(budget, 1)?;
         match ty {
+            ir::Ty::DependentArray { element, .. } => admit(element, budget, depth + 1)?,
             ir::Ty::Tuple(types) => {
                 for ty in types.iter() {
                     admit(ty, budget, depth + 1)?;
@@ -5720,7 +5730,7 @@ fn require_reference_free(
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
     match ty {
-        ir::Ty::Ref { .. } | ir::Ty::Param(_) => {
+        ir::Ty::DependentArray { .. } | ir::Ty::Ref { .. } | ir::Ty::Param(_) => {
             return Err(FactsError::unsupported(
                 budget,
                 "shared identity referent must be reference-free and Param-free",
@@ -9430,6 +9440,7 @@ pub enum FieldName {
 }
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub const_params: Vec<SourceConstParameter>,
     pub(super) embedded_source: Option<Arc<function_source::FunctionSource>>,
     pub(super) suspended_source: Option<Arc<function_source::AsyncBodySource>>,
     pub lexical_scope: Option<super::semantic_scope::ScopeId>,
@@ -9535,6 +9546,7 @@ pub struct TraitItemDecl {
 }
 #[derive(Clone, Debug)]
 pub struct FunctionHead {
+    pub const_params: Vec<SourceConstParameter>,
     pub constness: Constness,
     pub unsafety: bool,
     pub name: AstIdent,
@@ -9789,6 +9801,8 @@ pub struct SourceManuallyDropCall {
 
 #[derive(Clone, Debug)]
 pub enum Type {
+    DependentArray(Box<Type>, AstIdent),
+    ConstArgument(ir::ConstArgument),
     ManuallyDrop(Box<SourceManuallyDrop>),
     Cell(Box<SourceCell>),
     PhantomData(Box<SourcePhantomData>),
@@ -9831,6 +9845,11 @@ pub enum Type {
     Never,
     /// Unannotated locals only, resolved independently during function checking.
     Infer,
+}
+#[derive(Clone, Debug)]
+pub struct SourceConstParameter {
+    pub name: AstIdent,
+    pub ty: ir::ConstType,
 }
 /// Boxed as a whole by `Type`, keeping ordinary expression stack frames small.
 #[derive(Clone, Debug)]
@@ -11552,6 +11571,7 @@ struct Parser<'input, 'names> {
     allow_struct: bool,
     condition_purpose: ConditionPurpose,
     type_params: Vec<AstIdent>,
+    const_params: Vec<SourceConstParameter>,
     use_expansions: usize,
     use_expansion_bytes: usize,
     /// Block-local `const` items, innermost block last (local_consts.rs).
@@ -11742,6 +11762,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             allow_struct: true,
             condition_purpose: ConditionPurpose::Ordinary,
             type_params: Vec::new(),
+            const_params: Vec::new(),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
             local_consts: local_consts::LocalConsts::default(),
@@ -13255,6 +13276,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             allow_struct: self.allow_struct,
             condition_purpose: self.condition_purpose,
             type_params: std::mem::take(&mut self.type_params),
+            const_params: std::mem::take(&mut self.const_params),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
             // Items are unhygienic: expanded expressions see enclosing
@@ -13269,6 +13291,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         });
         self.type_params = std::mem::take(&mut child.type_params);
+        self.const_params = std::mem::take(&mut child.const_params);
         self.local_consts = std::mem::take(&mut child.local_consts);
         result
     }
@@ -13679,6 +13702,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             allow_struct: true,
             condition_purpose: ConditionPurpose::Ordinary,
             type_params: Vec::new(),
+            const_params: Vec::new(),
             use_expansions: 0,
             use_expansion_bytes: 0,
             local_consts: local_consts::LocalConsts::default(),
@@ -13878,6 +13902,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     | Type::RawPtr {
                         pointee: referent, ..
                     }
+                    | Type::DependentArray(referent, _)
                     | Type::Array(referent, _)
                     | Type::Slice(referent) => {
                         push(referent.as_ref())?;
@@ -14075,6 +14100,26 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Ok(Type::Slice(Box::new(element)));
             }
             self.expect(";")?;
+            if self.token().is_ident() {
+                let mut parameter = None;
+                for declared in &self.const_params {
+                    let token = self.input.mint_name(&self.token(), self.names)?;
+                    if self.contains_name(&[declared.name], token, LookupClass::TypeParameter)? {
+                        parameter = Some(token);
+                        break;
+                    }
+                }
+                if let Some(parameter) = parameter {
+                    self.cursor.bump();
+                    if !self.is("]") {
+                        return Err(
+                            self.unsupported("const-dependent array expressions are unsupported")
+                        );
+                    }
+                    self.expect("]")?;
+                    return Ok(Type::DependentArray(Box::new(element), parameter));
+                }
+            }
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
@@ -14286,7 +14331,23 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.error("positional type arguments must precede associated equalities")
                     );
                 }
-                let value = self.ty()?;
+                let value = if self.eat("true") {
+                    Type::ConstArgument(ir::ConstArgument::Bool(true))
+                } else if self.eat("false") {
+                    Type::ConstArgument(ir::ConstArgument::Bool(false))
+                } else if self
+                    .token()
+                    .text
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_digit)
+                    || self.is("{")
+                    || self.is("-")
+                {
+                    return Err(self.unsupported("numeric and expression const generic arguments require const instantiation"));
+                } else {
+                    self.ty()?
+                };
                 self.reserve_parser_items(&mut args, 1)?;
                 args.push(value);
             }
@@ -14397,6 +14458,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     ) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
         self.pending_self_defaults.clear();
+        self.const_params.clear();
         self.pending_type_defaults.clear();
         self.pending_regions = RegionDecls::default();
         let declarations = self.predeclare_type_parameters()?;
@@ -15420,6 +15482,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             .map_err(native_adapter::name_error)?,
                         regions: signature.regions.clone(),
                         type_params: signature.type_params.clone(),
+                        const_params: signature.const_params.clone(),
                         params: signature.params.clone(),
                         param_mut: signature.param_mut.clone(),
                         result: signature.result.clone(),
@@ -16186,6 +16249,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(native_adapter::name_error)?,
                     regions: head.regions,
                     type_params: head.type_params,
+                    const_params: head.const_params,
                     bounds: head.bounds,
                     params: head.params,
                     param_mut: head.param_mut,
@@ -16213,21 +16277,45 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.pending_bounds.clear();
         let declarations = self.predeclare_type_parameters()?;
         let mut params = Vec::new();
+        self.const_params.clear();
         if !self.eat("<") {
             return Ok(params);
         }
         let mut seen_type = false;
         loop {
             if self.eat("const") {
-                self.ident()?;
+                seen_type = true;
+                let name = self.ident()?;
                 self.expect(":")?;
-                self.ty()?;
+                let ty = match self.ty()? {
+                    Type::Int(ty) => ir::ConstType::Int(ty),
+                    Type::Bool => ir::ConstType::Bool,
+                    Type::Char => ir::ConstType::Char,
+                    _ => {
+                        return Err(
+                            self.unsupported("const parameter type is not a supported scalar")
+                        );
+                    }
+                };
                 if !self.is(">") && !self.is(",") && !self.is("=") {
                     return Err(self.error("expected const generic parameter delimiter"));
                 }
-                return Err(self.unsupported("const generic parameters are unsupported"));
-            }
-            if self.token().is_lifetime() {
+                if self.is("=") {
+                    return Err(self.unsupported("const parameter defaults are unsupported"));
+                }
+                if self.const_params.len() >= 32 {
+                    return Err(self.limit("const parameter resource limit32"));
+                }
+                let mut values = std::mem::take(&mut self.const_params);
+                for prior in &values {
+                    if self.contains_name(&[prior.name], name, LookupClass::TypeParameter)? {
+                        return Err(self.error("duplicate const parameter"));
+                    }
+                }
+                self.reserve_parser_items(&mut values, 1)?;
+                values.push(SourceConstParameter { name, ty });
+                self.const_params = values;
+            } else if self.token().is_lifetime() {
                 if seen_type {
                     return Err(self.error("lifetime parameters must precede type parameters"));
                 }
@@ -16287,6 +16375,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         }
         self.close_angle()?;
+        if !params.is_empty() && !self.const_params.is_empty() {
+            return Err(
+                self.unsupported("mixed type and const parameter declarations are unsupported")
+            );
+        }
         Ok(params)
     }
     fn function_head(
@@ -16314,6 +16407,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         visible.extend_from_slice(inherited);
         self.type_params = visible;
         let type_params = self.callable_generics(&mut regions)?;
+        if associated && !self.const_params.is_empty() {
+            return Err(self.unsupported("associated const parameter declarations are unsupported"));
+        }
         let mut bounds = std::mem::take(&mut self.pending_bounds);
         let enclosing_bounds = std::mem::take(&mut self.visible_bounds);
         {
@@ -16462,6 +16558,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.visible_bounds = enclosing_bounds;
         Ok((
             FunctionHead {
+                const_params: self.const_params.clone(),
                 constness,
                 unsafety,
                 name,
@@ -20950,7 +21047,8 @@ fn walk_depth_inspecting<'source>(
             }
             DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent))?,
             DepthNode::Type(
-                Type::Array(element, _)
+                Type::DependentArray(element, _)
+                | Type::Array(element, _)
                 | Type::Slice(element)
                 | Type::RawPtr {
                     pointee: element, ..
@@ -21463,6 +21561,11 @@ fn exact_source_type(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     Ok(match (a, b) {
+        (Type::ConstArgument(a), Type::ConstArgument(b)) => a == b,
+        (Type::DependentArray(a, an), Type::DependentArray(b, bn)) => {
+            exact_source_ident(names, *an, *bn)?
+                && exact_source_type(names, a, b, budget, depth + 1)?
+        }
         (Type::Projection(a), Type::Projection(b)) => {
             exact_source_projection(names, a, b, budget, depth + 1)?
         }
@@ -22667,7 +22770,8 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                 add(source_type_storage(field, budget, depth + 1)?)?;
             }
         }
-        Type::Array(element, _)
+        Type::DependentArray(element, _)
+        | Type::Array(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
@@ -23800,6 +23904,24 @@ impl PlanCtx {
             let id = registry.function_ids[position];
             decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
                 function.visibility.clone();
+            if !function.const_params.is_empty() {
+                budget.charge_work(function.const_params.len() + 1)?;
+                let info = decl_mut(&registry.slots, &mut registry.declarations, id)?;
+                let mut kinds = Vec::new();
+                budget.retain_bytes(
+                    function.const_params.len() * std::mem::size_of::<ir::ConstType>(),
+                )?;
+                kinds
+                    .try_reserve_exact(function.const_params.len())
+                    .map_err(|_| "const binder allocation failed")?;
+                kinds.extend(function.const_params.iter().map(|parameter| parameter.ty));
+                let binder = Arc::new(ir::ConstBinder::new(
+                    ir::BinderId { declaration: id },
+                    &kinds,
+                    budget,
+                )?);
+                info.env = Arc::new(info.env.with_const_binder(binder, budget)?);
+            }
             if let Some(receipt) = &function.embedded_source {
                 let bound = function_source::bind_registration(
                     receipt,
@@ -25238,6 +25360,95 @@ impl PlanCtx {
             ir::validate_shared_slice_element(element, caller, budget)?;
         }
         Ok(out)
+    }
+    fn validate_const_call_application(
+        &self,
+        path: &GenericPath,
+        caller: &super::traits::ValidatedFacts,
+        source: Option<&CanonicalSourceCapability>,
+        expression: &Expr,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let Expr::Call {
+            name: occurrence, ..
+        } = expression
+        else {
+            return Err("const application requires an original direct call".into());
+        };
+        self.check_budget(budget)?;
+        if !caller.budget().same_authority(budget)
+            || !Arc::ptr_eq(caller.world(), &self.trait_world()?)
+        {
+            return Err("const call changed validated caller authority".into());
+        }
+        let names = self.program.names.as_ref();
+        let original = path.path(names)?;
+        let key = name_scope::path_key(names, occurrence, Namespace::Value)?;
+        if name_scope::path_key(names, &original, Namespace::Value)? != key {
+            return Err("const application changed original resolved call occurrence".into());
+        }
+        let Some(declaration) = self.registry.functions.get(&key) else {
+            return Ok(());
+        };
+        let schema = self.function_schema(*declaration)?;
+        let [binder] = schema.env.const_binders() else {
+            return if schema.env.const_binders().is_empty() {
+                Ok(())
+            } else {
+                Err("unsupported: multiple const declaration binders".into())
+            };
+        };
+        if binder.owner().declaration != *declaration {
+            return Err("const call schema changed declaration owner".into());
+        }
+        let source = source.ok_or("const application requires original source authority")?;
+        if source.declaration != caller.declaration()
+            || !Arc::ptr_eq(&source.plan.program, &self.program)
+            || !Arc::ptr_eq(source.facts.world(), caller.world())
+        {
+            return Err("const application changed original caller owner".into());
+        }
+        let index = source
+            .inventory
+            .call_pointers
+            .get(&(expression as *const Expr as usize))
+            .ok_or("const application has no original source call occurrence")?;
+        let original = source
+            .inventory
+            .calls
+            .get(*index)
+            .ok_or("const application has no original source call site")?;
+        let original_path = original
+            .application
+            .as_ref()
+            .ok_or("const call has no original generic arguments")?;
+        if !exact_source_generic_path(names, original_path, path, budget, 0)?
+            || !original
+                .ordinary
+                .as_ref()
+                .map(|original| exact_source_path(names, original, occurrence, budget))
+                .transpose()?
+                .unwrap_or(false)
+        {
+            return Err("const application changed original source arguments or occurrence".into());
+        }
+        let (_, source_args) = path.application()?;
+        budget.charge_work(source_args.len())?;
+        budget.retain_bytes(source_args.len() * std::mem::size_of::<ir::GenericArgument>())?;
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(source_args.len())
+            .map_err(|_| "const argument allocation failed")?;
+        for argument in source_args {
+            match argument {
+                Type::ConstArgument(value) => {
+                    arguments.push(ir::GenericArgument::Const(value.clone()))
+                }
+                _ => return Err("E0747: type provided when a constant was expected".into()),
+            }
+        }
+        binder.validate_arguments(&arguments, caller.env(), budget)?;
+        Err("unsupported: valid const call requires const instance realization".into())
     }
     fn application(
         &self,
@@ -28073,7 +28284,8 @@ fn collect_source_params(
                 collect_source_params(names, f, used, budget, depth + 1)?;
             }
         }
-        Type::Array(t, _)
+        Type::DependentArray(t, _)
+        | Type::Array(t, _)
         | Type::Slice(t)
         | Type::RawPtr { pointee: t, .. }
         | Type::Ref { referent: t, .. } => {
@@ -29139,6 +29351,209 @@ mod const_declaration_tests {
     use super::*;
 
     #[test]
+    fn const_call_staging_rejects_changed_source_caller_and_stale_occurrence() {
+        let source = "fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn unused(){identity::<true>([7i32,11i32,24i32])}fn main(){}";
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        let function = plan.callable_body(&plan.program, declaration).unwrap();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&plan.program, function, identity, &budget).unwrap();
+        let cap = CanonicalSourceCapability {
+            runtime_sites: Default::default(),
+            plan: plan.clone(),
+            declaration,
+            facts: facts.clone(),
+            inventory,
+            constants: Vec::new(),
+            symbolic_constants: Vec::new(),
+            constant_emissions: Default::default(),
+            symbolic_constant_emissions: Default::default(),
+            calls: Default::default(),
+            nominal_call_realizations: Default::default(),
+            builtin_leading_zeros: Default::default(),
+            builtin_lens: Default::default(),
+            array_iters: Default::default(),
+            builtin_intrinsics: Default::default(),
+            unsizes: Default::default(),
+            scoped_bindings: Default::default(),
+            bindings: Default::default(),
+            narrow: Default::default(),
+            emissions: Default::default(),
+            error: Default::default(),
+        };
+        let Expr::Apply { path, value } = function.body.tail.as_deref().unwrap() else {
+            panic!("original application")
+        };
+        let check = |path: &GenericPath, caller: &tr::ValidatedFacts, value: &Expr| {
+            plan.validate_const_call_application(path, caller, Some(&cap), value, &budget)
+                .unwrap_err()
+        };
+        assert!(check(path, &facts, value).contains("E0308"));
+        let mut changed = path.clone();
+        changed.segments.last_mut().unwrap().args[0] =
+            Type::ConstArgument(ir::ConstArgument::Bool(false));
+        assert!(
+            !exact_source_generic_path(plan.program.names.as_ref(), path, &changed, &budget, 0)
+                .unwrap()
+        );
+        assert!(check(&changed, &facts, value).contains("changed original source arguments"));
+        let stale = value.as_ref().clone();
+        assert!(check(path, &facts, &stale).contains("no original source call occurrence"));
+        let foreign = plan.callable_facts(plan.function_decl(2).unwrap()).unwrap();
+        assert!(check(path, &foreign, value).contains("changed original caller owner"));
+        let other = PlanCtx::from_program(&program, &budget).unwrap();
+        let foreign = other
+            .callable_facts(other.function_decl(1).unwrap())
+            .unwrap();
+        assert!(check(path, &foreign, value).contains("changed validated caller authority"));
+    }
+
+    #[test]
+    fn const_call_staging_drop_requires_real_owner_kind_and_trivial_element() {
+        use super::super::traits::NormalDropPlan;
+        let source = "struct D{value:i32}fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn other<const N:usize>(){}fn boolean<const B:bool>(){}fn owner(value:D){}fn main(){}impl Drop for D{fn drop(&mut self){}}";
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let schema = plan.function_schema(declaration).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        let original = schema.signature.result;
+        let ir::Ty::DependentArray { element, length } = &original else {
+            panic!("real dependent array")
+        };
+        assert!(matches!(
+            facts.normal_drop_plan(&original).unwrap(),
+            NormalDropPlan::Trivial
+        ));
+        for owner in [
+            plan.function_decl(1).unwrap(),
+            plan.function_decl(2).unwrap(),
+        ] {
+            let changed = ir::Ty::DependentArray {
+                element: element.clone(),
+                length: ir::ConstParamId {
+                    owner: ir::BinderId { declaration: owner },
+                    index: 0,
+                },
+            };
+            assert_ne!(changed, original);
+            assert!(facts.normal_drop_plan(&changed).is_err());
+        }
+        let boolean = plan.function_decl(2).unwrap();
+        let boolean_facts = plan.callable_facts(boolean).unwrap();
+        let wrong_kind = ir::Ty::DependentArray {
+            element: element.clone(),
+            length: ir::ConstParamId {
+                owner: ir::BinderId {
+                    declaration: boolean,
+                },
+                index: 0,
+            },
+        };
+        assert!(boolean_facts.normal_drop_plan(&wrong_kind).is_err());
+        let owner = plan
+            .function_schema(plan.function_decl(3).unwrap())
+            .unwrap();
+        let changed = ir::Ty::DependentArray {
+            element: Arc::new(owner.signature.params[0].clone()),
+            length: *length,
+        };
+        assert_ne!(changed, original);
+        let error = match facts.normal_drop_plan(&changed) {
+            Err(error) => error,
+            Ok(_) => panic!("unknown extent cannot erase element destruction"),
+        };
+        assert!(error.to_string().contains("unsupported"), "{error}");
+    }
+
+    #[test]
+    fn const_call_staging_preserves_declarations_and_ordinary_generic_calls() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "const-staging-run-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        for (index, (source, expected)) in [
+            ("fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn main(){}", ""),
+            ("fn identity<T>(value:T)->T{value}fn main(){let value=identity::<i32>(7i32);println!(\"{}\",value);}", "7\n"),
+        ].into_iter().enumerate() {
+            let stock_image = scratch.join(format!("stock-{index}"));
+            let stock = super::parser_tests::stock_compile(source, &stock_image, false);
+            assert!(stock.status.success(), "{}", String::from_utf8_lossy(&stock.stderr));
+            let stock_run = std::process::Command::new(&stock_image).output().unwrap();
+            assert!(stock_run.status.success());
+            assert_eq!(stock_run.stdout, expected.as_bytes());
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    let compiled = super::super::compile_observed(source.into(), workers, check_only)
+                        .unwrap_or_else(|error| {
+                            panic!("workers={workers} check={check_only} {source}: {error}")
+                        });
+                    assert_eq!(compiled.executable.is_none(), check_only);
+                    if check_only {
+                        assert!(compiled.report.node_evaluations.iter().all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)));
+                    } else {
+                        let image = scratch.join(format!("native-{index}-{workers}"));
+                        std::fs::write(&image, compiled.executable.unwrap()).unwrap();
+                        std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o700)).unwrap();
+                        // A concurrent test's fork can briefly inherit the writer
+                        // before CLOEXEC. Retry only Linux pre-spawn ETXTBSY,
+                        // never a child that started or any semantic outcome.
+                        let mut attempts = 0;
+                        let ran = loop {
+                            match std::process::Command::new(&image).output() {
+                                Err(error) if error.raw_os_error() == Some(26) && attempts < 20 => {
+                                    attempts += 1;
+                                    std::thread::sleep(std::time::Duration::from_millis(1));
+                                }
+                                result => break result.unwrap(),
+                            }
+                        };
+                        assert!(ran.status.success(), "{ran:?}");
+                        assert_eq!(ran.stdout, expected.as_bytes());
+                    }
+                }
+            }
+        }
+        for source in [
+            "fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn unused(){let _=identity::<3>([7i32,11i32,24i32]);}fn main(){}",
+            "fn identity<const B:bool>(value:i32)->i32{value}fn unused(){let _=identity::<true>(7i32);}fn main(){}",
+        ] {
+            let stock = super::parser_tests::stock_compile(
+                source,
+                &scratch.join("valid-unsupported"),
+                true,
+            );
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    let error = super::super::compile(source.into(), workers, check_only)
+                        .err()
+                        .expect("valid const instantiation remains explicitly unsupported");
+                    assert!(error.to_string().contains("unsupported"), "{error}");
+                }
+            }
+        }
+        std::fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[test]
     fn const_declaration_qualifier_survives_resolution_and_runtime_publication() {
         let source = "mod m{pub const fn forward<T>(value:T)->T{value}}fn main(){let a=m::forward::<u64>(7u64);if a==7u64{println!(\"forwarded\");}}";
         let unresolved = parse_unresolved(source).unwrap();
@@ -29197,10 +29612,21 @@ mod const_declaration_tests {
 
     #[test]
     fn const_execution_contexts_and_associated_qualifiers_remain_unsupported() {
+        let default_source = "struct F<const N:usize=3>;fn main(){}";
+        let stock = super::parser_tests::stock_compile(
+            default_source,
+            std::path::Path::new("unused"),
+            true,
+        );
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
         for source in [
             "const fn id(x:u8)->u8{x}fn main(){let x=[0u8;id(1u8)];}",
             "const fn id(x:u8)->u8{x}fn main(){let x:[u8;id(1u8)]=[0u8];}",
-            "fn f<const N:usize>(){}fn main(){}",
+            default_source,
         ] {
             let error = parse(source).unwrap_err();
             assert!(error.contains("unsupported"), "{source}: {error}");
@@ -29580,9 +30006,18 @@ mod prepared_location_tests {
         super::parser_tests::stock_native_run(
             "fn main(){let f=||->!{loop{}};println!(\"{}\",42);}",
         );
-        let unsupported = parse_syntax_unprepared("fn f<const N:usize>() {}")
-            .err()
-            .unwrap();
+        let default_source = "struct F<const N:usize=3>;fn main(){}";
+        let stock = super::parser_tests::stock_compile(
+            default_source,
+            std::path::Path::new("unused"),
+            true,
+        );
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        let unsupported = parse_syntax_unprepared(default_source).err().unwrap();
         assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
         {
             let text = "async fn unused() {}fn main(){}";

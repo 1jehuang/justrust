@@ -207,7 +207,7 @@ impl Representations {
                 }
                 ty.clone()
             }
-            ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
+            ir::Ty::DependentArray { .. } | ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
                 return Err(Error::new(
                     "physical normalization requires closed declaration actuals",
                 ));
@@ -826,7 +826,7 @@ fn collect(
                 collect(component, output, budget, depth + 1)?;
             }
         }
-        ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
+        ir::Ty::DependentArray { .. } | ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
             return Err(Error::new(
                 "physical representation requires closed source actuals",
             ));

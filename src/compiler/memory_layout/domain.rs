@@ -130,6 +130,9 @@ fn normalize(
         return Ok(());
     }
     match ty {
+        ir::Ty::DependentArray { .. } => {
+            out.unsupported = Some("unsupported: const-dependent alignment obligations");
+        }
         ir::Ty::Param(parameter) => {
             let slot = parameters
                 .iter()

@@ -591,7 +591,7 @@ fn read_cell_cover(
                 // A pointer's referent is a different canonical object.
                 Ok(true)
             }
-            Ty::Param(_) => Ok(false),
+            Ty::DependentArray { .. } | Ty::Param(_) => Ok(false),
             Ty::Int(_)
             | Ty::Float(_)
             | Ty::Char

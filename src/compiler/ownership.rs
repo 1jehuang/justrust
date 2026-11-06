@@ -9,7 +9,9 @@ use super::borrow::{
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
 #[cfg(test)]
 use super::ir::ReferencePosition;
-use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
+use super::ir::{
+    self, CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty,
+};
 use super::traits::{FactsError, FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -2134,6 +2136,25 @@ impl<'a> MoveShape<'a> {
             return Err(Exhausted);
         }
         Ok(match ty {
+            Ty::DependentArray { length, .. } => {
+                let env = match facts {
+                    FactsCtx::Universal(env) => env,
+                    FactsCtx::Validated(authority)
+                        if authority.phase() == FactsPhase::Universal =>
+                    {
+                        authority.env()
+                    }
+                    _ => return Err(Exhausted),
+                };
+                budget.spend(env.const_binders().len())?;
+                if env.const_parameter_type(*length) != Some(ir::ConstType::Int(ir::IntTy::Usize)) {
+                    return Err(Exhausted);
+                }
+                facts.validate_ty(ty).map_err(|_| Exhausted)?;
+                // Unknown extent is never enumerated or assigned a physical
+                // width. Whole-value moves still use the common transfer path.
+                Self::OpaqueParam
+            }
             Ty::Param(param) => {
                 let env = match facts {
                     FactsCtx::Universal(env) => env,

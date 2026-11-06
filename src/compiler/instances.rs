@@ -268,6 +268,9 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
+            ir::Ty::DependentArray { .. } => {
+                Err("unsupported: const-dependent instance pattern identity".into())
+            }
             ir::Ty::Opaque(opaque) => {
                 self.append(b"O")?;
                 self.declaration(opaque.owner())?;
@@ -538,6 +541,9 @@ impl Encoder<'_> {
                 }
                 Ok(())
             }
+            ir::Ty::DependentArray { .. } => {
+                Err("unsupported: const-dependent instance identity is not implemented".into())
+            }
             ir::Ty::Param(_) => Err("generic instance key contains unresolved parameter".into()),
             ir::Ty::AssociatedType(_) => {
                 Err("generic instance key contains unresolved associated type".into())
@@ -691,7 +697,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::RawPtr {
                 pointee: referent, ..
             } => walk(referent, depth + 1, budget)?,
-            ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
+            ir::Ty::DependentArray { .. } | ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
                 return Err("generic instance has non-closed argument".into());
             }
         }

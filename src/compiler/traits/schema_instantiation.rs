@@ -219,6 +219,16 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
                 len: bn,
             },
         ) => an == bn && (Arc::ptr_eq(a, b) || same_input(a, b, budget, depth + 1)?),
+        (
+            Ty::DependentArray {
+                element: a,
+                length: x,
+            },
+            Ty::DependentArray {
+                element: b,
+                length: y,
+            },
+        ) => x == y && (Arc::ptr_eq(a, b) || same_input(a, b, budget, depth + 1)?),
         (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
             Arc::ptr_eq(a, b) || same_input(a, b, budget, depth + 1)?
         }

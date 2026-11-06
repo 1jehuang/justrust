@@ -138,6 +138,23 @@ impl PlanCtx {
             )
         };
         Ok(match ty {
+            Type::ConstArgument(_) => {
+                return Err("E0747: const argument is not a source type shape".into());
+            }
+            Type::DependentArray(..) => {
+                let info = self.registry.declaration(declaration)?;
+                let mut state = self.scratch();
+                state.source_context = Some(self.registry.source_type_context(declaration)?);
+                Shape::Leaf(state.source_ty(
+                    &self.registry,
+                    ty,
+                    bindings,
+                    ir::FactsCtx::Universal(&info.env),
+                    &self.budget,
+                    depth + 1,
+                    false,
+                )?)
+            }
             Type::Int(n) => Shape::Leaf(ir::Ty::Int(*n)),
             Type::Float(n) => Shape::Leaf(ir::Ty::Float(*n)),
             Type::Bool => Shape::Leaf(ir::Ty::Bool),

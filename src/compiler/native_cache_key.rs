@@ -114,10 +114,19 @@ impl Encoder<'_, '_> {
                 self.n(11)?;
                 self.ty(element, depth + 1)
             }
-            Cell(_) | PhantomData(_) | ManuallyDrop(_) | Opaque(_) | Closure(_) | FnPointer(_)
-            | FnItem(_) | AssociatedType(_) | Param(_) | Struct(_) | Enum(_) | Dyn(_) => {
-                Err(Failure::Unsupported)
-            }
+            DependentArray { .. }
+            | Cell(_)
+            | PhantomData(_)
+            | ManuallyDrop(_)
+            | Opaque(_)
+            | Closure(_)
+            | FnPointer(_)
+            | FnItem(_)
+            | AssociatedType(_)
+            | Param(_)
+            | Struct(_)
+            | Enum(_)
+            | Dyn(_) => Err(Failure::Unsupported),
         }
     }
     fn place(&mut self, p: &ir::Place) -> Result<()> {

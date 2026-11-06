@@ -129,6 +129,7 @@ impl Parser<'_, '_> {
         // The callable declaration describes the adapter ABI, never guessed
         // parameter/capture types. Parent checking supplies its exact actuals.
         let function = Function {
+            const_params: Vec::new(),
             embedded_source: None,
             suspended_source: None,
             lexical_scope: None,

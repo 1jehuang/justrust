@@ -165,6 +165,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. }
+            | Type::DependentArray(referent, _)
             | Type::Array(referent, _)
             | Type::Slice(referent)
             | Type::RawPtr {
@@ -702,6 +703,7 @@ impl Resolver<'_> {
                         }
                         Type::Tuple(fields) => pending.extend(fields),
                         Type::Ref { referent, .. }
+                        | Type::DependentArray(referent, _)
                         | Type::Array(referent, _)
                         | Type::Slice(referent)
                         | Type::RawPtr {
@@ -790,7 +792,7 @@ impl Resolver<'_> {
                         check_target(argument)?;
                     }
                 }
-                Type::Array(t, _) => check_target(t)?,
+                Type::DependentArray(t, _) | Type::Array(t, _) => check_target(t)?,
                 Type::FnPointer { inputs, output } => {
                     for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
                         check_target(field)?;
@@ -919,6 +921,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. }
+            | Type::DependentArray(referent, _)
             | Type::Array(referent, _)
             | Type::Slice(referent)
             | Type::RawPtr {
@@ -2788,7 +2791,8 @@ impl Resolver<'_> {
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
             Type::Dyn(trait_path) => self.trait_application(trait_path, module, true)?,
-            Type::Array(element, _)
+            Type::DependentArray(element, _)
+            | Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {
                 pointee: element, ..
@@ -7678,7 +7682,7 @@ fn replace_self_type(
     match ty {
         Type::SelfType => *ty = self_ty.clone(),
         Type::Ref { referent, .. } => replace_self_type(referent, self_ty, budget, depth + 1)?,
-        Type::Array(element, _) | Type::Slice(element) => {
+        Type::DependentArray(element, _) | Type::Array(element, _) | Type::Slice(element) => {
             replace_self_type(element, self_ty, budget, depth + 1)?
         }
         Type::RawPtr { pointee, .. } => replace_self_type(pointee, self_ty, budget, depth + 1)?,

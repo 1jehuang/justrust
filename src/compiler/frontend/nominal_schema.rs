@@ -508,6 +508,62 @@ impl PlanState {
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
         Ok(match ty {
+            Type::ConstArgument(_) => {
+                return Err("E0747: constant provided when a type was expected".into());
+            }
+            Type::DependentArray(element, name) => {
+                let context = self
+                    .source_context
+                    .ok_or("dependent array lacks source declaration context")?;
+                let info = registry.declaration(context.declaration)?;
+                if info.kind != ir::DeclKind::Function {
+                    return Err(
+                        "unsupported: dependent arrays outside free function declarations".into(),
+                    );
+                }
+                let source = registry
+                    .program
+                    .functions
+                    .get(info.source_index)
+                    .ok_or("missing const declaration source")?;
+                let key = registry.parameter_key(*name)?;
+                let mut found = None;
+                for (index, parameter) in source.const_params.iter().enumerate() {
+                    budget.charge_work(1)?;
+                    if registry.parameter_key(parameter.name)? == key {
+                        found = Some(ir::ConstParamId {
+                            owner: ir::BinderId {
+                                declaration: info.id,
+                            },
+                            index: index as u16,
+                        });
+                        break;
+                    }
+                }
+                let length = found.ok_or("unbound const array parameter")?;
+                if info.env.const_parameter_type(length)
+                    != Some(ir::ConstType::Int(ir::IntTy::Usize))
+                {
+                    return Err("E0308: array length const parameter must have type usize".into());
+                }
+                let element = self.source_ty_with_transport(
+                    registry,
+                    element,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    false,
+                    transport,
+                )?;
+                budget.retain_bytes(
+                    std::mem::size_of::<ir::Ty>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                ir::Ty::DependentArray {
+                    element: Arc::new(element),
+                    length,
+                }
+            }
             Type::ManuallyDrop(source) => {
                 source.require_kind(SourceCatalogKind::ManuallyDrop)?;
                 source
@@ -1596,7 +1652,9 @@ pub(super) fn source_names_lifetime(ty: &Type) -> bool {
         Type::Ref {
             region, referent, ..
         } => matches!(region, Some(RegionName::Named(_))) || source_names_lifetime(referent),
-        Type::Array(inner, _) | Type::Slice(inner) => source_names_lifetime(inner),
+        Type::DependentArray(inner, _) | Type::Array(inner, _) | Type::Slice(inner) => {
+            source_names_lifetime(inner)
+        }
         Type::RawPtr { pointee, .. } => source_names_lifetime(pointee),
         Type::Tuple(items) => items.iter().any(source_names_lifetime),
         Type::Apply(path) => path
@@ -1613,7 +1671,9 @@ fn source_elides_lifetime(ty: &Type) -> bool {
         Type::Ref {
             region, referent, ..
         } => region.is_none() || source_elides_lifetime(referent),
-        Type::Array(inner, _) | Type::Slice(inner) => source_elides_lifetime(inner),
+        Type::DependentArray(inner, _) | Type::Array(inner, _) | Type::Slice(inner) => {
+            source_elides_lifetime(inner)
+        }
         Type::RawPtr { pointee, .. } => source_elides_lifetime(pointee),
         Type::Tuple(items) => items.iter().any(source_elides_lifetime),
         Type::Apply(path) => path

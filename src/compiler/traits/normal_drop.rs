@@ -264,6 +264,10 @@ impl ValidatedFacts {
             Ok(())
         };
         match ty {
+            Ty::DependentArray { element, .. } => {
+                let (needs, open) = self.normal_drop_presence(element, depth + 1)?;
+                unresolved |= needs || open;
+            }
             Ty::Tuple(parts) => {
                 for part in parts.iter() {
                     child(part)?;
@@ -719,6 +723,21 @@ impl ValidatedFacts {
                     DropGlue::None
                 } else {
                     DropGlue::Fields(fields)
+                }
+            }
+            Ty::DependentArray { element, .. } => {
+                // Entry validation authenticates the declaration-owned usize
+                // binder. No extent is guessed: trivial element drop proves
+                // trivial array drop for every admissible extent.
+                match self.normal_drop_plan_inner(element, depth + 1, owning_depth, active)? {
+                    NormalDropPlan::Trivial => DropGlue::None,
+                    NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                    NormalDropPlan::Destructor(_) => {
+                        return Err(FactsError::unsupported(
+                            self.budget(),
+                            "unsupported: dependent array drop glue requires const instantiation",
+                        ));
+                    }
                 }
             }
             Ty::Array { element, len } => match child(element)? {

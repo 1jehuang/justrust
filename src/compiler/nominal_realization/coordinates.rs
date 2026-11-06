@@ -121,7 +121,7 @@ impl Term {
                 n.def().source_decl,
                 Self::from_types(&n.def().type_args, b, depth + 1)?,
             ),
-            ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
+            ir::Ty::DependentArray { .. } | ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
                 return Err(Error::new(
                     "nominal realization key requires normalized closed actuals",
                 ));

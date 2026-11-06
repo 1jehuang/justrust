@@ -192,7 +192,7 @@ fn ty(
             types(words, &value.type_args, budget, depth + 1)?;
             18
         }
-        ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
+        ir::Ty::DependentArray { .. } | ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
             return Err("instance graph key requires closed actuals".into());
         }
     };

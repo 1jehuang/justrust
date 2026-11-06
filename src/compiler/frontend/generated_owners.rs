@@ -185,6 +185,7 @@ impl Header {
 }
 fn signature(function: &Function, member: AstIdent) -> FunctionHead {
     FunctionHead {
+        const_params: function.const_params.clone(),
         constness: function.constness,
         unsafety: function.unsafety,
         name: member,

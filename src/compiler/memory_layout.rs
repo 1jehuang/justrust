@@ -84,7 +84,7 @@ fn pointer_metadata_size_authorized(
         | ir::Ty::PhantomData(_)
         | ir::Ty::ManuallyDrop(_)
         | ir::Ty::Cell(_) => Ok(Some(8)),
-        ir::Ty::Param(_) => Ok(None),
+        ir::Ty::DependentArray { .. } | ir::Ty::Param(_) => Ok(None),
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => Ok(Some(16)),
         ir::Ty::Unit
         | ir::Ty::Bool
@@ -155,7 +155,7 @@ fn walk_size_authorized(
         ir::Ty::ManuallyDrop(wrapper) => {
             walk_size_authorized(wrapper.argument(), facts, budget, depth + 1)
         }
-        ir::Ty::Param(_) => Ok(None),
+        ir::Ty::DependentArray { .. } | ir::Ty::Param(_) => Ok(None),
         ir::Ty::Char => Ok(Some(4)),
         ir::Ty::Array { element, len } => {
             let Some(size) = walk_size_authorized(element, facts, budget, depth + 1)? else {
@@ -215,7 +215,7 @@ fn walk_alignment(
             "unsupported: opaque target alignment requires graph-authorized physical normalization"
                 .into(),
         ),
-        ir::Ty::Param(_) => Ok(None),
+        ir::Ty::DependentArray { .. } | ir::Ty::Param(_) => Ok(None),
         ir::Ty::PhantomData(_) => Ok(Some(1)),
         ir::Ty::Cell(wrapper) => walk_alignment(wrapper.argument(), budget, depth + 1, private),
         ir::Ty::ManuallyDrop(wrapper) => {

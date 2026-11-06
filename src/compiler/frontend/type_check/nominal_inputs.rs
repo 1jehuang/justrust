@@ -489,6 +489,9 @@ fn recipe_type(
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
             | ir::Ty::Param(_) => ty.clone(),
+            ir::Ty::DependentArray { .. } => {
+                return Err("unsupported: const-dependent nominal realization".into());
+            }
             ir::Ty::Dyn(object) if object.is_closed_leaf() => ty.clone(),
             _ => return Err("invalid metadata: non-leaf nominal ingress recipe".into()),
         },

@@ -204,6 +204,31 @@ impl CallableSignatureOutput {
                 "callable signature output belongs to different inputs or authority".into(),
             );
         }
+        let original = inputs.registry.declaration(self.declaration)?;
+        if !Arc::ptr_eq(&self.schema.value.env, &original.env) {
+            return Err("callable signature output changed declaration environment".into());
+        }
+        if !original.env.const_binders().is_empty() {
+            // Const declarations retain their actual symbolic schema. Replay
+            // only this declaration's source header, never a caller's extent
+            // or the completion of any body or instantiated function.
+            let replay = compute_callable_signature(inputs.clone(), index, budget)?;
+            let actual = &self.schema.value.signature;
+            let expected = &replay.schema.value.signature;
+            if actual.params.len() != expected.params.len()
+                || actual.ref_contract != expected.ref_contract
+                || !ir::ref_types_equal(&actual.result, &expected.result, budget, 0)?
+            {
+                return Err("const callable signature differs from original source schema".into());
+            }
+            for (actual, expected) in actual.params.iter().zip(&expected.params) {
+                if !ir::ref_types_equal(actual, expected, budget, 0)? {
+                    return Err(
+                        "const callable parameter differs from original source schema".into(),
+                    );
+                }
+            }
+        }
         let slot = source_schemas::decl_slot(self.declaration, &inputs.registry, budget)?;
         source_schemas.functions.insert(
             slot,
@@ -841,19 +866,226 @@ mod tests {
             Arc<CallableSignatureInputs>,
         ) -> Result<Vec<Arc<CallableSignatureOutput>>, String>,
     ) -> Result<PlanCtx, String> {
+        construct_source(SOURCE, budget, compute)
+    }
+
+    fn construct_source(
+        source: &str,
+        budget: &ir::PlanBudget,
+        compute: impl FnOnce(
+            Arc<CallableSignatureInputs>,
+        ) -> Result<Vec<Arc<CallableSignatureOutput>>, String>,
+    ) -> Result<PlanCtx, String> {
         use crate::compiler::{expansion_budget, owner_path};
         let owner = |domain| {
             owner_path::standalone_issued(&expansion_budget::ExpansionBudget::default(), domain)
                 .unwrap()
         };
         immediate(PlanCtx::from_shared_program_with_signatures(
-            Arc::new(parse(SOURCE).unwrap()),
+            Arc::new(parse(source).unwrap()),
             budget,
             true,
             owner(owner_path::OwnerDomain::DeclarationSnapshot),
             owner(owner_path::OwnerDomain::TraitWorld),
             |inputs| std::future::ready(compute(inputs)),
         ))
+    }
+
+    const CONST_SOURCE: &str = "fn identity<const N:usize>(x:[i32;N])->[i32;N]{x} fn other<const N:usize>(x:[i32;N])->[i32;N]{x} fn main(){}";
+
+    #[test]
+    fn const_declaration_schema_publishes_real_symbolic_lengths_before_bodies() {
+        let budget = ir::PlanBudget::default();
+        let plan = construct_source(CONST_SOURCE, &budget, |inputs| {
+            let outputs = compute_standalone(inputs.clone(), &budget)?;
+            let mut owners = Vec::new();
+            for output in &outputs {
+                if output.schema.value.env.const_binders().is_empty() {
+                    continue;
+                }
+                let env = &output.schema.value.env;
+                let [binder] = env.const_binders() else {
+                    panic!("one declaration const binder")
+                };
+                assert_eq!(binder.owner().declaration, output.declaration);
+                assert_eq!(binder.parameters(), &[ir::ConstType::Int(ir::IntTy::Usize)]);
+                let ir::Ty::DependentArray { element, length } =
+                    &output.schema.value.signature.result
+                else {
+                    panic!("a symbolic array must not become a concrete placeholder")
+                };
+                assert_eq!(element.as_ref(), &ir::Ty::Int(ir::IntTy::I32));
+                assert_eq!(length.owner, binder.owner());
+                assert_eq!(length.index, 0);
+                assert_eq!(
+                    output.schema.value.signature.params.as_slice(),
+                    std::slice::from_ref(&output.schema.value.signature.result)
+                );
+                ir::FactsCtx::Universal(env)
+                    .validate_ty_with_budget(&output.schema.value.signature.result, &budget)?;
+                assert!(
+                    ir::FactsCtx::Concrete
+                        .validate_ty_with_budget(&output.schema.value.signature.result, &budget)
+                        .is_err()
+                );
+                owners.push(length.owner);
+            }
+            assert_eq!(owners.len(), 2);
+            assert_ne!(
+                owners[0], owners[1],
+                "same display name cannot identify a const binder"
+            );
+            let owner_output = outputs
+                .iter()
+                .find(|output| !output.schema.value.env.const_binders().is_empty())
+                .unwrap();
+            let env = &owner_output.schema.value.env;
+            let binder = &env.const_binders()[0];
+            let boolean = ir::GenericArgument::Const(ir::ConstArgument::Bool(true));
+            assert!(
+                binder
+                    .validate_arguments(&[boolean], env, &budget)
+                    .unwrap_err()
+                    .contains("E0308")
+            );
+            let scalar = ir::GenericArgument::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::Usize,
+                bits: 3,
+            });
+            binder.validate_arguments(&[scalar], env, &budget)?;
+            let parameter = ir::ConstParamId {
+                owner: binder.owner(),
+                index: 0,
+            };
+            binder.validate_arguments(
+                &[ir::GenericArgument::Const(ir::ConstArgument::Parameter(
+                    parameter,
+                ))],
+                env,
+                &budget,
+            )?;
+            let foreign_owner = owners
+                .iter()
+                .copied()
+                .find(|owner| *owner != binder.owner())
+                .unwrap();
+            let foreign =
+                ir::GenericArgument::Const(ir::ConstArgument::Parameter(ir::ConstParamId {
+                    owner: foreign_owner,
+                    index: 0,
+                }));
+            assert!(
+                binder
+                    .validate_arguments(&[foreign], env, &budget)
+                    .unwrap_err()
+                    .contains("declaration-owned binder")
+            );
+            assert!(
+                binder
+                    .validate_arguments(&[ir::GenericArgument::Type(ir::Ty::Bool)], env, &budget)
+                    .unwrap_err()
+                    .contains("E0747")
+            );
+            Ok(outputs)
+        })
+        .unwrap();
+        let declarations = plan
+            .registry
+            .function_ids
+            .iter()
+            .filter(|id| {
+                !plan
+                    .registry
+                    .declaration(**id)
+                    .unwrap()
+                    .env
+                    .const_binders()
+                    .is_empty()
+            })
+            .count();
+        assert_eq!(declarations, 2);
+    }
+
+    #[test]
+    fn const_declaration_schema_rejects_changed_same_owner_foreign_and_source_payloads() {
+        let budget = ir::PlanBudget::default();
+        construct_source(CONST_SOURCE, &budget, |inputs| {
+            let outputs = compute_standalone(inputs.clone(), &budget)?;
+            let indices = outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, output)| !output.schema.value.env.const_binders().is_empty())
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            assert_eq!(indices.len(), 2);
+            let index = indices[0];
+            let genuine = compute_callable_signature(inputs.clone(), index, &budget)?;
+            let original = genuine.schema.value.signature.result.clone();
+            let ir::Ty::DependentArray { element, length } = &original else {
+                panic!("symbolic original")
+            };
+            let wrong_index = ir::Ty::DependentArray {
+                element: element.clone(),
+                length: ir::ConstParamId {
+                    index: length.index + 1,
+                    ..*length
+                },
+            };
+            let wrong_element = ir::Ty::DependentArray {
+                element: Arc::new(ir::Ty::Bool),
+                length: *length,
+            };
+            let foreign = outputs[indices[1]].schema.value.signature.result.clone();
+            for changed in [
+                wrong_index,
+                wrong_element,
+                foreign,
+                ir::Ty::Array {
+                    element: element.clone(),
+                    len: 0,
+                },
+            ] {
+                assert_ne!(
+                    changed, original,
+                    "forgery must actually change the payload"
+                );
+                let mut output = compute_callable_signature(inputs.clone(), index, &budget)?;
+                output.schema.value.signature.result = changed;
+                let mut builder = SourceSchemasBuilder::default();
+                let mut state = PlanState::scratch(&inputs.nominal_schemas, &inputs.nominals);
+                assert!(
+                    output
+                        .install(&inputs, index, &mut builder, &mut state, &budget)
+                        .unwrap_err()
+                        .contains("original source schema")
+                );
+            }
+            let mut output = compute_callable_signature(inputs.clone(), index, &budget)?;
+            let info = inputs.registry.declaration(output.declaration)?;
+            let forged = Arc::new(ir::ConstBinder::new(
+                ir::BinderId {
+                    declaration: info.id,
+                },
+                &[ir::ConstType::Bool],
+                &budget,
+            )?);
+            let type_only = ir::GenericEnv::new(info.env.scopes(), &budget)?;
+            output.schema.value.env = Arc::new(type_only.with_const_binder(forged, &budget)?);
+            assert_ne!(
+                output.schema.value.env.const_binders(),
+                info.env.const_binders()
+            );
+            let mut builder = SourceSchemasBuilder::default();
+            let mut state = PlanState::scratch(&inputs.nominal_schemas, &inputs.nominals);
+            assert!(
+                output
+                    .install(&inputs, index, &mut builder, &mut state, &budget)
+                    .unwrap_err()
+                    .contains("declaration environment")
+            );
+            Ok(outputs)
+        })
+        .unwrap();
     }
 
     #[test]

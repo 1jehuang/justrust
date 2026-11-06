@@ -5,6 +5,9 @@
 //! diagnostics only. This structured representation is a migration boundary,
 //! not yet an ownership-checking CFG or a target layout/ABI representation.
 use super::frontend::{BinaryOp, UnaryOp};
+#[path = "ir/const_generics.rs"]
+mod const_generics;
+pub use const_generics::{ConstArgument, ConstBinder, ConstParamId, ConstType, GenericArgument};
 #[path = "ir/associated_const.rs"]
 mod associated_const;
 #[path = "ir/promotion.rs"]
@@ -103,7 +106,9 @@ impl Ty {
     /// closure owner arguments, parameters, result and captures.
     pub(in crate::compiler) fn is_closed_shallow(&self) -> bool {
         match self {
-            Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
+            Ty::DependentArray { .. } | Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => {
+                false
+            }
             Ty::PhantomData(marker) => marker.argument().is_closed_shallow(),
             Ty::Cell(cell) => cell.is_concrete(),
             Ty::ManuallyDrop(wrapper) => wrapper.argument().is_closed_shallow(),
@@ -245,7 +250,13 @@ impl ParamEnv {
 #[derive(Clone, Debug)]
 pub struct GenericEnv {
     scopes: Arc<[Arc<ParamEnv>]>,
-    total_arity: usize,
+    // Ordinary type-only environments carry no const-list allocation or fat
+    // slice pointer. Present lists remain immutable and preserve every binder.
+    const_binders: Option<Arc<ConstBinderScopes>>,
+}
+#[derive(Debug)]
+struct ConstBinderScopes {
+    binders: Box<[Arc<ConstBinder>]>,
 }
 impl GenericEnv {
     pub(crate) fn new(scopes: &[Arc<ParamEnv>], budget: &PlanBudget) -> Result<Self, String> {
@@ -271,8 +282,50 @@ impl GenericEnv {
         budget.retain_bytes(std::mem::size_of::<Self>() + std::mem::size_of_val(scopes))?;
         Ok(Self {
             scopes: scopes.into(),
-            total_arity,
+            const_binders: None,
         })
+    }
+    pub(in crate::compiler) fn with_const_binder(
+        &self,
+        binder: Arc<ConstBinder>,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.charge_work(self.scopes.len() + 1)?;
+        let combined_arity = self
+            .total_arity()
+            .checked_add(binder.parameters().len())
+            .ok_or("generic arity overflow")?;
+        if !self.const_binders().is_empty()
+            || !self
+                .scopes
+                .iter()
+                .any(|scope| scope.binder() == binder.owner())
+            || combined_arity > budget.limits().params
+        {
+            return Err("const binder does not belong to declaration environment".into());
+        }
+        budget.retain_bytes(
+            std::mem::size_of::<Self>()
+                + std::mem::size_of::<ConstBinderScopes>()
+                + 2 * std::mem::size_of::<usize>()
+                + std::mem::size_of::<Arc<ConstBinder>>(),
+        )?;
+        Ok(Self {
+            scopes: self.scopes.clone(),
+            const_binders: Some(Arc::new(ConstBinderScopes {
+                binders: Box::new([binder]),
+            })),
+        })
+    }
+    pub fn const_binders(&self) -> &[Arc<ConstBinder>] {
+        self.const_binders
+            .as_ref()
+            .map_or(&[], |scopes| scopes.binders.as_ref())
+    }
+    pub fn const_parameter_type(&self, parameter: ConstParamId) -> Option<ConstType> {
+        self.const_binders()
+            .iter()
+            .find_map(|binder| binder.parameter_type(parameter))
     }
     pub fn scopes(&self) -> &[Arc<ParamEnv>] {
         &self.scopes
@@ -285,10 +338,12 @@ impl GenericEnv {
         self.scopes.iter().any(|scope| scope.contains(param))
     }
     pub fn total_arity(&self) -> usize {
-        self.total_arity
+        // Constructor validation proves this sum cannot overflow. Scopes and
+        // their arities are immutable for the lifetime of this environment.
+        self.scopes.iter().map(|scope| scope.arity()).sum()
     }
     pub fn is_generic(&self) -> bool {
-        self.total_arity != 0
+        self.scopes.iter().any(|scope| scope.arity() != 0) || !self.const_binders().is_empty()
     }
     pub fn ordered_params(&self) -> impl Iterator<Item = ParamId> + '_ {
         self.scopes.iter().flat_map(|scope| {
@@ -738,6 +793,7 @@ pub(super) fn source_carrier_inventory(
             Ok(())
         };
         match ty {
+            Ty::DependentArray { element, .. } => child(element)?,
             Ty::Cell(_) | Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {
             }
             Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
@@ -849,6 +905,9 @@ pub(super) fn source_carrier_inventory(
             return Ok(());
         }
         match ty {
+            Ty::DependentArray { .. } => {
+                return Err("unsupported: reference carriers in dependent arrays".into());
+            }
             Ty::Ref { referent, .. } => {
                 emit(
                     CarrierChannel::Fixed(ReferencePosition { depth: prefix }),
@@ -975,7 +1034,7 @@ pub(super) fn source_carrier_inventory(
                     | Ty::Dyn(_)
                     | Ty::Never
                     | Ty::RawPtr { .. } => {}
-                    Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
+                    Ty::Ref { .. } | Ty::Param(_) | Ty::DependentArray { .. } => unreachable!(),
                 }
                 path.truncate(saved);
             }
@@ -1613,6 +1672,16 @@ impl ClosureBodyShape {
 pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool, String> {
     budget.charge_work(1)?;
     Ok(match (a, b) {
+        (
+            Ty::DependentArray {
+                element: a,
+                length: x,
+            },
+            Ty::DependentArray {
+                element: b,
+                length: y,
+            },
+        ) => x == y && Arc::ptr_eq(a, b),
         (
             Ty::Ref {
                 kind: ak,
@@ -3462,6 +3531,24 @@ fn substitute_ty_walk(
     budget.charge_work(1)?;
     budget.charge_nodes(1)?;
     Ok(match ty {
+        Ty::DependentArray { element, length } => {
+            let element = Arc::new(substitute_ty_walk(
+                element,
+                env,
+                args,
+                caller,
+                cx,
+                budget,
+                depth + 1,
+            )?);
+            let mapped = Ty::DependentArray {
+                element,
+                length: *length,
+            };
+            caller.validate_ty_metadata_with_budget(&mapped, budget)?;
+            budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+            mapped
+        }
         Ty::Opaque(opaque) => {
             budget.retain_bytes(
                 std::mem::size_of::<OpaqueTy>()
@@ -4700,7 +4787,8 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     walk(field, budget, depth + 1, seen)?;
                 }
             }
-            Ty::Array { element, .. }
+            Ty::DependentArray { element, .. }
+            | Ty::Array { element, .. }
             | Ty::RawPtr {
                 pointee: element, ..
             } => walk(element, budget, depth + 1, seen)?,
@@ -5552,7 +5640,7 @@ pub fn by_value_contains(
                     }
                 }
             }
-            Ty::Array { element, .. } if child(element)? => {
+            Ty::DependentArray { element, .. } | Ty::Array { element, .. } if child(element)? => {
                 return Ok((true, height));
             }
             _ => {}
@@ -6113,6 +6201,12 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
+    /// A declaration-owned symbolic length, never a guessed concrete extent.
+    /// Native layout requires a separately validated closing substitution.
+    DependentArray {
+        element: Arc<Ty>,
+        length: ConstParamId,
+    },
     Opaque(Arc<OpaqueTy>),
     Closure(Arc<ClosureTy>),
     /// Zero-sized function item type: exact declaration and ordered actuals.
@@ -6335,7 +6429,7 @@ impl PhantomDataTy {
                     child(ty)?;
                 }
             }
-            Ty::Array { element, .. } => child(element)?,
+            Ty::DependentArray { element, .. } | Ty::Array { element, .. } => child(element)?,
             Ty::RawPtr { pointee, .. } => child(pointee)?,
             Ty::Param(_)
             | Ty::Int(_)
@@ -6745,7 +6839,7 @@ impl FnPointerTy {
             budget.charge_work(1)?;
             match ty {
                 Ty::Ref { .. } => return Err("unsupported: function pointer reference lifetime signatures are not implemented".into()),
-                Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
+                Ty::DependentArray { element: pointee, .. } | Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
                 Ty::Tuple(fields) => { for t in fields.iter() { component(t, budget, depth + 1)?; } }
                 Ty::PhantomData(marker) => component(marker.argument(), budget, depth + 1)?,
                 Ty::Cell(cell) => component(cell.argument(), budget, depth + 1)?,
@@ -6878,6 +6972,7 @@ impl DynTy {
             match ty {
                 Ty::Unit | Ty::Bool | Ty::Char | Ty::Str | Ty::Int(_) | Ty::Float(_) => true,
                 Ty::Ref { referent, .. } => closed(referent, depth + 1),
+                Ty::DependentArray { .. } => false,
                 Ty::Array { element, .. } | Ty::Slice { element } => closed(element, depth + 1),
                 Ty::Tuple(values) => values.iter().all(|v| closed(v, depth + 1)),
                 _ => false,
@@ -7028,6 +7123,26 @@ fn type_metadata_walk(
             return Ok((false, height));
         }
         let key = match ty {
+            Ty::DependentArray { element, length } => {
+                if let Some(facts) = facts {
+                    let env = match facts {
+                        FactsCtx::Universal(env) => env,
+                        FactsCtx::Validated(facts) => facts.env(),
+                        FactsCtx::Concrete => {
+                            return Err(
+                                "dependent array requires an authoritative const binder".into()
+                            );
+                        }
+                    };
+                    for _ in env.const_binders() {
+                        charge(budget, work)?;
+                    }
+                    if env.const_parameter_type(*length) != Some(ConstType::Int(IntTy::Usize)) {
+                        return Err("dependent array const parameter is outside its authoritative usize binder".into());
+                    }
+                }
+                (15, Arc::as_ptr(element) as usize)
+            }
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::PhantomData(marker) => (12, Arc::as_ptr(marker) as usize),
             Ty::Cell(cell) => (14, Arc::as_ptr(cell) as usize),
@@ -7119,6 +7234,7 @@ fn type_metadata_walk(
             Ok(())
         };
         match ty {
+            Ty::DependentArray { element, .. } => child(element)?,
             Ty::Opaque(opaque) => {
                 for ty in opaque.types() {
                     child(ty)?;
@@ -7561,7 +7677,8 @@ impl Ty {
                     referent: inner, ..
                 }
                 | Self::RawPtr { pointee: inner, .. }
-                | Self::Array { element: inner, .. } => push(&mut pending, inner)?,
+                | Self::Array { element: inner, .. }
+                | Self::DependentArray { element: inner, .. } => push(&mut pending, inner)?,
                 Self::Tuple(fields) => {
                     for child in fields.iter() {
                         push(&mut pending, child)?;
@@ -7666,7 +7783,11 @@ impl Ty {
             | Self::Str
             | Self::Dyn(_)
             | Self::Slice { .. } => false,
-            Self::ManuallyDrop(_) | Self::Closure(_) | Self::Tuple(_) | Self::Array { .. } => {
+            Self::DependentArray { .. }
+            | Self::ManuallyDrop(_)
+            | Self::Closure(_)
+            | Self::Tuple(_)
+            | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
                 let mut arrays = std::collections::HashSet::new();
@@ -7685,6 +7806,11 @@ impl Ty {
                         | Self::Str
                         | Self::Slice { .. } => {
                             return false;
+                        }
+                        Self::DependentArray { element, .. }
+                            if arrays.insert(Arc::as_ptr(element)) =>
+                        {
+                            pending.push(element)
                         }
                         Self::ManuallyDrop(wrapper) => pending.push(wrapper.argument()),
                         Self::Closure(closure)
@@ -7984,7 +8110,7 @@ fn slice_boundary_walk_inner(
                     Ty::Ref { .. } if !matches!(mode, SliceBoundaryMode::Carriers) => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Slice { .. } => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Ref { referent, .. } => Some(Key(0, Arc::as_ptr(referent) as usize, tuple_components)),
-                    Ty::Array { element, .. } => Some(Key(1, Arc::as_ptr(element) as usize, tuple_components)),
+                    Ty::DependentArray { element, .. } | Ty::Array { element, .. } => Some(Key(1, Arc::as_ptr(element) as usize, tuple_components)),
                     Ty::Tuple(fields) => Some(Key(2, fields.as_ptr() as usize, tuple_components)),
                     Ty::Struct(value) => Some(Key(3, value.def() as *const StructDef as usize, tuple_components)),
                     Ty::Enum(value) => Some(Key(4, value.def() as *const EnumDef as usize, tuple_components)),
@@ -8021,6 +8147,7 @@ fn slice_boundary_walk_inner(
                     pending.push(Frame::Enter(ty.clone(), next, shared_components), budget)
                 };
                 match node {
+                    Ty::DependentArray { element, .. } => child(element, false)?,
                     Ty::Ref { referent, .. }
                     | Ty::Array {
                         element: referent, ..
@@ -8929,6 +9056,7 @@ pub(in crate::compiler) fn reference_type_summary(
         let mut opaque = matches!(
             ty,
             Ty::Param(_)
+                | Ty::DependentArray { .. }
                 | Ty::Opaque(_)
                 | Ty::AssociatedType(_)
                 | Ty::Dyn(_)
@@ -8971,7 +9099,8 @@ pub(in crate::compiler) fn reference_type_summary(
                 }
                 child(element)?;
             }
-            Ty::Slice { element }
+            Ty::DependentArray { element, .. }
+            | Ty::Slice { element }
             | Ty::RawPtr {
                 pointee: element, ..
             } => child(element)?,
@@ -9040,7 +9169,7 @@ fn marker_expression_types_equal(
     }
 }
 
-fn ref_types_equal(
+pub(super) fn ref_types_equal(
     left: &Ty,
     right: &Ty,
     budget: &PlanBudget,
@@ -9074,6 +9203,16 @@ fn ref_types_equal(
             Ok(equal)
         };
         let equal = match (left, right) {
+            (
+                Ty::DependentArray {
+                    element: a,
+                    length: x,
+                },
+                Ty::DependentArray {
+                    element: b,
+                    length: y,
+                },
+            ) => x == y && child(a, b)?,
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
             (Ty::PhantomData(a), Ty::PhantomData(b)) => a.try_eq(b, &mut child)?,
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => a.try_eq(b, &mut child)?,
@@ -9653,6 +9792,21 @@ fn pattern_types_equal_with_facts(
             return Err("pattern type comparison depth exceeds limit 128".into());
         }
         match (a, b) {
+            (
+                Ty::DependentArray {
+                    element: a,
+                    length: x,
+                },
+                Ty::DependentArray {
+                    element: b,
+                    length: y,
+                },
+            ) => {
+                if x != y {
+                    return Ok(false);
+                }
+                pending.push((a, b, depth + 1));
+            }
             (Ty::Opaque(a), Ty::Opaque(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
@@ -10029,7 +10183,9 @@ fn structurally_copy(ty: &Ty, depth: usize) -> bool {
             ..
         } => true,
         Ty::Tuple(fields) => fields.iter().all(|f| structurally_copy(f, depth + 1)),
-        Ty::Array { element, .. } => structurally_copy(element, depth + 1),
+        Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
+            structurally_copy(element, depth + 1)
+        }
         _ => false,
     }
 }

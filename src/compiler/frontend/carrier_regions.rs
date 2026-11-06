@@ -583,7 +583,7 @@ fn substitute(
                 *field = substitute(registry, field, types, regions, budget, depth + 1)?;
             }
         }
-        Type::Array(element, _) | Type::Slice(element) => {
+        Type::DependentArray(element, _) | Type::Array(element, _) | Type::Slice(element) => {
             **element = substitute(registry, element, types, regions, budget, depth + 1)?
         }
         Type::Apply(path) => {

@@ -752,7 +752,7 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "unsupported: mutable or nested reference associated equality",
             )),
-            Ty::Array { element, .. } => {
+            Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
                 self.validate_equality_reference_domain(element, depth + 1)
             }
             Ty::Struct(value) => {
@@ -1056,7 +1056,9 @@ impl ValidatedTraitWorld {
             | Ty::Closure(_)
             | Ty::Dyn(_)
             | Ty::Opaque(_) => Ok(false),
-            Ty::Array { element, .. } => self.shared_assignment_payload(element, depth + 1),
+            Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
+                self.shared_assignment_payload(element, depth + 1)
+            }
             Ty::Struct(value) => {
                 for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
                     if !self.shared_assignment_payload(&field.ty, depth + 1)? {
