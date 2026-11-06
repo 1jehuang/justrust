@@ -2,6 +2,8 @@
 //! Payloads are moved from the trusted source constructor. Their upstream
 //! schema/type/region allocations remain paid there. These receipts separately
 //! pay container capacity and the frozen wrapper, with no ledger backreference.
+//! Direct-return precision is separately sealed from the parser's complete
+//! original syntax receipt; ordinary schema metadata never grants it.
 #[cfg(test)]
 mod tests;
 
@@ -180,6 +182,7 @@ struct SourceDeclaration {
 
 #[derive(Debug)]
 pub(super) struct SourceSchemas {
+    direct_returns: PaidDeclTable<Arc<super::direct_return::DirectReturnPlace>>,
     snapshot: ir::SnapshotId,
     functions: DeclTable<StoredSchema>,
     region_modes: DeclTable<SourceDeclaration>,
@@ -398,6 +401,7 @@ fn assignment_position(
 
 #[derive(Debug, Default)]
 pub(super) struct SourceSchemasBuilder {
+    direct_returns: PaidDeclTable<Arc<super::direct_return::DirectReturnPlace>>,
     pub(super) functions: PaidDeclTable<StoredSchema>,
     region_modes: PaidDeclTable<SourceDeclaration>,
     pub(super) source_regions: PaidDeclTable<Arc<ir::SourceRegionEnv>>,
@@ -475,6 +479,11 @@ impl SourceSchemasBuilder {
             {
                 return Err("source callable schema does not match original registry".into());
             }
+            if let Some(proof) = super::direct_return::seal(registry, *key, &stored.value, budget)?
+            {
+                self.direct_returns
+                    .insert(DeclSlot { id: *key }, proof, budget)?;
+            }
         }
         self.seal(snapshot, budget)
     }
@@ -544,6 +553,7 @@ impl SourceSchemasBuilder {
         Ok(())
     }
     pub(super) fn finish_tables(&mut self, budget: &ir::PlanBudget) -> Result<(), String> {
+        self.direct_returns.finish(budget)?;
         check_receipt(self.functions.receipt.as_ref(), budget)?;
         check_receipt(self.region_modes.receipt.as_ref(), budget)?;
         check_receipt(self.source_regions.receipt.as_ref(), budget)?;
@@ -591,6 +601,7 @@ impl SourceSchemasBuilder {
             Ok(())
         }
         check_table(&self.functions, snapshot, budget)?;
+        check_table(&self.direct_returns, snapshot, budget)?;
         check_table(&self.region_modes, snapshot, budget)?;
         check_table(&self.source_regions, snapshot, budget)?;
         verify_storage(
@@ -640,6 +651,7 @@ impl SourceSchemasBuilder {
             .reserve_bytes(arc_storage::<SourceSchemas>()?)?
             .retain()?;
         Ok(Arc::new(SourceSchemas {
+            direct_returns: self.direct_returns,
             snapshot,
             functions: self.functions.values,
             region_modes: self.region_modes.values,
@@ -658,6 +670,15 @@ impl SourceSchemasBuilder {
     }
 }
 impl SourceSchemas {
+    pub(super) fn direct_return(
+        &self,
+        id: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<Arc<super::direct_return::DirectReturnPlace>>, String> {
+        self.check(id, budget)?;
+        check_receipt(self.direct_returns.receipt.as_ref(), budget)?;
+        Ok(lookup(&self.direct_returns.values, id, budget)?.cloned())
+    }
     fn check(&self, id: ir::DeclId, budget: &ir::PlanBudget) -> Result<(), String> {
         check_budget(budget)?;
         if id.snapshot != self.snapshot {

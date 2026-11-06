@@ -659,6 +659,15 @@ pub trait NominalValidationSession: Send {
 }
 
 pub trait SchemaCx {
+    /// Lookup of a frozen parser/source-schema proof, never a body callback.
+    fn declaration_direct_return(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::direct_return::DirectReturnPlace>>> {
+        let _ = declaration;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
     /// Default deny. Only original zero constructor/delegate source can issue absence of element provenance.
     fn native_sequence_empty(
         &self,
@@ -2638,6 +2647,38 @@ pub struct CarrierContractView {
     budget: PlanBudget,
 }
 impl CarrierContractView {
+    pub(in crate::compiler) fn source_return_path(
+        &self,
+        facts: &ValidatedFacts,
+        callee: &Callee,
+        signature: &Signature,
+        location: &ir::CarrierLocation,
+    ) -> Result<Option<ir::InputPath>> {
+        if !location.path.0.is_empty()
+            || location.channel != ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+            || !matches!(callee, Callee::Direct(_))
+        {
+            return Ok(None);
+        }
+        let retained = facts.world.declaration_carriers(self.declaration)?;
+        let Some(proof) = &retained.direct_return else {
+            return Ok(None);
+        };
+        let mut validated = false;
+        self.validate_result_flow_with(
+            facts,
+            SignatureSubject::Call(callee),
+            signature,
+            location,
+            &mut validated,
+        )?;
+        let raw = &facts.world.callable_header(self.declaration)?.schema;
+        charged(
+            facts.budget(),
+            proof.validate(self.declaration, raw, facts.budget()),
+        )?;
+        Ok(Some(proof.path()))
+    }
     pub(in crate::compiler) fn native_heap_invariants(&self) -> &[NativeHeapInvariant] {
         &self.native_heap_invariants
     }
@@ -2781,6 +2822,7 @@ impl CarrierContractView {
 
 #[derive(Debug)]
 struct DeclarationCarriers {
+    direct_return: Option<Arc<super::frontend::direct_return::DirectReturnPlace>>,
     declaration: DeclId,
     contract: ir::CarrierContract,
     regions: ir::CarrierRegionSchema,
@@ -7961,6 +8003,13 @@ impl ValidatedTraitWorld {
             )?;
             let source_regions = self.validate_source_regions(declaration, &raw.signature)?;
             let (contract, regions) = self.derive_carriers(&raw.signature, &source_regions)?;
+            let direct_return = self.schema.declaration_direct_return(declaration)?;
+            if let Some(proof) = &direct_return {
+                charged(
+                    &self.budget,
+                    proof.validate(declaration, &raw, &self.budget),
+                )?;
+            }
             self.origin_index
                 .note(&self.budget, declaration, self.origins.len())?;
             push(&self.budget, &mut self.origins, (declaration, schema))?;
@@ -7970,6 +8019,7 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 &mut self.carriers,
                 DeclarationCarriers {
+                    direct_return,
                     declaration,
                     contract,
                     regions,

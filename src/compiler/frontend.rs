@@ -8827,6 +8827,7 @@ mod array_len_receiver;
 mod associated_bounds;
 mod associated_declarations;
 mod const_inputs;
+pub(in crate::compiler) mod direct_return;
 pub(super) mod nominal_call_receipts;
 pub(in crate::compiler) use const_inputs::SealedBodyConstants;
 mod const_items;
@@ -9440,6 +9441,7 @@ pub enum FieldName {
 }
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub(super) direct_return_source: Option<Arc<direct_return::ParsedSource>>,
     pub const_params: Vec<SourceConstParameter>,
     pub(super) embedded_source: Option<Arc<function_source::FunctionSource>>,
     pub(super) suspended_source: Option<Arc<function_source::AsyncBodySource>>,
@@ -15470,6 +15472,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.emitted_callable_body(signature.name, &signature.params)?;
                     Some(Function {
                         embedded_source: None,
+                        direct_return_source: None,
                         suspended_source: None,
                         lexical_scope,
                         module,
@@ -16187,6 +16190,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         inherited: &[AstIdent],
         associated: bool,
     ) -> Result<(Function, ReceiverKind), ParseError> {
+        let direct_return_start = self.cursor.index();
         let enclosing_bounds = self.visible_bounds.clone();
         let (head, receiver) = self.function_head(inherited, associated)?;
         let mut body_bounds = enclosing_bounds.clone();
@@ -16233,6 +16237,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok((
                 Function {
                     embedded_source: None,
+                    direct_return_source: None,
                     suspended_source: function_source::issue_async_body(
                         &body,
                         self.names,
@@ -16260,8 +16265,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 receiver,
             ))
         })();
-        let result = result.and_then(|(function, receiver)| {
+        let result = result.and_then(|(mut function, receiver)| {
             self.record_c_function(&function, external, exported)?;
+            function.direct_return_source =
+                direct_return::issue(self, direct_return_start, &function, associated, external)
+                    .map_err(|error| self.error(&error))?;
             Ok((function, receiver))
         });
         self.lexical.closure_parent = previous_parent;
@@ -26474,6 +26482,14 @@ impl tr::SchemaCx for SchemaAdapter {
         self.source_schemas
             .schema(id, &self.budget)
             .map_err(|e| self.error(e))
+    }
+    fn declaration_direct_return(
+        &self,
+        id: ir::DeclId,
+    ) -> Result<Option<Arc<direct_return::DirectReturnPlace>>, tr::FactsError> {
+        self.source_schemas
+            .direct_return(id, &self.budget)
+            .map_err(|error| self.error(error))
     }
     fn associated_constant_schema(
         &self,

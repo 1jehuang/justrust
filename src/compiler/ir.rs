@@ -757,11 +757,61 @@ pub(super) fn source_carrier_inventory(
     ty: &Ty,
     budget: &PlanBudget,
 ) -> Result<SourceCarrierInventory, String> {
+    #[derive(Default)]
+    struct PresenceMemo {
+        values: std::collections::HashMap<usize, (bool, usize)>,
+        _base: Option<PlanReservation>,
+        _extra: Option<PlanReservation>,
+    }
+    impl PresenceMemo {
+        fn insert(
+            &mut self,
+            key: usize,
+            value: (bool, usize),
+            budget: &PlanBudget,
+        ) -> Result<(), String> {
+            if self.values.len() == self.values.capacity() {
+                let target = self
+                    .values
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or("carrier presence capacity overflow")?
+                    .max(4);
+                // Four entry widths conservatively cover buckets, control
+                // bytes and table slack. Both old and new tables remain paid
+                // throughout relocation; only this call owns these leases.
+                let width = 4 * std::mem::size_of::<(usize, (bool, usize))>();
+                let bytes = target
+                    .checked_mul(width)
+                    .ok_or("carrier presence byte overflow")?;
+                let mut staged = Self {
+                    _base: Some(budget.reserve_bytes(bytes)?),
+                    ..Self::default()
+                };
+                staged
+                    .values
+                    .try_reserve(target)
+                    .map_err(|_| "carrier presence allocation resource limit")?;
+                let extra = staged
+                    .values
+                    .capacity()
+                    .checked_sub(target)
+                    .and_then(|count| count.checked_mul(width))
+                    .ok_or("carrier presence capacity overflow")?;
+                staged._extra = Some(budget.reserve_bytes(extra)?);
+                budget.charge_work(self.values.len())?;
+                staged.values.extend(self.values.drain());
+                *self = staged;
+            }
+            self.values.insert(key, value);
+            Ok(())
+        }
+    }
     fn present(
         ty: &Ty,
         budget: &PlanBudget,
         depth: usize,
-        memo: &mut std::collections::HashMap<usize, (bool, usize)>,
+        memo: &mut PresenceMemo,
         deferred: &mut Vec<Ty>,
     ) -> Result<(bool, usize), String> {
         budget.check_depth(depth)?;
@@ -777,7 +827,7 @@ pub(super) fn source_carrier_inventory(
             return Ok((true, 0));
         }
         let key = std::ptr::from_ref(ty) as usize;
-        if let Some(&(has, height)) = memo.get(&key) {
+        if let Some(&(has, height)) = memo.values.get(&key) {
             budget.check_depth(depth.checked_add(height).ok_or("carrier depth overflow")?)?;
             return Ok((has, height));
         }
@@ -845,10 +895,7 @@ pub(super) fn source_carrier_inventory(
             | Ty::Dyn(_)
             | Ty::Never => {}
         }
-        budget.retain_bytes(4 * std::mem::size_of::<(usize, (bool, usize))>())?;
-        memo.try_reserve(1)
-            .map_err(|_| "carrier presence allocation resource limit")?;
-        memo.insert(key, (has, height));
+        memo.insert(key, (has, height), budget)?;
         Ok((has, height))
     }
     fn emit(
@@ -1041,18 +1088,32 @@ pub(super) fn source_carrier_inventory(
         }
         Ok(())
     }
-    let mut memo = std::collections::HashMap::new();
+    let mut memo = PresenceMemo::default();
     let mut deferred = Vec::new();
-    present(ty, budget, 0, &mut memo, &mut deferred)?;
+    let (has, height) = present(ty, budget, 0, &mut memo, &mut deferred)?;
     if !deferred.is_empty() {
         return Ok(SourceCarrierInventory::Deferred(deferred));
     }
-    let _scratch = budget.reserve_bytes(129 * std::mem::size_of::<CarrierStep>())?;
+    if !has {
+        return Ok(SourceCarrierInventory::Complete(Arc::from([])));
+    }
+    let capacity = height.checked_add(1).ok_or("carrier path depth overflow")?;
+    let _scratch = budget.reserve_bytes(
+        capacity
+            .checked_mul(std::mem::size_of::<CarrierStep>())
+            .ok_or("carrier path storage overflow")?,
+    )?;
     let mut path = Vec::new();
-    path.try_reserve_exact(129)
+    path.try_reserve_exact(capacity)
         .map_err(|_| "carrier path allocation resource limit")?;
+    let _extra = budget.reserve_bytes(
+        path.capacity()
+            .checked_sub(capacity)
+            .and_then(|count| count.checked_mul(std::mem::size_of::<CarrierStep>()))
+            .ok_or("carrier path capacity overflow")?,
+    )?;
     let mut output = Vec::new();
-    walk(ty, &mut path, 0, 0, &mut output, budget, &memo)?;
+    walk(ty, &mut path, 0, 0, &mut output, budget, &memo.values)?;
     Ok(SourceCarrierInventory::Complete(output.into()))
 }
 
@@ -15242,6 +15303,53 @@ mod tests {
             reference(BorrowKind::Shared, Ty::Bool),
         ]));
         assert!(carrier_locations(&oversized, &budget).is_err());
+    }
+
+    #[test]
+    fn carrier_inventory_presence_scratch_is_released_and_outputs_remain_paid() {
+        let budget = PlanBudget::new(PlanLimits {
+            bytes: 8192,
+            ..PlanLimits::default()
+        });
+        let plain = Ty::Tuple(Arc::from([
+            Ty::Bool,
+            Ty::Array {
+                element: Arc::new(Ty::Int(IntTy::U8)),
+                len: 3,
+            },
+        ]));
+        let before = budget.usage_snapshot().bytes;
+        for _ in 0..256 {
+            assert!(carrier_locations(&plain, &budget).unwrap().is_empty());
+            let usage = budget.usage_snapshot();
+            assert_eq!(usage.bytes, before);
+            assert_eq!(usage.reservations.current_reservations, 0);
+        }
+        assert!(budget.usage_snapshot().reservations.peak_bytes > before);
+        let reference = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Bool),
+        };
+        let output = carrier_locations(&reference, &budget).unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(
+            output[0].channel,
+            CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+        );
+        let expected =
+            3 * std::mem::size_of::<CarrierLocation>() + 4 * std::mem::size_of::<usize>();
+        assert_eq!(budget.usage_snapshot().bytes, before + expected);
+        assert_eq!(budget.usage_snapshot().reservations.current_reservations, 0);
+
+        let denied = PlanBudget::new(PlanLimits {
+            bytes: 1,
+            ..PlanLimits::default()
+        });
+        assert!(carrier_locations(&reference, &denied).is_err());
+        assert_eq!(
+            denied.first_resource_failure().unwrap().kind,
+            ResourceBudgetKind::Bytes
+        );
     }
 
     #[test]

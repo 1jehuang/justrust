@@ -1870,6 +1870,7 @@ mod tests {
         Function {
             const_params: Vec::new(),
             embedded_source: None,
+            direct_return_source: None,
             suspended_source: None,
             lexical_scope: None,
             module: builder.module_root().unwrap(),

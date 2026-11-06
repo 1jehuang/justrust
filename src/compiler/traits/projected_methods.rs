@@ -1656,6 +1656,7 @@ impl ValidatedTraitWorld {
             arguments: arguments.clone(),
             origin,
             retained: DeclarationCarriers {
+                direct_return: None,
                 declaration: item.declaration,
                 contract,
                 regions,
@@ -1757,6 +1758,7 @@ impl ValidatedTraitWorld {
             arguments: target.type_args.clone(),
             origin,
             retained: DeclarationCarriers {
+                direct_return: None,
                 declaration: retained.declaration,
                 contract: retained.contract.clone(),
                 regions: retained.regions.clone(),
@@ -1965,6 +1967,7 @@ impl ValidatedTraitWorld {
                 arguments: arguments.into(),
                 origin,
                 retained: DeclarationCarriers {
+                    direct_return: None,
                     declaration: retained.declaration,
                     contract,
                     regions,
@@ -2022,6 +2025,7 @@ impl ValidatedTraitWorld {
                     arguments: Arc::from([]),
                     origin,
                     retained: DeclarationCarriers {
+                        direct_return: None,
                         declaration: evidence.item,
                         contract: checked.contract,
                         regions: checked.regions,
@@ -2065,6 +2069,7 @@ impl ValidatedTraitWorld {
                 arguments: arguments.into(),
                 origin,
                 retained: DeclarationCarriers {
+                    direct_return: None,
                     declaration: evidence.item,
                     contract,
                     regions,

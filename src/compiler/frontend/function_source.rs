@@ -708,8 +708,9 @@ pub(super) fn issue_parsed(
 }
 
 // This is only the parser's original-range predicate, never an authority mint.
-// The caller still checks the original header, loader issuer and full recipe.
-fn original_token_range<'a>(
+// Callers check their original declaration and full supported syntax.
+// Embedded-source callers additionally require the loader issuer.
+pub(super) fn original_token_range<'a>(
     names: &impl NameAccess,
     tokens: impl IntoIterator<Item = &'a Token>,
 ) -> Result<Option<OriginalSpan>, String> {

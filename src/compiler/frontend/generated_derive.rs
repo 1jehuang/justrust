@@ -67,6 +67,7 @@ impl Parser<'_, '_> {
             function: Function {
                 const_params: Vec::new(),
                 embedded_source: None,
+                direct_return_source: None,
                 suspended_source: None,
                 lexical_scope,
                 module: declaration.module,

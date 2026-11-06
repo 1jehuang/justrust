@@ -1339,6 +1339,97 @@ fn main() {
 }
 
 #[test]
+fn memory_projected_generic_short_reborrow_acceptance() {
+    memory_projected_generic_short_reborrow_source();
+}
+
+#[test]
+fn memory_projected_generic_short_reborrow_noncopy_and_invalid_source() {
+    oracle::check(
+        "projected-generic-reborrow-controls",
+        &[
+            Case {
+                name: "projected_short_reborrow_drops_each_noncopy_value_once",
+                source: r#"struct Value { n: i32 }
+impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.n); } }
+struct Slot<T> { value: T, tag: i32 }
+fn field<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.value }
+fn replace_twice<T>(slot: &mut Slot<T>, first: T, second: T) {
+    let field = field(slot);
+    { let short = &mut *field; *short = first; }
+    *field = second;
+}
+fn main() {
+    let mut slot = Slot { value: Value { n: 3 }, tag: 19 };
+    replace_twice(&mut slot, Value { n: 7 }, Value { n: 11 });
+    println!("{} {}", slot.value.n, slot.tag);
+}
+"#,
+                expect: Expect::Run("drop 3\ndrop 7\n11 19\ndrop 11\n"),
+            },
+            Case {
+                name: "projected_second_field_preserves_distinct_noncopy_first_field",
+                source: r#"struct Value { n: i32 }
+struct Slot<T> { value: T, spare: T, tag: i32 }
+fn spare<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.spare }
+fn replace_twice<T>(slot: &mut Slot<T>, first: T, second: T) {
+    let handle = spare(slot);
+    { let short = &mut *handle; *short = first; }
+    *handle = second;
+}
+fn main() {
+    let mut slot = Slot { value: Value { n: 3 }, spare: Value { n: 5 }, tag: 19 };
+    replace_twice(&mut slot, Value { n: 7 }, Value { n: 11 });
+    println!("{} {} {}", slot.value.n, slot.spare.n, slot.tag);
+}
+"#,
+                expect: Expect::Run("3 11 19\n"),
+            },
+            Case {
+                name: "unused_projected_original_handle_write_with_live_child_is_invalid",
+                source: r#"struct Slot<T> { value: T, tag: i32 }
+fn field<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.value }
+fn unused<T>(slot: &mut Slot<T>, first: T, second: T) {
+    let field = field(slot);
+    let short = &mut *field;
+    *field = first;
+    *short = second;
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "unused_two_overlapping_projected_call_results_are_invalid",
+                source: r#"struct Slot<T> { value: T, tag: i32 }
+fn field<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.value }
+fn unused<T>(slot: &mut Slot<T>, first: T, second: T) {
+    let left = field(slot);
+    let right = field(slot);
+    *left = first;
+    *right = second;
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "unused_projected_call_result_cannot_escape_owned_frame",
+                source: r#"struct Slot<T> { value: T, tag: i32 }
+fn field<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.value }
+fn unused<'a, T>(value: T) -> &'a mut T {
+    let mut slot = Slot { value, tag: 19 };
+    field(&mut slot)
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn memory_projected_tuple_explicit_borrows_closure_source() {
     oracle::check(
         "memory-projected-tuple-explicit-borrows-closure-source",

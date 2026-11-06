@@ -5307,7 +5307,35 @@ impl CarrierBuilder<'_, '_> {
                 // by-value input aggregate (`self: Option<T>`), so the
                 // structural sources always join the result's liveness.
                 fixed_sourceless = true;
-                for (input, suffix, precision) in return_inputs(&result.returns) {
+                // Declaration envelopes remain canonical. Only an exact
+                // original complete-source projection can refine this call's
+                // storage identity, independently of callee body analysis.
+                let source_path = match (&view, facts) {
+                    (Some(view), Some(facts)) => match view
+                        .source_return_path(facts, &target, &signature, &location)
+                    {
+                        Ok(path) => path,
+                        Err(error) if error.is_resource() => return Err(Exhausted),
+                        Err(error) => {
+                            self.problem(
+                                block,
+                                None,
+                                Problem::Invalid(
+                                    error.into_diagnostic(&self.ledger).map_err(|_| Exhausted)?,
+                                ),
+                            )?;
+                            return Ok(());
+                        }
+                    },
+                    _ => None,
+                };
+                let exact = source_path
+                    .as_ref()
+                    .map(|path| (path.input, path.projection.as_ref(), TargetPrecision::Exact));
+                for (input, suffix, precision) in exact
+                    .into_iter()
+                    .chain(return_inputs(&result.returns).filter(|_| source_path.is_none()))
+                {
                     fixed_positioned = true;
                     let input_value = self.input_value(
                         &entry,

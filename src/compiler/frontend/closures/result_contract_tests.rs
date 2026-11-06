@@ -331,7 +331,13 @@ fn higher_order_symbolic_result_replays_original_call_contract() {
                         budget.usage_snapshot(),
                     )
                 });
-        crate::compiler::ownership::verify_template(template).unwrap();
+        crate::compiler::ownership::verify_template(template).unwrap_or_else(|error| {
+            panic!(
+                "ownership mode={mode:?}; error={error:?}; firstfailure={:?}; usage={:?}",
+                budget.first_resource_failure(),
+                budget.usage_snapshot(),
+            )
+        });
     }
 }
 
