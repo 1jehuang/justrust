@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 961)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2004)
+        self.assertEqual(expected['proposed_rule_identities'], 983)
+        self.assertEqual(expected['rule_identities_without_proposals'], 1982)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -117,7 +117,17 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(sequence[field], 0)
         self.assertIsNone(sequence['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 966)
+        pointer = expected['profiles']['pointer-types']
+        self.assertEqual(pointer['selected_pages'], ['src/types/pointer.md'])
+        self.assertEqual(pointer['proposed_rule_identities'], 22)
+        self.assertEqual(pointer['proposed_classification_counts'], {
+            'normative-semantic': 14, 'grammar': 2, 'index': 7,
+            'cross-reference': 7, 'edition-context': 0})
+        self.assertEqual(pointer['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(pointer[field], 0)
+        self.assertIsNone(pointer['full_rust_completion_percent'])
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 988)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
