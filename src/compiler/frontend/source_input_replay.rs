@@ -2,6 +2,7 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+mod borrow_coercion;
 mod generic_method;
 
 // This bounded arithmetic slice obtains its width only from authored suffixes,
@@ -2581,6 +2582,11 @@ impl Replay<'_> {
                     },
                 )?
             }
+            (source @ Expr::Borrow { place, .. }, ir::ExprKind::Call { .. })
+                if place.fields.is_empty() =>
+            {
+                self.explicit_borrow_coercion(source, node, id, depth + 1)?
+            }
             (
                 Expr::Call { .. },
                 ir::ExprKind::Call {
@@ -3259,6 +3265,247 @@ mod literal_context_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn explicit_borrow_coercion_replays_original_owner_and_rejects_forgeries() {
+        for (formal, borrow, kind) in [
+            ("&[T]", "&owner", ir::BorrowKind::Shared),
+            ("&mut[T]", "&mut owner", ir::BorrowKind::Mut),
+        ] {
+            let source = format!(
+                "use std::ops::{{Deref,DerefMut}};struct Wrapper<T>{{values:[T;2]}}impl<T> Deref for Wrapper<T>{{type Target=[T];fn deref(&self)->&[T]{{&self.values}}}}impl<T> DerefMut for Wrapper<T>{{fn deref_mut(&mut self)->&mut[T]{{&mut self.values}}}}fn take<T>(v:{formal}){{}}fn main(){{let mut owner:Wrapper<i32>=Wrapper{{values:[3i32,7i32]}};take({borrow});}}"
+            );
+            let prepared = crate::compiler::source::prepare_text_with_prelude(
+                "borrow-coercion-source.rs",
+                &source,
+                &crate::compiler::source::SourceOptions::default(),
+            )
+            .unwrap();
+            let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("original explicit-borrow body");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (index, operator, _) = original
+                .call_mapping
+                .iter()
+                .find(|(index, _, _)| original.calls[*index].operator_candidate)
+                .unwrap();
+            let operator = *operator;
+            let operand = match &checked.exprs[operator.0].kind {
+                ir::ExprKind::Call { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            for mutation in 0..7 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0 => {
+                        let ir::ExprKind::Borrow { kind: actual, .. } =
+                            &mut forged.exprs[operand.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        *actual = if kind == ir::BorrowKind::Mut {
+                            ir::BorrowKind::Shared
+                        } else {
+                            ir::BorrowKind::Mut
+                        };
+                    }
+                    1 => {
+                        let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[operand.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        place.local = ir::LocalId(usize::MAX);
+                    }
+                    2 | 3 => {
+                        let ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } = &mut forged.exprs[operator.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        if mutation == 2 {
+                            target.declaration = declaration;
+                        } else {
+                            target.type_args = vec![ir::Ty::Bool].into();
+                        }
+                    }
+                    4 => forged.exprs[operator.0].ty = ir::Ty::Bool,
+                    _ => {
+                        let mut rows = forged.call_evidence.to_vec();
+                        let row = rows.iter_mut().find(|row| row.call == operator).unwrap();
+                        if mutation == 5 {
+                            row.arguments = Arc::from([]);
+                        } else {
+                            row.type_actual_regions = vec![ir::TypeActualRegion {
+                                argument: 0,
+                                location: ir::CarrierLocation {
+                                    path: ir::CarrierPath(Arc::from([])),
+                                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                        depth: 0,
+                                    }),
+                                },
+                                source: ir::ActualRegion::Elided,
+                            }]
+                            .into();
+                        }
+                        forged.call_evidence = rows.into();
+                    }
+                }
+                assert_eq!(
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err(&format!("explicit borrow mutation {mutation}"))
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let function = plan.callable_body(&plan.program, declaration).unwrap();
+            let inventory =
+                SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
+                    .unwrap();
+            let (pointer, root) = function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| {
+                    let Stmt::Expr(Expr::Call { args, .. }) = statement else {
+                        return None;
+                    };
+                    let Expr::Borrow { place, .. } = &args[0] else {
+                        return None;
+                    };
+                    let LocalName::Named(root) = place.local else {
+                        return None;
+                    };
+                    Some((&args[0] as *const Expr as usize, root))
+                })
+                .unwrap();
+            let second = inventory.call_pointers[&deref_coercion::site(pointer, 2)];
+            for mutation in 0..3 {
+                let mut forged = original.clone();
+                match mutation {
+                    0 => forged
+                        .call_mapping
+                        .retain(|(_, expression, _)| *expression != operator),
+                    1 => {
+                        forged
+                            .call_mapping
+                            .iter_mut()
+                            .find(|(_, expression, _)| *expression == operator)
+                            .unwrap()
+                            .0 = second;
+                    }
+                    _ => forged.call_mapping.push(
+                        original
+                            .call_mapping
+                            .iter()
+                            .find(|(source, _, _)| source == index)
+                            .unwrap()
+                            .clone(),
+                    ),
+                }
+                assert_eq!(
+                    replay_source_body(&forged, checked, publication.facts(), &budget)
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            for mutation in 0..4 {
+                let mut inventory = SourceInventory::build(
+                    &plan.program,
+                    function,
+                    original.identity.clone(),
+                    &budget,
+                )
+                .unwrap();
+                let key = deref_coercion::site(pointer, 1);
+                match mutation {
+                    0 => {
+                        inventory.call_pointers.remove(&key);
+                    }
+                    1 => {
+                        inventory.call_pointers.insert(key, second);
+                    }
+                    2 => inventory.calls[*index].operator_candidate = false,
+                    _ => {
+                        inventory.calls[*index].node.owner =
+                            sr::OriginalBodyId::new(&budget).unwrap()
+                    }
+                }
+                assert_eq!(
+                    Replay::borrow_coercion_site(
+                        &original,
+                        &inventory,
+                        &original.calls[*index].node,
+                        kind,
+                        root,
+                        &budget
+                    )
+                    .unwrap_err()
+                    .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let foreign_program = parse("fn main(){}").unwrap();
+            let foreign_budget = ir::PlanBudget::default();
+            let foreign = PlanCtx::from_program(&foreign_program, &foreign_budget).unwrap();
+            let facts = foreign
+                .callable_facts(foreign.function_decl(0).unwrap())
+                .unwrap();
+            assert_eq!(
+                replay_source_body(&original, checked, &facts, &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+            assert!(budget.charge_work(usize::MAX).is_err());
+            assert_eq!(
+                replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::Resource
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_borrow_coercion_does_not_guess_named_actual_regions() {
+        let source = "use std::ops::Deref;struct Wrapper<T>{values:[T;1]}impl<T> Deref for Wrapper<T>{type Target=[T];fn deref(&self)->&[T]{&self.values}}fn take<T>(v:&[T]){}fn use_it<'a>(value:&'a i32){let owner:Wrapper<&'a i32>=Wrapper{values:[value]};take(&owner);}fn main(){let value=7i32;use_it(&value);}";
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "borrow-coercion-regions.rs",
+            source,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let error = match plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget) {
+            Err(error) => error,
+            Ok(_) => panic!("named generic regions must not acquire guessed coercion authority"),
+        };
+        assert_eq!(error.kind(), tr::FactsErrorKind::Unsupported);
+        assert!(
+            error
+                .to_string()
+                .contains("independently reference-free generic actuals")
+        );
+        assert!(!budget.has_resource_failure());
     }
 
     #[test]

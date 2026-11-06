@@ -14,6 +14,32 @@ fn unchanged_sort_by_actual_program() {
 }
 
 #[test]
+fn explicit_borrow_coercions_with_source_initializers_match_stock() {
+    for initializer in [
+        "(0i32..4i32).map(|x|x).collect()",
+        "make::<i32>()",
+        "vec![1i32,2i32,3i32]",
+    ] {
+        let source = format!(
+            "fn make<T>()->Vec<T>{{Vec::new()}}fn mutate<T:Copy+std::fmt::Display>(v:&mut[T]){{if v.len()>1usize{{let first=v[0usize];v[0usize]=v[1usize];v[1usize]=first;}}let mut i=0usize;while i<v.len(){{println!(\"{{}}\",v[i]);i+=1usize;}}}}fn read<T:Copy+std::fmt::Display>(v:&[T]){{let mut i=0usize;while i<v.len(){{println!(\"{{}}\",v[i]);i+=1usize;}}}}fn main(){{let data:Vec<i32>={initializer};let mut copied=data.clone();mutate(&mut copied);read(&copied);}}"
+        );
+        iterator_oracle::stock_native(&source);
+    }
+    iterator_oracle::stock_native(
+        r#"
+use std::ops::{Deref,DerefMut};
+struct Wrapper<T>{values:[T;2]}
+impl<T> Deref for Wrapper<T>{type Target=[T];fn deref(&self)->&[T]{&self.values}}
+impl<T> DerefMut for Wrapper<T>{fn deref_mut(&mut self)->&mut[T]{&mut self.values}}
+fn mutate<T:Copy>(values:&mut[T]){let first=values[0usize];values[0usize]=values[1usize];values[1usize]=first;}
+fn read<T:Copy+std::fmt::Display>(values:&[T]){let mut i=0usize;while i<values.len(){println!("{}",values[i]);i+=1usize;}}
+fn main(){let mut owner:Wrapper<i32>=Wrapper{values:[3i32,7i32]};mutate(&mut owner);read(&owner);}
+"#,
+    );
+    iterator_oracle::stock_native(include_str!("fixtures/full_programs/16_sorting.rs"));
+}
+
+#[test]
 fn format_operands_infer_partial_collect_types() {
     for source in [
         r#"fn main(){println!("{:?}",(0i32..3).map(|x|x+1).collect::<Vec<_>>());}"#,
