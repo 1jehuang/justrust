@@ -102,6 +102,10 @@ pub trait Iterator: Sized {
         Filter { iterator: self, predicate }
     }
 
+    fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F> {
+        FilterMap { iterator: self, f }
+    }
+
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
         loop {
             match self.next() {
@@ -1226,6 +1230,47 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> B> Iterator for Map<I, F> {
         match self.iterator.next() {
             Option::Some(item) => Option::Some((self.f)(item)),
             Option::None => Option::None,
+        }
+    }
+}
+
+pub struct FilterMap<I, F> {
+    iterator: I,
+    f: F,
+}
+
+impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> Iterator for FilterMap<I, F> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        loop {
+            match self.iterator.next() {
+                Option::Some(item) => match (self.f)(item) {
+                    Option::Some(value) => return Option::Some(value),
+                    Option::None => {},
+                },
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> IntoIterator for FilterMap<I, F> {
+    type Item = B;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<A, B, I: DoubleEndedIterator<Item = A>, F: FnMut(A) -> Option<B>> DoubleEndedIterator for FilterMap<I, F> {
+    fn next_back(&mut self) -> Option<B> {
+        loop {
+            match self.iterator.next_back() {
+                Option::Some(item) => match (self.f)(item) {
+                    Option::Some(value) => return Option::Some(value),
+                    Option::None => {},
+                },
+                Option::None => return Option::None,
+            }
         }
     }
 }

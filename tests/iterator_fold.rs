@@ -780,6 +780,56 @@ fn main() {
     );
 }
 
+/// `Iterator::filter_map` lazily selects mapped values in either direction.
+#[test]
+fn iterator_filter_map_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-filter-map",
+        &[
+            Case {
+                name: "unchanged_option_combinators",
+                source: include_str!("fixtures/full_programs/29_option_combinators.rs"),
+                expect: Expect::Run(include_str!(
+                    "fixtures/full_programs/29_option_combinators.stdout"
+                )),
+            },
+            Case {
+                name: "lazy_mutating_callback",
+                source: r#"fn main(){let mut calls=0i32;let mut it=(0i32..5i32).filter_map(|n|{calls+=1;println!("visit {}",n);if n%2==0 {Some(n*10)} else {None}});println!("created");println!("{:?}",it.next());println!("{:?}",it.next());println!("{:?}",it.next());println!("{:?}",it.next());drop(it);println!("calls {}",calls);}"#,
+                expect: Expect::Run(
+                    "created\nvisit 0\nSome(0)\nvisit 1\nvisit 2\nSome(20)\nvisit 3\nvisit 4\nSome(40)\nNone\ncalls 5\n",
+                ),
+            },
+            Case {
+                name: "owned_noncopy_items",
+                source: r#"fn main(){let v=vec![String::from("keep"),String::from(""),String::from("also")];let out:Vec<String>=v.into_iter().filter_map(|s|if s.is_empty(){None}else{Some(s)}).collect();println!("{:?}",out);}"#,
+                expect: Expect::Run("[\"keep\", \"also\"]\n"),
+            },
+            Case {
+                name: "double_ended_filter_map",
+                source: r#"fn main(){let a=[1i32,2,3,4,5];let mut it=a.iter().filter_map(|x|if *x%2==1{Some(*x)}else{None});println!("{:?} {:?} {:?} {:?}",it.next_back(),it.next(),it.next_back(),it.next());let out:Vec<i32>=a.iter().filter_map(|x|if *x>2{Some(*x)}else{None}).rev().collect();println!("{:?}",out);}"#,
+                expect: Expect::Run("Some(5) Some(1) Some(3) None\n[5, 4, 3]\n"),
+            },
+            Case {
+                name: "non_option_result_unused",
+                source: "fn unused(){let _=(0i32..3i32).filter_map(|x|x+1);}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0308"),
+            },
+            Case {
+                name: "wrong_callback_parameter_unused",
+                source: "fn unused(){let _=(0i32..3i32).filter_map(|x:bool|Some(x));}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0631"),
+            },
+            Case {
+                name: "borrowed_item_escape",
+                source: "fn main(){let item;{let values=vec![1i32,2];item=values.iter().filter_map(|x|Some(x)).next().unwrap();}println!(\"{}\",item);}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+        ],
+    );
+}
+
 /// `Iterator::filter` source adapter: `Filter<I, P>` with the
 /// `P: FnMut(&I::Item) -> bool` projection, consumed by `next()`. The parent
 /// may re-check and re-mint an equal closure shape seal.
