@@ -1071,6 +1071,55 @@ fn unresolved_macro_open_import_reports_original_binding_path_workers1_8() {
 }
 
 #[test]
+fn private_source_imports_are_semantic_despite_open_macro_namespace() {
+    for text in [
+        "mod api{fn secret(){}}use crate::api::{secret};fn main(){}",
+        "mod api{struct Secret{}}use crate::api::{Secret};fn main(){}",
+        "mod api{fn secret(){}}mod unused{use crate::api::{secret};}fn main(){}",
+        "mod api{struct Secret{}}mod unused{use crate::api::{Secret};}fn main(){}",
+    ] {
+        let scratch = Scratch::new();
+        scratch.write("client.rs", text.as_bytes());
+        let stock = capture(
+            Command::new(stock_rustc::stock_rustc())
+                .arg("--edition=2024")
+                .arg(scratch.path("client.rs"))
+                .arg("-o")
+                .arg(scratch.path("stock")),
+            &scratch,
+            20,
+        );
+        assert_eq!(stock.code, 1, "{text}: {stock:?}");
+        assert!(String::from_utf8_lossy(&stock.stderr).contains("is private"));
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let image = scratch.path(&format!("native-{workers}-{check}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command
+                    .current_dir(&scratch.0)
+                    .env("RUSTC", scratch.path("no-rustc"))
+                    .env("PATH", scratch.path("no-tools"))
+                    .arg(scratch.path("client.rs"))
+                    .args(["--workers", &workers.to_string()]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = capture(&mut command, &scratch, 20);
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert_eq!(result.code, 1, "{text}: {result:?}");
+                assert!(diagnostic.contains("private item"), "{text}: {diagnostic}");
+                assert!(!diagnostic.contains("unsupported"), "{text}: {diagnostic}");
+                for output in [&image, &scratch.path("client"), &scratch.path("a.out")] {
+                    assert!(!output.exists(), "{}", output.display());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn exported_namespace_open_authority_is_unsupported_not_absent_workers1_8() {
     let rustc = stock_rustc::stock_rustc();
     for (name, text) in [

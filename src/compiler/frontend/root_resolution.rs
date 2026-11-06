@@ -5873,10 +5873,19 @@ fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result
         .get(&key)
         .ok_or("missing source item bucket")?;
     for (index, item) in items.iter().enumerate() {
-        if matches!(item.kind, ItemKind::Import(_, _)) {
+        if let ItemKind::Import(target, type_only) = &item.kind {
             let type_target = resolver.import(path, index, true)?;
             let value_target = resolver.import(path, index, false)?;
             if type_target.is_none() && value_target.is_none() {
+                // Candidate lookup hides inaccessible leaves so that the other
+                // namespace can still supply the import. Once both namespaces
+                // are absent, replay the identical source target without that
+                // filtering to diagnose a real private declaration. A missing
+                // declaration remains missing and still needs macro completeness.
+                resolver.path(target, item.module, true, false)?;
+                if !type_only {
+                    resolver.path(target, item.module, false, false)?;
+                }
                 if item.macro_import_open {
                     return Err(format!(
                         "unsupported: unresolved import requires configured macro import/export completeness: {}",
@@ -7625,6 +7634,42 @@ mod tests {
         for source in [
             "pub mod a{pub use self as Alias;pub fn f()->i32{7}}fn main(){if a::Alias::f()==7{println!(\"reexports ok\");}}",
             "pub mod a{pub fn f()->i32{7}pub mod b{pub use super as Alias;}}fn main(){if a::b::Alias::f()==7{println!(\"reexports ok\");}}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            resolve(&parsed).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn missing_import_candidates_retain_privacy_and_absence() {
+        for source in [
+            "mod api{fn secret(){}}use crate::api::{secret};fn main(){}",
+            "mod api{struct Secret{}}use crate::api::{Secret};fn main(){}",
+            "mod api{fn secret(){}}mod unused{use crate::api::{secret};}fn main(){}",
+            "mod api{struct Secret{}}mod unused{use crate::api::{Secret};}fn main(){}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            let error = resolve(&parsed).unwrap_err();
+            assert!(error.contains("private item"), "{source}: {error}");
+            assert!(!error.contains("unsupported"), "{source}: {error}");
+        }
+        for source in [
+            "mod api{}use crate::api::{missing};fn main(){}",
+            "mod api{}mod unused{use crate::api::{missing};}fn main(){}",
+            "use crate::{unknown_macro};fn main(){}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            let error = resolve(&parsed).unwrap_err();
+            assert!(
+                error.contains("unresolved or cyclic import"),
+                "{source}: {error}"
+            );
+        }
+        for source in [
+            "mod api{pub fn f(){}}use crate::api::{f};fn main(){f();}",
+            "mod api{pub struct S{}}use crate::api::{S};fn main(){}",
+            "mod api{fn f(){}mod child{use super::{f};}}fn main(){}",
+            "mod api{pub(super) fn f(){}}mod sibling{use crate::api::{f};}fn main(){}",
         ] {
             let parsed = parse_unresolved(source).unwrap();
             resolve(&parsed).unwrap_or_else(|error| panic!("{source}: {error}"));
