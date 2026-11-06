@@ -8,6 +8,100 @@ use std::process::Command;
 mod iterator_oracle;
 
 #[test]
+fn comparator_sorting_vec_and_slices_match_stock() {
+    for source in [
+        r#"struct Item{key:i32,text:String}fn main(){let mut v=vec![Item{key:2,text:String::from("b")},Item{key:1,text:String::from("a")},Item{key:2,text:String::from("c")}];v.sort_unstable_by(|a,b|a.key.cmp(&b.key));for x in &v{println!("{}",x.key);}v.sort_unstable_by_key(|x|-x.key);for x in &v{println!("{}",x.key);}let mut e:Vec<Item>=Vec::new();e.sort_unstable_by(|a,b|a.key.cmp(&b.key));println!("{}",e.len());}"#,
+        r#"struct Item{key:i32,text:String}fn stable(v:&mut[Item]){v.sort_by(|a,b|a.key.cmp(&b.key));}fn main(){let mut v=vec![Item{key:2,text:String::from("b")},Item{key:1,text:String::from("a")},Item{key:2,text:String::from("c")}];stable(v.as_mut_slice());for x in &v{println!("{} {}",x.key,x.text);}v.as_mut_slice().sort_by_key(|x|-x.key);for x in &v{println!("{} {}",x.key,x.text);}}"#,
+        r#"fn order(v:&mut[i32]){let mut compared=false;v.sort_unstable_by(|a,b|{compared=true;b.cmp(a)});println!("{} {}",compared,v.len());v.sort_unstable_by_key(|x|*x);let mut i=0usize;while i<v.len(){println!("{}",v[i]);i+=1usize;}}fn main(){let mut v=vec![3i32,1,2,2];order(v.as_mut_slice());let mut e:Vec<i32>=Vec::new();order(e.as_mut_slice());let mut one=vec![4i32];order(one.as_mut_slice());v.sort_unstable();println!("{:?}",v);}"#,
+        r#"fn main(){let mut called=false;let mut v=vec![2i32,1];v.sort_unstable_by(|a,b|{called=true;a.cmp(b)});println!("{} {:?}",called,v);}"#,
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn comparator_sorting_rejects_invalid_unused_programs() {
+    for source in [
+        "fn unused(){let mut v=vec![1i32];v.sort_unstable_by(|a,b|a<b);}fn main(){}",
+        "fn unused(v:&mut[i32]){v.sort_by(|a,b|a<b);}fn main(){}",
+        "struct Key;fn unused(v:&mut[i32]){v.sort_unstable_by_key(|_|Key);}fn main(){}",
+        "fn unused(v:&mut[i32]){v.sort_unstable_by(|a,b|{*a=3;a.cmp(b)});}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn shared_slice_comparator_receiver_rejection_is_explicitly_unsupported() {
+    // Stock rejects the shared receiver. Native currently stops earlier at an
+    // inference boundary, which must not count as semantic rejection evidence.
+    let source = "fn unused(v:&[i32]){v.sort_unstable_by(|a:&i32,b:&i32|a.cmp(b));}fn main(){}";
+    comparator_boundary(
+        source,
+        "shared-receiver",
+        Some("E0596"),
+        "unsupported: nominal source constraints cannot progress",
+    );
+}
+
+#[test]
+fn comparator_function_items_remain_explicitly_unsupported() {
+    comparator_boundary(
+        "fn descending(a:&i32,b:&i32)->std::cmp::Ordering{b.cmp(a)}fn main(){let mut v=vec![1i32,3,2];v.sort_unstable_by(descending);v.as_mut_slice().sort_by(descending);}",
+        "function-item",
+        None,
+        "unsupported: function items with reference-bearing signatures as callable values",
+    );
+}
+
+fn comparator_boundary(source: &str, tag: &str, stock_error: Option<&str>, native_error: &str) {
+    let root = std::env::temp_dir().join(format!("jr-sort-{tag}-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let input = root.join("main.rs");
+    fs::write(&input, source).unwrap();
+    let stock = Command::new(iterator_oracle::closure_oracle::pinned_stock::stock_rustc())
+        .args(["--edition=2024", "--emit=metadata"])
+        .arg(&input)
+        .arg("-o")
+        .arg(root.join("stock.rmeta"))
+        .output()
+        .unwrap();
+    if let Some(error) = stock_error {
+        assert!(!stock.status.success());
+        assert!(String::from_utf8_lossy(&stock.stderr).contains(error));
+    } else {
+        assert!(
+            stock.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+    }
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let failure = compiler::compile_observed(source.into(), workers, check)
+                .err()
+                .expect("unsupported comparator boundary must not produce an executable");
+            assert!(failure.resource_usage.first_failure.is_none());
+            let diagnostic = failure.error.to_string();
+            assert!(
+                diagnostic.contains(native_error),
+                "workers={workers} check={check}: {diagnostic}"
+            );
+            if stock_error.is_some() {
+                assert!(iterator_oracle::validate_native_rejection(&failure).is_err());
+            }
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins() {
     for source in [
         r#"fn main(){let mut values:Vec<&str>=Vec::new();values.push("first");values.push("second");values.swap(0usize,1usize);println!("{:?}",values);values.swap(1usize,1usize);println!("{:?}",values);}"#,

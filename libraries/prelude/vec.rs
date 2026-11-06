@@ -478,6 +478,14 @@ impl<T> Vec<T> {
         }
     }
 
+    pub fn sort_unstable_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, compare: F) {
+        self.sort_by(compare);
+    }
+
+    pub fn sort_unstable_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, key: F) {
+        self.sort_by_key(key);
+    }
+
     /// Stable sort by extracted key. The key is recomputed per comparison.
     pub fn sort_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, mut key: F) {
         let mut i = 1usize;
@@ -498,6 +506,10 @@ impl<T> Vec<T> {
 }
 
 impl<T: super::cmp::Ord> Vec<T> {
+    pub fn sort_unstable(&mut self) {
+        self.sort();
+    }
+
     pub fn sort(&mut self) {
         // Stable insertion sort. Keep equal elements in their original order.
         let mut i = 1usize;

@@ -67,6 +67,40 @@ pub trait SliceMethods {
     fn swap(&mut self, a: usize, b: usize);
 }
 
+pub trait SliceSort<T> {
+    fn sort_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, compare: F);
+    fn sort_unstable_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, compare: F);
+    fn sort_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, key: F);
+    fn sort_unstable_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, key: F);
+}
+
+impl<T> SliceSort<T> for [T] {
+    fn sort_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, mut compare: F) {
+        let mut i = 1usize;
+        while i < self.len() {
+            let mut j = i;
+            while j > 0usize {
+                if !compare(&self[j - 1usize], &self[j]).is_gt() { break; }
+                self.swap(j - 1usize, j);
+                j -= 1usize;
+            }
+            i += 1usize;
+        }
+    }
+
+    fn sort_unstable_by<F: FnMut(&T, &T) -> super::cmp::Ordering>(&mut self, compare: F) {
+        self.sort_by(compare);
+    }
+
+    fn sort_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, mut key: F) {
+        self.sort_by(|a, b| key(a).cmp(&key(b)));
+    }
+
+    fn sort_unstable_by_key<K: super::cmp::Ord, F: FnMut(&T) -> K>(&mut self, key: F) {
+        self.sort_by_key(key);
+    }
+}
+
 impl<T> SliceMethods for [T] {
     type Element = T;
     fn as_mut_ptr(&mut self) -> *mut T {
