@@ -47,7 +47,7 @@
 31_impl_display	pass
 32_generics_traits	pass
 33_hashmap_entry	pass
-34_sort_by	fail	slice_sort_by
+34_sort_by	pass
 35_while_loop_match	pass
 36_iter_adapters	fail	iter_adapters
 37_struct_methods_lifetimes	pass	

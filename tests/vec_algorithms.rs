@@ -8,6 +8,11 @@ use std::process::Command;
 mod iterator_oracle;
 
 #[test]
+fn unchanged_sort_by_actual_program() {
+    iterator_oracle::stock_native(include_str!("fixtures/full_programs/34_sort_by.rs"));
+}
+
+#[test]
 fn comparator_sorting_vec_and_slices_match_stock() {
     for source in [
         r#"struct Item{key:i32,text:String}fn main(){let mut v=vec![Item{key:2,text:String::from("b")},Item{key:1,text:String::from("a")},Item{key:2,text:String::from("c")}];v.sort_unstable_by(|a,b|a.key.cmp(&b.key));for x in &v{println!("{}",x.key);}v.sort_unstable_by_key(|x|-x.key);for x in &v{println!("{}",x.key);}let mut e:Vec<Item>=Vec::new();e.sort_unstable_by(|a,b|a.key.cmp(&b.key));println!("{}",e.len());}"#,
