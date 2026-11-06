@@ -13,6 +13,29 @@ fn unchanged_sort_by_actual_program() {
 }
 
 #[test]
+fn format_operands_infer_partial_collect_types() {
+    for source in [
+        r#"fn main(){println!("{:?}",(0i32..3).map(|x|x+1).collect::<Vec<_>>());}"#,
+        r#"fn main(){let text=format!("{:?}",(0i32..3).map(|x|x+1).collect::<Vec<_>>());println!("{}",text);}"#,
+    ] {
+        iterator_oracle::stock_native(source);
+    }
+    for source in [
+        r#"fn unused(){println!("{:?}",(0i32..3).collect::<Vec<bool>>());}fn main(){}"#,
+        r#"fn unused(){let _=format!("{:?}",(0i32..3).collect::<Vec<bool>>());}fn main(){}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(failure.resource_usage.first_failure.is_none());
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
 fn comparator_sorting_vec_and_slices_match_stock() {
     for source in [
         r#"struct Item{key:i32,text:String}fn main(){let mut v=vec![Item{key:2,text:String::from("b")},Item{key:1,text:String::from("a")},Item{key:2,text:String::from("c")}];v.sort_unstable_by(|a,b|a.key.cmp(&b.key));for x in &v{println!("{}",x.key);}v.sort_unstable_by_key(|x|-x.key);for x in &v{println!("{}",x.key);}let mut e:Vec<Item>=Vec::new();e.sort_unstable_by(|a,b|a.key.cmp(&b.key));println!("{}",e.len());}"#,

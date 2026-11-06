@@ -275,7 +275,8 @@ impl Checker<'_> {
                 let (place, _, _) = self.checked_place(place)?;
                 self.borrow_expression(ir::BorrowKind::Shared, place)?
             } else {
-                let value = self.expr_expected(argument, None)?;
+                let expected = self.format_operand_expectation(argument);
+                let value = self.expr_expected(argument, expected.as_ref())?;
                 completes &= self.flow(value).completes;
                 let ty = self.exprs[value.0].ty.clone();
                 let owner = self.temporary(&format!("$fmt_into{index}"), ty, false)?;

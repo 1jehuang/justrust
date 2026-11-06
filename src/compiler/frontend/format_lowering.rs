@@ -175,6 +175,26 @@ impl Checker<'_> {
 }
 
 impl Checker<'_> {
+    /// A format operand has no expected type of its own. Only a partial
+    /// turbofish (`collect::<Vec<_>>()`) needs its body-solved type as
+    /// context; every other operand keeps context-free checking. The call is
+    /// still selected and proved against that type.
+    pub(in crate::compiler::frontend) fn format_operand_expectation(
+        &self,
+        argument: &Expr,
+    ) -> Option<ir::Ty> {
+        match argument {
+            Expr::MethodCall { type_args, .. }
+                if type_args
+                    .iter()
+                    .any(type_check::partial_annotation::has_nested_infer) =>
+            {
+                self.solved_receiver_hint(argument)
+            }
+            _ => None,
+        }
+    }
+
     /// Check one output macro. Every argument is evaluated once, in source
     /// order. When each placeholder is a plain `{}`/`{:?}` over a native
     /// scalar type this is the native `Format` operation unchanged.
@@ -232,7 +252,8 @@ impl Checker<'_> {
                     id
                 }
             } else {
-                self.expr_expected(argument, None)?
+                let expected = self.format_operand_expectation(argument);
+                self.expr_expected(argument, expected.as_ref())?
             };
             // Borrow the original mutable slice place through its descriptor,
             // rather than creating &&mut [T] and subsequently moving the inner

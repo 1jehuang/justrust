@@ -3368,12 +3368,33 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Continue { label } => self.infer_continue(*label),
             Expr::Format { arguments, .. } => {
                 for a in arguments {
-                    self.expr(a, depth + 1)?;
+                    let site = a as *const Expr as usize;
+                    let term = self.expr(a, depth + 1)?;
+                    // `println!("{:?}", it.collect::<Vec<_>>())`: a format
+                    // operand has no expected type of its own; its solved
+                    // type is the only context for partial turbofish holes.
+                    // The checker re-proves the call against that type.
+                    if matches!(a, Expr::MethodCall { type_args, .. } if type_args.iter().any(type_check::partial_annotation::has_nested_infer))
+                        && matches!(self.domain(term), Domain::Unknown | Domain::Nominal(..))
+                    {
+                        self.checker.infer_storage(1)?;
+                        self.receiver_sites.push((site, term));
+                    }
                 }
                 self.fixed(ir::Ty::Unit)
             }
             Expr::FormatInto(source) => {
-                for arg in source.arguments.iter().chain(source.rest.iter().flatten()) {
+                for arg in source.arguments.iter() {
+                    let site = arg as *const Expr as usize;
+                    let term = self.expr(arg, depth + 1)?;
+                    if matches!(arg, Expr::MethodCall { type_args, .. } if type_args.iter().any(type_check::partial_annotation::has_nested_infer))
+                        && matches!(self.domain(term), Domain::Unknown | Domain::Nominal(..))
+                    {
+                        self.checker.infer_storage(1)?;
+                        self.receiver_sites.push((site, term));
+                    }
+                }
+                for arg in source.rest.iter().flatten() {
                     self.expr(arg, depth + 1)?;
                 }
                 self.fixed(ir::Ty::Unit)
