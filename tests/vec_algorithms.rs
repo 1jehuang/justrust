@@ -66,6 +66,44 @@ impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{&mut self.value}}
 }
 
 #[test]
+fn local_deref_noncopy_field_formatting_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"
+use std::ops::Deref;
+struct Value{name:String}
+struct Owner{value:Value}
+impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{println!("deref");&self.value}}
+struct Shadow{value:Value,name:String}
+impl Deref for Shadow{type Target=Value;fn deref(&self)->&Value{println!("unexpected deref");&self.value}}
+fn main(){let owner=Owner{value:Value{name:String::from("retained")}};let text=format!("{} {}",owner.name,owner.name);println!("{}",text);println!("{}",owner.name);let shadow=Shadow{value:Value{name:String::from("target")},name:String::from("stored")};println!("{}",shadow.name);}
+"#,
+    );
+}
+
+#[test]
+fn local_deref_field_formatting_rejects_invalid_unused_programs() {
+    let prefix = r#"
+use std::ops::{Deref,DerefMut};
+struct Value{name:String}
+struct Owner{value:Value}
+impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{&self.value}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{&mut self.value}}
+"#;
+    for body in [
+        "fn unused(){let owner=Owner{value:Value{name:String::from(\"kept\")}};let _=format!(\"{}\",owner.absent);}fn main(){}",
+        "fn unused(){let mut owner=Owner{value:Value{name:String::from(\"kept\")}};let loan=&mut *owner;let _=format!(\"{}\",owner.name);loan.name=String::from(\"changed\");}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject(&format!("{prefix}{body}"));
+    }
+    iterator_oracle::stock_and_native_reject(
+        r#"
+mod inside{use std::ops::Deref;pub struct Value{name:String}pub struct Owner{value:Value}impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{&self.value}}pub fn make()->Owner{Owner{value:Value{name:String::from("private")}}}}
+fn unused(){let owner=inside::make();let _=format!("{}",owner.name);}fn main(){}
+"#,
+    );
+}
+
+#[test]
 fn unchanged_sort_by_actual_program() {
     iterator_oracle::stock_native(include_str!("fixtures/full_programs/34_sort_by.rs"));
 }

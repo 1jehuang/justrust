@@ -259,16 +259,21 @@ impl Checker<'_> {
             let place = static_source_place(argument)
                 .ok()
                 .filter(|_| place_expression(argument))
-                // `*owner` through a user Deref is not a static place: type
-                // it as a value (`*Deref::deref(&owner)`) and borrow that.
-                .filter(|place| {
-                    !matches!(argument, Expr::Deref { .. }) || self.checked_place(place).is_ok()
-                });
-            let indexed_reference = self.overloaded_index_reference(
+                // Overloaded Deref/Index fields are not builtin static
+                // places. Keep their returned-reference loan provenance.
+                .filter(|place| self.checked_place(place).is_ok());
+            let mut indexed_reference = self.overloaded_index_reference(
                 ir::BorrowKind::Shared,
                 argument,
                 argument as *const Expr as usize,
             )?;
+            if indexed_reference.is_none()
+                && place.is_none()
+                && matches!(argument, Expr::Field { .. })
+            {
+                indexed_reference =
+                    self.borrow_call_rooted_field(ir::BorrowKind::Shared, argument)?;
+            }
             let borrow = if let Some(reference) = indexed_reference {
                 reference
             } else if let Some(place) = &place {

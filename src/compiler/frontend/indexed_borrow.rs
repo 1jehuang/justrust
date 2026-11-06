@@ -200,9 +200,33 @@ impl type_check::Checker<'_> {
             fields.push(field);
             root = base;
         }
+        // A local owner's non-stored field is also a returned-reference
+        // place: obtain its ordinary checked Deref call without moving the
+        // owner, then use exactly the same projection/loan protocol below.
+        let local_owner = if !fields.is_empty() && matches!(root, Expr::Var(_)) {
+            match self.method_receiver_hint(root)? {
+                Some(hint) => {
+                    let owner = match &hint {
+                        ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                        ty => ty,
+                    };
+                    if let ir::Ty::Struct(nominal) = owner
+                        && !self.has_member(nominal.def().source_decl, fields[fields.len() - 1])?
+                    {
+                        Some(hint)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         if fields.is_empty()
             || !(matches!(root, Expr::Index { .. } | Expr::DynamicIndex { .. })
-                || type_check::genuine_call(root))
+                || type_check::genuine_call(root)
+                || local_owner.is_some())
         {
             return Ok(None);
         }
@@ -227,7 +251,12 @@ impl type_check::Checker<'_> {
         } else {
             None
         };
-        let evaluated = if let Some(carrier) = indexed {
+        let evaluated = if let Some(owner) = local_owner {
+            let Some(carrier) = self.receiver_overloaded_deref(root, &owner, kind)? else {
+                return Ok(None);
+            };
+            self.deref_overloaded_result(carrier)?
+        } else if let Some(carrier) = indexed {
             self.deref_overloaded_result(carrier)?
         } else {
             self.expr(root)?
