@@ -3573,7 +3573,9 @@ impl CarrierBuilder<'_, '_> {
             self.budget
                 .reserve_bytes(mul(length, size_of::<Projection>())?)?;
             let path = value_projection(source);
-            if probe_projected_shape(root, &path, self.budget)?.is_none() {
+            if probe_projected_shape(root, &path, self.budget)?
+                .is_none_or(|shape| matches!(shape, Ty::Param(_)))
+            {
                 // A generic original may deliberately retain less cell shape
                 // than its canonical closed family. Keep its already-issued
                 // target unchanged, with every dependency and authority intact.
@@ -9937,186 +9939,211 @@ mod parameter_equality_tests {
 
     #[test]
     fn original_parameter_slice_probe_requires_canonical_issued_carrier() {
-        let snapshot = Arc::new(crate::compiler::Snapshot {
-            input: crate::compiler::Input::Text(
-                include_str!("../../tests/fixtures/full_programs/13_trait_objects.rs").into(),
+        for (source, main_index, callee_suffix, input_path) in [
+            (
+                include_str!("../../tests/fixtures/full_programs/13_trait_objects.rs"),
+                1,
+                "max_by",
+                vec![CarrierStep::Field(0)],
             ),
-            source_options: crate::compiler::source::SourceOptions::default(),
-            budget: ir::PlanBudget::default(),
-        });
-        let ledger = snapshot.budget.clone();
-        struct ActualMaxByBody(crate::compiler::CompilerProvider);
-        impl crate::engine::Provider for ActualMaxByBody {
-            fn outputs(&self, key: &crate::engine::Key) -> usize {
-                if key.kind == u32::MAX {
-                    1
-                } else {
-                    crate::engine::Provider::outputs(&self.0, key)
+            (
+                "use std::io::BufReader;fn main(){let bytes:&[u8]=&[1u8,2,3];let _reader=BufReader::new(bytes);}",
+                0,
+                "new",
+                vec![],
+            ),
+        ] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text(source.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let ledger = snapshot.budget.clone();
+            struct ActualMaxByBody(crate::compiler::CompilerProvider, usize, &'static str);
+            impl crate::engine::Provider for ActualMaxByBody {
+                fn outputs(&self, key: &crate::engine::Key) -> usize {
+                    if key.kind == u32::MAX {
+                        1
+                    } else {
+                        crate::engine::Provider::outputs(&self.0, key)
+                    }
+                }
+                fn start(
+                    &self,
+                    cx: crate::engine::Context,
+                    key: crate::engine::Key,
+                ) -> crate::engine::TaskFuture {
+                    if key.kind != u32::MAX {
+                        return crate::engine::Provider::start(&self.0, cx, key);
+                    }
+                    let ledger = self.0.0.budget.clone();
+                    let main_index = self.1;
+                    let callee_suffix = self.2;
+                    Box::pin(async move {
+                        let signatures = cx
+                            .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                            .get(0);
+                        let main = cx
+                            .request(
+                                crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(
+                                    main_index,
+                                )
+                                .key(),
+                            )
+                            .get(0);
+                        let plan: Arc<crate::compiler::frontend::PlanCtx> =
+                            cx.read_fact(signatures).await?;
+                        let main: Arc<crate::compiler::TemplateBodyFact> =
+                            cx.read_fact(main).await?;
+                        let facts = plan
+                            .instance_facts(&ir::CallTarget {
+                                declaration: plan.function_decl(main_index).unwrap(),
+                                type_args: Arc::from([]),
+                            })
+                            .unwrap();
+                        let callee = main
+                            .checked
+                            .exprs
+                            .iter()
+                            .find_map(|expression| {
+                                let ir::ExprKind::Call { target, name, .. } = &expression.kind
+                                else {
+                                    return None;
+                                };
+                                name.ends_with(callee_suffix).then_some(target.clone())
+                            })
+                            .expect("unchanged original max_by call");
+                        let target = match callee {
+                            ir::Callee::Direct(target) => target,
+                            ir::Callee::TraitItem(call) => {
+                                let selected = ir::TraitCx::resolve_trait_call(
+                                    facts.world().as_ref(),
+                                    &call,
+                                    &facts,
+                                )
+                                .unwrap();
+                                let ir::Callee::Direct(target) = selected.callee() else {
+                                    panic!("max_by selected non-direct body")
+                                };
+                                target.clone()
+                            }
+                            _ => panic!("unexpected original max_by callee"),
+                        };
+                        let body_key = crate::compiler::keys::words(
+                            crate::compiler::CANONICAL_BODY,
+                            crate::compiler::instances::graph_key::encode(&target, &ledger)
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        let body = cx.request(body_key).get(0);
+                        let body: Arc<crate::compiler::InstanceBodyFact> =
+                            cx.read_fact(body).await?;
+                        cx.publish_fact(
+                            0,
+                            crate::compiler::InstanceBodyFact {
+                                facts: body.facts.clone(),
+                                checked: body.checked.clone(),
+                            },
+                        )
+                    })
                 }
             }
-            fn start(
-                &self,
-                cx: crate::engine::Context,
-                key: crate::engine::Key,
-            ) -> crate::engine::TaskFuture {
-                if key.kind != u32::MAX {
-                    return crate::engine::Provider::start(&self.0, cx, key);
-                }
-                let ledger = self.0.0.budget.clone();
-                Box::pin(async move {
-                    let signatures = cx
-                        .request(crate::compiler::keys::SignaturesDebtRoot.key())
-                        .get(0);
-                    let main = cx
-                        .request(
-                            crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(1)
-                                .key(),
-                        )
-                        .get(0);
-                    let plan: Arc<crate::compiler::frontend::PlanCtx> =
-                        cx.read_fact(signatures).await?;
-                    let main: Arc<crate::compiler::TemplateBodyFact> = cx.read_fact(main).await?;
-                    let facts = plan
-                        .instance_facts(&ir::CallTarget {
-                            declaration: plan.function_decl(1).unwrap(),
-                            type_args: Arc::from([]),
-                        })
-                        .unwrap();
-                    let callee = main
-                        .checked
-                        .exprs
-                        .iter()
-                        .find_map(|expression| {
-                            let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
-                                return None;
-                            };
-                            name.ends_with("max_by").then_some(target.clone())
-                        })
-                        .expect("unchanged original max_by call");
-                    let target = match callee {
-                        ir::Callee::Direct(target) => target,
-                        ir::Callee::TraitItem(call) => {
-                            let selected = ir::TraitCx::resolve_trait_call(
-                                facts.world().as_ref(),
-                                &call,
-                                &facts,
-                            )
-                            .unwrap();
-                            let ir::Callee::Direct(target) = selected.callee() else {
-                                panic!("max_by selected non-direct body")
-                            };
-                            target.clone()
+            let engine = crate::compiler::Engine::new(ActualMaxByBody(
+                crate::compiler::CompilerProvider(snapshot),
+                main_index,
+                callee_suffix,
+            ));
+            let body_handle = engine.request(crate::compiler::keys::test_key(u32::MAX, vec![0]));
+            engine.run(1).unwrap();
+            body_handle.completion().unwrap();
+            let body = body_handle
+                .fact::<crate::compiler::InstanceBodyFact>(0)
+                .unwrap();
+            let function =
+                Arc::new(cfg::lower_with_facts(&body.checked, &body.facts, &ledger).unwrap());
+            assert!(function.body_substitution.is_some());
+            let mut budget = Budget::new(32_000_000);
+            let mut builder = CarrierBuilder::new(
+                &function,
+                FactsCtx::Validated(&body.facts),
+                ledger,
+                &mut budget,
+                128 * 1024 * 1024,
+                None,
+            )
+            .unwrap();
+            let (input, origin) = builder
+                .reference_inputs
+                .iter()
+                .find(|(input, _)| {
+                    input.param == 0 && input.location.path.0.as_ref() == input_path.as_slice()
+                })
+                .cloned()
+                .expect("original parameter family issued descriptor");
+            let target = builder.targets[origin.0][0].clone();
+            let original_root = &builder.original_locals[function.params[0].0];
+            assert!(matches!(original_root, Ty::Param(_)));
+            let path = value_projection(&input.location);
+            let shape =
+                probe_projected_shape(original_root, &path, &mut Budget::new(1_000_000)).unwrap();
+            if input_path.is_empty() {
+                assert!(matches!(shape, Some(Ty::Param(_))));
+            } else {
+                assert!(shape.is_none());
+            }
+            let result = function.result.clone();
+            let result_location = ir::carrier_locations(&result, &builder.ledger)
+                .unwrap()
+                .iter()
+                .find(|location| {
+                    matches!(
+                        ir::carrier_at(&result, location, &builder.ledger).unwrap(),
+                        Ty::Ref {
+                            kind: BorrowKind::Shared,
+                            ..
                         }
-                        _ => panic!("unexpected original max_by callee"),
-                    };
-                    let body_key = crate::compiler::keys::words(
-                        crate::compiler::CANONICAL_BODY,
-                        crate::compiler::instances::graph_key::encode(&target, &ledger).unwrap(),
-                    )
-                    .unwrap();
-                    let body = cx.request(body_key).get(0);
-                    let body: Arc<crate::compiler::InstanceBodyFact> = cx.read_fact(body).await?;
-                    cx.publish_fact(
-                        0,
-                        crate::compiler::InstanceBodyFact {
-                            facts: body.facts.clone(),
-                            checked: body.checked.clone(),
-                        },
                     )
                 })
-            }
-        }
-        let engine = crate::compiler::Engine::new(ActualMaxByBody(
-            crate::compiler::CompilerProvider(snapshot),
-        ));
-        let body_handle = engine.request(crate::compiler::keys::test_key(u32::MAX, vec![0]));
-        engine.run(1).unwrap();
-        body_handle.completion().unwrap();
-        let body = body_handle
-            .fact::<crate::compiler::InstanceBodyFact>(0)
-            .unwrap();
-        let function =
-            Arc::new(cfg::lower_with_facts(&body.checked, &body.facts, &ledger).unwrap());
-        assert!(function.body_substitution.is_some());
-        let mut budget = Budget::new(32_000_000);
-        let mut builder = CarrierBuilder::new(
-            &function,
-            FactsCtx::Validated(&body.facts),
-            ledger,
-            &mut budget,
-            128 * 1024 * 1024,
-            None,
-        )
-        .unwrap();
-        let (input, origin) = builder
-            .reference_inputs
-            .iter()
-            .find(|(input, _)| {
-                input.param == 0 && input.location.path.0.as_ref() == [CarrierStep::Field(0)]
-            })
-            .cloned()
-            .expect("original parameter family issued descriptor");
-        let target = builder.targets[origin.0][0].clone();
-        let original_root = &builder.original_locals[function.params[0].0];
-        assert!(matches!(original_root, Ty::Param(_)));
-        let path = value_projection(&input.location);
-        assert!(
-            probe_projected_shape(original_root, &path, &mut Budget::new(1_000_000))
-                .unwrap()
-                .is_none()
-        );
-        let result = function.result.clone();
-        let result_location = ir::carrier_locations(&result, &builder.ledger)
-            .unwrap()
-            .iter()
-            .find(|location| {
-                matches!(
-                    ir::carrier_at(&result, location, &builder.ledger).unwrap(),
-                    Ty::Ref {
-                        kind: BorrowKind::Shared,
-                        ..
-                    }
-                )
-            })
-            .cloned()
-            .expect("original max_by shared result carrier");
-        let kept = builder
-            .structural_result_target(target.clone(), &result, &result_location)
-            .unwrap();
-        assert_eq!(kept, target);
-        let mut foreign = target.clone();
-        foreign.place.root =
-            CanonicalRoot::ParameterReferent(LocalId(usize::MAX), input.location.clone());
-        assert!(
-            builder
-                .structural_result_target(foreign, &result, &result_location)
-                .is_err()
-        );
-        let mut forged = target.clone();
-        let mut wrong_source = input.location.clone();
-        wrong_source.path = CarrierPath(Arc::from([CarrierStep::Field(1)]));
-        forged.place.root = CanonicalRoot::ParameterReferent(function.params[0], wrong_source);
-        assert!(
-            builder
-                .structural_result_target(forged, &result, &result_location)
-                .is_err()
-        );
-        let issued = builder.reference_inputs.clone();
-        builder.reference_inputs.clear();
-        assert!(
-            builder
+                .cloned()
+                .expect("original max_by shared result carrier");
+            let kept = builder
                 .structural_result_target(target.clone(), &result, &result_location)
-                .is_err()
-        );
-        builder.reference_inputs = issued;
-        // Exhaust the local ownership budget used by the applicability probe.
-        // This path does not request new schema facts from the separate ledger.
-        *builder.budget = Budget::new(0);
-        assert!(
-            builder
-                .structural_result_target(target, &result, &result_location)
-                .is_err()
-        );
+                .unwrap();
+            assert_eq!(kept, target);
+            let mut foreign = target.clone();
+            foreign.place.root =
+                CanonicalRoot::ParameterReferent(LocalId(usize::MAX), input.location.clone());
+            assert!(
+                builder
+                    .structural_result_target(foreign, &result, &result_location)
+                    .is_err()
+            );
+            let mut forged = target.clone();
+            let mut wrong_source = input.location.clone();
+            wrong_source.path = CarrierPath(Arc::from([CarrierStep::Field(1)]));
+            forged.place.root = CanonicalRoot::ParameterReferent(function.params[0], wrong_source);
+            assert!(
+                builder
+                    .structural_result_target(forged, &result, &result_location)
+                    .is_err()
+            );
+            let issued = builder.reference_inputs.clone();
+            builder.reference_inputs.clear();
+            assert!(
+                builder
+                    .structural_result_target(target.clone(), &result, &result_location)
+                    .is_err()
+            );
+            builder.reference_inputs = issued;
+            // Exhaust the local ownership budget used by the applicability probe.
+            // This path does not request new schema facts from the separate ledger.
+            *builder.budget = Budget::new(0);
+            assert!(
+                builder
+                    .structural_result_target(target, &result, &result_location)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
