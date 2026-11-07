@@ -6,11 +6,11 @@ mod oracle;
 use oracle::{Case, Expect};
 
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
-const VALID_CASES: usize = 16;
+const VALID_CASES: usize = 24;
 const INVALID_CASES: usize = 8;
 
 // Each ID has its own state: adding or reordering tests cannot perturb others.
-// Arithmetic operands stay in 1..=13, and each source has at most two closures.
+// Seeded closure operands stay in 1..=13, and each source has at most two closures.
 fn operands(id: usize) -> (i32, i32) {
     let mut state = SEED ^ (id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     state ^= state << 13;
@@ -21,6 +21,19 @@ fn operands(id: usize) -> (i32, i32) {
 
 fn valid(id: usize) -> (String, String) {
     assert!(id < VALID_CASES);
+    if id >= 16 {
+        let case = id - 16;
+        let a = 3 + case;
+        let b = 7 + 2 * case;
+        let c = 11 + case;
+        let d = 1 + case % 3;
+        return (
+            format!(
+                "use std::cell::RefCell;struct Data{{counter:i32,values:Vec<i32>}}fn main(){{let cell=RefCell::new(Data{{counter:{a},values:vec![{b},{c}]}});{{let mut guard=cell.borrow_mut();let counter=&mut guard.counter;*counter+={d};}}let guard=cell.borrow();let values=&guard.values;for value in values{{println!(\"{{}}\",value);}}println!(\"{{}}\",guard.counter);}}"
+            ),
+            format!("{b}\n{c}\n{}\n", a + d),
+        );
+    }
     if id >= 12 {
         return match id {
             12 => (
@@ -182,6 +195,13 @@ probes!(false;
 fn valid_15() {
     probe(15, false);
 }
+
+probes!(false;
+    guard_field_00 = 16, guard_field_01 = 17,
+    guard_field_02 = 18, guard_field_03 = 19,
+    guard_field_04 = 20, guard_field_05 = 21,
+    guard_field_06 = 22, guard_field_07 = 23,
+);
 
 probes!(true;
     unused_invalid_00 = 0, unused_invalid_01 = 1,
