@@ -704,6 +704,15 @@ impl Infra {
     pub fn is_billing(&self) -> bool {
         self.0.starts_with(BILLING)
     }
+
+    /// True when the build could not be routed because of the caller's working
+    /// directory or manifest (`cargo metadata failed` with no `Cargo.toml`, or
+    /// `not inside a synced root`), rather than a remote machine or transport
+    /// failure. Such errors must not trigger a remote failure backoff.
+    pub fn is_caller_error(&self) -> bool {
+        self.0.starts_with("cargo metadata failed:")
+            || self.0.ends_with("is not inside a synced root")
+    }
 }
 
 /// Marks an [`Infra`] whose text is a billing instruction.

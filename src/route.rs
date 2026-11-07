@@ -558,10 +558,12 @@ pub fn maybe_remote(full: &[OsString]) {
     let m = mode();
     // The remote agent runs this same binary: never route from there. Older
     // agents only set the run id override, and so does a benchmark that
-    // pins run ids; that one routes only when it forces remote explicitly.
-    if std::env::var_os(ON_AGENT).is_some()
-        || (std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() && m != Mode::Force)
-    {
+    // pins run ids (not `buildd`'s `-pre` prebuilds); that one routes only
+    // when it forces remote explicitly.
+    let pinned_non_prebuild = std::env::var("JUSTRUST_RUN_ID_OVERRIDE")
+        .ok()
+        .is_some_and(|id| !id.is_empty() && !id.ends_with("-pre"));
+    if std::env::var_os(ON_AGENT).is_some() || (pinned_non_prebuild && m != Mode::Force) {
         return;
     }
     if let Some(a) = full
@@ -720,24 +722,28 @@ pub fn maybe_remote(full: &[OsString]) {
                 eprintln!("justrust: remote required, refusing local fallback: {msg}");
                 std::process::exit(1);
             }
-            if let Some(f) = fail_file() {
+            let infra_err = Infra(msg.clone());
+            let caller_err = infra_err.is_caller_error();
+            if !caller_err && let Some(f) = fail_file() {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));
             }
-            let billing = Infra(msg.clone()).is_billing();
+            let billing = infra_err.is_billing();
             if billing {
                 eprintln!("{msg}");
-            } else {
+            } else if !caller_err {
                 eprintln!("justrust: remote unavailable ({msg}), building locally");
             }
-            let kind = if billing {
-                "billing"
-            } else {
-                "remote unavailable"
-            };
-            crate::remote_hosted::report_local_build(
-                &format!("{kind}: {msg}"),
-                ROUTED_CMD.get().map(String::as_str),
-            );
+            if !caller_err {
+                let kind = if billing {
+                    "billing"
+                } else {
+                    "remote unavailable"
+                };
+                crate::remote_hosted::report_local_build(
+                    &format!("{kind}: {msg}"),
+                    ROUTED_CMD.get().map(String::as_str),
+                );
+            }
         }
         Err(e) => {
             // Output may already have been shown: a local rerun would
@@ -1160,5 +1166,16 @@ mod tests {
         assert!(is_remote(&run(&["test"], &h)));
         let h = vec![e(&["test"], 30.0, true, 10.0)];
         assert!(!is_remote(&run(&["test"], &h)));
+    }
+
+    #[test]
+    fn caller_errors_do_not_count_as_remote_infra_failures() {
+        assert!(
+            Infra("cargo metadata failed: error: could not find `Cargo.toml` in `/home/waya` or any parent directory".into())
+                .is_caller_error()
+        );
+        assert!(Infra("/tmp/outside is not inside a synced root".into()).is_caller_error());
+        assert!(!Infra("sync daemon closed the connection".into()).is_caller_error());
+        assert!(!Infra("ssh connection refused".into()).is_caller_error());
     }
 }

@@ -1418,11 +1418,29 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
     }
 }
 
-/// On by default; `JUSTRUST_BUILDD_PREBUILD=0` turns it off.
+/// On by default for local builds; `JUSTRUST_BUILDD_PREBUILD=0` turns it off,
+/// and remote-by-default backends (SSH or signed-in hosted) skip local
+/// background prebuilds unless `JUSTRUST_BUILDD_PREBUILD=1` is explicitly set.
 fn wants_prebuild(req: &Request) -> bool {
-    !req.env.iter().any(|(k, v)| {
-        k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "0" | "off" | "false")
-    })
+    if let Some((_, v)) = req.env.iter().find(|(k, _)| k == "JUSTRUST_BUILDD_PREBUILD") {
+        return !matches!(v.as_str(), "0" | "off" | "false");
+    }
+    let remote_mode = req
+        .env
+        .iter()
+        .find(|(k, _)| k == "JUSTRUST_REMOTE")
+        .map(|(_, v)| v.trim().to_ascii_lowercase());
+    if matches!(
+        remote_mode.as_deref(),
+        Some("0" | "off" | "no" | "false" | "local")
+    ) {
+        return true;
+    }
+    !matches!(
+        crate::remote_backend::load(),
+        Some(crate::remote_backend::Backend::Ssh { .. })
+    ) && !(crate::remote_backend::load() == Some(crate::remote_backend::Backend::Hosted)
+        && crate::remote_hosted::signed_in())
 }
 
 fn is_test(argv: &[String]) -> bool {
