@@ -596,17 +596,20 @@ pub fn maybe_remote(full: &[OsString]) {
     let now = crate::paths::now();
     // Optimized builds always go through the router: whether bringing
     // the binary back pays off depends on the project.
-    let hosted_default = m == Mode::Default
-        && backend == Backend::Hosted
-        && crate::remote_hosted::signed_in()
+    let remote_default = m == Mode::Default
+        && ((backend == Backend::Hosted && crate::remote_hosted::signed_in())
+            || matches!(backend, Backend::Ssh { .. }))
         && !build;
     let reason = if m == Mode::Force {
         "JUSTRUST_REMOTE=force".to_string()
-    } else if hosted_default {
+    } else if remote_default {
         if recently_failed(now) {
             return say_local("remote failed in the last 10 minutes");
         }
-        "default for hosted builds; --local or JUSTRUST_REMOTE=auto to change".to_string()
+        format!(
+            "default for {} builds; --local or JUSTRUST_REMOTE=auto to change",
+            backend.kind()
+        )
     } else {
         if recently_failed(now) {
             return say_local("remote failed in the last 10 minutes");
