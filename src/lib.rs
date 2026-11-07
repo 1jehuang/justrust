@@ -616,8 +616,12 @@ enum RemoteCmd {
     Clippy(RemoteArgs),
     /// Choose where remote builds run: hosted (Jcode account, see
     /// `justrust login`), aws (legacy: the machine `remote up` creates in
-    /// your AWS account), or off.
-    Use { kind: String },
+    /// your AWS account), ssh (`justrust remote use ssh <[user@]host>`), or off.
+    Use {
+        kind: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Shell assignments for scripts (`eval "$(justrust remote env)"`):
     /// JR_REMOTE_KIND, JR_REMOTE_DEST, JR_REMOTE_SSH (ssh with the shared
     /// connection's options, also usable as `rsync -e`). Starts the machine
@@ -739,7 +743,13 @@ pub fn main() -> anyhow::Result<()> {
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some(telemetry::BG_ARG) => telemetry::background_main(),
-        Some("__agent") => remote_agent::main(std::env::args().nth(2)),
+        Some("__agent") => {
+            let prefix = match std::env::args().nth(2).as_deref() {
+                Some("--prefix") => std::env::args().nth(3),
+                other => other.map(str::to_owned),
+            };
+            remote_agent::main(prefix)
+        }
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()
@@ -1020,7 +1030,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             RemoteCmd::Test(a) => remote_build::run("test", a.args)?,
             RemoteCmd::Build(a) => remote_build::run("build", a.args)?,
             RemoteCmd::Clippy(a) => remote_build::run("clippy", a.args)?,
-            RemoteCmd::Use { kind } => remote_backend::use_command(&kind)?,
+            RemoteCmd::Use { kind, args } => remote_backend::use_command(&kind, &args)?,
             RemoteCmd::Env => remote_backend::env_command()?,
         },
         Command::Export {

@@ -2,7 +2,7 @@
 //! protocol, routing) only needs "an ssh-reachable machine with a shell".
 //!
 //! ```text
-//! ~/.justrust/remote/backend.json   {"kind": "hosted"} | {"kind": "aws"}
+//! ~/.justrust/remote/backend.json   {"kind": "hosted"} | {"kind": "aws"} | {"kind": "ssh", "host": "..."}
 //! ```
 //!
 //! - `hosted`: justrust's own build fleet, tied to a Jcode subscription
@@ -12,8 +12,8 @@
 //! - `aws`: the machine `justrust remote up` creates in the user's own AWS
 //!   account (see `remote`). Legacy: kept until hosted matches it, then
 //!   removed. The default when that machine exists.
-//!
-//! A `backend.json` naming the removed `ssh` backend reads as no backend.
+//! - `ssh`: any SSH-reachable Linux or macOS (Apple Silicon / Intel) machine
+//!   (`justrust remote use ssh <[user@]host> [ssh_opts...]`).
 //!
 //! With no backend configured nothing remote ever happens: the router costs
 //! one failed `stat`.
@@ -30,6 +30,11 @@ use crate::remote;
 pub enum Backend {
     Aws,
     Hosted,
+    Ssh {
+        host: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        opts: Vec<String>,
+    },
 }
 
 fn file() -> Result<PathBuf> {
@@ -79,6 +84,7 @@ impl Backend {
         match self {
             Backend::Aws => remote::describe_short().unwrap_or_else(|| "aws".into()),
             Backend::Hosted => "hosted".into(),
+            Backend::Ssh { host, .. } => format!("ssh:{host}"),
         }
     }
 
@@ -94,6 +100,7 @@ impl Backend {
                 })
             }
             Backend::Hosted => crate::remote_hosted::ensure_ready(),
+            Backend::Ssh { host, opts } => ssh_target(host, opts),
         }
     }
 
@@ -102,6 +109,7 @@ impl Backend {
         match self {
             Backend::Aws => "aws",
             Backend::Hosted => "hosted",
+            Backend::Ssh { .. } => "ssh",
         }
     }
 
@@ -110,8 +118,35 @@ impl Backend {
         match self {
             Backend::Aws => remote::cached_ip().is_some(),
             Backend::Hosted => crate::remote_hosted::probably_up(),
+            Backend::Ssh { .. } => true,
         }
     }
+}
+
+pub fn ssh_target(host: &str, extra_opts: &[String]) -> Result<Target> {
+    let d = remote::dir()?.join("ssh");
+    std::fs::create_dir_all(&d)?;
+    let mut opts = vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+        "-o".into(),
+        "ServerAliveInterval=15".into(),
+        "-o".into(),
+        "ServerAliveCountMax=3".into(),
+        "-o".into(),
+        "ControlMaster=auto".into(),
+        "-o".into(),
+        "ControlPersist=10m".into(),
+        "-o".into(),
+        format!("ControlPath={}", control_path(&d)),
+    ];
+    opts.extend(extra_opts.iter().cloned());
+    Ok(Target {
+        dest: host.to_owned(),
+        opts,
+    })
 }
 
 /// An ssh destination plus the options every connection uses.
@@ -193,29 +228,44 @@ fn env_lines(b: &Backend, t: &Target) -> String {
     )
 }
 
-/// `justrust remote use <hosted|aws|off>`.
-pub fn use_command(kind: &str) -> Result<()> {
+/// `justrust remote use <hosted|aws|ssh <host> [ssh_opts...]|off>`.
+pub fn use_command(kind: &str, args: &[String]) -> Result<()> {
     let b = match kind {
         "aws" => {
+            if !args.is_empty() {
+                bail!("unexpected arguments for `remote use aws`");
+            }
             if remote::instance_id().is_none() {
                 println!("no AWS machine yet. Create one with `justrust remote up`.");
             }
             Backend::Aws
         }
-        "ssh" => bail!(
-            "the ssh backend was removed: use hosted builds (`justrust login`, then `justrust remote use hosted`)"
-        ),
+        "ssh" => {
+            let Some(host) = args.first().map(|h| h.trim()).filter(|h| !h.is_empty()) else {
+                bail!("usage: justrust remote use ssh <[user@]host> [ssh_opts...]");
+            };
+            Backend::Ssh {
+                host: host.to_owned(),
+                opts: args[1..].to_vec(),
+            }
+        }
         "hosted" => {
+            if !args.is_empty() {
+                bail!("unexpected arguments for `remote use hosted`");
+            }
             crate::remote_hosted::check_use()?;
             Backend::Hosted
         }
         "off" | "none" => {
+            if !args.is_empty() {
+                bail!("unexpected arguments for `remote use {kind}`");
+            }
             crate::remote_daemon::stop();
             clear()?;
             println!("remote builds off: every build runs locally");
             return Ok(());
         }
-        other => bail!("unknown backend {other}: use hosted, aws, or off"),
+        other => bail!("unknown backend {other}: use hosted, aws, ssh, or off"),
     };
     crate::remote_daemon::stop();
     save(&b)?;
@@ -260,6 +310,16 @@ mod tests {
         assert_eq!(b, Backend::Aws);
         let b: Backend = serde_json::from_str(r#"{"kind":"hosted"}"#).unwrap();
         assert_eq!(b, Backend::Hosted);
+        let b: Backend = serde_json::from_str(r#"{"kind":"ssh","host":"wayamac"}"#).unwrap();
+        assert_eq!(
+            b,
+            Backend::Ssh {
+                host: "wayamac".into(),
+                opts: Vec::new(),
+            }
+        );
+        assert_eq!(b.label(), "ssh:wayamac");
+        assert_eq!(b.kind(), "ssh");
     }
 
     // Runs `sh` scripts.
@@ -294,8 +354,14 @@ mod tests {
         assert_eq!(resolve(None, false, false), None);
         assert_eq!(resolve(None, false, true), Some(Backend::Hosted));
         assert_eq!(resolve(None, true, true), Some(Backend::Aws));
-        // The removed ssh backend reads as unconfigured.
+        // An explicit ssh backend overrides the fallback env key.
         let ssh = br#"{"kind":"ssh","host":"me@box"}"#.to_vec();
-        assert_eq!(resolve(Some(ssh), false, true), None);
+        assert_eq!(
+            resolve(Some(ssh), false, true),
+            Some(Backend::Ssh {
+                host: "me@box".into(),
+                opts: Vec::new(),
+            })
+        );
     }
 }

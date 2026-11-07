@@ -474,11 +474,15 @@ fn upload_patch(t: &Target) -> bool {
         return false;
     }
     let script = format!(
-        "set -e; command -v zstd >/dev/null; b=~/.cargo/bin/justrust; u=~/.cargo/bin/.justrust.upload; \
-         [ \"$(sha256sum \"$b\" | cut -d' ' -f1)\" = {base_sha} ]; \
+        "set -e; export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; \
+         command -v zstd >/dev/null; b=~/.cargo/bin/justrust; u=~/.cargo/bin/.justrust.upload; \
+         sha() {{ (sha256sum \"$1\" 2>/dev/null || shasum -a 256 \"$1\") | awk '{{print $1}}'; }}; \
+         [ \"$(sha \"$b\")\" = {base_sha} ]; \
          zstd -q -d -f --long=27 --patch-from=\"$b\" -o \"$u\"; \
-         [ \"$(sha256sum \"$u\" | cut -d' ' -f1)\" = {want} ] || {{ rm -f \"$u\"; exit 1; }}; \
-         chmod +x \"$u\"; mv \"$u\" \"$b\"",
+         [ \"$(sha \"$u\")\" = {want} ] || {{ rm -f \"$u\"; exit 1; }}; \
+         chmod +x \"$u\"; \
+         (command -v codesign >/dev/null 2>&1 && codesign -s - -f \"$u\" 2>/dev/null || true); \
+         mv \"$u\" \"$b\"",
         base_sha = shell_quote(&base_sha),
         want = shell_quote(&want),
     );
@@ -521,10 +525,16 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         "{} {}",
         if cfg!(target_os = "linux") {
             "Linux"
+        } else if cfg!(target_os = "macos") {
+            "Darwin"
         } else {
             std::env::consts::OS
         },
-        std::env::consts::ARCH
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "arm64"
+        } else {
+            std::env::consts::ARCH
+        }
     );
     let t0 = Instant::now();
     if remote_arch == local_arch && fetch_release_on_machine(t) {
@@ -543,16 +553,22 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
     } else if remote_arch == local_arch {
         let exe = std::env::current_exe()?;
         let tmp = ".cargo/bin/.justrust.upload";
-        let ok = Command::new("rsync")
-            .args(["-z", "-e", &t.rsync_shell()])
-            .arg(&exe)
-            .arg(format!("{}:{tmp}", t.dest))
+        let ok = t
+            .command()
+            .arg("mkdir -p ~/.cargo/bin")
             .stdin(Stdio::null())
             .status()?
             .success()
+            && Command::new("rsync")
+                .args(["-z", "-e", &t.rsync_shell()])
+                .arg(&exe)
+                .arg(format!("{}:{tmp}", t.dest))
+                .stdin(Stdio::null())
+                .status()?
+                .success()
             && t.command()
                 .arg(format!(
-                    "mkdir -p ~/.cargo/bin && chmod +x ~/{tmp} && mv ~/{tmp} ~/.cargo/bin/justrust"
+                    "chmod +x ~/{tmp} && (command -v codesign >/dev/null 2>&1 && codesign -s - -f ~/{tmp} 2>/dev/null || true) && mv ~/{tmp} ~/.cargo/bin/justrust"
                 ))
                 .stdin(Stdio::null())
                 .status()?
@@ -569,16 +585,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         ));
     } else {
         eprintln!("justrust remote: building justrust on the machine ({remote_arch})...");
-        let st = t
-            .command()
-            .arg(format!(
-                ". ~/.cargo/env; cargo install justrust --version {} --locked -q",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .status()?;
-        if !st.success() {
-            bail!("installing justrust on the remote machine failed");
-        }
+        build_justrust_on_machine(t)?;
     }
     // Same linker on both sides: with wild here and not there, the
     // machine linked the 670 MB Desktop test binary with mold, 1.26 s
@@ -614,6 +621,75 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         t.dest,
         t0.elapsed().as_secs_f64()
     ));
+    Ok(())
+}
+
+/// Build and install `justrust` natively on a cross-OS/cross-arch remote host.
+/// Prefers syncing the local source checkout to `~/.justrust/bootstrap-src` so
+/// development builds and protocol changes match the client binary; falls back
+/// to `cargo install` when no local checkout is available.
+fn build_justrust_on_machine(t: &Target) -> Result<()> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if manifest_dir.join("Cargo.toml").is_file() && manifest_dir.join("src/main.rs").is_file() {
+        let _ = t
+            .command()
+            .arg("mkdir -p ~/.justrust/bootstrap-src ~/.cargo/bin")
+            .stdin(Stdio::null())
+            .status();
+        let src = format!("{}/", manifest_dir.display());
+        let dst = format!("{}:.justrust/bootstrap-src/", t.dest);
+        let synced = Command::new("rsync")
+            .args([
+                "-az",
+                "--delete",
+                "--exclude=/target/",
+                "--exclude=/.git/",
+                "--exclude=/.justrust/",
+                "--exclude=/toolchain/",
+                "--exclude=/bench/",
+                "--exclude=/data/",
+                "-e",
+                &t.rsync_shell(),
+            ])
+            .arg(&src)
+            .arg(&dst)
+            .stdin(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if synced {
+            let st = t
+                .command()
+                .arg(
+                    "set -e; . ~/.cargo/env 2>/dev/null || true; \
+                     export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; \
+                     cd ~/.justrust/bootstrap-src; \
+                     cargo build --release --bin justrust --locked -q; \
+                     mkdir -p ~/.cargo/bin; \
+                     u=~/.cargo/bin/.justrust.upload; \
+                     cp target/release/justrust \"$u\"; \
+                     chmod +x \"$u\"; \
+                     (command -v codesign >/dev/null 2>&1 && codesign -s - -f \"$u\" 2>/dev/null || true); \
+                     mv \"$u\" ~/.cargo/bin/justrust",
+                )
+                .stdin(Stdio::null())
+                .status()?;
+            if st.success() {
+                return Ok(());
+            }
+        }
+    }
+    let st = t
+        .command()
+        .arg(format!(
+            ". ~/.cargo/env 2>/dev/null || true; \
+             export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; \
+             cargo install justrust --version {} --locked -q",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .status()?;
+    if !st.success() {
+        bail!("installing justrust on the remote machine failed");
+    }
     Ok(())
 }
 
@@ -924,6 +1000,7 @@ fn run_remote_inner(
         &[],
     )?;
     let mut sync = None;
+    let mut remote_prefix = String::new();
     let mut submitted = false;
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
@@ -960,6 +1037,7 @@ fn run_remote_inner(
                     files,
                     ms,
                     machine,
+                    prefix,
                     note,
                     ..
                 },
@@ -967,6 +1045,9 @@ fn run_remote_inner(
             ) => {
                 if !note.is_empty() {
                     eprintln!("justrust remote: {note}");
+                }
+                if !prefix.is_empty() {
+                    remote_prefix = prefix;
                 }
                 mark("flushed");
                 if sync.is_none() {
@@ -991,6 +1072,17 @@ fn run_remote_inner(
                     first_out = true;
                     mark("first output");
                 }
+                let data: std::borrow::Cow<'_, [u8]> = if !remote_prefix.is_empty()
+                    && let Ok(s) = std::str::from_utf8(&data)
+                {
+                    if s.contains(&remote_prefix) {
+                        std::borrow::Cow::Owned(s.replace(&remote_prefix, "").into_bytes())
+                    } else {
+                        std::borrow::Cow::Borrowed(&data)
+                    }
+                } else {
+                    std::borrow::Cow::Borrowed(&data)
+                };
                 if stream == 1 {
                     // Selected tests are emitted only after their local files exist.
                     // Remote JSON contains host paths and cannot be passed through.
