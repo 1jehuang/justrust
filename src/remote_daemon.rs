@@ -669,6 +669,70 @@ fn drop_link(d: &Daemon, st: &mut Sync) {
     d.set_info(|i| i.connected = false);
 }
 
+/// Active mirror prefix on the connected remote machine (empty when paths
+/// are mirrored at `/` without rebasing).
+pub fn active_prefix() -> String {
+    crate::remote::dir()
+        .ok()
+        .and_then(|d| std::fs::read_to_string(d.join("active-prefix")).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn save_active_prefix(prefix: &str) {
+    if let Ok(d) = crate::remote::dir() {
+        let p = d.join("active-prefix");
+        if prefix.is_empty() {
+            let _ = std::fs::remove_file(p);
+        } else {
+            let _ = std::fs::write(p, prefix);
+        }
+    }
+}
+
+const REMOTE_MIRROR_PREFIX_SCRIPT: &str =
+    "mkdir -p ~/.justrust-mirror && cd ~/.justrust-mirror && pwd -P";
+
+/// On user SSH machines (especially cross-OS Linux <-> macOS where `/home` is
+/// controlled by `autofs` on macOS or `/Users` is not writable without root on
+/// Linux), check whether the local home directory path can be prepared at `/`.
+/// If not, rebase mirrors under the remote user's canonical `~/.justrust-mirror`.
+fn resolve_remote_prefix(
+    backend: &crate::remote_backend::Backend,
+    target: &crate::remote_backend::Target,
+) -> Result<String> {
+    if !matches!(backend, crate::remote_backend::Backend::Ssh { .. }) {
+        return Ok(String::new());
+    }
+    if let Some(home) = dirs::home_dir()
+        && let Some(h) = home.to_str()
+        && target
+            .command()
+            .arg(remote_sync::prepare_script(h))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    {
+        return Ok(String::new());
+    }
+    let out = target
+        .command()
+        .arg(REMOTE_MIRROR_PREFIX_SCRIPT)
+        .stdin(Stdio::null())
+        .output()
+        .context("resolving remote mirror prefix")?;
+    if !out.status.success() {
+        bail!("cannot create ~/.justrust-mirror on the remote machine");
+    }
+    let prefix = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !prefix.starts_with('/') {
+        bail!("remote mirror prefix is not an absolute path: {prefix:?}");
+    }
+    Ok(prefix)
+}
+
 /// Connect to the agent (starting the machine only when `start`) and begin
 /// reading frames. Invalidate known roots: only roots needed by a build are
 /// mirrored before that build, so an unrelated old workspace cannot delay it.
@@ -685,9 +749,19 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     }
     let target = st.backend.ensure_ready()?;
     crate::remote_build::ensure_remote_justrust(&target)?;
+    let prefix = resolve_remote_prefix(&st.backend, &target)?;
+    save_active_prefix(&prefix);
+    let agent_cmd = if prefix.is_empty() {
+        "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent".to_string()
+    } else {
+        format!(
+            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent {}",
+            crate::remote_build::shell_quote(&prefix)
+        )
+    };
     let mut child = target
         .command()
-        .arg("exec ~/.cargo/bin/justrust __agent")
+        .arg(agent_cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -742,7 +816,7 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         routes: Mutex::default(),
         mirror: Mirror {
             target: Some(target.clone()),
-            prefix: String::new(),
+            prefix,
         },
     });
     {
@@ -1869,5 +1943,20 @@ mod tests {
         assert!(!sync.needs_mirror(&a));
         assert!(sync.needs_mirror(&b));
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn resolve_remote_prefix_uses_non_overlapping_mirror_dir_in_script() {
+        // The fallback remote mirror path must not live inside ~/.justrust,
+        // because remote_evict_registry::validate_prefix rejects prefixes that
+        // overlap paths::root() (~/.justrust).
+        assert!(
+            REMOTE_MIRROR_PREFIX_SCRIPT.contains("~/.justrust-mirror"),
+            "fallback remote mirror path should use ~/.justrust-mirror"
+        );
+        assert!(
+            !REMOTE_MIRROR_PREFIX_SCRIPT.contains("~/.justrust/"),
+            "fallback remote mirror path must not overlap ~/.justrust"
+        );
     }
 }

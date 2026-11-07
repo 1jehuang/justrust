@@ -575,6 +575,11 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
 /// `JUSTRUST_REMOTE_TOOLCHAIN` says otherwise (`system` keeps the machine's
 /// rustc, any other value is used as the default spec).
 fn store_toolchain(cwd: &Path, env: &[(String, String)]) -> Option<String> {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        && std::env::var_os("JUSTRUST_REMOTE_TOOLCHAIN").is_none()
+    {
+        return None;
+    }
     if env
         .iter()
         .any(|(k, _)| matches!(k.as_str(), "JUSTRUST_TOOLCHAIN" | "RUSTUP_TOOLCHAIN"))
@@ -737,11 +742,18 @@ fn start_run(
     if !env.iter().any(|(k, _)| k == "JUSTRUST_PREBUILT_ALWAYS") {
         c.env("JUSTRUST_PREBUILT_ALWAYS", "1");
     }
-    // cargo and rustup live in ~/.cargo/bin, which a non-login ssh shell
-    // may not have on PATH.
+    // cargo and rustup live in ~/.cargo/bin, and Homebrew tools (zstd, git)
+    // live in /opt/homebrew/bin or /usr/local/bin on macOS, which a non-login
+    // ssh shell may not have on PATH.
     if let Some(home) = dirs::home_dir() {
         let path = std::env::var("PATH").unwrap_or_default();
-        c.env("PATH", format!("{}/.cargo/bin:{path}", home.display()));
+        c.env(
+            "PATH",
+            format!(
+                "{0}/.cargo/bin:/opt/homebrew/bin:{0}/.homebrew/bin:/usr/local/bin:{path}",
+                home.display()
+            ),
+        );
     }
     if let Some((_, home)) = env.iter().find(|(k, _)| k == CLIENT_CARGO_HOME)
         && let Some(home) = mirror_cargo_home(Path::new(home))
@@ -949,7 +961,11 @@ mod tests {
         let d = std::env::temp_dir().join(format!("jr-store-tc-{}", std::process::id()));
         let sub = d.join("a/b");
         std::fs::create_dir_all(&sub).unwrap();
-        let want = Some(crate::depcache_prebuilt::STORE_TOOLCHAIN.to_owned());
+        let want = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            Some(crate::depcache_prebuilt::STORE_TOOLCHAIN.to_owned())
+        } else {
+            None
+        };
         assert_eq!(store_toolchain(&sub, &[]), want);
         // The client chose one: keep it.
         let env = [("JUSTRUST_TOOLCHAIN".to_string(), "system".to_string())];

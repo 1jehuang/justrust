@@ -111,7 +111,7 @@ fn extra_zig_target(target: &str) -> bool {
 }
 
 fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
-    let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+    const HOSTED_NATIVE: &str = "x86_64-unknown-linux-gnu";
     let musl_build = args
         .first()
         .is_some_and(|a| a == "zigbuild" || a == "build");
@@ -126,7 +126,7 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
     crate::record::requested_targets(args, env_target)
         .iter()
         .any(|target| {
-            target != native.as_str()
+            target != HOSTED_NATIVE
                 && !(args.first().is_some_and(|a| a == "zigbuild")
                     && target.to_str().is_some_and(extra_zig_target))
                 && !(args.first().is_some_and(|a| a == "build")
@@ -548,19 +548,22 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("non-UTF-8 arguments");
     };
     let Some(sub) = args.first() else { return };
-    // Remote machines are Linux: a check there sees Linux cfgs and tests
-    // run on the wrong OS. Only an explicit force sends a macOS build.
-    if !cfg!(target_os = "linux") && m != Mode::Force {
+    let backend = remote_backend::load();
+    let is_ssh_backend = matches!(backend, Some(Backend::Ssh { .. }));
+    // Hosted and AWS remote machines are Linux: a check there sees Linux cfgs
+    // and tests run on the wrong OS. Only an explicit force or an SSH backend
+    // sends a macOS build.
+    if !cfg!(target_os = "linux") && !is_ssh_backend && m != Mode::Force {
         return say_local("remote machines build for Linux, this host is not Linux");
     }
     let build = routable_build(&args);
     let compile_only = crate::remote_artifacts::test_no_run(&args);
     if (build || compile_only)
-        && !(cfg!(target_os = "linux") && crate::remote_artifacts::available())
+        && !((cfg!(target_os = "linux") || is_ssh_backend) && crate::remote_artifacts::available())
     {
         warm_if_up(full);
         return say_local(
-            "remote build or compile-only test needs Linux and zstd to return executables",
+            "remote build or compile-only test needs Linux (or an ssh backend) and zstd to return executables",
         );
     }
     if !routable(sub) && !build {
@@ -569,7 +572,7 @@ pub fn maybe_remote(full: &[OsString]) {
         warm_if_up(full);
         return say_local(&local_only(sub));
     }
-    let Some(backend) = remote_backend::load() else {
+    let Some(backend) = backend else {
         if m == Mode::Force {
             eprintln!(
                 "justrust: JUSTRUST_REMOTE=force but no remote machine is configured, building locally"
@@ -658,7 +661,7 @@ pub fn maybe_remote(full: &[OsString]) {
         }
     };
     eprintln!("justrust: remote ({reason})");
-    let start = m == Mode::Force || backend == Backend::Hosted;
+    let start = m == Mode::Force || matches!(backend, Backend::Hosted | Backend::Ssh { .. });
     match remote_build::run_remote(sub, &args[1..], start) {
         Ok(Ok(o)) => std::process::exit(o.code),
         Ok(Err(Infra(msg))) => {
@@ -700,7 +703,7 @@ mod tests {
 
     #[test]
     fn hosted_cross_targets_are_preflighted_before_submission() {
-        let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+        let native = "x86_64-unknown-linux-gnu";
         assert!(!unsupported_hosted_target(&["check".into()], None));
         assert!(!unsupported_hosted_target(
             &["check".into(), "--target".into(), native.into()],
