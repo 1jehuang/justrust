@@ -468,6 +468,43 @@ fn fail_file() -> Option<std::path::PathBuf> {
     crate::remote::dir().ok().map(|d| d.join("route-fail"))
 }
 
+/// True when the cached SSH probe shows the remote machine runs a different OS
+/// or CPU architecture than this host (e.g. macOS arm64 remote vs Linux x86_64
+/// client). Cross-OS `check`, `clippy`, and `test` work on the remote host,
+/// whereas an un-targeted `build` or `test --no-run` produces remote-native
+/// executables (Mach-O on macOS) that cannot execute locally unless `--remote`
+/// (`Mode::Force`) or an explicit `--target` was requested.
+fn ssh_remote_cross_host() -> bool {
+    let Ok(dir) = crate::remote::dir() else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(dir.join("probe-ssh.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    let region = v["region"].as_str().unwrap_or("");
+    let itype = v["instance_type"].as_str().unwrap_or("");
+    let remote_is_macos = region.starts_with("macOS") || region.starts_with("Darwin");
+    let remote_is_linux = !remote_is_macos && !region.is_empty();
+    if cfg!(target_os = "linux") && remote_is_macos {
+        return true;
+    }
+    if cfg!(target_os = "macos") && remote_is_linux {
+        return true;
+    }
+    let remote_arm64 = itype.contains("arm64") || itype.contains("aarch64");
+    let remote_x86_64 = itype.contains("x86_64") || itype.contains("amd64");
+    if cfg!(target_arch = "x86_64") && remote_arm64 {
+        return true;
+    }
+    if cfg!(target_arch = "aarch64") && remote_x86_64 {
+        return true;
+    }
+    false
+}
+
 fn recently_failed(now: f64) -> bool {
     fail_file()
         .and_then(|f| file_mtime(&f))
@@ -558,6 +595,17 @@ pub fn maybe_remote(full: &[OsString]) {
     }
     let build = routable_build(&args);
     let compile_only = crate::remote_artifacts::test_no_run(&args);
+    if (build || compile_only)
+        && is_ssh_backend
+        && m != Mode::Force
+        && crate::remote_artifacts::build_target(&args).is_none()
+        && ssh_remote_cross_host()
+    {
+        warm_if_up(full);
+        return say_local(
+            "ssh remote machine has a different OS/arch; un-targeted build stays local so the binary runs on this host",
+        );
+    }
     if (build || compile_only)
         && !((cfg!(target_os = "linux") || is_ssh_backend) && crate::remote_artifacts::available())
     {
