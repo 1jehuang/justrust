@@ -1,5 +1,95 @@
 # Findings: where agent build time goes
 
+## 2026-11-08: test result reuse, in-stream artifact deltas, mirror resume
+
+Three changes target the parts of agent wait the client owns, sized from
+`justrust profile --days 7` (162,503s over 11,562 runs).
+
+- **Test result reuse** (`src/test_reuse.rs`). In the last 7 days, 1,074
+  test runs compiled nothing and still spent 15,203s running tests. 161
+  of them, 4,504s, repeated an identical command in the same directory,
+  and 134 of those followed a passing run. An agent-mode `test` identical
+  to a passing run now replays that run's results. Identical means the
+  same command, environment (session noise excluded), justrust binary,
+  and size, mode and mtime in nanoseconds of every source-root file since
+  that run started. The scan costs 26 ms for clean-room (4k files) and
+  600 ms for this repo (95k files), so it runs only when the command's
+  tests took at least 20 times the scan. Result: a scratch crate with a 5s
+  test went from 6.87s to 21 ms on rerun. An edit (5.81s), `--rerun`
+  (5.83s), and a changed `RUST_TEST_THREADS` all ran the tests again.
+  Four pass-then-fail repeats with nothing rebuilt were found, all in
+  tests that read files outside the source roots or were flaky. Those
+  are why `--rerun` and `JUSTRUST_TEST_REUSE=0` exist, and why only
+  passing results under 12 hours old are reused.
+- **In-stream artifact deltas** (`src/remote_artifacts.rs`). The clean-room
+  harness's `test --no-run` waited about 70s for artifacts, 1,233s over
+  20 runs: 365 test binaries, 6.7 GB, about 62s each time. Same-named
+  binaries from different checkouts shared nothing (1 of 365 identical,
+  and the delta saved 30%). Sibling binaries of one build delta well
+  against each other (25.8 MB to 3.1 MB). A new file is now sent as a
+  zstd delta against the earlier file of the same stream closest in size.
+  This is negotiated (`anchors`), so old hosts ignore it, and the client
+  accepts only bases it already wrote in this stream. Simulated on 60
+  real clean-room binaries: 346 MB to 193 MB. Measured on a fresh
+  24-test-binary workspace (regex and serde_json): 143.7 MB in 6.44s
+  before, 43.9 MB in 2.75s, 3.57s and 3.71s after. All 25 files were
+  sha256-identical to the host's copies.
+- **Mirror resume** (`src/remote_resume.rs`). Each daemon restart (client
+  upgrade, idle exit) re-mirrored this repository with a `--checksum`
+  rsync: 16 times, 746s total, 43-51s each today, because the client has
+  to read 1.37 GB of sources (58s cold here). A daemon that exits after
+  a clean barrier now saves each root's manifest and writes a random
+  token on the machine. The next daemon resumes only if it can read and
+  delete that token in one command and the sizes of the 24 newest files
+  match. It then pushes the local diff. The agent deletes the token
+  before applying any source write or delete, and full or bulk rsyncs
+  delete it too, so any change the saved manifest does not know about
+  forces the full mirror. Live, on this repository: the full mirror after
+  each restart took 14.95-81.9s today (`checksum rsync` 13.7-80.6s). With
+  resume, three consecutive restarts took 1.105s (0 files), 1.078s (1
+  edited file) and 2.004s (1 file) to sync, with 0.19-0.25s to save on
+  exit. A `check` right after a restart took 3.78s instead of 17.9-25.6s.
+  A deliberate type error appended after a resumed restart failed to
+  compile on the host (E0308), which shows the edit was synced. The
+  first live attempt saved nothing: the replacing daemon arrived while a
+  run was in flight, and the draining path skipped the save. The save now
+  runs before the daemon retires and never waits behind a sync in
+  progress.
+- **Source push race, found by the gate.** The first candidate gate
+  failed every point from 26 on with E0432: the machine's copy of
+  `jcode-base/src/usage/api_keys.rs` was empty while the local file was
+  fine. Neither bench root was resumed, so this was not resume. The bench
+  restores files with `shutil.copy2` (truncate, write, restore the old
+  mtime). `push_root` read the file mid-copy and recorded the stamp from
+  its scan. The restored mtime then matched that stamp, so the empty
+  bytes were never corrected. `push_root` behaved this way before this
+  work too, and the baseline gate run happened not to hit it. Any rewrite
+  that preserves mtime and size (copy2, `cp -p`, `git stash` within one
+  mtime tick) could hit it. `push_root` now sends a file only when its
+  metadata before and after reading matches the scan. Otherwise it records
+  the file as unknown, so the next push retries it.
+- **Resume spot check was too weak, also found by the gate.** The rerun
+  then failed 37 of 40 points: the daemon saved the bench mirror with the
+  empty file in its manifest as current, and the next daemon resumed it,
+  because only the 24 newest files had their sizes checked. Resume now
+  checks every file's size: paths go out gzipped, `size path` lines come
+  back gzipped, 0.55-0.84s for this repository's 95k files. A mismatch
+  names the file in the daemon log. In the next run that check caught
+  exactly this file (`api_keys.rs is 0 bytes on the machine, 27909
+  saved`) and did a full mirror. This repository itself is never resumed
+  on this host: another client (a different IP) mirrors the same absolute
+  path `/home/jeremy/justrust` on the shared machine, so the check sees
+  missing files and falls back to a full mirror, which is the safe result.
+- **Gate** (`bench/suite.py run --synth 1 -n 1`, forced remote): baseline
+  `synth1-20261108-121718-43f9f4a1bffd`, candidate
+  `synth1-20261108-132025-09136a87ab57-dirty`. The same 21 points fail in
+  both runs (forced-remote debug `build` refusals and existing jcode
+  test failures), so `suite.py compare` blocks the aggregate. On the 19
+  points that succeed in both: 61.64s before, 62.43s after, geometric
+  mean ratio 0.994. That is neutral, as expected: none of these points
+  restarts the daemon, repeats a passing test unchanged, or downloads
+  test binaries.
+
 ## 2026-11-08: waste lines for time outside cargo, recurring-cost hints
 
 The agent footer now covers the whole wait, not only cargo's phases.

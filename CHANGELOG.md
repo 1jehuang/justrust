@@ -5,6 +5,24 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- **Test binaries come back as deltas of each other.** After a remote
+  `test --no-run`, a new test binary is sent as a zstd delta against a
+  similar one already sent in the same transfer. 24 fresh test binaries:
+  143.7 MB in 6.4s became 43.9 MB in 2.8-3.7s. Negotiated, so older hosts
+  are unaffected.
+- **Source mirrors survive sync daemon restarts.** A restarted daemon (after
+  an upgrade or idle exit) resumes the machine's mirror when a token it left
+  on the machine confirms nothing changed there, instead of a full
+  `--checksum` rsync. For this repository, 15-82s became 1.1-2.0s.
+  `JUSTRUST_REMOTE_RESUME=0` turns it off. Before resuming, the daemon
+  checks the size of every mirrored file on the machine (about 0.6s for
+  95k files).
+- **Fixed: a file rewritten during a source push could stay stale on the
+  machine.** A rewrite that restores the old mtime and size (`cp -p`,
+  `shutil.copy2`), if read mid-copy, left a truncated file there that later
+  pushes never corrected. Files that change while being read are now
+  retried.
+
 ## 0.1.0-alpha.20
 
 - Signed-in local builds are reported to operations history like hosted runs.
