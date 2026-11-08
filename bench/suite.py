@@ -13,7 +13,8 @@ justrust, and reads the recorded summary.json for the phase breakdown.
   bench/suite.py compare A.json B.json     per-scenario median delta
   bench/suite.py show RESULT.json          print a saved result
 
-Results go to bench/results/<timestamp>-<justrust rev>.json (commit them).
+Results go to bench/results/<timestamp>-<justrust rev>.json and are uploaded
+automatically to the account-private record store (`justrust records`).
 A sample is flagged `noisy` when another rustc was running at its start or
 other processes averaged more than BENCH_NOISY_CORES (default 4) cores during
 the build. Medians are over all samples, `quiet` medians over the rest. Use --quiet-wait to wait for a quiet machine before each sample.
@@ -85,6 +86,25 @@ def binary_sha256(binary=None) -> str:
     if signature(before) != signature(after) or signature(after) != signature(current):
         raise ValueError("bench: justrust executable changed while recording its identity")
     return digest
+
+
+def upload_result(out: Path) -> None:
+    """Store a saved result in the account-private record store (`justrust
+    records`), so results are logged without anyone committing files.
+    Best effort: never fails the benchmark. Opt out: JUSTRUST_RECORDS=off."""
+    if os.environ.get("JUSTRUST_RECORDS", "").lower() in ("off", "0", "false"):
+        return
+    record_id = re.sub(r"[^A-Za-z0-9._-]", "-", Path(out).stem)[:128].lstrip(".-_") or "result"
+    try:
+        r = subprocess.run([shutil.which("justrust") or "justrust", "records", "put", "bench", record_id, str(out)],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        print(f"bench: result not uploaded: {err}", file=sys.stderr)
+        return
+    if r.returncode == 0:
+        print(f"recorded bench/{record_id} (justrust records show bench {record_id})")
+    else:
+        print(f"bench: result not uploaded: {(r.stderr or r.stdout).strip()[:300]}", file=sys.stderr)
 
 
 def verify_binary_identity(info: dict) -> None:
@@ -1486,6 +1506,7 @@ def cmd_run(args) -> None:
     out.write_text(json.dumps(result, indent=1) + "\n")
     print(table(result))
     print(f"\nsaved {out}")
+    upload_result(out)
 
 
 def _synth():
@@ -1533,6 +1554,7 @@ def cmd_run_synth(args, identity=None) -> None:
     out.write_text(json.dumps(result, indent=1) + "\n")
     print(synth_run.table(result["synth"]))
     print(f"\nsaved {out}")
+    upload_result(out)
 
 
 def cmd_show(args) -> None:

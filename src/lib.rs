@@ -450,6 +450,12 @@ enum Command {
         #[command(subcommand)]
         cmd: RemoteCmd,
     },
+    /// Account-private run and benchmark records, uploaded automatically
+    /// (list, show, or put a JSON file).
+    Records {
+        /// list (default), show KIND ID, or put KIND ID FILE.
+        args: Vec<String>,
+    },
     /// Append slim, path-redacted run summaries to the repo's data/runs/<machine>/.
     Export {
         /// Output root. Defaults to ./data/runs in the justrust repository.
@@ -919,6 +925,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Upgrade { .. } => "upgrade",
         Command::Remote { .. } => "remote",
         Command::Export { .. } => "export",
+        Command::Records { .. } => "records",
         Command::History { .. } => "history",
         Command::Update { .. } => "update",
     })
@@ -1091,6 +1098,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             RemoteCmd::Use { kind } => remote_backend::use_command(&kind)?,
             RemoteCmd::Env => remote_backend::env_command()?,
         },
+        Command::Records { args } => remote_hosted::records_command(&args)?,
         Command::Export {
             out,
             machine,

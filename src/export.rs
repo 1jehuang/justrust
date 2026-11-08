@@ -122,6 +122,30 @@ pub fn command(out: Option<PathBuf>, machine: Option<String>, dry_run: bool) -> 
     Ok(())
 }
 
+/// Slim summary for the account-private record store (`upload_run`).
+/// Private to the account, so names, args, and paths stay (home rewritten
+/// to `~`), only size is cut like the export.
+pub fn upload_run(s: &crate::summary::Summary) {
+    if !crate::remote_hosted::records_enabled() || !crate::remote_hosted::signed_in() {
+        return;
+    }
+    let Ok(v) = serde_json::to_value(s) else {
+        return;
+    };
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let mut public = HashSet::new();
+    let git_root = v
+        .get("git")
+        .and_then(|g| g.get("root"))
+        .and_then(Value::as_str);
+    let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
+    public.insert(repo_name(git_root, cwd));
+    let data = slim(v, &home, &hostname(), &public);
+    crate::remote_hosted::upload_record("run", &s.id, data);
+}
+
 /// `./data/runs` when run from the justrust repository root.
 fn default_out() -> Result<PathBuf> {
     let manifest = std::fs::read_to_string("Cargo.toml").unwrap_or_default();

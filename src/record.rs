@@ -1123,6 +1123,7 @@ fn finish(
     crate::depcache_gc::maybe_spawn();
     crate::depcache_remote::maybe_spawn_sync();
     crate::telemetry::record_run(&s, opts.agent);
+    crate::export::upload_run(&s);
     crate::telemetry::maybe_spawn_background();
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));

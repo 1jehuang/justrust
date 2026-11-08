@@ -182,8 +182,10 @@ billing, private caches) and never weaken the security invariants in
   and correctness checks relevant to the change. Its coverage is not universal
   (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
   report it as blocked rather than substituting `desktop-test-edit`.
-- Builds and benchmark results are recorded automatically by the tools.
-  Cite run ids. Do not hand-write logs, notes files, or exports.
+- Builds and benchmark results are recorded automatically by the tools:
+  every recorded build and every `bench/*.py` result is uploaded to the
+  account-private record store (`justrust records list|show`). Cite run ids.
+  Do not hand-write logs, notes files, or exports.
 - `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
   builds.
 

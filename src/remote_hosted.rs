@@ -860,6 +860,79 @@ fn post_detached(c: &Creds, path: &str, body: &Value) {
     spawn_detached(curl(c, "POST", path, Some(body)));
 }
 
+/// `POST {build}/build/records`: store one account-private record (`run`
+/// after every recorded build, `bench` for a benchmark result). This is
+/// the programmatic log: nobody hand-writes notes or exports. Fire and
+/// forget, signed-in only, opt out with `JUSTRUST_RECORDS=off`.
+pub fn upload_record(kind: &str, id: &str, data: Value) {
+    if !records_enabled() {
+        return;
+    }
+    let Ok(c) = creds() else {
+        return;
+    };
+    let mut body = json!({ "kind": kind, "id": id, "data": data });
+    let h = crate::procfs::hostname();
+    if !h.is_empty() {
+        body["machine"] = json!(run_label(&h, 64));
+    }
+    post_detached(&c, "build/records", &body);
+}
+
+/// `justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE`.
+pub fn records_command(args: &[String]) -> Result<()> {
+    let c = creds()?;
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    match a.as_slice() {
+        [] | ["list"] | ["list", _] => {
+            let path = match a.get(1) {
+                Some(k) => format!("build/records?kind={k}&limit=50"),
+                None => "build/records?limit=50".to_string(),
+            };
+            let v = ok(request(&c, "GET", &path, None)?)?;
+            for r in v["records"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<6} {:<40} {:<16} {}",
+                    r["kind"].as_str().unwrap_or(""),
+                    r["id"].as_str().unwrap_or(""),
+                    r["machine"].as_str().unwrap_or("-"),
+                    r["bytes"]
+                );
+            }
+        }
+        ["show", kind, id] => {
+            let v = ok(request(
+                &c,
+                "GET",
+                &format!("build/records/{kind}/{id}"),
+                None,
+            )?)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        ["put", kind, id, file] => {
+            let data: Value = serde_json::from_str(&std::fs::read_to_string(file)?)?;
+            let mut body = json!({ "kind": kind, "id": id, "data": data });
+            let h = crate::procfs::hostname();
+            if !h.is_empty() {
+                body["machine"] = json!(run_label(&h, 64));
+            }
+            ok(request(&c, "POST", "build/records", Some(&body))?)?;
+            println!("justrust records: stored {kind}/{id}");
+        }
+        _ => anyhow::bail!(
+            "usage: justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE"
+        ),
+    }
+    Ok(())
+}
+
+pub fn records_enabled() -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_RECORDS").as_deref(),
+        Ok("off" | "0" | "false")
+    )
+}
+
 /// An unauthenticated detached POST to the build service (`{build}/<path>`,
 /// e.g. the anonymous install funnel). No key is sent.
 pub fn post_anonymous_detached(path: &str, body: &Value) {
