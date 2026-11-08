@@ -37,7 +37,9 @@ fn savings_cli_filters_deduplicates_and_discloses_missing_history() {
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&base).unwrap();
     // macOS temp dirs sit behind a /var -> /private/var symlink; `--here`
-    // compares against the canonical working directory.
+    // compares against the canonical working directory. Windows canonical
+    // paths are \\?\ verbatim, which the working directory never is.
+    #[cfg(unix)]
     let base = base.canonicalize().unwrap();
     let fixture = Fixture(base.join(format!("jr-savings-{}", std::process::id())));
     let home = fixture.0.join("home");
