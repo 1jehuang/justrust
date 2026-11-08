@@ -1,4 +1,5 @@
 /target
+/.jcode/cloud-environment.lock
 # Ad hoc verification target dirs (e.g. CARGO_TARGET_DIR=target-verify)
 /target-*/
 /toolchain/rustc/src/llvm-project/
