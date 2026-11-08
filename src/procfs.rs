@@ -70,11 +70,14 @@ fn is_session_plumbing(base: &std::path::Path, pid: &str) -> bool {
     is_user_manager_argv(&argv)
 }
 
-/// `systemd --user` itself, or its PAM helper `(sd-pam)`.
+/// `systemd --user` itself, its PAM helper `(sd-pam)`, or an sshd session
+/// process (`sshd: user@notty`) of another connection, e.g. the persistent
+/// agent session. Those set their own title and never run builds.
 #[cfg(target_os = "linux")]
 fn is_user_manager_argv(argv: &[&[u8]]) -> bool {
     match argv {
         [b"(sd-pam)"] => true,
+        [title] if title.starts_with(b"sshd: ") && title.contains(&b'@') => true,
         [exe, flag] => *flag == b"--user" && exe.ends_with(b"/systemd"),
         _ => false,
     }
@@ -927,15 +930,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn only_the_user_manager_argv_is_session_plumbing() {
-        let yes: [&[&[u8]]; 3] = [
+        let yes: [&[&[u8]]; 4] = [
             &[b"/usr/lib/systemd/systemd", b"--user"],
             &[b"/lib/systemd/systemd", b"--user"],
             &[b"(sd-pam)"],
+            &[b"sshd: ubuntu@notty                "],
         ];
         for argv in yes {
             assert!(is_user_manager_argv(argv), "{argv:?}");
         }
-        let no: [&[&[u8]]; 6] = [
+        let no: [&[&[u8]]; 7] = [
+            &[b"sshd: listener"],
             &[b"cargo", b"build"],
             &[b"/usr/lib/systemd/systemd", b"--user", b"--extra"],
             &[b"/tmp/evil/systemd-like", b"--user"],

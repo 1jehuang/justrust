@@ -106,6 +106,9 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
 fn evict_now(roots: &crate::remote_evict::Shared) {
     use crate::remote_evict as ev;
     let Some(home) = dirs::home_dir() else { return };
+    if ev::Mode::from_env() == ev::Mode::On {
+        ev::sweep_sent(false, &mut |line| eprintln!("justrust agent: {line}"));
+    }
     let Ok(registry) = roots.lock() else { return };
     ev::collect(
         &registry,

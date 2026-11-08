@@ -26,6 +26,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "remote_evict_registry.rs"]
 mod durable;
 
+#[cfg(unix)]
+#[path = "remote_evict_orphans.rs"]
+pub mod orphans;
+
 #[cfg(all(test, unix))]
 #[path = "remote_evict_lock_tests.rs"]
 mod lock_tests;
@@ -685,6 +689,51 @@ fn collect_report(
             }
         }
     }
+    // Second pass: unregistered cargo build dirs, if still short.
+    let still = probe
+        .disk(home)
+        .map_or(0, |(f, t)| deficit(f, t))
+        .min(need.saturating_sub(freed));
+    let still = if mode == Mode::Dry {
+        need.saturating_sub(freed)
+    } else {
+        still
+    };
+    if still > 0 {
+        let registered: Vec<PathBuf> = roots.keys().cloned().collect();
+        let targets: Vec<PathBuf> = registered.iter().map(|r| r.join("target")).collect();
+        let dirs = orphans::find(&orphans::bases(home, &registered), &targets);
+        let chosen = orphans::plan(&dirs, still, orphans::ORPHAN_IDLE, probe);
+        log(format!(
+            "evict: orphan build dirs found={} planned={} needed_bytes={still} idle_seconds={}",
+            dirs.len(),
+            chosen.len(),
+            orphans::ORPHAN_IDLE.as_secs()
+        ));
+        for o in chosen {
+            let gib = o.bytes as f64 / (1u64 << 30) as f64;
+            if mode == Mode::Dry {
+                log(format!(
+                    "evict (dry run): would delete orphan {} ({gib:.1} GiB, last change {})",
+                    o.dir.display(),
+                    o.last_change
+                ));
+                freed += o.bytes;
+                continue;
+            }
+            match orphans::evict(&o, orphans::ORPHAN_IDLE, probe) {
+                Ok(()) => {
+                    log(format!(
+                        "evict: deleted orphan {} ({gib:.1} GiB, last change {})",
+                        o.dir.display(),
+                        o.last_change
+                    ));
+                    freed += o.bytes;
+                }
+                Err(e) => log(format!("evict: skip orphan {} ({e})", o.dir.display())),
+            }
+        }
+    }
     if let Some((after, _)) = probe.disk(home) {
         log(format!(
             "evict: summary allocated_tree_bytes={freed} free_before_bytes={free} free_after_bytes={after} observed_free_delta_bytes={} (net filesystem change, not attributed to deleted hardlinks)",
@@ -703,12 +752,14 @@ fn collect_report(
 pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
     let registry = Registry::open(prefix)?;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
+    sweep_sent(!apply, &mut |line| eprintln!("{line}"));
     let (roots, skipped) = registry.snapshot()?;
     eprintln!(
-        "evict: native {} registered={} rejected_receipts={} prefix={prefix:?}; unknown old mirrors are NOT enrolled or scanned",
+        "evict: native {} registered={} rejected_receipts={} prefix={prefix:?}; unregistered cargo build dirs idle {}s are a second pass",
         if apply { "apply" } else { "dry plan" },
         roots.len(),
-        skipped.len()
+        skipped.len(),
+        orphans::ORPHAN_IDLE.as_secs()
     );
     let (free, total) = System
         .disk(&home)
@@ -721,6 +772,24 @@ pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
         for (root, reason) in skipped {
             eprintln!("evict: skip {} ({reason:?})", root.display());
         }
+        let registered: Vec<PathBuf> = roots.keys().cloned().collect();
+        let targets: Vec<PathBuf> = registered.iter().map(|r| r.join("target")).collect();
+        let dirs = orphans::find(&orphans::bases(&home, &registered), &targets);
+        let idle = orphans::plan(&dirs, u64::MAX, orphans::ORPHAN_IDLE, &System);
+        let total_idle: u64 = idle.iter().map(|o| o.bytes).sum();
+        for o in &idle {
+            eprintln!(
+                "evict: idle orphan {} ({:.1} GiB, last change {})",
+                o.dir.display(),
+                o.bytes as f64 / (1u64 << 30) as f64,
+                o.last_change
+            );
+        }
+        eprintln!(
+            "evict: orphan build dirs found={} idle={} idle_bytes={total_idle} (deleted only under disk pressure)",
+            dirs.len(),
+            idle.len()
+        );
         eprintln!(
             "evict: no collection needed free_bytes={free} total_bytes={total} grace_seconds={}",
             DEFAULT_GRACE.as_secs()
@@ -740,6 +809,26 @@ pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
         "target collection failed; see diagnostics above"
     );
     Ok(())
+}
+
+/// Drop artifact-download delta bases nobody used for `SENT_MAX_AGE`.
+#[cfg(unix)]
+pub fn sweep_sent(dry: bool, log: &mut dyn FnMut(String)) {
+    let Ok(dir) = crate::paths::home().map(|h| h.join("sent")) else {
+        return;
+    };
+    if dry {
+        log(format!(
+            "evict: would prune delta bases older than {}s in {}",
+            orphans::SENT_MAX_AGE.as_secs(),
+            dir.display()
+        ));
+        return;
+    }
+    let (n, bytes) = orphans::sweep_sent(&dir, orphans::SENT_MAX_AGE, SystemTime::now());
+    if n > 0 {
+        log(format!("evict: pruned {n} old delta bases ({bytes} bytes)"));
+    }
 }
 
 /// Free space after an attempt, for the pre-build floor check.
