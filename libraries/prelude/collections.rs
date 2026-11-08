@@ -142,6 +142,42 @@ pub struct Entry<'a, K, V> {
 }
 
 impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
+    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
+        let map = self.map;
+        let index = match map.find_key(&self.key) {
+            Option::Some(i) => i,
+            Option::None => {
+                let value = default();
+                map.hashes.push(hash_of(&self.key));
+                map.keys.push(self.key);
+                map.values.push(value);
+                map.values.len() - 1usize
+            }
+        };
+        match map.values.get_mut(index) {
+            Option::Some(v) => v,
+            Option::None => panic!("entry slot missing"),
+        }
+    }
+
+    pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V {
+        let map = self.map;
+        let index = match map.find_key(&self.key) {
+            Option::Some(i) => i,
+            Option::None => {
+                let value = default(&self.key);
+                map.hashes.push(hash_of(&self.key));
+                map.keys.push(self.key);
+                map.values.push(value);
+                map.values.len() - 1usize
+            }
+        };
+        match map.values.get_mut(index) {
+            Option::Some(v) => v,
+            Option::None => panic!("entry slot missing"),
+        }
+    }
+
     pub fn or_insert(self, default: V) -> &'a mut V {
         let map = self.map;
         let index = match map.find_key(&self.key) {
@@ -318,6 +354,40 @@ pub struct BTreeEntry<'a, K, V> {
 }
 
 impl<'a, K: super::cmp::Ord, V> BTreeEntry<'a, K, V> {
+    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
+        let map = self.map;
+        let index = match map.search(&self.key) {
+            super::result::Result::Ok(i) => i,
+            super::result::Result::Err(i) => {
+                let value = default();
+                map.keys.insert(i, self.key);
+                map.values.insert(i, value);
+                i
+            }
+        };
+        match map.values.get_mut(index) {
+            Option::Some(v) => v,
+            Option::None => panic!("entry slot missing"),
+        }
+    }
+
+    pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V {
+        let map = self.map;
+        let index = match map.search(&self.key) {
+            super::result::Result::Ok(i) => i,
+            super::result::Result::Err(i) => {
+                let value = default(&self.key);
+                map.keys.insert(i, self.key);
+                map.values.insert(i, value);
+                i
+            }
+        };
+        match map.values.get_mut(index) {
+            Option::Some(v) => v,
+            Option::None => panic!("entry slot missing"),
+        }
+    }
+
     pub fn or_insert(self, default: V) -> &'a mut V {
         let map = self.map;
         let index = match map.search(&self.key) {

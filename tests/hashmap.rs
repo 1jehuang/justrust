@@ -356,3 +356,44 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn lazy_entry_callbacks_preserve_vacancy_and_key_authority() {
+    closure_oracle::check(
+        "lazy-entry-callback-vacancy",
+        &[
+            Case {
+                name: "both_maps_call_factories_only_for_vacant_keys",
+                source: r#"use std::collections::{HashMap,BTreeMap};
+fn main(){let mut calls=0;let mut h:HashMap<i32,i32>=HashMap::new();
+h.entry(1).or_insert_with(||{calls+=1;7});h.entry(1).or_insert_with(||{calls+=100;99});
+h.entry(2).or_insert_with_key(|k|{calls+=1;*k+10});h.entry(2).or_insert_with_key(|k|{calls+=100;*k});
+println!("{} {} {}",h.get(&1).unwrap(),h.get(&2).unwrap(),calls);
+let mut t:BTreeMap<i32,i32>=BTreeMap::new();
+t.entry(3).or_insert_with(||{calls+=1;17});t.entry(3).or_insert_with(||{calls+=100;99});
+t.entry(4).or_insert_with_key(|k|{calls+=1;*k+20});t.entry(4).or_insert_with_key(|k|{calls+=100;*k});
+println!("{} {} {}",t.get(&3).unwrap(),t.get(&4).unwrap(),calls);}"#,
+                expect: Expect::Run("7 12 2\n17 24 4\n"),
+            },
+            Case {
+                name: "factory_moves_noncopy_value_only_on_vacancy",
+                source: r#"use std::collections::{HashMap,BTreeMap};fn main(){
+let mut h:HashMap<i32,String>=HashMap::new();let a=String::from("first");h.entry(1).or_insert_with(move||a);
+let b=String::from("ignored");h.entry(1).or_insert_with(move||b);
+let mut t:BTreeMap<i32,String>=BTreeMap::new();let c=String::from("sorted");t.entry(2).or_insert_with(move||c);
+println!("{} {}",h.get(&1).unwrap(),t.get(&2).unwrap());}"#,
+                expect: Expect::Run("first sorted\n"),
+            },
+            Case {
+                name: "unused_factory_result_must_match_value_type",
+                source: "use std::collections::HashMap;fn unused(){let mut h:HashMap<i32,i32>=HashMap::new();h.entry(1).or_insert_with(||true);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_key_factory_cannot_mutate_shared_key",
+                source: "use std::collections::BTreeMap;fn unused(){let mut t:BTreeMap<i32,i32>=BTreeMap::new();t.entry(1).or_insert_with_key(|k|{*k=2;3});}fn main(){}",
+                expect: Expect::Invalid("E0594"),
+            },
+        ],
+    );
+}
