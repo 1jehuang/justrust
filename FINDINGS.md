@@ -70,6 +70,11 @@ contribute their reported duration as test time. A first attempt that
 tracked nesting depth was rejected because it dropped 811 test counts on
 interleaved output. Every re-mirror after a client upgrade restarts the
 daemon, costing 12-16s here. The waterfall now shows that cost directly.
+Host-side copies were checked over the daemon's pinned SSH identity. The
+host records its own local waterfall (`20261108-075347198-13230`: 1.235s of
+setup, cargo phases, and tests, summing exactly). The client replaces it
+with the end-to-end view (8.61s, including 5.42s `sync: machine link`
+reconnecting to an idle machine).
 
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
