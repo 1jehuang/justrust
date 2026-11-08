@@ -689,3 +689,94 @@ fn main() { let mut v = [P { x: 1 }, P { x: 2 }]; let i = 0; let a = &mut v[i]; 
         ],
     );
 }
+
+#[test]
+fn explicit_local_deref_field_borrows_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "explicit-local-deref-field-borrows",
+        &[
+            Case {
+                name: "generic_shared_mutable_and_nested_projection",
+                source: r#"use std::ops::{Deref,DerefMut};
+struct Payload<T>{values:[T;2],nested:(i32,i32)} struct Owner<T>{payload:Payload<T>}
+impl<T> Deref for Owner<T>{type Target=Payload<T>;fn deref(&self)->&Payload<T>{&self.payload}}
+impl<T> DerefMut for Owner<T>{fn deref_mut(&mut self)->&mut Payload<T>{&mut self.payload}}
+fn keep<T>(value:&T)->&T{value} fn keep_mut<T>(value:&mut T)->&mut T{value}
+fn main(){let mut owner=Owner{payload:Payload{values:[3i32,7i32],nested:(11i32,13i32)}};
+let values=keep(&owner.values);println!("{} {}",values[0],values[1]);
+let values=keep_mut(&mut owner.values);values[1]=19;
+let nested=keep(&owner.nested.1);println!("{} {}",owner.values[1],*nested);}"#,
+                expect: Expect::Run("3 7\n19 13\n"),
+            },
+            Case {
+                name: "refcell_guard_field_iteration_keeps_storage",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn main(){let account=RefCell::new(Account{entries:vec![String::from("first"),String::from("second")]});
+let view=account.borrow();for entry in &view.entries{println!("{}",entry);}println!("{}",view.entries.len());}"#,
+                expect: Expect::Run("first\nsecond\n2\n"),
+            },
+            Case {
+                name: "tuple_target_and_constant_index",
+                source: r#"use std::ops::Deref;struct Owner{inner:([i32;2],i32)}
+impl Deref for Owner{type Target=([i32;2],i32);fn deref(&self)->&Self::Target{&self.inner}}
+fn keep<T>(value:&T)->&T{value}fn main(){let owner=Owner{inner:([5i32,9i32],17i32)};
+let value=keep(&owner.0[1]);let other=keep(&owner.1);println!("{} {}",*value,*other);}"#,
+                expect: Expect::Run("9 17\n"),
+            },
+            Case {
+                name: "stored_field_precedes_deref_field",
+                source: r#"use std::ops::Deref;struct Target{value:i32}struct Owner{value:i32,target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{println!("deref");&self.target}}
+fn main(){let owner=Owner{value:3i32,target:Target{value:7i32}};let value=&owner.value;println!("{}",*value);}"#,
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "unused_mutable_borrow_requires_deref_mut",
+                source: r#"use std::ops::Deref;struct Target{value:i32}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+fn unused(mut owner:Owner){let value=&mut owner.value;*value=9;}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_mutable_field_borrow_requires_mutable_owner",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target{value:i32}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Target{&mut self.target}}
+fn unused(owner:Owner){let value=&mut owner.value;*value=9;}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_missing_target_field_rejects",
+                source: r#"use std::ops::Deref;struct Target{value:i32}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+fn unused(owner:Owner){let value=&owner.missing;}fn main(){}"#,
+                expect: Expect::Invalid("E0609"),
+            },
+            Case {
+                name: "unused_mutable_index_through_shared_target_field_rejects",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target<'a>{values:&'a[i32;2]}struct Owner<'a>{target:Target<'a>}
+impl<'a> Deref for Owner<'a>{type Target=Target<'a>;fn deref(&self)->&Target<'a>{&self.target}}
+impl<'a> DerefMut for Owner<'a>{fn deref_mut(&mut self)->&mut Target<'a>{&mut self.target}}
+fn unused(mut owner:Owner<'_>){let value=&mut owner.values[0];*value=9;}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_overlapping_projected_borrows_reject",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target{value:i32}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Target{&mut self.target}}
+fn unused(mut owner:Owner){let a=&mut owner.value;let b=&mut owner.value;*a+=*b;}fn main(){}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "unused_private_target_field_rejects",
+                source: r#"use std::ops::Deref;mod hidden{pub struct Target{value:i32}}
+struct Owner{target:hidden::Target}impl Deref for Owner{type Target=hidden::Target;fn deref(&self)->&hidden::Target{&self.target}}
+fn unused(owner:Owner){let value=&owner.value;}fn main(){}"#,
+                expect: Expect::Invalid("E0616"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}

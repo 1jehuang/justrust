@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+mod aggregate_reborrow;
 mod correlation;
 mod native_exchange;
 mod native_storage;
@@ -7581,7 +7582,20 @@ impl CarrierBuilder<'_, '_> {
                     }
                 }
             }
-            if (family_admitted || identity_admitted || pair_admitted)
+            let aggregate_admitted = !family_admitted
+                && !identity_admitted
+                && !pair_admitted
+                && self.problems.is_empty()
+                && !unmodeled_raw_write
+                && self.closed_shared_aggregate_reborrow_admitted(
+                    &body,
+                    &outgoing,
+                    &points,
+                    &offsets,
+                    &writes,
+                    &must_overwrite,
+                )?;
+            if (family_admitted || identity_admitted || pair_admitted || aggregate_admitted)
                 && self.problems.is_empty()
                 && !unmodeled_raw_write
             {
@@ -10794,6 +10808,186 @@ mod parameter_equality_tests {
         summary_contract.writes = Arc::from(summary.clone());
         assert!(!admitted(&summary_contract, &summary, &[]));
         assert!(identity_effect_rows(&declared, &rows, &[], &mut Budget::new(0)).is_err());
+    }
+
+    #[test]
+    fn closed_shared_aggregate_identity_rows_reject_incomplete_or_replaced_cells() {
+        let input = |field| InputCarrier {
+            param: 0,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([
+                    CarrierStep::Referent,
+                    CarrierStep::Field(field),
+                ])),
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+            },
+        };
+        let rows = [input(0), input(1)].map(|destination| ir::CarrierWriteEnvelope {
+            sources: Arc::from([destination.clone()]),
+            destination,
+        });
+        let declared = ir::CarrierContract {
+            inputs: Arc::from([input(0), input(1)]),
+            results: Arc::from([ir::CarrierReturn {
+                location: fixed_location(ReferencePosition { depth: 0 }),
+                sources: Arc::from([input(0), input(1)]),
+            }]),
+            writes: Arc::from(rows.clone()),
+        };
+        let admitted = |contract: &ir::CarrierContract,
+                        rows: &[ir::CarrierWriteEnvelope],
+                        must: &[InputCarrier]| {
+            aggregate_reborrow::computed_identity_writes(
+                contract,
+                rows,
+                must,
+                &mut Budget::new(1_000_000),
+            )
+            .unwrap()
+        };
+        assert!(admitted(&declared, &rows, &[]));
+        assert!(!admitted(&declared, &rows[..1], &[]));
+        assert!(!admitted(&declared, &rows, &[input(0)]));
+        for mutation in 0..6 {
+            let mut changed = rows.clone();
+            match mutation {
+                0 => changed[0].sources = Arc::from([]),
+                1 => changed[0].sources = Arc::from([input(1)]),
+                2 => changed[0].sources = Arc::from([input(0), input(1)]),
+                3 => changed[1] = changed[0].clone(),
+                4 => changed.swap(0, 1),
+                5 => changed[0].destination.param = 1,
+                _ => unreachable!(),
+            }
+            assert!(!admitted(&declared, &changed, &[]), "mutation {mutation}");
+        }
+        let mut duplicate = declared.clone();
+        duplicate.writes = Arc::from([rows[0].clone(), rows[0].clone()]);
+        assert!(!admitted(&duplicate, &rows, &[]));
+        for path in [
+            vec![],
+            vec![CarrierStep::Field(0)],
+            vec![CarrierStep::Referent],
+            vec![CarrierStep::Referent, CarrierStep::SliceElement],
+            vec![
+                CarrierStep::Referent,
+                CarrierStep::Referent,
+                CarrierStep::Field(0),
+            ],
+        ] {
+            let location = CarrierLocation {
+                path: CarrierPath(path.into()),
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+            };
+            assert!(!aggregate_reborrow::fixed_shared_aggregate_location(
+                &location
+            ));
+        }
+        assert!(aggregate_reborrow::fixed_shared_aggregate_location(
+            &input(0).location
+        ));
+        let mut nested_depth = input(0).location;
+        nested_depth.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
+        assert!(!aggregate_reborrow::fixed_shared_aggregate_location(
+            &nested_depth
+        ));
+        assert!(
+            aggregate_reborrow::computed_identity_writes(
+                &declared,
+                &rows,
+                &[],
+                &mut Budget::new(0)
+            )
+            .is_err()
+        );
+    }
+
+    fn shared_aggregate_body_fixture(
+        source: &str,
+    ) -> (
+        Arc<cfg::Function>,
+        Arc<super::super::traits::ValidatedFacts>,
+    ) {
+        let snapshot = Arc::new(crate::compiler::Snapshot {
+            input: crate::compiler::Input::Text(source.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let ledger = snapshot.budget.clone();
+        let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+        let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine
+            .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+            .unwrap();
+        let publication = body.publication.as_ref().expect("genuine source body");
+        (
+            Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap()),
+            publication.facts().clone(),
+        )
+    }
+
+    #[test]
+    fn closed_shared_aggregate_reborrow_keeps_exact_source_and_rejects_forged_body() {
+        let source = "struct Target<'a>{values:&'a[i32;2]}struct Owner<'a>{target:Target<'a>}fn project<'a,'b>(owner:&'a mut Owner<'b>)->&'a mut Target<'b>{&mut owner.target}fn main(){}";
+        let (function, facts) = shared_aggregate_body_fixture(source);
+        let make_plan =
+            |function: &Arc<cfg::Function>, facts: &Arc<super::super::traits::ValidatedFacts>| {
+                Plan::build_validated(
+                    function,
+                    facts,
+                    None,
+                    &mut Budget::new(32_000_000),
+                    128 * 1024 * 1024,
+                )
+            };
+        let genuine = make_plan(&function, &facts).unwrap();
+        assert!(genuine.problems.is_empty(), "{:?}", genuine.problems);
+        assert!(
+            genuine.effects().is_some(),
+            "exact source aggregate reborrow needs complete effects"
+        );
+        for mutation in 0..4 {
+            let mut forged = (*function).clone();
+            match mutation {
+                0 => forged.loan_sites[0].kind = BorrowKind::Shared,
+                1 => forged.loan_sites[0]
+                    .place
+                    .projection
+                    .push(Projection::Field(1)),
+                2 => {
+                    forged.ref_contract = Arc::new(ir::RefContract {
+                        region_count: 0,
+                        ..(*forged.ref_contract).clone()
+                    })
+                }
+                3 => forged.result = Ty::Unit,
+                _ => unreachable!(),
+            }
+            if let Ok(plan) = make_plan(&Arc::new(forged), &facts) {
+                assert!(
+                    plan.effects().is_none() || !plan.problems.is_empty(),
+                    "forgery {mutation}"
+                );
+            }
+        }
+        let (_, foreign) = shared_aggregate_body_fixture(source);
+        if let Ok(plan) = make_plan(&function, &foreign) {
+            assert!(
+                plan.effects().is_none() || !plan.problems.is_empty(),
+                "foreign facts"
+            );
+        }
+        let changed = "struct Target<'a>{values:&'a[i32;2]}struct Owner<'a>{target:Target<'a>}fn project<'a,'b>(owner:&'a mut Owner<'b>,replacement:&'b[i32;2])->&'a mut Target<'b>{owner.target.values=replacement;&mut owner.target}fn main(){}";
+        let (function, facts) = shared_aggregate_body_fixture(changed);
+        if let Ok(plan) = make_plan(&function, &facts) {
+            assert!(
+                plan.effects().is_none(),
+                "a replacement must not acquire an identity proof"
+            );
+        }
     }
 
     #[test]
