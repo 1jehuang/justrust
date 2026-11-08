@@ -42,6 +42,7 @@ use std::time::{Duration, Instant};
 use crate::peercache;
 use crate::remote_backend::{self, Backend};
 use crate::remote_proto::{Msg, VERSION, read_frame, write_frame};
+use crate::remote_resume;
 use crate::remote_sync::{self, MAX_FILE, Manifest, Mirror, UNKNOWN};
 use crate::remote_watch::Watcher;
 
@@ -377,6 +378,10 @@ impl Daemon {
 
     fn exit(&self, why: &str) -> ! {
         log(why);
+        // Draining: a replacement may already be mirroring. Never save then.
+        if !self.draining.load(Ordering::SeqCst) {
+            save_mirrors(self);
+        }
         self.retire();
         std::process::exit(0)
     }
@@ -876,6 +881,69 @@ fn remember_root(dest: &str, root: &Path) {
     }
 }
 
+/// Save what the machine holds, for the next daemon (`remote_resume`). Only
+/// after a barrier confirms every frame applied, and only roots with no
+/// pending repair or full sync.
+fn save_mirrors(d: &Daemon) {
+    if !remote_resume::enabled() {
+        return;
+    }
+    let Ok(mut st) = d.sync.lock() else { return };
+    let Some(link) = st.link.clone().filter(|l| l.alive()) else {
+        return;
+    };
+    if barrier(d, &mut st, &link).is_err() {
+        return;
+    }
+    let clean: Vec<(&Path, &Manifest, &[PathBuf])> = st
+        .roots
+        .iter()
+        .filter(|(r, root)| {
+            !root.needs_full_sync && r.is_dir() && !root.manifest.values().any(|s| *s == UNKNOWN)
+        })
+        .map(|(r, root)| (r.as_path(), &root.manifest, root.oversized.as_slice()))
+        .collect();
+    let t = Instant::now();
+    let n = remote_resume::save(st.backend.kind(), &link.mirror, &clean);
+    log(&format!(
+        "saved {n} of {} mirror manifests for the next daemon in {:.2}s",
+        clean.len(),
+        t.elapsed().as_secs_f64()
+    ));
+}
+
+/// A root this daemon does not track yet: resume the previous daemon's
+/// mirror when the machine confirms it, else mirror it in full. Returns
+/// files sent.
+fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<usize> {
+    if !st.roots.contains_key(root) {
+        let t = Instant::now();
+        if let Some((manifest, oversized)) =
+            remote_resume::take(st.backend.kind(), &link.mirror, root)
+        {
+            st.roots.insert(
+                root.to_path_buf(),
+                Root {
+                    manifest,
+                    watch_dirs: None,
+                    oversized,
+                    needs_full_sync: false,
+                },
+            );
+            remember_root(st.backend.kind(), root);
+            let n = push_root(d, st, root)?;
+            log(&format!(
+                "source mirror {}: resumed from the previous daemon, {n} files sent, total {:.3}s",
+                root.display(),
+                t.elapsed().as_secs_f64()
+            ));
+            return Ok(n);
+        }
+    }
+    remote_resume::invalidate(&link.mirror, root);
+    add_root(d, st, link, root).map(|()| 0)
+}
+
 /// Start tracking a root: rsync it once, then remember its manifest.
 fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let total = Instant::now();
@@ -989,6 +1057,8 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     if !diff.is_empty() {
         if diff.changed.len() + diff.deleted.len() > remote_sync::RSYNC_ABOVE {
             // A branch switch or a big generated change: one rsync is cheaper.
+            // It bypasses the agent, so drop saved mirror state here.
+            remote_resume::invalidate(&link.mirror, root);
             let t = Instant::now();
             let n = link.mirror.rsync(root)?;
             link.send(
@@ -1102,7 +1172,7 @@ fn repair_sources(d: &Daemon, st: &mut Sync, link: &Link) -> Result<usize> {
             }
         }
         if st.needs_mirror(&root) {
-            add_root(d, st, link, &root)?;
+            files += mirror_root(d, st, link, &root)?;
         } else {
             files += push_root(d, st, &root)?;
         }
@@ -1256,7 +1326,7 @@ fn run(
             let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
                 let result = if st.needs_mirror(root) {
-                    add_root(d, &mut st, &link, root).map(|()| 0)
+                    mirror_root(d, &mut st, &link, root)
                 } else {
                     push_root(d, &mut st, root)
                 };

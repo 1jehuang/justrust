@@ -102,6 +102,7 @@ mod remote_hosted;
 mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
+mod remote_resume;
 mod remote_sync;
 // Windows has no watcher backend yet (see the module docs).
 #[cfg_attr(windows, allow(dead_code))]

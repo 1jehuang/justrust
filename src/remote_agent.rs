@@ -299,6 +299,10 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             continue;
         }
         let sync_run = matches!(&msg, Msg::RunSync { .. });
+        // Saved mirror state of the root no longer describes the tree.
+        if let Msg::Write { path, .. } | Msg::Delete { path } = &msg {
+            crate::remote_resume::invalidate_above(&at(path));
+        }
         match msg {
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
                 Ok(()) => {
