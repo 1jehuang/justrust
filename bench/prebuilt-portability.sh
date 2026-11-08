@@ -12,7 +12,7 @@ for h in A B; do
   ln -sfn "$HOME/.cargo/registry" "$out/home$h/cargo/registry"
   [ -d "$HOME/.cargo/git" ] && ln -sfn "$HOME/.cargo/git" "$out/home$h/cargo/git"
   ( cd "$cwd" && CARGO_HOME="$out/home$h/cargo" JUSTRUST_DEPCACHE_DIR="$out/dc$h" \
-    JUSTRUST_DEPCACHE_EXPLAIN="$out/ex$h" CARGO_TARGET_DIR="$out/t$h" JUSTRUST_REMOTE=0 \
+    JUSTRUST_DEPCACHE_EXPLAIN="$out/ex$h" CARGO_TARGET_DIR="$out/t$h" JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' \
     JUSTRUST_QUIET=1 JUSTRUST_TOOLCHAIN="${TC:-nightly-2026-10-08}" \
     justrust "${args[@]}" --offline >"$out/log$h" 2>&1 )
   echo "home$h exit $?"

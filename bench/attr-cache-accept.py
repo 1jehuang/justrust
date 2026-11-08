@@ -37,7 +37,7 @@ UI_FLAGS = ["--config", 'profile.dev.package.jcode-desktop-ui.rustflags=["-Zcach
 
 def env(cache: bool) -> dict:
     e = {k: v for k, v in os.environ.items() if not k.startswith(("RUSTFLAGS", "CARGO_ENCODED"))}
-    e.update(RUSTC=RUSTC, JUSTRUST_TOOLCHAIN="system", JUSTRUST_REMOTE="0", JUSTRUST_DEPCACHE="0",
+    e.update(RUSTC=RUSTC, JUSTRUST_TOOLCHAIN="system", JUSTRUST_REMOTE="0", JUSTRUST_LOCAL_REASON="benchmark: controlled local baseline", JUSTRUST_DEPCACHE="0",
              JUSTRUST_PEER_CACHE="0", JUSTRUST_REMOTE_CACHE="0",
              CARGO_UNSTABLE_PROFILE_RUSTFLAGS="true",
              CARGO_TARGET_DIR=str(suite.JR_HOME / "bench" / f"attr-accept-{'on' if cache else 'off'}"))

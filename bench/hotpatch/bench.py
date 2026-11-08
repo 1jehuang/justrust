@@ -84,6 +84,7 @@ def run(w: dict, hot: bool, n: int) -> dict:
         {
             "CARGO_TARGET_DIR": str(w["target"]),
             "JUSTRUST_REMOTE": "0",
+            "JUSTRUST_LOCAL_REASON": "benchmark: controlled local baseline",
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": str(HOT),
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": f"{HOT} run",
         }

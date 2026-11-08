@@ -144,7 +144,7 @@ pub fn verdict_tag(f: &Failure) -> String {
     match f.class {
         Class::UserCode => format!("your code: {}", f.reason),
         Class::Toolchain => format!(
-            "NOT your code: justrust/toolchain fault ({}); retry with JUSTRUST_TOOLCHAIN=system JUSTRUST_REMOTE=off",
+            "NOT your code: justrust/toolchain fault ({}); retry with JUSTRUST_TOOLCHAIN=system JUSTRUST_REMOTE=off JUSTRUST_LOCAL_REASON=toolchain-fault",
             f.reason
         ),
         Class::Infra => format!("NOT your code: environment fault ({}); retry", f.reason),

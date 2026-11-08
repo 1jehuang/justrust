@@ -145,9 +145,9 @@ Where check/clippy/test run: signed in to hosted builds (API key or
 subscription) means remote by default. Choose per command with `--local`,
 `--remote`, or `--auto` (the router: remote only when predicted faster),
 or set JUSTRUST_REMOTE=off|force|auto. Give a reason for going local with
-`--local=\"why\"` (or JUSTRUST_LOCAL_REASON). With
-JUSTRUST_REQUIRE_LOCAL_REASON=1 (env or ~/.config/jcode env file) a
-requested local build without a reason is refused.
+`--local=\"why\"` (or JUSTRUST_LOCAL_REASON). A
+requested local build without a reason is refused unless
+JUSTRUST_REQUIRE_LOCAL_REASON=0 (env or ~/.config/jcode env file).
 
 Examples:
   justrust check -p my-crate

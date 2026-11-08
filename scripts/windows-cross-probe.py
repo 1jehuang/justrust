@@ -129,7 +129,7 @@ def main(argv=None):
                 raise ValueError("SDK PE machine mismatch")
             if not report["blockers"]:
                 # Local-only requirement: target SDK paths are local and hosted support is unverified.
-                run(["justrust", "build", "--local", "--offline", "--target", args.target,
+                run(["justrust", "build", "--local=Windows cross target is not supported hosted", "--offline", "--target", args.target,
                      "--target-dir", out / "target"], out, records)
                 if machine(out / "target" / args.target / "debug/windows-cross-probe.exe") != TARGETS[args.target][1]:
                     raise ValueError("Rust PE machine mismatch")

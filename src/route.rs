@@ -94,14 +94,15 @@ fn mode_from(v: Option<&str>) -> Mode {
     }
 }
 
-/// `JUSTRUST_REQUIRE_LOCAL_REASON=1` (env, or the shared Jcode env file):
+/// On by default. `JUSTRUST_REQUIRE_LOCAL_REASON=0` (env, or the shared
+/// Jcode env file) turns it off. When on,
 /// a requested local build (`--local`, JUSTRUST_REMOTE=off) must say why,
 /// so local builds that should have been hosted can be traced.
 pub fn require_local_reason() -> bool {
-    crate::remote_hosted::setting("JUSTRUST_REQUIRE_LOCAL_REASON").is_some_and(|v| {
+    !crate::remote_hosted::setting("JUSTRUST_REQUIRE_LOCAL_REASON").is_some_and(|v| {
         matches!(
             v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
+            "0" | "false" | "no" | "off"
         )
     })
 }

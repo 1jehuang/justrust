@@ -26,7 +26,7 @@ FPS = root / edit.file
 
 
 def run(target: str, daemon: bool, extra=None):
-    env = dict(os.environ, CARGO_TARGET_DIR=str(T / target), JUSTRUST_REMOTE="0",
+    env = dict(os.environ, CARGO_TARGET_DIR=str(T / target), JUSTRUST_REMOTE="0", JUSTRUST_LOCAL_REASON="benchmark: controlled local baseline",
                JUSTRUST_TOOLCHAIN=suite.TOOLCHAIN, JUSTRUST_PREBUILT="off",
                JUSTRUST_BUILDD="1" if daemon else "0", JCODE_SESSION_ID=f"bench-correct-{target}")
     env.update(extra or {})
