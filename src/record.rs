@@ -1125,6 +1125,13 @@ fn finish(
     crate::telemetry::record_run(&s, opts.agent);
     crate::export::upload_run(&s);
     crate::telemetry::maybe_spawn_background();
+    if s.diagnostics
+        .failure
+        .as_ref()
+        .is_some_and(|f| f.class == crate::failure::Class::Toolchain)
+    {
+        crate::stock_verify::maybe_spawn(&s.id);
+    }
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));
         eprint!("{}", crate::hints::render(&crate::hints::for_run(&s)));

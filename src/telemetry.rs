@@ -735,6 +735,15 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
         }),
     );
     put("startup_s", json!(r2(p.startup)));
+    put(
+        "failure_class",
+        json!(
+            s.diagnostics
+                .failure
+                .as_ref()
+                .map_or("none", |f| f.class.as_str())
+        ),
+    );
     put("lock_wait_s", json!(r2(p.lock_wait)));
     put("compile_s", json!(r2(p.compile)));
     put("test_run_s", json!(r2(p.test_run)));

@@ -368,6 +368,10 @@ pub struct Diagnostics {
     /// Why a compile failed with no compiler error, e.g. a full disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_fault: Option<String>,
+    /// Who a failed run is on (`failure`): the code, or the toolchain,
+    /// machine or justrust. `None` for successful runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::failure::Failure>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -385,6 +389,9 @@ pub struct IndexEntry {
     pub top_unit: Option<String>,
     pub compile_failed: bool,
     pub agent_session: Option<String>,
+    /// Failure class (`user_code`, `toolchain`, `infra`, ...) for failed runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::failure::Class>,
     /// Machine label when the run was remote. Absent for local runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
@@ -1045,6 +1052,25 @@ pub fn build(
     if diagnostics.compile_failed && diagnostics.compile_errors == 0 {
         diagnostics.environment_fault = lines.iter().find_map(|l| environment_fault(&l.l));
     }
+    {
+        let stderr: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.s == "e")
+            .map(|l| l.l.as_str())
+            .collect();
+        let unit_exits: Vec<i32> = units.iter().map(|u| u.exit).filter(|&c| c != 0).collect();
+        diagnostics.failure = crate::failure::classify(&crate::failure::Input {
+            exit,
+            subcommand: &meta.subcommand,
+            lines: &stderr,
+            compile_failed: diagnostics.compile_failed,
+            compile_errors: diagnostics.compile_errors,
+            environment_fault: diagnostics.environment_fault.as_deref(),
+            tests_failed: tests.failed,
+            unit_exits: &unit_exits,
+            units_ran: units.len(),
+        });
+    }
 
     let rebuild_reasons = lines
         .iter()
@@ -1196,6 +1222,7 @@ impl Summary {
             top_unit: self.top_units.first().map(|u| u.name.clone()),
             compile_failed: self.diagnostics.compile_failed,
             agent_session: self.agent_session.clone(),
+            failure: self.diagnostics.failure.as_ref().map(|f| f.class),
             remote: self.remote.as_ref().map(|r| r.machine.clone()),
         }
     }
@@ -1240,6 +1267,16 @@ impl Summary {
             status.to_owned()
         } else {
             "ok".to_owned()
+        };
+        let verdict = match self.diagnostics.failure.as_ref() {
+            Some(f)
+                if f.class == crate::failure::Class::UserCode
+                    && !verdict.starts_with("FAILED (exit") =>
+            {
+                format!("{verdict} [your code]")
+            }
+            Some(f) => format!("{verdict} [{}]", crate::failure::verdict_tag(f)),
+            None => verdict,
         };
         out.push_str(&self.agent_report(&verdict, hidden));
         out

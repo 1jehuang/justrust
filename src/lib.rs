@@ -38,6 +38,7 @@ mod execution_graph_task_bindings;
 mod execution_graph_task_dag;
 mod execution_graph_timing;
 mod export;
+mod failure;
 mod findings;
 mod hints;
 mod history;
@@ -46,6 +47,7 @@ mod hotpatch;
 mod msvc_tools;
 mod native;
 mod platform_config;
+mod stock_verify;
 mod test_reuse;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
@@ -216,6 +218,13 @@ enum Command {
         here: bool,
         #[arg(long)]
         json: bool,
+        /// Only failed runs.
+        #[arg(long)]
+        failed: bool,
+        /// Only failures that are not the code's fault (toolchain, infra,
+        /// unclassified): the ones justrust should fix.
+        #[arg(long, conflicts_with = "failed")]
+        ours: bool,
     },
     /// Sum known skipped task time across retained recordings (not wall-clock savings).
     Savings {
@@ -790,6 +799,7 @@ pub fn main() -> anyhow::Result<()> {
         Some(telemetry::BG_ARG) => telemetry::background_main(),
         Some(records_queue::ARG) => records_queue::sender_main(),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
+        Some(stock_verify::ARG) => stock_verify::main(std::env::args().nth(2)),
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()
@@ -970,7 +980,24 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         }
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
-        Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
+        Command::Runs {
+            limit,
+            here,
+            json,
+            failed,
+            ours,
+        } => runs::list(
+            limit,
+            here,
+            json,
+            if ours {
+                runs::FailFilter::Ours
+            } else if failed {
+                runs::FailFilter::Failed
+            } else {
+                runs::FailFilter::All
+            },
+        )?,
         Command::Savings { days, here, json } => savings::command(days, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
         Command::Profile {

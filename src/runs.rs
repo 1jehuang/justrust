@@ -72,12 +72,85 @@ fn short_args(args: &[String]) -> String {
     }
 }
 
-pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
+/// Which failed runs `justrust runs` lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FailFilter {
+    #[default]
+    All,
+    /// Every failed run.
+    Failed,
+    /// Failures that are not the code's fault: toolchain, infra, unknown.
+    Ours,
+}
+
+/// The failure class of an indexed run. Runs recorded before classification
+/// existed are classified from their saved summary and output.
+fn failure_class(r: &IndexEntry) -> Option<crate::failure::Class> {
+    if r.exit == 0 {
+        return None;
+    }
+    r.failure.or_else(|| classify_saved(&r.id).map(|f| f.class))
+}
+
+/// Classify a recorded run from its run directory.
+pub fn classify_saved(id: &str) -> Option<crate::failure::Failure> {
+    let dir = paths::runs_dir().ok()?.join(id);
+    let s: Summary = serde_json::from_slice(&std::fs::read(dir.join("summary.json")).ok()?).ok()?;
+    if let Some(f) = s.diagnostics.failure {
+        return Some(f);
+    }
+    let raw = std::fs::read_to_string(dir.join("output.jsonl")).unwrap_or_default();
+    let lines: Vec<crate::record::OutputLine> = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let stderr: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.s == "e")
+        .map(|l| l.l.as_str())
+        .collect();
+    let units = crate::summary::load_units(&dir);
+    let unit_exits: Vec<i32> = units.iter().map(|u| u.exit).filter(|&c| c != 0).collect();
+    crate::failure::classify(&crate::failure::Input {
+        exit: s.exit,
+        subcommand: &s.subcommand,
+        lines: &stderr,
+        compile_failed: s.diagnostics.compile_failed,
+        compile_errors: s.diagnostics.compile_errors,
+        environment_fault: s.diagnostics.environment_fault.as_deref(),
+        tests_failed: s.tests.failed,
+        unit_exits: &unit_exits,
+        units_ran: units.len(),
+    })
+}
+
+pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<()> {
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
     let mut runs: Vec<IndexEntry> = load_index()
         .into_iter()
         .filter(|r| !here || r.cwd.starts_with(&cwd))
         .collect();
+    if filter != FailFilter::All {
+        // Classify newest first and stop once `limit` matches are found:
+        // old runs may need their saved output read.
+        let mut kept = Vec::new();
+        for mut r in runs.into_iter().rev() {
+            if kept.len() >= limit {
+                break;
+            }
+            r.failure = failure_class(&r);
+            let keep = match (filter, r.failure) {
+                (FailFilter::Failed, _) => r.exit != 0,
+                (FailFilter::Ours, Some(c)) => c.is_ours(),
+                _ => false,
+            };
+            if keep {
+                kept.push(r);
+            }
+        }
+        kept.reverse();
+        runs = kept;
+    }
     let skip = runs.len().saturating_sub(limit);
     runs.drain(..skip);
     if json {
@@ -91,12 +164,12 @@ pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<26} {:>8} {:>8} {:>8} {:>6} {:>5}  {:<10} COMMAND",
-        "ID", "WALL", "COMPILE", "TESTS", "UNITS", "EXIT", "WHEN"
+        "{:<26} {:>8} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
+        "ID", "WALL", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
     );
     for r in &runs {
         println!(
-            "{:<26} {:>7.1}s {:>7.1}s {:>7.1}s {:>6} {:>5}  {:<10} cargo {}",
+            "{:<26} {:>7.1}s {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
             r.id,
             r.wall,
             r.compile + 0.0,
@@ -107,6 +180,15 @@ pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
             } else {
                 r.exit.to_string()
             },
+            r.failure
+                .map(|c| match c {
+                    crate::failure::Class::UserCode => "code",
+                    crate::failure::Class::Toolchain => "TOOLCHAIN",
+                    crate::failure::Class::Infra => "INFRA",
+                    crate::failure::Class::Interrupted => "intr",
+                    crate::failure::Class::Unknown => "UNKNOWN",
+                })
+                .unwrap_or(if r.exit == 0 { "" } else { "?" }),
             ago(r.start),
             short_args(&r.args)
         );
@@ -170,7 +252,10 @@ pub fn show(id: Option<&str>, json: bool) -> Result<()> {
         println!("{}", String::from_utf8_lossy(&raw));
         return Ok(());
     }
-    let s: Summary = serde_json::from_slice(&raw)?;
+    let mut s: Summary = serde_json::from_slice(&raw)?;
+    if s.diagnostics.failure.is_none() {
+        s.diagnostics.failure = classify_saved(&id);
+    }
     print!("{}", render(&s, &dir));
     Ok(())
 }
@@ -224,6 +309,17 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         format!("exit {}", s.exit)
     };
     let _ = writeln!(o, "result   {status}");
+    if let Some(f) = &s.diagnostics.failure {
+        let _ = writeln!(o, "cause    {}: {}", f.class.as_str(), f.reason);
+        if let Some(e) = &f.evidence {
+            let _ = writeln!(o, "         {e}");
+        }
+        if let Some(v) = crate::stock_verify::load(dir) {
+            let _ = writeln!(o, "stock    {}", v.line());
+        } else if f.class == crate::failure::Class::Toolchain {
+            let _ = writeln!(o, "stock    not verified (or still running)");
+        }
+    }
     let _ = writeln!(
         o,
         "time     {:.2}s wall, {:.1}s CPU ({:.1} of {} cores on average)\n",

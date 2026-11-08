@@ -904,6 +904,7 @@ mod tests {
             top_unit: None,
             compile_failed: false,
             agent_session: None,
+            failure: None,
             remote: remote.then(|| "m".to_string()),
         }
     }
