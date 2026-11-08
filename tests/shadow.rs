@@ -61,6 +61,10 @@ fn run(ws: &Path, home: &Path) -> (bool, String) {
         .env("JUSTRUST_NO_TELEMETRY", "1")
         .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_REMOTE", "off")
+        .env(
+            "JUSTRUST_LOCAL_REASON",
+            "shadow integration test runs locally",
+        )
         .env("JUSTRUST_BUILDD", "0")
         .env("JUSTRUST_SLOTS", "0")
         .env_remove("JUSTRUST_RUN_DIR")
