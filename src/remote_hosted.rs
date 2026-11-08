@@ -868,15 +868,19 @@ pub fn upload_record(kind: &str, id: &str, data: Value) {
     if !records_enabled() {
         return;
     }
-    let Ok(c) = creds() else {
+    if !signed_in() {
         return;
-    };
+    }
+    crate::records_queue::submit(kind, id, &record_body(kind, id, data));
+}
+
+fn record_body(kind: &str, id: &str, data: Value) -> Value {
     let mut body = json!({ "kind": kind, "id": id, "data": data });
     let h = crate::procfs::hostname();
     if !h.is_empty() {
         body["machine"] = json!(run_label(&h, 64));
     }
-    post_detached(&c, "build/records", &body);
+    body
 }
 
 /// `justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE`.
@@ -889,6 +893,11 @@ pub fn records_command(args: &[String]) -> Result<()> {
                 Some(k) => format!("build/records?kind={k}&limit=50"),
                 None => "build/records?limit=50".to_string(),
             };
+            let n = crate::records_queue::pending_count();
+            if n > 0 {
+                eprintln!("justrust records: {n} waiting for delivery");
+                crate::records_queue::spawn_sender();
+            }
             let v = ok(request(&c, "GET", &path, None)?)?;
             for r in v["records"].as_array().into_iter().flatten() {
                 println!(
@@ -911,13 +920,24 @@ pub fn records_command(args: &[String]) -> Result<()> {
         }
         ["put", kind, id, file] => {
             let data: Value = serde_json::from_str(&std::fs::read_to_string(file)?)?;
-            let mut body = json!({ "kind": kind, "id": id, "data": data });
-            let h = crate::procfs::hostname();
-            if !h.is_empty() {
-                body["machine"] = json!(run_label(&h, 64));
+            let body = record_body(kind, id, data);
+            let resp = request(&c, "POST", "build/records", Some(&body));
+            let code = resp.as_ref().ok().map(|r| r.code);
+            match crate::records_queue::classify(code) {
+                crate::records_queue::Outcome::Delivered => {
+                    println!("justrust records: stored {kind}/{id}")
+                }
+                crate::records_queue::Outcome::Rejected => {
+                    ok(resp?)?;
+                }
+                crate::records_queue::Outcome::Retry => {
+                    crate::records_queue::submit(kind, id, &body);
+                    println!(
+                        "justrust records: {kind}/{id} queued for retry ({})",
+                        code.map_or("no response".into(), |c| format!("HTTP {c}"))
+                    );
+                }
             }
-            ok(request(&c, "POST", "build/records", Some(&body))?)?;
-            println!("justrust records: stored {kind}/{id}");
         }
         _ => anyhow::bail!(
             "usage: justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE"

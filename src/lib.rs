@@ -77,11 +77,12 @@ mod peercache;
 mod procfs;
 mod profile;
 mod record;
+#[cfg(unix)]
+mod records_queue;
 mod release_tools;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
-#[cfg(unix)]
 mod remote_evict;
 /// The remote agent runs on the (Linux) build machines only.
 #[cfg(windows)]
@@ -792,6 +793,7 @@ pub fn main() -> anyhow::Result<()> {
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some(telemetry::BG_ARG) => telemetry::background_main(),
+        Some(records_queue::ARG) => records_queue::sender_main(),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
