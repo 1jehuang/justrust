@@ -1,5 +1,54 @@
 # Findings: where agent build time goes
 
+## 2026-11-08: end-to-end wait profiler; test time was misfiled as "after build"
+
+New: every recorded run now stores an `e2e` waterfall in `summary.json`.
+It covers everything the caller waited for, split into non-overlapping
+segments that sum to that wait: client start and routing, hosted admission,
+sync daemon connect, the sync daemon's own split (queued behind another sync,
+machine link, source push, confirm), the host or local cargo phases, host
+start and result relay, artifact return, and recording or reporting.
+`justrust show` prints it above cargo's phases. `justrust profile [--days N]
+[--here] [--remote|--local] [--measured] [--json]` aggregates it across runs,
+with per-segment totals, shares, counts of runs where a segment took 1s or
+more, and the slowest runs. Older runs get a coarser reconstruction (client
+wall, total sync, host phases) and are labelled as reconstructed. Recording
+only reads monotonic clocks in the client and daemon. Nothing reaches
+cargo's or rustc's environment. `Flushed` gains an optional `timing` field,
+and old daemons stay compatible.
+
+First live waterfall, hosted musl release build `20261108-061029807-411843`:
+24.92s waited, made up of 0.60s admission, 0.47s sync, 23.11s host compile,
+0.08s host start and relay, and 0.55s artifact return.
+
+The profiler exposed a recorder attribution bug. When the test runner could
+not hand a binary to the pool (for example with `--test-threads=1` or
+`--nocapture`), it ran the binary directly and no pool header followed. The
+summary then filed all of that libtest time under "after build" (`tail`).
+In the last 7 days 6,417 runs lost 68,715s of test time this way. That is
+44% of all recorded wait, reported as shutdown overhead. Run
+`20261105-144020114-2540075` shows 567.1s "after build" against 567.06s
+libtest time. The summary parser now treats the runner line as the binary's
+start when libtest output follows it with no pool header, and nested libtest
+blocks no longer end the parent. Reconstructions of older runs move
+libtest's reported time out of the tail, bounded by the tail.
+
+Corrected 7-day picture (`justrust profile --days 7`, 11,402 runs, 156,478s
+of agent wait, p50 4.17s, p90 27.5s): running tests 68.0%, host compile
+16.1%, unattributed remote time 5.1% (older records cannot split it), host
+build gaps 4.9%, sync 1.8%, build directory lock 1.3%. Tests, not
+compilation, dominate agent wait. Most of it is concentrated in a few
+clean-room conformance suites run with `--test-threads=1`. Separately, the
+baseline check of this change (`20261108-055503141-248961`) waited 105.3s:
+101.3s re-mirroring this repository (99.5s checksum rsync with 0 files sent)
+for 3.3s of build. A second run queued 91.5s behind it on the daemon's sync
+lock. The new waterfall reports this as `sync: source push` and
+`sync: queued behind`.
+
+No speedup is claimed. This is measurement infrastructure plus a reporting
+fix. Unit tests cover waterfall sums, overrun scaling, missing marks, old-run
+reconstruction, aggregation, the pool fallback, and wire compatibility.
+
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
 Resized the owner's existing AWS host from 96 to 32 physical cores and 384
