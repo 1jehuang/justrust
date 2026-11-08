@@ -76,6 +76,26 @@ setup, cargo phases, and tests, summing exactly). The client replaces it
 with the end-to-end view (8.61s, including 5.42s `sync: machine link`
 reconnecting to an idle machine).
 
+Follow-up sizing, so nothing is built without measured payoff. The
+104.2s full mirror in `20261108-080955887-217297` (`sync: source push`, 3 files
+sent) followed a reboot of this 7.6 GB client VM at 07:52. Its sources were
+not in the page cache. Cold small-file reads on this EBS volume measured
+13.6 MB/s (81 MB in 5.94s), and rsync `--checksum` must read all 1.14 GB.
+The same dry-run rsync with warm caches took 7.27s (7.38s with xxh128, so
+the hash is not the cost), and warm reads of every source took 1.3s locally
+and 0.8s on the host. `--checksum` stays: the code documents that receiver
+mtimes deliberately differ, so size alone misses same-size edits. Over 7
+days, all 83 full mirrors totalled 698s and the four over 30s totalled 394s.
+That is 0.45% of the 156,478s of recorded wait. A protocol change to trust
+a persisted manifest across daemon restarts is not justified by that,
+given its correctness risk. Test time is 68% of wait, but 71,300s of it
+is runs the agent asked to serialize with `--test-threads=1`. Only two
+multi-binary runs had that flag, and overlapping their binaries saves at
+most 245s, while it would break the serialization the agent asked for. The
+largest remaining lever is the tests themselves, chiefly the clean-room
+conformance suites (see `justrust profile --days 7`, slowest runs), not
+the client.
+
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
 Resized the owner's existing AWS host from 96 to 32 physical cores and 384
