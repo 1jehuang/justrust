@@ -115,6 +115,11 @@ fn checked_path(path: &Path) -> Result<PathBuf> {
             "parent path components are not permitted"
         );
         part.push(component);
+        // A bare Windows drive prefix (`C:`) or root has no metadata of its
+        // own (stat fails with ERROR_INVALID_FUNCTION), and cannot be a link.
+        if matches!(component, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
         match fs::symlink_metadata(&part) {
             Ok(meta) => ensure!(
                 !meta.file_type().is_symlink(),

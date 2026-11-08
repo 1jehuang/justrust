@@ -12,6 +12,8 @@ env:
   # Test runs are not usage.
   JUSTRUST_NO_TELEMETRY: "1"
   JUSTRUST_NO_UPDATE: "1"
+  # CI runners are not signed in to hosted; every build here is local.
+  JUSTRUST_REQUIRE_LOCAL_REASON: "0"
 
 jobs:
   linux:
