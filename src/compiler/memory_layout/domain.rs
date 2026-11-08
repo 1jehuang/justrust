@@ -584,9 +584,11 @@ fn normalize_query(
 // Only exact rigid parameters and builtin owning aggregate edges are reduced
 // into finite cleanup dependencies. Other unresolved forms retain the existing
 // closed-replay requirement rather than assuming nominal or hidden drop facts.
+#[allow(clippy::too_many_arguments)]
 fn normalize_drop(
     ty: &ir::Ty,
     facts: &traits::ValidatedFacts,
+    scratch: &mut traits::TraitScratch,
     parameters: &[ir::ParamId],
     out: &mut Requirement,
     budget: &ir::PlanBudget,
@@ -598,7 +600,7 @@ fn normalize_drop(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match facts
-        .normal_drop_plan(ty)
+        .normal_drop_plan_with_scratch(ty, scratch)
         .map_err(|e| e.into_legacy_diagnostic(budget))?
     {
         traits::NormalDropPlan::Trivial => return Ok(()),
@@ -620,12 +622,12 @@ fn normalize_drop(
         }
         ir::Ty::Tuple(parts) => {
             for part in parts.iter() {
-                normalize_drop(part, facts, parameters, out, budget, depth + 1)?;
+                normalize_drop(part, facts, scratch, parameters, out, budget, depth + 1)?;
             }
         }
         ir::Ty::Array { element, .. } => {
             // The authentic plan above decides zero-length array behavior.
-            normalize_drop(element, facts, parameters, out, budget, depth + 1)?;
+            normalize_drop(element, facts, scratch, parameters, out, budget, depth + 1)?;
         }
         _ => out.deferred_dispatch = true,
     }
@@ -665,8 +667,14 @@ type Argument = (
 struct Edge {
     occurrence: ir::ExprId,
     target: ir::CallTarget,
-    proof: traits::DirectCallProof,
+    proof: HeaderCallProof,
     arguments: Vec<Argument>,
+}
+
+#[derive(Clone)]
+enum HeaderCallProof {
+    Executable(traits::DirectCallProof),
+    Source(Arc<traits::CarrierContractView>),
 }
 
 /// Producer-local source proof. Only its compact projection may be published.
@@ -684,11 +692,27 @@ pub(in crate::compiler) struct Local {
     constructors: Arc<[ir::ExprId]>,
 }
 impl Local {
+    #[cfg(test)]
     pub(in crate::compiler) fn capture(
         source: Arc<ir::CheckedFunction>,
         publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
         facts: Arc<traits::ValidatedFacts>,
         budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        Self::capture_with_scratch(
+            source,
+            publication,
+            facts,
+            budget,
+            &mut traits::TraitScratch::default(),
+        )
+    }
+    pub(in crate::compiler) fn capture_with_scratch(
+        source: Arc<ir::CheckedFunction>,
+        publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
+        facts: Arc<traits::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+        mut scratch: &mut traits::TraitScratch,
     ) -> Result<Self, String> {
         if let Some(publication) = &publication {
             publication
@@ -743,18 +767,45 @@ impl Local {
                 budget.retain_bytes(std::mem::size_of::<(ir::ExprId, ir::TypeAlignmentQuery)>())?;
                 queries.push((occurrence, query.clone()));
             }
-            let ir::ExprKind::Call { target, .. } = &expression.kind else {
+            let ir::ExprKind::Call {
+                target, signature, ..
+            } = &expression.kind
+            else {
                 continue;
             };
-            let resolved = match target {
-                ir::Callee::Direct(target) => ir::Callee::Direct(target.clone()),
-                ir::Callee::TraitItem(call) | ir::Callee::Untupled(call) => facts
-                    .service()
-                    .resolve_trait_call(call, &facts)
+            if publication.is_some() {
+                facts.validate_source_flow_signature_with_scratch(
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &mut scratch,
+                )
+            } else {
+                facts.validate_signature_with(
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &mut scratch,
+                )
+            }
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            let nominals = facts
+                .parent_local_call_inputs_with_scratch(target, signature, &mut scratch)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            let resolved = if publication.is_some() {
+                facts
+                    .canonical_source_call_with_scratch(target, signature, &mut scratch)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
-                    .callee()
-                    .clone(),
-                ir::Callee::Virtual(_) => target.clone(),
+                    .0
+            } else {
+                match target {
+                    ir::Callee::Direct(target) => ir::Callee::Direct(target.clone()),
+                    ir::Callee::TraitItem(call) | ir::Callee::Untupled(call) => facts
+                        .service()
+                        .resolve_trait_call_with_nominals(call, &facts, &nominals, &mut scratch)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?
+                        .callee()
+                        .clone(),
+                    ir::Callee::Virtual(_) => target.clone(),
+                }
             };
             let ir::Callee::Direct(target) = resolved else {
                 budget.retain_bytes(std::mem::size_of::<(ir::ExprId, ir::Callee)>())?;
@@ -762,10 +813,23 @@ impl Local {
                 direct.deferred_dispatch = true;
                 continue;
             };
-            let proof = facts
-                .service()
-                .discharge_direct(&target, &facts)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            let proof = if publication.is_some() {
+                HeaderCallProof::Source(
+                    facts
+                        .source_carrier_contract_with_scratch(
+                            ir::SignatureSubject::Call(&ir::Callee::Direct(target.clone())),
+                            &mut scratch,
+                        )
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?,
+                )
+            } else {
+                HeaderCallProof::Executable(
+                    facts
+                        .service()
+                        .discharge_direct_with_nominals(&target, &facts, &nominals, &mut scratch)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?,
+                )
+            };
             let original = facts
                 .original_callable_schema(traits::OriginalCallableSubject::Direct(
                     target.declaration,
@@ -801,7 +865,15 @@ impl Local {
                 normalize_metadata_pointee(actual, &parameters, &mut metadata, budget)?;
                 let mut drop = Requirement::empty(parameters.len(), budget)?;
                 if facts.has_normal_drop_impls() {
-                    normalize_drop(actual, &facts, &parameters, &mut drop, budget, 0)?;
+                    normalize_drop(
+                        actual,
+                        &facts,
+                        &mut scratch,
+                        &parameters,
+                        &mut drop,
+                        budget,
+                        0,
+                    )?;
                 }
                 arguments.push((
                     requirement,
@@ -832,7 +904,15 @@ impl Local {
             {
                 budget.charge_work(1)?;
                 if may_own_drop(ty) {
-                    normalize_drop(ty, &facts, &parameters, &mut direct, budget, 0)?;
+                    normalize_drop(
+                        ty,
+                        &facts,
+                        &mut scratch,
+                        &parameters,
+                        &mut direct,
+                        budget,
+                        0,
+                    )?;
                 }
             }
         }
@@ -924,16 +1004,25 @@ fn graph_components(
 /// Successful finite fixed point, retaining original source/call/query inputs.
 /// Constructible only by replaying the exact graph-read local facts below.
 impl Local {
+    #[cfg(test)]
     fn validate(&self, budget: &ir::PlanBudget) -> Result<(), String> {
+        self.validate_with_scratch(budget, &mut traits::TraitScratch::default())
+    }
+    fn validate_with_scratch(
+        &self,
+        budget: &ir::PlanBudget,
+        scratch: &mut traits::TraitScratch,
+    ) -> Result<(), String> {
         budget.charge_work(1)?;
         if !self.facts.budget().same_authority(budget) {
             return Err("alignment local proof has a foreign task budget authority".into());
         }
-        let expected = Self::capture(
+        let expected = Self::capture_with_scratch(
             self.source.clone(),
             self.publication.clone(),
             self.facts.clone(),
             budget,
+            scratch,
         )?;
         if self.owner != expected.owner
             || self.parameters != expected.parameters
@@ -980,7 +1069,29 @@ impl Local {
         }
         for edge in self.edges.iter() {
             budget.charge_work(1)?;
-            if edge.proof.target() != &edge.target
+            let target_matches = match &edge.proof {
+                HeaderCallProof::Executable(proof) => proof.target() == &edge.target,
+                HeaderCallProof::Source(view) => {
+                    view.validate_for_with_scratch(&self.facts, scratch)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                    let Some(ir::TypedExpr {
+                        kind:
+                            ir::ExprKind::Call {
+                                target, signature, ..
+                            },
+                        ..
+                    }) = self.source.exprs.get(edge.occurrence.0)
+                    else {
+                        return Err("source header call changed original occurrence".into());
+                    };
+                    let (selected, _) = self
+                        .facts
+                        .canonical_source_call_with_scratch(target, signature, scratch)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                    selected == ir::Callee::Direct(edge.target.clone())
+                }
+            };
+            if !target_matches
                 || !matches!(
                     self.source.exprs.get(edge.occurrence.0).map(|e| &e.kind),
                     Some(ir::ExprKind::Call { .. })
@@ -1024,10 +1135,11 @@ pub(in crate::compiler) struct ClosedCalls {
     original: Local,
     target: ir::CallTarget,
     facts: Arc<traits::ValidatedFacts>,
-    selected: Arc<[(SelectedSite, ir::CallTarget, traits::DirectCallProof)]>,
+    selected: Arc<[(SelectedSite, ir::CallTarget, traits::SourceCallEntryProof)]>,
     queries: Arc<[(ir::ExprId, ir::Ty)]>,
     virtual_sites: Arc<[ir::ExprId]>,
     opaque_sites: Arc<[OpaqueCall]>,
+    cleanup_opaque: Arc<[(SelectedSite, Arc<ir::OpaqueTy>)]>,
     packs: Arc<[PackProviders]>,
 }
 
@@ -1056,7 +1168,7 @@ pub(in crate::compiler) struct PackProviders {
     providers: Arc<[traits::alignment_provider::BoundProvider]>,
 }
 impl Local {
-    #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(in crate::compiler) fn closed_calls(
         &self,
         target: &ir::CallTarget,
@@ -1065,7 +1177,28 @@ impl Local {
         budget: &ir::PlanBudget,
         engine: Option<crate::engine::EngineAuthority>,
     ) -> Result<ClosedCalls, String> {
-        self.validate(budget)?;
+        self.closed_calls_with_scratch(
+            target,
+            facts,
+            context,
+            budget,
+            engine,
+            &mut traits::TraitScratch::default(),
+            &mut traits::TraitScratch::default(),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::compiler) fn closed_calls_with_scratch(
+        &self,
+        target: &ir::CallTarget,
+        facts: Arc<traits::ValidatedFacts>,
+        context: &mut super::super::frontend::PlanCtx,
+        budget: &ir::PlanBudget,
+        engine: Option<crate::engine::EngineAuthority>,
+        mut source_scratch: &mut traits::TraitScratch,
+        mut scratch: &mut traits::TraitScratch,
+    ) -> Result<ClosedCalls, String> {
+        self.validate_with_scratch(budget, source_scratch)?;
         if self.owner != target.declaration
             || facts.target() != Some(target)
             || !Arc::ptr_eq(self.facts.world(), facts.world())
@@ -1075,21 +1208,24 @@ impl Local {
             );
         }
         let env = self.facts.env();
-        let mut scratch = traits::TraitScratch::default();
         let mut selected = Vec::new();
         let mut queries = Vec::new();
         let mut virtual_sites = Vec::new();
         let mut opaque_sites = Vec::new();
+        let mut cleanup_opaque = Vec::new();
         let mut packs = Vec::new();
-        let mut retain = |occurrence: SelectedSite, next: ir::CallTarget| -> Result<(), String> {
+        let mut retain = |occurrence: SelectedSite,
+                          next: ir::CallTarget,
+                          nominals: &[ir::Ty],
+                          scratch: &mut traits::TraitScratch|
+         -> Result<(), String> {
             let proof = facts
-                .service()
-                .discharge_direct(&next, &facts)
+                .source_call_entry_with_nominals(&next, nominals, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
             budget.retain_bytes(std::mem::size_of::<(
                 SelectedSite,
                 ir::CallTarget,
-                traits::DirectCallProof,
+                traits::SourceCallEntryProof,
             )>())?;
             selected.push((occurrence, next, proof));
             Ok(())
@@ -1105,9 +1241,9 @@ impl Local {
                         && !query.is_private_element_stride() =>
                 {
                     query.validate(ir::FactsCtx::Validated(&self.facts), budget)?;
-                    let closed = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
-                        query.queried_type(), env, &target.type_args, ir::FactsCtx::Validated(&facts),
-                        context, budget, engine, &mut scratch,
+                    let closed = super::super::nominal_realization::substitution::substitute_source_ty_with_scratch(
+                        query.queried_type(), &self.facts, env, &target.type_args, &facts,
+                        context, budget, engine, &mut source_scratch, &mut scratch,
                     )?;
                     let mut required = Requirement::empty(0, budget)?;
                     normalize_query(query, &closed, &facts, &[], &mut required, budget)?;
@@ -1121,16 +1257,20 @@ impl Local {
                     budget.retain_bytes(std::mem::size_of::<(ir::ExprId, ir::Ty)>())?;
                     queries.push((occurrence, closed));
                 }
-                ir::ExprKind::Call { target: callee, .. } => {
+                ir::ExprKind::Call {
+                    target: callee,
+                    signature,
+                    ..
+                } => {
                     // Hidden dispatch is not a source-level physical query.
                     // Preserve the exact original occurrence for its producer
                     // contract, never operation 140 or a copied hidden type.
                     if matches!(callee, ir::Callee::TraitItem(call)
                         if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)))
                     {
-                        let resolved = super::super::nominal_realization::substitution::substitute_callee_with_scratch(
-                            callee, env, &target.type_args, &facts, context,
-                            budget, engine, &mut scratch,
+                        let (resolved, _) = super::super::nominal_realization::substitution::substitute_source_call_with_scratch(
+                            callee, signature, &self.facts, env, &target.type_args, &facts, context,
+                            budget, engine, &mut source_scratch, &mut scratch,
                         )?;
                         let ir::Callee::TraitItem(call) = resolved else {
                             return Err("opaque alignment call lost public source contract".into());
@@ -1144,19 +1284,29 @@ impl Local {
                         opaque_sites.push(OpaqueCall { occurrence, call });
                         continue;
                     }
-                    let resolved = super::super::nominal_realization::substitution::substitute_callee_with_scratch(
-                        callee, env, &target.type_args, &facts, context,
-                        budget, engine, &mut scratch,
+                    let (resolved, nominals) = super::super::nominal_realization::substitution::substitute_source_call_with_scratch(
+                        callee, signature, &self.facts, env, &target.type_args, &facts, context,
+                        budget, engine, &mut source_scratch, &mut scratch,
                     )?;
                     match resolved {
-                        ir::Callee::Direct(next) => retain(SelectedSite::Call(occurrence), next)?,
+                        ir::Callee::Direct(next) => retain(
+                            SelectedSite::Call(occurrence),
+                            next,
+                            &nominals,
+                            &mut scratch,
+                        )?,
                         ir::Callee::Untupled(call) => {
                             let next = facts
                                 .service()
                                 .untupled_target(&call, &facts)
                                 .map_err(|e| e.into_legacy_diagnostic(budget))?
                                 .target;
-                            retain(SelectedSite::Call(occurrence), next)?;
+                            retain(
+                                SelectedSite::Call(occurrence),
+                                next,
+                                &nominals,
+                                &mut scratch,
+                            )?;
                         }
                         ir::Callee::Virtual(_) => {
                             budget.retain_bytes(std::mem::size_of::<ir::ExprId>())?;
@@ -1179,13 +1329,13 @@ impl Local {
                         self.source.exprs.get(reference.0).ok_or(
                             "alignment vtable constructor operand is outside original source",
                         )?;
-                    let concrete = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
-                        &operand.ty, env, &target.type_args, ir::FactsCtx::Validated(&facts),
-                        context, budget, engine, &mut scratch,
+                    let concrete = super::super::nominal_realization::substitution::substitute_source_ty_with_scratch(
+                        &operand.ty, &self.facts, env, &target.type_args, &facts,
+                        context, budget, engine, &mut source_scratch, &mut scratch,
                     )?;
-                    let object_ty = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
-                        &expression.ty, env, &target.type_args, ir::FactsCtx::Validated(&facts),
-                        context, budget, engine, &mut scratch,
+                    let object_ty = super::super::nominal_realization::substitution::substitute_source_ty_with_scratch(
+                        &expression.ty, &self.facts, env, &target.type_args, &facts,
+                        context, budget, engine, &mut source_scratch, &mut scratch,
                     )?;
                     let object = if let Some((_, object)) = object_ty.owned_pointer_object() {
                         object
@@ -1211,7 +1361,7 @@ impl Local {
                         .object_vtable_targets(referent, object)
                         .map_err(|e| e.into_legacy_diagnostic(budget))?
                     {
-                        retain(SelectedSite::Vtable(occurrence), next)?;
+                        retain(SelectedSite::Vtable(occurrence), next, &[], &mut scratch)?;
                     }
                     if facts.has_normal_drop_impls() {
                         match facts.normal_drop_plan_with_scratch(referent, &mut scratch)
@@ -1219,7 +1369,7 @@ impl Local {
                         {
                             traits::NormalDropPlan::Destructor(drop) => {
                                 for next in drop.targets() {
-                                    retain(SelectedSite::Vtable(occurrence), next.clone())?;
+                                    retain(SelectedSite::Vtable(occurrence), next.clone(), &[], &mut scratch)?;
                                 }
                             }
                             traits::NormalDropPlan::Unresolved => return Err(
@@ -1234,16 +1384,16 @@ impl Local {
                         .exprs
                         .get(value.0)
                         .ok_or("opaque alignment contract lost original packing value")?;
-                    let public = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
-                        &ir::Ty::Opaque(opaque.clone()), env, &target.type_args,
-                        ir::FactsCtx::Validated(&facts), context, budget, engine, &mut scratch,
+                    let public = super::super::nominal_realization::substitution::substitute_source_schema_ty_with_scratch(
+                        &ir::Ty::Opaque(opaque.clone()), &self.facts, env, &target.type_args,
+                        &facts, context, budget, engine, &mut source_scratch, &mut scratch,
                     )?;
                     let ir::Ty::Opaque(public) = public else {
                         return Err("opaque alignment packing changed public type identity".into());
                     };
-                    let authored_value = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
-                        &authored.ty, env, &target.type_args, ir::FactsCtx::Validated(&facts),
-                        context, budget, engine, &mut scratch,
+                    let authored_value = super::super::nominal_realization::substitution::substitute_source_schema_ty_with_scratch(
+                        &authored.ty, &self.facts, env, &target.type_args, &facts,
+                        context, budget, engine, &mut source_scratch, &mut scratch,
                     )?;
                     let providers = traits::alignment_provider::bound_providers(
                         facts.clone(),
@@ -1260,25 +1410,25 @@ impl Local {
                         opaque: public,
                         providers: providers.into(),
                     });
-                    if facts.has_normal_drop_impls() && !matches!(authored_value, ir::Ty::Opaque(_))
-                    {
-                        match facts
-                            .normal_drop_plan_with_scratch(&authored_value, &mut scratch)
-                            .map_err(|e| e.into_legacy_diagnostic(budget))?
-                        {
-                            traits::NormalDropPlan::Destructor(drop) => {
-                                for next in drop.targets() {
-                                    retain(
-                                        SelectedSite::CleanupExpression(occurrence),
-                                        next.clone(),
-                                    )?;
-                                }
-                            }
-                            traits::NormalDropPlan::Unresolved => return Err(
-                                "unsupported: original opaque producer cleanup remains unresolved"
-                                    .into(),
-                            ),
-                            traits::NormalDropPlan::Trivial => {}
+                    if facts.has_normal_drop_impls() {
+                        let (targets, dependencies) = facts
+                            .source_normal_drop_dependencies(&authored_value, &mut scratch)
+                            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                        for descriptor in dependencies {
+                            budget.retain_bytes(std::mem::size_of::<(
+                                SelectedSite,
+                                Arc<ir::OpaqueTy>,
+                            )>())?;
+                            cleanup_opaque
+                                .push((SelectedSite::CleanupExpression(occurrence), descriptor));
+                        }
+                        for next in targets {
+                            retain(
+                                SelectedSite::CleanupExpression(occurrence),
+                                next,
+                                &[],
+                                &mut scratch,
+                            )?;
                         }
                     }
                 }
@@ -1313,32 +1463,30 @@ impl Local {
                 if !may_own_drop(ty) {
                     continue;
                 }
+                // Only destructor target obligations escape this inventory.
+                // Executable layout is authenticated by later graph realization.
                 let closed =
-                    super::super::nominal_realization::substitution::substitute_ty_with_scratch(
+                    super::super::nominal_realization::substitution::substitute_source_schema_ty_with_scratch(
                         ty,
+                        &self.facts,
                         env,
                         &target.type_args,
-                        ir::FactsCtx::Validated(&facts),
+                        &facts,
                         context,
                         budget,
                         engine,
+                        &mut source_scratch,
                         &mut scratch,
                     )?;
-                match facts
-                    .normal_drop_plan_with_scratch(&closed, &mut scratch)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?
-                {
-                    traits::NormalDropPlan::Destructor(drop) => {
-                        for next in drop.targets() {
-                            retain(site, next.clone())?;
-                        }
-                    }
-                    traits::NormalDropPlan::Unresolved => {
-                        return Err(
-                            "unsupported: closed alignment cleanup remains unresolved".into()
-                        );
-                    }
-                    traits::NormalDropPlan::Trivial => {}
+                let (targets, dependencies) = facts
+                    .source_normal_drop_dependencies(&closed, &mut scratch)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                for descriptor in dependencies {
+                    budget.retain_bytes(std::mem::size_of::<(SelectedSite, Arc<ir::OpaqueTy>)>())?;
+                    cleanup_opaque.push((site, descriptor));
+                }
+                for next in targets {
+                    retain(site, next, &[], &mut scratch)?;
                 }
             }
         }
@@ -1350,6 +1498,7 @@ impl Local {
             queries: queries.into(),
             virtual_sites: virtual_sites.into(),
             opaque_sites: opaque_sites.into(),
+            cleanup_opaque: cleanup_opaque.into(),
             packs: packs.into(),
         })
     }
@@ -1371,23 +1520,43 @@ impl ClosedCalls {
     /// Validation authenticates a continuation, not successful admission.
     /// Replaying the entire occurrence inventory detects a removed selected
     /// target, erased constructor, changed actual argument or virtual slot.
+    #[cfg(test)]
     pub(in crate::compiler) fn validate(
         &self,
         context: &mut super::super::frontend::PlanCtx,
         budget: &ir::PlanBudget,
         engine: Option<crate::engine::EngineAuthority>,
     ) -> Result<(), String> {
-        let replay = self.original.closed_calls(
+        self.validate_with_scratch(
+            context,
+            budget,
+            engine,
+            &mut traits::TraitScratch::default(),
+            &mut traits::TraitScratch::default(),
+        )
+    }
+    pub(in crate::compiler) fn validate_with_scratch(
+        &self,
+        context: &mut super::super::frontend::PlanCtx,
+        budget: &ir::PlanBudget,
+        engine: Option<crate::engine::EngineAuthority>,
+        source_scratch: &mut traits::TraitScratch,
+        scratch: &mut traits::TraitScratch,
+    ) -> Result<(), String> {
+        let replay = self.original.closed_calls_with_scratch(
             &self.target,
             self.facts.clone(),
             context,
             budget,
             engine,
+            source_scratch,
+            scratch,
         )?;
         if self.selected.len() != replay.selected.len()
             || self.queries != replay.queries
             || self.virtual_sites != replay.virtual_sites
             || self.opaque_sites != replay.opaque_sites
+            || self.cleanup_opaque != replay.cleanup_opaque
             || self.packs.len() != replay.packs.len()
         {
             return Err("closed alignment inventory changed original occurrence coverage".into());
@@ -1411,6 +1580,9 @@ impl ClosedCalls {
             self.selected.iter().zip(replay.selected.iter())
         {
             budget.charge_work(1)?;
+            proof
+                .validate(target, &self.facts, scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
             if occurrence != original || target != expected || proof.target() != target {
                 return Err("closed alignment inventory changed canonical target proof".into());
             }
@@ -1593,21 +1765,76 @@ mod tests {
         let mut pending = vec![root];
         let mut visited = std::collections::HashSet::new();
         let mut locals = Vec::new();
+        let mut closures: Vec<frontend::closures::check::CheckedClosure> = Vec::new();
         while let Some(owner) = pending.pop() {
             if !visited.insert(owner) {
                 continue;
             }
-            let (checked, publication, facts) =
-                match plan.publish_callable_body(owner, budget).unwrap() {
-                    frontend::PublishedCallableBody::Source(publication) => (
-                        publication.source().clone(),
-                        Some(publication.clone()),
-                        publication.facts().clone(),
-                    ),
+            let (checked, publication, facts) = if let Some(closure) = closures
+                .iter()
+                .find(|closure| closure.ty.provider() == owner)
+            {
+                let mode = closure.ty.kind();
+                let facts = plan
+                    .trait_world()
+                    .unwrap()
+                    .closure_callable_facts_for(closure.ty.clone(), mode)
+                    .unwrap();
+                let body = closure.body_for(mode).unwrap();
+                facts
+                    .validate_closure_body_source(&closure.ty, mode, &body)
+                    .unwrap();
+                (body, None, facts)
+            } else {
+                let prepared = plan.prepare_body_constants(owner, budget).unwrap();
+                assert!(prepared.direct().is_empty());
+                let constants = plan
+                    .seal_body_constants(prepared, Vec::new(), budget)
+                    .unwrap();
+                let (published, authored_closures) = plan
+                    .publish_callable_body_with_closures(owner, constants, budget)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "publishing {}: {error:?}",
+                            plan.declaration(owner).unwrap().name
+                        )
+                    });
+                match published {
+                    frontend::PublishedCallableBody::Source(publication) => {
+                        if !authored_closures.is_empty() {
+                            let proof =
+                                frontend::closures::publication::ClosurePublicationProof::capture(
+                                    plan,
+                                    &publication,
+                                    &authored_closures,
+                                    budget,
+                                )
+                                .unwrap();
+                            for closure in authored_closures {
+                                let published =
+                                    frontend::closures::publication::PublishedClosure::capture(
+                                        plan, &closure,
+                                    )
+                                    .unwrap();
+                                closures.push(
+                                    proof
+                                        .restore_closure(plan, &publication, &published, budget)
+                                        .unwrap(),
+                                );
+                            }
+                        }
+                        (
+                            publication.source().clone(),
+                            Some(publication.clone()),
+                            publication.facts().clone(),
+                        )
+                    }
                     frontend::PublishedCallableBody::Recipe(checked) => {
+                        assert!(authored_closures.is_empty());
                         (checked, None, plan.callable_facts(owner).unwrap())
                     }
-                };
+                }
+            };
             let local = Local::capture(checked, publication, facts, budget).unwrap();
             pending.extend(local.callees());
             locals.push(local);
@@ -1657,6 +1884,160 @@ mod tests {
             len: 2,
         };
         assert!(normalize(&array, &owner.parameters, &mut requirement, &depth, 0).is_err());
+        let mut cleanup_scratch = traits::TraitScratch::default();
+        for _ in 0..2 {
+            let mut cleanup = Requirement::empty(owner.parameters.len(), &budget).unwrap();
+            normalize_drop(
+                &array,
+                &owner.facts,
+                &mut cleanup_scratch,
+                &owner.parameters,
+                &mut cleanup,
+                &budget,
+                0,
+            )
+            .unwrap();
+            assert_eq!(cleanup.drop_parameters, [true]);
+            assert!(!cleanup.deferred_dispatch);
+        }
+        let mut cleanup = Requirement::empty(owner.parameters.len(), &budget).unwrap();
+        assert!(
+            normalize_drop(
+                &ir::Ty::Tuple(Arc::from([])),
+                &owner.facts,
+                &mut cleanup_scratch,
+                &owner.parameters,
+                &mut cleanup,
+                &budget,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_drop(
+                &array,
+                &owner.facts,
+                &mut cleanup_scratch,
+                &owner.parameters,
+                &mut cleanup,
+                &depth,
+                0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn alignment_domain_closed_replay_reuses_scratch_not_inventory_authority() {
+        let (locals, owner, budget, mut plan) = fixture_plan(
+            "fn width<T>()->usize{std::mem::align_of::<T>()}fn main(){let _n=width::<u16>();}",
+            "main",
+        );
+        let local = locals.iter().find(|local| local.owner == owner).unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let mut source = traits::TraitScratch::default();
+        let mut closed = traits::TraitScratch::default();
+        // Capture and every replay share an operation arena, not a cached verdict.
+        let captured = Local::capture_with_scratch(
+            local.source.clone(),
+            local.publication.clone(),
+            local.facts.clone(),
+            &budget,
+            &mut source,
+        )
+        .unwrap();
+        captured
+            .validate_with_scratch(&budget, &mut source)
+            .unwrap();
+        captured
+            .validate_with_scratch(&budget, &mut source)
+            .unwrap();
+        let mut forged_local = captured.clone();
+        forged_local.owner.index ^= 1;
+        assert!(
+            forged_local
+                .validate_with_scratch(&budget, &mut source)
+                .is_err()
+        );
+        let calls = local
+            .closed_calls_with_scratch(
+                &target,
+                facts.clone(),
+                &mut plan,
+                &budget,
+                None,
+                &mut source,
+                &mut closed,
+            )
+            .unwrap();
+        assert!(!calls.selected.is_empty());
+        calls
+            .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+            .unwrap();
+        let mut erased = calls.clone();
+        erased.selected = Arc::from([]);
+        assert!(
+            erased
+                .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+                .is_err()
+        );
+        let mut changed = calls.clone();
+        Arc::make_mut(&mut changed.selected)[0].1.type_args = Arc::from([ir::Ty::Bool]);
+        assert!(
+            changed
+                .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+                .is_err()
+        );
+        let (_, foreign_owner, _, foreign_plan) = fixture_plan("fn main(){}", "main");
+        let foreign = foreign_plan
+            .instance_facts(&ir::CallTarget {
+                declaration: foreign_owner,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let mut foreign_local = captured.clone();
+        foreign_local.facts = foreign.clone();
+        assert!(
+            foreign_local
+                .validate_with_scratch(&budget, &mut source)
+                .is_err()
+        );
+        let mut changed = calls.clone();
+        changed.facts = foreign;
+        assert!(
+            changed
+                .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+                .is_err()
+        );
+        let mut changed = calls.clone();
+        changed.target.type_args = Arc::from([ir::Ty::Bool]);
+        assert!(
+            changed
+                .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+                .is_err()
+        );
+        let modules = facts.world().canonical_catalog().modules().budget();
+        assert!(
+            modules
+                .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX)
+                .is_err()
+        );
+        let failure = modules.snapshot().failure;
+        assert!(
+            captured
+                .validate_with_scratch(&budget, &mut source)
+                .is_err()
+        );
+        assert!(
+            calls
+                .validate_with_scratch(&mut plan, &budget, None, &mut source, &mut closed)
+                .is_err()
+        );
+        assert_eq!(modules.snapshot().failure, failure);
     }
 
     #[test]
@@ -1669,6 +2050,16 @@ mod tests {
             ),
             (
                 "trait Inspect{fn width(&self)->usize;}fn invoke(x:&dyn Inspect)->usize{x.width()}fn main(){}",
+                "invoke",
+                vec![],
+            ),
+            (
+                "fn value()->usize{1}fn invoke()->usize{let f=value;f()}fn main(){}",
+                "invoke",
+                vec![],
+            ),
+            (
+                "fn invoke()->usize{let f=||1usize;f()}fn main(){}",
                 "invoke",
                 vec![],
             ),
@@ -1686,9 +2077,37 @@ mod tests {
             };
             let facts = plan.instance_facts(&target).unwrap();
             let calls = local
-                .closed_calls(&target, facts, &mut plan, &budget, None)
+                .closed_calls(&target, facts.clone(), &mut plan, &budget, None)
                 .unwrap();
             calls.validate(&mut plan, &budget, None).unwrap();
+            let (callee, signature) = local
+                .source
+                .exprs
+                .iter()
+                .find_map(|expression| {
+                    if let ir::ExprKind::Call {
+                        target, signature, ..
+                    } = &expression.kind
+                    {
+                        Some((target, signature))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            let mut source_scratch = traits::TraitScratch::default();
+            let mut scratch = traits::TraitScratch::default();
+            let mut forged = signature.clone();
+            forged.result = ir::Ty::Bool;
+            assert!(super::super::super::nominal_realization::substitution::substitute_source_call_with_scratch(
+                callee, &forged, &local.facts, local.facts.env(), &target.type_args,
+                &facts, &mut plan, &budget, None, &mut source_scratch, &mut scratch,
+            ).is_err());
+            let copied_env = ir::GenericEnv::new(local.facts.env().scopes(), &budget).unwrap();
+            assert!(super::super::super::nominal_realization::substitution::substitute_source_call_with_scratch(
+                callee, signature, &local.facts, &copied_env, &target.type_args,
+                &facts, &mut plan, &budget, None, &mut source_scratch, &mut scratch,
+            ).is_err());
             let mut erased = calls.clone();
             if !erased.selected.is_empty() {
                 erased.selected = Arc::from([]);
@@ -1701,6 +2120,179 @@ mod tests {
             changed.target.declaration.index += 1;
             assert!(changed.validate(&mut plan, &budget, None).is_err());
         }
+        let (locals, owner, budget, mut plan) = fixture_plan(
+            "struct S<T>{value:T}enum E<T>{Value(T)}fn invoke<T>(a:S<i32>,b:E<i32>,c:S<T>)->usize{0}fn main(){}",
+            "invoke",
+        );
+        let local = locals.iter().find(|local| local.owner == owner).unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([ir::Ty::Int(ir::IntTy::U16)]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let mut scratch = traits::TraitScratch::default();
+        for (index, parameter) in local.source.params.iter().enumerate() {
+            let original = &local.source.locals[parameter.0].ty;
+            let mapped =
+                super::super::super::nominal_realization::substitution::substitute_ty_with_scratch(
+                    original,
+                    local.facts.env(),
+                    &target.type_args,
+                    ir::FactsCtx::Validated(&facts),
+                    &mut plan,
+                    &budget,
+                    None,
+                    &mut scratch,
+                )
+                .unwrap();
+            assert_eq!(
+                ir::identical_type(original, &mapped, &budget).unwrap(),
+                index < 2
+            );
+            if index == 2 {
+                let ir::Ty::Struct(mapped) = mapped else {
+                    panic!("changed struct kind")
+                };
+                assert_eq!(mapped.def().type_args.as_ref(), target.type_args.as_ref());
+            }
+        }
+        let ir::Ty::Struct(original) = &local.source.locals[local.source.params[0].0].ty else {
+            panic!("missing original struct parameter")
+        };
+        let mut forged = original.def().clone();
+        let mut fields = forged.fields.read(&budget).unwrap().to_vec();
+        fields[0].ty = ir::Ty::Bool;
+        forged.fields = Arc::<[ir::FieldDef]>::from(fields).into();
+        let forged = ir::Ty::Struct(ir::StructTy::new(forged));
+        assert!(
+            super::super::super::nominal_realization::substitution::substitute_ty_with_scratch(
+                &forged,
+                local.facts.env(),
+                &target.type_args,
+                ir::FactsCtx::Validated(&facts),
+                &mut plan,
+                &budget,
+                None,
+                &mut scratch,
+            )
+            .is_err()
+        );
+        for (source, actuals, unchanged) in [
+            (
+                "fn invoke(){let mut n=0i32;let f=||{n+=1;};}fn main(){}",
+                vec![],
+                true,
+            ),
+            (
+                "fn invoke<T>(x:T){let f=||{let y=&x;};}fn main(){}",
+                vec![ir::Ty::Int(ir::IntTy::U16)],
+                false,
+            ),
+        ] {
+            let (locals, owner, budget, mut plan) = fixture_plan(source, "invoke");
+            let local = locals.iter().find(|local| local.owner == owner).unwrap();
+            let original = local
+                .source
+                .exprs
+                .iter()
+                .find_map(|expression| {
+                    matches!(&expression.ty, ir::Ty::Closure(_)).then_some(&expression.ty)
+                })
+                .expect("authored capture closure");
+            let target = ir::CallTarget {
+                declaration: owner,
+                type_args: actuals.into(),
+            };
+            let facts = plan.instance_facts(&target).unwrap();
+            let mapped =
+                super::super::super::nominal_realization::substitution::substitute_ty_with_scratch(
+                    original,
+                    local.facts.env(),
+                    &target.type_args,
+                    ir::FactsCtx::Validated(&facts),
+                    &mut plan,
+                    &budget,
+                    None,
+                    &mut traits::TraitScratch::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                ir::identical_type(original, &mapped, &budget).unwrap(),
+                unchanged
+            );
+        }
+    }
+
+    #[test]
+    fn alignment_domain_opaque_cleanup_replays_exact_source_dependencies() {
+        let (locals, owner, budget, mut plan) = fixture_plan(
+            "struct V;impl Drop for V{fn drop(&mut self){let _n=std::mem::align_of::<u16>();}}trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{1usize}}fn make()->impl Inspect{V}fn main(){let _x=((Box::new(make()),),);}",
+            "main",
+        );
+        let local = locals.iter().find(|local| local.owner == owner).unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let calls = local
+            .closed_calls(&target, facts.clone(), &mut plan, &budget, None)
+            .unwrap();
+        assert!(!calls.cleanup_opaque.is_empty());
+        calls.validate(&mut plan, &budget, None).unwrap();
+        let opaque = calls.cleanup_opaque[0].1.clone();
+        let publication = local.publication.as_ref().unwrap();
+        let demands = crate::compiler::instances::source_direct_demands(
+            &target,
+            publication,
+            &mut plan,
+            &budget,
+            None,
+        )
+        .unwrap();
+        assert!(!demands.cleanup_opaque.is_empty());
+        let key = crate::compiler::instances::graph_key::encode_opaque(&opaque, &budget).unwrap();
+        assert!(demands.cleanup_opaque.iter().any(|descriptor| {
+            crate::compiler::instances::graph_key::encode_opaque(descriptor, &budget).unwrap()
+                == key
+        }));
+        assert!(demands.targets.iter().any(|producer| {
+            producer.declaration == opaque.owner()
+                && producer.type_args.as_ref() == opaque.owner_args()
+        }));
+        let mut wrong_owner = target.clone();
+        wrong_owner.declaration = opaque.owner();
+        assert!(
+            crate::compiler::instances::source_direct_demands(
+                &wrong_owner,
+                publication,
+                &mut plan,
+                &budget,
+                None,
+            )
+            .is_err()
+        );
+        let nested = ir::Ty::Tuple(Arc::from([ir::Ty::Array {
+            element: Arc::new(ir::Ty::Opaque(opaque.clone())),
+            len: 2,
+        }]));
+        let mut scratch = traits::TraitScratch::default();
+        assert!(
+            facts
+                .source_normal_drop_targets(&nested, &mut scratch)
+                .is_err()
+        );
+        let (targets, dependencies) = facts
+            .source_normal_drop_dependencies(&nested, &mut scratch)
+            .unwrap();
+        assert!(targets.is_empty());
+        assert_eq!(dependencies, vec![opaque]);
+        let mut erased = calls.clone();
+        erased.cleanup_opaque = Arc::from([]);
+        assert!(erased.validate(&mut plan, &budget, None).is_err());
+        let mut changed = calls;
+        Arc::make_mut(&mut changed.cleanup_opaque)[0].0 = SelectedSite::CleanupResult;
+        assert!(changed.validate(&mut plan, &budget, None).is_err());
     }
 
     #[test]

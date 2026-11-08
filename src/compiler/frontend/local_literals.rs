@@ -34,6 +34,8 @@ mod opaque;
 
 #[path = "local_literals/operators.rs"]
 mod operators;
+#[path = "local_literals/receiver_assignment.rs"]
+mod receiver_assignment;
 
 type Term = usize;
 #[derive(Clone, Debug)]
@@ -2637,6 +2639,7 @@ impl<'s> Solver<'_, '_, 's> {
                     let value = self.expr(value, depth + 1)?;
                     self.coerce(value, target)?;
                 }
+                Stmt::AssignDeref { .. } => self.reference_assignment(stmt, depth)?,
                 Stmt::AssignPlace { place, value, .. } => {
                     let target = self.place(place)?;
                     let value = self.expr(value, depth + 1)?;
@@ -3325,7 +3328,15 @@ impl<'s> Solver<'_, '_, 's> {
                 }
             }
             Expr::Field { base, field } => {
+                // Retain a completed source result just as nested method calls
+                // do. Checked field lowering still proves every Deref step.
+                let receiver_site =
+                    type_check::genuine_call(base).then_some(base.as_ref() as *const Expr as usize);
                 let base = self.expr(base, depth + 1)?;
+                if let Some(site) = receiver_site {
+                    self.checker.infer_storage(1)?;
+                    self.receiver_sites.push((site, base));
+                }
                 self.field(base, field.clone())
             }
             Expr::Deref { value } => {

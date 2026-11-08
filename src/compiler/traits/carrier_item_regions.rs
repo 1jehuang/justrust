@@ -860,17 +860,11 @@ impl ValidatedTraitWorld {
             item: required_item,
             method_args: Arc::from([]),
         };
+        // The unique original required-item mapping above authenticates the
+        // selected member. Replay its implementation obligation once below:
+        // the exact selected owner and ordered actuals determine that same
+        // member without rebuilding its complete signature a second time.
         let mut scratch = TraitScratch::default();
-        let selected = self.resolve_trait_call_with(&call, facts, &mut scratch)?;
-        let Callee::Direct(target) = selected.callee() else {
-            return Ok(None);
-        };
-        if target.declaration != declaration || !self.eq_types(&target.type_args, arguments, 0)? {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "projected envelope changed selected implementation",
-            ));
-        }
         let actual_projection = ir::AssociatedTypeProjection {
             item: projection.item,
             trait_ref: call.trait_ref.clone(),
@@ -890,10 +884,11 @@ impl ValidatedTraitWorld {
         if *selected_owner != owner || !self.eq_types(selected_arguments, arguments, 0)? {
             return Ok(None);
         }
-        let replayed = self.replay_implementation_assignment(
+        let replayed = self.replay_implementation_assignment_with(
             &actual_projection,
             &membership,
             ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
         )?;
         let expected = self.item_region_substitution(&Ty::Param(*parameter), &context, facts)?;
         if !self.eq_ty(&replayed, &expected, 0)? {
@@ -980,7 +975,8 @@ impl ValidatedTraitWorld {
         {
             return Ok(false);
         }
-        for mutation in 0..7 {
+        for mutation in 0..9 {
+            let mut declaration = view.declaration;
             let mut forged = raw.clone();
             let mut row = row.clone();
             let mut args = view.arguments.clone();
@@ -1021,10 +1017,20 @@ impl ValidatedTraitWorld {
                 }
                 5 => args = Arc::from([]),
                 6 => forged.signature.params[0] = Ty::Bool,
+                7 => {
+                    let mut reordered = args.to_vec();
+                    reordered.swap(0, 1);
+                    args = reordered.into();
+                }
+                8 => {
+                    declaration = self.info(view.declaration)?.owner.ok_or_else(|| {
+                        FactsError::invalid(&self.budget, "projected envelope lost original owner")
+                    })?;
+                }
                 _ => unreachable!(),
             }
             match self.direct_projected_envelope_sources(
-                view.declaration,
+                declaration,
                 &row,
                 output,
                 &forged,
@@ -1898,14 +1904,15 @@ impl ValidatedTraitWorld {
             },
             predicates: Arc::from([]),
         };
+        let mut active = ProofScratch::default();
         let instantiated =
-            self.substitute_projected_schema(&schema, context.arguments, facts.env())?;
+            self.substitute_carrier_schema(&schema, context.arguments, facts, &mut active)?;
         Ok(self
             .normalize_closed_projected_type_with(
                 &instantiated.signature.result,
                 ProofContext::from_facts(facts),
                 false,
-                &mut ProofScratch::default(),
+                &mut active,
             )?
             .0)
     }

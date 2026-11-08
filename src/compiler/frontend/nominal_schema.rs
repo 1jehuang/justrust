@@ -133,6 +133,82 @@ impl SourceMetadataCache {
     }
 }
 
+/// One schema substitution owns its construction scratch. Each occurrence still
+/// authenticates its actuals before consulting the canonical application cache.
+pub(super) struct SourceSchemaSubstitution {
+    plan: PlanCtx,
+    state: PlanState,
+}
+
+impl SourceSchemaSubstitution {
+    pub(super) fn new(plan: PlanCtx) -> Self {
+        let state = plan.scratch();
+        Self { plan, state }
+    }
+}
+
+impl ir::SubstitutionCx for SourceSchemaSubstitution {
+    fn nominal_application(&self, id: ir::NominalAppId) -> Result<ir::NominalAppInfo, String> {
+        ir::SubstitutionCx::nominal_application(&self.plan, id)
+    }
+
+    fn intern_nominal(
+        &mut self,
+        declaration: ir::DeclId,
+        arguments: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        ir::SubstitutionCx::intern_nominal(&mut self.plan, declaration, arguments, caller, budget)
+    }
+
+    fn intern_substituted_nominal(
+        &mut self,
+        request: &ir::NominalSubstitutionRequest<'_>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        let result = (|| {
+            self.plan.check_budget(budget)?;
+            self.plan
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(|_| "module authority resource boundary")?;
+            budget.charge_work(1)?;
+            for argument in request.arguments() {
+                self.state
+                    .source_metadata
+                    .validate_actual(argument, caller, budget)?;
+            }
+            self.state.intern_with_transport(
+                &self.plan.registry,
+                request.source_decl(),
+                request.arguments(),
+                caller,
+                budget,
+                0,
+                Some(request),
+            )
+        })();
+        if result.is_err() {
+            // A failed reconstruction cannot publish partial construction state.
+            self.state = self.plan.scratch();
+        }
+        result
+    }
+
+    fn instantiate_signature(
+        &mut self,
+        target: &ir::CallTarget,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Signature, String> {
+        ir::SubstitutionCx::instantiate_signature(&mut self.plan, target, caller, budget)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SchemaFieldKey {
     Named(NameKey),
@@ -1824,7 +1900,9 @@ mod tests {
 
     #[test]
     fn cached_nominal_application_does_not_rebuild_parameter_name_bindings() {
-        let program = parse("struct Pair<T,U>(T,U);fn main(){}").unwrap();
+        let program =
+            parse("struct Pair<T,U>(T,U);fn main(){}fn carry<T,U>(x:Pair<T,U>)->Pair<T,U>{x}")
+                .unwrap();
         let budget = ir::PlanBudget::default();
         let plan = PlanCtx::from_program(&program, &budget).unwrap();
         let key = name_scope::path_key(
@@ -1884,6 +1962,97 @@ mod tests {
             name_work(),
             before,
             "arity rejection needs no parameter lookup"
+        );
+        let schema = plan
+            .function_schema(plan.function_decl(1).unwrap())
+            .unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let mut substitution = SourceSchemaSubstitution::new(plan.clone());
+        let mapped = ir::substitute_ty(
+            &schema.signature.params[0],
+            &schema.env,
+            &args,
+            ir::FactsCtx::Validated(&facts),
+            &mut substitution,
+            &budget,
+        )
+        .unwrap();
+        let applications = substitution.state.nominals.applications.len();
+        assert!(applications > 0);
+        let before = name_work();
+        let repeated = ir::substitute_ty(
+            &schema.signature.result,
+            &schema.env,
+            &args,
+            ir::FactsCtx::Validated(&facts),
+            &mut substitution,
+            &budget,
+        )
+        .unwrap();
+        let (ir::Ty::Struct(mapped), ir::Ty::Struct(repeated)) = (&mapped, &repeated) else {
+            panic!("schema substitution changed nominal kind")
+        };
+        assert!(std::ptr::eq(mapped.def(), repeated.def()));
+        assert_eq!(substitution.state.nominals.applications.len(), applications);
+        assert_eq!(
+            name_work(),
+            before,
+            "schema roots discarded reconstruction scratch"
+        );
+        let changed = ir::substitute_ty(
+            &schema.signature.result,
+            &schema.env,
+            &[ir::Ty::Unit, ir::Ty::Bool],
+            ir::FactsCtx::Validated(&facts),
+            &mut substitution,
+            &budget,
+        )
+        .unwrap();
+        assert_ne!(changed, ir::Ty::Struct(mapped.clone()));
+        assert!(
+            ir::substitute_ty(
+                &schema.signature.result,
+                &schema.env,
+                &args[..1],
+                ir::FactsCtx::Validated(&facts),
+                &mut substitution,
+                &budget,
+            )
+            .is_err()
+        );
+        let source_budget = plan.catalog.modules().budget();
+        let counter = crate::compiler::expansion_budget::Counter::Work;
+        assert!(
+            source_budget
+                .charge(counter, source_budget.limits().counters[counter as usize])
+                .is_err()
+        );
+        assert!(
+            ir::substitute_ty(
+                &schema.signature.result,
+                &schema.env,
+                &args,
+                ir::FactsCtx::Validated(&facts),
+                &mut substitution,
+                &budget,
+            )
+            .is_err()
+        );
+        assert!(
+            budget
+                .charge_work(budget.limits().work.saturating_add(1))
+                .is_err()
+        );
+        assert!(
+            ir::substitute_ty(
+                &schema.signature.result,
+                &schema.env,
+                &args,
+                ir::FactsCtx::Validated(&facts),
+                &mut substitution,
+                &budget,
+            )
+            .is_err()
         );
     }
 

@@ -18,27 +18,63 @@ impl Checker<'_> {
             .map(|(selection, _)| selection)
     }
 
-    pub(super) fn method_selection_for_hint(
+    pub(super) fn method_result_for_hint(
         &self,
         receiver: &ir::Ty,
         name: &AstIdent,
         explicit: &[Type],
         arguments: &[Expr],
-    ) -> Result<Option<MethodSelection>, String> {
-        let (selection, deferred) = self.method_selection_with_inference_mode(
+    ) -> Result<Option<ir::Ty>, String> {
+        let (selection, deferred, partial_result) = self.method_selection_with_inference_mode(
             receiver, name, explicit, arguments, None, true,
         )?;
         if selection.is_some() || deferred {
-            return Ok(selection);
+            return Ok(selection
+                .map(|selected| selected.signature.result)
+                .or(partial_result));
         }
-        match array_unsize_carrier(receiver) {
-            Some(carrier) => self
-                .method_selection_with_inference_mode(
-                    &carrier, name, explicit, arguments, None, true,
-                )
-                .map(|(selection, _)| selection),
-            None => Ok(None),
+        if let Some(carrier) = array_unsize_carrier(receiver) {
+            let (selection, deferred, partial_result) = self.method_selection_with_inference_mode(
+                &carrier, name, explicit, arguments, None, true,
+            )?;
+            if selection.is_some() || deferred {
+                return Ok(selection
+                    .map(|selected| selected.signature.result)
+                    .or(partial_result));
+            }
         }
+        // Mirror method_through_deref, but read only its exact Target. An
+        // unresolved earlier receiver probe must never fall through here.
+        let mut owner = match receiver {
+            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+            ty => ty,
+        };
+        let mut depth = 0;
+        while let ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = owner
+            && matches!(
+                receiver,
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                }
+            )
+        {
+            self.infer_work(depth)?;
+            depth += 1;
+            owner = referent.as_ref();
+        }
+        let Some(target) = self.deref_target_hint(owner)? else {
+            return Ok(None);
+        };
+        self.method_selection_with_inference_mode(&target, name, explicit, arguments, None, true)
+            .map(|(selection, _, partial_result)| {
+                selection
+                    .map(|selected| selected.signature.result)
+                    .or(partial_result)
+            })
     }
 
     /// Preserve an unresolved higher-priority candidate when considering an
@@ -54,6 +90,7 @@ impl Checker<'_> {
         self.method_selection_with_inference_mode(
             receiver, name, explicit, arguments, expected, false,
         )
+        .map(|(selection, deferred, _)| (selection, deferred))
     }
 
     fn method_selection_with_inference_mode(
@@ -64,7 +101,7 @@ impl Checker<'_> {
         arguments: &[Expr],
         expected: Option<&ir::Ty>,
         hint_only: bool,
-    ) -> Result<(Option<MethodSelection>, bool), String> {
+    ) -> Result<(Option<MethodSelection>, bool, Option<ir::Ty>), String> {
         let plan = self.signatures.plan()?;
         let realized_receiver = if self.nominal_inputs.is_some() {
             Some(self.realize_constructor_actual(receiver, 0)?)
@@ -72,6 +109,12 @@ impl Checker<'_> {
             None
         };
         let receiver = realized_receiver.as_ref().unwrap_or(receiver);
+        let receiver_nominals = match self.facts() {
+            ir::FactsCtx::Validated(facts) => facts
+                .parent_local_receiver_inputs(receiver)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
+            _ => Vec::new(),
+        };
         let written =
             if !explicit.is_empty() && !explicit.iter().any(partial_annotation::has_nested_infer) {
                 self.infer_storage(explicit.len())?;
@@ -85,6 +128,7 @@ impl Checker<'_> {
                 None
             };
         let mut deferred = false;
+        let mut partial_result = None;
         let mut unproved_expected = false;
         let selection = plan.select_method_with_arguments_scratch(
             receiver,
@@ -109,6 +153,14 @@ impl Checker<'_> {
                             InherentMethodInference::Missing => MethodArguments::Missing,
                             InherentMethodInference::Applicable(None) => {
                                 deferred = true;
+                                if hint_only {
+                                    partial_result = self.receiver_bound_method_result(
+                                        owner,
+                                        name,
+                                        arguments.len(),
+                                        mode,
+                                    )?;
+                                }
                                 MethodArguments::Deferred
                             }
                             InherentMethodInference::Applicable(Some(actuals)) => {
@@ -138,9 +190,10 @@ impl Checker<'_> {
                     }
                     match facts
                         .service()
-                        .prove_goal_with(
+                        .prove_goal_with_nominals(
                             &ir::Predicate::Implements(application.clone()),
                             facts,
+                            &receiver_nominals,
                             &mut self.trait_scratch.borrow_mut(),
                         )
                         .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
@@ -241,10 +294,28 @@ impl Checker<'_> {
                         expected,
                         true,
                     )? {
-                        Some(actuals) if pinned => {
-                            MethodArguments::Applied(application.clone(), Cow::Owned(actuals))
+                        Some(actuals) => {
+                            let item = plan
+                                .trait_item(application.declaration, name, &plan.budget)?
+                                .ok_or("inferred trait method lost original item")?;
+                            let call = ir::Callee::TraitItem(ir::TraitCall {
+                                trait_ref: application.clone(),
+                                item,
+                                method_args: Arc::from(actuals.as_slice()),
+                            });
+                            let nominals = self.parent_local_invocation_inputs(&call)?;
+                            if !nominals.is_empty() {
+                                MethodArguments::Prepared {
+                                    application: pinned.then(|| application.clone()),
+                                    actuals: Cow::Owned(actuals),
+                                    nominals,
+                                }
+                            } else if pinned {
+                                MethodArguments::Applied(application.clone(), Cow::Owned(actuals))
+                            } else {
+                                MethodArguments::Ready(Cow::Owned(actuals))
+                            }
                         }
-                        Some(actuals) => MethodArguments::Ready(Cow::Owned(actuals)),
                         None => {
                             deferred = true;
                             MethodArguments::Deferred
@@ -272,6 +343,6 @@ impl Checker<'_> {
                 "E0277: expected method result requires an unsatisfied trait application".into(),
             );
         }
-        Ok((selection, deferred))
+        Ok((selection, deferred, partial_result))
     }
 }

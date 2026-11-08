@@ -186,6 +186,62 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
     assert_eq!(walk.complete.len(), completed);
     assert_eq!(f.budget.usage_snapshot().nodes, nodes + 1);
 
+    // Repeated normalization of an unchanged closure must retain its exact
+    // issuer allocation. Otherwise every predicate batch is artificially new,
+    // despite its unchanged owner, ordered actuals, seals and current facts.
+    let rows = [Predicate::Implements(TraitRef {
+        declaration: world.catalog.id(CatalogItem::Sized),
+        self_ty: ty.clone(),
+        args: Arc::from([]),
+    })];
+    let mut formations = ProofScratch::default();
+    let first = world
+        .normalize_instantiated_projection_predicates(
+            &rows,
+            ProofContext::from_facts(&f.facts),
+            &mut formations,
+        )
+        .unwrap();
+    let Ty::Closure(first_closure) = &first[0].trait_ref().self_ty else {
+        panic!("closure normalization changed its type kind")
+    };
+    assert!(Arc::ptr_eq(&closure, first_closure));
+    let before = f.budget.usage_snapshot().work;
+    world
+        .validate_predicates_with_active(
+            &first,
+            f.facts.env(),
+            None,
+            &mut formations,
+            Some(&f.facts),
+        )
+        .unwrap();
+    let formation_cold = f.budget.usage_snapshot().work - before;
+    let second = world
+        .normalize_instantiated_projection_predicates(
+            &rows,
+            ProofContext::from_facts(&f.facts),
+            &mut formations,
+        )
+        .unwrap();
+    assert!(world.same_formation_predicates(&first, &second).unwrap());
+    let before = f.budget.usage_snapshot().work;
+    world
+        .validate_predicates_with_active(
+            &second,
+            f.facts.env(),
+            None,
+            &mut formations,
+            Some(&f.facts),
+        )
+        .unwrap();
+    let formation_warm = f.budget.usage_snapshot().work - before;
+    assert!(
+        formation_warm < formation_cold,
+        "normalization rebuilt immutable closure inputs: cold={formation_cold}, warm={formation_warm}"
+    );
+    assert_eq!(formations.predicate_formations.len(), 1);
+
     // Copying the authentic seal onto a different descriptor must not hit
     // the completed allocation's memo entry.
     let forged = Ty::Closure(Arc::new(
@@ -207,6 +263,29 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
             .validate_ty_inner(&forged, f.facts.env(), 0, TypeUse::Root, &mut walk)
             .is_err()
     );
+    let forged_rows = [Predicate::Implements(TraitRef {
+        self_ty: forged.clone(),
+        ..rows[0].trait_ref().clone()
+    })];
+    let forged_normal = world
+        .normalize_instantiated_projection_predicates(
+            &forged_rows,
+            ProofContext::from_facts(&f.facts),
+            &mut formations,
+        )
+        .unwrap();
+    assert!(
+        world
+            .validate_predicates_with_active(
+                &forged_normal,
+                f.facts.env(),
+                None,
+                &mut formations,
+                Some(&f.facts),
+            )
+            .is_err()
+    );
+    assert_eq!(formations.predicate_formations.len(), 1);
     assert_eq!(walk.complete.len(), completed);
 
     let mut proofs = ProofScratch::default();
@@ -276,6 +355,73 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
     world
         .closedness_of_root(&Ty::Str, f.facts.env(), TypeUse::Actual, 0, &mut proofs)
         .unwrap();
+    // One operation may alternate between source and closed caller facts.
+    // Each context retains its own immutable closure formation, while the raw
+    // parent's completed rows and authority remain untouched.
+    let universal = world.callable_facts(f.facts.declaration()).unwrap();
+    let mut cold = Vec::new();
+    for facts in [f.facts.as_ref(), universal.as_ref()] {
+        let before = f.budget.usage_snapshot().work;
+        assert_eq!(
+            world
+                .validate_ty_inner_with_facts(
+                    &ty,
+                    facts.env(),
+                    0,
+                    TypeUse::Root,
+                    &mut walk,
+                    Some(facts),
+                )
+                .unwrap(),
+            height,
+        );
+        cold.push(f.budget.usage_snapshot().work - before);
+    }
+    assert_eq!(walk.contexts.len(), 2);
+    for (facts, cold) in [f.facts.as_ref(), universal.as_ref()].into_iter().zip(cold) {
+        let before = f.budget.usage_snapshot().work;
+        world
+            .validate_ty_inner_with_facts(
+                &ty,
+                facts.env(),
+                0,
+                TypeUse::Root,
+                &mut walk,
+                Some(facts),
+            )
+            .unwrap();
+        let warm = f.budget.usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "closure formation context was discarded: cold={cold}, warm={warm}"
+        );
+        assert!(
+            world
+                .validate_ty_inner_with_facts(
+                    &forged,
+                    facts.env(),
+                    0,
+                    TypeUse::Root,
+                    &mut walk,
+                    Some(facts),
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(walk.contexts.len(), 2);
+    assert_eq!(walk.complete.len(), completed);
+    assert!(
+        world
+            .validate_ty_inner_with_facts(
+                &ty,
+                foreign.facts.env(),
+                0,
+                TypeUse::Root,
+                &mut walk,
+                Some(&foreign.facts),
+            )
+            .is_err()
+    );
     // A hit still checks the complete subtree's depth at its new position.
     assert!(
         world
@@ -287,6 +433,19 @@ fn closure_type_walk_reuses_only_the_same_checked_allocation() {
                 &mut walk,
             )
             .is_err()
+    );
+    assert!(
+        world
+            .validate_ty_inner_with_facts(
+                &ty,
+                f.facts.env(),
+                0,
+                TypeUse::Root,
+                &mut walk,
+                Some(&f.facts),
+            )
+            .unwrap_err()
+            .is_resource()
     );
 }
 

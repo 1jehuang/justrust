@@ -130,7 +130,7 @@ impl ValidatedTraitWorld {
         }
         let results = self.captured_result_carriers(closure, mode, signature, facts)?;
         let source_regions = self.validate_source_regions(closure.provider(), signature)?;
-        let (contract, _) = self.derive_carriers(signature, &source_regions)?;
+        let (contract, _) = self.derive_carriers(signature, &source_regions, facts.env())?;
         for returned in results.iter() {
             if returned.sources.is_empty()
                 || returned
@@ -259,7 +259,8 @@ impl ValidatedTraitWorld {
             }
         }
         let source_regions = self.validate_source_regions(closure.provider(), &signature)?;
-        let (mut contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        let (mut contract, regions) =
+            self.derive_carriers(&signature, &source_regions, facts.env())?;
         if receipt.capture_witness().is_some() {
             let results = self.captured_result_carriers(&closure, mode, &signature, facts)?;
             for returned in results.iter() {
@@ -402,6 +403,8 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         retain::<NativeHeapInvariant>(&self.budget, 0)?;
         Ok(CarrierContractView {
+            source_schema: None,
+            executable_storage: true,
             native_heap_invariants: Arc::from([]),
             nominal: None,
             physical: None,

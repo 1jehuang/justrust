@@ -29,20 +29,30 @@ pub(in crate::compiler) struct NominalCarrierSource<'a> {
     function: &'a cfg::Function,
     facts: &'a ValidatedFacts,
     validated: bool,
+    // Local to one immutable CFG/facts analysis, never retained in a fact.
+    // Existing proof caches authenticate complete source/current contexts on
+    // every replay. Borrowed scratch cannot be reentered or shared globally.
+    scratch: TraitScratch,
 }
 
 impl<'a> NominalCarrierSource<'a> {
+    pub(in crate::compiler) fn into_scratch(self) -> TraitScratch {
+        self.scratch
+    }
+
     pub(in crate::compiler) fn new(function: &'a cfg::Function, facts: &'a ValidatedFacts) -> Self {
         Self {
             function,
             facts,
             validated: false,
+            scratch: TraitScratch::default(),
         }
     }
 
     pub(in crate::compiler) fn body(&mut self) -> Result<Arc<CarrierContractView>> {
         let facts = self.facts;
-        let canonical = facts.carrier_contract(SignatureSubject::Body)?;
+        let canonical = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut self.scratch)?;
         let mut params = Vec::new();
         for id in &self.function.params {
             push(
@@ -56,7 +66,15 @@ impl<'a> NominalCarrierSource<'a> {
             result: self.function.result.clone(),
             ref_contract: self.function.ref_contract.clone(),
         };
-        facts.validate_signature(SignatureSubject::Body, &signature)?;
+        if canonical.source_schema.is_some() {
+            facts.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Body,
+                &signature,
+                &mut self.scratch,
+            )?;
+        } else {
+            facts.validate_signature(SignatureSubject::Body, &signature)?;
+        }
         let mut different = false;
         for (before, after) in canonical
             .result_signature
@@ -95,9 +113,9 @@ impl<'a> NominalCarrierSource<'a> {
             target: None,
             signature,
         });
-        let mut view = authority.derive(facts)?;
+        let mut view = authority.derive_with_scratch(facts, &mut self.scratch)?;
         view.nominal = Some(authority);
-        view.validate_for(facts)?;
+        view.validate_for_with_scratch(facts, &mut self.scratch)?;
         retain::<CarrierContractView>(facts.budget(), 1)?;
         Ok(Arc::new(view))
     }
@@ -125,8 +143,19 @@ impl<'a> NominalCarrierSource<'a> {
                 "carrier source is not a call",
             ));
         };
-        let canonical = facts.carrier_contract(SignatureSubject::Call(target))?;
-        facts.validate_signature(SignatureSubject::Call(target), signature)?;
+        let canonical = facts.source_carrier_contract_with_scratch(
+            SignatureSubject::Call(target),
+            &mut self.scratch,
+        )?;
+        if canonical.source_schema.is_some() {
+            facts.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(target),
+                signature,
+                &mut self.scratch,
+            )?;
+        } else {
+            facts.validate_signature(SignatureSubject::Call(target), signature)?;
+        }
         let mut different = false;
         for (before, after) in canonical
             .result_signature
@@ -166,9 +195,9 @@ impl<'a> NominalCarrierSource<'a> {
             target: Some(target.clone()),
             signature: signature_copy(signature, facts.budget())?,
         });
-        let mut view = authority.derive(facts)?;
+        let mut view = authority.derive_with_scratch(facts, &mut self.scratch)?;
         view.nominal = Some(authority);
-        view.validate_for(facts)?;
+        view.validate_for_with_scratch(facts, &mut self.scratch)?;
         retain::<CarrierContractView>(facts.budget(), 1)?;
         Ok(Arc::new(view))
     }
@@ -186,9 +215,13 @@ impl ValidatedFacts {
 }
 
 impl NominalCarrierAuthority {
-    fn derive(&self, facts: &ValidatedFacts) -> Result<CarrierContractView> {
+    fn derive_with_scratch(
+        &self,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierContractView> {
         let original = &self.canonical;
-        original.validate_for(facts)?;
+        original.validate_for_with_scratch(facts, scratch)?;
         let subject = match &self.target {
             Some(Callee::Direct(target)) => {
                 if !matches!(&original.result_subject, parameter_equality::EqualityResultSubject::Direct(actual) if actual == target)
@@ -226,12 +259,24 @@ impl NominalCarrierAuthority {
                 "graph carrier transport requires an ordinary direct declaration",
             ));
         }
-        facts.validate_signature(subject, &self.signature)?;
+        let source_schema = match &original.source_schema {
+            Some(source) => Some(source.reissue_for_signature(
+                original,
+                subject,
+                &self.signature,
+                facts,
+                scratch,
+            )?),
+            None => {
+                facts.validate_signature(subject, &self.signature)?;
+                None
+            }
+        };
         let world = facts.world();
         let subject = world.equality_result_subject(subject, facts)?;
         let raw = world.normalized_declaration_schema(original.declaration)?;
         let retained = world.declaration_carriers(original.declaration)?;
-        let mut view = world.transport_carrier_parts(
+        let mut view = world.transport_carrier_parts_with_scratch(
             original.declaration,
             original.arguments.clone(),
             signature_copy(&self.signature, facts.budget())?,
@@ -241,11 +286,14 @@ impl NominalCarrierAuthority {
             original.origin.clone(),
             None,
             subject,
+            scratch,
         )?;
+        view.source_schema = source_schema;
+        view.executable_storage = original.executable_storage;
         // Restricted equality results are recomputed from the transported
         // subject, never copied from the canonical view; `validate_for`
         // rederives and compares them again.
-        world.seal_equality_results(&mut view, facts)?;
+        world.seal_equality_results_with_scratch(&mut view, facts, scratch)?;
         Ok(view)
     }
 
@@ -254,8 +302,24 @@ impl NominalCarrierAuthority {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        let expected = self.derive(facts)?;
-        if view.declaration != expected.declaration
+        self.validate_with_scratch(view, facts, &mut TraitScratch::default())
+    }
+
+    pub(super) fn validate_with_scratch(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        let expected = self.derive_with_scratch(facts, scratch)?;
+        let same_source = match (&view.source_schema, &expected.source_schema) {
+            (None, None) => true,
+            (Some(actual), Some(expected)) => actual.same_authority(expected, facts.budget())?,
+            _ => false,
+        };
+        if view.executable_storage != expected.executable_storage
+            || !same_source
+            || view.declaration != expected.declaration
             || view.arguments != expected.arguments
             || !facts
                 .world()
@@ -313,8 +377,23 @@ mod tests {
         cfg::BlockId,
         Arc<CarrierContractView>,
     ) {
+        graph_subject_source(workers, body, None)
+    }
+
+    fn graph_subject_source(
+        workers: usize,
+        body: bool,
+        sealed_source: Option<&str>,
+    ) -> (
+        Arc<cfg::Function>,
+        Arc<ValidatedFacts>,
+        cfg::BlockId,
+        Arc<CarrierContractView>,
+    ) {
         let snapshot = Arc::new(Snapshot {
-            input: Input::Text(if body {
+            input: Input::Text(if let Some(source) = sealed_source {
+                source
+            } else if body {
                 "fn split(s:&[i32])->(Option<&[i32]>,&[i32]){(Some(&s[..2]),&s[2..])} fn main(){let a=[1i32,2,3];let(x,y)=split(&a);println!(\"{} {}\",x.unwrap().len(),y.len());}"
             } else {
                 "struct W<'a,T>{r:&'a T} impl<'a,T> W<'a,T>{fn next(&mut self)->Option<&'a T>{Some(self.r)}} fn main(){let n=7i32;let mut w=W{r:&n};let x=w.next();match x{Some(r)=>println!(\"{}\",*r),None=>()}}"
@@ -380,12 +459,218 @@ mod tests {
                 }
                 let block = cfg::BlockId(index);
                 let view = facts.cfg_call_carriers(&function, block).unwrap();
-                if view.nominal.is_some() {
+                if let Some(nominal) = &view.nominal {
+                    if sealed_source.is_some() {
+                        let original = nominal.canonical.source_schema.as_ref().unwrap();
+                        let transported = view.source_schema.as_ref().unwrap();
+                        if original
+                            .same_authority(transported, facts.budget())
+                            .unwrap()
+                        {
+                            continue;
+                        }
+                    }
                     return (function, facts, block, view);
                 }
             }
         }
         panic!("CHECK did not publish the expected graph nominal call");
+    }
+
+    #[test]
+    fn graph_source_carrier_transport_reissues_exact_sealed_inputs() {
+        for workers in [1, 8] {
+            let (_, facts, _, view) = graph_subject_source(
+                workers,
+                false,
+                Some("fn main(){let mut it=(0i32..2i32).flat_map(|n|0i32..n);let _=it.next();}"),
+            );
+            let nominal = view.nominal.as_ref().unwrap();
+            let original = nominal.canonical.source_schema.as_ref().unwrap();
+            let transported = view.source_schema.as_ref().unwrap();
+            assert!(!Arc::ptr_eq(original, transported));
+            assert!(
+                !original
+                    .same_authority(transported, facts.budget())
+                    .unwrap()
+            );
+            let mut scratch = TraitScratch::default();
+            view.validate_for_with_scratch(&facts, &mut scratch)
+                .unwrap();
+            view.validate_for_with_scratch(&facts, &mut scratch)
+                .unwrap();
+            let operations = nominal_normalization::NominalOperations::default();
+            let replay_roots = || -> Result<()> {
+                for ty in view
+                    .result_signature
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&view.result_signature.result))
+                {
+                    facts.world.map_universal_projection_type_in(
+                        ty,
+                        facts.env(),
+                        0,
+                        Some((&facts, transported.transport())),
+                        false,
+                        &operations,
+                        &mut |projection| Ok(Ty::AssociatedType(Arc::new(projection.clone()))),
+                    )?;
+                }
+                Ok(())
+            };
+            let before = facts.budget().usage_snapshot().work;
+            replay_roots().unwrap();
+            let cold = facts.budget().usage_snapshot().work - before;
+            let before = facts.budget().usage_snapshot().work;
+            replay_roots().unwrap();
+            let warm = facts.budget().usage_snapshot().work - before;
+            assert!(
+                warm < cold,
+                "whole signature mapper discarded exact transport arena: {warm}/{cold}"
+            );
+            let mut rows = nominal_normalization::ParentLocalValidation::default();
+            let before = facts.budget().usage_snapshot().work;
+            transported
+                .transport()
+                .validate_with_replay(&facts.world, &facts, &mut rows)
+                .unwrap();
+            let row_cold = facts.budget().usage_snapshot().work - before;
+            ParentLocalTransport::default()
+                .validate_with_replay(&facts.world, &facts, &mut rows)
+                .unwrap();
+            let mut repeated = transported.transport().definitions().to_vec();
+            assert!(!repeated.is_empty());
+            repeated.push(repeated[0].clone());
+            ParentLocalTransport::new(&repeated)
+                .validate_with_replay(&facts.world, &facts, &mut rows)
+                .unwrap();
+            let before = facts.budget().usage_snapshot().work;
+            transported
+                .transport()
+                .validate_with_replay(&facts.world, &facts, &mut rows)
+                .unwrap();
+            let row_warm = facts.budget().usage_snapshot().work - before;
+            assert!(
+                row_warm < row_cold,
+                "sibling invocation evicted row DAG: {row_warm}/{row_cold}"
+            );
+            let context = ProofContext {
+                transport: transported.transport(),
+                ..ProofContext::from_facts(&facts)
+            };
+            let (declaration, arguments, _) = facts
+                .world
+                .source_carrier_application(
+                    &view.result_subject,
+                    &facts,
+                    context,
+                    scratch.for_world(facts.world.id),
+                )
+                .unwrap();
+            let schema = match &view.result_subject {
+                parameter_equality::EqualityResultSubject::Required(call) => {
+                    facts.world.item_header(call.item).unwrap().schema.clone()
+                }
+                _ => facts.world.callable_schema(declaration).unwrap(),
+            };
+            let mut substitutions = schema_instantiation::Substitutions::default();
+            let before = facts.budget().usage_snapshot().work;
+            facts
+                .world
+                .instantiate_raw_cached(
+                    &schema,
+                    &arguments,
+                    context,
+                    Some(declaration),
+                    &mut substitutions,
+                )
+                .unwrap();
+            let substitution_cold = facts.budget().usage_snapshot().work - before;
+            let before = facts.budget().usage_snapshot().work;
+            facts
+                .world
+                .instantiate_raw_cached(
+                    &schema,
+                    &arguments,
+                    context,
+                    Some(declaration),
+                    &mut substitutions,
+                )
+                .unwrap();
+            let substitution_warm = facts.budget().usage_snapshot().work - before;
+            assert!(
+                substitution_warm < substitution_cold,
+                "raw substitution discarded sealed replay DAG: {substitution_warm}/{substitution_cold}"
+            );
+            let mut transplanted = view.as_ref().clone();
+            transplanted.source_schema = Some(original.clone());
+            assert!(
+                transplanted
+                    .validate_for_with_scratch(&facts, &mut scratch)
+                    .is_err()
+            );
+            let mut changed = view.as_ref().clone();
+            changed.result_signature.result = Ty::Bool;
+            assert!(
+                changed
+                    .validate_for_with_scratch(&facts, &mut scratch)
+                    .is_err()
+            );
+            let (_, foreign, _, _) = graph_view(workers);
+            assert!(
+                transported
+                    .transport()
+                    .validate_with_replay(&foreign.world, &foreign, &mut rows)
+                    .is_err()
+            );
+            assert!(
+                facts
+                    .world
+                    .instantiate_raw_cached(
+                        &schema,
+                        &arguments,
+                        ProofContext {
+                            transport: transported.transport(),
+                            ..ProofContext::from_facts(&foreign)
+                        },
+                        Some(declaration),
+                        &mut substitutions
+                    )
+                    .is_err()
+            );
+            assert!(
+                foreign
+                    .world
+                    .map_universal_projection_type_in(
+                        &Ty::Unit,
+                        foreign.env(),
+                        0,
+                        Some((&foreign, transported.transport())),
+                        false,
+                        &operations,
+                        &mut |projection| Ok(Ty::AssociatedType(Arc::new(projection.clone()))),
+                    )
+                    .is_err()
+            );
+            assert!(
+                view.validate_for_with_scratch(&foreign, &mut scratch)
+                    .is_err()
+            );
+            view.validate_for_with_scratch(&facts, &mut scratch)
+                .unwrap();
+            facts.budget().poison_ledger_for_tests();
+            assert!(
+                matches!(transported.transport().validate_with_replay(&facts.world, &facts, &mut rows), Err(error) if error.is_resource())
+            );
+            assert!(
+                matches!(facts.world.instantiate_raw_cached(&schema, &arguments, context, Some(declaration), &mut substitutions), Err(error) if error.is_resource())
+            );
+            assert!(matches!(replay_roots(), Err(error) if error.is_resource()));
+            assert!(
+                matches!(view.validate_for_with_scratch(&facts, &mut scratch), Err(error) if error.is_resource())
+            );
+        }
     }
 
     #[test]

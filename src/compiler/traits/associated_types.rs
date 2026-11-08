@@ -52,7 +52,10 @@ impl ValidatedFacts {
 struct NormalizationKey {
     environment: usize,
     phase: FactsPhase,
+    source_metadata: Option<body_validation::SourceKey>,
+    original_metadata: Option<body_validation::SourceKey>,
     staged: bool,
+    executable_storage: bool,
     finalized: bool,
     projection: ir::AssociatedTypeProjection,
 }
@@ -89,17 +92,49 @@ impl NormalizedAssociatedType {
         projection: &ir::AssociatedTypeProjection,
         facts: &ValidatedFacts,
     ) -> Result<()> {
+        self.validate_for_with_proofs(projection, facts, &mut ProofScratch::default())
+    }
+
+    pub(super) fn validate_for_scratch(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        facts.world.check_facts(facts, false)?;
+        scratch.for_facts(facts);
+        scratch
+            .for_world(facts.world.id)
+            .with_caller_arena(facts.world.id, Some(facts), |proofs| {
+                self.validate_for_with_proofs(projection, facts, proofs)
+            })
+    }
+
+    fn validate_for_with_proofs(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        proofs: &mut ProofScratch,
+    ) -> Result<()> {
         let world = facts.world();
         world.check_normalization_budget()?;
         world.check_facts(facts, false)?;
         let context = NormalizationContext {
             proof: ProofContext::from_facts(facts),
             staged: false,
+            executable_storage: true,
         };
         let key = NormalizationKey {
             environment: facts.predicates.index,
             phase: facts.phase(),
+            source_metadata: None,
+            original_metadata: context
+                .proof
+                .original
+                .map(|facts| body_validation::SourceKey::retain(facts, &[]))
+                .transpose()?,
             staged: false,
+            executable_storage: true,
             finalized: world.owner_normalization_finalized,
             projection: projection.clone(),
         };
@@ -109,7 +144,7 @@ impl NormalizedAssociatedType {
                 "normalization proof replay changed exact projection or facts context",
             ));
         }
-        world.validate_normalization_evidence(&self.0, context)
+        world.validate_normalization_evidence_with(&self.0, context, proofs)
     }
 }
 
@@ -128,13 +163,17 @@ pub(super) struct NormalizationValidation {
     environment: usize,
     phase: FactsPhase,
     staged: bool,
+    executable_storage: bool,
     finalized: bool,
+    caller: Option<body_validation::Context>,
+    transport: Arc<[Ty]>,
 }
 
 #[derive(Clone, Copy)]
 struct NormalizationContext<'a> {
     proof: ProofContext<'a>,
     staged: bool,
+    executable_storage: bool,
 }
 
 #[derive(Default)]
@@ -266,7 +305,15 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        if !replays.bind_metadata_caller(self.id, facts) {
+        if !replays.bind_metadata_caller(self.id, facts)? {
+            // A checked nested caller owns an independent complete metadata
+            // DAG, keyed by all immutable facts authority. Never borrow or
+            // retag the enclosing caller's answers, including raw answers.
+            if let Some(facts) = facts
+                && let Some(checked) = replays.checked_metadata_child(self, facts)?
+            {
+                return self.validate_ty_metadata_with_facts(ty, env, depth, checked, Some(facts));
+            }
             // Repeated raw roots share only their own exact-world/environment
             // answers. They never see or retag the enclosing caller's rows.
             if facts.is_none()
@@ -642,6 +689,7 @@ impl ValidatedTraitWorld {
         let context = NormalizationContext {
             proof: ProofContext::from_facts(facts),
             staged: false,
+            executable_storage: true,
         };
         let mut stack = NormalizationStack::default();
         let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
@@ -653,7 +701,13 @@ impl ValidatedTraitWorld {
     pub fn normalize_ty(&self, ty: &Ty, facts: &ValidatedFacts) -> Result<Ty> {
         self.check_normalization_budget()?;
         self.check_facts(facts, false)?;
-        self.validate_ty_metadata_in(ty, facts.env(), 0)?;
+        self.validate_ty_metadata_with_facts(
+            ty,
+            facts.env(),
+            0,
+            &mut NominalReplays::default(),
+            Some(facts),
+        )?;
         if facts
             .predicates
             .predicates
@@ -661,7 +715,7 @@ impl ValidatedTraitWorld {
             .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
         {
             let normal = self.normalize_equality_type(ty, facts)?;
-            self.validate_ty(&normal, facts.env(), None, true, 0)?;
+            facts.validate_ty(&normal)?;
             return Ok(normal);
         }
         if self.type_contains_projection(ty, 0)?
@@ -672,6 +726,7 @@ impl ValidatedTraitWorld {
         let context = NormalizationContext {
             proof: ProofContext::from_facts(facts),
             staged: false,
+            executable_storage: true,
         };
         let normal = self.normalize_type_in(
             ty,
@@ -680,7 +735,7 @@ impl ValidatedTraitWorld {
             &mut Vec::new(),
             0,
         )?;
-        self.validate_ty(&normal, facts.env(), None, true, 0)?;
+        facts.validate_ty(&normal)?;
         Ok(normal)
     }
 
@@ -700,9 +755,27 @@ impl ValidatedTraitWorld {
         staged: bool,
         active: &mut ProofScratch,
     ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
+        self.normalize_closed_projected_type_for_use(ty, proof, staged, active, true)
+    }
+
+    pub(super) fn normalize_closed_projected_type_for_use(
+        &self,
+        ty: &Ty,
+        proof: ProofContext<'_>,
+        staged: bool,
+        active: &mut ProofScratch,
+        executable_storage: bool,
+    ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
         self.check_normalization_budget()?;
-        self.check_context(proof)?;
-        let context = NormalizationContext { proof, staged };
+        self.check_proof_context_caller(proof)?;
+        if let Some(facts) = proof.original {
+            proof.transport.validate(self, facts)?;
+        }
+        let context = NormalizationContext {
+            proof,
+            staged,
+            executable_storage,
+        };
         let mut dependencies = Vec::new();
         let mut stack = NormalizationStack {
             active: Vec::new(),
@@ -729,11 +802,22 @@ impl ValidatedTraitWorld {
         result
     }
 
+    #[cfg(test)]
     pub(super) fn normalize_closed_equality_projection(
         &self,
         projection: &ir::AssociatedTypeProjection,
         proof: ProofContext<'_>,
         active: &mut ProofScratch,
+    ) -> Result<NormalizedAssociatedType> {
+        self.normalize_closed_equality_projection_for_use(projection, proof, active, true)
+    }
+
+    pub(super) fn normalize_closed_equality_projection_for_use(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        proof: ProofContext<'_>,
+        active: &mut ProofScratch,
+        executable_storage: bool,
     ) -> Result<NormalizedAssociatedType> {
         let mut stack = NormalizationStack {
             active: Vec::new(),
@@ -742,6 +826,7 @@ impl ValidatedTraitWorld {
         let context = NormalizationContext {
             proof,
             staged: false,
+            executable_storage,
         };
         let result = (|| {
             let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
@@ -752,6 +837,43 @@ impl ValidatedTraitWorld {
         result
     }
 
+    pub(super) fn validate_projected_dependency_for_use(
+        &self,
+        evidence: &NormalizedAssociatedType,
+        proof: ProofContext<'_>,
+        executable_storage: bool,
+    ) -> Result<()> {
+        self.check_context(proof)?;
+        self.validate_normalization_evidence(
+            &evidence.0,
+            NormalizationContext {
+                proof,
+                staged: false,
+                executable_storage,
+            },
+        )
+    }
+
+    pub(super) fn validate_projected_dependency_with_for_use(
+        &self,
+        evidence: &NormalizedAssociatedType,
+        proof: ProofContext<'_>,
+        active: &mut ProofScratch,
+        staged: bool,
+        executable_storage: bool,
+    ) -> Result<()> {
+        self.check_context(proof)?;
+        self.validate_normalization_evidence_with(
+            &evidence.0,
+            NormalizationContext {
+                proof,
+                staged,
+                executable_storage,
+            },
+            active,
+        )
+    }
+
     pub(super) fn validate_staged_projected_dependency(
         &self,
         evidence: &NormalizedAssociatedType,
@@ -759,7 +881,14 @@ impl ValidatedTraitWorld {
         staged: bool,
     ) -> Result<()> {
         self.check_context(proof)?;
-        self.validate_normalization_evidence(&evidence.0, NormalizationContext { proof, staged })
+        self.validate_normalization_evidence(
+            &evidence.0,
+            NormalizationContext {
+                proof,
+                staged,
+                executable_storage: true,
+            },
+        )
     }
 
     pub(super) fn validate_projected_dependency(
@@ -782,6 +911,7 @@ impl ValidatedTraitWorld {
             NormalizationContext {
                 proof,
                 staged: false,
+                executable_storage: true,
             },
             active,
         )
@@ -876,13 +1006,15 @@ impl ValidatedTraitWorld {
     // Keep formation replays local to the current proof computation. This
     // shares only successful metadata authentication: raw projection membership,
     // closedness, depth and executable-type checks still run below.
-    fn validate_projection_input(
+    #[allow(clippy::too_many_arguments)]
+    fn validate_projection_input_with_facts(
         &self,
         ty: &Ty,
         projection: &ir::AssociatedTypeProjection,
         env: &GenericEnv,
         depth: usize,
         replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
         let item = self.associated_header(projection.item)?;
         if item.trait_decl != projection.trait_ref.declaration {
@@ -891,15 +1023,16 @@ impl ValidatedTraitWorld {
                 "associated projection item belongs to another trait",
             ));
         }
-        self.validate_ty_metadata_with(ty, env, depth, replays)?;
-        self.validate_raw_associated_ty_with(
+        self.validate_ty_metadata_with_facts(ty, env, depth, replays, caller)?;
+        self.validate_raw_associated_ty_with_facts(
             &projection.trait_ref.self_ty,
             env,
             depth + 1,
             replays,
+            caller,
         )?;
         for argument in projection.trait_ref.args.iter() {
-            self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
+            self.validate_raw_associated_ty_with_facts(argument, env, depth + 1, replays, caller)?;
         }
         Ok(())
     }
@@ -911,12 +1044,25 @@ impl ValidatedTraitWorld {
         depth: usize,
         replays: &mut NominalReplays,
     ) -> Result<()> {
+        self.validate_raw_associated_ty_with_facts(ty, env, depth, replays, None)
+    }
+
+    fn validate_raw_associated_ty_with_facts(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
-                self.validate_projection_input(ty, projection, env, depth, replays)?;
+                self.validate_projection_input_with_facts(
+                    ty, projection, env, depth, replays, caller,
+                )?;
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
                     && !self.checked_closure_projection(projection, env)?
@@ -932,7 +1078,13 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for part in parts.iter() {
-                    self.validate_raw_associated_ty_with(part, env, depth + 1, replays)?;
+                    self.validate_raw_associated_ty_with_facts(
+                        part,
+                        env,
+                        depth + 1,
+                        replays,
+                        caller,
+                    )?;
                 }
             }
             Ty::DependentArray { element, length } => {
@@ -942,7 +1094,13 @@ impl ValidatedTraitWorld {
                         "raw dependent array changed original const binder",
                     ));
                 }
-                self.validate_raw_associated_ty_with(element, env, depth + 1, replays)?;
+                self.validate_raw_associated_ty_with_facts(
+                    element,
+                    env,
+                    depth + 1,
+                    replays,
+                    caller,
+                )?;
             }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_TYPE_LEN {
@@ -951,14 +1109,26 @@ impl ValidatedTraitWorld {
                         "array length limit exceeded",
                     ));
                 }
-                self.validate_raw_associated_ty_with(element, env, depth + 1, replays)?;
+                self.validate_raw_associated_ty_with_facts(
+                    element,
+                    env,
+                    depth + 1,
+                    replays,
+                    caller,
+                )?;
             }
             Ty::Ref { referent, .. }
             | Ty::RawPtr {
                 pointee: referent, ..
             }
             | Ty::Slice { element: referent } => {
-                self.validate_raw_associated_ty_with(referent, env, depth + 1, replays)?;
+                self.validate_raw_associated_ty_with_facts(
+                    referent,
+                    env,
+                    depth + 1,
+                    replays,
+                    caller,
+                )?;
             }
             // A raw header such as `Option<Self::Item>` (or its impl-side
             // `Option<<C as It>::Item>`) carries a projection as a nominal
@@ -966,19 +1136,50 @@ impl ValidatedTraitWorld {
             // as raw, exactly as tuples and references do above. Executable
             // types still meet the strict validator after normalization.
             Ty::Struct(_) | Ty::Enum(_) if self.type_contains_projection(ty, depth + 1)? => {
-                self.validate_ty_metadata_with(ty, env, depth, replays)?;
+                self.validate_ty_metadata_with_facts(ty, env, depth, replays, caller)?;
                 let arguments = match ty {
                     Ty::Struct(value) => value.def().type_args.clone(),
                     Ty::Enum(value) => value.def().type_args.clone(),
                     _ => unreachable!(),
                 };
                 for argument in arguments.iter() {
-                    self.validate_raw_associated_ty_with(argument, env, depth + 1, replays)?;
+                    self.validate_raw_associated_ty_with_facts(
+                        argument,
+                        env,
+                        depth + 1,
+                        replays,
+                        caller,
+                    )?;
                 }
             }
             // Reuse only a completed full raw formation under the original
             // environment, root role, unsized policy and remaining depth.
             // Metadata-only and caller-authorized successes cannot issue it.
+            // Caller-authorized formation never enters the raw success cache.
+            // It uses the same None-sizedness, root-position policy as checked
+            // predicate formation. Retain only that exact computation's DAG,
+            // whose entry point rechecks full caller authority and depth.
+            _ if caller.is_some() => {
+                if replays.predicate_formations.maybe_unsized.is_none() {
+                    self.validate_ty_inner_with_facts(
+                        ty,
+                        env,
+                        depth,
+                        TypeUse::Root,
+                        &mut replays.predicate_formations,
+                        caller,
+                    )?;
+                } else {
+                    self.validate_ty_inner_with_facts(
+                        ty,
+                        env,
+                        depth,
+                        TypeUse::Root,
+                        &mut TypeWalk::default(),
+                        caller,
+                    )?;
+                }
+            }
             _ => replays
                 .raw_formations
                 .check(self, ty, env, TypeUse::Root, None, depth)?,
@@ -1222,11 +1423,16 @@ impl ValidatedTraitWorld {
         // The stage is separate from public facts and from public projection memo keys.
         let context = NormalizationContext {
             proof: ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &self.empty,
                 phase: FactsPhase::Schema,
             },
             staged: true,
+            // This publishes declaration schemas, never executable field storage.
+            // Closed physical roots are independently graph-realized later.
+            executable_storage: false,
         };
         self.stage_owner_assignments()?;
         let mut normalized = Vec::new();
@@ -1499,9 +1705,32 @@ impl ValidatedTraitWorld {
                 })))
             }
             Ty::Struct(_) | Ty::Enum(_) => {
-                self.normalize_nominal_actuals(ty, context.proof.env(), depth, |argument| {
-                    self.normalize_type_in(argument, context, stack, dependencies, depth + 1)
-                })
+                if !context.proof.metadata_transport().is_empty()
+                    && self.type_contains_projection(ty, depth + 1)?
+                    && let Some(facts) = context.proof.metadata_facts()
+                    && let Some(realized) = context.proof.metadata_transport().select_with_replays(
+                        self,
+                        ty,
+                        facts,
+                        &mut stack.obligations.replays,
+                    )?
+                {
+                    return Ok(realized);
+                }
+                let operations = std::mem::take(&mut stack.obligations.nominal_operations);
+                let result = self.normalize_nominal_actuals_in(
+                    ty,
+                    context.proof.env(),
+                    depth,
+                    context.proof.metadata_facts(),
+                    context.executable_storage,
+                    &operations,
+                    |argument| {
+                        self.normalize_type_in(argument, context, stack, dependencies, depth + 1)
+                    },
+                );
+                stack.obligations.nominal_operations = operations;
+                result
             }
             _ => Ok(ty.clone()),
         }
@@ -1514,7 +1743,10 @@ impl ValidatedTraitWorld {
     ) -> Result<bool> {
         Ok(left.environment == right.environment
             && left.phase == right.phase
+            && self.same_source_metadata(&left.source_metadata, &right.source_metadata)?
+            && self.same_source_metadata(&left.original_metadata, &right.original_metadata)?
             && left.staged == right.staged
+            && left.executable_storage == right.executable_storage
             && left.finalized == right.finalized
             && left.projection.item == right.projection.item
             && self.eq_predicate(
@@ -1530,24 +1762,34 @@ impl ValidatedTraitWorld {
         stack: &mut NormalizationStack,
     ) -> Result<Arc<NormalizationEvidence>> {
         self.check_normalization_budget()?;
-        self.check_context(context.proof)?;
+        self.check_proof_context_caller(context.proof)?;
         charged(&self.budget, self.budget.check_depth(stack.active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
         // The selected implementation below proves root membership using this
         // same proof scratch. Do not first repeat that proof in a fresh scratch.
         // Input metadata and nested projection membership still require replay.
-        self.validate_projection_input(
+        self.validate_projection_input_with_facts(
             &Ty::AssociatedType(Arc::new(projection.clone())),
             projection,
             context.proof.env(),
             0,
             &mut stack.obligations.replays,
+            context.proof.metadata_facts(),
         )?;
         let key = NormalizationKey {
             environment: context.proof.predicates.index,
             phase: context.proof.phase,
+            source_metadata: context.proof.source_key()?,
+            original_metadata: context
+                .proof
+                .original
+                .map(|facts| {
+                    body_validation::SourceKey::retain(facts, context.proof.transport.definitions())
+                })
+                .transpose()?,
             staged: context.staged,
+            executable_storage: context.executable_storage,
             finalized: self.owner_normalization_finalized,
             projection: projection.clone(),
         };
@@ -1595,11 +1837,12 @@ impl ValidatedTraitWorld {
             )?,
             args: normal_args.into(),
         };
-        self.validate_ref_with(
+        self.validate_ref_with_facts(
             &selected_goal,
             context.proof.env(),
             None,
             &mut stack.obligations.replays,
+            context.proof.metadata_facts(),
         )?;
         if let Some(raw_rhs) = self.dynamic_associated_binding(
             &ir::AssociatedTypeProjection {
@@ -1690,8 +1933,12 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
-        let closed_goal =
-            self.goal_is_closed_with(&selected_goal, context.proof.env(), &mut stack.obligations)?;
+        let closed_goal = self.goal_is_closed_in_for_use(
+            &selected_goal,
+            context.proof,
+            &mut stack.obligations,
+            context.executable_storage,
+        )?;
         let builtin_closure = self.checked_closure_projection(
             &ir::AssociatedTypeProjection {
                 trait_ref: selected_goal.clone(),
@@ -1710,12 +1957,11 @@ impl ValidatedTraitWorld {
         // Concrete implementation selection remains assumption-free. A symbolic
         // builtin closure instead proves its exact owner predicates in the
         // genuine caller environment, retaining that context in its evidence.
+        // A closed goal drops every caller assumption, but its original
+        // source receipts remain necessary to authenticate nominal actuals.
+        // Source-only evidence is distinct from both raw and executable proof.
         let selection_context = if closed_goal {
-            ProofContext {
-                original: None,
-                predicates: &self.empty,
-                phase: FactsPhase::Closed,
-            }
+            context.proof.closed_selection(self)
         } else {
             context.proof
         };
@@ -1855,11 +2101,12 @@ impl ValidatedTraitWorld {
                 },
                 predicates: Arc::from([]),
             };
-            let instantiated = self.schema.instantiate_schema(
+            let instantiated = self.instantiate_raw_cached(
                 &schema,
                 &arguments,
-                context.proof.env(),
-                &self.budget,
+                context.proof,
+                None,
+                &mut stack.obligations.instantiations,
             )?;
             self.validate_rhs_substitution(
                 &raw_rhs,
@@ -1888,12 +2135,13 @@ impl ValidatedTraitWorld {
                 &mut dependencies,
                 0,
             )?;
-            self.validate_associated_normal_form(
+            self.validate_associated_normal_form_for_use(
                 Some(projection.item),
                 &normal,
                 context.proof.env(),
                 selection_context,
                 &mut stack.obligations,
+                context.executable_storage,
             )?;
             self.require_associated_assignment_bounds(
                 projection.item,
@@ -2155,8 +2403,20 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<()> {
-        self.check_context(context)?;
-        if self.type_contains_projection(normal, 0)? {
+        self.validate_associated_normal_form_for_use(item, normal, env, context, active, true)
+    }
+
+    fn validate_associated_normal_form_for_use(
+        &self,
+        item: Option<DeclId>,
+        normal: &Ty,
+        env: &GenericEnv,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+        executable_storage: bool,
+    ) -> Result<()> {
+        self.check_proof_context_caller(context)?;
+        if executable_storage && self.type_contains_projection(normal, 0)? {
             // An owning generic impl can assign an exact rigid family from its
             // declared bounds. This is not a closed normal form or permission
             // to emit a residual projection. Keep the same immutable caller
@@ -2169,7 +2429,36 @@ impl ValidatedTraitWorld {
             }
             self.validate_universal_projection_type(normal, env, 0)?;
         }
-        self.validate_actual(normal, env)?;
+        if context.metadata_facts().is_some() && !matches!(normal, Ty::Str) {
+            if executable_storage {
+                self.validate_ty_inner_with_facts(
+                    normal,
+                    env,
+                    0,
+                    TypeUse::Actual,
+                    &mut TypeWalk::default(),
+                    context.metadata_facts(),
+                )?;
+            } else {
+                self.validate_ty_metadata_with_facts(
+                    normal,
+                    env,
+                    0,
+                    &mut active.replays,
+                    context.metadata_facts(),
+                )?;
+                self.validate_predicate_formation(
+                    normal,
+                    env,
+                    TypeUse::Actual,
+                    None,
+                    &mut active.replays,
+                    context.metadata_facts(),
+                )?;
+            }
+        } else {
+            self.validate_actual(normal, env)?;
+        }
         let relaxed_sized = match item {
             Some(item) => self.associated_header(item)?.relaxed_sized,
             None => false,
@@ -2210,7 +2499,24 @@ impl ValidatedTraitWorld {
         proofs: &mut ProofScratch,
     ) -> Result<()> {
         self.check_normalization_budget()?;
-        self.check_context(context.proof)?;
+        self.check_proof_context_caller(context.proof)?;
+        let original_matches = match (&evidence.key.original_metadata, context.proof.original) {
+            (Some(saved), Some(facts)) => {
+                saved.matches(facts, context.proof.transport.definitions())?
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !original_matches
+            || !context
+                .proof
+                .matches_source(&evidence.key.source_metadata)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated normalization changed its exact metadata source",
+            ));
+        }
         checked_module(
             &self.budget,
             self.catalog
@@ -2219,13 +2525,26 @@ impl ValidatedTraitWorld {
                 .check()
                 .map_err(ModuleError::from),
         )?;
+        if let Some(facts) = context.proof.original {
+            context.proof.transport.validate(self, facts)?;
+        }
         for previous in &proofs.normalization_validations {
             charged(&self.budget, self.budget.charge_work(1))?;
-            if Arc::ptr_eq(&previous.evidence, evidence)
+            if match (&previous.caller, context.proof.metadata_facts()) {
+                (Some(saved), Some(facts)) => saved.matches(facts)?,
+                (None, None) => context.proof.transport.is_empty(),
+                _ => false,
+            } && schema_instantiation::same_transport(
+                &previous.transport,
+                context.proof.transport.definitions(),
+                &self.budget,
+                0,
+            )? && Arc::ptr_eq(&previous.evidence, evidence)
                 && previous.world == self.id
                 && previous.environment == context.proof.predicates.index
                 && previous.phase == context.proof.phase
                 && previous.staged == context.staged
+                && previous.executable_storage == context.executable_storage
                 && previous.finalized == self.owner_normalization_finalized
             {
                 return Ok(());
@@ -2233,9 +2552,17 @@ impl ValidatedTraitWorld {
         }
         let cycles = proofs.cycles;
         self.validate_normalization_evidence_uncached(evidence, context, proofs)?;
-        if proofs.cycles == cycles
+        // Checked and raw rows retain distinct complete caller coordinates.
+        if (context.proof.metadata_facts().is_some() || context.proof.transport.is_empty())
+            && proofs.cycles == cycles
             && proofs.normalization_validations.len() < MAX_SCRATCH_OBLIGATIONS
         {
+            retain::<Ty>(&self.budget, context.proof.transport.definitions().len())?;
+            let caller = context
+                .proof
+                .metadata_facts()
+                .map(body_validation::Context::retain)
+                .transpose()?;
             push_scratch_row(
                 &self.budget,
                 &mut proofs.normalization_validations,
@@ -2246,7 +2573,10 @@ impl ValidatedTraitWorld {
                     environment: context.proof.predicates.index,
                     phase: context.proof.phase,
                     staged: context.staged,
+                    executable_storage: context.executable_storage,
                     finalized: self.owner_normalization_finalized,
+                    caller,
+                    transport: context.proof.transport.definitions().into(),
                 },
             )?;
         }
@@ -2269,15 +2599,28 @@ impl ValidatedTraitWorld {
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
             ) || nominal_application_self(&evidence.selected_goal.self_ty))
-                && !self.goal_is_closed_with(
+                && !self.goal_is_closed_in_for_use(
                     &evidence.selected_goal,
-                    context.proof.env(),
+                    context.proof,
                     proofs,
+                    context.executable_storage,
                 )?);
+        let membership_context = if caller_membership {
+            context.proof
+        } else {
+            context.proof.closed_selection(self)
+        };
+        if !membership_context.matches_source(&evidence.membership.0.source_metadata)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated normalization membership changed exact metadata source",
+            ));
+        }
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
             || evidence.key.staged != context.staged
+            || evidence.key.executable_storage != context.executable_storage
             || evidence.key.finalized != self.owner_normalization_finalized
             || evidence.membership.0.world != self.id
             || evidence.membership.0.environment
@@ -2527,11 +2870,12 @@ impl ValidatedTraitWorld {
                 },
                 predicates: Arc::from([]),
             };
-            let instantiated = self.schema.instantiate_schema(
+            let instantiated = self.instantiate_raw_cached(
                 &schema,
                 &evidence.arguments,
-                context.proof.env(),
-                &self.budget,
+                context.proof,
+                None,
+                &mut proofs.instantiations,
             )?;
             self.validate_rhs_substitution(
                 &value.rhs,
@@ -2569,7 +2913,16 @@ impl ValidatedTraitWorld {
             if dependency.world != evidence.world
                 || dependency.key.environment != evidence.key.environment
                 || dependency.key.phase != evidence.key.phase
+                || !self.same_source_metadata(
+                    &dependency.key.source_metadata,
+                    &evidence.key.source_metadata,
+                )?
+                || !self.same_source_metadata(
+                    &dependency.key.original_metadata,
+                    &evidence.key.original_metadata,
+                )?
                 || dependency.key.staged != evidence.key.staged
+                || dependency.key.executable_storage != evidence.key.executable_storage
                 || dependency.key.finalized != evidence.key.finalized
             {
                 return Err(FactsError::invalid(
@@ -2587,11 +2940,7 @@ impl ValidatedTraitWorld {
             if caller_membership {
                 context.proof
             } else {
-                ProofContext {
-                    original: None,
-                    predicates: &self.empty,
-                    phase: FactsPhase::Closed,
-                }
+                context.proof.closed_selection(self)
             },
             proofs,
         )?;
@@ -2896,9 +3245,11 @@ mod tests {
         let context = NormalizationContext {
             proof: ProofContext::from_facts(&facts),
             staged: false,
+            executable_storage: true,
         };
         // Only memo row storage is scoped. The normalized proof survives it.
         let evidence_refs = Arc::strong_count(&normalized.0);
+        let caller = Some(body_validation::Context::retain(&facts).unwrap());
         let baseline = budget.usage_snapshot().bytes;
         let mut owned = ProofScratch::default();
         push_scratch_row(
@@ -2911,7 +3262,10 @@ mod tests {
                 environment: context.proof.predicates.index,
                 phase: context.proof.phase,
                 staged: context.staged,
+                executable_storage: context.executable_storage,
                 finalized: world.owner_normalization_finalized,
+                caller,
+                transport: Arc::from([]),
             },
         )
         .unwrap();
@@ -2938,8 +3292,9 @@ mod tests {
         );
         let entries = proofs.normalization_validations.len();
         assert!(entries > 0);
-        // Original caller facts are authenticated even on a warm replay. Keep
-        // that metered obligation distinct from the single memo lookup probe.
+        // Original caller facts are authenticated even on a warm replay.
+        // In addition to the memo row and its caller/transport checks, the
+        // retained original source key authenticates its context and seals.
         let before = budget.usage_snapshot().work;
         world.check_context(context.proof).unwrap();
         let authentication_work = budget.usage_snapshot().work - before;
@@ -2950,7 +3305,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             budget.usage_snapshot().work - before,
-            authentication_work + 1
+            authentication_work + 6
         );
         assert_eq!(proofs.normalization_validations.len(), entries);
         for _ in 0..3 {
@@ -2959,6 +3314,37 @@ mod tests {
                 .unwrap();
             assert_eq!(proofs.normalization_validations.len(), entries);
         }
+        // Logical normalization cannot satisfy an executable replay, even
+        // when every other authority coordinate and proof allocation agrees.
+        let logical_context = NormalizationContext {
+            executable_storage: false,
+            ..context
+        };
+        assert!(
+            world
+                .validate_normalization_evidence_with(&normalized.0, logical_context, &mut proofs,)
+                .is_err()
+        );
+        let mut logical_proofs = ProofScratch::default();
+        let (_, logical_dependencies) = world
+            .normalize_closed_projected_type_for_use(
+                &Ty::AssociatedType(Arc::new(projection.clone())),
+                context.proof,
+                false,
+                &mut logical_proofs,
+                false,
+            )
+            .unwrap();
+        let logical = logical_dependencies.last().unwrap();
+        assert!(!Arc::ptr_eq(&logical.0, &normalized.0));
+        world
+            .validate_normalization_evidence_with(&logical.0, logical_context, &mut logical_proofs)
+            .unwrap();
+        assert!(
+            world
+                .validate_projected_dependency_with(logical, context.proof, &mut logical_proofs,)
+                .is_err()
+        );
         // The same allocation is not proof under a changed caller or stage.
         let mut wrong_context = context;
         wrong_context.staged = true;
@@ -3233,6 +3619,55 @@ mod tests {
             index: u64::MAX,
         };
         assert!(world.normalized_declaration_schema(missing).is_err());
+
+        let program = frontend::parse(
+            "struct S;trait Has{type Out;}impl Has for S{type Out=i32;}fn projected()-><S as Has>::Out{7}fn main(){}",
+        ).unwrap();
+        let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                world
+                    .signature_contains_projection(&header.schema.signature)
+                    .unwrap()
+            })
+            .unwrap()
+            .declaration;
+        let original = &world.original_callable_header(declaration).unwrap().schema;
+        let normalized = &world.callable_header(declaration).unwrap().schema;
+        assert!(
+            !world
+                .eq_signature(&original.signature, &normalized.signature)
+                .unwrap()
+        );
+        world
+            .validate_declaration_schema(declaration, original)
+            .unwrap();
+        // The executable representation is not an original declaration receipt.
+        assert!(
+            world
+                .validate_declaration_schema(declaration, normalized)
+                .is_err()
+        );
+        let target = CallTarget {
+            declaration,
+            type_args: Arc::from([]),
+        };
+        let facts = world.instance_facts(&target).unwrap();
+        facts
+            .validate_instance_entry(&target, world.budget())
+            .unwrap();
+        let mut forged = clone_schema(original, world.budget()).unwrap();
+        forged.signature.result = Ty::Bool;
+        assert!(
+            world
+                .validate_declaration_schema(declaration, &forged)
+                .is_err()
+        );
+        assert!(world.original_callable_header(missing).is_err());
     }
 
     #[test]
@@ -3594,6 +4029,57 @@ mod tests {
         // rather than share a cached Arc. Both results must still validate.
         first.validate_for(&projection, &facts).unwrap();
         cached.validate_for(&projection, &facts).unwrap();
+        assert!(first.0.membership.0.source_metadata.is_some());
+        assert!(first.0.key.original_metadata.is_some());
+        let mut stripped_original = (*first.0).clone();
+        stripped_original.key.original_metadata = None;
+        assert!(
+            matches!(NormalizedAssociatedType(Arc::new(stripped_original)).validate_for(&projection, &facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let other_declaration = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                header.declaration != declaration && header.schema.env.total_arity() == 0
+            })
+            .unwrap()
+            .declaration;
+        let other_facts = world.callable_facts(other_declaration).unwrap();
+        assert!(
+            matches!(first.validate_for(&projection, &other_facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let mut forged_membership = (*first.0.membership.0).clone();
+        forged_membership.source_metadata = None;
+        let mut forged_source = (*first.0).clone();
+        forged_source.membership = ProofEvidence(Arc::new(forged_membership));
+        assert!(
+            matches!(NormalizedAssociatedType(Arc::new(forged_source)).validate_for(&projection, &facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let source_context = ProofContext::from_facts(&facts).closed_selection(&world);
+        let mut proofs = ProofScratch::default();
+        let sourced = world
+            .normalize_closed_equality_projection(&projection, source_context, &mut proofs)
+            .unwrap();
+        assert!(sourced.0.key.source_metadata.is_some());
+        let normalization_context = NormalizationContext {
+            proof: source_context,
+            staged: false,
+            executable_storage: true,
+        };
+        world
+            .validate_normalization_evidence_with(&sourced.0, normalization_context, &mut proofs)
+            .unwrap();
+        let raw_context = NormalizationContext {
+            proof: ProofContext {
+                source_metadata: None,
+                ..source_context
+            },
+            ..normalization_context
+        };
+        assert!(
+            matches!(world.validate_normalization_evidence_with(&sourced.0, raw_context, &mut proofs), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
         let mut forged = (*cached.0).clone();
         forged.normal = Ty::Slice {
             element: Arc::new(Ty::Bool),
@@ -3702,6 +4188,46 @@ mod tests {
                 .unwrap();
             assert_eq!(replays.raw_formations.retained_roots(), roots);
         }
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_raw_associated_ty_with_facts(&ty, facts.env(), 0, &mut replays, Some(&facts))
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let checked_roots = replays.predicate_formations.complete.len();
+        assert!(checked_roots > 0);
+        for _ in 0..3 {
+            let before = facts.budget().usage_snapshot().work;
+            world
+                .validate_raw_associated_ty_with_facts(
+                    &ty,
+                    facts.env(),
+                    1,
+                    &mut replays,
+                    Some(&facts),
+                )
+                .unwrap();
+            assert!(facts.budget().usage_snapshot().work - before < cold);
+            assert_eq!(replays.predicate_formations.complete.len(), checked_roots);
+            assert_eq!(replays.raw_formations.retained_roots(), roots);
+        }
+        let mut different_policy = NominalReplays {
+            predicate_formations: TypeWalk {
+                maybe_unsized: facts.env().ordered_params().next(),
+                ..TypeWalk::default()
+            },
+            ..NominalReplays::default()
+        };
+        world
+            .validate_raw_associated_ty_with_facts(
+                &ty,
+                facts.env(),
+                0,
+                &mut different_policy,
+                Some(&facts),
+            )
+            .unwrap();
+        assert_eq!(different_policy.predicate_formations.visits, 0);
+        assert!(different_policy.predicate_formations.complete.is_empty());
         let Ty::Struct(original) = &ty else {
             panic!("source nominal")
         };
@@ -3714,7 +4240,14 @@ mod tests {
                 &forged, facts.env(), 0, &mut replays,
             ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
             assert_eq!(replays.raw_formations.retained_roots(), roots);
+            assert!(matches!(world.validate_raw_associated_ty_with_facts(
+                &forged, facts.env(), 0, &mut replays, Some(&facts),
+            ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+            assert_eq!(replays.predicate_formations.complete.len(), checked_roots);
         }
+        assert!(matches!(world.validate_raw_associated_ty_with_facts(
+            &ty, other_facts.env(), 0, &mut replays, Some(&facts),
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         assert!(matches!(world.validate_raw_associated_ty_with(
             &ty, other_facts.env(), 0, &mut replays,
         ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
@@ -3729,6 +4262,9 @@ mod tests {
         ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         assert!(matches!(foreign.validate_raw_associated_ty_with(
             &ty, facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        assert!(matches!(foreign.validate_raw_associated_ty_with_facts(
+            &ty, facts.env(), 0, &mut replays, Some(&facts),
         ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         // The raw entry point must not weaken the existing role/unsized keys.
         let slice = Ty::Slice {
@@ -3752,6 +4288,9 @@ mod tests {
         facts.budget().poison_ledger_for_tests();
         assert!(matches!(world.validate_raw_associated_ty_with(
             &ty, facts.env(), 0, &mut replays,
+        ), Err(error) if error.kind() == FactsErrorKind::Resource));
+        assert!(matches!(world.validate_raw_associated_ty_with_facts(
+            &ty, facts.env(), 0, &mut replays, Some(&facts),
         ), Err(error) if error.kind() == FactsErrorKind::Resource));
         assert_eq!(facts.budget().first_resource_failure(), failure);
     }

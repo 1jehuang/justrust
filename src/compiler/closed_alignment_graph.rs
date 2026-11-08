@@ -83,17 +83,6 @@ pub(super) async fn produce(
             summary_key.charge_key(budget).map_err(Error::new)?;
             let summary: Arc<memory_layout::domain::compact::Summary> =
                 facts.get(summary_key.key()).await?;
-            let closed_facts = types.instance_facts(&target).map_err(Error::new)?;
-            if !summary
-                .closed_requirements(&target, &closed_facts, budget)
-                .map_err(Error::new)?
-            {
-                return cx.publish_fact(
-                    0,
-                    closed::Header::no_continuation(target, &summary, &closed_facts, budget)
-                        .map_err(Error::new)?,
-                );
-            }
             let original_facts = if let Some(closure) = &template.closure {
                 types
                     .trait_world()
@@ -110,26 +99,76 @@ pub(super) async fn produce(
                     .callable_facts(target.declaration)
                     .map_err(Error::new)?
             };
-            let local = Local::capture(
+            // A canonical publication can already be the exact closed instance.
+            // Re-forming its entry obligations would allocate different proof
+            // records and sever the authority of its authored type receipts.
+            // Universal templates and other instances still form their own facts.
+            let mut same_closed_publication = false;
+            if template.closure.is_none() && template.publication.is_some() {
+                if let Some(source_target) = original_facts.target() {
+                    if source_target.declaration == target.declaration
+                        && source_target.type_args.len() == target.type_args.len()
+                    {
+                        same_closed_publication = true;
+                        for (source, current) in
+                            source_target.type_args.iter().zip(target.type_args.iter())
+                        {
+                            if !ir::identical_type(source, current, budget).map_err(Error::new)? {
+                                same_closed_publication = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let closed_facts = if same_closed_publication {
+                original_facts.clone()
+            } else {
+                types.instance_facts(&target).map_err(Error::new)?
+            };
+            if !summary
+                .closed_requirements(&target, &closed_facts, budget)
+                .map_err(Error::new)?
+            {
+                return cx.publish_fact(
+                    0,
+                    closed::Header::no_continuation(target, &summary, &closed_facts, budget)
+                        .map_err(Error::new)?,
+                );
+            }
+            let mut source_scratch = super::traits::TraitScratch::default();
+            let local = Local::capture_with_scratch(
                 template.checked.clone(),
                 template.publication.clone(),
                 original_facts,
                 budget,
+                &mut source_scratch,
             )
             .map_err(Error::new)?;
             let mut context = types.as_ref().clone();
+            let mut closed_scratch = super::traits::TraitScratch::default();
             let continuation = local
-                .closed_calls(
+                .closed_calls_with_scratch(
                     &target,
                     closed_facts,
                     &mut context,
                     budget,
                     Some(cx.authority()),
+                    &mut source_scratch,
+                    &mut closed_scratch,
                 )
                 .map_err(Error::new)?;
             continuation
-                .validate(&mut context, budget, Some(cx.authority()))
+                .validate_with_scratch(
+                    &mut context,
+                    budget,
+                    Some(cx.authority()),
+                    &mut source_scratch,
+                    &mut closed_scratch,
+                )
                 .map_err(Error::new)?;
+            drop(source_scratch);
+            drop(closed_scratch);
             let owners: Vec<_> = continuation.provider_declarations().collect();
             let summaries =
                 alignment_domain_graph::provider_summaries(facts, &owners, budget).await?;

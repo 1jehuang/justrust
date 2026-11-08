@@ -155,7 +155,9 @@ impl ValidatedTraitWorld {
             ));
         }
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &facts.predicates,
             phase: facts.phase(),
         };
@@ -215,7 +217,9 @@ impl ValidatedTraitWorld {
         }
         self.validate_ref_in(application, facts.env(), None)?;
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
             phase: FactsPhase::Closed,
         };

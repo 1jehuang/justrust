@@ -18,6 +18,60 @@ fn enum_projection_executes() {
 }
 
 #[test]
+fn generic_closed_body_realizes_projected_nominal_storage() {
+    oracle::stock_native(
+        r#"struct Buffer<I:Iterator>{value:Option<I::Item>}fn buffer<I:Iterator>(value:Option<I::Item>)->Buffer<I>{Buffer::<I>{value}}fn main(){let stored=buffer::<std::ops::Range<i32>>(Some(37));if let Some(value)=stored.value{println!("{}",value);}}"#,
+    );
+    oracle::stock_and_native_reject(
+        "struct Buffer<I:Iterator>{value:Option<I::Item>}fn wrong()->Buffer<std::ops::Range<i32>>{Buffer::<std::ops::Range<i32>>{value:Some(false)}}fn main(){}",
+    );
+    oracle::stock_native(
+        "fn extract<T>(value:Option<T>,other:T)->T{match value{Some(found)=>found,None=>other}}fn main(){let range=extract::<std::ops::Range<i32>>(Some(2..7),0..0);println!(\"{}\",range.end-range.start);}",
+    );
+    oracle::stock_native(
+        "struct Value{n:i32}fn pass<T>(value:T)->Option<T>{Some(value)}fn main(){if let Some(value)=pass::<Value>(Value{n:37}){println!(\"{}\",value.n);}}",
+    );
+    oracle::stock_and_native_reject(
+        "struct Value{n:i32}struct Other{n:i32}fn wrong(value:Option<Value>){if let Some(v)=value{let _other:Other=v;}}fn main(){}",
+    );
+    oracle::stock_native(
+        "trait It{type Item;}struct C;impl It for C{type Item=i32;}struct Store<I:It>{value:I::Item}fn store<I:It>(value:I::Item)->Option<Store<I>>{Some(Store::<I>{value})}fn main(){if let Some(value)=store::<C>(37){println!(\"{}\",value.value);}}",
+    );
+    oracle::stock_and_native_reject(
+        "trait It{type Item;}struct Store<I:It>{value:I::Item}fn wrong<I:It>(value:bool)->Store<I>{Store::<I>{value}}fn main(){}",
+    );
+    oracle::stock_and_native_reject(
+        "trait It{type Item;}struct C;impl It for C{type Item=i32;}struct Store<I:It>{value:I::Item}fn wrong()->Store<C>{Store::<C>{value:false}}fn main(){}",
+    );
+}
+
+#[test]
+fn generic_closed_associated_nominal_dependencies_preserve_ordered_storage() {
+    oracle::stock_native(
+        r#"struct Buffer<I:Iterator>{value:Option<I::Item>}trait Make{type Out;}struct C;impl Make for C{type Out=Buffer<std::ops::Range<i32>>;}fn identity<T>(value:T)->T{value}fn forward<M:Make>(value:M::Out)->M::Out{identity::<M::Out>(value)}fn main(){let stored=forward::<C>(Buffer::<std::ops::Range<i32>>{value:Some(37)});if let Some(value)=stored.value{println!("{}",value);}}"#,
+    );
+    oracle::stock_native(
+        r#"trait It{type Item;}struct Pair<A,B>{left:A,right:B}struct C;impl It for C{type Item=Option<Pair<i32,bool>>;}struct Store<I:It>{value:I::Item}fn store<I:It>(value:I::Item)->Store<I>{Store::<I>{value}}fn main(){let p=store::<C>(Some(Pair::<i32,bool>{left:41,right:true}));if let Some(v)=p.value{println!("{} {}",v.left,v.right);}}"#,
+    );
+    oracle::stock_and_native_reject(
+        "trait It{type Item;}struct Pair<A,B>{left:A,right:B}struct C;impl It for C{type Item=Pair<i32,bool>;}struct Store<I:It>{value:I::Item}fn wrong()->Store<C>{Store::<C>{value:Pair::<bool,i32>{left:true,right:41}}}fn main(){}",
+    );
+}
+
+#[test]
+fn generic_closed_nominal_closure_actual_uses_parent_metadata() {
+    oracle::stock_native(
+        r#"fn head<I:Iterator>(mut value:I)->Option<I::Item>{value.next()}fn invoke<F:FnOnce()->Option<i32>>(f:F)->Option<i32>{f()}fn main(){let range=2..7;if let Some(value)=invoke(move||head(range)){println!("{}",value);}}"#,
+    );
+    oracle::stock_native(
+        r#"struct Hold<F>{value:F}impl<F:FnOnce()->i32> Hold<F>{fn run(self)->i32{let f=self.value;f()}}fn hold<F:FnOnce()->i32>(f:F)->Hold<F>{Hold::<F>{value:f}}fn main(){let n=37i32;let h=hold(move||n);println!("{}",h.run());}"#,
+    );
+    oracle::stock_and_native_reject(
+        "struct Hold<F>{value:F}fn hold<F:FnOnce()->i32>(f:F)->Hold<F>{Hold::<F>{value:f}}fn wrong(){let _h=hold(||false);}fn main(){}",
+    );
+}
+
+#[test]
 fn unused_nominal_projection_without_membership_is_rejected() {
     oracle::stock_and_native_reject(
         "trait It{type Item;}struct Bad<I>{item:<I as It>::Item}fn main(){}",

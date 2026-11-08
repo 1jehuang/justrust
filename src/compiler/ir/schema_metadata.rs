@@ -12,6 +12,29 @@ pub(in crate::compiler) fn substitute_schema_metadata_ty(
     registry: &dyn super::super::traits::SchemaCx,
     budget: &PlanBudget,
 ) -> Result<Ty, String> {
+    substitute_schema_metadata_ty_scratch(
+        ty,
+        env,
+        args,
+        caller,
+        cx,
+        registry,
+        budget,
+        &mut super::super::traits::TraitScratch::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::compiler) fn substitute_schema_metadata_ty_scratch(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    registry: &dyn super::super::traits::SchemaCx,
+    budget: &PlanBudget,
+    scratch: &mut super::super::traits::TraitScratch,
+) -> Result<Ty, String> {
     if !registry.budget().same_authority(budget) || args.len() != env.total_arity() {
         return Err("schema metadata substitution authority or arity mismatch".into());
     }
@@ -27,10 +50,19 @@ pub(in crate::compiler) fn substitute_schema_metadata_ty(
         }
     }
     FactsCtx::Universal(env).validate_ty_metadata_with_budget(ty, budget)?;
+    let mut validate = |root: &Ty| {
+        if let Some(facts) = caller.validated() {
+            facts
+                .validate_ty_metadata_scratch(root, budget, scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))
+        } else {
+            caller.validate_ty_metadata_with_budget(root, budget)
+        }
+    };
     for argument in args {
-        caller.validate_ty_metadata_with_budget(argument, budget)?;
+        validate(argument)?;
     }
     let result = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
-    caller.validate_ty_metadata_with_budget(&result, budget)?;
+    validate(&result)?;
     Ok(result)
 }

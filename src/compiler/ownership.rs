@@ -330,14 +330,16 @@ impl CarrierEffectTable {
         facts: &ValidatedFacts,
         view: &super::traits::CarrierContractView,
         caller_validated: bool,
+        scratch: &mut super::traits::TraitScratch,
     ) -> Result<Option<Arc<borrow::CarrierEffects>>, super::traits::FactsError> {
         Ok(self
-            .lookup_proof(target, caller, facts, view, caller_validated)?
+            .lookup_proof(target, caller, facts, view, caller_validated, scratch)?
             .map(|proof| proof.effects.clone()))
     }
     /// Reuse the exact universal-body ingress. An unproved empty-looking value
     /// never reaches this path, and only an owned stored-element row can vanish.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(super) fn empty_result(
         &self,
         target: &super::ir::Callee,
@@ -348,7 +350,33 @@ impl CarrierEffectTable {
         location: &super::ir::CarrierLocation,
         caller_validated: bool,
     ) -> Result<bool, FactsError> {
-        let Some(proof) = self.lookup_proof(target, caller, facts, view, caller_validated)? else {
+        self.empty_result_with_scratch(
+            target,
+            caller,
+            facts,
+            view,
+            signature,
+            location,
+            caller_validated,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn empty_result_with_scratch(
+        &self,
+        target: &super::ir::Callee,
+        caller: &cfg::Function,
+        facts: &ValidatedFacts,
+        view: &super::traits::CarrierContractView,
+        signature: &super::ir::Signature,
+        location: &super::ir::CarrierLocation,
+        caller_validated: bool,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<bool, FactsError> {
+        let Some(proof) =
+            self.lookup_proof(target, caller, facts, view, caller_validated, scratch)?
+        else {
             return Ok(false);
         };
         let Some(empty) = &proof.empty_result else {
@@ -357,12 +385,13 @@ impl CarrierEffectTable {
         let budget = facts.budget();
         empty.validate_inputs(proof, budget)?;
         let mut validated = false;
-        view.validate_result_flow_with(
+        view.validate_result_flow_with_scratch(
             facts,
             super::ir::SignatureSubject::Call(target),
             signature,
             location,
             &mut validated,
+            scratch,
         )?;
         let super::ir::Callee::Direct(target) = target else {
             return Ok(false);
@@ -408,6 +437,7 @@ impl CarrierEffectTable {
         facts: &ValidatedFacts,
         view: &super::traits::CarrierContractView,
         caller_validated: bool,
+        scratch: &mut super::traits::TraitScratch,
     ) -> Result<Option<&Arc<CarrierEffectProof>>, super::traits::FactsError> {
         let budget = facts.budget();
         if !budget.same_authority(&self.budget) || facts.phase() != FactsPhase::Closed {
@@ -421,7 +451,7 @@ impl CarrierEffectTable {
                 .validate_provenance(facts, budget)
                 .map_err(|message| super::traits::FactsError::from_message(budget, &message))?;
         }
-        view.validate_for(facts)?;
+        view.validate_for_with_scratch(facts, scratch)?;
         for template in self.templates.iter() {
             budget
                 .charge_work(1)
@@ -5586,6 +5616,88 @@ mod tests {
                 .unwrap()
         );
         caller.validate_provenance(&parent.facts, &budget).unwrap();
+        let source_view = parent
+            .facts
+            .source_carrier_contract_with_scratch(
+                super::super::ir::SignatureSubject::Call(&callee),
+                &mut crate::compiler::traits::TraitScratch::default(),
+            )
+            .unwrap();
+        let mut replay_scratch = crate::compiler::traits::TraitScratch::default();
+        let before = budget.usage_snapshot().work;
+        let first = table
+            .lookup(
+                &callee,
+                &caller,
+                &parent.facts,
+                &source_view,
+                true,
+                &mut replay_scratch,
+            )
+            .unwrap()
+            .unwrap();
+        let cold = budget.usage_snapshot().work - before;
+        let before = budget.usage_snapshot().work;
+        let warmed = table
+            .lookup(
+                &callee,
+                &caller,
+                &parent.facts,
+                &source_view,
+                true,
+                &mut replay_scratch,
+            )
+            .unwrap()
+            .unwrap();
+        let warm = budget.usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "solver effect replay discarded source arena: {warm}/{cold}"
+        );
+        assert!(Arc::ptr_eq(&first, &warmed));
+        assert!(
+            table
+                .empty_result_with_scratch(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &source_view,
+                    &signature,
+                    &location,
+                    true,
+                    &mut replay_scratch,
+                )
+                .unwrap()
+        );
+        let mut wrong_target = callee.clone();
+        let super::super::ir::Callee::Direct(target) = &mut wrong_target else {
+            panic!("direct native source")
+        };
+        target.declaration.index = target.declaration.index.wrapping_add(1);
+        assert!(
+            table
+                .lookup(
+                    &wrong_target,
+                    &caller,
+                    &parent.facts,
+                    &source_view,
+                    true,
+                    &mut replay_scratch
+                )
+                .is_err()
+        );
+        assert!(
+            table
+                .lookup(
+                    &callee,
+                    &caller,
+                    template.facts(),
+                    &source_view,
+                    true,
+                    &mut replay_scratch
+                )
+                .is_err()
+        );
         assert!(
             table
                 .empty_result(
@@ -5601,6 +5713,18 @@ mod tests {
         );
         let mut changed_caller = caller.clone();
         changed_caller.result = Ty::Bool;
+        assert!(
+            table
+                .lookup(
+                    &callee,
+                    &changed_caller,
+                    &parent.facts,
+                    &source_view,
+                    false,
+                    &mut replay_scratch
+                )
+                .is_err()
+        );
         assert!(
             table
                 .empty_result(
@@ -5678,6 +5802,9 @@ mod tests {
                 .is_resource()
         );
         budget.poison_ledger_for_tests();
+        assert!(
+            matches!(table.lookup(&callee, &caller, &parent.facts, &source_view, true, &mut replay_scratch), Err(error) if error.is_resource())
+        );
         assert!(
             table
                 .empty_result(

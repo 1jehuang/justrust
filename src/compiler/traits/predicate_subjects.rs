@@ -28,7 +28,12 @@ impl ValidatedTraitWorld {
         let Ty::AssociatedType(projection) = &goal.self_ty else {
             return Ok(None);
         };
-        if !self.goal_is_closed(&projection.trait_ref, context.env())?
+        let closed = if context.original.is_some() {
+            self.goal_is_closed_in(&projection.trait_ref, context)?
+        } else {
+            self.goal_is_closed(&projection.trait_ref, context.env())?
+        };
+        if !closed
             && self
                 .opaque_associated_binding(projection, context.env())?
                 .is_none()

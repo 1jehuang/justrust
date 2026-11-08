@@ -1,4 +1,5 @@
 //! Existing inherent inference, with explicit absence versus unresolved evidence.
+use super::receiver_result_hint::InherentMethodCandidate;
 use super::*;
 
 pub(super) enum InherentMethodInference {
@@ -26,41 +27,12 @@ impl Checker<'_> {
                 root = referent;
             }
         }
-        let Some((nominal, _)) = nominal_parts(root) else {
-            return Ok(InherentMethodInference::Missing);
-        };
-        let mut candidate = None;
-        for id in &plan.registry.function_ids {
-            plan.budget.charge_work(1)?;
-            let info = plan.declaration(*id)?;
-            let Some(associated) = &info.path.associated else {
-                continue;
-            };
-            if filter.is_some_and(|mode| receiver_mode(mode) != receiver_mode(associated.receiver))
-                || associated.trait_decl.is_some()
-                || associated.nominal != nominal
-                || !plan.registry.source_member_equal(info.path.item, *name)?
-            {
-                continue;
-            }
-            let impl_env = plan.param_env(associated.impl_decl)?;
-            let mut bindings = HashMap::new();
-            if !match_impl_type(
-                &associated.self_pattern,
-                root,
-                &impl_env,
-                &mut bindings,
-                &plan.budget,
-                0,
-            )? {
-                continue;
-            }
-            if candidate.replace((*id, bindings)).is_some() {
+        let (id, owner_bindings) = match self.inherent_method_candidate(root, name, filter)? {
+            InherentMethodCandidate::Missing => return Ok(InherentMethodInference::Missing),
+            InherentMethodCandidate::Ambiguous => {
                 return Ok(InherentMethodInference::Applicable(None));
             }
-        }
-        let Some((id, owner_bindings)) = candidate else {
-            return Ok(InherentMethodInference::Missing);
+            InherentMethodCandidate::Unique(id, bindings) => (id, bindings),
         };
         let info = plan.declaration(id)?;
         let schema = plan.function_schema(id)?;

@@ -115,6 +115,7 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
     );
     assert!(closed::Header::no_continuation(target.clone(), &summary, &facts, &budget).is_err());
     let actual = target.type_args[0].clone();
+    let mut cleanup_scratch = traits::TraitScratch::default();
     for ty in [
         actual.clone(),
         ir::Ty::Tuple(Arc::from([actual.clone()])),
@@ -132,7 +133,16 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
             traits::NormalDropPlan::Trivial
         );
         let mut requirement = Requirement::empty(0, &budget).unwrap();
-        super::super::normalize_drop(&ty, &facts, &[], &mut requirement, &budget, 0).unwrap();
+        super::super::normalize_drop(
+            &ty,
+            &facts,
+            &mut cleanup_scratch,
+            &[],
+            &mut requirement,
+            &budget,
+            0,
+        )
+        .unwrap();
         assert_eq!(requirement.deferred_dispatch, expected);
     }
     let generic = locals
@@ -144,6 +154,7 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
     super::super::normalize_drop(
         &ir::Ty::Param(param),
         &generic.facts,
+        &mut cleanup_scratch,
         &[],
         &mut requirement,
         &budget,
@@ -155,6 +166,7 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
         super::super::normalize_drop(
             &ir::Ty::Param(param),
             &generic.facts,
+            &mut cleanup_scratch,
             &[param],
             &mut requirement,
             &foreign_budget,
@@ -167,6 +179,7 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
         super::super::normalize_drop(
             &ir::Ty::Param(param),
             &generic.facts,
+            &mut cleanup_scratch,
             &[param],
             &mut missing,
             &budget,
@@ -187,6 +200,7 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
     super::super::normalize_drop(
         ty,
         &local.facts,
+        &mut cleanup_scratch,
         &local.parameters,
         &mut requirement,
         &budget,
@@ -195,6 +209,54 @@ fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
     .unwrap();
     assert_eq!(requirement.drop_parameters, [false]);
     assert!(!requirement.deferred_dispatch);
+
+    // A closed nominal actual may still carry its authenticated source field
+    // projection before graph realization. Summary dependency discovery must
+    // not manufacture executable destructor evidence for that source shape.
+    let program = frontend::parse(
+        "trait Has{type Out;}impl Has for i32{type Out=u8;}struct Storage<T:Has>{value:T::Out}fn source<T:Has>(x:Storage<T>){}fn keep<T>(x:T){}fn main(){}",
+    )
+    .unwrap();
+    let budget = ir::PlanBudget::default();
+    let mut plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let source_owner = plan.function_decl(0).unwrap();
+    let source = plan.callable_facts(source_owner).unwrap();
+    let schema = plan.function_schema(source_owner).unwrap();
+    let source_target = ir::CallTarget {
+        declaration: source_owner,
+        type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+    };
+    let closed = plan.instance_facts(&source_target).unwrap();
+    let actual = crate::compiler::nominal_realization::substitution::substitute_source_schema_ty_with_scratch(
+        &schema.signature.params[0],
+        &source,
+        source.env(),
+        &source_target.type_args,
+        &closed,
+        &mut plan,
+        &budget,
+        None,
+        &mut traits::TraitScratch::default(),
+        &mut traits::TraitScratch::default(),
+    )
+    .unwrap();
+    let target = ir::CallTarget {
+        declaration: plan.function_decl(1).unwrap(),
+        type_args: Arc::from([actual]),
+    };
+    let facts = plan.instance_facts(&target).unwrap();
+    let summary = source_summary(&plan, target.declaration, &budget);
+    assert!(facts.normal_drop_plan(&target.type_args[0]).is_err());
+    assert!(
+        !summary
+            .closed_requirements(&target, &facts, &budget)
+            .unwrap()
+    );
+    assert!(
+        summary
+            .closed_requirements(&target, &facts, &ir::PlanBudget::default())
+            .is_err()
+    );
 }
 
 #[test]

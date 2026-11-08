@@ -36,27 +36,12 @@ pub(super) enum Term {
     Array(Box<Term>, usize),
     Slice(Box<Term>),
     Nominal(ir::DeclId, Vec<Term>),
+    /// Coordinates only. Metadata is replayed from the parent-published template.
+    Closure(ir::DeclId, Vec<Term>),
     /// Closed trait object: principal, ordered actuals, ordered assignments.
     Dyn(ir::DeclId, Vec<Term>, Vec<(ir::DeclId, Term)>),
 }
 impl Term {
-    pub(super) fn contains_nominal(&self) -> bool {
-        match self {
-            Self::Nominal(..) => true,
-            Self::Ref(_, t) | Self::RawPtr(_, t) | Self::Array(t, _) | Self::Slice(t) => {
-                t.contains_nominal()
-            }
-            Self::Cell(_, argument) => argument.contains_nominal(),
-            Self::ManuallyDrop(_, argument) => argument.contains_nominal(),
-            Self::PhantomData(_, argument) => argument.contains_nominal(),
-            Self::FnPointer(inputs, output) => {
-                inputs.iter().any(Self::contains_nominal) || output.contains_nominal()
-            }
-            Self::Tuple(ts) => ts.iter().any(Self::contains_nominal),
-            _ => false,
-        }
-    }
-
     pub(super) fn from_ty(ty: &ir::Ty, b: &ir::PlanBudget, depth: usize) -> Result<Self, Error> {
         b.check_depth(depth).map_err(Error::new)?;
         b.charge_work(1).map_err(Error::new)?;
@@ -131,11 +116,10 @@ impl Term {
                     "unsupported: function item types as nominal generic arguments",
                 ));
             }
-            ir::Ty::Closure(_) => {
-                return Err(Error::new(
-                    "unsupported: nominal realization requires genuine early closure metadata",
-                ));
-            }
+            ir::Ty::Closure(closure) => Self::Closure(
+                closure.provider(),
+                Self::from_types(closure.owner_args(), b, depth + 1)?,
+            ),
             ir::Ty::Opaque(_) => {
                 return Err(Error::new(
                     "unsupported: opaque nominal realization coordinate",
@@ -253,6 +237,17 @@ impl Term {
                 out.extend([13, id.snapshot.graph_word(), id.index, ts.len() as u64]);
                 for t in ts {
                     t.write(out, b, d + 1)?;
+                }
+            }
+            Self::Closure(provider, args) => {
+                out.extend([
+                    19,
+                    provider.snapshot.graph_word(),
+                    provider.index,
+                    args.len() as u64,
+                ]);
+                for argument in args {
+                    argument.write(out, b, d + 1)?;
                 }
             }
             Self::Dyn(id, args, assigned) => {
@@ -388,6 +383,13 @@ impl Reader<'_> {
                     ));
                 }
                 Term::Dyn(ir::DeclId { snapshot, index }, args, assigned)
+            }
+            19 => {
+                let provider = ir::DeclId {
+                    snapshot: ir::SnapshotId::from_graph_word(self.word()?),
+                    index: self.word()?,
+                };
+                Term::Closure(provider, self.terms(d + 1)?)
             }
             18 => {
                 let declaration = ir::DeclId {

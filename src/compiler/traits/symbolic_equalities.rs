@@ -109,7 +109,9 @@ impl ValidatedTraitWorld {
                         args: Arc::from([]),
                     }),
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Closed
                     },

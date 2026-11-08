@@ -18,9 +18,19 @@ type Bucket = (
 pub(super) struct Substitutions {
     entries: Vec<Entry>,
     index: HashMap<Bucket, Vec<usize>>,
+    /// Metadata proof DAGs survive distinct raw substitution misses. Each
+    /// validation still binds the exact original caller/world and live budget.
+    metadata: Option<Box<TraitScratch>>,
+    metadata_storage: Option<ir::PlanReservation>,
+    /// Every invocation replays every sealed row. Retain only its metadata
+    /// walk arena so raw substitution hits do not restart receipt proof DAGs.
+    transport: nominal_normalization::ParentLocalValidation,
 }
 
 struct Entry {
+    checked_context: Option<body_validation::Context>,
+    source_metadata: Option<body_validation::SourceKey>,
+    transport: Arc<[Ty]>,
     world: WorldId,
     adapter: Arc<dyn SchemaCx + Send + Sync>,
     caller: Arc<PredicateEnv>,
@@ -44,6 +54,20 @@ impl ValidatedTraitWorld {
     ) -> Result<InstantiatedSchema> {
         self.check_normalization_budget()?;
         self.check_context(context)?;
+        checked_module(
+            &self.budget,
+            self.catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        if let Some(facts) = context.original {
+            self.check_facts(facts, false)?;
+            context
+                .transport
+                .validate_with_replay(self, facts, &mut cache.transport)?;
+        }
         charged(&self.budget, self.budget.check_depth(0))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         if !self.schema.budget().same_authority(&self.budget) {
@@ -68,6 +92,18 @@ impl ValidatedTraitWorld {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 let entry = &cache.entries[index];
                 if entry.world == self.id
+                    && context.matches_source(&entry.source_metadata)?
+                    && match (&entry.checked_context, context.original) {
+                        (Some(saved), Some(facts)) => saved.matches(facts)?,
+                        (None, None) => context.transport.is_empty(),
+                        _ => false,
+                    }
+                    && same_transport(
+                        &entry.transport,
+                        context.transport.definitions(),
+                        &self.budget,
+                        0,
+                    )?
                     && Arc::ptr_eq(&entry.adapter, &self.schema)
                     && std::ptr::eq(entry.caller.as_ref(), context.predicates)
                     && entry.phase == context.phase
@@ -75,7 +111,8 @@ impl ValidatedTraitWorld {
                     && entry.finalized == self.owner_normalization_finalized
                     && entry.declaration == declaration
                     && Arc::ptr_eq(&entry.schema.env, &schema.env)
-                    && Arc::ptr_eq(&entry.schema.predicates, &schema.predicates)
+                    && (Arc::ptr_eq(&entry.schema.predicates, &schema.predicates)
+                        || (entry.schema.predicates.is_empty() && schema.predicates.is_empty()))
                     && self.eq_contract(
                         &entry.schema.signature.ref_contract,
                         &schema.signature.ref_contract,
@@ -98,12 +135,42 @@ impl ValidatedTraitWorld {
                 }
             }
         }
-        let result =
-            self.schema
-                .instantiate_schema(schema, arguments, context.env(), &self.budget)?;
+        let result = match context.metadata_facts() {
+            Some(facts) => {
+                if cache.metadata.is_none() {
+                    let storage = charged(
+                        &self.budget,
+                        self.budget
+                            .reserve_bytes(std::mem::size_of::<TraitScratch>()),
+                    )?;
+                    cache.metadata = Some(Box::default());
+                    cache.metadata_storage = Some(storage);
+                }
+                self.schema.instantiate_schema_with_facts_scratch(
+                    schema,
+                    arguments,
+                    facts,
+                    &self.budget,
+                    cache.metadata.as_deref_mut().unwrap(),
+                )?
+            }
+            None => {
+                self.schema
+                    .instantiate_schema(schema, arguments, context.env(), &self.budget)?
+            }
+        };
         // Capacity exhaustion declines caching, never a successful substitution.
-        if cache.entries.len() < MAX_SCRATCH_OBLIGATIONS {
+        if (context.original.is_some() || context.transport.is_empty())
+            && cache.entries.len() < MAX_SCRATCH_OBLIGATIONS
+        {
+            retain::<Ty>(&self.budget, context.transport.definitions().len())?;
             let retained = Entry {
+                source_metadata: context.source_key()?,
+                checked_context: context
+                    .original
+                    .map(body_validation::Context::retain)
+                    .transpose()?,
+                transport: context.transport.definitions().into(),
                 world: self.id,
                 adapter: self.schema.clone(),
                 caller: if context.predicates.index == usize::MAX {
@@ -135,6 +202,29 @@ impl ValidatedTraitWorld {
     }
 }
 
+pub(super) fn same_transport(
+    left: &[Ty],
+    right: &[Ty],
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<bool> {
+    if !same_inputs(left, right, budget, depth)? {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        charged(budget, budget.charge_work(1))?;
+        let receipts = match (left, right) {
+            (Ty::Struct(a), Ty::Struct(b)) => (a.parent_local_receipt(), b.parent_local_receipt()),
+            (Ty::Enum(a), Ty::Enum(b)) => (a.parent_local_receipt(), b.parent_local_receipt()),
+            _ => return Ok(false),
+        };
+        if !matches!(receipts, (Some(a), Some(b)) if Arc::ptr_eq(a, b)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn clone_result(result: &InstantiatedSchema, budget: &PlanBudget) -> Result<InstantiatedSchema> {
     retain::<Ty>(budget, result.signature.params.len())?;
     charged(
@@ -144,7 +234,7 @@ fn clone_result(result: &InstantiatedSchema, budget: &PlanBudget) -> Result<Inst
     Ok(result.clone())
 }
 
-pub(super) fn same_inputs(
+pub(in crate::compiler) fn same_inputs(
     left: &[Ty],
     right: &[Ty],
     budget: &PlanBudget,
@@ -174,6 +264,11 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
     Ok(match (left, right) {
         (Ty::Struct(a), Ty::Struct(b)) => {
             std::ptr::eq(a.def(), b.def())
+                && match (a.parent_local_receipt(), b.parent_local_receipt()) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
                 && match (a.realization(), b.realization()) {
                     (None, None) => true,
                     (Some(a), Some(b)) => a.same_fact(b),
@@ -182,6 +277,11 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
         }
         (Ty::Enum(a), Ty::Enum(b)) => {
             std::ptr::eq(a.def(), b.def())
+                && match (a.parent_local_receipt(), b.parent_local_receipt()) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
                 && match (a.realization(), b.realization()) {
                     (None, None) => true,
                     (Some(a), Some(b)) => a.same_fact(b),
@@ -339,7 +439,9 @@ mod tests {
         );
         let before = scratch.instantiations.entries.len();
         let phased = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: context.predicates,
             phase: FactsPhase::Schema,
         };
@@ -357,6 +459,244 @@ mod tests {
             )
             .unwrap();
         assert_eq!(scratch.instantiations.entries.len(), before + 2);
+        // Associated-RHS replay rebuilds a zero-row schema wrapper. An empty
+        // slice carries no predicate authority, so its container address must
+        // not defeat reuse of otherwise identical retained source inputs.
+        let mut empty = schema.clone();
+        empty.predicates = Arc::from([]);
+        let mut derived = Substitutions::default();
+        let before = world.budget.usage_snapshot().work;
+        let first = world
+            .instantiate_raw_cached(&empty, &args, context, None, &mut derived)
+            .unwrap();
+        let cold = world.budget.usage_snapshot().work - before;
+        for _ in 0..8 {
+            let mut rebuilt = empty.clone();
+            rebuilt.predicates = Arc::from([]);
+            rebuilt.signature.ref_contract =
+                Arc::new(empty.signature.ref_contract.as_ref().clone());
+            assert!(!Arc::ptr_eq(&empty.predicates, &rebuilt.predicates));
+            let before = world.budget.usage_snapshot().work;
+            let result = world
+                .instantiate_raw_cached(&rebuilt, &args, context, None, &mut derived)
+                .unwrap();
+            let warm = world.budget.usage_snapshot().work - before;
+            assert!(
+                warm < cold,
+                "canonical empty schema was reconstructed: {warm}/{cold}"
+            );
+            assert!(
+                same_input(
+                    &first.signature.result,
+                    &result.signature.result,
+                    &world.budget,
+                    0
+                )
+                .unwrap()
+            );
+            assert_eq!(derived.entries.len(), 1);
+        }
+        let mut changed_result = empty.clone();
+        changed_result.signature.result = Ty::Bool;
+        assert_eq!(
+            world
+                .instantiate_raw_cached(&changed_result, &args, context, None, &mut derived)
+                .unwrap()
+                .signature
+                .result,
+            Ty::Bool
+        );
+        assert_eq!(derived.entries.len(), 2);
+        let mut nonempty = empty.clone();
+        nonempty.predicates = Arc::from([Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Sized),
+            self_ty: Ty::Bool,
+            args: Arc::from([]),
+        })]);
+        world
+            .instantiate_raw_cached(&nonempty, &args, context, None, &mut derived)
+            .unwrap();
+        nonempty.predicates = nonempty.predicates.to_vec().into();
+        world
+            .instantiate_raw_cached(&nonempty, &args, context, None, &mut derived)
+            .unwrap();
+        assert_eq!(
+            derived.entries.len(),
+            4,
+            "nonempty predicate authority was conflated"
+        );
+        let (_, _, foreign) = fixture();
+        assert!(
+            world
+                .instantiate_raw_cached(
+                    &empty,
+                    &args,
+                    ProofContext::from_facts(&foreign),
+                    None,
+                    &mut derived
+                )
+                .is_err()
+        );
+        assert_eq!(derived.entries.len(), 4);
+        world.budget.poison_ledger_for_tests();
+        assert!(
+            matches!(world.instantiate_raw_cached(&empty, &args, context, None, &mut derived), Err(error) if error.is_resource())
+        );
+    }
+
+    #[test]
+    fn raw_schema_metadata_arena_survives_distinct_misses_without_widening_authority() {
+        let (world, schema, facts) = fixture();
+        let context = ProofContext::from_facts(&facts);
+        let mut cache = Substitutions::default();
+        let original = world
+            .instantiate_raw_cached(&schema, &[Ty::Bool], context, None, &mut cache)
+            .unwrap();
+        let actual = original.signature.result;
+        world
+            .instantiate_raw_cached(
+                &schema,
+                std::slice::from_ref(&actual),
+                context,
+                None,
+                &mut cache,
+            )
+            .unwrap();
+        let arena = cache.metadata.as_deref().unwrap() as *const TraitScratch;
+        assert!(cache.metadata_storage.is_some());
+        assert!(
+            cache
+                .metadata
+                .as_ref()
+                .unwrap()
+                .proofs
+                .replays
+                .validated_type(&world, &actual, facts.env())
+                .unwrap()
+                .is_some()
+        );
+        let before = cache.entries.len();
+        world
+            .instantiate_raw_cached(
+                &schema,
+                std::slice::from_ref(&actual),
+                context,
+                Some(facts.declaration()),
+                &mut cache,
+            )
+            .unwrap();
+        assert_eq!(cache.entries.len(), before + 1);
+        assert_eq!(
+            cache.metadata.as_deref().unwrap() as *const TraitScratch,
+            arena
+        );
+        assert!(
+            cache
+                .metadata
+                .as_ref()
+                .unwrap()
+                .proofs
+                .replays
+                .validated_type(&world, &actual, facts.env())
+                .unwrap()
+                .is_some()
+        );
+        let raw = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: context.predicates,
+            phase: FactsPhase::Schema,
+        };
+        world
+            .instantiate_raw_cached(&schema, &[Ty::Bool], raw, None, &mut cache)
+            .unwrap();
+        assert_eq!(
+            cache.metadata.as_deref().unwrap() as *const TraitScratch,
+            arena
+        );
+        let (_, _, foreign) = fixture();
+        assert!(
+            world
+                .instantiate_raw_cached(
+                    &schema,
+                    std::slice::from_ref(&actual),
+                    ProofContext::from_facts(&foreign),
+                    None,
+                    &mut cache,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            cache.metadata.as_deref().unwrap() as *const TraitScratch,
+            arena
+        );
+        let module_budget = world.catalog.modules().budget();
+        assert!(
+            module_budget
+                .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX)
+                .is_err()
+        );
+        let failure = module_budget.snapshot().failure;
+        for declaration in [None, Some(facts.declaration())] {
+            assert!(matches!(world.instantiate_raw_cached(
+                &schema, std::slice::from_ref(&actual), context, declaration, &mut cache,
+            ), Err(error) if error.is_resource()));
+            assert_eq!(module_budget.snapshot().failure, failure);
+        }
+    }
+
+    #[test]
+    fn raw_schema_cache_separates_closed_source_metadata_from_raw_authority() {
+        let (world, schema, facts) = fixture();
+        let caller = ProofContext::from_facts(&facts);
+        let source = caller.closed_selection(&world);
+        let raw = ProofContext {
+            source_metadata: None,
+            ..source
+        };
+        let args = [Ty::Int(ir::IntTy::I32)];
+        let mut cache = Substitutions::default();
+        let first = world
+            .instantiate_raw_cached(&schema, &args, source, None, &mut cache)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.entries[0].checked_context.is_none());
+        assert!(cache.entries[0].source_metadata.is_some());
+        for _ in 0..3 {
+            let again = world
+                .instantiate_raw_cached(&schema, &args, source, None, &mut cache)
+                .unwrap();
+            assert!(
+                same_input(
+                    &first.signature.result,
+                    &again.signature.result,
+                    &world.budget,
+                    0
+                )
+                .unwrap()
+            );
+            world
+                .instantiate_raw_cached(&schema, &args, raw, None, &mut cache)
+                .unwrap();
+            assert_eq!(cache.entries.len(), 2);
+            assert!(cache.entries[1].source_metadata.is_none());
+            assert!(cache.entries[1].checked_context.is_none());
+        }
+        world
+            .instantiate_raw_cached(&schema, &args, caller, None, &mut cache)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 3);
+        assert!(cache.entries[2].source_metadata.is_none());
+        assert!(cache.entries[2].checked_context.is_some());
+        let forged = ProofContext {
+            phase: FactsPhase::Universal,
+            ..source
+        };
+        assert!(
+            matches!(world.instantiate_raw_cached(&schema, &args, forged, None, &mut cache), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert_eq!(cache.entries.len(), 3);
     }
 
     #[test]
@@ -397,7 +737,9 @@ mod tests {
                     &schema,
                     &[Ty::Bool],
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &forged_context,
                         phase: context.phase
                     },

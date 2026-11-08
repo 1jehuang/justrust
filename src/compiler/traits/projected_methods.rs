@@ -496,7 +496,9 @@ impl ValidatedTraitWorld {
             ));
         }
         self.check_context(ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &owner.predicates,
             phase: FactsPhase::Universal,
         })
@@ -516,6 +518,16 @@ impl ValidatedTraitWorld {
             None,
             &mut ProofScratch::default(),
         )
+    }
+
+    pub(super) fn substitute_projected_schema_raw_with(
+        &self,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        caller: &GenericEnv,
+        active: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
+        self.substitute_projected_schema_inner(schema, arguments, caller, None, active)
     }
 
     pub(super) fn substitute_projected_schema_with(
@@ -543,8 +555,15 @@ impl ValidatedTraitWorld {
         context: Option<ProofContext<'_>>,
         active: &mut ProofScratch,
     ) -> Result<InstantiatedSchema> {
+        let original = context.and_then(ProofContext::metadata_facts);
         for argument in arguments {
-            self.validate_ty_metadata_with(argument, caller, 0, &mut active.replays)?;
+            self.validate_ty_metadata_with_facts(
+                argument,
+                caller,
+                0,
+                &mut active.replays,
+                original,
+            )?;
         }
         if arguments.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -587,7 +606,7 @@ impl ValidatedTraitWorld {
             )))
         {
             self.validate_rhs_substitution(raw, actual, &schema.env, arguments, 0)?;
-            self.validate_ty_metadata_with(actual, caller, 0, &mut active.replays)?;
+            self.validate_ty_metadata_with_facts(actual, caller, 0, &mut active.replays, original)?;
         }
         for (raw, actual) in schema.predicates.iter().zip(value.predicates.iter()) {
             self.validate_predicate_substitution(raw, actual, &schema.env, arguments)?;
@@ -667,7 +686,9 @@ impl ValidatedTraitWorld {
                         &normal,
                         &owner.implementation.schema_env,
                         ProofContext {
+                            transport: ParentLocalTransport::default(),
                             original: None,
+                            source_metadata: None,
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
@@ -682,7 +703,9 @@ impl ValidatedTraitWorld {
                     != owner.implementation.trait_ref.declaration
                 {
                     let context = ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     };
@@ -772,7 +795,9 @@ impl ValidatedTraitWorld {
                     // predicates prove membership (e.g. `I::Item` under `I: Iterator`).
                     // Otherwise only the ordinary closed selector may normalize it.
                     let context = ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     };
@@ -785,7 +810,9 @@ impl ValidatedTraitWorld {
                     self.normalize_closed_projected_type(
                         ty,
                         ProofContext {
+                            transport: ParentLocalTransport::default(),
                             original: None,
+                            source_metadata: None,
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
@@ -883,7 +910,9 @@ impl ValidatedTraitWorld {
                     &implementation.trait_ref,
                     &normal,
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     },
@@ -1119,25 +1148,46 @@ impl ValidatedTraitWorld {
                 },
                 predicates: Arc::from([]),
             };
-            let head =
+            let mut head =
                 self.substitute_projected_schema_with(&head, &owner_arguments, context, active)?;
+            self.normalize_instantiated_projection_signature(&mut head.signature, context, active)?;
             let goal = TraitRef {
                 declaration: implementation.trait_ref.declaration,
                 self_ty: head.signature.result,
                 args: head.signature.params.into(),
             };
-            self.validate_ref_with(&goal, context.env(), None, &mut active.replays)?;
-            let closed = self.goal_is_closed_with(&goal, context.env(), active)?;
+            self.validate_ref_with_facts(
+                &goal,
+                context.env(),
+                None,
+                &mut active.replays,
+                context.metadata_facts(),
+            )?;
+            let closed = match context.metadata_facts() {
+                Some(facts) => self.goal_is_closed_with_facts_storage(
+                    &goal,
+                    facts,
+                    &mut active.closedness,
+                    &mut active.closedness_storage,
+                )?,
+                None => self.goal_is_closed_with(&goal, context.env(), active)?,
+            };
             if closed {
-                let selection = self.require_in(
-                    &Predicate::Implements(goal),
+                let selection_context = if context.phase == FactsPhase::Closed
+                    && std::ptr::eq(context.predicates, self.empty.as_ref())
+                {
+                    context
+                } else {
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
-                    },
-                    active,
-                )?;
+                    }
+                };
+                let selection =
+                    self.require_in(&Predicate::Implements(goal), selection_context, active)?;
                 if !matches!(&selection.0.origin,
                     ProofOrigin::Implementation { declaration, arguments }
                         if *declaration == owner_id
@@ -1234,7 +1284,7 @@ impl ValidatedTraitWorld {
             },
             predicates: Arc::from([]),
         };
-        let value = self.substitute_projected_schema(&schema, arguments, context.env())?;
+        let value = self.substitute_projected_schema_with(&schema, arguments, context, active)?;
         if closed {
             self.normalize_closed_projected_type_with(
                 &value.signature.result,
@@ -1300,7 +1350,7 @@ impl ValidatedTraitWorld {
                 &self.budget,
             ),
         )?;
-        self.derive_carriers(&value.signature, &source)?;
+        self.derive_carriers(&value.signature, &source, &implementation.schema_env)?;
         Ok(value)
     }
 
@@ -1311,7 +1361,7 @@ impl ValidatedTraitWorld {
         provided: &CallableHeader,
     ) -> Result<()> {
         let source = self.validate_source_regions(item.declaration, required)?;
-        let (required, _) = self.derive_carriers(required, &source)?;
+        let (required, _) = self.derive_carriers(required, &source, &provided.schema.env)?;
         // The provided declaration was independently normalized and published
         // by build_origin_schemas. It cannot supply the required topology.
         let provided = self.declaration_carriers(provided.declaration)?;
@@ -1348,9 +1398,15 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
     ) -> Result<ProjectedApplication> {
         self.check_normalization_budget()?;
-        self.check_context(context)?;
+        self.check_proof_context_caller(context)?;
         self.validate_projected_required_schema(item)?;
-        self.validate_ref_with(goal, context.env(), None, &mut active.replays)?;
+        self.validate_ref_with_facts(
+            goal,
+            context.env(),
+            None,
+            &mut active.replays,
+            context.metadata_facts(),
+        )?;
         if goal.declaration != item.trait_decl {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -1358,7 +1414,7 @@ impl ValidatedTraitWorld {
             ));
         }
         let opaque_reference = matches!(&goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
-        let closed = self.goal_is_closed(goal, context.env())?;
+        let closed = self.goal_is_closed_in(goal, context)?;
         // A rigid nominal reference (`&'a Vec<K>`) selects its implementation by
         // head constructor; its generic actuals are proved in the caller env.
         let nominal_reference = !closed
@@ -1373,16 +1429,25 @@ impl ValidatedTraitWorld {
                 "unsupported: rigid caller projected method application",
             ));
         }
+        // Preserve a checked caller only when selection has not changed its
+        // closed predicate environment. Other callers still enter the raw
+        // empty context, without transporting source-owned nominal authority.
+        let same_closed_context = context.metadata_facts().is_some()
+            && context.phase == FactsPhase::Closed
+            && std::ptr::eq(context.predicates, self.empty.as_ref());
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
             if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
                 || opaque_reference
                 || nominal_reference
+                || same_closed_context
             {
                 context
             } else {
                 ProofContext {
+                    transport: ParentLocalTransport::default(),
                     original: None,
+                    source_metadata: None,
                     predicates: &self.empty,
                     phase: FactsPhase::Closed,
                 }
@@ -1407,7 +1472,7 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut arguments, argument.clone())?;
         }
         let mut instantiated =
-            self.substitute_projected_schema(&item.schema, &arguments, context.env())?;
+            self.substitute_projected_schema_with(&item.schema, &arguments, context, active)?;
         // As in `instantiate_owner_item`: a reference Self actual
         // (`IntoIterator for &'a Vec<T>`) expands the raw declaration's Self
         // tail into exact input regions. Topology derives from the original
@@ -1437,8 +1502,9 @@ impl ValidatedTraitWorld {
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
         }
-        // Provided methods retain all their original where-clauses, not just
-        // the restricted marker obligations admitted on required methods.
+        // A provided method (`Iterator::max where Self::Item: Ord`) keeps its
+        // declared where-clauses; the closed application must prove each
+        // exactly as substituted, whatever trait bounds the projection.
         let provided_bounds = item.default.is_some() && !item.schema.predicates.is_empty();
         if !method_args.is_empty()
             || provided_bounds
@@ -1491,11 +1557,13 @@ impl ValidatedTraitWorld {
             instantiated.signature.ref_contract = contract;
         }
         self.complete_projected_contract(&mut instantiated.signature)?;
-        self.validate_schema_signature(
+        self.validate_schema_signature_with_scratch(
             item.declaration,
             &instantiated.signature,
             context.env(),
             None,
+            context.metadata_facts(),
+            Some(&mut active.signature_formations),
         )?;
         for (index, ty) in instantiated.signature.params.iter().enumerate() {
             if !self.closed_closure_tuple_input(
@@ -1641,7 +1709,9 @@ impl ValidatedTraitWorld {
             item,
             implementation,
             ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &owner,
                 phase: FactsPhase::Universal,
             },
@@ -1656,7 +1726,8 @@ impl ValidatedTraitWorld {
             &self.budget,
             ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
         )?;
-        let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+        let (contract, regions) =
+            self.derive_carriers(&schema.signature, &source_regions, &schema.env)?;
         Ok(ProjectedCarrierBase {
             schema,
             arguments: arguments.clone(),
@@ -1810,7 +1881,8 @@ impl ValidatedTraitWorld {
         // empty envelope nor coincident concrete reference types issue it.
         let source =
             self.validate_source_regions(base.retained.declaration, &base.schema.signature)?;
-        let (contract, regions) = self.derive_carriers(&base.schema.signature, &source)?;
+        let (contract, regions) =
+            self.derive_carriers(&base.schema.signature, &source, &base.schema.env)?;
         let origin = charged(
             &self.budget,
             ir::derive_signature_origin_schema(
@@ -1959,7 +2031,8 @@ impl ValidatedTraitWorld {
             let schema = self.normalized_declaration_schema(evidence.item)?;
             let retained = self.declaration_carriers(evidence.item)?;
             let source_regions = retained.source_regions.clone();
-            let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+            let (contract, regions) =
+                self.derive_carriers(&schema.signature, &source_regions, &schema.env)?;
             let mut arguments = self.trait_arguments(&evidence.goal)?;
             for argument in evidence.method_args.iter() {
                 push(&self.budget, &mut arguments, argument.clone())?;
@@ -2069,7 +2142,8 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
             )?;
-            let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+            let (contract, regions) =
+                self.derive_carriers(&schema.signature, &source_regions, &schema.env)?;
             return Ok(ProjectedCarrierBase {
                 schema,
                 arguments: arguments.into(),
@@ -2104,7 +2178,10 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         evidence: &ProjectedMethodEvidence,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
+        self.check_facts(facts, true)?;
+        scratch.for_facts(facts);
         self.check_normalization_budget()?;
         if evidence.world != self.id
             || evidence.environment != facts.predicates.index
@@ -2151,11 +2228,12 @@ impl ValidatedTraitWorld {
         if let Some(authority) = &evidence.universal {
             return self.validate_universal_required_carrier(view, authority, facts);
         }
-        let application = self.instantiate_projected_item(
+        let application = self.instantiate_projected_item_with_scratch(
             self.item_header(evidence.item)?,
             &evidence.goal,
             &evidence.method_args,
             ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
         )?;
         match (
             &evidence.selection.0.origin,
@@ -2198,7 +2276,11 @@ impl ValidatedTraitWorld {
             .iter()
             .zip(application.evidence.dependencies.iter())
         {
-            self.validate_projected_dependency(dependency, ProofContext::from_facts(facts))?;
+            self.validate_projected_dependency_with(
+                dependency,
+                ProofContext::from_facts(facts),
+                scratch.for_world(self.id),
+            )?;
             if !self.same_projected_dependency(dependency, expected)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -2220,7 +2302,7 @@ impl ValidatedTraitWorld {
         // Reuse ordinary transport, with no projected proof, to independently
         // check the final carrier shape without recursive evidence validation.
         retain::<Ty>(&self.budget, evidence.signature.params.len())?;
-        let expected = self.transport_carrier_parts(
+        let expected = self.transport_carrier_parts_with_scratch(
             evidence.item,
             base.arguments,
             evidence.signature.clone(),
@@ -2230,6 +2312,7 @@ impl ValidatedTraitWorld {
             base.origin,
             None,
             view.result_subject.clone(),
+            scratch,
         )?;
         if view.contract != expected.contract
             || view.regions != expected.regions
@@ -2569,7 +2652,9 @@ mod tests {
         // Closed implementation selection uses the assumption-free world
         // environment, not the callable environment of the original item.
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &world.empty,
             phase: FactsPhase::Closed,
         };
@@ -2583,10 +2668,11 @@ mod tests {
             args: Arc::from([]),
         });
         active
-            .with_caller_arena(world.id, context.original, |arena| {
+            .with_caller_arena(world.id, context.metadata_facts(), |arena| {
                 arena.active.push(GoalKey {
                     environment: context.predicates.index,
                     phase: context.phase,
+                    source_metadata: context.source_key()?,
                     finalized: world.owner_normalization_finalized,
                     goal: Predicate::Implements(TraitRef {
                         declaration: world.catalog.id(CatalogItem::Copy),
@@ -2777,6 +2863,32 @@ mod tests {
             matches!(result.location.channel, ir::CarrierChannel::ParamTail { parameter: p, .. } if p == parameter)
                 && !result.sources.is_empty()
         }));
+
+        // Required-item source identity remains the trait declaration, but
+        // its instantiated signature is scoped by the implementation binder.
+        // Associated producer bounds must never be read in the trait's env.
+        let world = self::world(
+            "trait Make{type Out;fn get(&mut self)->Self::Out;}trait Source{type Item;type Producer:Make<Out=Self::Item>;}struct Wrap<A,B,S:Source>{a:A,b:B,producer:S::Producer}trait Next{type Item;fn next(&mut self)->Self::Item;}impl<A,B,S:Source> Next for Wrap<A,B,S>{type Item=S::Item;fn next(&mut self)->Self::Item{self.producer.get()}}fn main(){}",
+        );
+        let owner = owners(&world)[0];
+        let target = owner.items[0].1;
+        let schema = world.normalized_callable_schema(target).unwrap();
+        let source = world
+            .validate_source_regions(target, &schema.signature)
+            .unwrap();
+        let (cold, _) = world
+            .derive_carriers(&schema.signature, &source, &schema.env)
+            .unwrap();
+        let (warm, _) = world
+            .derive_carriers(&schema.signature, &source, &schema.env)
+            .unwrap();
+        assert!(!cold.results[0].sources.is_empty());
+        assert_eq!(cold.results, warm.results);
+        let trait_env = &world.info(owner.trait_ref.declaration).unwrap().env;
+        assert!(matches!(
+            world.derive_carriers(&schema.signature, &source, trait_env),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
     }
 
     fn shared(ty: Ty) -> Ty {
@@ -2849,7 +2961,9 @@ mod tests {
                     &world.callable_schema(declaration).unwrap(),
                     &target.type_args,
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &world.empty,
                         phase: FactsPhase::Closed,
                     },
@@ -2894,7 +3008,9 @@ mod tests {
                     &world.callable_schema(declaration).unwrap(),
                     &target.type_args,
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &world.empty,
                         phase: FactsPhase::Closed,
                     },

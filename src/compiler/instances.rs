@@ -819,6 +819,9 @@ pub(super) struct DirectDemands {
     pub targets: Vec<ir::CallTarget>,
     /// The subset demanded by implicit normal-drop cleanup.
     pub cleanup: Vec<ir::CallTarget>,
+    /// Exact source opaque dependencies. Only graph-read defining publications
+    /// may resolve these to physical cleanup demands.
+    pub cleanup_opaque: Vec<Arc<ir::OpaqueTy>>,
 }
 impl DirectDemands {
     /// Every implicit cleanup destructor in `function` must be one of this
@@ -856,7 +859,41 @@ impl DirectDemands {
         }
         Ok(())
     }
-    fn cleanup(&mut self, target: ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
+    fn opaque_cleanup(
+        &mut self,
+        opaque: Arc<ir::OpaqueTy>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let key = graph_key::encode_opaque(&opaque, budget)?;
+        for previous in &self.cleanup_opaque {
+            if graph_key::encode_opaque(previous, budget)? == key {
+                return Ok(());
+            }
+        }
+        budget.retain_bytes(2 * std::mem::size_of::<Arc<ir::OpaqueTy>>())?;
+        self.cleanup_opaque
+            .try_reserve(1)
+            .map_err(|_| "opaque cleanup demand allocation failed")?;
+        self.cleanup_opaque.push(opaque.clone());
+        budget.retain_bytes(
+            opaque
+                .owner_args()
+                .len()
+                .saturating_mul(std::mem::size_of::<ir::Ty>()),
+        )?;
+        self.call(
+            ir::CallTarget {
+                declaration: opaque.owner(),
+                type_args: opaque.owner_args().into(),
+            },
+            budget,
+        )
+    }
+    pub(super) fn cleanup(
+        &mut self,
+        target: ir::CallTarget,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
         budget.charge_work(self.cleanup.len().max(1))?;
         if !self.cleanup.contains(&target) {
             budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
@@ -869,6 +906,71 @@ impl DirectDemands {
     }
 }
 
+pub(super) fn source_direct_demands(
+    target: &ir::CallTarget,
+    publication: &Arc<super::source_replay::CanonicalSourcePublication>,
+    context: &mut frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
+) -> Result<DirectDemands, String> {
+    publication
+        .validate_source(publication.source(), publication.facts(), budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    ir::validate_published_source(publication, budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    if publication.facts().declaration() != target.declaration {
+        return Err("instance demands changed exact source publication owner".into());
+    }
+    direct_demands_in(
+        target,
+        publication.source(),
+        Some(publication.facts()),
+        context,
+        budget,
+        engine,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_demand_ty(
+    ty: &ir::Ty,
+    source_facts: Option<&traits::ValidatedFacts>,
+    env: &ir::GenericEnv,
+    arguments: &[ir::Ty],
+    closed_facts: &traits::ValidatedFacts,
+    context: &mut frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
+    source_scratch: &mut traits::TraitScratch,
+    scratch: &mut traits::TraitScratch,
+) -> Result<ir::Ty, String> {
+    if let Some(source_facts) = source_facts {
+        super::nominal_realization::substitution::substitute_source_schema_ty_with_scratch(
+            ty,
+            source_facts,
+            env,
+            arguments,
+            closed_facts,
+            context,
+            budget,
+            engine,
+            source_scratch,
+            scratch,
+        )
+    } else {
+        super::nominal_realization::substitution::substitute_ty_with_scratch(
+            ty,
+            env,
+            arguments,
+            ir::FactsCtx::from_validated(closed_facts),
+            context,
+            budget,
+            engine,
+            scratch,
+        )
+    }
+}
+
 pub(super) fn direct_demands(
     target: &ir::CallTarget,
     source: &ir::CheckedFunction,
@@ -876,11 +978,41 @@ pub(super) fn direct_demands(
     budget: &ir::PlanBudget,
     engine: Option<crate::engine::EngineAuthority>,
 ) -> Result<DirectDemands, String> {
+    direct_demands_in(target, source, None, context, budget, engine)
+}
+
+fn direct_demands_in(
+    target: &ir::CallTarget,
+    source: &ir::CheckedFunction,
+    source_facts: Option<&Arc<traits::ValidatedFacts>>,
+    context: &mut frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
+) -> Result<DirectDemands, String> {
     let mut demands = DirectDemands::default();
     let schema = context.function_schema(target.declaration)?;
-    let env = schema.env;
-    let closed_facts = context.instance_facts(target)?;
+    let env = source_facts.map_or(schema.env, |facts| facts.env().clone());
+    let mut same_closed_source = false;
+    if let Some(source_target) = source_facts.and_then(|facts| facts.target()) {
+        if source_target.declaration == target.declaration
+            && source_target.type_args.len() == target.type_args.len()
+        {
+            same_closed_source = true;
+            for (source, current) in source_target.type_args.iter().zip(target.type_args.iter()) {
+                if !ir::identical_type(source, current, budget)? {
+                    same_closed_source = false;
+                    break;
+                }
+            }
+        }
+    }
+    let closed_facts = if same_closed_source {
+        source_facts.expect("matched closed source").clone()
+    } else {
+        context.instance_facts(target)?
+    };
     let mut scratch = traits::TraitScratch::default();
+    let mut source_scratch = traits::TraitScratch::default();
     // Implicit cleanup is part of the same closed demand frontier as an
     // explicit call. Do not rely on nongeneric source-root enumeration.
     if closed_facts.has_normal_drop_impls() {
@@ -908,28 +1040,44 @@ pub(super) fn direct_demands(
             ) {
                 continue;
             }
-            let ty = super::nominal_realization::substitution::substitute_ty_with_scratch(
+            let ty = close_demand_ty(
                 ty,
+                source_facts.map(AsRef::as_ref),
                 &env,
                 &target.type_args,
-                ir::FactsCtx::from_validated(&closed_facts),
+                &closed_facts,
                 context,
                 budget,
                 engine,
+                &mut source_scratch,
                 &mut scratch,
             )?;
-            match closed_facts
-                .normal_drop_plan_with_scratch(&ty, &mut scratch)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?
-            {
-                traits::NormalDropPlan::Destructor(destructor) => {
-                    for target in destructor.targets() {
-                        demands.cleanup(target, budget)?;
-                    }
+            if source_facts.is_some() {
+                // Inventory grants no glue: preserve ordinary targets and every
+                // opaque producer descriptor for graph-authorized expansion.
+                let (targets, opaque) = closed_facts
+                    .source_normal_drop_dependencies(&ty, &mut scratch)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                for target in targets {
+                    demands.cleanup(target, budget)?;
                 }
-                traits::NormalDropPlan::Trivial => {}
-                traits::NormalDropPlan::Unresolved => {
-                    return Err("unsupported: unresolved closed Drop demand".into());
+                for descriptor in opaque {
+                    demands.opaque_cleanup(descriptor, budget)?;
+                }
+            } else {
+                match closed_facts
+                    .normal_drop_plan_with_scratch(&ty, &mut scratch)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+                {
+                    traits::NormalDropPlan::Destructor(destructor) => {
+                        for target in destructor.targets() {
+                            demands.cleanup(target, budget)?;
+                        }
+                    }
+                    traits::NormalDropPlan::Trivial => {}
+                    traits::NormalDropPlan::Unresolved => {
+                        return Err("unsupported: unresolved closed Drop demand".into());
+                    }
                 }
             }
         }
@@ -939,10 +1087,26 @@ pub(super) fn direct_demands(
         // --- trait objects (snail): each unsizing site demands every
         // vtable slot implementation for its exact substituted referent.
         if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
-            let object = if let Some((_, object)) = expression.ty.owned_pointer_object() {
+            let object_ty = if source_facts.is_some() {
+                close_demand_ty(
+                    &expression.ty,
+                    source_facts.map(AsRef::as_ref),
+                    &env,
+                    &target.type_args,
+                    &closed_facts,
+                    context,
+                    budget,
+                    engine,
+                    &mut source_scratch,
+                    &mut scratch,
+                )?
+            } else {
+                expression.ty.clone()
+            };
+            let object = if let Some((_, object)) = object_ty.owned_pointer_object() {
                 object
             } else {
-                let ir::Ty::Ref { referent, .. } = &expression.ty else {
+                let ir::Ty::Ref { referent, .. } = &object_ty else {
                     return Err("trait object unsizing result must be a reference".into());
                 };
                 let ir::Ty::Dyn(object) = referent.as_ref() else {
@@ -954,14 +1118,16 @@ pub(super) fn direct_demands(
                 .exprs
                 .get(reference.0)
                 .ok_or("trait object unsizing operand outside arena")?;
-            let concrete = super::nominal_realization::substitution::substitute_ty_with_scratch(
+            let concrete = close_demand_ty(
                 &operand.ty,
+                source_facts.map(AsRef::as_ref),
                 &env,
                 &target.type_args,
-                ir::FactsCtx::from_validated(&closed_facts),
+                &closed_facts,
                 context,
                 budget,
                 engine,
+                &mut source_scratch,
                 &mut scratch,
             )?;
             let referent = match (&concrete, concrete.owned_pointer_pointee()) {
@@ -994,7 +1160,12 @@ pub(super) fn direct_demands(
             continue;
         }
         // --- end trait objects ---
-        if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
+        if let ir::ExprKind::Call {
+            target: callee,
+            signature,
+            ..
+        } = &expression.kind
+        {
             if let ir::Callee::TraitItem(call) = callee
                 && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
             {
@@ -1004,7 +1175,22 @@ pub(super) fn direct_demands(
                 // No copied side inventory or physical target is queued here.
                 continue;
             }
-            let resolved =
+            let resolved = if let Some(source_facts) = source_facts {
+                super::nominal_realization::substitution::substitute_source_call_with_scratch(
+                    callee,
+                    signature,
+                    source_facts,
+                    &env,
+                    &target.type_args,
+                    &closed_facts,
+                    context,
+                    budget,
+                    engine,
+                    &mut source_scratch,
+                    &mut scratch,
+                )?
+                .0
+            } else {
                 super::nominal_realization::substitution::substitute_callee_with_scratch(
                     callee,
                     &env,
@@ -1014,7 +1200,8 @@ pub(super) fn direct_demands(
                     budget,
                     engine,
                     &mut scratch,
-                )?;
+                )?
+            };
             let next = match resolved {
                 ir::Callee::TraitItem(call)
                     if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) =>

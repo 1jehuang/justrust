@@ -414,7 +414,9 @@ mod tests {
         let closure = closures.bodies[0].ty.clone();
         let world = plan.trait_world().unwrap();
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &world.empty,
             phase: FactsPhase::Closed,
         };
@@ -500,7 +502,9 @@ mod tests {
                 args: Arc::from([world.closure_arguments(&closure).unwrap()]),
             };
             let context = ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &world.empty,
                 phase: FactsPhase::Closed,
             };
@@ -700,6 +704,7 @@ mod tests {
                             &selection,
                             ProofContext {
                                 original: None,
+                                source_metadata: None,
                                 ..context
                             },
                             &mut active,
@@ -916,6 +921,7 @@ mod tests {
                             &mut direct_signature,
                             ProofContext {
                                 original: None,
+                                source_metadata: None,
                                 ..context
                             },
                         )
@@ -1064,7 +1070,9 @@ mod tests {
             args: Arc::from([world.closure_arguments(&closure).unwrap()]),
         };
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &world.empty,
             phase: FactsPhase::Closed,
         };
@@ -1153,7 +1161,9 @@ mod tests {
         reject(&changed_goal, &signature, &ProofEvidence(Arc::new(record)));
         let (other, other_closure) = fixture();
         let foreign_context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &other.empty,
             phase: FactsPhase::Closed,
         };

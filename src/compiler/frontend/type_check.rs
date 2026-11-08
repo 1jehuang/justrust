@@ -27,6 +27,8 @@ mod inherent_method_hint;
 mod iterator_loop;
 #[path = "local_literals.rs"]
 mod local_literals;
+#[path = "type_check/receiver_result_hint.rs"]
+mod receiver_result_hint;
 pub(in crate::compiler) use local_literals::nominal_manifest::{
     DeclarationFields as NominalDeclarationFields, DeclarationRecipe as NominalDeclarationRecipe,
     Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
@@ -1509,7 +1511,7 @@ impl<'s> Checker<'s> {
                             .ok_or("unresolved function declaration in inference")?;
                         plan.registry
                             .check_explicit_impl_params(declaration, path.application()?.1.len())?;
-                        plan.instantiate_signature(
+                        plan.source_inference_signature(
                             &ir::CallTarget {
                                 declaration,
                                 type_args: args.into(),
@@ -5274,8 +5276,7 @@ impl<'a> Checker<'a> {
                             },
                         );
                     }
-                    self.method_selection_for_hint(&owner, name, type_args, call_args)?
-                        .map(|selected| selected.signature.result)
+                    self.method_result_for_hint(&owner, name, type_args, call_args)?
                 } else {
                     None
                 }
@@ -5356,7 +5357,7 @@ impl<'a> Checker<'a> {
                     self.infer_call_args(declaration, args, None, false)?
                 {
                     Some(
-                        plan.instantiate_signature(
+                        plan.source_inference_signature(
                             &ir::CallTarget {
                                 declaration,
                                 type_args: type_args.into(),
@@ -6811,16 +6812,13 @@ impl<'a> Checker<'a> {
         let mut carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
-        // `*guard() (OP)= v` on an owned DerefMut call result (RefMut, Box):
+        // `*guard() (OP)= v` / `guard().field (OP)= v` on an owned
+        // DerefMut call result (RefMut, Box):
         // the carrier becomes `DerefMut::deref_mut(&mut temporary)`, the
         // temporary living to the end of the statement as receivers do.
-        let overloaded = matches!(fields.first(), Some(FieldSelector::Deref))
-            && matches!(carrier_ty, ir::Ty::Struct(_) | ir::Ty::Enum(_))
-            && genuine_call(carrier);
-        if overloaded {
-            let Some(target) = self.deref_target_hint(&carrier_ty)? else {
-                return Err("E0614: call assignment carrier cannot be dereferenced".into());
-            };
+        let overloaded_target = self.owned_call_assignment_target(carrier, &carrier_ty, fields)?;
+        let overloaded = overloaded_target.is_some();
+        if let Some(target) = overloaded_target {
             carrier_ty = ir::Ty::Ref {
                 kind: ir::BorrowKind::Mut,
                 referent: Arc::new(target),
@@ -9622,9 +9620,12 @@ impl<'a> Checker<'a> {
                     &mut scratch,
                 )
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let nominals = facts
+                .parent_local_signature_inputs(&signature)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             let resolved = facts
                 .service()
-                .resolve_trait_call_with(call, facts, &mut scratch)
+                .resolve_trait_call_with_nominals(call, facts, &nominals, &mut scratch)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             drop(scratch);
             let signature = resolved.signature();
@@ -13267,31 +13268,34 @@ impl<'a> Checker<'a> {
                             .cloned()
                             .ok_or("missing function signature")?
                     } else {
-                        plan.instantiate_signature(&target, self.facts(), &plan.budget)?
+                        plan.source_inference_signature(&target, self.facts(), &plan.budget)?
                     };
                 let facts = self
                     .signatures
                     .facts
                     .as_deref()
                     .ok_or("direct call requires validated facts")?;
-                let proof = facts
-                    .service()
-                    .discharge_direct(&target, facts)
+                facts
+                    .validate_source_flow_signature_with_scratch(
+                        ir::SignatureSubject::Call(&ir::Callee::Direct(target.clone())),
+                        &signature,
+                        &mut self.trait_scratch.borrow_mut(),
+                    )
                     .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
-                if !facts
-                    .world()
-                    .signatures_equal(proof.signature(), &signature)
-                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
-                {
-                    return Err("canonical direct signature mismatch".into());
-                }
                 if self.signatures.param_env.is_some() {
                     for ty in signature
                         .params
                         .iter()
                         .chain(std::iter::once(&signature.result))
                     {
-                        validate_root_carrier(ty, self.facts(), &plan.budget)?;
+                        facts
+                            .validate_ty_metadata_scratch(
+                                ty,
+                                &plan.budget,
+                                &mut self.trait_scratch.borrow_mut(),
+                            )
+                            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                        ir::carrier_locations(ty, &plan.budget)?;
                     }
                 }
                 for ty in signature

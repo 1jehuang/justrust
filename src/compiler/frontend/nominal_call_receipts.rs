@@ -113,12 +113,12 @@ fn validate(
     budget: &ir::PlanBudget,
     scratch: &mut tr::TraitScratch,
 ) -> Result<(), FactsError> {
-    facts.validate_signature_with(
+    facts.validate_source_flow_signature_with_scratch(
         ir::SignatureSubject::Call(&receipt.target),
         &receipt.original,
         scratch,
     )?;
-    facts.validate_signature_with(
+    facts.validate_source_flow_signature_with_scratch(
         ir::SignatureSubject::Call(&receipt.target),
         &receipt.mapped,
         scratch,
@@ -214,7 +214,7 @@ impl CanonicalSourceCapability {
             })?;
         validate(row, &self.facts, budget, scratch)?;
         validate_original_callee(&row.target, target, budget)?;
-        self.facts.validate_signature_with(
+        self.facts.validate_source_flow_signature_with_scratch(
             ir::SignatureSubject::Call(target),
             canonical,
             scratch,
@@ -340,7 +340,11 @@ pub(super) fn original_call_signature<'a>(
     } else {
         // No receipt means no transport authority. Legacy source signatures
         // retain exact comparison and cannot hide any graph-backed component.
-        facts.validate_signature_with(ir::SignatureSubject::Call(target), mapped, scratch)?;
+        facts.validate_source_flow_signature_with_scratch(
+            ir::SignatureSubject::Call(target),
+            mapped,
+            scratch,
+        )?;
         for ty in target
             .metadata_types()
             .chain(mapped.params.iter())
@@ -382,7 +386,11 @@ pub(super) fn replay(
                 target, signature, ..
             } = &expression.kind
             {
-                facts.validate_signature(ir::SignatureSubject::Call(target), signature)?;
+                facts.validate_source_flow_signature_with_scratch(
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    scratch,
+                )?;
                 for ty in target
                     .metadata_types()
                     .chain(signature.params.iter())
@@ -572,6 +580,88 @@ mod tests {
             assert!(
                 replay_source_body(&changed, source, publication.facts(), &budget).is_err(),
                 "real source publication accepted receipt forgery mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn graph_source_nominal_call_receipt_preserves_projected_storage_and_foreign_rejection() {
+        const SOURCE: &str = "trait It{type Item;}struct C;impl It for C{type Item=i32;}struct Store<I:It>{value:I::Item}fn store<I:It>(value:I::Item)->Option<Store<I>>{Some(Store::<I>{value})}fn main(){let _v=store::<C>(37);}";
+        for workers in [1, 8] {
+            let (budget, publication) = graph_publication_for(SOURCE, "main", workers);
+            let (_, foreign) = graph_publication_for(SOURCE, "main", workers);
+            let original = publication.original().source_for_test();
+            publication
+                .validate_source(publication.source(), publication.facts(), &budget)
+                .unwrap();
+            publication
+                .validate_source(publication.source(), publication.facts(), &budget)
+                .unwrap();
+            let rows = original.nominal_call_realizations.as_ref().unwrap();
+            let row = rows
+                .iter()
+                .find(|row| {
+                    publication
+                        .facts()
+                        .validate_signature_with(
+                            ir::SignatureSubject::Call(&row.target),
+                            &row.original,
+                            &mut tr::TraitScratch::default(),
+                        )
+                        .is_err()
+                })
+                .expect(
+                    "genuine source projection still requires physical reminting for execution",
+                );
+            validate(
+                row,
+                publication.facts(),
+                &budget,
+                &mut tr::TraitScratch::default(),
+            )
+            .unwrap();
+            assert!(
+                validate(
+                    row,
+                    foreign.facts(),
+                    &budget,
+                    &mut tr::TraitScratch::default()
+                )
+                .is_err()
+            );
+            let mut canonical_scratch = tr::TraitScratch::default();
+            for _ in 0..2 {
+                publication
+                    .facts()
+                    .canonical_source_call_with_scratch(
+                        &row.target,
+                        &row.original,
+                        &mut canonical_scratch,
+                    )
+                    .unwrap();
+            }
+            let mut wrong_signature = row.original.clone();
+            wrong_signature.result = ir::Ty::Bool;
+            assert!(
+                publication
+                    .facts()
+                    .canonical_source_call_with_scratch(
+                        &row.target,
+                        &wrong_signature,
+                        &mut canonical_scratch,
+                    )
+                    .is_err()
+            );
+            let mut forged = row.clone();
+            forged.mapped.result = ir::Ty::Bool;
+            assert!(
+                validate(
+                    &forged,
+                    publication.facts(),
+                    &budget,
+                    &mut tr::TraitScratch::default()
+                )
+                .is_err()
             );
         }
     }

@@ -135,6 +135,29 @@ fn main(){let mut owner:Wrapper<i32>=Wrapper{values:[3i32,7i32]};mutate(&mut own
 }
 
 #[test]
+fn shared_local_deref_method_receivers_match_stock() {
+    iterator_oracle::stock_native(
+        r#"
+use std::ops::Deref;
+struct Owner<T>{n:T}
+struct Wrapper<T>{v:Owner<T>}
+struct View<'a,T>{r:&'a T}
+impl<T> Deref for Wrapper<T>{type Target=Owner<T>;fn deref(&self)->&Owner<T>{&self.v}}
+impl<T> Owner<T>{fn view<'a>(&'a self)->View<'a,T>{View{r:&self.n}}}
+fn show<T:std::fmt::Display>(view:View<'_,T>){println!("{}",view.r);}
+fn main(){let wrapper=Wrapper{v:Owner{n:String::from("shared")}};let view=wrapper.view();show(view);let borrowed=&wrapper;let view=borrowed.view();show(view);}
+"#,
+    );
+    iterator_oracle::stock_native(
+        r#"
+use std::rc::Rc;use std::cell::RefCell;
+struct Account{balance:i32}
+fn main(){let a=Rc::new(RefCell::new(Account{balance:42i32}));let b=Rc::clone(&a);let view=b.borrow();println!("{}",view.balance);drop(view);let view=a.try_borrow().unwrap();println!("{}",view.balance);}
+"#,
+    );
+}
+
+#[test]
 fn format_operands_infer_partial_collect_types() {
     for source in [
         r#"fn main(){println!("{:?}",(0i32..3).map(|x|x+1).collect::<Vec<_>>());}"#,
@@ -816,6 +839,11 @@ let c=RefCell::new(vec![1u32,2]);let g=c.borrow();for x in g.iter(){println!(\"{
 }
 
 #[test]
+fn shared_ledger_fallible_borrows_match_stock() {
+    iterator_oracle::stock_native(include_str!("fixtures/full_programs/38_shared_ledger.rs"));
+}
+
+#[test]
 fn generic_owner_method_chains_replay_consumed_borrowed_values() {
     iterator_oracle::stock_native(
         r#"struct Owner<T>{n:T}
@@ -1169,6 +1197,19 @@ fn leaf<'a,'b,T>(owner:&'b mut Owner<'a,T>)->&'b mut T{&mut owner.value}
 struct Notice{value:i32}
 impl Drop for Notice{fn drop(&mut self){println!("drop {}",self.value);}}
 fn main(){let token=();let mut owner=Owner{token:&token,value:Notice{value:7i32}};let r=leaf(&mut owner);*r=Notice{value:11i32};println!("value {}",owner.value.value);}
+"#,
+    );
+}
+
+#[test]
+fn string_field_drop_after_leaf_reborrow_matches_stock() {
+    iterator_oracle::stock_native(
+        r#"
+struct Owner<'a,T>{token:&'a (),value:T}
+fn leaf<'a,'b,T>(owner:&'b mut Owner<'a,T>)->&'b mut T{&mut owner.value}
+struct Notice{value:String}
+impl Drop for Notice{fn drop(&mut self){println!("drop {}",self.value);}}
+fn main(){let token=();let mut notice=Owner{token:&token,value:Notice{value:String::from("old")}};let r=leaf(&mut notice);r.value=String::from("new");println!("{}",notice.value.value);}
 "#,
     );
 }

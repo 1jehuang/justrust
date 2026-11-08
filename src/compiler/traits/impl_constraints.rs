@@ -188,12 +188,16 @@ impl ValidatedTraitWorld {
                     }
                     continue;
                 }
-                let normalized =
-                    match self.normalize_closed_equality_projection(&projection, facts, active) {
-                        Ok(value) => value,
-                        Err(error) if error.kind() == FactsErrorKind::Unproved => continue,
-                        Err(error) => return Err(error),
-                    };
+                let normalized = match self.normalize_closed_equality_projection_for_use(
+                    &projection,
+                    facts,
+                    active,
+                    false,
+                ) {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == FactsErrorKind::Unproved => continue,
+                    Err(error) => return Err(error),
+                };
                 if !self.match_head(ty, normalized.ty(), &header.schema_env, slots, 0)? {
                     return Ok(false);
                 }

@@ -47,7 +47,9 @@ impl ValidatedTraitWorld {
             0,
         )?;
         let proof = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
             phase: FactsPhase::Schema,
         };
@@ -113,14 +115,16 @@ impl ValidatedTraitWorld {
         }
         Ok(result)
     }
-    pub(super) fn realize_opaque_family(
+    pub(super) fn realize_opaque_family_with_scratch(
         &self,
         opaque: &Arc<ir::OpaqueTy>,
         env: &GenericEnv,
         args: &[Ty],
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Ty> {
         self.check_facts(facts, false)?;
+        scratch.for_facts(facts);
         self.validate_opaque_metadata(opaque, env)?;
         let schema = GenericSchema {
             env: Arc::new(env.clone()),
@@ -132,10 +136,17 @@ impl ValidatedTraitWorld {
             predicates: Arc::from([]),
         };
         let actual = self
-            .substitute_projected_schema(&schema, args, facts.env())?
+            .substitute_carrier_schema(&schema, args, facts, scratch.for_world(self.id))?
             .signature
             .result;
-        let actual = facts.normalize_substituted_projection_type(&actual, &self.budget)?;
+        let actual = self
+            .normalize_closed_projected_type_with(
+                &actual,
+                ProofContext::from_facts(facts),
+                false,
+                scratch.for_world(self.id),
+            )?
+            .0;
         let Ty::Opaque(opaque) = &actual else {
             return Err(FactsError::invalid(
                 &self.budget,

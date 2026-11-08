@@ -9,6 +9,18 @@ pub enum NormalDropPlan {
     Destructor(Arc<ValidatedDestructor>),
 }
 
+#[derive(Default)]
+pub(super) struct NormalDropScratch {
+    context: Option<body_validation::Context>,
+    plans: Vec<CompletedNormalDrop>,
+    storage: Vec<ir::PlanReservation>,
+}
+
+struct CompletedNormalDrop {
+    ty: Ty,
+    plan: NormalDropPlan,
+}
+
 /// The canonical own-Drop resolution, shared by glue and presence consumers.
 /// This is node-local evidence, not a published fact or executable destructor.
 enum OwnNormalDrop {
@@ -175,6 +187,320 @@ impl ValidatedDestructor {
     }
 }
 impl ValidatedFacts {
+    /// Dependency discovery before graph field layout exists. Only canonical
+    /// user destructor targets escape, never a ValidatedDestructor or glue.
+    #[cfg(test)]
+    pub(in crate::compiler) fn source_normal_drop_targets(
+        &self,
+        ty: &Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<Vec<CallTarget>> {
+        self.world.check_facts(self, true)?;
+        let mut targets = Vec::new();
+        self.source_normal_drop_targets_inner(
+            ty,
+            scratch,
+            0,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut targets,
+            &mut None,
+        )?;
+        Ok(targets)
+    }
+
+    /// Source-only dependencies, never destructor evidence or triviality.
+    pub(in crate::compiler) fn source_normal_drop_dependencies(
+        &self,
+        ty: &Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<(Vec<CallTarget>, Vec<Arc<ir::OpaqueTy>>)> {
+        self.world.check_facts(self, true)?;
+        let mut targets = Vec::new();
+        let mut opaque = Some(Vec::new());
+        self.source_normal_drop_targets_inner(
+            ty,
+            scratch,
+            0,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut targets,
+            &mut opaque,
+        )?;
+        Ok((targets, opaque.unwrap_or_default()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn source_normal_drop_targets_inner(
+        &self,
+        ty: &Ty,
+        scratch: &mut TraitScratch,
+        depth: usize,
+        owning_depth: usize,
+        active: &mut Vec<NormalDropFrame>,
+        complete: &mut Vec<Ty>,
+        targets: &mut Vec<CallTarget>,
+        opaque: &mut Option<Vec<Arc<ir::OpaqueTy>>>,
+    ) -> Result<()> {
+        charged(self.budget(), self.budget().check_depth(depth))?;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        self.validate_ty_metadata_scratch(ty, self.budget(), scratch)?;
+        if matches!(ty, Ty::AssociatedType(_)) {
+            let normalized = self.normalize_substituted_projection_type(ty, self.budget())?;
+            if self.world.eq_ty(ty, &normalized, 0)? {
+                return Err(FactsError::unsupported(
+                    self.budget(),
+                    "unresolved source cleanup projection",
+                ));
+            }
+            return self.source_normal_drop_targets_inner(
+                &normalized,
+                scratch,
+                depth + 1,
+                owning_depth,
+                active,
+                complete,
+                targets,
+                opaque,
+            );
+        }
+        if let (Ty::Opaque(descriptor), Some(dependencies)) = (ty, opaque.as_mut()) {
+            for previous in dependencies.iter() {
+                charged(self.budget(), self.budget().charge_work(1))?;
+                if schema_instantiation::same_input(
+                    &Ty::Opaque(previous.clone()),
+                    ty,
+                    self.budget(),
+                    0,
+                )? {
+                    return Ok(());
+                }
+            }
+            push(self.budget(), dependencies, descriptor.clone())?;
+            return Ok(());
+        }
+        if matches!(ty, Ty::Param(_) | Ty::Opaque(_)) {
+            return Err(FactsError::unsupported(
+                self.budget(),
+                "unresolved source cleanup owner",
+            ));
+        }
+        if matches!(
+            ty,
+            Ty::Ref { .. }
+                | Ty::RawPtr { .. }
+                | Ty::PhantomData(_)
+                | Ty::Cell(_)
+                | Ty::ManuallyDrop(_)
+        ) {
+            return Ok(());
+        }
+        for frame in active.iter() {
+            charged(self.budget(), self.budget().charge_work(1))?;
+            if self.world.eq_ty(ty, &frame.owner, 0)? {
+                return if owning_depth > frame.owning_depth {
+                    Ok(())
+                } else {
+                    Err(FactsError::invalid(
+                        self.budget(),
+                        "recursive source cleanup without an owning edge",
+                    ))
+                };
+            }
+        }
+        for previous in complete.iter() {
+            charged(self.budget(), self.budget().charge_work(1))?;
+            if schema_instantiation::same_input(previous, ty, self.budget(), 0)? {
+                return Ok(());
+            }
+        }
+        push(
+            self.budget(),
+            active,
+            NormalDropFrame {
+                owner: ty.clone(),
+                owning_depth,
+            },
+        )?;
+        let result: Result<()> = (|| {
+            // Full source metadata above authenticates this reserved ownership
+            // carrier. It confers an owning edge here, not native layout/glue.
+            if let Some((kind, pointee)) = ty.owned_pointer_pointee() {
+                if kind == ir::OwnedPointerKind::Box
+                    && let Ty::Struct(value) = ty
+                    && value.realization().is_none()
+                {
+                    let source = self
+                        .world
+                        .schema
+                        .native_box_source(value.def().source_decl)?
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                self.budget(),
+                                "source cleanup Box lost canonical ownership provider",
+                            )
+                        })?;
+                    source
+                        .authorize_definition(ty, self.budget())
+                        .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+                }
+                if matches!(pointee, Ty::Dyn(_)) {
+                    // Unsizing sites separately demand every vtable target.
+                    return Ok(());
+                }
+                let next = owning_depth.checked_add(1).ok_or_else(|| {
+                    FactsError::resource(self.budget(), "source cleanup owning depth overflow")
+                })?;
+                return self.source_normal_drop_targets_inner(
+                    pointee,
+                    scratch,
+                    depth + 1,
+                    next,
+                    active,
+                    complete,
+                    targets,
+                    opaque,
+                );
+            }
+            let declaration = match ty {
+                Ty::Struct(value) => Some(value.def().source_decl),
+                Ty::Enum(value) => Some(value.def().source_decl),
+                _ => None,
+            };
+            let mut has_own_drop = false;
+            if let Some(declaration) = declaration {
+                let candidates = self
+                    .world
+                    .trait_impl_index
+                    .get(&self.world.catalog.id(CatalogItem::Drop))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                for &position in candidates {
+                    charged(self.budget(), self.budget().charge_work(1))?;
+                    let implementation = &self.world.headers.impls[position];
+                    let owner = match &implementation.trait_ref.self_ty {
+                        Ty::Struct(value) => Some(value.def().source_decl),
+                        Ty::Enum(value) => Some(value.def().source_decl),
+                        _ => None,
+                    };
+                    has_own_drop |= owner == Some(declaration);
+                }
+            }
+            if has_own_drop {
+                let predicate = Predicate::Implements(TraitRef {
+                    declaration: self.world.catalog.id(CatalogItem::Drop),
+                    self_ty: ty.clone(),
+                    args: Arc::from([]),
+                });
+                let proof = self.world.require_in(
+                    &predicate,
+                    ProofContext::from_facts(self),
+                    scratch.for_world(self.world.id),
+                )?;
+                let ProofOrigin::Implementation {
+                    declaration,
+                    arguments,
+                } = &proof.0.origin
+                else {
+                    return Err(FactsError::invalid(
+                        self.budget(),
+                        "source destructor has no canonical implementation",
+                    ));
+                };
+                let positions = self
+                    .world
+                    .impl_header_index
+                    .get(self.budget(), *declaration)?;
+                let mut selected = None;
+                for position in positions.iter() {
+                    let implementation = &self.world.headers.impls[*position];
+                    for (item, body) in implementation.items.iter() {
+                        charged(self.budget(), self.budget().charge_work(1))?;
+                        if *item == self.world.catalog.id(CatalogItem::DropItem) {
+                            if selected.is_some() {
+                                return Err(FactsError::invalid(
+                                    self.budget(),
+                                    "ambiguous source destructor item",
+                                ));
+                            }
+                            self.world.ensure_provider(*body)?;
+                            selected = Some(CallTarget {
+                                declaration: *body,
+                                type_args: arguments.clone(),
+                            });
+                        }
+                    }
+                }
+                let target = selected.ok_or_else(|| {
+                    FactsError::invalid(self.budget(), "source destructor item missing")
+                })?;
+                // Admission proves entry obligations only. Later executable
+                // discharge still authenticates its signature and field layout.
+                self.world.instance_facts(&target)?;
+                let mut duplicate = false;
+                for previous in targets.iter() {
+                    charged(self.budget(), self.budget().charge_work(1))?;
+                    duplicate |= previous == &target;
+                }
+                if !duplicate {
+                    push(self.budget(), targets, target)?;
+                }
+            }
+            let mut child = |ty: &Ty| {
+                self.source_normal_drop_targets_inner(
+                    ty,
+                    scratch,
+                    depth + 1,
+                    owning_depth,
+                    active,
+                    complete,
+                    targets,
+                    opaque,
+                )
+            };
+            match ty {
+                Ty::Struct(value) => {
+                    for field in nominal_fields(&value.def().fields, self.budget())?.iter() {
+                        child(&field.ty)?;
+                    }
+                }
+                Ty::Enum(value) => {
+                    for variant in value.def().variants.iter() {
+                        charged(self.budget(), self.budget().charge_work(1))?;
+                        for field in nominal_fields(&variant.fields, self.budget())?.iter() {
+                            child(&field.ty)?;
+                        }
+                    }
+                }
+                Ty::Tuple(parts) => {
+                    for part in parts.iter() {
+                        child(part)?;
+                    }
+                }
+                Ty::Closure(value) => {
+                    for capture in value.captures() {
+                        child(capture)?;
+                    }
+                }
+                Ty::Array { element, len } if *len != 0 => child(element)?,
+                Ty::DependentArray { .. } | Ty::Slice { .. } => {
+                    return Err(FactsError::unsupported(
+                        self.budget(),
+                        "unsupported: unresolved source cleanup extent",
+                    ));
+                }
+                _ => {}
+            }
+            Ok(())
+        })();
+        active.pop();
+        result?;
+        push(self.budget(), complete, ty.clone())?;
+        Ok(())
+    }
+
     /// Feature-presence optimization, not a proof that an arbitrary type is Copy.
     pub fn has_normal_drop_impls(&self) -> bool {
         self.world.has_normal_drop
@@ -373,8 +699,46 @@ impl ValidatedFacts {
         ty: &Ty,
         scratch: &mut TraitScratch,
     ) -> Result<NormalDropPlan> {
+        // Live facts, source authority, exact metadata and budget checks must
+        // precede even a completed-plan hit. This is the same full admission
+        // required by the uncached entry point.
         self.validate_ty_scratch(ty, scratch)?;
-        self.normal_drop_plan_inner(ty, 0, 0, &mut Vec::new())
+        let memo = &mut scratch.normal_drops;
+        if !memo
+            .context
+            .as_ref()
+            .map(|context| context.matches(self))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            *memo = NormalDropScratch {
+                context: Some(body_validation::Context::retain(self)?),
+                ..NormalDropScratch::default()
+            };
+        }
+        if !ty.is_nominal_back_edge() {
+            for previous in &memo.plans {
+                charged(self.budget(), self.budget().charge_work(1))?;
+                if schema_instantiation::same_input(&previous.ty, ty, self.budget(), 0)? {
+                    return Ok(previous.plan.clone());
+                }
+            }
+        }
+        // Recursive glue refers to this root's authenticated DFS ancestors.
+        // Never reuse an active or partial subtree from another ancestry.
+        let plan = self.normal_drop_plan_inner(ty, 0, 0, &mut Vec::new())?;
+        if !ty.is_nominal_back_edge() && memo.plans.len() < MAX_SCRATCH_OBLIGATIONS {
+            push_scratch_row(
+                self.budget(),
+                &mut memo.plans,
+                &mut memo.storage,
+                CompletedNormalDrop {
+                    ty: ty.clone(),
+                    plan: plan.clone(),
+                },
+            )?;
+        }
+        Ok(plan)
     }
     pub(in crate::compiler) fn native_box_actual_is_closed(&self, actual: &Ty) -> Result<bool> {
         self.world.check_facts(self, true)?;
@@ -883,9 +1247,73 @@ mod owning_rc_authority_tests {
         assert_eq!(facts.phase(), FactsPhase::Closed);
         let checked = publication.source();
         let owner = checked.locals[checked.params[0].0].ty.clone();
-        let NormalDropPlan::Destructor(plan) = facts.normal_drop_plan(&owner).unwrap() else {
+        let mut scratch = TraitScratch::default();
+        let before = budget.usage_snapshot().work;
+        let NormalDropPlan::Destructor(plan) = facts
+            .normal_drop_plan_with_scratch(&owner, &mut scratch)
+            .unwrap()
+        else {
             panic!("recursive owner needs destruction")
         };
+        let cold = budget.usage_snapshot().work - before;
+        for _ in 0..2 {
+            let before = budget.usage_snapshot().work;
+            let NormalDropPlan::Destructor(reused) = facts
+                .normal_drop_plan_with_scratch(&owner, &mut scratch)
+                .unwrap()
+            else {
+                panic!("completed root lost recursive destruction")
+            };
+            assert!(Arc::ptr_eq(&plan, &reused));
+            assert!(budget.usage_snapshot().work - before < cold);
+            assert_eq!(scratch.normal_drops.plans.len(), 1);
+        }
+        let other = facts
+            .world
+            .callable_facts(context.function_decl(1).unwrap())
+            .unwrap();
+        assert!(
+            !scratch
+                .normal_drops
+                .context
+                .as_ref()
+                .unwrap()
+                .matches(&other)
+                .unwrap()
+        );
+        assert!(matches!(
+            other
+                .normal_drop_plan_with_scratch(&Ty::Unit, &mut scratch)
+                .unwrap(),
+            NormalDropPlan::Trivial
+        ));
+        assert!(
+            scratch
+                .normal_drops
+                .context
+                .as_ref()
+                .unwrap()
+                .matches(&other)
+                .unwrap()
+        );
+        let NormalDropPlan::Destructor(rebound) = facts
+            .normal_drop_plan_with_scratch(&owner, &mut scratch)
+            .unwrap()
+        else {
+            panic!("original recursive root lost destruction after caller change")
+        };
+        assert!(!Arc::ptr_eq(&plan, &rebound));
+        let foreign_context =
+            frontend::PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let foreign = foreign_context
+            .callable_facts(foreign_context.function_decl(0).unwrap())
+            .unwrap();
+        assert!(
+            matches!(foreign.normal_drop_plan_with_scratch(&owner, &mut scratch), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        facts
+            .normal_drop_plan_with_scratch(&owner, &mut scratch)
+            .unwrap();
         let DropGlue::Variants(variants) = plan.glue() else {
             panic!("enum fields")
         };
@@ -910,6 +1338,11 @@ mod owning_rc_authority_tests {
         let wrong_slot = Ty::Enum(ir::EnumTy::new(wrong_slot));
         assert!(!facts.same_normal_drop_owner(&wrong_slot, &owner).unwrap());
         assert!(facts.normal_drop_plan(&wrong_slot).is_err());
+        assert!(
+            facts
+                .normal_drop_plan_with_scratch(&wrong_slot, &mut scratch)
+                .is_err()
+        );
         let mut changed = original.def().clone();
         changed.variants = Arc::from([]);
         let forged_same_id = Ty::Enum(ir::EnumTy::new(changed));
@@ -919,6 +1352,11 @@ mod owning_rc_authority_tests {
                 .is_err()
         );
         assert!(facts.normal_drop_plan(&forged_same_id).is_err());
+        assert!(
+            facts
+                .normal_drop_plan_with_scratch(&forged_same_id, &mut scratch)
+                .is_err()
+        );
         plan.validate(&owner, facts).unwrap();
         assert!(recursive.validate(&owner, facts).is_err());
         assert!(plan.targets().is_empty());
@@ -956,6 +1394,13 @@ mod owning_rc_authority_tests {
         );
         assert_eq!(
             facts.normal_drop_plan(&owner).unwrap_err().kind(),
+            FactsErrorKind::Resource
+        );
+        assert_eq!(
+            facts
+                .normal_drop_plan_with_scratch(&owner, &mut scratch)
+                .unwrap_err()
+                .kind(),
             FactsErrorKind::Resource
         );
         let first = budget.first_resource_failure().unwrap();
@@ -1183,6 +1628,21 @@ mod owning_rc_authority_tests {
         };
         assert!(matches!(dynamic.glue(), DropGlue::RcObject));
         assert!(matches!(typed.glue(), DropGlue::RcValue(Some(_))));
+        let mut source_scratch = TraitScratch::default();
+        for _ in 0..2 {
+            assert_eq!(
+                facts
+                    .source_normal_drop_targets(&owners[1], &mut source_scratch)
+                    .unwrap(),
+                typed.targets()
+            );
+            assert!(
+                facts
+                    .source_normal_drop_targets(&owners[0], &mut source_scratch)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         for (valid, owner) in [(&dynamic, &owners[0]), (&typed, &owners[1])] {
             valid.validate(owner, facts).unwrap();
             for glue in [

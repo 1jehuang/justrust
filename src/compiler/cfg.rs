@@ -2238,7 +2238,11 @@ impl Function {
         }
         Ok(())
     }
-    fn validate_loan_timing(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+    fn validate_loan_timing(
+        &self,
+        facts: ir::FactsCtx<'_>,
+        source_metadata: bool,
+    ) -> Result<(), String> {
         let budget = self.query_budget(facts);
         let mut work = 0usize;
         let mut spend = |amount: usize| -> Result<(), String> {
@@ -2253,6 +2257,7 @@ impl Function {
             }
             Ok(())
         };
+        let mut receiver_scratch = crate::compiler::traits::TraitScratch::default();
         for (loan_index, site) in self.loan_sites.iter().enumerate() {
             spend(1)?;
             let LoanTiming::TwoPhase {
@@ -2311,10 +2316,16 @@ impl Function {
             }
             let receiver = if let Some(authority) = facts.validated() {
                 argument == 0
-                    && authority
-                        .service()
-                        .callee_receiver(target, authority)
-                        .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                    && (if source_metadata {
+                        authority.source_callee_receiver_for_signature(
+                            target,
+                            signature,
+                            &mut receiver_scratch,
+                        )
+                    } else {
+                        authority.service().callee_receiver(target, authority)
+                    })
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
                         == (ir::ReceiverMode::Borrowed {
                             kind: ir::BorrowKind::Mut,
                         })
@@ -3744,6 +3755,19 @@ impl Function {
             }
             validate_type_with_budget(&self.result, 0, budget)?;
         }
+        // Provenance replay above authenticates either the exact original
+        // publication or all current-engine storage roots and closed receipts.
+        // Neither case should reconstruct physical storage from source schemas.
+        let source_signature_metadata = physical.is_none()
+            && facts.validated().is_some()
+            && (self
+                .lowering_proof
+                .as_ref()
+                .is_some_and(|shape| shape.original_publication.is_some())
+                || self
+                    .body_substitution
+                    .as_ref()
+                    .is_some_and(|proof| proof.has_typed_engine()));
         if self.params.len() >= ir::MAX_PATTERN_PROJECTION_WORK {
             return Err("reference contract parameter resource limit exceeded".into());
         }
@@ -3760,15 +3784,22 @@ impl Function {
             // the resulting concrete carrier contract, never a public alias.
             self.ref_contract.validate(&parameter_types, &self.result)?;
         } else if let Some(authority) = facts.validated() {
-            ir::validate_body_signature_with_scratch(
-                &ir::Signature {
-                    ref_contract: self.ref_contract.clone(),
-                    params: parameter_types.clone(),
-                    result: self.result.clone(),
-                },
-                authority,
-                scratch,
-            )?;
+            let signature = ir::Signature {
+                ref_contract: self.ref_contract.clone(),
+                params: parameter_types.clone(),
+                result: self.result.clone(),
+            };
+            if source_signature_metadata {
+                authority
+                    .validate_source_flow_signature_with_scratch(
+                        ir::SignatureSubject::Body,
+                        &signature,
+                        scratch,
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+            } else {
+                ir::validate_body_signature_with_scratch(&signature, authority, scratch)?;
+            }
         }
         drop(parameter_types);
         if self.loan_sites.len() > ir::MAX_LOAN_SITES {
@@ -3997,7 +4028,13 @@ impl Function {
                     if let Some(physical) = physical {
                         physical.validate_call(item.terminator.origin, target, signature)?;
                     } else {
-                        ir::validate_callee_scratch(target, signature, facts, scratch)?;
+                        ir::validate_callee_for_use_scratch(
+                            target,
+                            signature,
+                            facts,
+                            scratch,
+                            !source_signature_metadata,
+                        )?;
                     }
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
@@ -4042,7 +4079,7 @@ impl Function {
         if loan_uses.iter().any(|count| *count != 1) {
             return Err("CFG loan site must have exactly one borrow instruction".into());
         }
-        self.validate_loan_timing(facts)
+        self.validate_loan_timing(facts, physical.is_none())
     }
 }
 
@@ -8327,6 +8364,25 @@ mod original_replay_transport_tests {
         assert!(function.call_evidence.is_empty());
         assert!(function.lowering_proof.is_some());
         function
+            .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+            .unwrap();
+        let mut forged_signature = function.clone();
+        forged_signature.result = Ty::Bool;
+        forged_signature.lowering_proof = Some(std::sync::Arc::new(
+            GeneratedCfgShape::capture_with_publication(
+                &forged_signature,
+                publication.facts(),
+                Some(&publication),
+                &budget,
+            )
+            .unwrap(),
+        ));
+        assert!(
+            forged_signature
+                .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()),)
+                .is_err()
+        );
+        function
             .validate_source_publication(&publication, &budget)
             .unwrap();
         assert!(
@@ -8636,6 +8692,26 @@ mod tests {
         assert!(lower_with_facts(&replay, &facts, &budget).is_err());
         let function = lower_with_facts(&instance, &facts, &budget).unwrap();
         function.validate_provenance(&facts, &budget).unwrap();
+        let mut forged_result = function.clone();
+        forged_result.result = Ty::Bool;
+        assert!(
+            function
+                .body_substitution
+                .as_ref()
+                .unwrap()
+                .validate_cfg(&forged_result, &facts, &budget)
+                .is_err()
+        );
+        let mut forged_contract = function.clone();
+        forged_contract.ref_contract = std::sync::Arc::new((*function.ref_contract).clone());
+        assert!(
+            function
+                .body_substitution
+                .as_ref()
+                .unwrap()
+                .validate_cfg(&forged_contract, &facts, &budget)
+                .is_err()
+        );
         let shape = function.lowering_proof.as_ref().unwrap();
         assert!(std::sync::Arc::ptr_eq(&shape.world, facts.world()));
         assert!(std::sync::Arc::ptr_eq(

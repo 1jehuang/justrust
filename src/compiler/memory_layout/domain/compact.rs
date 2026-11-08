@@ -41,8 +41,9 @@ impl Header {
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         // Local is computation-local scratch, never part of the output.
-        let local = Local::capture(source, publication, facts, budget)?;
-        local.validate(budget)?;
+        let mut scratch = traits::TraitScratch::default();
+        let local = Local::capture_with_scratch(source, publication, facts, budget, &mut scratch)?;
+        local.validate_with_scratch(budget, &mut scratch)?;
         let mut transfers = Vec::new();
         for edge in local.edges.iter() {
             budget.charge_work(1)?;
@@ -442,8 +443,7 @@ impl Summary {
             return Err("alignment summary changed its closed fact subject".into());
         }
         facts
-            .service()
-            .discharge_direct(target, facts)
+            .validate_instance_entry(target, budget)
             .map_err(|error| error.into_legacy_diagnostic(budget))?;
         let required = self.requirement(target.declaration)?;
         required.admit()?;
@@ -451,6 +451,7 @@ impl Summary {
             return Err("alignment summary changed closed argument arity".into());
         }
         let mut closed = Requirement::empty(0, budget)?;
+        let mut cleanup_scratch = traits::TraitScratch::default();
         for (slot, argument) in target.type_args.iter().enumerate() {
             budget.charge_work(1)?;
             if required.parameters[slot] {
@@ -460,7 +461,15 @@ impl Summary {
                 super::normalize_raw_pointee(argument, &[], &mut closed, budget)?;
             }
             if required.drop_parameters[slot] {
-                super::normalize_drop(argument, facts, &[], &mut closed, budget, 0)?;
+                // This summary selects graph dependencies before physical
+                // nominal fields have been realized. Discover source cleanup
+                // targets and opaque producers, never executable drop glue.
+                // Empty inventories mean no dispatch continuation is needed,
+                // not that the eventual executable destructor is trivial.
+                let (targets, producers) = facts
+                    .source_normal_drop_dependencies(argument, &mut cleanup_scratch)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                closed.deferred_dispatch |= !targets.is_empty() || !producers.is_empty();
             }
             if let Some(limit) = required.semantic_limits[slot] {
                 super::normalize_semantic_size(argument, &[], limit, &mut closed, budget)?;

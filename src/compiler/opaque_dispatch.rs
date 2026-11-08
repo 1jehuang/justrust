@@ -288,6 +288,34 @@ pub(super) async fn extend_instance_demands(
     types: &frontend::PlanCtx,
     demands: &mut instances::DirectDemands,
 ) -> Result<(), Error> {
+    // Cleanup inventory retains opaque descriptors, not hidden-type guesses.
+    // Read all independent defining publications before consuming any hidden
+    // representation. The capability replays exact owner/site/ordered actuals
+    // and authored pack witnesses, including nested opaque dependencies.
+    if !demands.cleanup_opaque.is_empty() {
+        let (mut roots, _root_storage) = provider.scratch_vec(demands.cleanup_opaque.len())?;
+        roots.extend(demands.cleanup_opaque.iter().cloned().map(ir::Ty::Opaque));
+        let representations =
+            opaque_instances::read(&Facts { cx }, &roots, &provider.0.budget).await?;
+        let facts = types.instance_facts(target).map_err(Error::new)?;
+        let mut scratch = traits::TraitScratch::default();
+        for root in roots {
+            let hidden = representations.normalize(&root, &provider.0.budget)?;
+            let (targets, remaining) = facts
+                .source_normal_drop_dependencies(&hidden, &mut scratch)
+                .map_err(|error| Error::new(error.into_legacy_diagnostic(&provider.0.budget)))?;
+            if !remaining.is_empty() {
+                return Err(Error::new(
+                    "opaque cleanup retained an unread producer representation",
+                ));
+            }
+            for target in targets {
+                demands
+                    .cleanup(target, &provider.0.budget)
+                    .map_err(Error::new)?;
+            }
+        }
+    }
     let mut has_opaque_actual = false;
     for actual in target.type_args.iter() {
         if opaque_instances::contains(actual, &provider.0.budget)? {

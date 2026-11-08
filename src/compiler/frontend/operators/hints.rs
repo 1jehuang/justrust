@@ -89,9 +89,10 @@ impl type_check::Checker<'_> {
         Ok(unique)
     }
 
-    /// A unique proved operator application supplies an expected RHS type.
-    /// Operand coercions are checked independently during lowering, just as
-    /// ordinary call arguments are. Ambiguous or open impls give no hint.
+    /// `s + &t` with `t: String`: when exactly one proved application of the
+    /// binary operator trait exists for the receiver, stock checks the RHS
+    /// as coercible to that impl's formal (`&String` to `&str`). Returns the
+    /// unique formal; any ambiguity or open selection supplies nothing.
     pub(in crate::compiler::frontend) fn unique_operator_rhs_formal(
         &self,
         receiver: &ir::Ty,

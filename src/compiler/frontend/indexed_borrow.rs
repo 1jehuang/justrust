@@ -59,6 +59,13 @@ impl type_check::Checker<'_> {
             }
             match step {
                 IndexedBorrowStep::Field(field) => {
+                    // Only a stored member belongs to this fresh owned value.
+                    // A Deref target requires ordinary checked field lowering.
+                    if let ir::Ty::Struct(nominal) = &ty
+                        && !self.has_member(nominal.def().source_decl, field)?
+                    {
+                        return Ok(None);
+                    }
                     let (_, field_ty) = self.field_type(&ty, field)?;
                     ty = field_ty;
                 }
@@ -200,10 +207,12 @@ impl type_check::Checker<'_> {
             fields.push(field);
             root = base;
         }
-        // A local owner's non-stored field is also a returned-reference
-        // place: obtain its ordinary checked Deref call without moving the
-        // owner, then use exactly the same projection/loan protocol below.
-        let local_owner = if !fields.is_empty() && matches!(root, Expr::Var(_)) {
+        // A non-stored field belongs to the checked Deref target, whether
+        // the owner is a local or an owned call result. The ordinary receiver
+        // protocol retains temporary owners through the full expression.
+        let overloaded_owner = if !fields.is_empty()
+            && (matches!(root, Expr::Var(_)) || type_check::genuine_call(root))
+        {
             match self.method_receiver_hint(root)? {
                 Some(hint) => {
                     let owner = match &hint {
@@ -226,7 +235,7 @@ impl type_check::Checker<'_> {
         if fields.is_empty()
             || !(matches!(root, Expr::Index { .. } | Expr::DynamicIndex { .. })
                 || type_check::genuine_call(root)
-                || local_owner.is_some())
+                || overloaded_owner.is_some())
         {
             return Ok(None);
         }
@@ -236,10 +245,11 @@ impl type_check::Checker<'_> {
         {
             return Ok(None);
         }
-        // An owned call result is not a returned-reference place. Decline
-        // before lowering it: the caller's owned-field fallback must remain
-        // the only evaluation and the only original call correspondence.
+        // Stored fields of an owned call result use the owned-field fallback.
+        // Decline before lowering so that fallback remains the only evaluation
+        // and the only original call correspondence.
         if type_check::genuine_call(root)
+            && overloaded_owner.is_none()
             && self
                 .method_receiver_hint(root)?
                 .is_some_and(|ty| !matches!(ty, ir::Ty::Ref { .. } | ir::Ty::Never))
@@ -251,10 +261,15 @@ impl type_check::Checker<'_> {
         } else {
             None
         };
-        let evaluated = if let Some(owner) = local_owner {
+        let overloaded_carrier = if let Some(owner) = overloaded_owner {
             let Some(carrier) = self.receiver_overloaded_deref(root, &owner, kind)? else {
                 return Ok(None);
             };
+            Some(carrier)
+        } else {
+            None
+        };
+        let evaluated = if let Some(carrier) = overloaded_carrier {
             self.deref_overloaded_result(carrier)?
         } else if let Some(carrier) = indexed {
             self.deref_overloaded_result(carrier)?
@@ -274,9 +289,12 @@ impl type_check::Checker<'_> {
             array_steps.push(index);
             outer = base;
         }
+        // The owned receiver protocol can wrap its selected call in a block.
+        // Admit only that exact checked carrier, never an arbitrary block.
         let carrier = match self.exprs[outer.0].kind {
             ir::ExprKind::Deref { value }
-                if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. }) =>
+                if matches!(self.exprs[value.0].kind, ir::ExprKind::Call { .. })
+                    || overloaded_carrier == Some(value) =>
             {
                 value
             }

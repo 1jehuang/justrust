@@ -16,18 +16,43 @@ impl Replay<'_> {
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         sr::depth(self.budget, depth)?;
-        let Expr::MethodCall {
-            receiver,
-            name,
-            type_args,
-            args: written,
-        } = source
-        else {
-            return Err(FactsError::invalid(
-                self.budget,
-                "generic method lost original syntax",
-            ));
-        };
+        let (receiver, name, type_args, written, authored_owner, receiver_tag, argument_offset) =
+            match source {
+                Expr::MethodCall {
+                    receiver,
+                    name,
+                    type_args,
+                    args,
+                } => (
+                    receiver.as_ref(),
+                    name,
+                    type_args,
+                    args.as_slice(),
+                    None,
+                    10,
+                    0,
+                ),
+                Expr::AssociatedCall {
+                    owner,
+                    name,
+                    type_args,
+                    args,
+                } => {
+                    let (receiver, written) = args.split_first().ok_or_else(|| {
+                        FactsError::unsupported(
+                            self.budget,
+                            "associated method requires an explicit source receiver",
+                        )
+                    })?;
+                    (receiver, name, type_args, written, Some(owner), 9, 1)
+                }
+                _ => {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "generic method lost original syntax",
+                    ));
+                }
+            };
         if !type_args.is_empty() {
             return Err(FactsError::unsupported(
                 self.budget,
@@ -121,86 +146,128 @@ impl Replay<'_> {
                 ));
             }
         }
-        let receiver_node = node.child(10, 0, self.budget)?;
+        let receiver_node = node.child(receiver_tag, 0, self.budget)?;
         validate_original_occurrence(self.original, &receiver_node, self.budget)?;
         let argument = self.checked.exprs.get(args[0].0).ok_or_else(|| {
             FactsError::invalid(self.budget, "generic method receiver outside checked arena")
         })?;
-        let (owner, input, expectation) = match info.receiver {
-            ReceiverKind::Value { .. } => {
-                let owner = self.expression(receiver, &receiver_node, args[0], None, depth + 1)?;
-                (owner.clone(), owner, ir::CallExpectation::NoFirmReference)
-            }
-            ReceiverKind::Borrowed { kind } if kind == ir::BorrowKind::Shared || closed_header => {
-                if !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) {
-                    return Err(FactsError::unsupported(
-                        self.budget,
-                        "borrowed input method requires an original local receiver",
-                    ));
-                }
-                let (local, source_ty) = self.operand(&receiver_node, depth + 1)?;
-                if kind == ir::BorrowKind::Shared
-                    && matches!(argument.kind, ir::ExprKind::Call { .. })
-                {
-                    let (owner, input) = self.shared_deref_receiver(
-                        &receiver_node,
-                        args[0],
-                        local,
-                        &source_ty,
-                        depth + 1,
-                    )?;
-                    (owner, input, ir::CallExpectation::FirmReference { kind })
-                } else {
-                    let mut owner = source_ty.clone();
-                    let mut projection = Vec::new();
-                    while let ir::Ty::Ref { referent, .. } = &owner {
-                        sr::depth(self.budget, depth + projection.len())?;
-                        sr::push(&mut projection, ir::Projection::Deref, self.budget)?;
-                        owner = referent.as_ref().clone();
-                    }
-                    let input = self.reference(kind, owner.clone())?;
-                    let exact = match &argument.kind {
-                        ir::ExprKind::Borrow {
-                            kind: actual_kind,
-                            place,
-                            timing,
-                        } => {
-                            let exact_timing = match (kind, timing) {
-                                (ir::BorrowKind::Shared, ir::BorrowTiming::Immediate) => true,
-                                (
-                                    ir::BorrowKind::Mut,
-                                    ir::BorrowTiming::TwoPhase {
-                                        activation,
-                                        argument,
-                                        reason: ir::ImplicitBorrowKind::MutableReceiver,
-                                    },
-                                ) => *activation == id && *argument == 0,
-                                _ => false,
-                            };
-                            *actual_kind == kind
-                                && exact_timing
-                                && place.local == local
-                                && place.projection == projection
-                        }
-                        ir::ExprKind::Local(actual) if kind == ir::BorrowKind::Shared => {
-                            *actual == local && self.equal(&source_ty, &input)?
-                        }
-                        _ => false,
-                    };
-                    if !exact || !self.equal(&argument.ty, &input)? {
-                        return Err(FactsError::invalid(
-                            self.budget,
-                            "generic method changed its source receiver adjustment",
-                        ));
-                    }
-                    (owner, input, ir::CallExpectation::FirmReference { kind })
-                }
-            }
-            _ => {
+        let (owner, input, expectation) = if let Some(authored_owner) = authored_owner {
+            let ReceiverKind::Borrowed {
+                kind: ir::BorrowKind::Shared,
+            } = info.receiver
+            else {
                 return Err(FactsError::unsupported(
                     self.budget,
-                    "generic input method mutable receiver is not admitted",
+                    "associated input method requires a shared source receiver",
                 ));
+            };
+            let expectation = ir::CallExpectation::FirmReference {
+                kind: ir::BorrowKind::Shared,
+            };
+            let formal = &view.signature().params[0];
+            let input = self.argument(
+                receiver,
+                &receiver_node,
+                args[0],
+                id,
+                0,
+                expectation,
+                formal.is_closed_shallow().then_some(formal),
+                depth + 1,
+            )?;
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &input
+            else {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "associated method lost its source shared receiver",
+                ));
+            };
+            let owner = referent.as_ref().clone();
+            self.associated_method_owner(authored_owner, associated.nominal, &owner)?;
+            (owner, input, expectation)
+        } else {
+            match info.receiver {
+                ReceiverKind::Value { .. } => {
+                    let owner =
+                        self.expression(receiver, &receiver_node, args[0], None, depth + 1)?;
+                    (owner.clone(), owner, ir::CallExpectation::NoFirmReference)
+                }
+                ReceiverKind::Borrowed { kind }
+                    if kind == ir::BorrowKind::Shared || closed_header =>
+                {
+                    if !matches!(receiver, Expr::Var(path) if is_local_shaped_path(path)) {
+                        return Err(FactsError::unsupported(
+                            self.budget,
+                            "borrowed input method requires an original local receiver",
+                        ));
+                    }
+                    let (local, source_ty) = self.operand(&receiver_node, depth + 1)?;
+                    if kind == ir::BorrowKind::Shared
+                        && matches!(argument.kind, ir::ExprKind::Call { .. })
+                    {
+                        let (owner, input) = self.shared_deref_receiver(
+                            &receiver_node,
+                            args[0],
+                            local,
+                            &source_ty,
+                            depth + 1,
+                        )?;
+                        (owner, input, ir::CallExpectation::FirmReference { kind })
+                    } else {
+                        let mut owner = source_ty.clone();
+                        let mut projection = Vec::new();
+                        while let ir::Ty::Ref { referent, .. } = &owner {
+                            sr::depth(self.budget, depth + projection.len())?;
+                            sr::push(&mut projection, ir::Projection::Deref, self.budget)?;
+                            owner = referent.as_ref().clone();
+                        }
+                        let input = self.reference(kind, owner.clone())?;
+                        let exact = match &argument.kind {
+                            ir::ExprKind::Borrow {
+                                kind: actual_kind,
+                                place,
+                                timing,
+                            } => {
+                                let exact_timing = match (kind, timing) {
+                                    (ir::BorrowKind::Shared, ir::BorrowTiming::Immediate) => true,
+                                    (
+                                        ir::BorrowKind::Mut,
+                                        ir::BorrowTiming::TwoPhase {
+                                            activation,
+                                            argument,
+                                            reason: ir::ImplicitBorrowKind::MutableReceiver,
+                                        },
+                                    ) => *activation == id && *argument == 0,
+                                    _ => false,
+                                };
+                                *actual_kind == kind
+                                    && exact_timing
+                                    && place.local == local
+                                    && place.projection == projection
+                            }
+                            ir::ExprKind::Local(actual) if kind == ir::BorrowKind::Shared => {
+                                *actual == local && self.equal(&source_ty, &input)?
+                            }
+                            _ => false,
+                        };
+                        if !exact || !self.equal(&argument.ty, &input)? {
+                            return Err(FactsError::invalid(
+                                self.budget,
+                                "generic method changed its source receiver adjustment",
+                            ));
+                        }
+                        (owner, input, ir::CallExpectation::FirmReference { kind })
+                    }
+                }
+                _ => {
+                    return Err(FactsError::unsupported(
+                        self.budget,
+                        "generic input method mutable receiver is not admitted",
+                    ));
+                }
             }
         };
         let owner_decl = match &owner {
@@ -240,7 +307,7 @@ impl Replay<'_> {
             };
             let actual = self.argument(
                 source,
-                &node.child(9, index, self.budget)?,
+                &node.child(9, index + argument_offset, self.budget)?,
                 args[index + 1],
                 id,
                 index + 1,

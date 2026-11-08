@@ -10,6 +10,11 @@ pub(super) enum MethodArguments<'a> {
     /// (`Into<T>`), chosen by the caller from the expected result type.
     /// Selection proves exactly this application instead of re-enumerating.
     Applied(ir::TraitRef, Cow<'a, [ir::Ty]>),
+    Prepared {
+        application: Option<ir::TraitRef>,
+        actuals: Cow<'a, [ir::Ty]>,
+        nominals: Vec<ir::Ty>,
+    },
 }
 
 impl PlanCtx {
@@ -113,6 +118,45 @@ impl PlanCtx {
                         let found = match arguments(owner, mode, traits_only)? {
                             MethodArguments::Missing => continue,
                             MethodArguments::Deferred => return Ok(None),
+                            MethodArguments::Prepared {
+                                application,
+                                actuals,
+                                nominals,
+                            } => {
+                                if let Some(application) = application {
+                                    if !traits_only {
+                                        return Err(
+                                            "trait application selected for an inherent probe"
+                                                .into(),
+                                        );
+                                    }
+                                    self.select_trait_filtered_with_nominals(
+                                        &application,
+                                        name,
+                                        actuals.as_ref(),
+                                        caller,
+                                        true,
+                                        Some(mode),
+                                        budget,
+                                        &nominals,
+                                        &mut scratch.borrow_mut(),
+                                    )?
+                                } else {
+                                    self.lookup_associated_with_nominals(
+                                        owner,
+                                        name,
+                                        actuals.as_ref(),
+                                        caller,
+                                        module,
+                                        true,
+                                        Some(mode),
+                                        traits_only,
+                                        budget,
+                                        &nominals,
+                                        &mut scratch.borrow_mut(),
+                                    )?
+                                }
+                            }
                             MethodArguments::Ready(actuals) => self
                                 .lookup_associated_with_scratch(
                                     owner,

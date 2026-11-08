@@ -2,6 +2,7 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+mod associated_method;
 mod borrow_coercion;
 mod generic_method;
 mod projected_borrow;
@@ -1134,11 +1135,16 @@ impl Replay<'_> {
                 ));
             }
         }
-        self.original.facts.validate_signature_with(
-            ir::SignatureSubject::Call(target),
-            canonical,
-            &mut tr::TraitScratch::default(),
-        )?;
+        // This replay authenticates the authored target, ordered arguments and
+        // source call evidence. It does not issue an executable DirectCallProof
+        // or require projected source fields to have physical graph identities.
+        self.original
+            .facts
+            .validate_source_flow_signature_with_scratch(
+                ir::SignatureSubject::Call(target),
+                canonical,
+                &mut tr::TraitScratch::default(),
+            )?;
         if inputs.len() != arguments.len()
             || arguments.len() != canonical.params.len()
             || evidence.arguments.len() != arguments.len()
@@ -2859,8 +2865,38 @@ impl Replay<'_> {
                     args,
                     ..
                 },
-            ) => self
-                .closed_static_result(source, node, id, target, signature, args, expected, depth)?,
+            ) => {
+                let explicit_method = if let ir::Callee::Direct(direct) = target {
+                    let info = self
+                        .original
+                        .plan
+                        .registry
+                        .declaration(direct.declaration)
+                        .map_err(|e| source_error(self.budget, &e))?;
+                    info.path.associated.is_some()
+                        && matches!(info.receiver, ReceiverKind::Borrowed { .. })
+                } else {
+                    false
+                };
+                if explicit_method {
+                    let ir::Callee::Direct(direct) = target else {
+                        unreachable!()
+                    };
+                    self.generic_method_result(
+                        source,
+                        node,
+                        id,
+                        direct,
+                        signature,
+                        args,
+                        depth + 1,
+                    )?
+                } else {
+                    self.closed_static_result(
+                        source, node, id, target, signature, args, expected, depth,
+                    )?
+                }
+            }
             (
                 Expr::MethodCall {
                     receiver,
@@ -5028,6 +5064,106 @@ mod literal_context_tests {
             .retain(|(_, expression, _)| *expression != producer);
         let error = replay_source_body(&forged, checked, publication.facts(), &budget)
             .expect_err("missing shared static source receipt must fail");
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+    }
+
+    #[test]
+    fn associated_shared_method_producer_rejects_forged_authority() {
+        let program = parse(
+            "trait Duplicate{fn duplicate(&self)->Self;}struct Wrap<T>{inner:T}impl<T> Duplicate for Wrap<T>{fn duplicate(&self)->Self{loop{}}}fn take<T>(s:&T){}fn main(){let wrap=Wrap{inner:7u32};let copy=Wrap::duplicate(&wrap);take(&copy);}",
+        ).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected associated shared method source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        let producer = checked
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expression)| {
+                let ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    args,
+                    ..
+                } = &expression.kind
+                else {
+                    return None;
+                };
+                let info = plan.registry.declaration(target.declaration).unwrap();
+                (args.len() == 1
+                    && info
+                        .path
+                        .associated
+                        .as_ref()
+                        .is_some_and(|owner| owner.trait_decl.is_some()))
+                .then_some(ir::ExprId(index))
+            })
+            .expect("associated shared method producer");
+        for mutation in 0..4 {
+            let mut forged = checked.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        ..
+                    } = &mut forged.exprs[producer.0].kind
+                    else {
+                        unreachable!()
+                    };
+                    target.type_args = vec![ir::Ty::Bool].into();
+                }
+                1 => {
+                    let ir::ExprKind::Call { signature, .. } = &mut forged.exprs[producer.0].kind
+                    else {
+                        unreachable!()
+                    };
+                    signature.result = ir::Ty::Bool;
+                }
+                2 => {
+                    let ir::ExprKind::Call { args, .. } = &forged.exprs[producer.0].kind else {
+                        unreachable!()
+                    };
+                    let receiver = args[0];
+                    let ir::ExprKind::Borrow { kind, .. } = &mut forged.exprs[receiver.0].kind
+                    else {
+                        panic!("expected explicit shared receiver borrow")
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                _ => {
+                    let mut evidence = forged.call_evidence.to_vec();
+                    let row = evidence
+                        .iter_mut()
+                        .find(|row| row.call == producer)
+                        .unwrap();
+                    let mut arguments = row.arguments.to_vec();
+                    arguments[0].expectation = ir::CallExpectation::NoFirmReference;
+                    row.arguments = arguments.into();
+                    forged.call_evidence = evidence.into();
+                }
+            }
+            let error =
+                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                    .expect_err("forged associated receiver producer must fail");
+            assert_eq!(
+                error.kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mutation {mutation}"
+            );
+        }
+        let mut forged = original.clone();
+        forged
+            .call_mapping
+            .retain(|(_, expression, _)| *expression != producer);
+        let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+            .expect_err("associated producer requires original source correspondence");
         assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
     }
 

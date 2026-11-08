@@ -8,7 +8,22 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         env: &GenericEnv,
     ) -> Result<()> {
-        self.validate_ty_metadata_in(&Ty::AssociatedType(Arc::new(projection.clone())), env, 0)?;
+        self.validate_universal_projection_with(projection, env, &mut ProofScratch::default())
+    }
+
+    pub(super) fn validate_universal_projection_with(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        env: &GenericEnv,
+        active: &mut ProofScratch,
+    ) -> Result<()> {
+        self.check_normalization_budget()?;
+        self.validate_ty_metadata_with(
+            &Ty::AssociatedType(Arc::new(projection.clone())),
+            env,
+            0,
+            &mut active.replays,
+        )?;
         if self.raw_associated_ty_is_closed(&Ty::AssociatedType(Arc::new(projection.clone())), 0)? {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -110,11 +125,23 @@ impl ValidatedTraitWorld {
         while index < predicates.len() {
             if let Predicate::Implements(goal) = &predicates[index] {
                 let goal = goal.clone();
-                self.validate_predicate_metadata(&predicates[index], env)?;
-                let mut inherited = self.substitute_supertrait_predicates(&goal, env, false)?;
+                self.validate_predicate_metadata_with(
+                    &predicates[index],
+                    env,
+                    &mut active.replays,
+                )?;
+                let mut inherited = self.substitute_supertrait_predicates_with_replays(
+                    &goal,
+                    env,
+                    false,
+                    &mut active.replays,
+                )?;
                 for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
-                    for row in self.associated_bounds_for(*associated, &goal, env)?.iter() {
-                        self.validate_predicate_metadata(row, env)?;
+                    for row in self
+                        .associated_bounds_for_raw_with(*associated, &goal, env, active)?
+                        .iter()
+                    {
+                        self.validate_predicate_metadata_with(row, env, &mut active.replays)?;
                         self.append_predicate(&mut inherited, row)?;
                     }
                 }
@@ -136,11 +163,13 @@ impl ValidatedTraitWorld {
                 self.prove_in(
                     &expected,
                     ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &caller,
                         phase: FactsPhase::Schema,
                     },
-                    &mut ProofScratch::default(),
+                    active,
                 )?,
                 ProofOutcome::Proved(_)
             ) {
@@ -175,7 +204,9 @@ impl ValidatedTraitWorld {
                             .normalize_closed_projected_type(
                                 ty,
                                 ProofContext {
+                                    transport: ParentLocalTransport::default(),
                                     original: None,
+                                    source_metadata: None,
                                     predicates: &world.empty,
                                     phase: FactsPhase::Schema,
                                 },
@@ -370,6 +401,51 @@ mod tests {
         world
             .validate_universal_projection(&projection, facts.env())
             .unwrap();
+        let mut active = ProofScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_universal_projection_with(&projection, facts.env(), &mut active)
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_universal_projection_with(&projection, facts.env(), &mut active)
+            .unwrap();
+        let warm = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "raw membership metadata arena discarded: {warm}/{cold}"
+        );
+        let ordinary = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        ordinary.validate_for(&facts).unwrap();
+        let mut scratch = TraitScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        let source = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut scratch)
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        let warmed = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut scratch)
+            .unwrap();
+        let warm = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "carrier realization arena discarded: {warm}/{cold}"
+        );
+        assert_eq!(source.contract, warmed.contract);
+        assert_eq!(ordinary.contract, source.contract);
+        source
+            .validate_for_with_scratch(&facts, &mut scratch)
+            .unwrap();
+        source.validate_for(&facts).unwrap();
+        let mut forged = source.as_ref().clone();
+        forged.contract.inputs = Arc::from([]);
+        assert!(
+            forged
+                .validate_for_with_scratch(&facts, &mut scratch)
+                .is_err()
+        );
         let mut reordered = projection.clone();
         reordered.trait_ref.args = Arc::from([
             projection.trait_ref.args[1].clone(),
@@ -380,11 +456,21 @@ mod tests {
                 .validate_universal_projection(&reordered, facts.env())
                 .is_err()
         );
+        assert!(
+            world
+                .validate_universal_projection_with(&reordered, facts.env(), &mut active)
+                .is_err()
+        );
         let mut foreign_item = projection.clone();
         foreign_item.item.index = foreign_item.item.index.wrapping_add(1);
         assert!(
             world
                 .validate_universal_projection(&foreign_item, facts.env())
+                .is_err()
+        );
+        assert!(
+            world
+                .validate_universal_projection_with(&foreign_item, facts.env(), &mut active)
                 .is_err()
         );
         let (foreign, foreign_facts, _) = fixture();
@@ -398,5 +484,22 @@ mod tests {
                 .validate_universal_projection(&projection, foreign_facts.env())
                 .is_err()
         );
+        assert!(
+            source
+                .validate_for_with_scratch(&foreign_facts, &mut scratch)
+                .is_err()
+        );
+        source
+            .validate_for_with_scratch(&facts, &mut scratch)
+            .unwrap();
+        assert!(facts.budget().charge_work(usize::MAX).is_err());
+        let failure = facts.budget().first_resource_failure();
+        assert!(
+            matches!(world.validate_universal_projection_with(&projection, facts.env(), &mut active), Err(error) if error.is_resource())
+        );
+        assert!(
+            matches!(source.validate_for_with_scratch(&facts, &mut scratch), Err(error) if error.is_resource())
+        );
+        assert_eq!(facts.budget().first_resource_failure(), failure);
     }
 }

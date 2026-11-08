@@ -2111,6 +2111,9 @@ struct CarrierBuilder<'a, 'b> {
     // Fixed-point revisits query the same immutable carrier types. The trait
     // scratch retains exact payload/caller proofs and resets on facts changes.
     copy_scratch: super::traits::TraitScratch,
+    /// Construction and solver effect replay share exact caller-owned proof
+    /// arenas. Each lookup still validates its full immutable view and table.
+    carrier_scratch: super::traits::TraitScratch,
     bindings: Vec<CallCarrierBinding>,
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
@@ -2880,7 +2883,7 @@ impl CarrierBuilder<'_, '_> {
         })
     }
     fn family_is_open(
-        &self,
+        &mut self,
         view: &super::traits::CarrierContractView,
         family: &ir::CarrierFamily,
     ) -> Result<bool, Exhausted> {
@@ -2891,7 +2894,10 @@ impl CarrierBuilder<'_, '_> {
                 .is_none()),
             ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_) => {
                 let facts = self.authority.as_ref().ok_or(Exhausted)?;
-                match view.family_actual(family, facts).map_err(|_| Exhausted)? {
+                match view
+                    .family_actual_with_scratch(family, facts, &mut self.carrier_scratch)
+                    .map_err(|_| Exhausted)?
+                {
                     Some(Ty::AssociatedType(_)) | Some(Ty::Opaque(_)) => Ok(true),
                     Some(_) => Ok(false),
                     None => Err(Exhausted),
@@ -4033,6 +4039,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             authority: None,
             validated_provenance: None,
             copy_scratch: super::traits::TraitScratch::default(),
+            carrier_scratch: super::traits::TraitScratch::default(),
             bindings: vec![],
             regions: RegionRelations::default(),
             effect_table: None,
@@ -4153,6 +4160,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             .reserve_bytes(mul(builder.cells.len().div_ceil(64), size_of::<u64>())?)?;
         builder.initial.overwritten = Set::new(builder.cells.len());
         if let FactsCtx::Validated(authority) = facts {
+            let mut nominal_calls = super::traits::NominalCarrierSource::new(f, authority);
             let signature = body_signature(f, builder.budget)?;
             let body_view = if let Some(physical) = physical {
                 physical
@@ -4169,7 +4177,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         super::traits::FactsError::from_message(authority.budget(), &message)
                     })
             } else {
-                super::traits::NominalCarrierSource::new(f, authority).body()
+                nominal_calls.body()
             };
             match body_view {
                 Ok(view) => {
@@ -4214,7 +4222,6 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     ),
                 )?,
             }
-            let mut nominal_calls = super::traits::NominalCarrierSource::new(f, authority);
             for (index, block) in f.blocks.iter().enumerate() {
                 if let Terminator::Call {
                     target, signature, ..
@@ -4276,6 +4283,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     }
                 }
             }
+            builder.carrier_scratch = nominal_calls.into_scratch();
             builder.body_signature = Some(signature);
         }
         builder.prepare_native_storage()?;
@@ -5547,7 +5555,7 @@ impl CarrierBuilder<'_, '_> {
                     }
                     _ => false,
                 };
-                match table.empty_result(
+                match table.empty_result_with_scratch(
                     &target,
                     self.f,
                     &facts,
@@ -5555,6 +5563,7 @@ impl CarrierBuilder<'_, '_> {
                     &signature,
                     &location,
                     caller_validated,
+                    &mut self.carrier_scratch,
                 ) {
                     Ok(empty) => empty,
                     Err(error) if error.is_resource() => return Err(Exhausted),
@@ -5609,7 +5618,14 @@ impl CarrierBuilder<'_, '_> {
                     }
                     _ => false,
                 };
-                match table.lookup(&target, self.f, &facts, view, caller_validated) {
+                match table.lookup(
+                    &target,
+                    self.f,
+                    &facts,
+                    view,
+                    caller_validated,
+                    &mut self.carrier_scratch,
+                ) {
                     Ok(summary) => {
                         self.call_effects[block.0] = Some(summary.clone());
                         summary
@@ -12943,6 +12959,95 @@ mod parameter_equality_tests {
             );
             ownership::verify_template(template).unwrap();
         }
+        // The callee itself retains a rigid associated result. Only the
+        // caller owns Out=U, so transporting the raw projection family must
+        // replay that equality before publishing a U result channel.
+        let template = source_template(
+            "trait Source:Sized{type Out;fn get(self)->Self::Out;} fn get<T:Source>(x:T)->T::Out{x.get()} fn forward<T:Source<Out=U>,U>(x:T)->U{get(x)} fn main(){}",
+            1,
+        );
+        let facts = template.facts();
+        let (target, signature) = template
+            .function()
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.value {
+                Terminator::Call {
+                    target, signature, ..
+                } => Some((target, signature)),
+                _ => None,
+            })
+            .unwrap();
+        let view = facts
+            .source_carrier_contract(ir::SignatureSubject::Call(target))
+            .unwrap();
+        let row = &view.contract().results[0];
+        assert!(matches!(
+            row.location.channel,
+            CarrierChannel::ParamTail { .. }
+        ));
+        for _ in 0..3 {
+            assert!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &row.location,
+                    &mut false
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+        let mut unrelated = row.location.clone();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        unrelated.channel = CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        };
+        assert!(matches!(
+            result_flow_problem(
+                Some(&view),
+                Some(facts),
+                ir::SignatureSubject::Call(target),
+                signature,
+                &unrelated,
+                &mut false
+            )
+            .unwrap(),
+            Some(Problem::Invalid(_))
+        ));
+        ownership::verify_template(template).unwrap();
+
+        // A different associated family is eligible only through its exact
+        // producer bound, not merely because both projections mention S.
+        let template = source_template(
+            "trait Make{type Out;fn get(&mut self)->Self::Out;} trait Source{type Item;type Producer:Make<Out=Self::Item>;type Other;} struct Wrap<S:Source>{producer:S::Producer,other:S::Other} fn next<S:Source>(x:&mut Wrap<S>)->S::Item{x.producer.get()} fn main(){}",
+            0,
+        );
+        let facts = template.facts();
+        let view = facts
+            .source_carrier_contract(ir::SignatureSubject::Body)
+            .unwrap();
+        let sources = &view.contract().results[0].sources;
+        assert!(!sources.is_empty());
+        assert!(
+            sources.iter().any(|source| source
+                .location
+                .path
+                .0
+                .contains(&ir::CarrierStep::Field(0)))
+        );
+        assert!(
+            !sources.iter().any(|source| source
+                .location
+                .path
+                .0
+                .contains(&ir::CarrierStep::Field(1)))
+        );
+        view.validate_for(facts).unwrap();
+        ownership::verify_template(template).unwrap();
     }
 
     #[test]

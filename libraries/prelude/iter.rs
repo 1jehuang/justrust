@@ -106,6 +106,10 @@ pub trait Iterator: Sized {
         FilterMap { iterator: self, f }
     }
 
+    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U, F> {
+        FlatMap { iterator: self, f, front: Option::None, back: Option::None, exhausted: false }
+    }
+
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
         loop {
             match self.next() {
@@ -1230,6 +1234,96 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> B> Iterator for Map<I, F> {
         match self.iterator.next() {
             Option::Some(item) => Option::Some((self.f)(item)),
             Option::None => Option::None,
+        }
+    }
+}
+
+pub struct FlatMap<I, U: IntoIterator, F> {
+    iterator: I,
+    f: F,
+    front: Option<U::IntoIter>,
+    back: Option<U::IntoIter>,
+    exhausted: bool,
+}
+
+impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> Iterator for FlatMap<I, U, F> {
+    type Item = U::Item;
+
+    fn next(&mut self) -> Option<U::Item> {
+        loop {
+            match self.front.take() {
+                Option::Some(mut inner) => match inner.next() {
+                    Option::Some(item) => {
+                        self.front = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => {},
+                },
+                Option::None => {},
+            }
+            if !self.exhausted {
+                match self.iterator.next() {
+                    Option::Some(item) => {
+                        self.front = Option::Some((self.f)(item).into_iter());
+                        continue;
+                    }
+                    Option::None => self.exhausted = true,
+                }
+            }
+            match self.back.take() {
+                Option::Some(mut inner) => match inner.next() {
+                    Option::Some(item) => {
+                        self.back = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => return Option::None,
+                },
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> IntoIterator for FlatMap<I, U, F> {
+    type Item = U::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+impl<A, I: DoubleEndedIterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> DoubleEndedIterator for FlatMap<I, U, F>
+where <U as IntoIterator>::IntoIter: DoubleEndedIterator,
+{
+    fn next_back(&mut self) -> Option<U::Item> {
+        loop {
+            match self.back.take() {
+                Option::Some(mut inner) => match inner.next_back() {
+                    Option::Some(item) => {
+                        self.back = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => {},
+                },
+                Option::None => {},
+            }
+            if !self.exhausted {
+                match self.iterator.next_back() {
+                    Option::Some(item) => {
+                        self.back = Option::Some((self.f)(item).into_iter());
+                        continue;
+                    }
+                    Option::None => self.exhausted = true,
+                }
+            }
+            match self.front.take() {
+                Option::Some(mut inner) => match inner.next_back() {
+                    Option::Some(item) => {
+                        self.front = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => return Option::None,
+                },
+                Option::None => return Option::None,
+            }
         }
     }
 }

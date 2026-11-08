@@ -133,30 +133,33 @@ impl ClosedReceipt {
     ) -> Result<(), String> {
         validate(&self.receipt, facts, budget, scratch)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let inputs = facts
+            .parent_local_call_inputs_with_scratch(
+                &self.receipt.target,
+                &self.receipt.original,
+                scratch,
+            )
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let selected = match &self.selection {
-            ir::Callee::Direct(target) => ir::Callee::Direct(
+            ir::Callee::Direct(target) => {
                 facts
-                    .service()
-                    .discharge_direct_with(target, facts, scratch)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?
-                    .target()
-                    .clone(),
-            ),
-            ir::Callee::TraitItem(call) => facts
-                .service()
-                .resolve_trait_call_with(call, facts, scratch)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?
-                .callee()
-                .clone(),
-            ir::Callee::Virtual(call) => ir::Callee::Virtual(call.clone()),
+                    .source_call_entry_with_nominals(target, &inputs, scratch)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                ir::Callee::Direct(target.clone())
+            }
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => facts
+                .source_callee_entry(&self.selection, &inputs, scratch)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?,
             ir::Callee::Untupled(call) => {
                 facts
-                    .service()
-                    .validate_untupled(call, facts)
+                    .source_callee_entry(&self.selection, &inputs, scratch)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?;
                 ir::Callee::Untupled(call.clone())
             }
         };
+        // Selection proves only the canonical target/obligations. Executable
+        // authority comes below from every mapped physical root and exact
+        // current-engine graph capability, never from this entry proof.
         validate_original_callee(&selected, &self.receipt.target, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let derived = conversion_rows(&self.receipt.original, &self.receipt.mapped, budget)?;
@@ -190,8 +193,29 @@ pub(in crate::compiler) fn replay(
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    let calls = checked
-        .exprs
+    replay_expressions(
+        rows,
+        engine,
+        &checked.exprs,
+        template,
+        arguments,
+        facts,
+        budget,
+    )
+}
+
+/// Replay every original occurrence and its complete typed realization payload.
+/// CFG lowering retains these expressions in its immutable body proof.
+pub(in crate::compiler) fn replay_expressions(
+    rows: Option<&[ClosedReceipt]>,
+    engine: Option<crate::engine::EngineAuthority>,
+    expressions: &[ir::TypedExpr],
+    template: &crate::compiler::ownership::VerifiedTemplateCfg,
+    arguments: &[ir::Ty],
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    let calls = expressions
         .iter()
         .enumerate()
         .filter_map(|(index, e)| match &e.kind {

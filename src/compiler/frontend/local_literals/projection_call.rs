@@ -1,4 +1,4 @@
-//! Fully resolved call actuals use the ordinary sealed signature instantiation.
+//! Fully resolved call actuals use checked source signature admission.
 //! No inference variable can authorize a projection equality.
 use super::*;
 
@@ -32,7 +32,7 @@ impl<'s> Solver<'_, '_, 's> {
             declaration,
             type_args: actuals.into(),
         };
-        plan.instantiate_signature(&target, self.checker.facts(), &plan.budget)
+        plan.source_inference_signature(&target, self.checker.facts(), &plan.budget)
             .map(Some)
     }
 }

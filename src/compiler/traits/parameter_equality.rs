@@ -97,6 +97,7 @@ struct RestrictedResultCertificate {
 
 #[derive(Clone, Debug)]
 pub(super) struct EqualityResultAuthority {
+    executable_storage: bool,
     world: WorldId,
     environment: usize,
     phase: FactsPhase,
@@ -183,8 +184,27 @@ impl CarrierContractView {
         result_location: &ir::CarrierLocation,
         view_validated: &mut bool,
     ) -> Result<()> {
+        self.validate_result_flow_with_scratch(
+            facts,
+            actual_subject,
+            actual_signature,
+            result_location,
+            view_validated,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    pub(in crate::compiler) fn validate_result_flow_with_scratch(
+        &self,
+        facts: &ValidatedFacts,
+        actual_subject: ir::SignatureSubject<'_>,
+        actual_signature: &ir::Signature,
+        result_location: &ir::CarrierLocation,
+        view_validated: &mut bool,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
         if !*view_validated {
-            self.validate_for(facts)?;
+            self.validate_for_with_scratch(facts, scratch)?;
             *view_validated = true;
         }
         let world = facts.world();
@@ -197,7 +217,15 @@ impl CarrierContractView {
                 "result flow changed exact subject or signature",
             ));
         }
-        facts.validate_signature(actual_subject, actual_signature)?;
+        if self.source_schema.is_some() {
+            facts.validate_source_flow_signature_with_scratch(
+                actual_subject,
+                actual_signature,
+                scratch,
+            )?;
+        } else {
+            facts.validate_signature_with(actual_subject, actual_signature, scratch)?;
+        }
         let locations = charged(
             facts.budget(),
             ir::carrier_locations(&actual_signature.result, facts.budget()),
@@ -230,10 +258,15 @@ struct CanonicalSourceProof<'a> {
     facts: &'a ValidatedFacts,
 }
 impl CanonicalCarrierParts<'_> {
-    fn seal(self, world: &ValidatedTraitWorld) -> Result<CarrierContractView> {
+    fn seal(
+        self,
+        world: &ValidatedTraitWorld,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierContractView> {
         let Self { mut view, facts } = self;
         let proof = CanonicalSourceProof { view: &view, facts };
-        let authority = world.derive_equality_results(&view, facts, Some(&proof))?;
+        let authority =
+            world.derive_equality_results_with_scratch(&view, facts, Some(&proof), scratch)?;
         view.equality_results = authority;
         Ok(view)
     }
@@ -253,7 +286,8 @@ impl ValidatedTraitWorld {
         projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
         result_subject: parameter_equality::EqualityResultSubject,
     ) -> Result<Arc<CarrierContractView>> {
-        let mut view = self.transport_carrier_parts(
+        let mut scratch = TraitScratch::default();
+        let mut view = self.transport_carrier_parts_with_scratch(
             declaration,
             arguments,
             signature,
@@ -263,6 +297,7 @@ impl ValidatedTraitWorld {
             origin,
             projected,
             result_subject,
+            &mut scratch,
         )?;
         if facts.phase() == FactsPhase::Closed
             && view.projected.is_none()
@@ -271,15 +306,15 @@ impl ValidatedTraitWorld {
                 EqualityResultSubject::Body { .. } | EqualityResultSubject::Direct(_)
             )
         {
-            view = CanonicalCarrierParts { view, facts }.seal(self)?;
+            view = CanonicalCarrierParts { view, facts }.seal(self, &mut scratch)?;
         } else {
-            self.seal_equality_results(&mut view, facts)?;
+            self.seal_equality_results_with_scratch(&mut view, facts, &mut scratch)?;
         }
         // Sealing just derived the complete canonical equality proof for this
         // exact local view and facts. Nothing can mutate it before publication.
         // Replay all other authorities here; consumers still independently run
         // validate_for, including full equality-result reconstruction.
-        view.validate_carrier_authorities(facts)?;
+        view.validate_carrier_authorities_with_scratch(facts, Some(&mut scratch))?;
         Ok(Arc::new(view))
     }
 
@@ -324,8 +359,14 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
     ) -> Result<()> {
         // Metadata errors win over domain restrictions, even for unused rows.
+        self.check_proof_context_caller(context)?;
         for row in rows {
-            self.validate_predicate_metadata(row, context.env())?;
+            self.validate_predicate_metadata_with_facts(
+                row,
+                context.env(),
+                &mut active.replays,
+                context.original,
+            )?;
         }
         self.replay_validated_equality_rows(rows, context, active)
     }
@@ -440,7 +481,17 @@ impl ValidatedTraitWorld {
         view: &mut CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        view.equality_results = self.derive_equality_results(view, facts, None)?;
+        self.seal_equality_results_with_scratch(view, facts, &mut TraitScratch::default())
+    }
+
+    pub(super) fn seal_equality_results_with_scratch(
+        &self,
+        view: &mut CarrierContractView,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        view.equality_results =
+            self.derive_equality_results_with_scratch(view, facts, None, scratch)?;
         Ok(())
     }
 
@@ -451,7 +502,16 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        let expected = self.derive_equality_results(view, facts, None)?;
+        self.validate_equality_results_with_scratch(view, facts, &mut TraitScratch::default())
+    }
+
+    pub(super) fn validate_equality_results_with_scratch(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        let expected = self.derive_equality_results_with_scratch(view, facts, None, scratch)?;
         match (&view.equality_results, expected) {
             (None, None) => Ok(()),
             (Some(stored), Some(expected)) => {
@@ -464,11 +524,50 @@ impl ValidatedTraitWorld {
         }
     }
 
+    #[cfg(test)]
     fn derive_equality_results(
         &self,
         view: &CarrierContractView,
         facts: &ValidatedFacts,
         construction: Option<&CanonicalSourceProof<'_>>,
+    ) -> Result<Option<Arc<EqualityResultAuthority>>> {
+        self.derive_equality_results_with_scratch(
+            view,
+            facts,
+            construction,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    fn derive_equality_results_with_scratch(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+        construction: Option<&CanonicalSourceProof<'_>>,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Arc<EqualityResultAuthority>>> {
+        self.check_facts(facts, true)?;
+        let source_replay = view
+            .source_schema
+            .as_ref()
+            .map(|source| source.replay_with_scratch(view, facts, scratch))
+            .transpose()?;
+        self.derive_equality_results_in(
+            view,
+            facts,
+            construction,
+            source_replay.as_ref(),
+            scratch.for_world(self.id),
+        )
+    }
+
+    fn derive_equality_results_in(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+        construction: Option<&CanonicalSourceProof<'_>>,
+        source_replay: Option<&source_carriers::SourceCarrierReplay<'_>>,
+        active: &mut ProofScratch,
     ) -> Result<Option<Arc<EqualityResultAuthority>>> {
         self.check_facts(facts, true)?;
         if !self.owner_normalization_finalized {
@@ -558,9 +657,13 @@ impl ValidatedTraitWorld {
         self.validate_declaration_schema(view.declaration, &raw)?;
         if let EqualityResultSubject::Required(call) = &view.result_subject
             && self.schema_contains_projection(&raw)?
+            && view.source_schema.is_none()
         {
-            let closed = self.goal_is_closed(&call.trait_ref, facts.env())?
-                || matches!(&call.trait_ref.self_ty, Ty::Dyn(_));
+            let closed = self.goal_is_closed_in_with(
+                &call.trait_ref,
+                ProofContext::from_facts(facts),
+                active,
+            )? || matches!(&call.trait_ref.self_ty, Ty::Dyn(_));
             if (closed && view.projected.is_none())
                 || (!closed && view.equality_required.is_none() && view.projected.is_none())
             {
@@ -570,6 +673,7 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        let mut required_application = None;
         let mut dependencies = Vec::new();
         let mut caller_origins = Vec::new();
         let mut caller_stage = stage;
@@ -578,10 +682,15 @@ impl ValidatedTraitWorld {
         // a selected implementation's topology.
         if let EqualityResultSubject::Required(call) = &view.result_subject
             && self.schema_contains_projection(&raw)?
-            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !self.goal_is_closed_in_with(
+                &call.trait_ref,
+                ProofContext::from_facts(facts),
+                active,
+            )?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
-            let (application, authority) = self.instantiate_universal_required_item(call, facts)?;
+            let (application, authority) =
+                self.instantiate_universal_required_item_with(call, facts, active)?;
             if !self.eq_signature(&application.signature, &view.result_signature)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -609,6 +718,7 @@ impl ValidatedTraitWorld {
             for dependency in authority.dependencies.iter() {
                 result_push(&self.budget, &mut dependencies, dependency.clone())?;
             }
+            required_application = Some((call, application));
             // Discharge all raw caller occurrences, not just those visible in
             // the signature. The dependency selection above only scopes result
             // coverage; it is never an obligation filter.
@@ -616,11 +726,7 @@ impl ValidatedTraitWorld {
             for origin in context.origins.iter() {
                 result_push(&self.budget, &mut rows, origin.row.clone())?;
             }
-            self.replay_equality_rows(
-                &rows,
-                ProofContext::from_facts(facts),
-                &mut ProofScratch::default(),
-            )?;
+            self.replay_equality_rows(&rows, ProofContext::from_facts(facts), active)?;
         }
         let mut raw_rows = Vec::new();
         for origin in &origins {
@@ -636,11 +742,11 @@ impl ValidatedTraitWorld {
             },
             predicates: result_slice(&self.budget, raw_rows)?,
         };
-        let instantiated = self.substitute_projected_schema(&schema, &arguments, facts.env())?;
+        let instantiated = self.substitute_carrier_schema(&schema, &arguments, facts, active)?;
         self.replay_equality_rows(
             &instantiated.predicates,
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            active,
         )?;
         let mut actual_rows = Vec::new();
         let mut certificates = Vec::new();
@@ -681,8 +787,21 @@ impl ValidatedTraitWorld {
             // The private owned capsule came directly from completed canonical
             // transport. Its immutable borrow covers this entire derivation.
             // All equality rows and certificates above are still replayed.
+        } else if let Some(replayed) = source_replay {
+            // This invocation already reconstructed every source application,
+            // ordered seal and topology above. Reuse only that exact immutable
+            // borrow, not a completed view verdict from another query.
+            replayed.validate_for(view, facts)?;
         } else {
-            self.validate_result_source_transport(view, &raw, facts)?;
+            self.validate_result_source_transport(
+                view,
+                &raw,
+                facts,
+                required_application
+                    .as_ref()
+                    .map(|(call, application)| (*call, application)),
+                active,
+            )?;
         }
         // Either source transport above reconstructed the canonical signature,
         // or the consumed producer capsule retained that exact completed work.
@@ -690,28 +809,80 @@ impl ValidatedTraitWorld {
         // Keep metadata validation here without discharging the same target
         // again. Closure bodies and required calls retain their distinct
         // subject-specific validation below.
-        match &view.result_subject {
-            EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
-                facts.validate_signature(SignatureSubject::Body, &view.result_signature)?
+        if view.source_schema.is_some() {
+            for ty in view
+                .result_signature
+                .params
+                .iter()
+                .chain(std::iter::once(&view.result_signature.result))
+            {
+                self.validate_ty_metadata_with_facts(
+                    ty,
+                    facts.env(),
+                    0,
+                    &mut active.replays,
+                    Some(facts),
+                )?;
             }
-            EqualityResultSubject::Body { .. } => {
-                self.validate_signature_shape(&view.result_signature, facts.env(), None)?;
+            charged(
+                &self.budget,
+                ir::validate_stored_ref_contract(
+                    &view.result_signature.params,
+                    &view.result_signature.result,
+                    &view.result_signature.ref_contract,
+                    &self.budget,
+                ),
+            )?;
+        } else {
+            match &view.result_subject {
+                EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
+                    facts.validate_signature(SignatureSubject::Body, &view.result_signature)?
+                }
+                EqualityResultSubject::Body { .. } => {
+                    self.validate_signature_shape_with_scratch(
+                        &view.result_signature,
+                        facts.env(),
+                        None,
+                        Some(facts),
+                        Some(&mut active.signature_formations),
+                    )?;
+                }
+                // Canonical transport or its independent replay already discharges
+                // this exact direct target, checks every predicate, and establishes
+                // the canonical result_signature. Repeating validate_signature
+                // here rebuilds the same nested projection proofs without adding
+                // an independent check.
+                EqualityResultSubject::Direct(_) => {
+                    self.validate_signature_shape_with_scratch(
+                        &view.result_signature,
+                        facts.env(),
+                        None,
+                        Some(facts),
+                        Some(&mut active.signature_formations),
+                    )?;
+                }
+                EqualityResultSubject::Required(_) if required_application.is_some() => {
+                    // The exact required call was completely instantiated above,
+                    // compared against this signature, and its original source
+                    // topology was independently reconstructed. Keep formation
+                    // checks without rebuilding the same proof DAG a third time.
+                    self.validate_signature_shape_with_scratch(
+                        &view.result_signature,
+                        facts.env(),
+                        None,
+                        Some(facts),
+                        Some(&mut active.signature_formations),
+                    )?;
+                }
+                EqualityResultSubject::Required(call) => facts.validate_signature(
+                    SignatureSubject::Call(&Callee::TraitItem(call.clone())),
+                    &view.result_signature,
+                )?,
             }
-            // Canonical transport or its independent replay already discharges
-            // this exact direct target, checks every predicate, and establishes
-            // the canonical result_signature. Repeating validate_signature
-            // here rebuilds the same nested projection proofs without adding
-            // an independent check.
-            EqualityResultSubject::Direct(_) => {
-                self.validate_signature_shape(&view.result_signature, facts.env(), None)?;
-            }
-            EqualityResultSubject::Required(call) => facts.validate_signature(
-                SignatureSubject::Call(&Callee::TraitItem(call.clone())),
-                &view.result_signature,
-            )?,
         }
         retain::<EqualityResultAuthority>(&self.budget, 1)?;
         Ok(Some(Arc::new(EqualityResultAuthority {
+            executable_storage: view.executable_storage,
             world: self.id,
             environment: facts.predicates.index,
             phase: facts.phase(),
@@ -740,19 +911,38 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         raw: &GenericSchema,
         facts: &ValidatedFacts,
+        required_application: Option<(&TraitCall, &InstantiatedSchema)>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         if let EqualityResultSubject::Required(call) = &view.result_subject
             && self.schema_contains_projection(raw)?
+            && view.source_schema.is_none()
         {
-            if self.goal_is_closed(&call.trait_ref, facts.env())? {
+            if self.goal_is_closed_in_with(
+                &call.trait_ref,
+                ProofContext::from_facts(facts),
+                active,
+            )? {
                 // validate_for replayed the mandatory selected required view.
                 return Ok(());
             }
             let source = self.validate_source_regions(call.item, &raw.signature)?;
-            let (application, _) = self.instantiate_universal_required_item(call, facts)?;
+            let application = match required_application {
+                Some((original, application)) if std::ptr::eq(original, call) => application,
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "required result lost exact completed source application",
+                    ));
+                }
+            };
             let signature = &application.signature;
-            let (contract, regions) =
-                self.derive_universal_required_carriers(call.item, signature, &source)?;
+            let (contract, regions) = self.derive_universal_required_carriers(
+                call.item,
+                signature,
+                &source,
+                facts.env(),
+            )?;
             let origin = charged(
                 &self.budget,
                 ir::derive_signature_origin_schema(signature, facts.env(), &self.budget),
@@ -807,33 +997,51 @@ impl ValidatedTraitWorld {
         // Reconstruct from declaration authority, not from the candidate's
         // origin, region schema, or nominal/component mappings. In particular,
         // a concrete target signature cannot replace the original ParamTails.
-        let signature = match &view.result_subject {
-            EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
-                self.closure_body_signature(facts)?
-            }
-            EqualityResultSubject::Body { .. }
-                if matches!(facts.subject, FactsSubject::UniversalCallable(_)) =>
-            {
-                result_signature(&self.budget, &canonical.signature)?
-            }
-            EqualityResultSubject::Body {
-                declaration,
-                arguments,
-            } => {
-                self.discharge_direct(
-                    &CallTarget {
-                        declaration: *declaration,
-                        type_args: arguments.clone(),
-                    },
-                    facts,
-                )?
+        let signature = if let Some(source) = &view.source_schema {
+            let context = ProofContext {
+                transport: source.transport(),
+                ..ProofContext::from_facts(facts)
+            };
+            self.source_carrier_application(&view.result_subject, facts, context, active)?
+                .2
                 .signature
-            }
-            EqualityResultSubject::Direct(target) => {
-                self.discharge_direct(target, facts)?.signature
-            }
-            EqualityResultSubject::Required(call) => {
-                self.instantiate_trait_signature(call, facts)?
+        } else {
+            match &view.result_subject {
+                EqualityResultSubject::Body { .. } if facts.closure.is_some() => {
+                    self.closure_body_signature(facts)?
+                }
+                EqualityResultSubject::Body { .. }
+                    if matches!(facts.subject, FactsSubject::UniversalCallable(_)) =>
+                {
+                    result_signature(&self.budget, &canonical.signature)?
+                }
+                EqualityResultSubject::Body {
+                    declaration,
+                    arguments,
+                } => {
+                    self.discharge_in_with_facts(
+                        &CallTarget {
+                            declaration: *declaration,
+                            type_args: arguments.clone(),
+                        },
+                        ProofContext::from_facts(facts),
+                        active,
+                        Some(facts),
+                    )?
+                    .signature
+                }
+                EqualityResultSubject::Direct(target) => {
+                    self.discharge_in_with_facts(
+                        target,
+                        ProofContext::from_facts(facts),
+                        active,
+                        Some(facts),
+                    )?
+                    .signature
+                }
+                EqualityResultSubject::Required(call) => {
+                    self.instantiate_trait_signature(call, facts)?
+                }
             }
         };
         if !self.eq_signature(&signature, &view.result_signature)? {
@@ -850,7 +1058,7 @@ impl ValidatedTraitWorld {
             &self.budget,
             ir::derive_signature_origin_schema(&canonical.signature, &canonical.env, &self.budget),
         )?;
-        let expected = self.transport_carrier_parts(
+        let expected = self.transport_carrier_parts_in(
             view.declaration,
             expected_arguments,
             signature,
@@ -860,6 +1068,7 @@ impl ValidatedTraitWorld {
             origin,
             None,
             view.result_subject.clone(),
+            active,
         )?;
         if view.origin != expected.origin
             || view.fixed != expected.fixed
@@ -1022,7 +1231,9 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        if stored.world != self.id
+        if stored.executable_storage != expected.executable_storage
+            || stored.executable_storage != view.executable_storage
+            || stored.world != self.id
             || stored.environment != facts.predicates.index
             || stored.phase != facts.phase()
             || stored.finalized != self.owner_normalization_finalized
@@ -1217,6 +1428,76 @@ mod tests {
             let origins = Arc::make_mut(&mut authority.origins);
             origins[0].occurrence = origins[0].occurrence.wrapping_add(1);
         });
+        let mut source_scratch = TraitScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        let source_view = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut source_scratch)
+            .unwrap();
+        let cold_source = facts.budget().usage_snapshot().work - before;
+        assert!(source_view.equality_results.is_some());
+        let before = facts.budget().usage_snapshot().work;
+        let warmed = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut source_scratch)
+            .unwrap();
+        let warm_source = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm_source < cold_source,
+            "equality replay discarded caller arena: {warm_source}/{cold_source}"
+        );
+        assert_eq!(source_view.contract, warmed.contract);
+        // Reconstruction must retain its caller's complete normalization DAG,
+        // not allocate a fresh transport arena below every equality seal.
+        let mut source_scratch = TraitScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        source_view
+            .validate_for_with_scratch(&facts, &mut source_scratch)
+            .unwrap();
+        let cold_replay = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        source_view
+            .validate_for_with_scratch(&facts, &mut source_scratch)
+            .unwrap();
+        let warm_replay = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm_replay < cold_replay,
+            "result transport discarded active proofs: {warm_replay}/{cold_replay}"
+        );
+        let source = source_view.source_schema.as_ref().unwrap();
+        let replayed = source
+            .replay_with_scratch(&source_view, &facts, &mut source_scratch)
+            .unwrap();
+        replayed.validate_for(&source_view, &facts).unwrap();
+        let copied_view = source_view.as_ref().clone();
+        assert!(replayed.validate_for(&copied_view, &facts).is_err());
+        assert!(replayed.validate_for(&source_view, &universal).is_err());
+        assert!(replayed.validate_for(&source_view, &foreign).is_err());
+        let mut missing = source_view.as_ref().clone();
+        missing.equality_results = None;
+        assert!(
+            missing
+                .validate_for_with_scratch(&facts, &mut source_scratch)
+                .is_err()
+        );
+        let mut changed_rows = source_view.as_ref().clone();
+        Arc::make_mut(changed_rows.equality_results.as_mut().unwrap()).actual_rows = Arc::from([]);
+        assert!(
+            changed_rows
+                .validate_for_with_scratch(&facts, &mut source_scratch)
+                .is_err()
+        );
+        assert!(
+            source_view
+                .validate_for_with_scratch(&universal, &mut source_scratch)
+                .is_err()
+        );
+        assert!(
+            source_view
+                .validate_for_with_scratch(&foreign, &mut source_scratch)
+                .is_err()
+        );
+        source_view
+            .validate_for_with_scratch(&facts, &mut source_scratch)
+            .unwrap();
         // Exercise the equality producer directly, not its outer proof memo:
         // closedness formation must share this exact local proof arena.
         let context = ProofContext::from_facts(&facts);
@@ -1264,6 +1545,22 @@ mod tests {
         assert!(facts.budget().charge_work(usize::MAX).is_err());
         let failure = facts.budget().first_resource_failure();
         facts.budget().poison_ledger_for_tests();
+        assert!(
+            replayed
+                .validate_for(&source_view, &facts)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert!(
+            source_view
+                .validate_for_with_scratch(&facts, &mut source_scratch)
+                .is_err()
+        );
+        assert!(
+            facts
+                .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut source_scratch)
+                .is_err()
+        );
         assert!(
             matches!(world.prove_projection_equality(projection, ty, context, &mut active),
             Err(error) if error.kind() == FactsErrorKind::Resource)

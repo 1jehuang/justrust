@@ -34,6 +34,9 @@ impl SourceInventory {
             }
             let call_receiver = match expr {
                 Expr::MethodCall { receiver, .. } => Some((receiver.as_ref(), 10)),
+                // A field may autoderef its owned call-result base. Its
+                // operator roles belong to that exact authored operand.
+                Expr::Field { base, .. } => Some((base.as_ref(), 13)),
                 // `guard()[i]`: index autoderef may call `Deref` on the owned
                 // call result, recorded at the base's receiver step.
                 Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
@@ -141,6 +144,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn field_call_receiver_roles_preserve_exact_operand_and_step() {
+        let program = parse(
+            "struct V{n:u32}fn make()->V{V{n:1u32}}fn main(){let n=make().n;let other=make();}",
+        )
+        .unwrap();
+        let function = program.functions.last().unwrap();
+        let Stmt::Let {
+            value: Expr::Field { base, .. },
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("expected authored call-base field");
+        };
+        let Stmt::Let { value: other, .. } = &function.body.statements[1] else {
+            panic!("expected unrelated authored call");
+        };
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        let pointer = base.as_ref() as *const Expr as usize;
+        let authored = &inventory.calls[inventory.call_pointers[&pointer]];
+        assert!(!authored.operator_candidate);
+        assert!(authored.node.path.ends_with(&[13, 0]));
+        for step in 1..=deref_coercion::MAX_DEREF_STEPS {
+            let tagged = deref_coercion::site(pointer, step);
+            let role = &inventory.calls[inventory.call_pointers[&tagged]];
+            assert!(role.operator_candidate);
+            assert!(role.ordinary.is_none());
+            assert_eq!(role.node, authored.node);
+            // A different written call has no field-receiver operator role.
+            let foreign = deref_coercion::site(other as *const Expr as usize, step);
+            assert!(!inventory.call_pointers.contains_key(&foreign));
+        }
+        // A malformed high tag can alias the ordinary call address, but
+        // must never identify a reserved operator role.
+        let changed_step = deref_coercion::site(pointer, deref_coercion::MAX_DEREF_STEPS + 1);
+        assert!(
+            inventory
+                .call_pointers
+                .get(&changed_step)
+                .is_none_or(|index| !inventory.calls[*index].operator_candidate)
+        );
+        let foreign_body = SourceInventory::build(
+            &program,
+            &program.functions[0],
+            sr::OriginalBodyId::new(&budget).unwrap(),
+            &budget,
+        )
+        .unwrap();
+        assert!(!foreign_body.call_pointers.contains_key(&pointer));
+        assert_ne!(foreign_body.owner, authored.node.owner);
     }
 
     #[test]

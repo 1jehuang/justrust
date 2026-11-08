@@ -29,9 +29,25 @@ impl Checker<'_> {
         let ir::FactsCtx::Validated(facts) = self.facts() else {
             return Err("trait method inference requires canonical caller facts".into());
         };
+        let mut nominals = Vec::new();
+        for actual in std::iter::once(&application.self_ty).chain(application.args.iter()) {
+            let inputs = facts
+                .parent_local_receiver_inputs(actual)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+            self.infer_storage(inputs.len())?;
+            nominals
+                .try_reserve(inputs.len())
+                .map_err(|_| "trait inference nominal input allocation failed")?;
+            nominals.extend(inputs);
+        }
         match facts
             .service()
-            .prove_goal(&ir::Predicate::Implements(application.clone()), facts)
+            .prove_goal_with_nominals(
+                &ir::Predicate::Implements(application.clone()),
+                facts,
+                &nominals,
+                &mut tr::TraitScratch::default(),
+            )
             .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
         {
             tr::ProofOutcome::Proved(_) => {}

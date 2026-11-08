@@ -71,6 +71,7 @@ struct Vertex {
     targets: Arc<[ir::CallTarget]>,
     query_sites: Arc<[ir::ExprId]>,
     virtual_sites: Arc<[ir::ExprId]>,
+    cleanup_opaque: Arc<[(super::super::super::SelectedSite, Arc<ir::OpaqueTy>)]>,
 }
 #[derive(Clone)]
 pub(in crate::compiler) struct Topology {
@@ -99,6 +100,31 @@ pub(in crate::compiler) fn continuations(
                 .saturating_mul(2 * std::mem::size_of::<super::super::super::OpaqueCall>()),
     )?;
     let mut demands: Vec<_> = header.targets().cloned().collect();
+    budget.retain_bytes(
+        header
+            .cleanup_opaque
+            .len()
+            .saturating_mul(std::mem::size_of::<ir::CallTarget>()),
+    )?;
+    for (_, opaque) in header.cleanup_opaque.iter() {
+        budget.charge_work(1)?;
+        budget.retain_bytes(
+            opaque
+                .owner_args()
+                .len()
+                .saturating_mul(std::mem::size_of::<ir::Ty>()),
+        )?;
+        let owner = ir::CallTarget {
+            declaration: opaque.owner(),
+            type_args: opaque.owner_args().into(),
+        };
+        let words = crate::compiler::instances::graph_key::encode(&owner, budget)?;
+        if let Some(producer) = available.get(&words) {
+            let facts = context.instance_facts(&owner)?;
+            producer.validate_cleanup_pack(opaque, &facts, budget)?;
+        }
+        demands.push(owner);
+    }
     let mut pending = header.opaque_calls().to_vec();
     let mut seen = Vec::new();
     while let Some(invocation) = pending.pop() {
@@ -156,6 +182,23 @@ impl Topology {
         let mut vertices = Vec::new();
         for (index, header) in headers.iter().enumerate() {
             let selected = continuations(header, &available, context, budget)?;
+            for (_, opaque) in header.cleanup_opaque.iter() {
+                budget.charge_work(1)?;
+                budget.retain_bytes(
+                    opaque
+                        .owner_args()
+                        .len()
+                        .saturating_mul(std::mem::size_of::<ir::Ty>()),
+                )?;
+                let owner = ir::CallTarget {
+                    declaration: opaque.owner(),
+                    type_args: opaque.owner_args().into(),
+                };
+                let words = crate::compiler::instances::graph_key::encode(&owner, budget)?;
+                if !available.contains_key(&words) {
+                    return Err("closed alignment topology omitted opaque cleanup producer".into());
+                }
+            }
             // Every opaque contract owner must exist, including forwarded
             // providers. Absence is never interpreted as empty dispatch.
             let mut pending = header.opaque_calls().to_vec();
@@ -199,6 +242,7 @@ impl Topology {
                 targets: targets.into(),
                 query_sites: header.queries.iter().map(|(site, _)| *site).collect(),
                 virtual_sites: header.virtual_sites.clone(),
+                cleanup_opaque: header.cleanup_opaque.clone(),
             });
         }
         let mut seen = vec![false; headers.len()];
@@ -354,6 +398,7 @@ impl Summary {
             let sites: Vec<_> = header.queries.iter().map(|(site, _)| *site).collect();
             if sites.as_slice() != vertex.query_sites.as_ref()
                 || header.virtual_sites != vertex.virtual_sites
+                || header.cleanup_opaque != vertex.cleanup_opaque
             {
                 return Err("closed SCC changed local query or virtual occurrence receipt".into());
             }
@@ -487,6 +532,48 @@ mod tests {
             ..Default::default()
         });
         assert!(summary.admit(&root, &denied).is_err());
+    }
+
+    #[test]
+    fn alignment_domain_opaque_cleanup_demands_real_producer_pack() {
+        let (_, owner, budget, mut plan) = fixture_plan(
+            "struct V;impl Drop for V{fn drop(&mut self){let _n=std::mem::align_of::<u16>();}}trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{1usize}}fn make()->impl Inspect{V}fn main(){let _x=(make(),);}",
+            "main",
+        );
+        let root = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([]),
+        };
+        let header = closed_header(&mut plan, root.clone(), &budget);
+        let opaque = header
+            .cleanup_opaque
+            .first()
+            .expect("genuine cleanup dependency")
+            .1
+            .clone();
+        let producer_target = ir::CallTarget {
+            declaration: opaque.owner(),
+            type_args: opaque.owner_args().into(),
+        };
+        let words =
+            crate::compiler::instances::graph_key::encode(&producer_target, &budget).unwrap();
+        let demands = continuations(&header, &HashMap::new(), &plan, &budget).unwrap();
+        assert!(demands.iter().any(|target| {
+            crate::compiler::instances::graph_key::encode(target, &budget).unwrap() == words
+        }));
+        assert!(Topology::discover(root, vec![header.clone()], &plan, &budget).is_err());
+        let producer = closed_header(&mut plan, producer_target, &budget);
+        let mut available = HashMap::from([(words.clone(), producer.clone())]);
+        continuations(&header, &available, &plan, &budget).unwrap();
+        let mut missing = (*producer).clone();
+        missing.packs = Arc::from([]);
+        available.insert(words, Arc::new(missing));
+        assert!(continuations(&header, &available, &plan, &budget).is_err());
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(continuations(&header, &available, &plan, &denied).is_err());
     }
 
     #[test]
