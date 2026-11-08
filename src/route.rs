@@ -858,6 +858,10 @@ mod tests {
             "aarch64-pc-windows-msvc",
             "aarch64-unknown-linux-gnu",
         ] {
+            // On an aarch64 host this target is native, not a cross build.
+            if target == format!("{}-unknown-linux-gnu", std::env::consts::ARCH) {
+                continue;
+            }
             let build = vec![
                 "build".into(),
                 "--release".into(),

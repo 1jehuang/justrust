@@ -460,12 +460,12 @@
     },
     {
       "origin": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25/diagnostic_hash::tests.exit",
-      "artifact": "native/v25/diagnostic_hash::tests.exit",
+      "artifact": "native/v25/diagnostic_hash__tests.exit",
       "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
     },
     {
       "origin": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25/diagnostic_hash::tests.log",
-      "artifact": "native/v25/diagnostic_hash::tests.log",
+      "artifact": "native/v25/diagnostic_hash__tests.log",
       "sha256": "45d732a9c13e917003192097549e2aedf0d44a56de96cf1619c41b74ad1b859a"
     },
     {
@@ -700,12 +700,12 @@
     },
     {
       "origin": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/diagnostic_hash::tests.exit",
-      "artifact": "native/v25-snapshot/diagnostic_hash::tests.exit",
+      "artifact": "native/v25-snapshot/diagnostic_hash__tests.exit",
       "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
     },
     {
       "origin": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/diagnostic_hash::tests.log",
-      "artifact": "native/v25-snapshot/diagnostic_hash::tests.log",
+      "artifact": "native/v25-snapshot/diagnostic_hash__tests.log",
       "sha256": "7536d612e0015e8ffbace54ec5291db0dc1adaa3af9b5fe57529428e53109c3b"
     },
     {

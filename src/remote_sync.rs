@@ -772,7 +772,9 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    // Hosted receivers run Linux rsync. macOS ships openrsync, which ignores
+    // `--chmod` for directories, so this local-receiver test is Linux-only.
+    #[cfg(target_os = "linux")]
     #[test]
     fn rsync_read_only_source_keeps_source_modes_and_writable_receiver_directories() {
         use std::os::unix::fs::PermissionsExt;
