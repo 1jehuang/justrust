@@ -7,6 +7,31 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn entry_default_only_evaluates_when_vacant() {
+    closure_oracle::check(
+        "entry-default-vacant-only",
+        &[
+            Case {
+                name: "default_side_effects_are_skipped_for_both_occupied_maps",
+                source: r#"use std::collections::{HashMap,BTreeMap};struct Value(i32);impl Default for Value{fn default()->Self{println!("default");Value(7)}}
+fn main(){let mut hash:HashMap<i32,Value>=HashMap::new();hash.entry(1).or_default().0+=1;hash.entry(1).or_default().0+=1;
+let mut tree:BTreeMap<i32,Value>=BTreeMap::new();tree.entry(1).or_default().0+=2;tree.entry(1).or_default().0+=2;
+println!("{} {}",hash.get(&1).unwrap().0,tree.get(&1).unwrap().0);}"#,
+                expect: Expect::Run("default\ndefault\n9 11\n"),
+            },
+            Case {
+                name: "occupied_default_must_not_construct_or_drop_a_throwaway_value",
+                source: r#"use std::collections::{HashMap,BTreeMap};struct Value(i32);impl Default for Value{fn default()->Self{println!("construct");Value(7)}}impl Drop for Value{fn drop(&mut self){println!("drop {}",self.0)}}
+fn main(){let mut hash:HashMap<i32,Value>=HashMap::new();hash.insert(1,Value(11));hash.entry(1).or_default().0+=1;
+let mut tree:BTreeMap<i32,Value>=BTreeMap::new();tree.insert(1,Value(21));tree.entry(1).or_default().0+=1;
+println!("{} {}",hash.get(&1).unwrap().0,tree.get(&1).unwrap().0);}"#,
+                expect: Expect::Run("12 22\ndrop 22\ndrop 12\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn hashmap_entry_copy_effects_preserve_origin_and_alias_checks() {
     closure_oracle::check(
         "hashmap-copy-entry-effects",
