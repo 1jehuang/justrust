@@ -738,6 +738,7 @@ fn rsync_retry(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn rsync_vanished_retries_require_a_successful_fresh_transfer() {
         use std::os::unix::process::ExitStatusExt;

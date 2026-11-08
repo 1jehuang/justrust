@@ -107,6 +107,7 @@ fn ancestors_of_self() -> Vec<u32> {
 
 /// Conservative live-use exclusion for native target GC. Non-Linux hosts
 /// cannot prove inactivity here and must retain targets.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
     #[cfg(target_os = "linux")]
     {

@@ -352,13 +352,12 @@ fn recent_run_ids(runs: &Path) -> Vec<String> {
     static CACHE: Mutex<Option<(std::path::PathBuf, std::time::SystemTime, Vec<String>)>> =
         Mutex::new(None);
     let mtime = std::fs::metadata(runs).and_then(|m| m.modified()).ok();
-    if let (Some(mtime), Ok(cache)) = (mtime, CACHE.lock()) {
-        if let Some((p, t, ids)) = cache.as_ref()
-            && p == runs
-            && *t == mtime
-        {
-            return ids.clone();
-        }
+    if let (Some(mtime), Ok(cache)) = (mtime, CACHE.lock())
+        && let Some((p, t, ids)) = cache.as_ref()
+        && p == runs
+        && *t == mtime
+    {
+        return ids.clone();
     }
     let ids = scan_run_ids(runs);
     if let (Some(mtime), Ok(mut cache)) = (mtime, CACHE.lock()) {

@@ -114,7 +114,10 @@ pub(crate) fn main(args: Vec<OsString>) -> anyhow::Result<()> {
         Err(error).with_context(|| format!("execute native engine {}", engine.display()))
     }
     #[cfg(not(unix))]
-    unreachable!()
+    {
+        let _ = (forwarded, engine, home);
+        unreachable!()
+    }
 }
 
 /// Only the default home is created here. An explicit override is left to the
