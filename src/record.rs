@@ -1124,6 +1124,7 @@ fn finish(
     crate::telemetry::maybe_spawn_background();
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));
+        eprint!("{}", crate::hints::render(&crate::hints::for_run(&s)));
     } else if std::env::var_os("JUSTRUST_QUIET").is_none() {
         eprintln!("justrust: {}", s.one_line());
     }

@@ -39,6 +39,7 @@ mod execution_graph_task_dag;
 mod execution_graph_timing;
 mod export;
 mod findings;
+mod hints;
 mod history;
 #[cfg(unix)]
 mod hotpatch;

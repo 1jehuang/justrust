@@ -8,6 +8,8 @@ For Rust projects, use `justrust` instead of calling cargo directly:
 - Output: errors and failing tests in full, the first few warnings, no
   progress noise, then a `justrust:` report: verdict, where the time went,
   why each crate rebuilt, and `waste` lines with fixable inefficiencies.
+  A `habit` line names a cost this project keeps paying (a slow test you
+  keep running, a crate every edit rebuilds) and how to stop paying it.
   Do not pipe it through `grep`, `tail`, or `head`: that hides errors.
 - More: `justrust log --grep <text>` or `justrust log --tail 200` prints the
   full saved output of the last run. `justrust show` explains the time,

@@ -1353,7 +1353,24 @@ fn record_remote(
     crate::split_index::maybe_refresh(&s);
     crate::telemetry::record_run(&s, true);
     crate::telemetry::maybe_spawn_background();
+    // The machine printed its own report, which cannot see the client's side
+    // of the wait (sync, admission, artifacts) or this machine's history.
+    eprint!("{}", client_side_report(&s));
     true
+}
+
+/// Waste lines for time outside the remote build plus recurring-cost hints,
+/// appended under the machine's report.
+fn client_side_report(s: &crate::summary::Summary) -> String {
+    let mut o = String::new();
+    for f in crate::findings::e2e_findings(s) {
+        o.push_str(&format!(
+            "  waste   ~{:>5.1}s  {}\n",
+            f.cost_secs, f.message
+        ));
+    }
+    o.push_str(&crate::hints::render(&crate::hints::for_run(s)));
+    o
 }
 
 /// `justrust remote check|test|...`: always remote (starting the machine if

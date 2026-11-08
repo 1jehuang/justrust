@@ -397,6 +397,17 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
             let _ = writeln!(o, "  ~{:.1}s {}", f.cost_secs, f.message);
         }
     }
+    let hints = crate::hints::for_run(s);
+    if !hints.is_empty() {
+        let _ = writeln!(o, "\nRecurring costs (this workspace, last 7 days)");
+        for h in &hints {
+            let _ = writeln!(
+                o,
+                "  ~{:.0}s over {} runs: {}",
+                h.total_secs, h.runs, h.message
+            );
+        }
+    }
     let _ = writeln!(o, "\nRaw data: {}", dir.display());
     o
 }

@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-11-08: waste lines for time outside cargo, recurring-cost hints
+
+The agent footer now covers the whole wait, not only cargo's phases.
+
+- **e2e waste lines.** When a measured waterfall segment outside cargo costs
+  at least 2s and 15% of the wait, the footer names it with its cost and
+  what to do. The segments are queued behind another sync, source push,
+  machine link, hosted admission, and artifacts back. Remote runs print these
+  on the client, under the host's report, because the host cannot see them.
+  Replaying the last 3,000 runs found 69 with a measured waterfall. The rule
+  fires on 14 of them: sync push 7 times (249s), artifacts back 2 (141s),
+  sync queued 3 (50s), link 1 (5s), and admission 1 (3s). Live run
+  `20261108-083941538-34943` waited 50.0s, of which 43.1s was the source
+  re-check after the sync daemon restarted for this install. The line
+  appeared with that cost.
+- **`habit` hints.** After a run that paid a slow test (2s or more) or a
+  local crate rebuild (10s or more), justrust reads the newest 60 summaries
+  of the same workspace from the last 7 days, using only the last 1 MB of the
+  index. It names costs seen in at least 3 runs and totalling at least 60s
+  for a test or 120s for a crate, at most two per run. On real
+  clean-room runs: `20261108-080710445-188223` gets "`justrust_engine (test)`
+  test harness build has cost 2312s over 33 runs (~70s each)", and
+  `20261106-191035514-3063731` gets "`justrust_engine` rebuild has cost 1637s
+  over 31 runs". Cost: `justrust show` on a qualifying run takes 48 ms with
+  hints and 37 ms without (20 runs each, two rounds). Runs that do not qualify
+  skip the history read entirely. `JUSTRUST_HINTS=0` disables it.
+
 ## 2026-11-08: end-to-end wait profiler; test time was misfiled as "after build"
 
 New: every recorded run now stores an `e2e` waterfall in `summary.json`.

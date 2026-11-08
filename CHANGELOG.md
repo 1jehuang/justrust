@@ -5,6 +5,15 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- **Waste lines for time outside cargo.** From the end-to-end waterfall:
+  queued behind another sync, source push (re-check after a restart or
+  reboot), machine link, hosted admission, and artifacts back, each with its
+  measured cost and what to do. Quiet under 2s or 15% of the wait.
+- **Recurring-cost hints (`habit`).** After a run that paid a slow test or a
+  long local rebuild again, the footer names the test or crate, its total
+  over the last 7 days in this workspace, and the fix (skip it while
+  iterating, `justrust split`). Also in `justrust show`. `JUSTRUST_HINTS=0`
+  turns them off.
 - **End-to-end wait waterfall.** Every recorded run stores what the caller
   waited for, split into non-overlapping segments that sum to the wait:
   routing, hosted admission, sync (queued behind another sync, machine link,
