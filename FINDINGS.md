@@ -9423,3 +9423,16 @@ Private operational acceptance also exercised genuinely fresh fixed-kernel build
 ## 2026-11-06: desktop responsive conversation layout verification
 
 Desktop workspace test run `20261106-015237975-640485` took 45.1 s, with 32.42 s compilation and 11.54 s tests. The 125k-line UI test unit alone rebuilt in 27.58 s (107.7 s CPU, 3326 MB peak) for a small layout edit. 1863 tests passed and four unrelated fixture/integration tests failed. Screenshot build `20261106-015030861-616520` took 8.8 s, including 5.69 s recompiling UI and 2.04 s the dependent app. The existing report identifies broad UI source embedding as an invalidation source. Narrowing build-script inputs or extracting embedded data into a leaf crate remains a separate architectural follow-up, not part of the layout change. These runs are not a before/after speedup comparison.
+
+## 2026-11-08: hosted disk 97% again; native GC found nothing eligible
+
+At 11:39 UTC the hosted build disk was 469G/484G (97%, 15G free).
+`justrust remote gc` on the host collected 0 bytes: every registered root was
+Missing, Recent, InUse or Unsafe. The space was outside its reach: mirrored
+`~/.jcode/scratch/*/target` dirs (hm-verify 19G, vole-regions 19G, ~62G total),
+`/home/ubuntu/.cache/firefox-rust-hosted` (68G, no process using it) and
+`~/.justrust/sent` (40G, 3980 files). Manually removed only rebuildable build
+outputs: `target/` of scratch roots with no file modified in 6 h, and the
+unused firefox cache. Sources untouched. Result: 345G used, 139G free (72%).
+Follow-up: GC should cover unregistered/old mirror targets, ad hoc caches under
+`~/.cache`, and age out `~/.justrust/sent`.
