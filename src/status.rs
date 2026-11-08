@@ -345,6 +345,28 @@ fn estimate(
 }
 
 fn recent_run_ids(runs: &Path) -> Vec<String> {
+    // `status --watch` calls this every second and the runs directory holds
+    // tens of thousands of entries. A new run changes the directory mtime, so
+    // rescan only then.
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::path::PathBuf, std::time::SystemTime, Vec<String>)>> =
+        Mutex::new(None);
+    let mtime = std::fs::metadata(runs).and_then(|m| m.modified()).ok();
+    if let (Some(mtime), Ok(cache)) = (mtime, CACHE.lock()) {
+        if let Some((p, t, ids)) = cache.as_ref() {
+            if p == runs && *t == mtime {
+                return ids.clone();
+            }
+        }
+    }
+    let ids = scan_run_ids(runs);
+    if let (Some(mtime), Ok(mut cache)) = (mtime, CACHE.lock()) {
+        *cache = Some((runs.to_path_buf(), mtime, ids.clone()));
+    }
+    ids
+}
+
+fn scan_run_ids(runs: &Path) -> Vec<String> {
     let mut ids = Vec::new();
     let mut overrides = Vec::new();
     if let Ok(entries) = std::fs::read_dir(runs) {
@@ -378,12 +400,40 @@ fn recent_run_ids(runs: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The full index, re-parsed only when the file changes. `status --watch`
+/// needs it for estimates every second while any build runs, and it is tens
+/// of MB.
+fn cached_index() -> std::sync::Arc<Vec<IndexEntry>> {
+    use std::sync::Mutex;
+    type Key = (u64, std::time::SystemTime);
+    static CACHE: Mutex<Option<(Key, std::sync::Arc<Vec<IndexEntry>>)>> = Mutex::new(None);
+    let key = paths::index_file()
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| Some((m.len(), m.modified().ok()?)));
+    let Some(key) = key else {
+        return std::sync::Arc::new(crate::runs::load_index());
+    };
+    let mut cache = match CACHE.lock() {
+        Ok(c) => c,
+        Err(_) => return std::sync::Arc::new(crate::runs::load_index()),
+    };
+    if let Some((k, v)) = cache.as_ref() {
+        if *k == key {
+            return v.clone();
+        }
+    }
+    let v = std::sync::Arc::new(crate::runs::load_index());
+    *cache = Some((key, v.clone()));
+    v
+}
+
 pub fn collect() -> Result<Status> {
     let runs = paths::runs_dir()?;
     let now = paths::now();
     let recent_ids = recent_run_ids(&runs);
     let mut status = Status::default();
-    let mut index: Option<Vec<IndexEntry>> = None;
+    let mut index: Option<std::sync::Arc<Vec<IndexEntry>>> = None;
     for id in &recent_ids {
         let dir = runs.join(id);
         if dir.join("summary.json").exists() {
@@ -398,7 +448,7 @@ pub fn collect() -> Result<Status> {
         let live = crate::live::load(&dir).unwrap_or_default();
         let (ncpu, cpu_cores, sampled_at) = measured_cpu(&dir, &meta, now);
         let done_units = crate::summary::load_units(&dir);
-        let index = index.get_or_insert_with(crate::runs::load_index);
+        let index = index.get_or_insert_with(cached_index);
         let est = estimate(now, &meta, &live, &done_units, index, &runs);
         let running = live
             .active
@@ -428,8 +478,11 @@ pub fn collect() -> Result<Status> {
         rem(b).total_cmp(&rem(a))
     });
     if status.active.is_empty() {
-        let index = index.unwrap_or_else(crate::runs::load_index);
-        if let Some(r) = index.last() {
+        let last = match &index {
+            Some(index) => index.last().cloned(),
+            None => crate::runs::last_index_entry(),
+        };
+        if let Some(r) = last.as_ref() {
             let ago = now - (r.start + r.wall);
             if ago < SHOW_DONE_SECS && r.units_compiled > 0 {
                 status.recent = Some(Finished {
@@ -621,6 +674,7 @@ pub fn render_waybar(s: &Status) -> String {
 }
 
 pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
+    let mut last = String::new();
     loop {
         let s = collect()?;
         let out = if waybar {
@@ -630,9 +684,15 @@ pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
         } else {
             render_text(&s)
         };
-        println!("{}", out.trim_end());
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        // Under --watch, repeat lines only make the reader (Waybar) redraw.
+        if watch.is_none() || out != last {
+            println!("{}", out.trim_end());
+            use std::io::Write;
+            if std::io::stdout().flush().is_err() && watch.is_some() {
+                return Ok(()); // reader went away
+            }
+            last = out;
+        }
         match watch {
             Some(secs) => std::thread::sleep(std::time::Duration::from_secs_f64(secs.max(0.2))),
             None => return Ok(()),

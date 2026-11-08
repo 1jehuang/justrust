@@ -17,6 +17,42 @@ pub fn load_index() -> Vec<IndexEntry> {
         .collect()
 }
 
+/// The last parseable index entry, reading only the file's tail. The index
+/// grows without bound (tens of MB), and `status --watch` asks for the latest
+/// run every second while idle.
+pub fn last_index_entry() -> Option<IndexEntry> {
+    last_entry_in(&paths::index_file().ok()?)
+}
+
+fn last_entry_in(path: &std::path::Path) -> Option<IndexEntry> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut window: u64 = 64 * 1024;
+    loop {
+        let start = len.saturating_sub(window);
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut buf = Vec::new();
+        f.by_ref().take(len - start).read_to_end(&mut buf).ok()?;
+        let text = String::from_utf8_lossy(&buf);
+        // The first line of a partial window may be cut; skip it unless the
+        // window starts at the beginning of the file.
+        let skip = usize::from(start > 0);
+        let lines: Vec<&str> = text.lines().skip(skip).collect();
+        if let Some(e) = lines
+            .iter()
+            .rev()
+            .find_map(|l| serde_json::from_str(l).ok())
+        {
+            return Some(e);
+        }
+        if start == 0 {
+            return None;
+        }
+        window *= 4;
+    }
+}
+
 fn ago(t: f64) -> String {
     let d = (paths::now() - t).max(0.0);
     match d {
@@ -419,5 +455,41 @@ fn trunc(s: &str, n: usize) -> String {
         let mut t: String = s.chars().take(n - 1).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::*;
+
+    fn line(id: &str) -> String {
+        serde_json::to_string(&IndexEntry {
+            id: id.into(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn last_entry_reads_tail_and_skips_torn_lines() {
+        let dir = std::env::temp_dir().join(format!("jr-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("index.jsonl");
+        // Larger than the first 64 KiB window, so the cut first line is exercised.
+        let mut s: String = (0..3000)
+            .map(|i| line(&format!("run-{i}")) + "\n")
+            .collect();
+        std::fs::write(&p, &s).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "run-2999");
+        // A partially written trailing record falls back to the previous one.
+        s.push_str("{\"id\":\"half");
+        std::fs::write(&p, &s).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "run-2999");
+        // A single line with no newline (window covers the whole file).
+        std::fs::write(&p, line("only")).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "only");
+        std::fs::write(&p, "").unwrap();
+        assert!(last_entry_in(&p).is_none());
+        std::fs::remove_dir_all(dir).ok();
     }
 }
