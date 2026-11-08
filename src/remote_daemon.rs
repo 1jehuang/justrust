@@ -378,7 +378,8 @@ impl Daemon {
 
     fn exit(&self, why: &str) -> ! {
         log(why);
-        // Draining: a replacement may already be mirroring. Never save then.
+        // Draining: already saved before retiring (a replacement may be
+        // mirroring now, and must not find a token written after it began).
         if !self.draining.load(Ordering::SeqCst) {
             save_mirrors(self);
         }
@@ -400,6 +401,9 @@ impl Daemon {
         log(&format!(
             "shutdown requested, finishing {active} run(s) in flight"
         ));
+        // Still the only daemon (we hold the lock): save now, while no
+        // replacement can be writing to the machine.
+        save_mirrors(self);
         self.retire();
         let d = self.clone();
         std::thread::spawn(move || {
@@ -888,11 +892,18 @@ fn save_mirrors(d: &Daemon) {
     if !remote_resume::enabled() {
         return;
     }
-    let Ok(mut st) = d.sync.lock() else { return };
-    let Some(link) = st.link.clone().filter(|l| l.alive()) else {
+    // Never wait behind a sync in progress: a replacement daemon is waiting
+    // for us to let go, and that sync's state is not settled anyway.
+    let Ok(mut st) = d.sync.try_lock() else {
+        log("mirror manifests not saved: a sync is in progress");
         return;
     };
-    if barrier(d, &mut st, &link).is_err() {
+    let Some(link) = st.link.clone().filter(|l| l.alive()) else {
+        log("mirror manifests not saved: no live connection");
+        return;
+    };
+    if let Err(e) = barrier(d, &mut st, &link) {
+        log(&format!("mirror manifests not saved: {e:#}"));
         return;
     }
     let clean: Vec<(&Path, &Manifest, &[PathBuf])> = st
