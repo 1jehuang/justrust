@@ -607,6 +607,8 @@ mod tests {
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).into()).collect()
     }
+    // Managed GCC paths are Unix paths; Windows hosts never provision them.
+    #[cfg(unix)]
     #[test]
     fn gcc_environment_is_target_scoped() {
         let mut cmd = Command::new("cargo");

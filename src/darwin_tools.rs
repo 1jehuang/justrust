@@ -339,6 +339,8 @@ mod tests {
         assert!(validate(&store, &id).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
+    // Windows cannot rename over files the validator may hold open.
+    #[cfg(unix)]
     #[test]
     fn manifest_and_content_tampering_are_rejected() {
         let root = fixture();
