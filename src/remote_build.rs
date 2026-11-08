@@ -1351,6 +1351,7 @@ fn record_remote(
     }
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
+    crate::test_reuse::store(&s, wall);
     crate::telemetry::record_run(&s, true);
     crate::telemetry::maybe_spawn_background();
     // The machine printed its own report, which cannot see the client's side

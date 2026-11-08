@@ -5,6 +5,12 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- **Test result reuse.** An agent-mode `test` identical to a passing run
+  (same command, environment, justrust binary, and source file stamps since
+  that run started) replays its results in milliseconds instead of syncing,
+  building and running again. Only passing runs, at most 12 h old, and only
+  when the tests take at least 20x the source scan. `--rerun` or
+  `JUSTRUST_TEST_REUSE=0` runs them anyway.
 - **Waste lines for time outside cargo.** From the end-to-end waterfall:
   queued behind another sync, source push (re-check after a restart or
   reboot), machine link, hosted admission, and artifacts back, each with its

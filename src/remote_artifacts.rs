@@ -45,6 +45,10 @@ struct Request {
     /// Select test executables from this successful run, never by scanning deps.
     #[serde(default)]
     test_run: Option<String>,
+    /// The client can apply a delta against an earlier file of the same
+    /// stream (`Frame::File::base`). Older hosts ignore it.
+    #[serde(default)]
+    anchors: bool,
 }
 
 /// An artifact the client already has.
@@ -73,6 +77,11 @@ enum Frame {
         size: u64,
         patch: bool,
         len: u64,
+        /// Delta base: an earlier file of this stream (its name), when there
+        /// is no previous copy of this one. Test binaries of one crate share
+        /// most of their code: this halves a fresh `test --no-run` transfer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
     },
     End,
 }
@@ -465,6 +474,8 @@ fn serve_selected_dir(
         &[],
     )?;
     let have: BTreeMap<&str, &Have> = req.have.iter().map(|h| (h.name.as_str(), h)).collect();
+    // Files sent earlier in this stream: (name, size, host copy).
+    let mut streamed: Vec<(String, u64, PathBuf)> = Vec::new();
     let files = if let Some(artifacts) = selected {
         let files = artifacts
             .iter()
@@ -508,10 +519,15 @@ fn serve_selected_dir(
         let snap = sent_root.join(format!("{key}.new"));
         std::fs::copy(&path, &snap).with_context(|| format!("copy {}", path.display()))?;
         let zst = sent_root.join(format!("{key}.zst"));
+        let base = (!patch && req.anchors)
+            .then(|| anchor(&streamed, m.len()))
+            .flatten();
         let mut c = Command::new("zstd");
         c.args(["-q", "-f", "-3", "-T0", "--long=31"]);
         if patch {
             c.arg(format!("--patch-from={}", sent.display()));
+        } else if let Some((_, _, from)) = base {
+            c.arg(format!("--patch-from={}", from.display()));
         }
         let st = c
             .arg(&snap)
@@ -534,15 +550,31 @@ fn serve_selected_dir(
                 size: m.len(),
                 patch,
                 len: data.len() as u64,
+                base: base.map(|(n, _, _)| n.clone()),
             },
             &data,
         )?;
         std::fs::rename(&snap, &sent)?;
         std::fs::write(&sent_id, &rid)?;
+        streamed.push((name, m.len(), sent));
     }
     write_frame(&mut out, &Frame::End, &[])?;
     out.flush()?;
     Ok(())
+}
+
+/// The earlier file of this stream closest in size to a `size`-byte file,
+/// when it is similar enough to be worth a delta: both at least 1 MB, sizes
+/// within a factor of two.
+fn anchor(streamed: &[(String, u64, PathBuf)], size: u64) -> Option<&(String, u64, PathBuf)> {
+    const MIN: u64 = 1 << 20;
+    if size < MIN {
+        return None;
+    }
+    streamed
+        .iter()
+        .filter(|(_, s, _)| *s >= MIN && *s <= size * 2 && *s * 2 >= size)
+        .min_by_key(|(_, s, _)| s.abs_diff(size))
 }
 
 fn records_path() -> Result<PathBuf> {
@@ -774,10 +806,11 @@ fn apply(
     name: &str,
     mode: u32,
     size: u64,
-    patch: bool,
+    from: Option<&Path>,
     data: &[u8],
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
+    let patch = from.is_some();
     let compile_only = matches!(validation, Validation::Test | Validation::WindowsTest(_));
     if !safe_name(name) {
         bail!("unsafe artifact name {name:?}");
@@ -794,8 +827,8 @@ fn apply(
     std::fs::write(&zst, data)?;
     let mut c = Command::new("zstd");
     c.args(["-q", "-d", "-f", "--long=31"]);
-    if patch {
-        c.arg(format!("--patch-from={}", dst.display()));
+    if let Some(from) = from {
+        c.arg(format!("--patch-from={}", from.display()));
     }
     let st = c
         .arg(&zst)
@@ -922,6 +955,7 @@ fn fetch_inner(
         start,
         have,
         test_run: test_run.map(str::to_owned),
+        anchors: true,
     };
     let mut child = t
         .command()
@@ -942,6 +976,7 @@ fn fetch_inner(
     let mut bytes = 0u64;
     let mut remote_dir = None;
     let mut selected = None;
+    let mut streamed: std::collections::HashSet<String> = Default::default();
     let res = (|| -> Result<()> {
         let mut line = String::new();
         loop {
@@ -1005,6 +1040,7 @@ fn fetch_inner(
                     size,
                     patch,
                     len,
+                    base,
                 } => {
                     if test_run.is_some()
                         && !selected.as_ref().is_some_and(|artifacts| {
@@ -1036,7 +1072,16 @@ fn fetch_inner(
                     } else {
                         Validation::NativeBuild
                     };
-                    let dst = apply(&dir, &name, mode, size, patch, &data, validation)?;
+                    // A base must be a file this stream already wrote and
+                    // verified, never anything else in the target dir.
+                    let from = match (&base, patch) {
+                        (Some(b), false) if streamed.contains(b) => Some(dir.join(b)),
+                        (Some(b), _) => bail!("artifact delta against unknown base {b:?}"),
+                        (None, true) => Some(dir.join(&name)),
+                        (None, false) => None,
+                    };
+                    let dst = apply(&dir, &name, mode, size, from.as_deref(), &data, validation)?;
+                    streamed.insert(name.clone());
                     let m = std::fs::metadata(&dst)?;
                     records.insert(
                         dst.display().to_string(),
@@ -1047,7 +1092,7 @@ fn fetch_inner(
                         },
                     );
                     files += 1;
-                    patched += patch as usize;
+                    patched += (patch || base.is_some()) as usize;
                     bytes += len;
                 }
                 Frame::End => return Ok(()),
@@ -1509,7 +1554,7 @@ mod tests {
                 "app",
                 0o755,
                 body.len() as u64,
-                false,
+                None,
                 &encoded.stdout,
                 Validation::Glibc217,
             );
@@ -1677,6 +1722,7 @@ mod tests {
                     + 60.0,
                 have,
                 test_run: None,
+                anchors: true,
             };
             let mut out = Vec::new();
             serve_dir(&remote, &req, &sent, &mut out).unwrap();
@@ -1696,15 +1742,21 @@ mod tests {
                         size,
                         patch,
                         len,
+                        base,
                     } => {
                         let mut d = vec![0; len as usize];
                         r.read_exact(&mut d).unwrap();
+                        let from = match (&base, patch) {
+                            (Some(b), _) => Some(local.join(b)),
+                            (None, true) => Some(local.join(&name)),
+                            (None, false) => None,
+                        };
                         apply(
                             &local,
                             &name,
                             mode,
                             size,
-                            patch,
+                            from.as_deref(),
                             &d,
                             Validation::NativeBuild,
                         )
@@ -1737,6 +1789,104 @@ mod tests {
         assert!(second[0].2, "{second:?}");
         assert!(second[0].1 < first[0].1 / 10, "{second:?} vs {first:?}");
         assert_eq!(std::fs::read(local.join("app")).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn anchor_picks_closest_similar_earlier_file() {
+        let mb = 1u64 << 20;
+        let s = |n: &str, size| (n.to_string(), size, PathBuf::from(n));
+        let streamed = vec![s("tiny", 1000), s("a", 20 * mb), s("b", 26 * mb)];
+        assert_eq!(anchor(&streamed, 25 * mb).unwrap().0, "b");
+        assert_eq!(anchor(&streamed, 19 * mb).unwrap().0, "a");
+        // Small files and very different sizes are sent whole.
+        assert!(anchor(&streamed, 1000).is_none());
+        assert!(anchor(&streamed, 80 * mb).is_none());
+        assert!(anchor(&[], 20 * mb).is_none());
+    }
+
+    /// Two new, similar test binaries in one stream: the second comes back
+    /// as a delta against the first, and both are reproduced exactly.
+    #[cfg(unix)]
+    #[test]
+    fn similar_new_files_stream_as_deltas_of_each_other() {
+        if !available() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("jr-art-anchor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (remote, local, sent) = (root.join("r"), root.join("l"), root.join("sent"));
+        for d in [&remote, &local, &sent] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // Incompressible shared body, so only a delta can make it small.
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let shared: Vec<u8> = (0..(3usize << 20))
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect();
+        let mut one = shared.clone();
+        one.extend_from_slice(b"first test binary");
+        let mut two = shared;
+        two.extend_from_slice(b"second test binary");
+        for (n, b) in [("one", &one), ("two", &two)] {
+            std::fs::write(remote.join(n), b).unwrap();
+            crate::sys::set_mode(&remote.join(n), 0o755).unwrap();
+        }
+        let req = Request {
+            cwd: String::new(),
+            args: vec![],
+            start: 0.0,
+            have: vec![],
+            test_run: None,
+            anchors: true,
+        };
+        let mut out = Vec::new();
+        serve_dir(&remote, &req, &sent, &mut out).unwrap();
+        let mut r = BufReader::new(&out[..]);
+        let mut line = String::new();
+        let mut lens = Vec::new();
+        loop {
+            line.clear();
+            r.read_line(&mut line).unwrap();
+            match serde_json::from_str::<Frame>(&line).unwrap() {
+                Frame::File {
+                    name,
+                    mode,
+                    size,
+                    len,
+                    base,
+                    ..
+                } => {
+                    let mut d = vec![0; len as usize];
+                    r.read_exact(&mut d).unwrap();
+                    let from = base.as_ref().map(|b| local.join(b));
+                    apply(
+                        &local,
+                        &name,
+                        mode,
+                        size,
+                        from.as_deref(),
+                        &d,
+                        Validation::NativeBuild,
+                    )
+                    .unwrap();
+                    lens.push((name, len, base));
+                }
+                Frame::End => break,
+                _ => {}
+            }
+        }
+        assert_eq!(lens.len(), 2, "{lens:?}");
+        assert!(lens[0].2.is_none());
+        assert_eq!(lens[1].2.as_deref(), Some(lens[0].0.as_str()));
+        assert!(lens[1].1 < lens[0].1 / 20, "{lens:?}");
+        assert_eq!(std::fs::read(local.join("one")).unwrap(), one);
+        assert_eq!(std::fs::read(local.join("two")).unwrap(), two);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

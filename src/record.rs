@@ -1119,6 +1119,7 @@ fn finish(
     )?;
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
+    crate::test_reuse::store(&s, s.e2e.as_ref().map_or(s.wall, |e| e.wall));
     crate::depcache_gc::maybe_spawn();
     crate::depcache_remote::maybe_spawn_sync();
     crate::telemetry::record_run(&s, opts.agent);

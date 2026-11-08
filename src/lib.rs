@@ -46,6 +46,7 @@ mod hotpatch;
 mod msvc_tools;
 mod native;
 mod platform_config;
+mod test_reuse;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
 mod hotpatch {
@@ -703,12 +704,17 @@ fn route_then_accelerate(
 
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
     let (args, route_mode) = take_route_flags(args);
+    let (args, rerun) = test_reuse::take_rerun_flag(args);
     if let Some(m) = route_mode {
         // SAFETY: single-threaded here, before any build starts.
         unsafe { std::env::set_var("JUSTRUST_REMOTE", m) };
     }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
+    // An identical passing test run needs no sync, build or run at all.
+    if !rerun && let Some(code) = test_reuse::try_reuse(&full) {
+        std::process::exit(code);
+    }
     // Hosted/forced remote runs exit before a local daemon can return a
     // prebuild. Only a chosen local build may use local early answers.
     if let Some(code) = route_then_accelerate(

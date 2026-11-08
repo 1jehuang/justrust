@@ -17,6 +17,9 @@ For Rust projects, use `justrust` instead of calling cargo directly:
   `justrust profile --here --days 7` shows where this project's build wait
   goes across runs.
 - Prefer `justrust check` to find compile errors before `justrust test`.
+- Rerunning an identical passing `justrust test` with no source, env or
+  command change reuses its result instantly (it says so). Add `--rerun` when
+  a test reads files outside the repo or the network and must run again.
 - Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay cargo.
 
 Where builds run: when signed in to hosted builds, check, clippy, and test
