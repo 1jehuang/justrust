@@ -3,6 +3,318 @@ use super::*;
 const ARGUMENT_STR_SOURCE: &str = "struct Item{name:String}fn inspect(items:Vec<&Item>){let _names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}";
 
 #[test]
+fn captured_result_read_preserves_inner_reference_channel_and_source_place() {
+    const SOURCE: &str = "fn inspect(bytes:&[u8]){let f=||bytes.iter().cloned();}fn main(){}";
+    let (plan, checked, _) = fixture_graph_source(SOURCE);
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    let witness = receipt.capture_witness().unwrap();
+    let read = witness
+        .nodes
+        .iter()
+        .find(|node| matches!(node.kind, ir::CaptureResultKind::Read { .. }))
+        .unwrap()
+        .expression;
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert!(!view.contract().results.is_empty());
+        for returned in view.contract().results.iter() {
+            assert_eq!(returned.sources.len(), 1);
+            let source = &returned.sources[0];
+            assert_eq!(source.param, 0);
+            assert_eq!(
+                source.location.channel,
+                ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+            );
+            let expected_path: &[ir::CarrierStep] = if mode == ir::ClosureKind::FnOnce {
+                &[ir::CarrierStep::Field(0)]
+            } else {
+                &[ir::CarrierStep::Referent, ir::CarrierStep::Field(0)]
+            };
+            assert_eq!(source.location.path.0.as_ref(), expected_path);
+        }
+        for mutation in 0..4 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => {
+                    // Keep the checked result type but replace reading the
+                    // inner reference with the outer capture-field reference.
+                    let ir::ExprKind::Deref { value } = forged.exprs[read.0].kind else {
+                        panic!("capture read")
+                    };
+                    forged.exprs[read.0].kind = forged.exprs[value.0].kind.clone();
+                }
+                1 => forged.exprs[read.0].kind = ir::ExprKind::Local(forged.params[1]),
+                2 => {
+                    let ir::Ty::Ref { referent, .. } = &forged.exprs[read.0].ty else {
+                        panic!("shared read")
+                    };
+                    forged.exprs[read.0].ty = ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: referent.clone(),
+                    };
+                }
+                3 => forged.exprs[read.0].kind = ir::ExprKind::Local(forged.params[0]),
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_source(receipt, &forged, &facts).is_err(),
+                "mode={mode:?} mutation={mutation}"
+            );
+        }
+    }
+    for mutation in 0..4 {
+        let mut witness = witness.clone();
+        let mut nodes = witness.nodes.to_vec();
+        let node = nodes
+            .iter_mut()
+            .find(|node| node.expression == read)
+            .unwrap();
+        let ir::CaptureResultKind::Read {
+            source,
+            original,
+            prefix,
+            ..
+        } = &mut node.kind
+        else {
+            panic!("read")
+        };
+        match mutation {
+            0 => source.kind = ir::CaptureKind::Mut,
+            1 => source.place.local = ir::LocalId(source.place.local.0 + 1),
+            2 => original.local = ir::LocalId(original.local.0 + 1),
+            3 => *prefix = Arc::from([ir::Projection::Deref]),
+            _ => unreachable!(),
+        }
+        witness.nodes = nodes.into();
+        let forged_receipt = Arc::new(
+            ir::ClosureResultReceipt::captured(
+                receipt.owner(),
+                receipt.provider(),
+                receipt.site(),
+                receipt.tail(),
+                witness,
+                &plan.budget,
+            )
+            .unwrap(),
+        );
+        let forged = Arc::new(
+            checked
+                .ty
+                .as_ref()
+                .clone()
+                .with_result_receipt(Some(forged_receipt)),
+        );
+        assert!(
+            world
+                .closure_callable_facts_for(forged, ir::ClosureKind::Fn)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn captured_result_replays_original_capture_call_and_current_context() {
+    const SOURCE: &str =
+        "fn inspect(){let bytes=[2u8,3u8];let f=||bytes.iter().cloned();}fn main(){}";
+    let (plan, checked, _) = fixture_graph_source(SOURCE);
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    let witness = receipt.capture_witness().unwrap();
+    let borrow = witness
+        .nodes
+        .iter()
+        .find(|node| matches!(node.kind, ir::CaptureResultKind::Borrow { .. }))
+        .unwrap()
+        .expression;
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert!(!view.contract().results.is_empty());
+        for returned in view.contract().results.iter() {
+            assert!(!returned.sources.is_empty());
+            assert!(returned.sources.iter().all(|source| source.param == 0
+                && source.location.path.0.contains(&ir::CarrierStep::Field(0))));
+        }
+        for mutation in 0..7 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    let field = place
+                        .projection
+                        .iter_mut()
+                        .find(|step| matches!(step, ir::Projection::Field(_)))
+                        .unwrap();
+                    *field = ir::Projection::Field(1);
+                }
+                1 => {
+                    let ir::ExprKind::Borrow { kind, .. } = &mut forged.exprs[borrow.0].kind else {
+                        panic!("borrow")
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                2 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrow.0].kind
+                    else {
+                        panic!("borrow")
+                    };
+                    place.local = forged.params[1];
+                }
+                3 => forged.body.tail = Some(borrow),
+                4 => {
+                    let ir::ExprKind::Call { args, .. } = &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("call")
+                    };
+                    args[0] = borrow;
+                }
+                5 => {
+                    let ir::ExprKind::Call { target, .. } =
+                        &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("call")
+                    };
+                    match target {
+                        ir::Callee::Direct(call) => call.declaration = checked.ty.provider(),
+                        ir::Callee::TraitItem(call) => call.item = checked.ty.provider(),
+                        _ => panic!("source call"),
+                    }
+                }
+                6 => {
+                    if let Some(node) = witness.nodes.iter().find(|node| {
+                        matches!(node.kind, ir::CaptureResultKind::ArrayToSlice { .. })
+                    }) {
+                        let ir::ExprKind::ArrayToSlice { reference } =
+                            &mut forged.exprs[node.expression.0].kind
+                        else {
+                            panic!("unsize")
+                        };
+                        *reference = receipt.tail();
+                    } else {
+                        forged.result = ir::Ty::Unit;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_source(receipt, &forged, &facts).is_err(),
+                "mode={mode:?} mutation={mutation}"
+            );
+        }
+    }
+    let facts = world
+        .closure_callable_facts_for(checked.ty.clone(), ir::ClosureKind::FnOnce)
+        .unwrap();
+    assert!(
+        validate_source(
+            receipt,
+            &checked.body_for(ir::ClosureKind::Fn).unwrap(),
+            &facts
+        )
+        .is_err()
+    );
+    assert!(
+        validate_source(
+            receipt,
+            &checked.body,
+            &world.callable_facts(checked.ty.owner()).unwrap()
+        )
+        .is_err()
+    );
+    let schema_item = *plan.registry.trait_items.iter().flatten().next().unwrap();
+    assert!(
+        validate_source(
+            receipt,
+            &checked.body,
+            &world.schema_facts(schema_item).unwrap()
+        )
+        .is_err()
+    );
+    let (foreign_plan, foreign_checked, _) = fixture_graph_source(SOURCE);
+    let foreign = foreign_plan
+        .trait_world()
+        .unwrap()
+        .closure_callable_facts_for(foreign_checked.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    assert!(validate_source(receipt, &checked.body, &foreign).is_err());
+    for mutation in 0..5 {
+        let mut witness = witness.clone();
+        let mut nodes = witness.nodes.to_vec();
+        let node = nodes
+            .iter_mut()
+            .find(|node| matches!(node.kind, ir::CaptureResultKind::Borrow { .. }))
+            .unwrap();
+        let ir::CaptureResultKind::Borrow { field, source, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        match mutation {
+            0 => *field += 1,
+            1 => source.kind = ir::CaptureKind::Mut,
+            2 => source.place.local = ir::LocalId(source.place.local.0 + 1),
+            3 => {
+                witness.recipe = foreign_checked
+                    .ty
+                    .result_receipt()
+                    .unwrap()
+                    .capture_witness()
+                    .unwrap()
+                    .recipe
+                    .clone()
+            }
+            4 => {}
+            _ => unreachable!(),
+        }
+        witness.nodes = nodes.into();
+        let forged = Arc::new(
+            ir::ClosureResultReceipt::captured(
+                checked.ty.owner(),
+                checked.ty.provider(),
+                checked.ty.site() + u32::from(mutation == 4),
+                receipt.tail(),
+                witness,
+                &plan.budget,
+            )
+            .unwrap(),
+        );
+        let forged = Arc::new(
+            checked
+                .ty
+                .as_ref()
+                .clone()
+                .with_result_receipt(Some(forged)),
+        );
+        assert!(
+            world
+                .closure_callable_facts_for(forged, ir::ClosureKind::Fn)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn projected_noncopy_collection_builds_with_default_budget() {
     let budget = ir::PlanBudget::default();
     let source = "struct Item{first:String,second:String}fn main(){let items=vec![Item{first:String::from(\"apple\"),second:String::from(\"pear\")}];let first:Vec<&String>=items.iter().map(|i|&i.first).collect();let second:Vec<&String>=items.iter().map(|i|&i.second).collect();println!(\"{} {}\",first[0],second[0]);}";

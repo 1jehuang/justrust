@@ -77,10 +77,15 @@ impl ValidatedTraitWorld {
         }
         let adapter = self.decode_closure_adapter(target)?;
         self.validate_closure_metadata(adapter.closure, context.env())?;
-        if !adapter
+        let captured = adapter
             .closure
             .result_receipt()
-            .is_some_and(|receipt| receipt.is_projected_input())
+            .is_some_and(|receipt| receipt.capture_witness().is_some());
+        if !captured
+            && !adapter
+                .closure
+                .result_receipt()
+                .is_some_and(|receipt| receipt.is_projected_input())
         {
             return Ok(());
         }
@@ -99,7 +104,22 @@ impl ValidatedTraitWorld {
                 "projected direct adapter changed its sealed ABI",
             ));
         }
-        canonicalize_empty_projected_result(signature, &self.budget)
+        if captured {
+            let facts = context.original.ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "captured direct adapter lacks original current caller facts",
+                )
+            })?;
+            self.canonicalize_captured_result_signature(
+                adapter.closure,
+                adapter.mode,
+                signature,
+                facts,
+            )
+        } else {
+            canonicalize_empty_projected_result(signature, &self.budget)
+        }
     }
 
     /// The required Fn output projection may acquire reference layers only from
@@ -126,7 +146,7 @@ impl ValidatedTraitWorld {
         let Some(receipt) = closure.result_receipt() else {
             return Ok(None);
         };
-        if receipt.argument_origin().is_none() {
+        if receipt.argument_origin().is_none() && receipt.capture_witness().is_none() {
             return Ok(None);
         }
         if self.closure_trait_kind(item.trait_decl)? != Some(*kind)
@@ -198,6 +218,20 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "closure result differs from its authenticated adapter ABI",
             ));
+        }
+        if receipt.capture_witness().is_some() {
+            let facts = context.original.ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "captured callable result lacks original current caller facts",
+                )
+            })?;
+            self.canonicalize_captured_result_signature(
+                closure,
+                *kind,
+                &mut provider.signature,
+                facts,
+            )?;
         }
         if receipt.is_projected_input() {
             canonicalize_empty_projected_result(&mut provider.signature, &self.budget)?;
@@ -570,6 +604,411 @@ mod tests {
             results[0].sources = sources.into();
             forged.contract.results = results.into();
             assert!(forged.validate_for(&facts).is_err());
+        }
+    }
+
+    #[test]
+    fn captured_result_closed_adapter_replays_source_and_current_caller() {
+        use crate::compiler::{
+            ClosureBodiesFact, CompilerProvider, Input, Snapshot, TEMPLATE_BODY, keys,
+        };
+        use crate::engine::Engine;
+        let fixture = || {
+            let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
+                input: Input::Text(
+                    "fn main(){let n=7i32;let f=||&n;let values=[2u8,3u8];let bytes:&[u8]=&values;let g=||&bytes;}"
+                        .into(),
+                ),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: PlanBudget::default(),
+            })));
+            let signatures = engine.request(keys::SignaturesDebtRoot.key());
+            let body = engine.request(keys::item(TEMPLATE_BODY, 0));
+            engine.run(1).unwrap();
+            body.completion().unwrap();
+            let plan = signatures.fact::<frontend::PlanCtx>(0).unwrap();
+            let closures = body.fact::<ClosureBodiesFact>(1).unwrap();
+            let world = plan.trait_world().unwrap();
+            let closure = closures.bodies.first().unwrap().ty.clone();
+            let facts = world
+                .instance_facts(&CallTarget {
+                    declaration: closure.owner(),
+                    type_args: Arc::from([]),
+                })
+                .unwrap();
+            let types = closures
+                .bodies
+                .iter()
+                .map(|body| body.ty.clone())
+                .collect::<Vec<_>>();
+            (world, facts, types)
+        };
+        let (world, facts, closures) = fixture();
+        let (foreign_world, foreign_facts, _) = fixture();
+        for closure in closures {
+            for mode in [
+                ir::ClosureKind::Fn,
+                ir::ClosureKind::FnMut,
+                ir::ClosureKind::FnOnce,
+            ] {
+                let header = world
+                    .headers
+                    .traits
+                    .iter()
+                    .find(|header| {
+                        world.closure_trait_kind(header.declaration).unwrap() == Some(mode)
+                    })
+                    .unwrap();
+                let item = world.item_header(header.items[0]).unwrap();
+                let goal = TraitRef {
+                    declaration: header.declaration,
+                    self_ty: Ty::Closure(closure.clone()),
+                    args: Arc::from([world.closure_arguments(&closure).unwrap()]),
+                };
+                let context = ProofContext::from_facts(&facts);
+                let mut active = ProofScratch::default();
+                let selection = world
+                    .require_in(&Predicate::Implements(goal.clone()), context, &mut active)
+                    .unwrap();
+                let application = world
+                    .instantiate_projected_item(item, &goal, &[], context)
+                    .unwrap();
+                let signature = &application.instantiated.signature;
+                assert_eq!(
+                    signature.ref_contract.results.len(),
+                    ir::root_reference_layers(closure.result()).unwrap(),
+                );
+                assert!(
+                    world
+                        .closed_closure_argument_result_signature(
+                            item,
+                            &goal,
+                            signature,
+                            &selection,
+                            context,
+                            &mut active,
+                        )
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(
+                    world
+                        .closed_closure_argument_result_signature(
+                            item,
+                            &goal,
+                            signature,
+                            &selection,
+                            ProofContext {
+                                original: None,
+                                ..context
+                            },
+                            &mut active,
+                        )
+                        .is_err()
+                );
+                assert!(
+                    world
+                        .closed_closure_argument_result_signature(
+                            item,
+                            &goal,
+                            signature,
+                            &selection,
+                            ProofContext::from_facts(&foreign_facts),
+                            &mut active,
+                        )
+                        .is_err()
+                );
+                assert!(
+                    foreign_world
+                        .authenticate_captured_result_signature(&closure, mode, signature, &facts,)
+                        .is_err()
+                );
+                for change in 0..4 {
+                    let mut record = selection.0.as_ref().clone();
+                    match change {
+                        0 => record.environment ^= 1,
+                        1 => record.phase = FactsPhase::Universal,
+                        2 => {
+                            record.origin = ProofOrigin::Closure {
+                                kind: if mode == ir::ClosureKind::Fn {
+                                    ir::ClosureKind::FnOnce
+                                } else {
+                                    ir::ClosureKind::Fn
+                                },
+                            }
+                        }
+                        _ => record.world = foreign_world.id,
+                    }
+                    assert!(
+                        world
+                            .closed_closure_argument_result_signature(
+                                item,
+                                &goal,
+                                signature,
+                                &ProofEvidence(Arc::new(record)),
+                                context,
+                                &mut active,
+                            )
+                            .is_err()
+                    );
+                }
+                let target = world.closure_target(&closure, mode).unwrap();
+                let direct = world
+                    .discharge_in_with_facts(&target, context, &mut active, Some(&facts))
+                    .unwrap();
+                assert_eq!(direct.signature.ref_contract, signature.ref_contract);
+                let direct_callee = Callee::Direct(target.clone());
+                let direct_view = facts
+                    .carrier_contract(SignatureSubject::Call(&direct_callee))
+                    .unwrap();
+                for location in ir::carrier_locations(&signature.result, facts.budget())
+                    .unwrap()
+                    .iter()
+                {
+                    let storage = direct_view
+                        .captured_result_storage(
+                            &facts,
+                            &direct_callee,
+                            &direct.signature,
+                            location,
+                        )
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(storage.input().param, 0);
+                    assert_eq!(storage.input().location.channel, location.channel);
+                    assert!(storage.projection().is_empty());
+                    assert!(
+                        direct_view
+                            .captured_result_storage(
+                                &foreign_facts,
+                                &direct_callee,
+                                &direct.signature,
+                                location,
+                            )
+                            .is_err()
+                    );
+                    for mutation in 0..3 {
+                        let mut forged = direct_view.as_ref().clone();
+                        let mut rows = forged.contract.results.to_vec();
+                        let row = rows
+                            .iter_mut()
+                            .find(|row| row.location == *location)
+                            .unwrap();
+                        let mut sources = row.sources.to_vec();
+                        match mutation {
+                            0 => sources[0].param = 1,
+                            1 => {
+                                sources[0].location.channel =
+                                    ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                        depth: location.channel.prefix() + 1,
+                                    })
+                            }
+                            _ => {
+                                sources[0].location.path =
+                                    ir::CarrierPath(Arc::from([ir::CarrierStep::Field(99)]))
+                            }
+                        }
+                        row.sources = sources.into();
+                        forged.contract.results = rows.into();
+                        assert!(
+                            forged
+                                .captured_result_storage(
+                                    &facts,
+                                    &direct_callee,
+                                    &direct.signature,
+                                    location,
+                                )
+                                .is_err()
+                        );
+                    }
+                    let receipt = closure.result_receipt().unwrap();
+                    for mutation in 0..7 {
+                        let mut witness = receipt.capture_witness().unwrap().clone();
+                        let mut nodes = witness.nodes.to_vec();
+                        let node = nodes
+                            .iter_mut()
+                            .find(|node| node.expression == receipt.tail())
+                            .unwrap();
+                        let ir::CaptureResultKind::Borrow {
+                            mut field,
+                            mut source,
+                            mut original,
+                            mut prefix,
+                        } = node.kind.clone()
+                        else {
+                            panic!("original borrowed source");
+                        };
+                        match mutation {
+                            0 => {
+                                node.kind = ir::CaptureResultKind::Read {
+                                    field,
+                                    source,
+                                    original,
+                                    prefix,
+                                };
+                            }
+                            1 => {
+                                node.kind = ir::CaptureResultKind::Call {
+                                    target: direct_callee.clone(),
+                                    arguments: Arc::from([]),
+                                };
+                            }
+                            _ => {
+                                match mutation {
+                                    2 => field += 1,
+                                    3 => prefix = Arc::from([ir::Projection::Deref]),
+                                    4 => original.projection.push(ir::Projection::Field(0)),
+                                    5 => source.kind = ir::CaptureKind::Mut,
+                                    _ => source.place.local.0 += 1,
+                                }
+                                node.kind = ir::CaptureResultKind::Borrow {
+                                    field,
+                                    source,
+                                    original,
+                                    prefix,
+                                };
+                            }
+                        }
+                        witness.nodes = nodes.into();
+                        let receipt = Arc::new(
+                            ir::ClosureResultReceipt::captured(
+                                receipt.owner(),
+                                receipt.provider(),
+                                receipt.site(),
+                                receipt.tail(),
+                                witness,
+                                facts.budget(),
+                            )
+                            .unwrap(),
+                        );
+                        let forged_closure =
+                            Arc::new(closure.as_ref().clone().with_result_receipt(Some(receipt)));
+                        let mut forged_view = direct_view.as_ref().clone();
+                        forged_view.closure_result = Some((forged_closure, mode));
+                        assert!(
+                            !matches!(
+                                forged_view.captured_result_storage(
+                                    &facts,
+                                    &direct_callee,
+                                    &direct.signature,
+                                    location,
+                                ),
+                                Ok(Some(_))
+                            ),
+                            "storage source mutation={mutation}"
+                        );
+                        assert!(forged_view.validate_for(&facts).is_err());
+                    }
+                }
+                let mut direct_signature = direct.signature.clone();
+                let direct_contract = direct_signature.ref_contract.clone();
+                world
+                    .canonicalize_projected_closure_direct(&target, &mut direct_signature, context)
+                    .unwrap();
+                assert!(Arc::ptr_eq(
+                    &direct_contract,
+                    &direct_signature.ref_contract
+                ));
+                assert!(
+                    world
+                        .canonicalize_projected_closure_direct(
+                            &target,
+                            &mut direct_signature,
+                            ProofContext {
+                                original: None,
+                                ..context
+                            },
+                        )
+                        .is_err()
+                );
+                direct_signature.result = Ty::Bool;
+                assert!(
+                    world
+                        .canonicalize_projected_closure_direct(
+                            &target,
+                            &mut direct_signature,
+                            context
+                        )
+                        .is_err()
+                );
+                let mut same = signature.clone();
+                let unchanged = same.ref_contract.clone();
+                world
+                    .canonicalize_captured_result_signature(&closure, mode, &mut same, &facts)
+                    .unwrap();
+                assert!(Arc::ptr_eq(&unchanged, &same.ref_contract));
+                for returns in [
+                    ir::ReturnContract::NoReference,
+                    ir::ReturnContract::MutInputPaths(Arc::from([])),
+                    ir::ReturnContract::SharedInputEnvelopes(Arc::from([ir::InputEnvelope {
+                        input: ir::InputReference {
+                            param: 0,
+                            position: ir::ReferencePosition { depth: 0 },
+                        },
+                    }])),
+                ] {
+                    let mut forged = signature.clone();
+                    let mut contract = forged.ref_contract.as_ref().clone();
+                    let mut rows = contract.results.to_vec();
+                    rows[0].returns = returns;
+                    contract.results = rows.into();
+                    forged.ref_contract = Arc::new(contract);
+                    assert!(
+                        world
+                            .canonicalize_captured_result_signature(
+                                &closure,
+                                mode,
+                                &mut forged,
+                                &facts
+                            )
+                            .is_err()
+                    );
+                }
+                let mut changed = signature.clone();
+                let mut contract = changed.ref_contract.as_ref().clone();
+                let mut rows = contract.results.to_vec();
+                rows.last_mut().unwrap().position.depth += 1;
+                contract.results = rows.into();
+                changed.ref_contract = Arc::new(contract);
+                assert!(
+                    world
+                        .authenticate_captured_result_signature(&closure, mode, &changed, &facts,)
+                        .is_err()
+                );
+                let missing = Arc::new(
+                    ir::ClosureTy::new(
+                        closure.owner(),
+                        closure.owner_args().into(),
+                        closure.site(),
+                        closure.provider(),
+                        closure.params().into(),
+                        closure.result().clone(),
+                        closure.captures().into(),
+                        closure.kind(),
+                    )
+                    .with_sources(closure.sources().into()),
+                );
+                let mut missing_goal = goal.clone();
+                missing_goal.self_ty = Ty::Closure(missing);
+                assert!(
+                    world
+                        .closed_closure_argument_result_signature(
+                            item,
+                            &missing_goal,
+                            signature,
+                            &selection,
+                            context,
+                            &mut active,
+                        )
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    world
+                        .require_in(&Predicate::Implements(missing_goal), context, &mut active,)
+                        .is_err()
+                );
+            }
         }
     }
 

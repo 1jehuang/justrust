@@ -5454,26 +5454,60 @@ impl CarrierBuilder<'_, '_> {
                     .iter()
                     .find(|(candidate, _)| *candidate == location)
             {
+                let captured_storage = if fixed_sourceless && !fixed_positioned {
+                    match (&view, facts) {
+                        (Some(view), Some(facts)) => match view
+                            .captured_result_storage(facts, &target, &signature, &location)
+                        {
+                            Ok(storage) => storage,
+                            Err(error) if error.is_resource() => return Err(Exhausted),
+                            Err(error) => {
+                                self.problem(
+                                    block,
+                                    None,
+                                    Problem::Invalid(
+                                        error
+                                            .into_diagnostic(&self.ledger)
+                                            .map_err(|_| Exhausted)?,
+                                    ),
+                                )?;
+                                return Ok(());
+                            }
+                        },
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 for parent in input.references.0.members() {
                     self.parents[row.0].insert(parent);
                     self.dependencies[row.0].insert(parent);
                     if fixed_sourceless {
                         // Lifetime-only rows still never identify storage.
-                        // A returned owned generic value is different: its
-                        // exact shared-reference actual retains its source's
-                        // already issued targets, including subtree precision.
+                        // An exact original capture Borrow/Read is separate
+                        // source authority, not a rigid parameter-family proof.
                         let inherited = !fixed_positioned
-                            && match &view {
-                                Some(view) => self.owned_shared_family_result_source(
-                                    &signature, view, &location,
-                                )?,
-                                None => false,
-                            };
+                            && (captured_storage.is_some()
+                                || match &view {
+                                    Some(view) => self.owned_shared_family_result_source(
+                                        &signature, view, &location,
+                                    )?,
+                                    None => false,
+                                });
                         if !inherited {
                             continue;
                         }
                     }
-                    for target in self.targets[parent].clone() {
+                    for mut target in self.targets[parent].clone() {
+                        if let Some(storage) = &captured_storage
+                            && target.precision == TargetPrecision::Exact
+                        {
+                            self.budget.spend(storage.projection().len())?;
+                            target
+                                .place
+                                .projection
+                                .extend_from_slice(storage.projection());
+                        }
                         let mut target =
                             self.structural_result_target(target, &signature.result, &location)?;
                         if !target.authority.contains(&parent) {

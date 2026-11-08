@@ -9,6 +9,56 @@ fn borrowed_capture_environments() {
         "closure_borrows",
         &[
             Case {
+                name: "captured_borrow_result",
+                source: "fn main(){let n=7i32;let f=||&n;assert_eq!(*f(),7);assert_eq!(*f(),7);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_borrow_tuple_result",
+                source: "fn main(){let a=7i32;let b=9i32;let f=||(&a,&b);let (x,y)=f();assert_eq!(*x+*y,16);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_result_disjoint_parent_field",
+                source: "struct Pair{left:i32,right:i32}fn main(){let mut pair=Pair{left:7,right:9};let f=||&pair.left;let result=f();pair.right=11;assert_eq!(*result,7);assert_eq!(pair.right,11);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_iterator_result_chain",
+                source: "fn main(){let bytes=[2u8,3u8];let f=||bytes.iter().cloned();let mut first=f();let mut second=f();assert_eq!(first.next(),Some(2u8));assert_eq!(first.next(),Some(3u8));assert_eq!(first.next(),None);assert_eq!(second.next(),Some(2u8));}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_slice_reference_read_result",
+                source: "fn inspect(bytes:&[u8]){let f=||bytes.iter().cloned();let mut result=f();assert_eq!(result.next(),Some(2u8));assert_eq!(result.next(),Some(3u8));}fn main(){let bytes=[2u8,3u8];inspect(&bytes);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_nested_slice_reference_read_result",
+                source: "fn inspect(bytes:&&[u8]){let f=||bytes.iter().cloned();let mut result=f();assert_eq!(result.next(),Some(2u8));}fn main(){let values=[2u8,3u8];let bytes:&[u8]=&values;inspect(&bytes);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_nested_reference_borrow_result",
+                source: "fn main(){let values=[2u8,3u8];let bytes:&[u8]=&values;let f=||&bytes;let result=f();assert_eq!((*result)[0],2u8);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "captured_result_keeps_parent_loan",
+                source: "fn main(){let mut n=7i32;let f=||&n;let result=f();n=9;println!(\"{}\",result);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "unused_local_reference_result_escape",
+                source: "fn unused(){let f=||{let local=7i32;&local};let result=f();}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_moved_owned_capture_result_escape",
+                source: "fn unused(){let values=[2u8,3u8];let f=move||&values;let result=f();}fn main(){}",
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
                 name: "shared_read",
                 source: "fn main(){let n=7i32;let f=|x:i32|n+x;assert_eq!(f(2),9);assert_eq!(f(3),10);assert_eq!(n,7);}",
                 expect: Expect::Run(""),

@@ -39,6 +39,9 @@ mod closure;
 mod closure_result;
 pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, ClosureTy};
 pub use closure_result::ClosureResultReceipt;
+pub(in crate::compiler) use closure_result::{
+    CaptureResultKind, CaptureResultNode, CaptureResultWitness,
+};
 #[path = "ir/type_alignment.rs"]
 mod type_alignment;
 pub use type_alignment::{TypeAlignmentQuery, TypeQueryKind};

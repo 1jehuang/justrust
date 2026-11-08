@@ -138,7 +138,13 @@ impl ValidatedTraitWorld {
             self.validate_ty_metadata_with(ty, env, 0, &mut replays)?;
         }
         if let Some(receipt) = closure.result_receipt() {
-            let expected_result = if receipt.is_projected_input() {
+            let expected_result = if receipt.capture_witness().is_some() {
+                // replay_closure_owner_substitution above authenticates this
+                // exact result against the original parent-private source seal.
+                // Canonical call and capture carrier authority is replayed by
+                // the result contract in the actual current facts context.
+                closure.result().clone()
+            } else if receipt.is_projected_input() {
                 charged(
                     &self.budget,
                     receipt.projected_result(closure.params(), &self.budget),
@@ -176,6 +182,7 @@ impl ValidatedTraitWorld {
             if !result_channels.is_empty()
                 && !matches!(closure.result(), Ty::Param(_))
                 && receipt.argument_origin().is_none()
+                && receipt.capture_witness().is_none()
             {
                 return Err(FactsError::unsupported(
                     &self.budget,

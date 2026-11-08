@@ -2,6 +2,8 @@
 //! Projected borrows retain only input occurrences, never inferred captures.
 use super::super::type_check::Checker;
 use super::*;
+#[path = "captured_result.rs"]
+mod captured_result;
 #[cfg(test)]
 #[path = "result_contract_tests.rs"]
 mod tests;
@@ -247,6 +249,9 @@ pub(in crate::compiler) fn validate_source(
     let budget = facts.budget();
     if source.params.len() != 2 || source.body.tail != Some(receipt.tail()) {
         return Err("closure result changed its original parameter or tail occurrence".into());
+    }
+    if receipt.capture_witness().is_some() {
+        return captured_result::validate_source(receipt, source, facts);
     }
     if let Some(origin) = receipt.argument_origin() {
         let (closure, _) = facts

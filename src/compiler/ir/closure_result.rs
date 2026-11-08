@@ -1,5 +1,8 @@
-//! Pure parent-sealed source witnesses. No Ty, signature, body or world is retained.
+//! Parent-sealed source witnesses. No signature, body or world is retained.
 use super::*;
+#[path = "closure_capture_result.rs"]
+mod capture;
+pub(in crate::compiler) use capture::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ResultTypeWitness {
@@ -7,6 +10,7 @@ enum ResultTypeWitness {
     Unit,
     SharedStr,
     ProjectedInput,
+    Captured,
     Tuple(Arc<[ResultTypeWitness]>),
 }
 impl ResultTypeWitness {
@@ -47,6 +51,9 @@ impl ResultTypeWitness {
             Self::ProjectedInput => {
                 Err("projected closure result requires canonical input types".into())
             }
+            Self::Captured => {
+                Err("captured closure result requires original source shape replay".into())
+            }
             Self::Tuple(fields) => Ok(Ty::Tuple(
                 fields
                     .iter()
@@ -80,6 +87,7 @@ enum ResultCallWitness {
         declaration: Option<DeclId>,
         origin: ClosureArgumentOrigin,
     },
+    Captured(Arc<CaptureResultWitness>),
 }
 /// Parent-minted source tuple occurrence, never an inferred capture origin.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -92,6 +100,33 @@ pub struct ClosureArgumentOrigin {
     pub(in crate::compiler) depth: u8,
 }
 impl ClosureResultReceipt {
+    pub(in crate::compiler) fn captured(
+        owner: DeclId,
+        provider: DeclId,
+        site: u32,
+        tail: ExprId,
+        witness: CaptureResultWitness,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.retain_bytes(
+            std::mem::size_of::<Self>() + std::mem::size_of::<CaptureResultWitness>() + 32,
+        )?;
+        Ok(Self {
+            owner,
+            provider,
+            site,
+            tail,
+            call: ResultCallWitness::Captured(Arc::new(witness)),
+            result: ResultTypeWitness::Captured,
+            arguments: Arc::from([]),
+        })
+    }
+    pub(in crate::compiler) fn capture_witness(&self) -> Option<&CaptureResultWitness> {
+        match &self.call {
+            ResultCallWitness::Captured(witness) => Some(witness),
+            _ => None,
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     pub(in crate::compiler) fn new(
         owner: DeclId,

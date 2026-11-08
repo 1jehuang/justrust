@@ -1,6 +1,10 @@
 //! Closure-specific result views replay an original required-call authority.
 //! No source body, world, facts or mutable schema is retained in the receipt.
 use super::*;
+#[path = "closure_capture_results.rs"]
+mod capture;
+#[path = "closure_capture_storage.rs"]
+mod storage;
 
 impl ValidatedFacts {
     pub(in crate::compiler) fn closure_result_witness(
@@ -99,6 +103,110 @@ impl ValidatedTraitWorld {
         Ok(Some(Arc::new(view)))
     }
 
+    /// The required callable's reference layers use the original selected
+    /// adapter, but their loan origins must independently replay the capture
+    /// receipt in the actual caller before that signature can be published.
+    pub(super) fn authenticate_captured_result_signature(
+        &self,
+        closure: &Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        self.check_facts(facts, true)?;
+        self.validate_closure_metadata(closure, facts.env())?;
+        if !closure.supports(mode) || !self.eq_ty(&signature.result, closure.result(), 0)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "captured callable signature changed source result or receiver capability",
+            ));
+        }
+        let layers = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
+        if signature.ref_contract.results.len() != layers {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "captured callable signature lost original fixed reference layers",
+            ));
+        }
+        let results = self.captured_result_carriers(closure, mode, signature, facts)?;
+        let source_regions = self.validate_source_regions(closure.provider(), signature)?;
+        let (contract, _) = self.derive_carriers(signature, &source_regions)?;
+        for returned in results.iter() {
+            if returned.sources.is_empty()
+                || returned
+                    .sources
+                    .iter()
+                    .any(|source| !contract.inputs.contains(source))
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "captured callable result has no exact original receiver loan",
+                ));
+            }
+        }
+        for row in signature.ref_contract.results.iter() {
+            let location = ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(row.position),
+            };
+            if !results.iter().any(|returned| returned.location == location) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "captured callable lifetime layer lacks original result carrier provenance",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn canonicalize_captured_result_signature(
+        &self,
+        closure: &Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        signature: &mut Signature,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        self.authenticate_captured_result_signature(closure, mode, signature, facts)?;
+        let empty = |row: &ir::ResultReference| match &row.returns {
+            ir::ReturnContract::SharedInputEnvelopes(inputs) => inputs.is_empty(),
+            ir::ReturnContract::SharedInputPaths(inputs) => inputs.is_empty(),
+            _ => false,
+        };
+        let results = charged(
+            &self.budget,
+            ir::derive_return_contracts(
+                &signature.params,
+                &signature.result,
+                &signature.ref_contract,
+                &self.budget,
+            ),
+        )?;
+        if results.len() != signature.ref_contract.results.len()
+            || results
+                .iter()
+                .zip(signature.ref_contract.results.iter())
+                .any(|(new, old)| {
+                    new.position != old.position
+                        || new.region != old.region
+                        || !empty(new)
+                        || !empty(old)
+                })
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "captured callable normalization changed original fixed lifetime authority",
+            ));
+        }
+        if results != signature.ref_contract.results {
+            retain::<ir::RefContract>(&self.budget, 1)?;
+            signature.ref_contract = Arc::new(ir::RefContract {
+                results,
+                ..signature.ref_contract.as_ref().clone()
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn closure_result_carrier_parts(
         &self,
         closure: Arc<ir::ClosureTy>,
@@ -125,7 +233,7 @@ impl ValidatedTraitWorld {
                 "closure result lacks its parent-sealed source receipt",
             )
         })?;
-        if receipt.argument_origin().is_none() {
+        if receipt.argument_origin().is_none() && receipt.capture_witness().is_none() {
             let (required_call, _) = self.realize_closure_result_witness(&closure, receipt)?;
             let required_signature = self.instantiate_trait_signature(&required_call, facts)?;
             let original_call = Callee::TraitItem(required_call);
@@ -152,6 +260,20 @@ impl ValidatedTraitWorld {
         }
         let source_regions = self.validate_source_regions(closure.provider(), &signature)?;
         let (mut contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        if receipt.capture_witness().is_some() {
+            let results = self.captured_result_carriers(&closure, mode, &signature, facts)?;
+            for returned in results.iter() {
+                for input in returned.sources.iter() {
+                    if !contract.inputs.contains(input) {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "capture result source is outside the actual receiver carrier domain",
+                        ));
+                    }
+                }
+            }
+            contract.results = results;
+        }
         if let Some(input) = receipt.argument_origin() {
             let source_ty = closure.params().get(input.argument).ok_or_else(|| {
                 FactsError::invalid(

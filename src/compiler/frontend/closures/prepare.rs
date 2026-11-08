@@ -168,15 +168,8 @@ impl Checker<'_> {
         }
         let (mut body, flow) = checked?;
         let result = result_hint.unwrap_or(flow.ty.clone());
-        let result_receipt = child.restricted_closure_result(
-            owner,
-            provider,
-            syntax.site,
-            &body,
-            &result,
-            &prefix,
-            arguments,
-        )?;
+        let result_body = body.clone();
+        let result_prefix = prefix.clone();
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
         body.statements = prefix;
@@ -257,6 +250,26 @@ impl Checker<'_> {
                 });
             }
         }
+        let result_receipt = match child.captured_closure_result(
+            owner,
+            provider,
+            syntax.site,
+            &result_body,
+            &result,
+            &projections,
+            &sources,
+        )? {
+            Some(receipt) => Some(receipt),
+            None => child.restricted_closure_result(
+                owner,
+                provider,
+                syntax.site,
+                &result_body,
+                &result,
+                &result_prefix,
+                arguments,
+            )?,
+        };
         let closure = Arc::new(
             self.seal_closure_shape(
                 ir::ClosureTy::new(
