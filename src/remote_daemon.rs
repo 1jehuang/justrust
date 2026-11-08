@@ -1247,7 +1247,7 @@ fn run(
     let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
     let id = d.id();
     let (tx, rx) = channel();
-    let (link, files, note) = {
+    let (link, files, note, timing) = {
         let mut st = d.sync.lock().unwrap();
         let locked = t.elapsed();
         let res = (|| -> Result<_> {
@@ -1346,6 +1346,12 @@ fn run(
                     return Err(e);
                 }
             }
+            let timing = crate::e2e::SyncTiming {
+                lock_ms: locked.as_secs_f64() * 1000.0,
+                link_ms: (linked - locked).as_secs_f64() * 1000.0,
+                push_ms: (pushed - linked).as_secs_f64() * 1000.0,
+                barrier_ms: (t.elapsed() - pushed).as_secs_f64() * 1000.0,
+            };
             if t.elapsed() > Duration::from_millis(1000) {
                 log(&format!(
                     "slow sync {:.2}s: lock {:.2}s, link {:.2}s, push {:.2}s, barrier {:.2}s",
@@ -1356,7 +1362,7 @@ fn run(
                     (t.elapsed() - pushed).as_secs_f64()
                 ));
             }
-            Ok((link, files, note))
+            Ok((link, files, note, timing))
         })();
         match res {
             Ok(v) => v,
@@ -1385,6 +1391,7 @@ fn run(
             machine,
             prefix: link.mirror.prefix.clone(),
             note,
+            timing: Some(timing),
         },
         &[],
     ) {

@@ -328,6 +328,7 @@ pub fn main(args: Vec<OsString>) -> ! {
 
 /// Record `cargo <args>` and exit with cargo's exit code.
 pub fn run(args: Vec<OsString>, opts: Options) -> ! {
+    crate::e2e::mark("routed");
     let mut trace = PhaseTrace::new();
     if !should_record(&args) {
         exec_cargo(&args);
@@ -901,6 +902,7 @@ fn record(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
+    crate::e2e::mark("cargo_spawn");
     let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
     lifecycle.running();
@@ -968,6 +970,7 @@ fn record(
         }
     }
     let end = paths::now();
+    crate::e2e::mark("cargo_done");
     let sched = scope.map(crate::sched::Scope::finish);
     trace.mark("drain-scope");
     {
@@ -1103,6 +1106,11 @@ fn finish(
         s.early = Some(e);
     }
     crate::split_index::attach(&mut s);
+    s.e2e = Some(crate::e2e::local(
+        &crate::e2e::marks(),
+        crate::e2e::elapsed(),
+        &s.phases,
+    ));
     std::fs::write(run_dir.join("summary.json"), serde_json::to_vec_pretty(&s)?)?;
     paths::append_line(
         &paths::index_file()?,

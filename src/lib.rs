@@ -21,6 +21,7 @@ mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
 mod depcache_remote;
+mod e2e;
 mod early;
 mod execution_graph;
 mod execution_graph_compiler;
@@ -72,6 +73,7 @@ mod mcp;
 mod paths;
 mod peercache;
 mod procfs;
+mod profile;
 mod record;
 mod release_tools;
 mod remote;
@@ -236,6 +238,27 @@ enum Command {
     Show {
         /// Run id or prefix, or "last".
         id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Where end-to-end build wait went across recorded runs: routing,
+    /// hosted admission, source sync, cargo phases, artifacts, reporting.
+    Profile {
+        /// Only runs from the last N days (fractions allowed).
+        #[arg(long)]
+        days: Option<f64>,
+        /// Only runs under the current directory.
+        #[arg(long)]
+        here: bool,
+        /// Only runs built remotely.
+        #[arg(long, conflicts_with = "local")]
+        remote: bool,
+        /// Only runs built locally.
+        #[arg(long)]
+        local: bool,
+        /// Skip runs whose waterfall is reconstructed from older records.
+        #[arg(long)]
+        measured: bool,
         #[arg(long)]
         json: bool,
     },
@@ -709,6 +732,7 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
 }
 
 pub fn main() -> anyhow::Result<()> {
+    e2e::init();
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let name = sys::program_name(&argv0);
     // `justrust __build-script <real> ...`: the build-script run wrapper.
@@ -833,6 +857,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Status { watch: Some(_), .. } => return None,
         Command::Status { .. } => "status",
         Command::Show { .. } => "show",
+        Command::Profile { .. } => "profile",
         Command::Slots {
             gc_root: Some(_), ..
         } => return None,
@@ -909,6 +934,14 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Savings { days, here, json } => savings::command(days, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
+        Command::Profile {
+            days,
+            here,
+            remote,
+            local,
+            measured,
+            json,
+        } => profile::command(days, here, remote, local, measured, json)?,
         Command::Status {
             json,
             waybar,

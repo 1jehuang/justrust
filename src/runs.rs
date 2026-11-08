@@ -197,7 +197,10 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     if let Some(note) = &s.cpu_secs_note {
         let _ = writeln!(o, "CPU accounting: {note}");
     }
-    let _ = writeln!(o, "Where the wall time went");
+    if let Some(e) = s.e2e.clone().or_else(|| crate::e2e::derive(s)) {
+        let _ = writeln!(o, "{}", crate::e2e::render(&e));
+    }
+    let _ = writeln!(o, "Where cargo's wall time went");
     let p = &s.phases;
     for (label, v, note) in [
         (

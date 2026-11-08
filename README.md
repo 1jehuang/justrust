@@ -75,7 +75,10 @@ justrust build
 `check`, `test`, `build`, `clippy`, and `run` take cargo's arguments and
 return its exit code. Errors and failing tests stay in full, followed by
 a concise result and timing report. Use `justrust log` for the full output
-and `justrust show` for the timing breakdown.
+and `justrust show` for the timing breakdown, including an end-to-end
+waterfall of everything you waited for (routing, hosted admission, source
+sync, cargo phases, artifacts). `justrust profile --days 7` totals that
+waterfall across runs to show where agent wait goes.
 
 Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
