@@ -452,7 +452,7 @@ fn serve(mut inp: impl Read, out: impl Write) -> Result<()> {
     serve_selected_dir(&dir, &req, &sent_root, out, selected)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn serve_dir(dir: &Path, req: &Request, sent_root: &Path, out: impl Write) -> Result<()> {
     serve_selected_dir(dir, req, sent_root, out, None)
 }

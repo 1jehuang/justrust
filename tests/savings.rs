@@ -35,6 +35,10 @@ fn savings_cli_filters_deduplicates_and_discloses_missing_history() {
     let base = std::env::var_os("JCODE_SCRATCH_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&base).unwrap();
+    // macOS temp dirs sit behind a /var -> /private/var symlink; `--here`
+    // compares against the canonical working directory.
+    let base = base.canonicalize().unwrap();
     let fixture = Fixture(base.join(format!("jr-savings-{}", std::process::id())));
     let home = fixture.0.join("home");
     let cwd = fixture.0.join("workspace");
