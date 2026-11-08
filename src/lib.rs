@@ -686,6 +686,22 @@ fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>
     (out, mode)
 }
 
+/// Whether a build reached through the `cargo` shim goes through local vs
+/// hosted routing. Agent sessions (`JCODE_SESSION_ID`) route by default,
+/// interactive shells keep plain recorded cargo. `JUSTRUST_CARGO_ROUTE=0`
+/// opts out, `=1` opts a non-agent shell in. A cargo nested inside a
+/// recorded run (build scripts, tests) never routes again.
+fn cargo_shim_routes(agent: bool, nested: bool, setting: Option<&str>) -> bool {
+    if nested {
+        return false;
+    }
+    match setting {
+        Some("0" | "off" | "false" | "no") => false,
+        Some("1" | "on" | "true" | "yes") => true,
+        _ => agent,
+    }
+}
+
 /// Remote routing must precede local early answers. A resident prebuild or
 /// shadow result must not override an explicit or default hosted route.
 fn route_then_accelerate(
@@ -798,7 +814,19 @@ pub fn main() -> anyhow::Result<()> {
     }
     telemetry::install_panic_hook();
     if name == "cargo" {
-        record::main(std::env::args_os().skip(1).collect());
+        let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+        // Agents reach justrust through the `cargo` shim too (wrapper
+        // scripts such as jcode's dev_cargo.sh). Give their builds the same
+        // local-vs-hosted routing as `justrust check|test|build`, so hosted
+        // machines do the heavy compiles instead of the laptop battery.
+        if cargo_shim_routes(
+            std::env::var_os("JCODE_SESSION_ID").is_some(),
+            std::env::var_os("JUSTRUST_RUN_DIR").is_some(),
+            std::env::var("JUSTRUST_CARGO_ROUTE").ok().as_deref(),
+        ) {
+            route::maybe_remote(&args);
+        }
+        record::main(args);
     }
     update::notices();
 
@@ -1401,6 +1429,19 @@ mod passthrough_tests {
         let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
         passthrough_split(&argv)
             .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
+    }
+
+    #[test]
+    fn cargo_shim_routes_agent_builds_only() {
+        // Agent wrappers (jcode dev_cargo.sh) route by default.
+        assert!(cargo_shim_routes(true, false, None));
+        // Interactive shells keep plain recorded cargo unless opted in.
+        assert!(!cargo_shim_routes(false, false, None));
+        assert!(cargo_shim_routes(false, false, Some("1")));
+        assert!(!cargo_shim_routes(true, false, Some("off")));
+        // Cargo nested in a recorded run never routes again.
+        assert!(!cargo_shim_routes(true, true, None));
+        assert!(!cargo_shim_routes(true, true, Some("1")));
     }
 
     #[test]
