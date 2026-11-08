@@ -1053,6 +1053,21 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The content of `p`, only if it is exactly the file the scan stamped: the
+/// stamp recorded in the manifest must describe the bytes sent. A file
+/// rewritten between scan and read (truncated, then refilled, with its old
+/// mtime restored as `cp -p` and `shutil.copy2` do) would otherwise be sent
+/// half-written under a stamp that later matches again, and never resent.
+fn read_settled(p: &Path, scanned: Option<remote_sync::Stamp>) -> Option<Vec<u8>> {
+    let scanned = scanned?;
+    let data = std::fs::read(p).ok()?;
+    let after = std::fs::symlink_metadata(p).ok()?;
+    let (s, ns) = crate::sys::mtime(&after);
+    let now = s as i128 * 1_000_000_000 + ns as i128;
+    (data.len() as u64 == scanned.size && after.len() == scanned.size && now == scanned.mtime_ns)
+        .then_some(data)
+}
+
 /// Push every difference between `root` and its manifest. Returns files sent.
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     let total = Instant::now();
@@ -1098,9 +1113,10 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
         } else {
             for rel in &diff.changed {
                 let p = root.join(rel);
-                match std::fs::read(&p) {
-                    Ok(data) if data.len() as u64 <= MAX_FILE => {
-                        let mode = new.get(rel).map_or(0o644, |s| s.mode);
+                let scanned = new.get(rel).copied();
+                match read_settled(&p, scanned) {
+                    Some(data) if data.len() as u64 <= MAX_FILE => {
+                        let mode = scanned.map_or(0o644, |s| s.mode);
                         link.send(
                             &Msg::Write {
                                 path: p.display().to_string(),
@@ -1109,7 +1125,8 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
                             &data,
                         )?;
                     }
-                    // Gone or grown since the scan: try again next time.
+                    // Gone, grown, or rewritten since the scan: try again
+                    // next time.
                     _ => {
                         new.insert(rel.clone(), UNKNOWN);
                     }
@@ -1578,6 +1595,42 @@ fn peer_sync_loop(d: &Daemon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file rewritten after the scan, even to the same size and with its
+    /// old mtime restored (`shutil.copy2`), is not sent under the scanned
+    /// stamp: that stamp would match again later and the bytes on the
+    /// machine would never be corrected.
+    #[test]
+    fn push_reads_only_the_file_the_scan_stamped() {
+        let d = std::env::temp_dir().join(format!("jr-settled-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("api_keys.rs");
+        std::fs::write(&p, "pub fn f() {}\n").unwrap();
+        let stamp = |p: &Path| {
+            let m = std::fs::symlink_metadata(p).unwrap();
+            let (s, ns) = crate::sys::mtime(&m);
+            remote_sync::Stamp {
+                mtime_ns: s as i128 * 1_000_000_000 + ns as i128,
+                size: m.len(),
+                mode: 0o644,
+            }
+        };
+        let scanned = stamp(&p);
+        assert_eq!(
+            read_settled(&p, Some(scanned)).as_deref(),
+            Some(&b"pub fn f() {}\n"[..])
+        );
+        // Truncated mid-copy: size differs from the stamp.
+        std::fs::write(&p, "").unwrap();
+        assert!(read_settled(&p, Some(scanned)).is_none());
+        // Rewritten with different content: mtime differs.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(&p, "pub fn g() {}\n").unwrap();
+        assert!(read_settled(&p, Some(scanned)).is_none());
+        assert!(read_settled(&p, None).is_none());
+        assert!(read_settled(&d.join("gone.rs"), Some(scanned)).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     #[ignore = "focused real-manifest watch-directory reconstruction diagnostic"]
