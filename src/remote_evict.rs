@@ -313,6 +313,8 @@ impl Registry {
     }
 
     fn record_activity(&self, root: &Path) -> std::io::Result<()> {
+        #[cfg(not(unix))]
+        let _ = root;
         #[cfg(unix)]
         if let Some(store) = &self.store {
             store.activity(root)?;
@@ -374,6 +376,7 @@ impl Registry {
 /// never starts on a half-deleted `target/`.
 pub struct RootLock(#[allow(dead_code)] std::fs::File);
 
+#[cfg(unix)]
 fn validate_lock_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(dir)?;
@@ -390,6 +393,7 @@ fn validate_lock_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn lock_path(root: &Path) -> std::io::Result<PathBuf> {
     let name = format!("{:016x}.lock", fxhash(root.as_os_str().as_encoded_bytes()));
     let dir = crate::remote::dir()
@@ -404,6 +408,7 @@ fn lock_path(root: &Path) -> std::io::Result<PathBuf> {
     Ok(dir.join(name))
 }
 
+#[cfg(unix)]
 fn fxhash(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in bytes {
@@ -413,6 +418,7 @@ fn fxhash(bytes: &[u8]) -> u64 {
     h
 }
 
+#[cfg(unix)]
 fn validate_lock_inode(meta: &std::fs::Metadata, uid: u32) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     if !meta.is_file() || meta.uid() != uid || meta.nlink() != 1 {

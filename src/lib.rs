@@ -79,12 +79,13 @@ mod peercache;
 mod procfs;
 mod profile;
 mod record;
-#[cfg(unix)]
 mod records_queue;
 mod release_tools;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
+// Build-host eviction runs on Unix hosts only.
+#[cfg_attr(not(unix), allow(dead_code))]
 mod remote_evict;
 /// The remote agent runs on the (Linux) build machines only.
 #[cfg(windows)]

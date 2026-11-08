@@ -284,6 +284,7 @@ pub fn invalidate(mirror: &Mirror, root: &Path) {
 /// Machine side, before applying a source write or delete at `path`: any
 /// saved mirror state of a root above it no longer describes the tree.
 /// One `stat` per ancestor.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn invalidate_above(path: &Path) {
     for dir in path.ancestors().skip(1) {
         let token = dir.join(TOKEN_FILE);
@@ -370,7 +371,9 @@ mod tests {
 
     /// Save on a local "machine", then resume: the manifest comes back only
     /// while the machine's copy still matches, and only once.
-    #[cfg(unix)]
+    /// The probe uses GNU `stat -c` like the Linux build machines; BSD stat
+    /// on macOS does not support it, so the local-machine test is Linux-only.
+    #[cfg(target_os = "linux")]
     #[test]
     fn save_then_take_round_trip_and_divergence() {
         let base = std::env::temp_dir().join(format!("jr-resume-{}", std::process::id()));
