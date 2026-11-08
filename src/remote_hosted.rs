@@ -767,6 +767,94 @@ pub fn report_local_build(reason: &str, cmd: Option<&str>) {
     post_detached(&c, "build/local", &local_build_body(reason, cmd));
 }
 
+/// Labels for a local run on the operator dashboard, captured once at start.
+#[derive(Clone)]
+pub struct LocalRunLabels {
+    cmd: String,
+    project: Option<String>,
+}
+
+impl LocalRunLabels {
+    /// `None` when nothing should be reported (signed out, tests, or a
+    /// non-default build service whose operator is not us).
+    pub fn capture(args: &[std::ffi::OsString]) -> Option<Self> {
+        if cfg!(test) || !signed_in() {
+            return None;
+        }
+        let c = creds().ok()?;
+        if c.build_base != DEFAULT_BUILD_BASE {
+            return None;
+        }
+        let cmd = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let project = std::env::current_dir().ok().and_then(|cwd| {
+            crate::early::workspace_root(&cwd)
+                .unwrap_or(cwd)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+        });
+        Some(Self { cmd, project })
+    }
+}
+
+/// Body of `POST {build}/build/local/runs`: one lifecycle report for a build
+/// on this machine (same labels a hosted run reports at charge time).
+fn local_run_body(
+    l: &LocalRunLabels,
+    run_id: &str,
+    state: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+) -> Value {
+    let mut body = json!({
+        "run_id": run_id,
+        "state": state,
+        "cmd": run_label(&l.cmd, 160),
+        "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+    });
+    if let Some(p) = &l.project {
+        body["project"] = json!(run_label(p, 160));
+    }
+    let h = crate::procfs::hostname();
+    if !h.is_empty() {
+        body["machine"] = json!(run_label(&h, 64));
+    }
+    if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
+        body["session"] = json!(run_label(&s, 96));
+    }
+    if let Some(e) = exit_code {
+        body["exit_code"] = json!(e);
+    }
+    if let Some(w) = wall_s {
+        body["wall_s"] = json!((w * 100.0).round() / 100.0);
+    }
+    body
+}
+
+/// `POST {build}/build/local/runs` (running, done, abandoned) so local
+/// operations show in operator history next to hosted ones. Fire and
+/// forget: a detached curl that never delays or fails the build.
+pub fn report_local_run(
+    l: &LocalRunLabels,
+    run_id: &str,
+    state: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+) {
+    let Ok(c) = creds() else {
+        return;
+    };
+    post_detached(
+        &c,
+        "build/local/runs",
+        &local_run_body(l, run_id, state, exit_code, wall_s),
+    );
+}
+
 /// A detached curl POST that never delays or fails the build.
 fn post_detached(c: &Creds, path: &str, body: &Value) {
     spawn_detached(curl(c, "POST", path, Some(body)));
@@ -1573,6 +1661,26 @@ mod tests {
         let s = check_access(&c).unwrap_err().to_string();
         assert!(s.contains("not available on your Jcode account yet"), "{s}");
         assert!(!s.contains("upgrade"), "{s}");
+    }
+
+    #[test]
+    fn local_run_body_carries_state_and_labels() {
+        let l = LocalRunLabels {
+            cmd: "test\n-p   a".into(),
+            project: Some("proj".into()),
+        };
+        let b = local_run_body(&l, "20261108-1-2", "done", Some(101), Some(1.234));
+        assert_eq!(b["state"], "done");
+        assert_eq!(b["cmd"], "test -p a");
+        assert_eq!(b["project"], "proj");
+        assert_eq!(b["exit_code"], 101);
+        assert_eq!(b["wall_s"], 1.23);
+        let b = local_run_body(&l, "x", "running", None, None);
+        assert!(b.get("exit_code").is_none());
+        assert!(
+            LocalRunLabels::capture(&[]).is_none(),
+            "never reports from tests"
+        );
     }
 
     #[test]

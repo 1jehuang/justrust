@@ -339,6 +339,7 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
         &subcommand(&args).unwrap_or_default(),
         crate::telemetry::local_route_label(),
     );
+    lifecycle.report_local(&args);
     trace.mark("lifecycle-start");
     match record(&args, opts, &id, &mut lifecycle) {
         Ok(code) => std::process::exit(code),

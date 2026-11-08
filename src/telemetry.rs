@@ -187,6 +187,27 @@ pub(crate) struct BuildLifecycle {
     terminal: bool,
     scope: Option<String>,
     logs: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Signed-in local builds also report to operator run history
+    /// (`report_local_run`), like hosted runs do.
+    local: Option<std::sync::Arc<LocalRun>>,
+    local_worker: Option<std::thread::JoinHandle<()>>,
+}
+
+pub(crate) struct LocalRun {
+    labels: crate::remote_hosted::LocalRunLabels,
+    started: std::time::Instant,
+}
+
+impl LocalRun {
+    fn report(&self, id: &str, state: &str, exit: Option<i32>) {
+        crate::remote_hosted::report_local_run(
+            &self.labels,
+            id,
+            state,
+            exit,
+            Some(self.started.elapsed().as_secs_f64()),
+        );
+    }
 }
 const HEARTBEAT_S: u64 = 30;
 
@@ -255,6 +276,8 @@ impl BuildLifecycle {
             terminal: false,
             scope: telemetry_creds().as_ref().map(auth_scope),
             logs: Default::default(),
+            local: None,
+            local_worker: None,
         };
         if enabled() && observer.scope.is_some() && valid_run_id(id) {
             emit_lifecycle(
@@ -301,11 +324,50 @@ impl BuildLifecycle {
         }
         observer
     }
+    /// Also report this build to operator run history as a local run.
+    /// Off with telemetry, for remote runs, and when signed out.
+    pub(crate) fn report_local(&mut self, args: &[std::ffi::OsString]) {
+        if self.route == "remote" || !enabled() || !valid_run_id(&self.id) {
+            return;
+        }
+        let Some(labels) = crate::remote_hosted::LocalRunLabels::capture(args) else {
+            return;
+        };
+        let local = std::sync::Arc::new(LocalRun {
+            labels,
+            started: std::time::Instant::now(),
+        });
+        self.local = Some(local.clone());
+        let shared = self.shared.clone();
+        let id = self.id.clone();
+        self.local_worker = std::thread::Builder::new()
+            .name("local-run-heartbeat".into())
+            .spawn(move || {
+                let (lock, cv) = &*shared;
+                let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                loop {
+                    let (next, timeout) = cv
+                        .wait_timeout(state, std::time::Duration::from_secs(HEARTBEAT_S))
+                        .unwrap_or_else(|e| e.into_inner());
+                    state = next;
+                    if state.1 {
+                        break;
+                    }
+                    if timeout.timed_out() && state.0 {
+                        local.report(&id, "running", None);
+                    }
+                }
+            })
+            .ok();
+    }
     pub(crate) fn log_availability(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         self.logs.clone()
     }
     pub(crate) fn running(&self) {
         self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
+        if let Some(l) = &self.local {
+            l.report(&self.id, "running", None);
+        }
         emit_lifecycle(
             &self.id,
             &self.sub,
@@ -321,10 +383,14 @@ impl BuildLifecycle {
         self.shared.1.notify_all();
         // Do not wait at build exit. The stopped worker owns only telemetry state.
         self.worker.take();
+        self.local_worker.take();
     }
     pub(crate) fn done(&mut self, exit: i32, logs: bool) {
         self.stop();
         self.terminal = true;
+        if let Some(l) = self.local.take() {
+            l.report(&self.id, "done", Some(exit));
+        }
         emit_lifecycle(
             &self.id,
             &self.sub,
@@ -339,6 +405,11 @@ impl BuildLifecycle {
 impl Drop for BuildLifecycle {
     fn drop(&mut self) {
         self.stop();
+        if !self.terminal
+            && let Some(l) = self.local.take()
+        {
+            l.report(&self.id, "abandoned", None);
+        }
         if !self.terminal {
             emit_lifecycle(
                 &self.id,
