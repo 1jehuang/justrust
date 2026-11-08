@@ -131,6 +131,11 @@ pub fn env_file_path() -> Option<PathBuf> {
     Some(config_dir()?.join(ENV_FILE))
 }
 
+/// A setting from the environment, else the shared credentials file.
+pub fn setting(name: &str) -> Option<String> {
+    resolve(name, env_file_text().as_deref())
+}
+
 /// A key is present (env or file). No network.
 pub fn signed_in() -> bool {
     resolve("JCODE_API_KEY", env_file_text().as_deref()).is_some()

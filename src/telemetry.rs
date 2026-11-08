@@ -598,7 +598,7 @@ fn route_label(s: &crate::summary::Summary) -> &'static str {
 
 fn route_reason_label(reason: Option<&str>, remote: bool) -> &'static str {
     match reason {
-        Some("JUSTRUST_REMOTE=off") => "remote_off",
+        Some(r) if r.starts_with("JUSTRUST_REMOTE=off") => "remote_off",
         Some("JUSTRUST_REMOTE=force") => "forced",
         Some("remote failed in the last 10 minutes") => "recent_remote_failure",
         Some("remote machines build for Linux, this host is not Linux") => "non_linux",

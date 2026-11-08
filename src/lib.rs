@@ -143,7 +143,10 @@ then a one-line verdict. The full output is always saved: `justrust log`.
 Where check/clippy/test run: signed in to hosted builds (API key or
 subscription) means remote by default. Choose per command with `--local`,
 `--remote`, or `--auto` (the router: remote only when predicted faster),
-or set JUSTRUST_REMOTE=off|force|auto.
+or set JUSTRUST_REMOTE=off|force|auto. Give a reason for going local with
+`--local=\"why\"` (or JUSTRUST_LOCAL_REASON). With
+JUSTRUST_REQUIRE_LOCAL_REASON=1 (env or ~/.config/jcode env file) a
+requested local build without a reason is refused.
 
 Examples:
   justrust check -p my-crate
@@ -680,21 +683,27 @@ fn passthrough_split(argv: &[OsString]) -> Option<(&'static str, Vec<OsString>)>
 }
 
 /// `--local` / `--remote` / `--auto` before any `--`: aliases for
-/// JUSTRUST_REMOTE=off|force|auto (the router).
-fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
+/// JUSTRUST_REMOTE=off|force|auto (the router). `--local=<why>` also
+/// records why (JUSTRUST_LOCAL_REASON), see `route::require_local_reason`.
+fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>, Option<String>) {
     let mut mode = None;
+    let mut why = None;
     let mut out = Vec::with_capacity(args.len());
     let mut passed = false;
     for a in args {
         passed |= a == "--";
         match a.to_str() {
             Some("--local") if !passed => mode = Some("off"),
+            Some(s) if !passed && s.starts_with("--local=") => {
+                mode = Some("off");
+                why = Some(s["--local=".len()..].to_string());
+            }
             Some("--remote") if !passed => mode = Some("force"),
             Some("--auto") if !passed => mode = Some("auto"),
             _ => out.push(a),
         }
     }
-    (out, mode)
+    (out, mode, why)
 }
 
 /// Whether a build reached through the `cargo` shim goes through local vs
@@ -730,11 +739,15 @@ fn route_then_accelerate(
 }
 
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
-    let (args, route_mode) = take_route_flags(args);
+    let (args, route_mode, local_why) = take_route_flags(args);
     let (args, rerun) = test_reuse::take_rerun_flag(args);
     if let Some(m) = route_mode {
         // SAFETY: single-threaded here, before any build starts.
         unsafe { std::env::set_var("JUSTRUST_REMOTE", m) };
+    }
+    if let Some(w) = local_why {
+        // SAFETY: as above.
+        unsafe { std::env::set_var("JUSTRUST_LOCAL_REASON", w) };
     }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
@@ -1154,6 +1167,17 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 #[cfg(test)]
 mod passthrough_tests {
     use super::*;
+
+    #[test]
+    fn local_flag_carries_reason() {
+        let a = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        let (rest, m, w) = take_route_flags(a(&["-p", "x", "--local=offline", "--", "--local"]));
+        assert_eq!(m, Some("off"));
+        assert_eq!(w.as_deref(), Some("offline"));
+        assert_eq!(rest, a(&["-p", "x", "--", "--local"]));
+        let (_, m, w) = take_route_flags(a(&["--local"]));
+        assert_eq!((m, w), (Some("off"), None));
+    }
 
     #[test]
     fn graph_large_capture_is_explicit_and_excludes_manifests() {
