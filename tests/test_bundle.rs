@@ -107,7 +107,11 @@ impl Fixture {
 #[test]
 fn bundle_fixture() {
     if let Some(expected) = std::env::var_os("JUSTRUST_BUNDLE_EXPECT_CWD") {
-        assert_eq!(std::env::current_dir().unwrap(), PathBuf::from(expected));
+        // Canonical on both sides: Windows may report a verbatim `\\?\` cwd.
+        assert_eq!(
+            std::env::current_dir().unwrap().canonicalize().unwrap(),
+            PathBuf::from(expected).canonicalize().unwrap()
+        );
     }
     assert!(
         std::env::var_os("JUSTRUST_BUNDLE_DELIBERATE_FAILURE").is_none(),
