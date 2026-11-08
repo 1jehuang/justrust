@@ -457,17 +457,11 @@ enum Command {
         /// list (default), show KIND ID, or put KIND ID FILE.
         args: Vec<String>,
     },
-    /// Append slim, path-redacted run summaries to the repo's data/runs/<machine>/.
+    /// Retired: builds upload to `justrust records` automatically.
+    #[command(hide = true)]
     Export {
-        /// Output root. Defaults to ./data/runs in the justrust repository.
-        #[arg(long)]
-        out: Option<PathBuf>,
-        /// Machine directory name. Defaults to the hostname.
-        #[arg(long)]
-        machine: Option<String>,
-        /// Report what would be added without writing.
-        #[arg(long)]
-        dry_run: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        _args: Vec<String>,
     },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
@@ -1101,11 +1095,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             RemoteCmd::Env => remote_backend::env_command()?,
         },
         Command::Records { args } => remote_hosted::records_command(&args)?,
-        Command::Export {
-            out,
-            machine,
-            dry_run,
-        } => export::command(out, machine, dry_run)?,
+        Command::Export { .. } => export::command()?,
         Command::History {
             sessions,
             repo,

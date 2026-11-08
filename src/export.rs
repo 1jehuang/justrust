@@ -1,125 +1,26 @@
-//! `justrust export`: copy compact run summaries into the repo's `data/runs/`.
+//! Slim run summaries for the account-private record store.
 //!
-//! Raw run directories (`~/.justrust/runs/<id>/`) are hundreds of MB and hold
-//! full compiler output. The export keeps one slim JSON line per finished run
-//! so findings can cite run ids that exist in the repository and benchmarks
-//! can replay real agent workloads:
-//!
-//! ```text
-//! data/runs/<machine>/<YYYY-MM>.jsonl   one line per run, sorted by id
-//! ```
-//!
-//! Each line is the run's `summary.json` with:
-//! - every absolute path under the home directory rewritten to `~/...`
-//! - the first compile error cut to its first line (no source snippets)
-//! - `top_units` cut to the slowest 6, each with its 5 slowest passes
-//! - `split_hints` dropped (derived text, regenerated on demand)
-//! - floats rounded to milliseconds
-//! - `machine`, `repo`, and `kind` (`agent`, `manual`, `bench`, `scratch`) added
-//!
-//! The repository is public, so only runs whose `repo` is listed in
-//! `<out>/public-repos.txt` keep crate names, arguments, paths, and error
-//! text. Every other run (private repos, scratch copies of unknown origin) is
-//! exported with timings and counts only: `repo` becomes `private`, unit names
-//! become `crate0..`, errors keep only their code, and paths, arguments, and
-//! rebuild reasons are dropped. A missing allowlist redacts everything.
-//!
-//! The export is incremental: ids already present in the machine directory
-//! are skipped, so running it again only appends new runs.
+//! Every recorded build's `summary.json` is uploaded as a `run` record
+//! (`upload_run`), cut to what analysis needs: home paths rewritten to `~`,
+//! the first error cut to one line, the slowest units and passes only,
+//! floats rounded, and `machine`, `repo`, `kind` added. `justrust export`
+//! and committing `data/runs/` are retired; that directory is a frozen
+//! archive of runs cited by older docs.
 
-use crate::paths;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::Path;
 
 const TOP_UNITS: usize = 6;
 const TOP_PASSES: usize = 5;
 const ERROR_CHARS: usize = 200;
 
-pub fn command(out: Option<PathBuf>, machine: Option<String>, dry_run: bool) -> Result<()> {
-    let root = match out {
-        Some(p) => p,
-        None => default_out()?,
-    };
-    let machine = match machine {
-        Some(m) => m,
-        None => hostname(),
-    };
-    if machine.is_empty() || machine.contains(['/', '\\']) || machine.starts_with('.') {
-        bail!("invalid machine name {machine:?}, pass --machine NAME");
-    }
-    let dir = root.join(&machine);
-    let home = dirs::home_dir().context("no home directory")?;
-    let runs_dir = paths::runs_dir()?;
-
-    let existing = existing_ids(&dir)?;
-    let public = load_public_repos(&root);
-    let mut ids: Vec<String> = std::fs::read_dir(&runs_dir)
-        .with_context(|| format!("reading {}", runs_dir.display()))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|id| !existing.contains(id))
-        .collect();
-    ids.sort();
-
-    let mut shards: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut unfinished = 0usize;
-    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
-    let mut redacted = 0usize;
-    for id in &ids {
-        let path = runs_dir.join(id).join("summary.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            unfinished += 1;
-            continue;
-        };
-        let Ok(summary) = serde_json::from_str::<Value>(&text) else {
-            unfinished += 1;
-            continue;
-        };
-        let slim = slim(summary, &home, &machine, &public);
-        let kind = slim["kind"].as_str().unwrap_or("?").to_string();
-        *kinds.entry(kind).or_default() += 1;
-        if slim["repo"] == PRIVATE {
-            redacted += 1;
-        }
-        shards
-            .entry(shard_name(id))
-            .or_default()
-            .push(serde_json::to_string(&slim)?);
-    }
-
-    let added: usize = shards.values().map(Vec::len).sum();
-    if !dry_run && added > 0 {
-        std::fs::create_dir_all(&dir)?;
-        for (shard, lines) in &shards {
-            let path = dir.join(format!("{shard}.jsonl"));
-            let mut text = std::fs::read_to_string(&path).unwrap_or_default();
-            if !text.is_empty() && !text.ends_with('\n') {
-                text.push('\n');
-            }
-            for l in lines {
-                text.push_str(l);
-                text.push('\n');
-            }
-            let tmp = path.with_extension("jsonl.tmp");
-            std::fs::write(&tmp, text)?;
-            std::fs::rename(&tmp, &path)?;
-        }
-    }
-    let by_kind: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
-    println!(
-        "justrust export: {} {added} new runs to {} ({}; {redacted} redacted as private), {} already exported, {unfinished} without a summary",
-        if dry_run { "would add" } else { "added" },
-        dir.display(),
-        if by_kind.is_empty() {
-            "none".to_string()
-        } else {
-            by_kind.join(", ")
-        },
-        existing.len(),
-    );
-    Ok(())
+/// `justrust export` is retired: runs go to the account record store.
+pub fn command() -> Result<()> {
+    bail!(
+        "`justrust export` is retired. Every recorded build is uploaded automatically to the account-private record store: use `justrust records list` and `justrust records show run <id>`. data/runs/ is a frozen archive."
+    )
 }
 
 /// Slim summary for the account-private record store (`upload_run`).
@@ -142,73 +43,8 @@ pub fn upload_run(s: &crate::summary::Summary) {
         .and_then(Value::as_str);
     let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
     public.insert(repo_name(git_root, cwd));
-    let data = slim(v, &home, &hostname(), &public);
+    let data = slim(v, &home, &crate::procfs::hostname(), &public);
     crate::remote_hosted::upload_record("run", &s.id, data);
-}
-
-/// `./data/runs` when run from the justrust repository root.
-fn default_out() -> Result<PathBuf> {
-    let manifest = std::fs::read_to_string("Cargo.toml").unwrap_or_default();
-    let is_repo = manifest
-        .parse::<toml::Table>()
-        .ok()
-        .and_then(|t| {
-            t.get("package")?
-                .get("name")?
-                .as_str()
-                .map(|n| n == "justrust")
-        })
-        .unwrap_or(false);
-    if !is_repo {
-        bail!("run `justrust export` from the justrust repository root, or pass --out DIR");
-    }
-    Ok(PathBuf::from("data/runs"))
-}
-
-fn hostname() -> String {
-    crate::procfs::hostname()
-}
-
-/// `20261009-154349337-1890849` -> `2026-10`.
-fn shard_name(id: &str) -> String {
-    match (id.get(0..4), id.get(4..6)) {
-        (Some(y), Some(m)) if id.as_bytes()[..6].iter().all(u8::is_ascii_digit) => {
-            format!("{y}-{m}")
-        }
-        _ => "unknown".to_string(),
-    }
-}
-
-fn existing_ids(dir: &Path) -> Result<HashSet<String>> {
-    let mut ids = HashSet::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(ids);
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().is_none_or(|x| x != "jsonl") {
-            continue;
-        }
-        for line in std::fs::read_to_string(&p)?.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line)
-                && let Some(id) = v.get("id").and_then(Value::as_str)
-            {
-                ids.insert(id.to_string());
-            }
-        }
-    }
-    Ok(ids)
-}
-
-/// Repo names allowed to keep details, one per line, `#` comments.
-fn load_public_repos(root: &Path) -> HashSet<String> {
-    std::fs::read_to_string(root.join("public-repos.txt"))
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.split('#').next().unwrap_or("").trim())
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 const PRIVATE: &str = "private";
@@ -462,22 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_parsing() {
-        let dir = std::env::temp_dir().join(format!("jr-export-allow-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("public-repos.txt"),
-            "# public\njcode\n  gpui  # fork\n\n",
-        )
-        .unwrap();
-        let p = load_public_repos(&dir);
-        assert_eq!(p.len(), 2);
-        assert!(p.contains("jcode") && p.contains("gpui"));
-        assert!(load_public_repos(&dir.join("missing")).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn classifies_runs() {
         let h = "/home/u";
         assert_eq!(
@@ -508,28 +328,5 @@ mod tests {
             repo_name(None, "/home/u/.justrust/bench/work/d/jcode-desktop"),
             "jcode-desktop"
         );
-    }
-
-    #[test]
-    fn shards_by_month() {
-        assert_eq!(shard_name("20261009-154349337-1890849"), "2026-10");
-        assert_eq!(shard_name("bogus"), "unknown");
-    }
-
-    #[test]
-    fn export_is_incremental() {
-        let dir = std::env::temp_dir().join(format!("jr-export-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("2026-10.jsonl"),
-            "{\"id\":\"a\"}\n{\"id\":\"b\"}\nnot json\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("notes.txt"), "{\"id\":\"c\"}\n").unwrap();
-        let ids = existing_ids(&dir).unwrap();
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains("a") && ids.contains("b"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
