@@ -10,7 +10,10 @@ For Rust projects, use `justrust` instead of calling cargo directly:
   why each crate rebuilt, and `waste` lines with fixable inefficiencies.
   Do not pipe it through `grep`, `tail`, or `head`: that hides errors.
 - More: `justrust log --grep <text>` or `justrust log --tail 200` prints the
-  full saved output of the last run. `justrust show` explains the time.
+  full saved output of the last run. `justrust show` explains the time,
+  from routing and source sync to compiling and tests.
+  `justrust profile --here --days 7` shows where this project's build wait
+  goes across runs.
 - Prefer `justrust check` to find compile errors before `justrust test`.
 - Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay cargo.
 

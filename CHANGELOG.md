@@ -5,6 +5,19 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- **End-to-end wait waterfall.** Every recorded run stores what the caller
+  waited for, split into non-overlapping segments that sum to the wait:
+  routing, hosted admission, sync (queued behind another sync, machine link,
+  source push, confirm), cargo phases on the host or locally, artifact
+  return, and reporting. `justrust show` prints it. Older runs get a coarser
+  reconstruction, labelled as such.
+- **`justrust profile`** totals the waterfall across runs (`--days`, `--here`,
+  `--remote`, `--local`, `--measured`, `--json`) and lists the slowest runs.
+- **Fixed: test time reported as "after build".** A test binary the runner
+  could not hand to the parallel pool (`--test-threads=1`, `--nocapture`),
+  and the remainder of a binary whose test ran itself as a child, were
+  counted as shutdown time instead of test time.
+
 ## 0.1.0-alpha.18
 
 - **Account-linked diagnostic telemetry** uses service-authenticated account
