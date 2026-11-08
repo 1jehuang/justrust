@@ -49,6 +49,28 @@ No speedup is claimed. This is measurement infrastructure plus a reporting
 fix. Unit tests cover waterfall sums, overrun scaling, missing marks, old-run
 reconstruction, aggregation, the pool fallback, and wire compatibility.
 
+Follow-up validation. Eight measured hosted runs had segments that summed
+exactly to their wait, no negative segments, and `e2e.wall` within 0.04s of
+the client wall. Every sync split matched the daemon's own `slow sync` log
+line exactly (for example `20261108-061007803-408172`: link 2.33s, push
+13.42s, barrier 0.06s). Two concurrent checks (`20261108-061916776-507650`,
+`20261108-061918739-508403`) attributed correctly. The first showed 16.17s
+`sync: source push` (a 95k-file checksum re-mirror after the daemon
+restarted). The second showed 16.28s `sync: queued behind`, then 6.09s
+waiting on the host build directory lock. That matches daemon lines
+`lock 0.00s ... push 16.17s` and `lock 16.28s ... push 0.42s`. A property
+test covers 500 random mark sets, with marks missing and out of order, for
+both local and remote waterfalls. A temporary harness replayed the new
+summary parser over 402 randomly sampled real test runs. Test counts were
+identical, phases still summed to wall, and the misfiled tail fell from
+3,791s to 107s. A second gap was found and fixed: a test that runs its own
+binary as a child (nested `running 1 test`) closed the parent binary early,
+filing the rest under "after build". Unmatched libtest results now
+contribute their reported duration as test time. A first attempt that
+tracked nesting depth was rejected because it dropped 811 test counts on
+interleaved output. Every re-mirror after a client upgrade restarts the
+daemon, costing 12-16s here. The waterfall now shows that cost directly.
+
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
 Resized the owner's existing AWS host from 96 to 32 physical cores and 384
