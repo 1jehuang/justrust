@@ -166,7 +166,7 @@ billing, private caches) and never weaken the security invariants in
 
 - Do not claim a speedup without before and after numbers from
   `bench/suite.py` (pinned snapshots, see `bench/README.md`): run it before
-  and after, commit both result files, and quote `bench/suite.py compare`.
+  and after, and quote `bench/suite.py compare`.
   `justrust show` explains a single run.
 - For general speed claims and default promotion, use the comprehensive
   session-weighted workload: `bench/suite.py run --synth 1 -n 1` before and
@@ -182,9 +182,8 @@ billing, private caches) and never weaken the security invariants in
   and correctness checks relevant to the change. Its coverage is not universal
   (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
   report it as blocked rather than substituting `desktop-test-edit`.
-- Run `justrust export` from the repo root and commit `data/runs/` so every
-  cited run id exists in the repository (slim, path-redacted summaries, see
-  `data/runs/README.md`).
+- Builds and benchmark results are recorded automatically by the tools.
+  Cite run ids. Do not hand-write logs, notes files, or exports.
 - `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
   builds.
 
