@@ -5,6 +5,10 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.20
+
+- Signed-in local builds are reported to operations history like hosted runs.
+- Hosted `aarch64-apple-ios` builds with a managed iOS SDK.
 - **Test result reuse.** An agent-mode `test` identical to a passing run
   (same command, environment, justrust binary, and source file stamps since
   that run started) replays its results in milliseconds instead of syncing,
