@@ -115,7 +115,7 @@ PY
     echo 'cd ~/bench-justrust'
     printf '( while sleep 60; do %s; done ) &\n' "$MARK_ACTIVE"
     echo 'trap "kill $! 2>/dev/null" EXIT'
-    echo 'export PATH=$HOME/bench-bin:$HOME/.cargo/bin:$PATH JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0'
+    echo 'export PATH=$HOME/bench-bin:$HOME/.cargo/bin:$PATH JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON="benchmark on the build machine itself"'
     # The machine has rustup's stable, not a distro cargo: that is "stock" there.
     echo '[ -x /usr/bin/cargo ] || export VERSUS_STOCK_CARGO=$HOME/.cargo/bin/cargo'
     # The executable copied above may be older than this source checkout.

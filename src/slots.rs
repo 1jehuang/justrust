@@ -1588,6 +1588,8 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        // Windows canonicalize yields a \\?\ verbatim path Cargo never reports.
+        #[cfg(unix)]
         let root = root.canonicalize().unwrap();
         let configured = os(&["test", "--config", "build.target-dir='configured'"]);
         assert_eq!(

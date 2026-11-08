@@ -18,7 +18,7 @@ trap 'cp "$OUT/id.rs.bak" "$F"' EXIT
 exec 9>"$ROOT/../.bench.lock"; flock 9
 # The local crate cache would restore cut-off crates' dependents by content and hide
 # the cutoff; the edit is unique per run anyway.
-export JUSTRUST_TOOLCHAIN=$TC JUSTRUST_REMOTE=0 JUSTRUST_BUILDD=0 JUSTRUST_PREBUILT=off JUSTRUST_LOCALCACHE=0
+export JUSTRUST_TOOLCHAIN=$TC JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' JUSTRUST_BUILDD=0 JUSTRUST_PREBUILT=off JUSTRUST_LOCALCACHE=0
 edit() { # a unique body edit
   python3 - "$F" <<'EOF'
 import sys, time

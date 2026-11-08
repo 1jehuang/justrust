@@ -174,7 +174,7 @@ def native_checks(root):
         if count == 5:
             for name in API_NAMES:
                 require(f'test {name} ... ok' in raw, 'actual API test absent from journal')
-        log_name = filter_name or 'full-native'
+        log_name = (filter_name or 'full-native').replace('::', '__')
         require((root / f'native/v25-snapshot/{log_name}.exit').read_text().strip() == '0', 'native raw exit mismatch')
         require(f'{count} passed, 0 failed,' in (root / f'native/v25-snapshot/{log_name}.log').read_text(), 'native condensed log count mismatch')
         rows.append(dict(run_id=run, filter=filter_name, passed=count))

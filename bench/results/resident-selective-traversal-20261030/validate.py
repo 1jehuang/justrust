@@ -205,7 +205,7 @@ def native(root):
             and len(admission['native_test_rows']) == len(expected), 'native admission filters')
     for row in admission['native_test_rows']:
         raw, names = journal(root, 'v24-snapshot', row['run_id'], row['passed'])
-        require(text(root, 'native/v24-snapshot/' + row['filter'] + '.exit').strip() == '0', 'native exit')
+        require(text(root, 'native/v24-snapshot/' + row['filter'].replace('::', '__') + '.exit').strip() == '0', 'native exit')
         if row['filter'] == 'resident_selective_traversal':
             require(names == API_NAMES, 'actual native API names')
             args = load(root, f"journals/v24-snapshot/{row['run_id']}/meta.json")['args']

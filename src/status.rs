@@ -345,6 +345,28 @@ fn estimate(
 }
 
 fn recent_run_ids(runs: &Path) -> Vec<String> {
+    // `status --watch` calls this every second and the runs directory holds
+    // tens of thousands of entries. A new run changes the directory mtime, so
+    // rescan only then.
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::path::PathBuf, std::time::SystemTime, Vec<String>)>> =
+        Mutex::new(None);
+    let mtime = std::fs::metadata(runs).and_then(|m| m.modified()).ok();
+    if let (Some(mtime), Ok(cache)) = (mtime, CACHE.lock())
+        && let Some((p, t, ids)) = cache.as_ref()
+        && p == runs
+        && *t == mtime
+    {
+        return ids.clone();
+    }
+    let ids = scan_run_ids(runs);
+    if let (Some(mtime), Ok(mut cache)) = (mtime, CACHE.lock()) {
+        *cache = Some((runs.to_path_buf(), mtime, ids.clone()));
+    }
+    ids
+}
+
+fn scan_run_ids(runs: &Path) -> Vec<String> {
     let mut ids = Vec::new();
     let mut overrides = Vec::new();
     if let Ok(entries) = std::fs::read_dir(runs) {
@@ -378,12 +400,40 @@ fn recent_run_ids(runs: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The full index, re-parsed only when the file changes. `status --watch`
+/// needs it for estimates every second while any build runs, and it is tens
+/// of MB.
+fn cached_index() -> std::sync::Arc<Vec<IndexEntry>> {
+    use std::sync::Mutex;
+    type Key = (u64, std::time::SystemTime);
+    static CACHE: Mutex<Option<(Key, std::sync::Arc<Vec<IndexEntry>>)>> = Mutex::new(None);
+    let key = paths::index_file()
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| Some((m.len(), m.modified().ok()?)));
+    let Some(key) = key else {
+        return std::sync::Arc::new(crate::runs::load_index());
+    };
+    let mut cache = match CACHE.lock() {
+        Ok(c) => c,
+        Err(_) => return std::sync::Arc::new(crate::runs::load_index()),
+    };
+    if let Some((k, v)) = cache.as_ref()
+        && *k == key
+    {
+        return v.clone();
+    }
+    let v = std::sync::Arc::new(crate::runs::load_index());
+    *cache = Some((key, v.clone()));
+    v
+}
+
 pub fn collect() -> Result<Status> {
     let runs = paths::runs_dir()?;
     let now = paths::now();
     let recent_ids = recent_run_ids(&runs);
     let mut status = Status::default();
-    let mut index: Option<Vec<IndexEntry>> = None;
+    let mut index: Option<std::sync::Arc<Vec<IndexEntry>>> = None;
     for id in &recent_ids {
         let dir = runs.join(id);
         if dir.join("summary.json").exists() {
@@ -398,7 +448,7 @@ pub fn collect() -> Result<Status> {
         let live = crate::live::load(&dir).unwrap_or_default();
         let (ncpu, cpu_cores, sampled_at) = measured_cpu(&dir, &meta, now);
         let done_units = crate::summary::load_units(&dir);
-        let index = index.get_or_insert_with(crate::runs::load_index);
+        let index = index.get_or_insert_with(cached_index);
         let est = estimate(now, &meta, &live, &done_units, index, &runs);
         let running = live
             .active
@@ -428,8 +478,11 @@ pub fn collect() -> Result<Status> {
         rem(b).total_cmp(&rem(a))
     });
     if status.active.is_empty() {
-        let index = index.unwrap_or_else(crate::runs::load_index);
-        if let Some(r) = index.last() {
+        let last = match &index {
+            Some(index) => index.last().cloned(),
+            None => crate::runs::last_index_entry(),
+        };
+        if let Some(r) = last.as_ref() {
             let ago = now - (r.start + r.wall);
             if ago < SHOW_DONE_SECS && r.units_compiled > 0 {
                 status.recent = Some(Finished {
@@ -621,6 +674,8 @@ pub fn render_waybar(s: &Status) -> String {
 }
 
 pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
+    let mut last = String::new();
+    let wake = Wake::new();
     loop {
         let s = collect()?;
         let out = if waybar {
@@ -630,12 +685,123 @@ pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
         } else {
             render_text(&s)
         };
-        println!("{}", out.trim_end());
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-        match watch {
-            Some(secs) => std::thread::sleep(std::time::Duration::from_secs_f64(secs.max(0.2))),
-            None => return Ok(()),
+        // Under --watch, repeat lines only make the reader (Waybar) redraw.
+        if watch.is_none() || out != last {
+            println!("{}", out.trim_end());
+            use std::io::Write;
+            if std::io::stdout().flush().is_err() && watch.is_some() {
+                return Ok(()); // reader went away
+            }
+            last = out;
+        }
+        let Some(secs) = watch else { return Ok(()) };
+        // Only a running build (elapsed time) or a just-finished run (shown
+        // for SHOW_DONE_SECS) changes on its own. Otherwise nothing changes
+        // until a run starts or finishes: sleep on inotify until then.
+        let tick = secs.max(0.2);
+        let timeout = if !s.active.is_empty() {
+            Some(tick)
+        } else {
+            s.recent
+                .as_ref()
+                .map(|r| (SHOW_DONE_SECS - r.ago).clamp(0.05, SHOW_DONE_SECS) + 0.05)
+        };
+        if !wake.wait(timeout) {
+            std::thread::sleep(std::time::Duration::from_secs_f64(timeout.unwrap_or(tick)));
+        }
+    }
+}
+
+/// Blocks until justrust's state may have changed: a run directory appears or
+/// changes, or the index is appended. Falls back to plain sleeping (returns
+/// false) where inotify is unavailable.
+struct Wake {
+    #[cfg(target_os = "linux")]
+    fd: Option<std::os::fd::OwnedFd>,
+}
+
+impl Wake {
+    fn new() -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::FromRawFd;
+            use std::os::unix::ffi::OsStrExt;
+            // SAFETY: plain syscall; the fd is owned below.
+            let raw = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
+            if raw < 0 {
+                return Wake { fd: None };
+            }
+            // SAFETY: fresh fd we own.
+            let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) };
+            let mask = libc::IN_CREATE
+                | libc::IN_MODIFY
+                | libc::IN_CLOSE_WRITE
+                | libc::IN_MOVED_TO
+                | libc::IN_DELETE;
+            let mut ok = false;
+            for dir in [paths::home(), paths::runs_dir()].into_iter().flatten() {
+                let _ = std::fs::create_dir_all(&dir);
+                let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+                    continue;
+                };
+                // SAFETY: valid fd and NUL-terminated path.
+                ok |= unsafe { libc::inotify_add_watch(raw, c.as_ptr(), mask) } >= 0;
+            }
+            Wake {
+                fd: ok.then_some(fd),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        Wake {}
+    }
+
+    /// Waits up to `timeout` seconds (forever if None). Returns false if it
+    /// could not wait, so the caller sleeps instead.
+    fn wait(&self, timeout: Option<f64>) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let Some(fd) = &self.fd else { return false };
+            let raw = fd.as_raw_fd();
+            // Also watch stdout: a closed reader (Waybar reloaded) raises
+            // POLLERR on the pipe, so an idle watcher exits instead of
+            // sleeping forever as an orphan.
+            let mut pfds = [
+                libc::pollfd {
+                    fd: raw,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: libc::STDOUT_FILENO,
+                    events: 0,
+                    revents: 0,
+                },
+            ];
+            let ms = timeout.map_or(-1, |t| (t * 1000.0).ceil() as i32);
+            // SAFETY: two valid pollfds.
+            let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, ms) };
+            if pfds[1].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+                std::process::exit(0);
+            }
+            let n = if pfds[0].revents & libc::POLLIN != 0 {
+                n
+            } else {
+                n.min(0)
+            };
+            if n > 0 {
+                // Coalesce a burst (a build writes many files at once).
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let mut buf = [0u8; 16 << 10];
+                // SAFETY: reading into a buffer we own; fd is non-blocking.
+                while unsafe { libc::read(raw, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+            }
+            n >= 0
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = timeout;
+            false
         }
     }
 }

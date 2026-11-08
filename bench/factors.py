@@ -875,6 +875,7 @@ def cmd_run(args) -> None:
         out.write_text(json.dumps(result, indent=1) + "\n")
     print(table(result["factors"]))
     print(f"\nsaved {out}")
+    suite.upload_result(out)
     write_report()
 
 

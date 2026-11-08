@@ -16,7 +16,7 @@ TMP=$(mktemp -d "${JCODE_SCRATCH_DIR:-/tmp}/cutoff-sem.XXXXXX")
 cp "$UP" "$TMP/up.bak"; cp "$UI" "$TMP/ui.bak"
 restore() { cp "$TMP/up.bak" "$UP"; cp "$TMP/ui.bak" "$UI"; }
 trap restore EXIT
-export CARGO_TARGET_DIR=$ROOT/target-$TC JUSTRUST_TOOLCHAIN=$TC JUSTRUST_REMOTE=0 JUSTRUST_BUILDD=0 \
+export CARGO_TARGET_DIR=$ROOT/target-$TC JUSTRUST_TOOLCHAIN=$TC JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' JUSTRUST_BUILDD=0 \
   JUSTRUST_PREBUILT=off JUSTRUST_CARGO_CUTOFF_LOG=$TMP/cutoff.log
 cat >>"$UI" <<'EOF'
 

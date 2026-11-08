@@ -19,7 +19,7 @@ for mode in on off; do
   total=0
   for pass in 1 2; do
     for p in "$@"; do
-      out=$(JUSTRUST_UNIFY_FEATURES=$unify JUSTRUST_SLOTS=0 JUSTRUST_REMOTE=0 \
+      out=$(JUSTRUST_UNIFY_FEATURES=$unify JUSTRUST_SLOTS=0 JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' \
         JUSTRUST_DEPCACHE_DIR="$scratch/cache-$mode" CARGO_TARGET_DIR="$scratch/t-$mode" \
         JUSTRUST_REPORT=brief "$J" check -p "$p" 2>&1 | grep -o 'justrust show [0-9-]*' | tail -1 | cut -d' ' -f3)
       python3 - "$out" "$pass" "$p" <<'EOF'

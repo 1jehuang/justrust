@@ -94,6 +94,33 @@ fn mode_from(v: Option<&str>) -> Mode {
     }
 }
 
+/// On by default. `JUSTRUST_REQUIRE_LOCAL_REASON=0` (env, or the shared
+/// Jcode env file) turns it off. When on,
+/// a requested local build (`--local`, JUSTRUST_REMOTE=off) must say why,
+/// so local builds that should have been hosted can be traced.
+pub fn require_local_reason() -> bool {
+    !crate::remote_hosted::setting("JUSTRUST_REQUIRE_LOCAL_REASON").is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+/// The recorded reason for a requested local build, or the refusal message.
+fn local_request_reason(why: Option<&str>, required: bool) -> Result<String, String> {
+    match why.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => Ok(format!("JUSTRUST_REMOTE=off: {w}")),
+        None if required => Err(
+            "justrust: local build requested without a reason. Use --local=\"<why>\" \
+(or JUSTRUST_LOCAL_REASON=<why>), e.g. --local=\"local-only test needs GPU\". \
+Required by JUSTRUST_REQUIRE_LOCAL_REASON; omit --local/JUSTRUST_REMOTE=off to build hosted."
+                .to_string(),
+        ),
+        None => Ok("JUSTRUST_REMOTE=off".to_string()),
+    }
+}
+
 /// Subcommands that may run remotely.
 fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
@@ -576,8 +603,19 @@ pub fn maybe_remote(full: &[OsString]) {
     if m == Mode::Off {
         // Building here was asked for, but this build's dependencies may
         // still come from the machine's cache.
+        let why = local_request_reason(
+            std::env::var("JUSTRUST_LOCAL_REASON").ok().as_deref(),
+            require_local_reason(),
+        );
+        let why = match why {
+            Ok(w) => w,
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(2);
+            }
+        };
         warm_if_up(full);
-        return say_local("JUSTRUST_REMOTE=off");
+        return say_local(&why);
     }
     let Some(args) = full
         .iter()
@@ -759,6 +797,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_reason_required_when_configured() {
+        assert_eq!(
+            local_request_reason(None, false).unwrap(),
+            "JUSTRUST_REMOTE=off"
+        );
+        assert!(local_request_reason(Some("  "), true).is_err());
+        assert_eq!(
+            local_request_reason(Some("gpu test"), true).unwrap(),
+            "JUSTRUST_REMOTE=off: gpu test"
+        );
+    }
+
+    #[test]
     fn hosted_cross_targets_are_preflighted_before_submission() {
         let native = "x86_64-unknown-linux-gnu";
         assert!(!unsupported_hosted_target(&["check".into()], None));
@@ -918,6 +969,10 @@ mod tests {
             "aarch64-pc-windows-msvc",
             "aarch64-unknown-linux-gnu",
         ] {
+            // On an aarch64 host this target is native, not a cross build.
+            if target == format!("{}-unknown-linux-gnu", std::env::consts::ARCH) {
+                continue;
+            }
             let build = vec![
                 "build".into(),
                 "--release".into(),
@@ -960,6 +1015,7 @@ mod tests {
             top_unit: None,
             compile_failed: false,
             agent_session: None,
+            failure: None,
             remote: remote.then(|| "m".to_string()),
         }
     }

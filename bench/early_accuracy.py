@@ -160,7 +160,7 @@ def mutations() -> list[dict]:
                 callers_ms = (time.monotonic() - t) * 1000
                 early["diags"] = early.get("diags", []) + c.get("diags", [])
                 early["raw"] = early.get("raw", []) + c.get("raw", [])
-            env = {**os.environ, "CARGO_TARGET_DIR": str(target), "JUSTRUST_REMOTE": "0", "JUSTRUST_TOOLCHAIN": "system"}
+            env = {**os.environ, "CARGO_TARGET_DIR": str(target), "JUSTRUST_REMOTE": "0", "JUSTRUST_LOCAL_REASON": "benchmark: controlled local baseline", "JUSTRUST_TOOLCHAIN": "system"}
             env.pop("JUSTRUST_EARLY", None)
             p = subprocess.run([J, "check", "-p", "jcode-desktop-ui"], cwd=WS, env=env, capture_output=True, text=True)
             rerr = rustc_errors(p.stderr)

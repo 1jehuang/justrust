@@ -1422,7 +1422,11 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
 /// and remote-by-default backends (SSH or signed-in hosted) skip local
 /// background prebuilds unless `JUSTRUST_BUILDD_PREBUILD=1` is explicitly set.
 fn wants_prebuild(req: &Request) -> bool {
-    if let Some((_, v)) = req.env.iter().find(|(k, _)| k == "JUSTRUST_BUILDD_PREBUILD") {
+    if let Some((_, v)) = req
+        .env
+        .iter()
+        .find(|(k, _)| k == "JUSTRUST_BUILDD_PREBUILD")
+    {
         return !matches!(v.as_str(), "0" | "off" | "false");
     }
     let remote_mode = req

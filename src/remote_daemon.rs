@@ -42,6 +42,7 @@ use std::time::{Duration, Instant};
 use crate::peercache;
 use crate::remote_backend::{self, Backend};
 use crate::remote_proto::{Msg, VERSION, read_frame, write_frame};
+use crate::remote_resume;
 use crate::remote_sync::{self, MAX_FILE, Manifest, Mirror, UNKNOWN};
 use crate::remote_watch::Watcher;
 
@@ -377,6 +378,11 @@ impl Daemon {
 
     fn exit(&self, why: &str) -> ! {
         log(why);
+        // Draining: already saved before retiring (a replacement may be
+        // mirroring now, and must not find a token written after it began).
+        if !self.draining.load(Ordering::SeqCst) {
+            save_mirrors(self);
+        }
         self.retire();
         std::process::exit(0)
     }
@@ -395,6 +401,9 @@ impl Daemon {
         log(&format!(
             "shutdown requested, finishing {active} run(s) in flight"
         ));
+        // Still the only daemon (we hold the lock): save now, while no
+        // replacement can be writing to the machine.
+        save_mirrors(self);
         self.retire();
         let d = self.clone();
         std::thread::spawn(move || {
@@ -950,6 +959,82 @@ fn remember_root(dest: &str, root: &Path) {
     }
 }
 
+/// Save what the machine holds, for the next daemon (`remote_resume`). Only
+/// after a barrier confirms every frame applied, and only roots with no
+/// pending repair or full sync.
+fn save_mirrors(d: &Daemon) {
+    if !remote_resume::enabled() {
+        return;
+    }
+    // Never wait behind a sync in progress: a replacement daemon is waiting
+    // for us to let go, and that sync's state is not settled anyway.
+    let Ok(mut st) = d.sync.try_lock() else {
+        log("mirror manifests not saved: a sync is in progress");
+        return;
+    };
+    let Some(link) = st.link.clone().filter(|l| l.alive()) else {
+        log("mirror manifests not saved: no live connection");
+        return;
+    };
+    if let Err(e) = barrier(d, &mut st, &link) {
+        log(&format!("mirror manifests not saved: {e:#}"));
+        return;
+    }
+    let clean: Vec<(&Path, &Manifest, &[PathBuf])> = st
+        .roots
+        .iter()
+        .filter(|(r, root)| {
+            !root.needs_full_sync && r.is_dir() && !root.manifest.values().any(|s| *s == UNKNOWN)
+        })
+        .map(|(r, root)| (r.as_path(), &root.manifest, root.oversized.as_slice()))
+        .collect();
+    let t = Instant::now();
+    let n = remote_resume::save(st.backend.kind(), &link.mirror, &clean);
+    log(&format!(
+        "saved {n} of {} mirror manifests for the next daemon in {:.2}s",
+        clean.len(),
+        t.elapsed().as_secs_f64()
+    ));
+}
+
+/// A root this daemon does not track yet: resume the previous daemon's
+/// mirror when the machine confirms it, else mirror it in full. Returns
+/// files sent.
+fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<usize> {
+    if !st.roots.contains_key(root) {
+        let t = Instant::now();
+        match remote_resume::take(st.backend.kind(), &link.mirror, root) {
+            Ok((manifest, oversized)) => {
+                st.roots.insert(
+                    root.to_path_buf(),
+                    Root {
+                        manifest,
+                        watch_dirs: None,
+                        oversized,
+                        needs_full_sync: false,
+                    },
+                );
+                remember_root(st.backend.kind(), root);
+                let n = push_root(d, st, root)?;
+                log(&format!(
+                    "source mirror {}: resumed from the previous daemon, {n} files sent, total {:.3}s",
+                    root.display(),
+                    t.elapsed().as_secs_f64()
+                ));
+                return Ok(n);
+            }
+            Err(why) if why == "nothing saved" => {}
+            Err(why) => log(&format!(
+                "source mirror {}: not resumed ({why}, {:.3}s), full mirror",
+                root.display(),
+                t.elapsed().as_secs_f64()
+            )),
+        }
+    }
+    remote_resume::invalidate(&link.mirror, root);
+    add_root(d, st, link, root).map(|()| 0)
+}
+
 /// Start tracking a root: rsync it once, then remember its manifest.
 fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let total = Instant::now();
@@ -1048,6 +1133,21 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The content of `p`, only if it is exactly the file the scan stamped: the
+/// stamp recorded in the manifest must describe the bytes sent. A file
+/// rewritten between scan and read (truncated, then refilled, with its old
+/// mtime restored as `cp -p` and `shutil.copy2` do) would otherwise be sent
+/// half-written under a stamp that later matches again, and never resent.
+fn read_settled(p: &Path, scanned: Option<remote_sync::Stamp>) -> Option<Vec<u8>> {
+    let scanned = scanned?;
+    let data = std::fs::read(p).ok()?;
+    let after = std::fs::symlink_metadata(p).ok()?;
+    let (s, ns) = crate::sys::mtime(&after);
+    let now = s as i128 * 1_000_000_000 + ns as i128;
+    (data.len() as u64 == scanned.size && after.len() == scanned.size && now == scanned.mtime_ns)
+        .then_some(data)
+}
+
 /// Push every difference between `root` and its manifest. Returns files sent.
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     let total = Instant::now();
@@ -1063,6 +1163,8 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     if !diff.is_empty() {
         if diff.changed.len() + diff.deleted.len() > remote_sync::RSYNC_ABOVE {
             // A branch switch or a big generated change: one rsync is cheaper.
+            // It bypasses the agent, so drop saved mirror state here.
+            remote_resume::invalidate(&link.mirror, root);
             let t = Instant::now();
             let n = link.mirror.rsync(root)?;
             link.send(
@@ -1091,9 +1193,10 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
         } else {
             for rel in &diff.changed {
                 let p = root.join(rel);
-                match std::fs::read(&p) {
-                    Ok(data) if data.len() as u64 <= MAX_FILE => {
-                        let mode = new.get(rel).map_or(0o644, |s| s.mode);
+                let scanned = new.get(rel).copied();
+                match read_settled(&p, scanned) {
+                    Some(data) if data.len() as u64 <= MAX_FILE => {
+                        let mode = scanned.map_or(0o644, |s| s.mode);
                         link.send(
                             &Msg::Write {
                                 path: p.display().to_string(),
@@ -1102,7 +1205,8 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
                             &data,
                         )?;
                     }
-                    // Gone or grown since the scan: try again next time.
+                    // Gone, grown, or rewritten since the scan: try again
+                    // next time.
                     _ => {
                         new.insert(rel.clone(), UNKNOWN);
                     }
@@ -1176,7 +1280,7 @@ fn repair_sources(d: &Daemon, st: &mut Sync, link: &Link) -> Result<usize> {
             }
         }
         if st.needs_mirror(&root) {
-            add_root(d, st, link, &root)?;
+            files += mirror_root(d, st, link, &root)?;
         } else {
             files += push_root(d, st, &root)?;
         }
@@ -1321,7 +1425,7 @@ fn run(
     let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
     let id = d.id();
     let (tx, rx) = channel();
-    let (link, files, note) = {
+    let (link, files, note, timing) = {
         let mut st = d.sync.lock().unwrap();
         let locked = t.elapsed();
         let res = (|| -> Result<_> {
@@ -1330,7 +1434,7 @@ fn run(
             let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
                 let result = if st.needs_mirror(root) {
-                    add_root(d, &mut st, &link, root).map(|()| 0)
+                    mirror_root(d, &mut st, &link, root)
                 } else {
                     push_root(d, &mut st, root)
                 };
@@ -1420,6 +1524,12 @@ fn run(
                     return Err(e);
                 }
             }
+            let timing = crate::e2e::SyncTiming {
+                lock_ms: locked.as_secs_f64() * 1000.0,
+                link_ms: (linked - locked).as_secs_f64() * 1000.0,
+                push_ms: (pushed - linked).as_secs_f64() * 1000.0,
+                barrier_ms: (t.elapsed() - pushed).as_secs_f64() * 1000.0,
+            };
             if t.elapsed() > Duration::from_millis(1000) {
                 log(&format!(
                     "slow sync {:.2}s: lock {:.2}s, link {:.2}s, push {:.2}s, barrier {:.2}s",
@@ -1430,7 +1540,7 @@ fn run(
                     (t.elapsed() - pushed).as_secs_f64()
                 ));
             }
-            Ok((link, files, note))
+            Ok((link, files, note, timing))
         })();
         match res {
             Ok(v) => v,
@@ -1459,6 +1569,7 @@ fn run(
             machine,
             prefix: link.mirror.prefix.clone(),
             note,
+            timing: Some(timing),
         },
         &[],
     ) {
@@ -1564,6 +1675,42 @@ fn peer_sync_loop(d: &Daemon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file rewritten after the scan, even to the same size and with its
+    /// old mtime restored (`shutil.copy2`), is not sent under the scanned
+    /// stamp: that stamp would match again later and the bytes on the
+    /// machine would never be corrected.
+    #[test]
+    fn push_reads_only_the_file_the_scan_stamped() {
+        let d = std::env::temp_dir().join(format!("jr-settled-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("api_keys.rs");
+        std::fs::write(&p, "pub fn f() {}\n").unwrap();
+        let stamp = |p: &Path| {
+            let m = std::fs::symlink_metadata(p).unwrap();
+            let (s, ns) = crate::sys::mtime(&m);
+            remote_sync::Stamp {
+                mtime_ns: s as i128 * 1_000_000_000 + ns as i128,
+                size: m.len(),
+                mode: 0o644,
+            }
+        };
+        let scanned = stamp(&p);
+        assert_eq!(
+            read_settled(&p, Some(scanned)).as_deref(),
+            Some(&b"pub fn f() {}\n"[..])
+        );
+        // Truncated mid-copy: size differs from the stamp.
+        std::fs::write(&p, "").unwrap();
+        assert!(read_settled(&p, Some(scanned)).is_none());
+        // Rewritten with different content: mtime differs.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(&p, "pub fn g() {}\n").unwrap();
+        assert!(read_settled(&p, Some(scanned)).is_none());
+        assert!(read_settled(&p, None).is_none());
+        assert!(read_settled(&d.join("gone.rs"), Some(scanned)).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     #[ignore = "focused real-manifest watch-directory reconstruction diagnostic"]

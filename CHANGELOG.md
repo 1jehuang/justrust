@@ -5,6 +5,56 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- **Test binaries come back as deltas of each other.** After a remote
+  `test --no-run`, a new test binary is sent as a zstd delta against a
+  similar one already sent in the same transfer. 24 fresh test binaries:
+  143.7 MB in 6.4s became 43.9 MB in 2.8-3.7s. Negotiated, so older hosts
+  are unaffected.
+- **Source mirrors survive sync daemon restarts.** A restarted daemon (after
+  an upgrade or idle exit) resumes the machine's mirror when a token it left
+  on the machine confirms nothing changed there, instead of a full
+  `--checksum` rsync. For this repository, 15-82s became 1.1-2.0s.
+  `JUSTRUST_REMOTE_RESUME=0` turns it off. Before resuming, the daemon
+  checks the size of every mirrored file on the machine (about 0.6s for
+  95k files).
+- **Fixed: a file rewritten during a source push could stay stale on the
+  machine.** A rewrite that restores the old mtime and size (`cp -p`,
+  `shutil.copy2`), if read mid-copy, left a truncated file there that later
+  pushes never corrected. Files that change while being read are now
+  retried.
+
+## 0.1.0-alpha.20
+
+- Signed-in local builds are reported to operations history like hosted runs.
+- Hosted `aarch64-apple-ios` builds with a managed iOS SDK.
+- **Test result reuse.** An agent-mode `test` identical to a passing run
+  (same command, environment, justrust binary, and source file stamps since
+  that run started) replays its results in milliseconds instead of syncing,
+  building and running again. Only passing runs, at most 12 h old, and only
+  when the tests take at least 20x the source scan. `--rerun` or
+  `JUSTRUST_TEST_REUSE=0` runs them anyway.
+- **Waste lines for time outside cargo.** From the end-to-end waterfall:
+  queued behind another sync, source push (re-check after a restart or
+  reboot), machine link, hosted admission, and artifacts back, each with its
+  measured cost and what to do. Quiet under 2s or 15% of the wait.
+- **Recurring-cost hints (`habit`).** After a run that paid a slow test or a
+  long local rebuild again, the footer names the test or crate, its total
+  over the last 7 days in this workspace, and the fix (skip it while
+  iterating, `justrust split`). Also in `justrust show`. `JUSTRUST_HINTS=0`
+  turns them off.
+- **End-to-end wait waterfall.** Every recorded run stores what the caller
+  waited for, split into non-overlapping segments that sum to the wait:
+  routing, hosted admission, sync (queued behind another sync, machine link,
+  source push, confirm), cargo phases on the host or locally, artifact
+  return, and reporting. `justrust show` prints it. Older runs get a coarser
+  reconstruction, labelled as such.
+- **`justrust profile`** totals the waterfall across runs (`--days`, `--here`,
+  `--remote`, `--local`, `--measured`, `--json`) and lists the slowest runs.
+- **Fixed: test time reported as "after build".** A test binary the runner
+  could not hand to the parallel pool (`--test-threads=1`, `--nocapture`),
+  and the remainder of a binary whose test ran itself as a child, were
+  counted as shutdown time instead of test time.
+
 ## 0.1.0-alpha.18
 
 - **Account-linked diagnostic telemetry** uses service-authenticated account

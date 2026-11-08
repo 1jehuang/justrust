@@ -1,32 +1,10 @@
-# Recorded runs
+# Recorded runs (frozen archive)
 
-One slim JSON line per recorded cargo run, written by `justrust export`
-(see `src/export.rs`). Raw runs stay in `~/.justrust/runs/` (hundreds of MB
-with full compiler output). This directory keeps what findings and replay
-benchmarks need: wall time, phases, slowest units and passes, rebuild
-reasons, tests, CPU, memory, and contention.
+`justrust export` is retired. Every recorded build is now uploaded
+automatically to the account-private record store; use
+`justrust records list` and `justrust records show run <id>`.
 
-```text
-data/runs/public-repos.txt          repos allowed to keep details
-data/runs/<machine>/<YYYY-MM>.jsonl one line per run, sorted by id
-```
-
-Large monthly files may have `<YYYY-MM>-archive-N.jsonl` siblings to stay
-below GitHub's 100 MB file limit. The exporter deduplicates IDs across every
-JSONL sibling and appends new records to the ordinary monthly file. Readers
-must include all JSONL files, not just exact monthly filenames.
-
-Fields added by the export: `machine`, `repo`, and `kind`:
-
-- `agent`: an agent session in a real checkout (the workload to optimize)
-- `manual`: a real checkout, no agent session
-- `bench`: justrust benchmark copies (`~/.justrust/bench`)
-- `scratch`: throwaway copies and temp dirs
-
-This repository is public. Paths under the home directory become `~/...`, and
-first errors keep one line. Runs from repos not listed in `public-repos.txt`
-keep only numbers: `repo` is `private`, unit names become `crate0..`, errors
-keep only their code, and paths, arguments, and rebuild reasons are removed.
-
-Update with `justrust export` from the repo root, then commit. It only
-appends runs that are not exported yet.
+This directory is kept read-only because older docs cite run ids in it. Do
+not add files here. One slim JSON line per run, `<machine>/<YYYY-MM>.jsonl`
+(plus `-archive-N` siblings); runs from repos not in `public-repos.txt` keep
+only numbers.

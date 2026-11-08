@@ -8,10 +8,18 @@ For Rust projects, use `justrust` instead of calling cargo directly:
 - Output: errors and failing tests in full, the first few warnings, no
   progress noise, then a `justrust:` report: verdict, where the time went,
   why each crate rebuilt, and `waste` lines with fixable inefficiencies.
+  A `habit` line names a cost this project keeps paying (a slow test you
+  keep running, a crate every edit rebuilds) and how to stop paying it.
   Do not pipe it through `grep`, `tail`, or `head`: that hides errors.
 - More: `justrust log --grep <text>` or `justrust log --tail 200` prints the
-  full saved output of the last run. `justrust show` explains the time.
+  full saved output of the last run. `justrust show` explains the time,
+  from routing and source sync to compiling and tests.
+  `justrust profile --here --days 7` shows where this project's build wait
+  goes across runs.
 - Prefer `justrust check` to find compile errors before `justrust test`.
+- Rerunning an identical passing `justrust test` with no source, env or
+  command change reuses its result instantly (it says so). Add `--rerun` when
+  a test reads files outside the repo or the network and must run again.
 - Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay cargo.
 
 Where builds run: when signed in to hosted builds or configured with an SSH

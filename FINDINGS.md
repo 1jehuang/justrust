@@ -1,5 +1,218 @@
 # Findings: where agent build time goes
 
+## 2026-11-08: test result reuse, in-stream artifact deltas, mirror resume
+
+Three changes target the parts of agent wait the client owns, sized from
+`justrust profile --days 7` (162,503s over 11,562 runs).
+
+- **Test result reuse** (`src/test_reuse.rs`). In the last 7 days, 1,074
+  test runs compiled nothing and still spent 15,203s running tests. 161
+  of them, 4,504s, repeated an identical command in the same directory,
+  and 134 of those followed a passing run. An agent-mode `test` identical
+  to a passing run now replays that run's results. Identical means the
+  same command, environment (session noise excluded), justrust binary,
+  and size, mode and mtime in nanoseconds of every source-root file since
+  that run started. The scan costs 26 ms for clean-room (4k files) and
+  600 ms for this repo (95k files), so it runs only when the command's
+  tests took at least 20 times the scan. Result: a scratch crate with a 5s
+  test went from 6.87s to 21 ms on rerun. An edit (5.81s), `--rerun`
+  (5.83s), and a changed `RUST_TEST_THREADS` all ran the tests again.
+  Four pass-then-fail repeats with nothing rebuilt were found, all in
+  tests that read files outside the source roots or were flaky. Those
+  are why `--rerun` and `JUSTRUST_TEST_REUSE=0` exist, and why only
+  passing results under 12 hours old are reused.
+- **In-stream artifact deltas** (`src/remote_artifacts.rs`). The clean-room
+  harness's `test --no-run` waited about 70s for artifacts, 1,233s over
+  20 runs: 365 test binaries, 6.7 GB, about 62s each time. Same-named
+  binaries from different checkouts shared nothing (1 of 365 identical,
+  and the delta saved 30%). Sibling binaries of one build delta well
+  against each other (25.8 MB to 3.1 MB). A new file is now sent as a
+  zstd delta against the earlier file of the same stream closest in size.
+  This is negotiated (`anchors`), so old hosts ignore it, and the client
+  accepts only bases it already wrote in this stream. Simulated on 60
+  real clean-room binaries: 346 MB to 193 MB. Measured on a fresh
+  24-test-binary workspace (regex and serde_json): 143.7 MB in 6.44s
+  before, 43.9 MB in 2.75s, 3.57s and 3.71s after. All 25 files were
+  sha256-identical to the host's copies.
+- **Mirror resume** (`src/remote_resume.rs`). Each daemon restart (client
+  upgrade, idle exit) re-mirrored this repository with a `--checksum`
+  rsync: 16 times, 746s total, 43-51s each today, because the client has
+  to read 1.37 GB of sources (58s cold here). A daemon that exits after
+  a clean barrier now saves each root's manifest and writes a random
+  token on the machine. The next daemon resumes only if it can read and
+  delete that token in one command and the sizes of the 24 newest files
+  match. It then pushes the local diff. The agent deletes the token
+  before applying any source write or delete, and full or bulk rsyncs
+  delete it too, so any change the saved manifest does not know about
+  forces the full mirror. Live, on this repository: the full mirror after
+  each restart took 14.95-81.9s today (`checksum rsync` 13.7-80.6s). With
+  resume, three consecutive restarts took 1.105s (0 files), 1.078s (1
+  edited file) and 2.004s (1 file) to sync, with 0.19-0.25s to save on
+  exit. A `check` right after a restart took 3.78s instead of 17.9-25.6s.
+  A deliberate type error appended after a resumed restart failed to
+  compile on the host (E0308), which shows the edit was synced. The
+  first live attempt saved nothing: the replacing daemon arrived while a
+  run was in flight, and the draining path skipped the save. The save now
+  runs before the daemon retires and never waits behind a sync in
+  progress.
+- **Source push race, found by the gate.** The first candidate gate
+  failed every point from 26 on with E0432: the machine's copy of
+  `jcode-base/src/usage/api_keys.rs` was empty while the local file was
+  fine. Neither bench root was resumed, so this was not resume. The bench
+  restores files with `shutil.copy2` (truncate, write, restore the old
+  mtime). `push_root` read the file mid-copy and recorded the stamp from
+  its scan. The restored mtime then matched that stamp, so the empty
+  bytes were never corrected. `push_root` behaved this way before this
+  work too, and the baseline gate run happened not to hit it. Any rewrite
+  that preserves mtime and size (copy2, `cp -p`, `git stash` within one
+  mtime tick) could hit it. `push_root` now sends a file only when its
+  metadata before and after reading matches the scan. Otherwise it records
+  the file as unknown, so the next push retries it.
+- **Resume spot check was too weak, also found by the gate.** The rerun
+  then failed 37 of 40 points: the daemon saved the bench mirror with the
+  empty file in its manifest as current, and the next daemon resumed it,
+  because only the 24 newest files had their sizes checked. Resume now
+  checks every file's size: paths go out gzipped, `size path` lines come
+  back gzipped, 0.55-0.84s for this repository's 95k files. A mismatch
+  names the file in the daemon log. In the next run that check caught
+  exactly this file (`api_keys.rs is 0 bytes on the machine, 27909
+  saved`) and did a full mirror. This repository itself is never resumed
+  on this host: another client (a different IP) mirrors the same absolute
+  path `/home/jeremy/justrust` on the shared machine, so the check sees
+  missing files and falls back to a full mirror, which is the safe result.
+- **Gate** (`bench/suite.py run --synth 1 -n 1`, forced remote): baseline
+  `synth1-20261108-121718-43f9f4a1bffd`, candidate
+  `synth1-20261108-132025-09136a87ab57-dirty`. The same 21 points fail in
+  both runs (forced-remote debug `build` refusals and existing jcode
+  test failures), so `suite.py compare` blocks the aggregate. On the 19
+  points that succeed in both: 61.64s before, 62.43s after, geometric
+  mean ratio 0.994. That is neutral, as expected: none of these points
+  restarts the daemon, repeats a passing test unchanged, or downloads
+  test binaries.
+
+## 2026-11-08: waste lines for time outside cargo, recurring-cost hints
+
+The agent footer now covers the whole wait, not only cargo's phases.
+
+- **e2e waste lines.** When a measured waterfall segment outside cargo costs
+  at least 2s and 15% of the wait, the footer names it with its cost and
+  what to do. The segments are queued behind another sync, source push,
+  machine link, hosted admission, and artifacts back. Remote runs print these
+  on the client, under the host's report, because the host cannot see them.
+  Replaying the last 3,000 runs found 69 with a measured waterfall. The rule
+  fires on 14 of them: sync push 7 times (249s), artifacts back 2 (141s),
+  sync queued 3 (50s), link 1 (5s), and admission 1 (3s). Live run
+  `20261108-083941538-34943` waited 50.0s, of which 43.1s was the source
+  re-check after the sync daemon restarted for this install. The line
+  appeared with that cost.
+- **`habit` hints.** After a run that paid a slow test (2s or more) or a
+  local crate rebuild (10s or more), justrust reads the newest 60 summaries
+  of the same workspace from the last 7 days, using only the last 1 MB of the
+  index. It names costs seen in at least 3 runs and totalling at least 60s
+  for a test or 120s for a crate, at most two per run. On real
+  clean-room runs: `20261108-080710445-188223` gets "`justrust_engine (test)`
+  test harness build has cost 2312s over 33 runs (~70s each)", and
+  `20261106-191035514-3063731` gets "`justrust_engine` rebuild has cost 1637s
+  over 31 runs". Cost: `justrust show` on a qualifying run takes 48 ms with
+  hints and 37 ms without (20 runs each, two rounds). Runs that do not qualify
+  skip the history read entirely. `JUSTRUST_HINTS=0` disables it.
+
+## 2026-11-08: end-to-end wait profiler; test time was misfiled as "after build"
+
+New: every recorded run now stores an `e2e` waterfall in `summary.json`.
+It covers everything the caller waited for, split into non-overlapping
+segments that sum to that wait: client start and routing, hosted admission,
+sync daemon connect, the sync daemon's own split (queued behind another sync,
+machine link, source push, confirm), the host or local cargo phases, host
+start and result relay, artifact return, and recording or reporting.
+`justrust show` prints it above cargo's phases. `justrust profile [--days N]
+[--here] [--remote|--local] [--measured] [--json]` aggregates it across runs,
+with per-segment totals, shares, counts of runs where a segment took 1s or
+more, and the slowest runs. Older runs get a coarser reconstruction (client
+wall, total sync, host phases) and are labelled as reconstructed. Recording
+only reads monotonic clocks in the client and daemon. Nothing reaches
+cargo's or rustc's environment. `Flushed` gains an optional `timing` field,
+and old daemons stay compatible.
+
+First live waterfall, hosted musl release build `20261108-061029807-411843`:
+24.92s waited, made up of 0.60s admission, 0.47s sync, 23.11s host compile,
+0.08s host start and relay, and 0.55s artifact return.
+
+The profiler exposed a recorder attribution bug. When the test runner could
+not hand a binary to the pool (for example with `--test-threads=1` or
+`--nocapture`), it ran the binary directly and no pool header followed. The
+summary then filed all of that libtest time under "after build" (`tail`).
+In the last 7 days 6,417 runs lost 68,715s of test time this way. That is
+44% of all recorded wait, reported as shutdown overhead. Run
+`20261105-144020114-2540075` shows 567.1s "after build" against 567.06s
+libtest time. The summary parser now treats the runner line as the binary's
+start when libtest output follows it with no pool header, and nested libtest
+blocks no longer end the parent. Reconstructions of older runs move
+libtest's reported time out of the tail, bounded by the tail.
+
+Corrected 7-day picture (`justrust profile --days 7`, 11,402 runs, 156,478s
+of agent wait, p50 4.17s, p90 27.5s): running tests 68.0%, host compile
+16.1%, unattributed remote time 5.1% (older records cannot split it), host
+build gaps 4.9%, sync 1.8%, build directory lock 1.3%. Tests, not
+compilation, dominate agent wait. Most of it is concentrated in a few
+clean-room conformance suites run with `--test-threads=1`. Separately, the
+baseline check of this change (`20261108-055503141-248961`) waited 105.3s:
+101.3s re-mirroring this repository (99.5s checksum rsync with 0 files sent)
+for 3.3s of build. A second run queued 91.5s behind it on the daemon's sync
+lock. The new waterfall reports this as `sync: source push` and
+`sync: queued behind`.
+
+No speedup is claimed. This is measurement infrastructure plus a reporting
+fix. Unit tests cover waterfall sums, overrun scaling, missing marks, old-run
+reconstruction, aggregation, the pool fallback, and wire compatibility.
+
+Follow-up validation. Eight measured hosted runs had segments that summed
+exactly to their wait, no negative segments, and `e2e.wall` within 0.04s of
+the client wall. Every sync split matched the daemon's own `slow sync` log
+line exactly (for example `20261108-061007803-408172`: link 2.33s, push
+13.42s, barrier 0.06s). Two concurrent checks (`20261108-061916776-507650`,
+`20261108-061918739-508403`) attributed correctly. The first showed 16.17s
+`sync: source push` (a 95k-file checksum re-mirror after the daemon
+restarted). The second showed 16.28s `sync: queued behind`, then 6.09s
+waiting on the host build directory lock. That matches daemon lines
+`lock 0.00s ... push 16.17s` and `lock 16.28s ... push 0.42s`. A property
+test covers 500 random mark sets, with marks missing and out of order, for
+both local and remote waterfalls. A temporary harness replayed the new
+summary parser over 402 randomly sampled real test runs. Test counts were
+identical, phases still summed to wall, and the misfiled tail fell from
+3,791s to 107s. A second gap was found and fixed: a test that runs its own
+binary as a child (nested `running 1 test`) closed the parent binary early,
+filing the rest under "after build". Unmatched libtest results now
+contribute their reported duration as test time. A first attempt that
+tracked nesting depth was rejected because it dropped 811 test counts on
+interleaved output. Every re-mirror after a client upgrade restarts the
+daemon, costing 12-16s here. The waterfall now shows that cost directly.
+Host-side copies were checked over the daemon's pinned SSH identity. The
+host records its own local waterfall (`20261108-075347198-13230`: 1.235s of
+setup, cargo phases, and tests, summing exactly). The client replaces it
+with the end-to-end view (8.61s, including 5.42s `sync: machine link`
+reconnecting to an idle machine).
+
+Follow-up sizing, so nothing is built without measured payoff. The
+104.2s full mirror in `20261108-080955887-217297` (`sync: source push`, 3 files
+sent) followed a reboot of this 7.6 GB client VM at 07:52. Its sources were
+not in the page cache. Cold small-file reads on this EBS volume measured
+13.6 MB/s (81 MB in 5.94s), and rsync `--checksum` must read all 1.14 GB.
+The same dry-run rsync with warm caches took 7.27s (7.38s with xxh128, so
+the hash is not the cost), and warm reads of every source took 1.3s locally
+and 0.8s on the host. `--checksum` stays: the code documents that receiver
+mtimes deliberately differ, so size alone misses same-size edits. Over 7
+days, all 83 full mirrors totalled 698s and the four over 30s totalled 394s.
+That is 0.45% of the 156,478s of recorded wait. A protocol change to trust
+a persisted manifest across daemon restarts is not justified by that,
+given its correctness risk. Test time is 68% of wait, but 71,300s of it
+is runs the agent asked to serialize with `--test-threads=1`. Only two
+multi-binary runs had that flag, and overlapping their binaries saves at
+most 245s, while it would break the serialization the agent asked for. The
+largest remaining lever is the tests themselves, chiefly the clean-room
+conformance suites (see `justrust profile --days 7`, slowest runs), not
+the client.
+
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
 Resized the owner's existing AWS host from 96 to 32 physical cores and 384
@@ -9300,3 +9513,16 @@ Private operational acceptance also exercised genuinely fresh fixed-kernel build
 ## 2026-11-06: desktop responsive conversation layout verification
 
 Desktop workspace test run `20261106-015237975-640485` took 45.1 s, with 32.42 s compilation and 11.54 s tests. The 125k-line UI test unit alone rebuilt in 27.58 s (107.7 s CPU, 3326 MB peak) for a small layout edit. 1863 tests passed and four unrelated fixture/integration tests failed. Screenshot build `20261106-015030861-616520` took 8.8 s, including 5.69 s recompiling UI and 2.04 s the dependent app. The existing report identifies broad UI source embedding as an invalidation source. Narrowing build-script inputs or extracting embedded data into a leaf crate remains a separate architectural follow-up, not part of the layout change. These runs are not a before/after speedup comparison.
+
+## 2026-11-08: hosted disk 97% again; native GC found nothing eligible
+
+At 11:39 UTC the hosted build disk was 469G/484G (97%, 15G free).
+`justrust remote gc` on the host collected 0 bytes: every registered root was
+Missing, Recent, InUse or Unsafe. The space was outside its reach: mirrored
+`~/.jcode/scratch/*/target` dirs (hm-verify 19G, vole-regions 19G, ~62G total),
+`/home/ubuntu/.cache/firefox-rust-hosted` (68G, no process using it) and
+`~/.justrust/sent` (40G, 3980 files). Manually removed only rebuildable build
+outputs: `target/` of scratch roots with no file modified in 6 h, and the
+unused firefox cache. Sources untouched. Result: 345G used, 139G free (72%).
+Follow-up: GC should cover unregistered/old mirror targets, ad hoc caches under
+`~/.cache`, and age out `~/.justrust/sent`.

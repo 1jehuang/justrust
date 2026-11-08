@@ -13,7 +13,7 @@ work=${JUSTRUST_E2E_DIR:-$HOME/.justrust/bench/e2e-default-toolchain}
 mkdir -p "$work"
 cp -r "$src/." "$work/"
 cd "$work"
-export JUSTRUST_REMOTE=0
+export JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON='e2e test of the local toolchain'
 fails=0
 gen() { python3 - "$@" <<'EOF'
 import sys
@@ -23,7 +23,7 @@ for k, v in zip(["TIMES", "BODY", "FIELDS"], sys.argv[1:]):
 open("app/src/lib.rs", "w").write(t)
 EOF
 }
-values() { justrust test --local -p app -- --nocapture 2>&1 | grep -o 'E2E [^"]*' | head -1; }
+values() { justrust test -p app -- --nocapture 2>&1 | grep -o 'E2E [^"]*' | head -1; }
 expect() { # what got want
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got '$2', want '$3'"; fails=$((fails+1)); fi
 }
@@ -40,13 +40,13 @@ gen 5 7 "";        expect "attribute args only"  "$(values)" "E2E work=7 times=5
 gen 5 7 ", c: u8"; expect "derive input changed" "$(values)" "E2E work=7 times=5 fields=3 tag="
 gen 2 7 "";        expect "revert"               "$(values)" "E2E work=7 times=2 fields=2 tag="
 gen 2 '"x"' ""
-if justrust test --local -p app 2>&1 | grep -q "E0308"; then echo "PASS type error in an attributed fn is reported"; else echo "FAIL type error not reported"; fails=$((fails+1)); fi
+if justrust test -p app 2>&1 | grep -q "E0308"; then echo "PASS type error in an attributed fn is reported"; else echo "FAIL type error not reported"; fails=$((fails+1)); fi
 gen 2 7 "";        expect "fixed"                "$(values)" "E2E work=7 times=2 fields=2 tag="
-if justrust test --local -p app --doc 2>&1 | grep -q "^justrust: ok"; then echo "PASS doctests (jr rustdoc)"; else echo "FAIL doctests"; fails=$((fails+1)); fi
+if justrust test -p app --doc 2>&1 | grep -q "^justrust: ok"; then echo "PASS doctests (jr rustdoc)"; else echo "FAIL doctests"; fails=$((fails+1)); fi
 gen 4 7 ""
-if justrust test --local -p app --doc 2>&1 | grep -q "^justrust: ok"; then echo "PASS doctests after attribute change"; else echo "FAIL doctests after attribute change"; fails=$((fails+1)); fi
+if justrust test -p app --doc 2>&1 | grep -q "^justrust: ok"; then echo "PASS doctests after attribute change"; else echo "FAIL doctests after attribute change"; fails=$((fails+1)); fi
 gen 2 7 ""
-if justrust clippy --local -p app 2>&1 | grep -q "^justrust: ok"; then echo "PASS clippy (jr clippy)"; else echo "FAIL clippy"; fails=$((fails+1)); fi
+if justrust clippy -p app 2>&1 | grep -q "^justrust: ok"; then echo "PASS clippy (jr clippy)"; else echo "FAIL clippy"; fails=$((fails+1)); fi
 JUSTRUST_TOOLCHAIN=system values >/dev/null
 [ "$(toolchain)" = None ] && echo "PASS JUSTRUST_TOOLCHAIN=system opts out" || { echo "FAIL system opt-out"; fails=$((fails+1)); }
 printf '[toolchain]\nchannel = "jr-0123456789ab"\n' > justrust.toml

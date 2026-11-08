@@ -17,6 +17,42 @@ pub fn load_index() -> Vec<IndexEntry> {
         .collect()
 }
 
+/// The last parseable index entry, reading only the file's tail. The index
+/// grows without bound (tens of MB), and `status --watch` asks for the latest
+/// run every second while idle.
+pub fn last_index_entry() -> Option<IndexEntry> {
+    last_entry_in(&paths::index_file().ok()?)
+}
+
+fn last_entry_in(path: &std::path::Path) -> Option<IndexEntry> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut window: u64 = 64 * 1024;
+    loop {
+        let start = len.saturating_sub(window);
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut buf = Vec::new();
+        f.by_ref().take(len - start).read_to_end(&mut buf).ok()?;
+        let text = String::from_utf8_lossy(&buf);
+        // The first line of a partial window may be cut; skip it unless the
+        // window starts at the beginning of the file.
+        let skip = usize::from(start > 0);
+        let lines: Vec<&str> = text.lines().skip(skip).collect();
+        if let Some(e) = lines
+            .iter()
+            .rev()
+            .find_map(|l| serde_json::from_str(l).ok())
+        {
+            return Some(e);
+        }
+        if start == 0 {
+            return None;
+        }
+        window *= 4;
+    }
+}
+
 fn ago(t: f64) -> String {
     let d = (paths::now() - t).max(0.0);
     match d {
@@ -36,12 +72,85 @@ fn short_args(args: &[String]) -> String {
     }
 }
 
-pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
+/// Which failed runs `justrust runs` lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FailFilter {
+    #[default]
+    All,
+    /// Every failed run.
+    Failed,
+    /// Failures that are not the code's fault: toolchain, infra, unknown.
+    Ours,
+}
+
+/// The failure class of an indexed run. Runs recorded before classification
+/// existed are classified from their saved summary and output.
+fn failure_class(r: &IndexEntry) -> Option<crate::failure::Class> {
+    if r.exit == 0 {
+        return None;
+    }
+    r.failure.or_else(|| classify_saved(&r.id).map(|f| f.class))
+}
+
+/// Classify a recorded run from its run directory.
+pub fn classify_saved(id: &str) -> Option<crate::failure::Failure> {
+    let dir = paths::runs_dir().ok()?.join(id);
+    let s: Summary = serde_json::from_slice(&std::fs::read(dir.join("summary.json")).ok()?).ok()?;
+    if let Some(f) = s.diagnostics.failure {
+        return Some(f);
+    }
+    let raw = std::fs::read_to_string(dir.join("output.jsonl")).unwrap_or_default();
+    let lines: Vec<crate::record::OutputLine> = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let stderr: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.s == "e")
+        .map(|l| l.l.as_str())
+        .collect();
+    let units = crate::summary::load_units(&dir);
+    let unit_exits: Vec<i32> = units.iter().map(|u| u.exit).filter(|&c| c != 0).collect();
+    crate::failure::classify(&crate::failure::Input {
+        exit: s.exit,
+        subcommand: &s.subcommand,
+        lines: &stderr,
+        compile_failed: s.diagnostics.compile_failed,
+        compile_errors: s.diagnostics.compile_errors,
+        environment_fault: s.diagnostics.environment_fault.as_deref(),
+        tests_failed: s.tests.failed,
+        unit_exits: &unit_exits,
+        units_ran: units.len(),
+    })
+}
+
+pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<()> {
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
     let mut runs: Vec<IndexEntry> = load_index()
         .into_iter()
         .filter(|r| !here || r.cwd.starts_with(&cwd))
         .collect();
+    if filter != FailFilter::All {
+        // Classify newest first and stop once `limit` matches are found:
+        // old runs may need their saved output read.
+        let mut kept = Vec::new();
+        for mut r in runs.into_iter().rev() {
+            if kept.len() >= limit {
+                break;
+            }
+            r.failure = failure_class(&r);
+            let keep = match (filter, r.failure) {
+                (FailFilter::Failed, _) => r.exit != 0,
+                (FailFilter::Ours, Some(c)) => c.is_ours(),
+                _ => false,
+            };
+            if keep {
+                kept.push(r);
+            }
+        }
+        kept.reverse();
+        runs = kept;
+    }
     let skip = runs.len().saturating_sub(limit);
     runs.drain(..skip);
     if json {
@@ -55,12 +164,12 @@ pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<26} {:>8} {:>8} {:>8} {:>6} {:>5}  {:<10} COMMAND",
-        "ID", "WALL", "COMPILE", "TESTS", "UNITS", "EXIT", "WHEN"
+        "{:<26} {:>8} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
+        "ID", "WALL", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
     );
     for r in &runs {
         println!(
-            "{:<26} {:>7.1}s {:>7.1}s {:>7.1}s {:>6} {:>5}  {:<10} cargo {}",
+            "{:<26} {:>7.1}s {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
             r.id,
             r.wall,
             r.compile + 0.0,
@@ -71,6 +180,15 @@ pub fn list(limit: usize, here: bool, json: bool) -> Result<()> {
             } else {
                 r.exit.to_string()
             },
+            r.failure
+                .map(|c| match c {
+                    crate::failure::Class::UserCode => "code",
+                    crate::failure::Class::Toolchain => "TOOLCHAIN",
+                    crate::failure::Class::Infra => "INFRA",
+                    crate::failure::Class::Interrupted => "intr",
+                    crate::failure::Class::Unknown => "UNKNOWN",
+                })
+                .unwrap_or(if r.exit == 0 { "" } else { "?" }),
             ago(r.start),
             short_args(&r.args)
         );
@@ -134,7 +252,10 @@ pub fn show(id: Option<&str>, json: bool) -> Result<()> {
         println!("{}", String::from_utf8_lossy(&raw));
         return Ok(());
     }
-    let s: Summary = serde_json::from_slice(&raw)?;
+    let mut s: Summary = serde_json::from_slice(&raw)?;
+    if s.diagnostics.failure.is_none() {
+        s.diagnostics.failure = classify_saved(&id);
+    }
     print!("{}", render(&s, &dir));
     Ok(())
 }
@@ -188,6 +309,17 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         format!("exit {}", s.exit)
     };
     let _ = writeln!(o, "result   {status}");
+    if let Some(f) = &s.diagnostics.failure {
+        let _ = writeln!(o, "cause    {}: {}", f.class.as_str(), f.reason);
+        if let Some(e) = &f.evidence {
+            let _ = writeln!(o, "         {e}");
+        }
+        if let Some(v) = crate::stock_verify::load(dir) {
+            let _ = writeln!(o, "stock    {}", v.line());
+        } else if f.class == crate::failure::Class::Toolchain {
+            let _ = writeln!(o, "stock    not verified (or still running)");
+        }
+    }
     let _ = writeln!(
         o,
         "time     {:.2}s wall, {:.1}s CPU ({:.1} of {} cores on average)\n",
@@ -197,7 +329,10 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     if let Some(note) = &s.cpu_secs_note {
         let _ = writeln!(o, "CPU accounting: {note}");
     }
-    let _ = writeln!(o, "Where the wall time went");
+    if let Some(e) = s.e2e.clone().or_else(|| crate::e2e::derive(s)) {
+        let _ = writeln!(o, "{}", crate::e2e::render(&e));
+    }
+    let _ = writeln!(o, "Where cargo's wall time went");
     let p = &s.phases;
     for (label, v, note) in [
         (
@@ -394,6 +529,17 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
             let _ = writeln!(o, "  ~{:.1}s {}", f.cost_secs, f.message);
         }
     }
+    let hints = crate::hints::for_run(s);
+    if !hints.is_empty() {
+        let _ = writeln!(o, "\nRecurring costs (this workspace, last 7 days)");
+        for h in &hints {
+            let _ = writeln!(
+                o,
+                "  ~{:.0}s over {} runs: {}",
+                h.total_secs, h.runs, h.message
+            );
+        }
+    }
     let _ = writeln!(o, "\nRaw data: {}", dir.display());
     o
 }
@@ -405,5 +551,41 @@ fn trunc(s: &str, n: usize) -> String {
         let mut t: String = s.chars().take(n - 1).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::*;
+
+    fn line(id: &str) -> String {
+        serde_json::to_string(&IndexEntry {
+            id: id.into(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn last_entry_reads_tail_and_skips_torn_lines() {
+        let dir = std::env::temp_dir().join(format!("jr-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("index.jsonl");
+        // Larger than the first 64 KiB window, so the cut first line is exercised.
+        let mut s: String = (0..3000)
+            .map(|i| line(&format!("run-{i}")) + "\n")
+            .collect();
+        std::fs::write(&p, &s).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "run-2999");
+        // A partially written trailing record falls back to the previous one.
+        s.push_str("{\"id\":\"half");
+        std::fs::write(&p, &s).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "run-2999");
+        // A single line with no newline (window covers the whole file).
+        std::fs::write(&p, line("only")).unwrap();
+        assert_eq!(last_entry_in(&p).unwrap().id, "only");
+        std::fs::write(&p, "").unwrap();
+        assert!(last_entry_in(&p).is_none());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

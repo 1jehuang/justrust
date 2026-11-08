@@ -66,6 +66,9 @@ pub struct Summary {
     /// Early diagnostics from the resident rust-analyzer (`early`), opt-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub early: Option<crate::early::EarlyInfo>,
+    /// Everything the caller waited for, client to report (`e2e`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e2e: Option<crate::e2e::E2e>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -110,6 +113,9 @@ pub struct RemoteInfo {
     pub sync_ms: f64,
     /// Wall time the local client waited, start to exit.
     pub client_wall: f64,
+    /// Where the sync daemon spent `sync_ms` (absent from older daemons).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<crate::e2e::SyncTiming>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -362,6 +368,10 @@ pub struct Diagnostics {
     /// Why a compile failed with no compiler error, e.g. a full disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_fault: Option<String>,
+    /// Who a failed run is on (`failure`): the code, or the toolchain,
+    /// machine or justrust. `None` for successful runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::failure::Failure>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -379,6 +389,9 @@ pub struct IndexEntry {
     pub top_unit: Option<String>,
     pub compile_failed: bool,
     pub agent_session: Option<String>,
+    /// Failure class (`user_code`, `toolchain`, `infra`, ...) for failed runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::failure::Class>,
     /// Machine label when the run was remote. Absent for local runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
@@ -594,6 +607,13 @@ fn keep_slowest(v: &mut Vec<TestTime>) {
     v.truncate(SLOWEST_KEPT);
 }
 
+/// libtest's `running 3 tests` / `running 1 test` block opener.
+fn is_libtest_running(l: &str) -> bool {
+    l.strip_prefix("running ")
+        .and_then(|r| r.strip_suffix(" tests").or_else(|| r.strip_suffix(" test")))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn parse_test_result(l: &str) -> Option<(u64, u64, u64, u64, f64)> {
     let rest = l.trim().strip_prefix("test result: ")?;
     let num = |key: &str| -> u64 {
@@ -702,8 +722,42 @@ pub fn build(
         }
     };
     let mut first_test_line: Option<f64> = None;
+    let mut orphan_spans: Vec<(f64, f64)> = Vec::new();
+    // A runner line handed to the pool: (time, binary). Normally the pool
+    // prints its own header later. When the hand-off fails the runner execs
+    // the binary directly and its output follows with no header, so the
+    // binary starts here instead.
+    let mut pooled: Option<(f64, String)> = None;
     for l in lines {
         let text = l.l.trim();
+        if let Some(exe) = text
+            .strip_prefix("Running `")
+            .and_then(|c| {
+                let mut w = c.trim_end_matches('`').split_whitespace();
+                w.next()?;
+                (w.next()? == crate::test_runner::SUBCOMMAND).then_some(w)
+            })
+            .and_then(|mut w| {
+                w.next()?
+                    .starts_with(crate::test_pool::POOL_ARG)
+                    .then(|| w.next())
+                    .flatten()
+            })
+        {
+            pooled = Some((l.t, crate::sys::last_component(exe).to_owned()));
+        }
+        if current.is_none()
+            && is_libtest_running(text)
+            && let Some((t, name)) = pooled.take()
+        {
+            let start = rel(t);
+            first_test_line = Some(first_test_line.map_or(start, |f: f64| f.min(start)));
+            current = Some(TestBinary {
+                name,
+                start,
+                ..Default::default()
+            });
+        }
         // Test binaries appear as `Running unittests src/lib.rs (target/.../x-hash)`
         // or, with verbose output, as "Running `/.../deps/x-hash args`". Verbose
         // cargo also prints "Running `rustc ...`" for compiler invocations.
@@ -733,6 +787,7 @@ pub fn build(
             }
         });
         if let Some(rest) = running_test.or_else(|| text.strip_prefix("Doc-tests ")) {
+            pooled = None;
             close(current.take(), l.t, &mut tests);
             let t = rel(l.t);
             first_test_line = Some(first_test_line.map_or(t, |f: f64| f.min(t)));
@@ -777,10 +832,17 @@ pub fn build(
                 b.filtered_out += fo;
                 let t = l.t;
                 close(current.take(), t, &mut tests);
+            } else if secs > 0.0 {
+                // No open binary: an earlier nested result (a test that ran
+                // its own binary as a child) closed it. libtest's own
+                // duration still bounds when this run started.
+                let end = rel(l.t);
+                orphan_spans.push(((end - secs).max(0.0), end));
             }
         }
     }
     close(current.take(), end, &mut tests);
+    test_spans.extend(orphan_spans);
     keep_slowest(&mut tests.slowest);
 
     // Phases.
@@ -990,6 +1052,25 @@ pub fn build(
     if diagnostics.compile_failed && diagnostics.compile_errors == 0 {
         diagnostics.environment_fault = lines.iter().find_map(|l| environment_fault(&l.l));
     }
+    {
+        let stderr: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.s == "e")
+            .map(|l| l.l.as_str())
+            .collect();
+        let unit_exits: Vec<i32> = units.iter().map(|u| u.exit).filter(|&c| c != 0).collect();
+        diagnostics.failure = crate::failure::classify(&crate::failure::Input {
+            exit,
+            subcommand: &meta.subcommand,
+            lines: &stderr,
+            compile_failed: diagnostics.compile_failed,
+            compile_errors: diagnostics.compile_errors,
+            environment_fault: diagnostics.environment_fault.as_deref(),
+            tests_failed: tests.failed,
+            unit_exits: &unit_exits,
+            units_ran: units.len(),
+        });
+    }
 
     let rebuild_reasons = lines
         .iter()
@@ -1028,6 +1109,7 @@ pub fn build(
         toolchain: meta.toolchain.clone(),
         route: meta.route.clone(),
         early: None,
+        e2e: None,
     }
 }
 
@@ -1140,6 +1222,7 @@ impl Summary {
             top_unit: self.top_units.first().map(|u| u.name.clone()),
             compile_failed: self.diagnostics.compile_failed,
             agent_session: self.agent_session.clone(),
+            failure: self.diagnostics.failure.as_ref().map(|f| f.class),
             remote: self.remote.as_ref().map(|r| r.machine.clone()),
         }
     }
@@ -1184,6 +1267,16 @@ impl Summary {
             status.to_owned()
         } else {
             "ok".to_owned()
+        };
+        let verdict = match self.diagnostics.failure.as_ref() {
+            Some(f)
+                if f.class == crate::failure::Class::UserCode
+                    && !verdict.starts_with("FAILED (exit") =>
+            {
+                format!("{verdict} [your code]")
+            }
+            Some(f) => format!("{verdict} [{}]", crate::failure::verdict_tag(f)),
+            None => verdict,
         };
         out.push_str(&self.agent_report(&verdict, hidden));
         out
@@ -1855,6 +1948,120 @@ mod tests {
             slow_test_lines(t, 60.0).is_empty(),
             "not notable in a long run"
         );
+    }
+    #[test]
+    fn pool_handoff_fallback_counts_as_test_time() {
+        // The runner could not hand the binary to the pool (unpoolable
+        // arguments) and ran it directly: no pool header follows.
+        let line = |t: f64, s: &str, l: &str| OutputLine {
+            t,
+            s: s.into(),
+            l: l.into(),
+        };
+        let lines = [
+            line(
+                0.8,
+                "e",
+                "Finished `test` profile [unoptimized] target(s) in 0.78s",
+            ),
+            line(
+                0.81,
+                "e",
+                "Running `/h/justrust __test-runner --pool=env /w/target/debug/deps/a-1 --test-threads=1`",
+            ),
+            line(0.82, "o", "running 3 tests"),
+            line(
+                8.3,
+                "o",
+                "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.48s",
+            ),
+            line(
+                8.32,
+                "e",
+                "Running `/h/justrust __test-runner --pool=env /w/target/debug/deps/b-2 --test-threads=1`",
+            ),
+            line(8.33, "o", "running 1 test"),
+            line(
+                24.5,
+                "o",
+                "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.1s",
+            ),
+        ];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            24.6,
+            101,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        let names: Vec<_> = s.tests.binaries.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["a-1", "b-2"]);
+        assert_eq!((s.tests.passed, s.tests.failed), (3, 1));
+        assert!(
+            s.phases.test_run > 23.0,
+            "test time must not land in the tail: {:?}",
+            s.phases
+        );
+        assert!(s.phases.tail < 1.0, "{:?}", s.phases);
+    }
+    #[test]
+    fn nested_libtest_result_does_not_move_parent_time_to_tail() {
+        let line = |t: f64, s: &str, l: &str| OutputLine {
+            t,
+            s: s.into(),
+            l: l.into(),
+        };
+        let lines = [
+            line(
+                0.05,
+                "e",
+                "Finished `test` profile [unoptimized] target(s) in 0.05s",
+            ),
+            line(
+                0.05,
+                "e",
+                "Running `/h/justrust __test-runner /w/target/debug/deps/app-1`",
+            ),
+            line(0.05, "o", "running 835 tests"),
+            // A test runs this binary again as a child.
+            line(0.77, "o", "running 1 test"),
+            line(
+                0.79,
+                "o",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 834 filtered out; finished in 0.02s",
+            ),
+            line(
+                4.9,
+                "o",
+                "test result: ok. 823 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 4.85s",
+            ),
+        ];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            4.91,
+            0,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(s.tests.passed, 824);
+        assert!(s.phases.test_run > 4.8, "{:?}", s.phases);
+        assert!(s.phases.tail < 0.1, "{:?}", s.phases);
     }
     #[test]
     fn pooled_tests_outside_deps_keep_counts_timing_and_verdict() {

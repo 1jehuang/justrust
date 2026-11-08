@@ -45,7 +45,7 @@ ee88c803abfa78f9f894666138fe1f9b0529d001acb2b89f4e5b54d22d1e6f23  ./build/v24/fr
 39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c  ./build/v24/orchestration-exit
 ead9d7e9b50e1010ca763d26558a8d183658cf1aad82645b474a93789ae31e5e  ./build/v24/source-after.log
 ae4ce1dbce548e6bdf791906eae543c732209fe4e5a98c89b0cec1fca5f6b176  ./build/v24/source-before.sha256
-8372c8ef95f6c993c0d2a37bf782bfa5862dfe5f4b8b03bbf5ba1e9825be8f78  ./collection.json
+fa6b4c2939a37a174c4ac6f438a41e12e0a94efcd0ab8e582713148eec0d4c01  ./collection.json
 9acd5ffcc65219019e822c09fc5037f8fbff9eeaef18dde76da52f220912d6a0  ./collect.py
 db90ad37034538a43085648432ed49409840911970d58d90ecdbf5fd0537e8be  ./fixed-five/rsa21/engine-assert-failure-0.stderr
 95e5c20332f8aed0639f5116b75fb9985dfebb8ed67e27395a944638befa6878  ./fixed-five/rsa21/engine-assert-failure-0.stdout
@@ -769,8 +769,8 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./native/v24-p
 cb4bb46e2d7f90913e4b0eebb2cef6692dbbfe52657217ca23badf70b83943a6  ./native/v24-private-lock/metadata.stderr
 39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c  ./native/v24/resident_selective_traversal.exit
 146aeef730d019375d95f8ad6ee5129eafb2e4a2907983c37dac47a007360e72  ./native/v24/resident_selective_traversal.log
-9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  ./native/v24-snapshot/diagnostic_hash::tests.exit
-0269dc752000616f4e5202797a34d417d65627c91a33fac80486ef8af4f1f9fb  ./native/v24-snapshot/diagnostic_hash::tests.log
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  ./native/v24-snapshot/diagnostic_hash__tests.exit
+0269dc752000616f4e5202797a34d417d65627c91a33fac80486ef8af4f1f9fb  ./native/v24-snapshot/diagnostic_hash__tests.log
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  ./native/v24-snapshot/diagnostics_timing_tests.exit
 3c51e7c04da8bb0fc5daafaff404ae38495191a2e6f6fd06706dc4f53867260f  ./native/v24-snapshot/diagnostics_timing_tests.log
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa  ./native/v24-snapshot/exit
@@ -829,5 +829,5 @@ ada7271fc4dac1356e3aeb510778dd86c891ab0834437a70fcf06ad79e8fe72f  ./source-ready
 36bab991750586e78be36895700b9cb074b0f1a76738e1f14c6d3d4587a8f758  ./source-ready/READY.txt
 4c8df37e0fcd02a97d7a10db940ff013fab57d61f87ebaea2d02fffbafc83a73  ./source-ready/source.patch
 f024635d871332f5d3552a7799644a6376a89453dd4941c6d0ec97cae0b24f65  ./test_validate.py
-4947071067331b5b2bf9ca329153dfb614749f02db36db1dbf2c0970af7e2e71  ./validate.py
+c0113f6b9fbe7bde080ee1ef929b60129b8efaf4170433a2683ebff2b9d68cd5  ./validate.py
 b03ab27c31c22e15c7edbe9cd58cbb43fa8d6698ae7c8b6b28cc7539150fc056  ./validation.json

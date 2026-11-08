@@ -480,9 +480,12 @@ pub(crate) fn curl(url: &str, dest: &Path) -> Result<()> {
 pub(crate) fn sha256(path: &Path) -> Result<String> {
     // Windows: certutil prints the hash on the second line.
     if cfg!(windows) {
+        // certutil rejects verbatim (`\\?\`) paths from canonicalize().
+        let display = path.to_string_lossy();
+        let plain = display.strip_prefix(r"\\?\").unwrap_or(&display);
         let out = Command::new("certutil")
             .args(["-hashfile"])
-            .arg(path)
+            .arg(plain)
             .arg("SHA256")
             .output()
             .context("running certutil")?;

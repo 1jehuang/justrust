@@ -104,6 +104,20 @@ pub fn unpack_run_files(payload: &[u8], dir: &std::path::Path) -> Result<usize> 
     Ok(n)
 }
 
+/// Where the sync daemon spent a run's time before the build could start.
+/// Sent in `Flushed`. Milliseconds.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub struct SyncTiming {
+    /// Waiting for the daemon's sync lock (another run was syncing).
+    pub lock_ms: f64,
+    /// Connecting or reconnecting to the build machine.
+    pub link_ms: f64,
+    /// Scanning, diffing, and sending sources (and full mirrors).
+    pub push_ms: f64,
+    /// Waiting for the machine to confirm it applied the sources.
+    pub barrier_ms: f64,
+}
+
 /// One cache entry a peer has: enough to decide whether fetching it beats
 /// compiling.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -229,6 +243,9 @@ pub enum Msg {
         /// large to sync), shown before the build output.
         #[serde(default)]
         note: String,
+        /// Where `ms` went (absent from older daemons).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<SyncTiming>,
     },
     /// Sent just before `Exit` (v4+). Payload: [`pack_run_files`] of the
     /// remote run directory.
@@ -381,6 +398,34 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<(Msg, Vec<u8>)>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn flushed_sync_timing_is_compatible_both_ways() {
+        // An old daemon's Flushed (no timing) still parses.
+        let old: Msg = serde_json::from_value(serde_json::json!({
+            "t":"Flushed", "id":1, "files":2, "ms":3.5, "machine":"m"
+        }))
+        .unwrap();
+        assert!(matches!(old, Msg::Flushed { timing: None, .. }));
+        let t = SyncTiming {
+            lock_ms: 1.0,
+            link_ms: 2.0,
+            push_ms: 3.0,
+            barrier_ms: 4.0,
+        };
+        let new = Msg::Flushed {
+            id: 1,
+            files: 2,
+            ms: 10.0,
+            machine: "m".into(),
+            prefix: String::new(),
+            note: String::new(),
+            timing: Some(t),
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &new, &[]).unwrap();
+        let (back, _) = read_frame(&mut &buf[..]).unwrap().unwrap();
+        assert_eq!(back, new);
+    }
     #[test]
     fn barrier_ack_disk_full_is_compatible_both_ways() {
         // An old agent's ack (no field) reads as not disk-full.

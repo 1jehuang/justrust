@@ -132,7 +132,7 @@ def environment(args, stack):
                    JUSTRUST_REAL_CARGO=str(args.cargo), JUSTRUST_HOME=str(root / 'home' / '.justrust'),
                    JUSTRUST_LOCALCACHE='0', JUSTRUST_LOCALCACHE_TARGET_BOUND='0',
                    JUSTRUST_PREBUILT='off', JUSTRUST_PREBUILT_ALWAYS='0',
-                   JUSTRUST_TOOLCHAIN='system', JUSTRUST_REMOTE='off',
+                   JUSTRUST_TOOLCHAIN='system', JUSTRUST_REMOTE='off', JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline',
                    JUSTRUST_DEPCACHE='0', JUSTRUST_REMOTE_CACHE='0',
                    JUSTRUST_PEER_CACHE='0', JUSTRUST_CACHE_PROC_MACROS='0',
                    JUSTRUST_BUILDD='0', JUSTRUST_BUILDD_PREBUILD='0',

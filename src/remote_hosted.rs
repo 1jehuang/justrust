@@ -131,6 +131,11 @@ pub fn env_file_path() -> Option<PathBuf> {
     Some(config_dir()?.join(ENV_FILE))
 }
 
+/// A setting from the environment, else the shared credentials file.
+pub fn setting(name: &str) -> Option<String> {
+    resolve(name, env_file_text().as_deref())
+}
+
 /// A key is present (env or file). No network.
 pub fn signed_in() -> bool {
     resolve("JCODE_API_KEY", env_file_text().as_deref()).is_some()
@@ -767,9 +772,190 @@ pub fn report_local_build(reason: &str, cmd: Option<&str>) {
     post_detached(&c, "build/local", &local_build_body(reason, cmd));
 }
 
+/// Labels for a local run on the operator dashboard, captured once at start.
+#[derive(Clone)]
+pub struct LocalRunLabels {
+    cmd: String,
+    project: Option<String>,
+}
+
+impl LocalRunLabels {
+    /// `None` when nothing should be reported (signed out, tests, or a
+    /// non-default build service whose operator is not us).
+    pub fn capture(args: &[std::ffi::OsString]) -> Option<Self> {
+        if cfg!(test) || !signed_in() {
+            return None;
+        }
+        let c = creds().ok()?;
+        if c.build_base != DEFAULT_BUILD_BASE {
+            return None;
+        }
+        let cmd = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let project = std::env::current_dir().ok().and_then(|cwd| {
+            crate::early::workspace_root(&cwd)
+                .unwrap_or(cwd)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+        });
+        Some(Self { cmd, project })
+    }
+}
+
+/// Body of `POST {build}/build/local/runs`: one lifecycle report for a build
+/// on this machine (same labels a hosted run reports at charge time).
+fn local_run_body(
+    l: &LocalRunLabels,
+    run_id: &str,
+    state: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+) -> Value {
+    let mut body = json!({
+        "run_id": run_id,
+        "state": state,
+        "cmd": run_label(&l.cmd, 160),
+        "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+    });
+    if let Some(p) = &l.project {
+        body["project"] = json!(run_label(p, 160));
+    }
+    let h = crate::procfs::hostname();
+    if !h.is_empty() {
+        body["machine"] = json!(run_label(&h, 64));
+    }
+    if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
+        body["session"] = json!(run_label(&s, 96));
+    }
+    if let Some(e) = exit_code {
+        body["exit_code"] = json!(e);
+    }
+    if let Some(w) = wall_s {
+        body["wall_s"] = json!((w * 100.0).round() / 100.0);
+    }
+    body
+}
+
+/// `POST {build}/build/local/runs` (running, done, abandoned) so local
+/// operations show in operator history next to hosted ones. Fire and
+/// forget: a detached curl that never delays or fails the build.
+pub fn report_local_run(
+    l: &LocalRunLabels,
+    run_id: &str,
+    state: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+) {
+    let Ok(c) = creds() else {
+        return;
+    };
+    post_detached(
+        &c,
+        "build/local/runs",
+        &local_run_body(l, run_id, state, exit_code, wall_s),
+    );
+}
+
 /// A detached curl POST that never delays or fails the build.
 fn post_detached(c: &Creds, path: &str, body: &Value) {
     spawn_detached(curl(c, "POST", path, Some(body)));
+}
+
+/// `POST {build}/build/records`: store one account-private record (`run`
+/// after every recorded build, `bench` for a benchmark result). This is
+/// the programmatic log: nobody hand-writes notes or exports. Fire and
+/// forget, signed-in only, opt out with `JUSTRUST_RECORDS=off`.
+pub fn upload_record(kind: &str, id: &str, data: Value) {
+    if !records_enabled() {
+        return;
+    }
+    if !signed_in() {
+        return;
+    }
+    crate::records_queue::submit(kind, id, &record_body(kind, id, data));
+}
+
+fn record_body(kind: &str, id: &str, data: Value) -> Value {
+    let mut body = json!({ "kind": kind, "id": id, "data": data });
+    let h = crate::procfs::hostname();
+    if !h.is_empty() {
+        body["machine"] = json!(run_label(&h, 64));
+    }
+    body
+}
+
+/// `justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE`.
+pub fn records_command(args: &[String]) -> Result<()> {
+    let c = creds()?;
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    match a.as_slice() {
+        [] | ["list"] | ["list", _] => {
+            let path = match a.get(1) {
+                Some(k) => format!("build/records?kind={k}&limit=50"),
+                None => "build/records?limit=50".to_string(),
+            };
+            let n = crate::records_queue::pending_count();
+            if n > 0 {
+                eprintln!("justrust records: {n} waiting for delivery");
+                crate::records_queue::spawn_sender();
+            }
+            let v = ok(request(&c, "GET", &path, None)?)?;
+            for r in v["records"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<6} {:<40} {:<16} {}",
+                    r["kind"].as_str().unwrap_or(""),
+                    r["id"].as_str().unwrap_or(""),
+                    r["machine"].as_str().unwrap_or("-"),
+                    r["bytes"]
+                );
+            }
+        }
+        ["show", kind, id] => {
+            let v = ok(request(
+                &c,
+                "GET",
+                &format!("build/records/{kind}/{id}"),
+                None,
+            )?)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        ["put", kind, id, file] => {
+            let data: Value = serde_json::from_str(&std::fs::read_to_string(file)?)?;
+            let body = record_body(kind, id, data);
+            let resp = request(&c, "POST", "build/records", Some(&body));
+            let code = resp.as_ref().ok().map(|r| r.code);
+            match crate::records_queue::classify(code) {
+                crate::records_queue::Outcome::Delivered => {
+                    println!("justrust records: stored {kind}/{id}")
+                }
+                crate::records_queue::Outcome::Rejected => {
+                    ok(resp?)?;
+                }
+                crate::records_queue::Outcome::Retry => {
+                    crate::records_queue::submit(kind, id, &body);
+                    println!(
+                        "justrust records: {kind}/{id} queued for retry ({})",
+                        code.map_or("no response".into(), |c| format!("HTTP {c}"))
+                    );
+                }
+            }
+        }
+        _ => anyhow::bail!(
+            "usage: justrust records [list [run|bench]] | show KIND ID | put KIND ID FILE"
+        ),
+    }
+    Ok(())
+}
+
+pub fn records_enabled() -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_RECORDS").as_deref(),
+        Ok("off" | "0" | "false")
+    )
 }
 
 /// An unauthenticated detached POST to the build service (`{build}/<path>`,
@@ -1573,6 +1759,26 @@ mod tests {
         let s = check_access(&c).unwrap_err().to_string();
         assert!(s.contains("not available on your Jcode account yet"), "{s}");
         assert!(!s.contains("upgrade"), "{s}");
+    }
+
+    #[test]
+    fn local_run_body_carries_state_and_labels() {
+        let l = LocalRunLabels {
+            cmd: "test\n-p   a".into(),
+            project: Some("proj".into()),
+        };
+        let b = local_run_body(&l, "20261108-1-2", "done", Some(101), Some(1.234));
+        assert_eq!(b["state"], "done");
+        assert_eq!(b["cmd"], "test -p a");
+        assert_eq!(b["project"], "proj");
+        assert_eq!(b["exit_code"], 101);
+        assert_eq!(b["wall_s"], 1.23);
+        let b = local_run_body(&l, "x", "running", None, None);
+        assert!(b.get("exit_code").is_none());
+        assert!(
+            LocalRunLabels::capture(&[]).is_none(),
+            "never reports from tests"
+        );
     }
 
     #[test]

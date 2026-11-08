@@ -29,6 +29,82 @@ impl Finding {
 /// Ignore findings worth less than this many seconds.
 const MIN_COST: f64 = 0.3;
 
+/// Time outside cargo that the end-to-end waterfall attributes (`e2e`).
+/// Only measured waterfalls: reconstructions of older runs cannot tell these
+/// segments apart. Each fires only when it is a real share of the wait, so
+/// routine sub-second sync stays quiet.
+pub fn e2e_findings(s: &Summary) -> Vec<Finding> {
+    let Some(e) = s.e2e.as_ref().filter(|e| !e.derived && e.wall > 0.0) else {
+        return Vec::new();
+    };
+    let seg = |k: &str| {
+        e.segments
+            .iter()
+            .filter(|x| x.key == k)
+            .map(|x| x.secs)
+            .sum::<f64>()
+    };
+    let notable = |secs: f64| secs >= 2.0 && secs >= 0.15 * e.wall;
+    let mut out = Vec::new();
+    let queued = seg("sync.lock_wait");
+    if notable(queued) {
+        out.push(Finding::new(
+            "sync_queued",
+            queued,
+            format!(
+                "waited {queued:.1}s for another build's source sync to finish before this one could sync. \
+                 Concurrent agents share one sync daemon; avoid starting builds of a different large \
+                 workspace at the same moment, or build locally with --local while it syncs"
+            ),
+        ));
+    }
+    let push = seg("sync.push");
+    if notable(push) {
+        out.push(Finding::new(
+            "sync_push",
+            push,
+            format!(
+                "{push:.1}s sending sources to the build machine before the build could start. \
+                 Usually a full re-check of every file after the sync daemon restarted or this \
+                 machine rebooted (cold disk cache). It is once per restart: later builds sync only \
+                 edits. If it repeats, large untracked files under the workspace slow it: add them \
+                 to .gitignore"
+            ),
+        ));
+    }
+    let link = seg("sync.link");
+    if notable(link) {
+        out.push(Finding::new(
+            "sync_link",
+            link,
+            format!(
+                "{link:.1}s connecting to the build machine (it was idle or the session dropped). \
+                 Once per reconnect"
+            ),
+        ));
+    }
+    let artifacts = seg("remote.artifacts");
+    if notable(artifacts) {
+        out.push(Finding::new(
+            "artifacts_back",
+            artifacts,
+            format!(
+                "{artifacts:.1}s copying build outputs back from the build machine. Build only \
+                 the binaries you need (-p, --bin), or use check/test, which return no binaries"
+            ),
+        ));
+    }
+    let admission = seg("remote.admission");
+    if notable(admission) {
+        out.push(Finding::new(
+            "remote_admission",
+            admission,
+            format!("{admission:.1}s waiting for the hosted build service to admit the run"),
+        ));
+    }
+    out
+}
+
 /// Run every check and return findings, most expensive first.
 pub fn analyze(s: &Summary) -> Vec<Finding> {
     let mut out = Vec::new();
@@ -424,6 +500,7 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
 
     out.retain(|f| f.cost_secs >= MIN_COST);
     out.extend(avoidable_test_targets(s));
+    out.extend(e2e_findings(s));
 
     out.sort_by(|a, b| b.cost_secs.total_cmp(&a.cost_secs));
     // The split recommendation is shown once, on the costliest finding that
@@ -759,6 +836,52 @@ mod tests {
             ncpu: 16,
             ..Default::default()
         }
+    }
+
+    fn with_e2e(segs: &[(&str, f64)], derived: bool) -> Summary {
+        let mut s = base();
+        s.e2e = Some(crate::e2e::E2e {
+            wall: segs.iter().map(|x| x.1).sum(),
+            segments: segs
+                .iter()
+                .map(|(k, v)| crate::e2e::Segment {
+                    key: (*k).into(),
+                    secs: *v,
+                })
+                .collect(),
+            derived,
+        });
+        s
+    }
+
+    #[test]
+    fn e2e_waste_names_the_slow_segment_with_its_cost() {
+        let s = with_e2e(
+            &[
+                ("client.route", 0.1),
+                ("sync.lock_wait", 12.0),
+                ("sync.push", 30.0),
+                ("remote.host", 20.0),
+            ],
+            false,
+        );
+        let f = analyze(&s);
+        let kinds: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds[..2], ["sync_push", "sync_queued"]);
+        assert_eq!(f[0].cost_secs, 30.0);
+        assert!(f[0].message.contains("30.0s sending sources"));
+    }
+
+    #[test]
+    fn e2e_waste_is_quiet_for_routine_or_reconstructed_runs() {
+        // Under 2s, and under 15% of the wait, both stay quiet.
+        let routine = with_e2e(&[("sync.push", 1.5), ("remote.host", 3.0)], false);
+        assert!(e2e_findings(&routine).is_empty());
+        let small_share = with_e2e(&[("sync.push", 5.0), ("remote.host", 100.0)], false);
+        assert!(e2e_findings(&small_share).is_empty());
+        let derived = with_e2e(&[("sync.push", 30.0), ("remote.host", 3.0)], true);
+        assert!(e2e_findings(&derived).is_empty());
+        assert!(e2e_findings(&base()).is_empty());
     }
 
     /// Fixture from run 20261008-210412035-4101929.

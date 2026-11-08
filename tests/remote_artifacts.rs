@@ -154,6 +154,7 @@ fn compile_only_transports_selected_cargo_tests_without_execution() {
         .env("JUSTRUST_NO_TELEMETRY", "1")
         .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_TOOLCHAIN", "system")
+        .env("JUSTRUST_REQUIRE_LOCAL_REASON", "0")
         .env_remove("JUSTRUST_REMOTE_REQUIRED")
         .env_remove("JUSTRUST_TOOLCHAIN_REQUIRED")
         .env_remove("JUSTRUST_ON_REMOTE_AGENT")

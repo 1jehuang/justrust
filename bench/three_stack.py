@@ -143,7 +143,7 @@ def environment(args, sample, stack):
     env.update(CARGO_HOME=str(root / 'cargo'), CARGO_NET_OFFLINE='true',
                RUSTC=str(args.rustc), JUSTRUST_REAL_RUSTC=str(args.rustc),
                JUSTRUST_REAL_CARGO=str(args.cargo), JUSTRUST_TOOLCHAIN='system',
-               JUSTRUST_TOOLCHAIN_AUTO_INSTALL='0', JUSTRUST_REMOTE='off',
+               JUSTRUST_TOOLCHAIN_AUTO_INSTALL='0', JUSTRUST_REMOTE='off', JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline',
                JUSTRUST_PREBUILT='off', JUSTRUST_PREBUILT_ALWAYS='0', JUSTRUST_NO_TELEMETRY='1',
                JUSTRUST_BUILDD='0', JUSTRUST_BUILDD_PREBUILD='0',
                JUSTRUST_REMOTE_CACHE='0', JUSTRUST_PEER_CACHE='0',
@@ -475,7 +475,7 @@ def replay(output):
         environments[state['sample'], state['stack']] = env
         if any(k.startswith(('LD_', 'DYLD_')) for k in env) or any(env.get(k) != v for k, v in runtime.PROFILES.items()):
             raise ValueError('unsafe environment or profile')
-        controls = {'JUSTRUST_TOOLCHAIN': 'system', 'JUSTRUST_REMOTE': 'off',
+        controls = {'JUSTRUST_TOOLCHAIN': 'system', 'JUSTRUST_REMOTE': 'off', 'JUSTRUST_LOCAL_REASON': 'benchmark: controlled local baseline',
                     'JUSTRUST_PREBUILT': 'off', 'JUSTRUST_PREBUILT_ALWAYS': '0', 'JUSTRUST_NO_TELEMETRY': '1',
                     'JUSTRUST_BUILDD': '0', 'JUSTRUST_BUILDD_PREBUILD': '0',
                     'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0',

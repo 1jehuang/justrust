@@ -60,11 +60,11 @@ tdir() { echo "$scratch/t-$$-$1"; }
 fresh_home; wipe_remote
 run remote-cold JUSTRUST_REMOTE=force JUSTRUST_PEER_CACHE=0
 fresh_home
-run local-cold JUSTRUST_REMOTE=off JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir cold)"
+run local-cold JUSTRUST_REMOTE=off JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir cold)"
 
 # 2. local-pull: machine warm (step 1), local cache empty, fetched on miss.
 fresh_home
-run local-pull JUSTRUST_REMOTE=off CARGO_TARGET_DIR="$(tdir pull)"
+run local-pull JUSTRUST_REMOTE=off JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' CARGO_TARGET_DIR="$(tdir pull)"
 
 # 3. remote-pull: local cache warm (step 2), machine cache empty.
 wipe_remote
@@ -75,6 +75,6 @@ run remote-pull JUSTRUST_REMOTE=force
 fresh_home; wipe_remote
 run remote-cold2 JUSTRUST_REMOTE=force
 sleep 60
-run synced JUSTRUST_REMOTE=off JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir synced)"
+run synced JUSTRUST_REMOTE=off JUSTRUST_LOCAL_REASON='benchmark: controlled local baseline' JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir synced)"
 
 echo "results in $out"

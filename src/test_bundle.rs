@@ -115,6 +115,11 @@ fn checked_path(path: &Path) -> Result<PathBuf> {
             "parent path components are not permitted"
         );
         part.push(component);
+        // A bare Windows drive prefix (`C:`) or root has no metadata of its
+        // own (stat fails with ERROR_INVALID_FUNCTION), and cannot be a link.
+        if matches!(component, Component::Prefix(_) | Component::RootDir) {
+            continue;
+        }
         match fs::symlink_metadata(&part) {
             Ok(meta) => ensure!(
                 !meta.file_type().is_symlink(),
@@ -219,10 +224,13 @@ fn pack(target: String, messages: PathBuf, artifact_root: PathBuf, out: PathBuf)
                 use std::os::unix::fs::PermissionsExt;
                 dest.set_permissions(fs::Permissions::from_mode(0o755))?;
             }
+            let size = dest.metadata()?.len();
+            // Close before hashing: Windows hashers cannot share a write handle.
+            drop(dest);
             tests.push(Test {
                 path,
                 sha256: crate::toolchain::sha256(&destination)?,
-                size: dest.metadata()?.len(),
+                size,
             });
         }
         let manifest = Manifest {

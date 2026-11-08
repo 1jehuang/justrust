@@ -913,6 +913,7 @@ fn run_remote_inner(
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
     let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
+    crate::e2e::mark("routed");
     let mark = |what: &str| {
         if trace {
             eprintln!(
@@ -940,6 +941,7 @@ fn run_remote_inner(
         .and_then(|n| n.to_str())
         .map(str::to_string);
     mark("roots");
+    crate::e2e::mark("remote_roots");
     diagnostic.stage = "remote_admission";
     let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref()) {
         Ok(h) => h,
@@ -947,6 +949,7 @@ fn run_remote_inner(
     };
     let mut hosted_run = HostedRun::new(hosted, run_id, total);
     mark("charged");
+    crate::e2e::mark("admitted");
     // Visible to `justrust status` (and the status bar) while it runs.
     let mut live = LiveRun::start(run_id, &cwd, &label, started_at);
     diagnostic.stage = "remote_transport";
@@ -954,6 +957,7 @@ fn run_remote_inner(
         Ok(s) => s,
         Err(e) => return infra(format!("{e:#}")),
     };
+    crate::e2e::mark("daemon_connected");
     let mut env = Vec::new();
     env.push((crate::remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
     env.extend(forwarded_env(|name| std::env::var(name).ok()));
@@ -1010,6 +1014,7 @@ fn run_remote_inner(
     )?;
     let mut sync = None;
     let mut remote_prefix = String::new();
+    let mut sync_timing = None;
     let mut submitted = false;
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
@@ -1048,6 +1053,7 @@ fn run_remote_inner(
                     machine,
                     prefix,
                     note,
+                    timing,
                     ..
                 },
                 _,
@@ -1059,6 +1065,8 @@ fn run_remote_inner(
                     remote_prefix = prefix;
                 }
                 mark("flushed");
+                crate::e2e::mark("flushed");
+                sync_timing = timing;
                 if sync.is_none() {
                     lifecycle.running();
                     hosted_run.running();
@@ -1114,6 +1122,7 @@ fn run_remote_inner(
                 diagnostic.exit = Some(code);
                 diagnostic.may_have_started = true;
                 mark("exit");
+                crate::e2e::mark("exit");
                 hosted_run.finish("done", Some(code));
                 if compile_only {
                     compile_stdout.finish(&mut so, &mut se, json_output)?;
@@ -1168,6 +1177,7 @@ fn run_remote_inner(
                     }
                 }
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
+                crate::e2e::mark("artifacts");
                 mark("recording");
                 diagnostic.stage = "remote_summary";
                 if !record_remote(
@@ -1176,6 +1186,7 @@ fn run_remote_inner(
                     &run_files,
                     &machine,
                     ms,
+                    sync_timing,
                     total.elapsed().as_secs_f64(),
                 ) {
                     report_remote_failure(sub, diagnostic, total.elapsed().as_secs_f64());
@@ -1383,6 +1394,7 @@ fn record_remote(
     run_files: &[u8],
     machine: &str,
     sync_ms: f64,
+    sync_timing: Option<crate::e2e::SyncTiming>,
     wall: f64,
 ) -> bool {
     let Ok(mut s) = serde_json::from_slice::<crate::summary::Summary>(summary) else {
@@ -1414,7 +1426,17 @@ fn record_remote(
         machine: machine.to_string(),
         sync_ms,
         client_wall: wall,
+        sync: sync_timing,
     });
+    s.e2e = Some(crate::e2e::remote(
+        &crate::e2e::marks(),
+        crate::e2e::elapsed(),
+        &crate::e2e::RemoteTimes {
+            sync: sync_timing,
+            host_wall: s.wall,
+            host_phases: s.phases.clone(),
+        },
+    ));
     // Hints are local state: attach them here, not on the remote machine
     // (which mirrors the workspace at the same absolute path).
     crate::split_index::attach(&mut s);
@@ -1430,9 +1452,27 @@ fn record_remote(
     }
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
+    crate::test_reuse::store(&s, wall);
     crate::telemetry::record_run(&s, true);
     crate::telemetry::maybe_spawn_background();
+    // The machine printed its own report, which cannot see the client's side
+    // of the wait (sync, admission, artifacts) or this machine's history.
+    eprint!("{}", client_side_report(&s));
     true
+}
+
+/// Waste lines for time outside the remote build plus recurring-cost hints,
+/// appended under the machine's report.
+fn client_side_report(s: &crate::summary::Summary) -> String {
+    let mut o = String::new();
+    for f in crate::findings::e2e_findings(s) {
+        o.push_str(&format!(
+            "  waste   ~{:>5.1}s  {}\n",
+            f.cost_secs, f.message
+        ));
+    }
+    o.push_str(&crate::hints::render(&crate::hints::for_run(s)));
+    o
 }
 
 /// `justrust remote check|test|...`: always remote (starting the machine if
@@ -1612,6 +1652,7 @@ mod tests {
             &[],
             "private-machine",
             0.0,
+            None,
             0.0
         ));
     }

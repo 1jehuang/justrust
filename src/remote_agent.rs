@@ -106,6 +106,9 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
 fn evict_now(roots: &crate::remote_evict::Shared) {
     use crate::remote_evict as ev;
     let Some(home) = dirs::home_dir() else { return };
+    if ev::Mode::from_env() == ev::Mode::On {
+        ev::sweep_sent(false, &mut |line| eprintln!("justrust agent: {line}"));
+    }
     let Ok(registry) = roots.lock() else { return };
     ev::collect(
         &registry,
@@ -296,6 +299,10 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             continue;
         }
         let sync_run = matches!(&msg, Msg::RunSync { .. });
+        // Saved mirror state of the root no longer describes the tree.
+        if let Msg::Write { path, .. } | Msg::Delete { path } = &msg {
+            crate::remote_resume::invalidate_above(&at(path));
+        }
         match msg {
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
                 Ok(()) => {

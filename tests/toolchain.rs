@@ -147,6 +147,10 @@ fn justrust(home: &Path, server: &str, cwd: &Path) -> Command {
         .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_DIST_SERVER", server)
         .env("JUSTRUST_REMOTE", "0")
+        .env(
+            "JUSTRUST_LOCAL_REASON",
+            "toolchain integration test runs locally",
+        )
         .env("JUSTRUST_DEPCACHE", "0")
         .env_remove("JUSTRUST_TOOLCHAIN")
         .env_remove("JUSTRUST_RUN_DIR")

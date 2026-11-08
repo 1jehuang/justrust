@@ -21,6 +21,7 @@ mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
 mod depcache_remote;
+mod e2e;
 mod early;
 mod execution_graph;
 mod execution_graph_compiler;
@@ -37,13 +38,17 @@ mod execution_graph_task_bindings;
 mod execution_graph_task_dag;
 mod execution_graph_timing;
 mod export;
+mod failure;
 mod findings;
+mod hints;
 mod history;
 #[cfg(unix)]
 mod hotpatch;
 mod msvc_tools;
 mod native;
 mod platform_config;
+mod stock_verify;
+mod test_reuse;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
 mod hotpatch {
@@ -72,12 +77,15 @@ mod mcp;
 mod paths;
 mod peercache;
 mod procfs;
+mod profile;
 mod record;
+mod records_queue;
 mod release_tools;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
-#[cfg(unix)]
+// Build-host eviction runs on Unix hosts only.
+#[cfg_attr(not(unix), allow(dead_code))]
 mod remote_evict;
 /// The remote agent runs on the (Linux) build machines only.
 #[cfg(windows)]
@@ -97,6 +105,7 @@ mod remote_hosted;
 mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
+mod remote_resume;
 mod remote_sync;
 // Windows has no watcher backend yet (see the module docs).
 #[cfg_attr(windows, allow(dead_code))]
@@ -135,7 +144,10 @@ then a one-line verdict. The full output is always saved: `justrust log`.
 Where check/clippy/test run: signed in to hosted builds (API key or
 subscription) means remote by default. Choose per command with `--local`,
 `--remote`, or `--auto` (the router: remote only when predicted faster),
-or set JUSTRUST_REMOTE=off|force|auto.
+or set JUSTRUST_REMOTE=off|force|auto. Give a reason for going local with
+`--local=\"why\"` (or JUSTRUST_LOCAL_REASON). A
+requested local build without a reason is refused unless
+JUSTRUST_REQUIRE_LOCAL_REASON=0 (env or ~/.config/jcode env file).
 
 Examples:
   justrust check -p my-crate
@@ -210,6 +222,13 @@ enum Command {
         here: bool,
         #[arg(long)]
         json: bool,
+        /// Only failed runs.
+        #[arg(long)]
+        failed: bool,
+        /// Only failures that are not the code's fault (toolchain, infra,
+        /// unclassified): the ones justrust should fix.
+        #[arg(long, conflicts_with = "failed")]
+        ours: bool,
     },
     /// Sum known skipped task time across retained recordings (not wall-clock savings).
     Savings {
@@ -236,6 +255,27 @@ enum Command {
     Show {
         /// Run id or prefix, or "last".
         id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Where end-to-end build wait went across recorded runs: routing,
+    /// hosted admission, source sync, cargo phases, artifacts, reporting.
+    Profile {
+        /// Only runs from the last N days (fractions allowed).
+        #[arg(long)]
+        days: Option<f64>,
+        /// Only runs under the current directory.
+        #[arg(long)]
+        here: bool,
+        /// Only runs built remotely.
+        #[arg(long, conflicts_with = "local")]
+        remote: bool,
+        /// Only runs built locally.
+        #[arg(long)]
+        local: bool,
+        /// Skip runs whose waterfall is reconstructed from older records.
+        #[arg(long)]
+        measured: bool,
         #[arg(long)]
         json: bool,
     },
@@ -425,17 +465,17 @@ enum Command {
         #[command(subcommand)]
         cmd: RemoteCmd,
     },
-    /// Append slim, path-redacted run summaries to the repo's data/runs/<machine>/.
+    /// Account-private run and benchmark records, uploaded automatically
+    /// (list, show, or put a JSON file).
+    Records {
+        /// list (default), show KIND ID, or put KIND ID FILE.
+        args: Vec<String>,
+    },
+    /// Retired: builds upload to `justrust records` automatically.
+    #[command(hide = true)]
     Export {
-        /// Output root. Defaults to ./data/runs in the justrust repository.
-        #[arg(long)]
-        out: Option<PathBuf>,
-        /// Machine directory name. Defaults to the hostname.
-        #[arg(long)]
-        machine: Option<String>,
-        /// Report what would be added without writing.
-        #[arg(long)]
-        dry_run: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        _args: Vec<String>,
     },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
@@ -648,21 +688,43 @@ fn passthrough_split(argv: &[OsString]) -> Option<(&'static str, Vec<OsString>)>
 }
 
 /// `--local` / `--remote` / `--auto` before any `--`: aliases for
-/// JUSTRUST_REMOTE=off|force|auto (the router).
-fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
+/// JUSTRUST_REMOTE=off|force|auto (the router). `--local=<why>` also
+/// records why (JUSTRUST_LOCAL_REASON), see `route::require_local_reason`.
+fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>, Option<String>) {
     let mut mode = None;
+    let mut why = None;
     let mut out = Vec::with_capacity(args.len());
     let mut passed = false;
     for a in args {
         passed |= a == "--";
         match a.to_str() {
             Some("--local") if !passed => mode = Some("off"),
+            Some(s) if !passed && s.starts_with("--local=") => {
+                mode = Some("off");
+                why = Some(s["--local=".len()..].to_string());
+            }
             Some("--remote") if !passed => mode = Some("force"),
             Some("--auto") if !passed => mode = Some("auto"),
             _ => out.push(a),
         }
     }
-    (out, mode)
+    (out, mode, why)
+}
+
+/// Whether a build reached through the `cargo` shim goes through local vs
+/// hosted routing. Agent sessions (`JCODE_SESSION_ID`) route by default,
+/// interactive shells keep plain recorded cargo. `JUSTRUST_CARGO_ROUTE=0`
+/// opts out, `=1` opts a non-agent shell in. A cargo nested inside a
+/// recorded run (build scripts, tests) never routes again.
+fn cargo_shim_routes(agent: bool, nested: bool, setting: Option<&str>) -> bool {
+    if nested {
+        return false;
+    }
+    match setting {
+        Some("0" | "off" | "false" | "no") => false,
+        Some("1" | "on" | "true" | "yes") => true,
+        _ => agent,
+    }
 }
 
 /// Remote routing must precede local early answers. A resident prebuild or
@@ -682,13 +744,22 @@ fn route_then_accelerate(
 }
 
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
-    let (args, route_mode) = take_route_flags(args);
+    let (args, route_mode, local_why) = take_route_flags(args);
+    let (args, rerun) = test_reuse::take_rerun_flag(args);
     if let Some(m) = route_mode {
         // SAFETY: single-threaded here, before any build starts.
         unsafe { std::env::set_var("JUSTRUST_REMOTE", m) };
     }
+    if let Some(w) = local_why {
+        // SAFETY: as above.
+        unsafe { std::env::set_var("JUSTRUST_LOCAL_REASON", w) };
+    }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
+    // An identical passing test run needs no sync, build or run at all.
+    if !rerun && let Some(code) = test_reuse::try_reuse(&full) {
+        std::process::exit(code);
+    }
     // Hosted/forced remote runs exit before a local daemon can return a
     // prebuild. Only a chosen local build may use local early answers.
     if let Some(code) = route_then_accelerate(
@@ -713,6 +784,7 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
 }
 
 pub fn main() -> anyhow::Result<()> {
+    e2e::init();
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let name = sys::program_name(&argv0);
     // `justrust __build-script <real> ...`: the build-script run wrapper.
@@ -743,6 +815,7 @@ pub fn main() -> anyhow::Result<()> {
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some(telemetry::BG_ARG) => telemetry::background_main(),
+        Some(records_queue::ARG) => records_queue::sender_main(),
         Some("__agent") => {
             let prefix = match std::env::args().nth(2).as_deref() {
                 Some("--prefix") => std::env::args().nth(3),
@@ -750,6 +823,7 @@ pub fn main() -> anyhow::Result<()> {
             };
             remote_agent::main(prefix)
         }
+        Some(stock_verify::ARG) => stock_verify::main(std::env::args().nth(2)),
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()
@@ -777,7 +851,19 @@ pub fn main() -> anyhow::Result<()> {
     }
     telemetry::install_panic_hook();
     if name == "cargo" {
-        record::main(std::env::args_os().skip(1).collect());
+        let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+        // Agents reach justrust through the `cargo` shim too (wrapper
+        // scripts such as jcode's dev_cargo.sh). Give their builds the same
+        // local-vs-hosted routing as `justrust check|test|build`, so hosted
+        // machines do the heavy compiles instead of the laptop battery.
+        if cargo_shim_routes(
+            std::env::var_os("JCODE_SESSION_ID").is_some(),
+            std::env::var_os("JUSTRUST_RUN_DIR").is_some(),
+            std::env::var("JUSTRUST_CARGO_ROUTE").ok().as_deref(),
+        ) {
+            route::maybe_remote(&args);
+        }
+        record::main(args);
     }
     update::notices();
 
@@ -843,6 +929,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Status { watch: Some(_), .. } => return None,
         Command::Status { .. } => "status",
         Command::Show { .. } => "show",
+        Command::Profile { .. } => "profile",
         Command::Slots {
             gc_root: Some(_), ..
         } => return None,
@@ -869,6 +956,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Upgrade { .. } => "upgrade",
         Command::Remote { .. } => "remote",
         Command::Export { .. } => "export",
+        Command::Records { .. } => "records",
         Command::History { .. } => "history",
         Command::Update { .. } => "update",
     })
@@ -916,9 +1004,34 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         }
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
-        Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
+        Command::Runs {
+            limit,
+            here,
+            json,
+            failed,
+            ours,
+        } => runs::list(
+            limit,
+            here,
+            json,
+            if ours {
+                runs::FailFilter::Ours
+            } else if failed {
+                runs::FailFilter::Failed
+            } else {
+                runs::FailFilter::All
+            },
+        )?,
         Command::Savings { days, here, json } => savings::command(days, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
+        Command::Profile {
+            days,
+            here,
+            remote,
+            local,
+            measured,
+            json,
+        } => profile::command(days, here, remote, local, measured, json)?,
         Command::Status {
             json,
             waybar,
@@ -1033,11 +1146,8 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             RemoteCmd::Use { kind, args } => remote_backend::use_command(&kind, &args)?,
             RemoteCmd::Env => remote_backend::env_command()?,
         },
-        Command::Export {
-            out,
-            machine,
-            dry_run,
-        } => export::command(out, machine, dry_run)?,
+        Command::Records { args } => remote_hosted::records_command(&args)?,
+        Command::Export { .. } => export::command()?,
         Command::History {
             sessions,
             repo,
@@ -1068,6 +1178,17 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 #[cfg(test)]
 mod passthrough_tests {
     use super::*;
+
+    #[test]
+    fn local_flag_carries_reason() {
+        let a = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        let (rest, m, w) = take_route_flags(a(&["-p", "x", "--local=offline", "--", "--local"]));
+        assert_eq!(m, Some("off"));
+        assert_eq!(w.as_deref(), Some("offline"));
+        assert_eq!(rest, a(&["-p", "x", "--", "--local"]));
+        let (_, m, w) = take_route_flags(a(&["--local"]));
+        assert_eq!((m, w), (Some("off"), None));
+    }
 
     #[test]
     fn graph_large_capture_is_explicit_and_excludes_manifests() {
@@ -1371,6 +1492,19 @@ mod passthrough_tests {
         let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
         passthrough_split(&argv)
             .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
+    }
+
+    #[test]
+    fn cargo_shim_routes_agent_builds_only() {
+        // Agent wrappers (jcode dev_cargo.sh) route by default.
+        assert!(cargo_shim_routes(true, false, None));
+        // Interactive shells keep plain recorded cargo unless opted in.
+        assert!(!cargo_shim_routes(false, false, None));
+        assert!(cargo_shim_routes(false, false, Some("1")));
+        assert!(!cargo_shim_routes(true, false, Some("off")));
+        // Cargo nested in a recorded run never routes again.
+        assert!(!cargo_shim_routes(true, true, None));
+        assert!(!cargo_shim_routes(true, true, Some("1")));
     }
 
     #[test]

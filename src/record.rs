@@ -328,6 +328,7 @@ pub fn main(args: Vec<OsString>) -> ! {
 
 /// Record `cargo <args>` and exit with cargo's exit code.
 pub fn run(args: Vec<OsString>, opts: Options) -> ! {
+    crate::e2e::mark("routed");
     let mut trace = PhaseTrace::new();
     if !should_record(&args) {
         exec_cargo(&args);
@@ -338,6 +339,7 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
         &subcommand(&args).unwrap_or_default(),
         crate::telemetry::local_route_label(),
     );
+    lifecycle.report_local(&args);
     trace.mark("lifecycle-start");
     match record(&args, opts, &id, &mut lifecycle) {
         Ok(code) => std::process::exit(code),
@@ -901,6 +903,7 @@ fn record(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
+    crate::e2e::mark("cargo_spawn");
     let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
     lifecycle.running();
@@ -968,6 +971,7 @@ fn record(
         }
     }
     let end = paths::now();
+    crate::e2e::mark("cargo_done");
     let sched = scope.map(crate::sched::Scope::finish);
     trace.mark("drain-scope");
     {
@@ -1103,6 +1107,11 @@ fn finish(
         s.early = Some(e);
     }
     crate::split_index::attach(&mut s);
+    s.e2e = Some(crate::e2e::local(
+        &crate::e2e::marks(),
+        crate::e2e::elapsed(),
+        &s.phases,
+    ));
     std::fs::write(run_dir.join("summary.json"), serde_json::to_vec_pretty(&s)?)?;
     paths::append_line(
         &paths::index_file()?,
@@ -1110,12 +1119,22 @@ fn finish(
     )?;
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
+    crate::test_reuse::store(&s, s.e2e.as_ref().map_or(s.wall, |e| e.wall));
     crate::depcache_gc::maybe_spawn();
     crate::depcache_remote::maybe_spawn_sync();
     crate::telemetry::record_run(&s, opts.agent);
+    crate::export::upload_run(&s);
     crate::telemetry::maybe_spawn_background();
+    if s.diagnostics
+        .failure
+        .as_ref()
+        .is_some_and(|f| f.class == crate::failure::Class::Toolchain)
+    {
+        crate::stock_verify::maybe_spawn(&s.id);
+    }
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));
+        eprint!("{}", crate::hints::render(&crate::hints::for_run(&s)));
     } else if std::env::var_os("JUSTRUST_QUIET").is_none() {
         eprintln!("justrust: {}", s.one_line());
     }

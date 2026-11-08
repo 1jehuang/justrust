@@ -150,7 +150,7 @@ def validate(root):
         require(len(set(names)) == expected, 'duplicate raw native tests')
     require(sorted(observed_gates) == sorted([*FOCUSED, 'full-native']), 'native filter coverage mismatch')
     for gate in (*FOCUSED, 'full-native'):
-        require(text(f'unit/v28/{gate}.exit').strip() == '0', 'failed native gate')
+        require(text(f'unit/v28/{gate.replace("::", "__")}.exit').strip() == '0', 'failed native gate')
     for name in ('build/v28/orchestration-exit', 'unit/v28/exit',
                  'root/suite-v27-baseline.exit', 'root/suite-v28-candidate.exit',
                  'root/suite-v28-repeat.exit', 'root/suite-v28-repeat-baseline.exit',

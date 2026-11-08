@@ -569,6 +569,7 @@ def cmd_run(args) -> None:
     out.write_text(json.dumps(res, indent=1) + "\n")
     print(scoreboard(res))
     print(f"\nsaved {out}")
+    suite.upload_result(out)
     if not args.no_report:
         write_report(out)
 
@@ -599,6 +600,7 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     out.write_text(json.dumps(res, indent=1) + "\n")
     print(synth_run.table(res["synth"]))
     print(f"\nsaved {out}")
+    suite.upload_result(out)
     if not args.no_report:
         write_report(out)
 

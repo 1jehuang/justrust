@@ -216,7 +216,7 @@ def rustc_errors(stderr: str, ws: Path):
 
 
 def check(kind: str, crate: str):
-    env = {**os.environ, "CARGO_TARGET_DIR": str(TARGET[kind]), "JUSTRUST_REMOTE": "0",
+    env = {**os.environ, "CARGO_TARGET_DIR": str(TARGET[kind]), "JUSTRUST_REMOTE": "0", "JUSTRUST_LOCAL_REASON": "benchmark: controlled local baseline",
            "JUSTRUST_TOOLCHAIN": "system", "JUSTRUST_BUILDD": "0", "JUSTRUST_PREBUILT": "off"}
     for k in ("JUSTRUST_EARLY", "JUSTRUST_EARLY_EXIT"):
         env.pop(k, None)
