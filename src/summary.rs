@@ -715,6 +715,7 @@ pub fn build(
         }
     };
     let mut first_test_line: Option<f64> = None;
+    let mut orphan_spans: Vec<(f64, f64)> = Vec::new();
     // A runner line handed to the pool: (time, binary). Normally the pool
     // prints its own header later. When the hand-off fails the runner execs
     // the binary directly and its output follows with no header, so the
@@ -824,10 +825,17 @@ pub fn build(
                 b.filtered_out += fo;
                 let t = l.t;
                 close(current.take(), t, &mut tests);
+            } else if secs > 0.0 {
+                // No open binary: an earlier nested result (a test that ran
+                // its own binary as a child) closed it. libtest's own
+                // duration still bounds when this run started.
+                let end = rel(l.t);
+                orphan_spans.push(((end - secs).max(0.0), end));
             }
         }
     }
     close(current.take(), end, &mut tests);
+    test_spans.extend(orphan_spans);
     keep_slowest(&mut tests.slowest);
 
     // Phases.
@@ -1966,6 +1974,57 @@ mod tests {
             s.phases
         );
         assert!(s.phases.tail < 1.0, "{:?}", s.phases);
+    }
+    #[test]
+    fn nested_libtest_result_does_not_move_parent_time_to_tail() {
+        let line = |t: f64, s: &str, l: &str| OutputLine {
+            t,
+            s: s.into(),
+            l: l.into(),
+        };
+        let lines = [
+            line(
+                0.05,
+                "e",
+                "Finished `test` profile [unoptimized] target(s) in 0.05s",
+            ),
+            line(
+                0.05,
+                "e",
+                "Running `/h/justrust __test-runner /w/target/debug/deps/app-1`",
+            ),
+            line(0.05, "o", "running 835 tests"),
+            // A test runs this binary again as a child.
+            line(0.77, "o", "running 1 test"),
+            line(
+                0.79,
+                "o",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 834 filtered out; finished in 0.02s",
+            ),
+            line(
+                4.9,
+                "o",
+                "test result: ok. 823 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 4.85s",
+            ),
+        ];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            4.91,
+            0,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(s.tests.passed, 824);
+        assert!(s.phases.test_run > 4.8, "{:?}", s.phases);
+        assert!(s.phases.tail < 0.1, "{:?}", s.phases);
     }
     #[test]
     fn pooled_tests_outside_deps_keep_counts_timing_and_verdict() {

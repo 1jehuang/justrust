@@ -441,6 +441,58 @@ mod tests {
     }
 
     #[test]
+    fn every_mark_permutation_sums_to_wall_without_negatives() {
+        let names = [
+            "routed",
+            "remote_roots",
+            "admitted",
+            "daemon_connected",
+            "flushed",
+            "exit",
+            "artifacts",
+            "cargo_spawn",
+            "cargo_done",
+        ];
+        let r = RemoteTimes {
+            sync: Some(SyncTiming {
+                lock_ms: 900.0,
+                link_ms: 50.0,
+                push_ms: 300.0,
+                barrier_ms: 60.0,
+            }),
+            host_wall: 5.0,
+            host_phases: Phases {
+                compile: 4.0,
+                test_run: 1.0,
+                ..Default::default()
+            },
+        };
+        // Pseudo-random times, some marks absent, in arbitrary order.
+        let mut seed = 7u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed >> 33
+        };
+        for _ in 0..500 {
+            let mut v = Vec::new();
+            for n in names {
+                if next() % 8 != 0 {
+                    v.push((n, (next() % 8000) as f64 / 1000.0));
+                }
+            }
+            let now = 8.5;
+            let e = remote(&Marks(v.clone()), now, &r);
+            assert!((sum(&e) - now).abs() < 1e-9, "{v:?} {e:?}");
+            assert!(e.segments.iter().all(|s| s.secs >= 0.0), "{e:?}");
+            let l = local(&Marks(v), now, &r.host_phases);
+            assert!((sum(&l) - now).abs() < 1e-9, "{l:?}");
+            assert!(l.segments.iter().all(|s| s.secs >= 0.0), "{l:?}");
+        }
+    }
+
+    #[test]
     fn missing_and_out_of_order_marks_never_lose_time() {
         let m = Marks(vec![("routed", 0.5), ("admitted", 0.2), ("exit", 2.0)]);
         let e = remote(&m, 2.5, &RemoteTimes::default());
