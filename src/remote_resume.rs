@@ -9,7 +9,9 @@
 //! barrier with nothing pending, no failed paths) saves each root's
 //! manifest and writes a fresh random token into `<root>/.justrust/` on the
 //! machine. The next daemon resumes a root only when the machine still has
-//! that token and the sizes of the most recently changed files match. Then
+//! that token and the size of every file in the manifest matches (0.6 s for
+//! 94k files over ssh; a sample of the newest files once missed a
+//! truncated file the previous daemon had saved as current). Then
 //! it pushes just the difference between the saved manifest and the local
 //! tree, as the live daemon would have. Anything else (no file, a new or
 //! reprovisioned machine, another daemon's token, a size mismatch, an
@@ -30,8 +32,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 const VERSION: u32 = 1;
-/// Files whose size the machine must confirm before a resume.
-const SPOT_CHECK: usize = 24;
 const TOKEN_FILE: &str = ".justrust/mirror-token";
 
 #[derive(Serialize, Deserialize)]
@@ -75,47 +75,64 @@ fn new_token() -> String {
     h.hex()
 }
 
-/// The most recently modified files: the ones most likely to differ if the
-/// machine's copy diverged.
-fn spot_files(m: &Manifest) -> Vec<(&PathBuf, &Stamp)> {
-    let mut v: Vec<_> = m.iter().collect();
-    v.sort_by_key(|(_, s)| std::cmp::Reverse(s.mtime_ns));
-    v.truncate(SPOT_CHECK);
-    v
-}
-
-/// Shell script printing the token, then the size of each file (-1 if absent).
-fn probe_script(remote: &str, files: &[&PathBuf]) -> String {
+/// Shell script printing, gzipped, the token, then `size path` for each
+/// NUL-separated gzipped path on stdin that exists.
+fn probe_script(remote: &str) -> String {
     let q = crate::remote_build::shell_quote;
-    let mut s = format!(
-        "cat {t} 2>/dev/null; rm -f {t}; echo; cd {} || exit 1",
+    format!(
+        "{{ cat {t} 2>/dev/null; rm -f {t}; echo; cd {} || exit 1; \
+         gzip -dc | xargs -0 -r stat -c '%s %n' -- 2>/dev/null; true; }} | gzip -1",
         q(remote),
         t = q(&format!("{remote}/{TOKEN_FILE}")),
-    );
-    for f in files {
-        s.push_str(&format!(
-            "; stat -c %s -- {} 2>/dev/null || echo -1",
-            q(&f.to_string_lossy())
-        ));
-    }
-    s
+    )
 }
 
-/// Whether the probe output confirms `token` and every expected size.
-fn confirms(out: &str, token: &str, sizes: &[u64]) -> bool {
+fn probe_input(files: &[&PathBuf]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    for f in files {
+        let b = f.as_os_str().as_encoded_bytes();
+        if b.contains(&0) {
+            return None;
+        }
+        gz.write_all(b).ok()?;
+        gz.write_all(b"\0").ok()?;
+    }
+    gz.finish().ok()
+}
+
+/// Whether the probe output confirms `token` and the size of every file,
+/// else the first file that differs.
+fn confirms(out: &str, token: &str, files: &Manifest) -> Result<(), String> {
     let mut lines = out.lines();
     if lines.next().map(str::trim) != Some(token) || token.is_empty() {
-        return false;
+        return Err("machine token missing or replaced".into());
     }
-    let got: Vec<&str> = lines.map(str::trim).filter(|l| !l.is_empty()).collect();
-    got.len() == sizes.len()
-        && got
-            .iter()
-            .zip(sizes)
-            .all(|(g, want)| g.parse::<u64>().ok() == Some(*want))
+    let got: std::collections::HashMap<&str, &str> = lines
+        .filter_map(|l| l.split_once(' ').map(|(size, name)| (name, size)))
+        .collect();
+    for (p, st) in files {
+        match p.to_str().and_then(|n| got.get(n)) {
+            None => return Err(format!("{} missing on the machine", p.display())),
+            Some(size) if size.parse::<u64>().ok() != Some(st.size) => {
+                return Err(format!(
+                    "{} is {size} bytes on the machine, {} saved",
+                    p.display(),
+                    st.size
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
 }
 
 fn run_remote(mirror: &Mirror, script: &str) -> Option<String> {
+    run_remote_with(mirror, script, None)
+}
+
+fn run_remote_with(mirror: &Mirror, script: &str, input: Option<Vec<u8>>) -> Option<String> {
+    let gunzip = input.is_some();
     let mut c = match &mirror.target {
         Some(t) => {
             let mut c = t.command();
@@ -128,7 +145,38 @@ fn run_remote(mirror: &Mirror, script: &str) -> Option<String> {
             c
         }
     };
-    let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    c.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    let mut child = c.spawn().ok()?;
+    let feeder = input.and_then(|b| {
+        let mut w = child.stdin.take()?;
+        Some(std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = w.write_all(&b);
+        }))
+    });
+    let out = child.wait_with_output().ok()?;
+    if let Some(f) = feeder {
+        let _ = f.join();
+    }
+    let out = std::process::Output {
+        stdout: if gunzip {
+            use std::io::Read;
+            let mut v = Vec::new();
+            flate2::read::GzDecoder::new(&out.stdout[..])
+                .read_to_end(&mut v)
+                .ok()?;
+            v
+        } else {
+            out.stdout
+        },
+        ..out
+    };
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -209,12 +257,16 @@ fn save_in(
 }
 
 /// The saved manifest of `root`, if the machine confirms it still holds
-/// exactly that tree. Consumes the saved file either way.
-pub fn take(backend: &str, mirror: &Mirror, root: &Path) -> Option<(Manifest, Vec<PathBuf>)> {
+/// exactly that tree, else why not. Consumes the saved file either way.
+pub fn take(
+    backend: &str,
+    mirror: &Mirror,
+    root: &Path,
+) -> Result<(Manifest, Vec<PathBuf>), String> {
     if !enabled() {
-        return None;
+        return Err("disabled".into());
     }
-    take_in(&dir()?, backend, mirror, root)
+    take_in(&dir().ok_or("no state dir")?, backend, mirror, root)
 }
 
 /// Before a full mirror: no saved state for `root` survives it.
@@ -246,17 +298,17 @@ fn take_in(
     backend: &str,
     mirror: &Mirror,
     root: &Path,
-) -> Option<(Manifest, Vec<PathBuf>)> {
+) -> Result<(Manifest, Vec<PathBuf>), String> {
     let path = file_in(d, backend, root);
-    let raw = std::fs::read(&path).ok()?;
+    let raw = std::fs::read(&path).map_err(|_| "nothing saved".to_string())?;
     let _ = std::fs::remove_file(&path);
-    let s: Saved = serde_json::from_slice(&raw).ok()?;
+    let s: Saved = serde_json::from_slice(&raw).map_err(|_| "unreadable save".to_string())?;
     if s.v != VERSION
         || s.backend != backend
         || s.root != root.display().to_string()
         || s.remote != mirror.remote(root)
     {
-        return None;
+        return Err("saved for another backend or version".into());
     }
     let manifest: Manifest = s
         .files
@@ -272,16 +324,15 @@ fn take_in(
             )
         })
         .collect();
-    let spot = spot_files(&manifest);
-    let names: Vec<&PathBuf> = spot.iter().map(|(p, _)| *p).collect();
-    let sizes: Vec<u64> = spot.iter().map(|(_, s)| s.size).collect();
-    let out = run_remote(mirror, &probe_script(&s.remote, &names))?;
-    confirms(&out, &s.token, &sizes).then(|| {
-        (
-            manifest,
-            s.oversized.into_iter().map(PathBuf::from).collect(),
-        )
-    })
+    let names: Vec<&PathBuf> = manifest.keys().collect();
+    let input = probe_input(&names).ok_or("path with NUL")?;
+    let out =
+        run_remote_with(mirror, &probe_script(&s.remote), Some(input)).ok_or("probe failed")?;
+    confirms(&out, &s.token, &manifest)?;
+    Ok((
+        manifest,
+        s.oversized.into_iter().map(PathBuf::from).collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -298,26 +349,23 @@ mod tests {
 
     #[test]
     fn probe_output_must_match_token_and_every_size() {
-        assert!(confirms("tok\n12\n7\n", "tok", &[12, 7]));
-        assert!(!confirms("other\n12\n7\n", "tok", &[12, 7]));
-        assert!(!confirms("tok\n12\n-1\n", "tok", &[12, 7]));
-        assert!(!confirms("tok\n12\n", "tok", &[12, 7]));
-        assert!(!confirms("\n", "", &[]));
-        assert!(confirms("tok\n", "tok", &[]));
-    }
-
-    #[test]
-    fn spot_check_takes_the_newest_files() {
-        let m: Manifest = (0..40)
-            .map(|i| (PathBuf::from(format!("f{i}")), stamp(i, i as u64)))
-            .collect();
-        let s = spot_files(&m);
-        assert_eq!(s.len(), SPOT_CHECK);
-        assert_eq!(s[0].0, &PathBuf::from("f39"));
-        assert!(
-            s.iter()
-                .all(|(_, st)| st.mtime_ns >= 40 - SPOT_CHECK as i128)
+        let m: Manifest = [
+            (PathBuf::from("a b.rs"), stamp(1, 12)),
+            (PathBuf::from("c.rs"), stamp(2, 7)),
+        ]
+        .into();
+        assert!(confirms("tok\n7 c.rs\n12 a b.rs\n", "tok", &m).is_ok());
+        assert!(confirms("other\n12 a b.rs\n7 c.rs\n", "tok", &m).is_err());
+        assert_eq!(
+            confirms("tok\n12 a b.rs\n0 c.rs\n", "tok", &m),
+            Err("c.rs is 0 bytes on the machine, 7 saved".into())
         );
+        assert_eq!(
+            confirms("tok\n12 a b.rs\n", "tok", &m),
+            Err("c.rs missing on the machine".into())
+        );
+        assert!(confirms("\n", "", &Manifest::new()).is_err());
+        assert!(confirms("tok\n", "tok", &Manifest::new()).is_ok());
     }
 
     /// Save on a local "machine", then resume: the manifest comes back only
@@ -355,16 +403,31 @@ mod tests {
             1
         );
         invalidate(&mirror, &root);
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // Consumed: a second daemon cannot reuse it.
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // The machine's copy changed size: full mirror instead.
         assert_eq!(
             save_in(&home, "hosted", &mirror, &[(&root, &manifest, &[])]),
             1
         );
         std::fs::write(remote.join("a.rs"), "fn a() { changed }\n").unwrap();
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
+        // Every file is checked, not just the newest: an old file the
+        // previous daemon wrongly believed current blocks the resume.
+        std::fs::write(remote.join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(remote.join("old.rs"), "").unwrap();
+        let two: Manifest = [
+            (PathBuf::from("a.rs"), stamp(5, 10)),
+            (PathBuf::from("old.rs"), stamp(1, 27)),
+        ]
+        .into();
+        assert_eq!(save_in(&home, "hosted", &mirror, &[(&root, &two, &[])]), 1);
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
+        // A file missing on the machine blocks it too.
+        std::fs::remove_file(remote.join("old.rs")).unwrap();
+        assert_eq!(save_in(&home, "hosted", &mirror, &[(&root, &two, &[])]), 1);
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // A different machine (no token): full mirror.
         std::fs::write(remote.join("a.rs"), "fn a() {}\n").unwrap();
         assert_eq!(
@@ -372,14 +435,14 @@ mod tests {
             1
         );
         std::fs::remove_file(remote.join(TOKEN_FILE)).unwrap();
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // Any source write under the root on the machine drops the token.
         assert_eq!(
             save_in(&home, "hosted", &mirror, &[(&root, &manifest, &[])]),
             1
         );
         invalidate_above(&remote.join("src/new.rs"));
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // Another saver's token replaced ours: only the last save matches.
         assert_eq!(
             save_in(&home, "hosted", &mirror, &[(&root, &manifest, &[])]),
@@ -391,7 +454,7 @@ mod tests {
             1
         );
         std::fs::write(file_in(&home, "hosted", &root), first).unwrap();
-        assert!(take_in(&home, "hosted", &mirror, &root).is_none());
+        assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

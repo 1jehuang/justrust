@@ -929,26 +929,32 @@ fn save_mirrors(d: &Daemon) {
 fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<usize> {
     if !st.roots.contains_key(root) {
         let t = Instant::now();
-        if let Some((manifest, oversized)) =
-            remote_resume::take(st.backend.kind(), &link.mirror, root)
-        {
-            st.roots.insert(
-                root.to_path_buf(),
-                Root {
-                    manifest,
-                    watch_dirs: None,
-                    oversized,
-                    needs_full_sync: false,
-                },
-            );
-            remember_root(st.backend.kind(), root);
-            let n = push_root(d, st, root)?;
-            log(&format!(
-                "source mirror {}: resumed from the previous daemon, {n} files sent, total {:.3}s",
+        match remote_resume::take(st.backend.kind(), &link.mirror, root) {
+            Ok((manifest, oversized)) => {
+                st.roots.insert(
+                    root.to_path_buf(),
+                    Root {
+                        manifest,
+                        watch_dirs: None,
+                        oversized,
+                        needs_full_sync: false,
+                    },
+                );
+                remember_root(st.backend.kind(), root);
+                let n = push_root(d, st, root)?;
+                log(&format!(
+                    "source mirror {}: resumed from the previous daemon, {n} files sent, total {:.3}s",
+                    root.display(),
+                    t.elapsed().as_secs_f64()
+                ));
+                return Ok(n);
+            }
+            Err(why) if why == "nothing saved" => {}
+            Err(why) => log(&format!(
+                "source mirror {}: not resumed ({why}, {:.3}s), full mirror",
                 root.display(),
                 t.elapsed().as_secs_f64()
-            ));
-            return Ok(n);
+            )),
         }
     }
     remote_resume::invalidate(&link.mirror, root);
