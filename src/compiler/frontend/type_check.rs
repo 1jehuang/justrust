@@ -4171,7 +4171,10 @@ impl<'a> Checker<'a> {
         field: &FieldSelector,
     ) -> Result<bool, String> {
         Ok(match field {
-            FieldSelector::Tuple(index) => *index < self.source_fields(declaration, None)?.len(),
+            FieldSelector::Tuple(index) => matches!(
+                self.source_fields(declaration, None)?.get(*index),
+                Some(FieldName::Tuple(actual)) if actual == index
+            ),
             FieldSelector::Named(name) => match self.member_index(declaration, None, *name) {
                 Ok(_) => true,
                 Err(error) if error == "unknown nominal field" => false,
@@ -4990,6 +4993,24 @@ impl<'a> Checker<'a> {
                     projection.push(ir::Projection::Deref);
                 }
                 FieldSelector::ConstantIndex(index) => {
+                    // Index the reference's storage, not the reference carrier.
+                    // Only builtin references participate here. Keep each step in
+                    // the place so loan checking retains the original authority.
+                    while let ir::Ty::Ref { kind, referent } = &ty {
+                        if derefs >= 128 || projection.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        writable = (derefs == 0 || writable) && *kind == ir::BorrowKind::Mut;
+                        derefs += 1;
+                        let referent = referent.as_ref().clone();
+                        projection.push(ir::Projection::Deref);
+                        ty = referent;
+                    }
+                    if projection.len() >= 128 {
+                        return Err("normalized place projection nesting exceeds limit128".into());
+                    }
                     ty = self.index_type(&ty, *index)?;
                     projection.push(ir::Projection::ConstantIndex(*index));
                 }
@@ -14629,6 +14650,105 @@ mod checked_identity_tests {
     }
     fn budget_of(signatures: &Signatures) -> &ir::PlanBudget {
         &signatures.plan().unwrap().budget
+    }
+
+    #[test]
+    fn builtin_reference_array_assignment_preserves_capability() {
+        for source in [
+            "fn main(){let mut a=[1i32,2i32];let r=&mut a;r[1]=3;}",
+            "fn keep(a:&mut [i32;2])->&mut [i32;2]{a}fn main(){let mut a=[1i32,2i32];let r=keep(&mut a);r[1]=3;}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "fn main(){let a=[1i32,2i32];let mut r=&a;r[1]=3;}",
+            "fn main(){let mut a=[1i32,2i32];let r=&mut a;let s=&r;s[1]=3;}",
+            "fn unused(r:&[i32;2]){r[1]=3;}fn main(){}",
+            "fn main(){let mut a=[1i32,2i32];let r=&mut a;r[2]=3;}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn projected_borrow_constant_index_preserves_reference_capability() {
+        let (program, signatures) = call_place_fixture();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, program.functions[2].module);
+        let element = ir::Ty::Int(ir::IntTy::I32);
+        let array = ir::Ty::Array {
+            element: Arc::new(element.clone()),
+            len: 2,
+        };
+        let reference = |kind, referent| ir::Ty::Ref {
+            kind,
+            referent: Arc::new(referent),
+        };
+        let shared = ir::BorrowKind::Shared;
+        let mutable = ir::BorrowKind::Mut;
+        for (kind, ty, derefs) in [
+            (shared, reference(shared, array.clone()), 1),
+            (shared, reference(mutable, array.clone()), 1),
+            (mutable, reference(mutable, array.clone()), 1),
+            (
+                mutable,
+                reference(mutable, reference(mutable, array.clone())),
+                2,
+            ),
+            (
+                shared,
+                reference(shared, reference(mutable, array.clone())),
+                2,
+            ),
+        ] {
+            let (projection, actual) = checker
+                .explicit_field_borrow_projection(kind, ty, &[FieldSelector::ConstantIndex(1)])
+                .unwrap();
+            let mut expected = vec![ir::Projection::Deref; derefs];
+            expected.push(ir::Projection::ConstantIndex(1));
+            assert_eq!(projection, expected);
+            assert_eq!(actual, element);
+        }
+        for ty in [
+            reference(shared, array.clone()),
+            reference(mutable, reference(shared, array.clone())),
+            reference(shared, reference(mutable, array.clone())),
+        ] {
+            let error = checker
+                .explicit_field_borrow_projection(mutable, ty, &[FieldSelector::ConstantIndex(0)])
+                .unwrap_err();
+            assert!(error.starts_with("E0596:"), "{error}");
+        }
+        let error = checker
+            .explicit_field_borrow_projection(
+                shared,
+                reference(shared, array),
+                &[FieldSelector::ConstantIndex(2)],
+            )
+            .unwrap_err();
+        assert!(error.contains("out of bounds"), "{error}");
+    }
+
+    #[test]
+    fn tuple_member_lookup_preserves_source_field_shape() {
+        for source in [
+            "use std::ops::Deref;struct Owner{inner:([i32;2],i32)}impl Deref for Owner{type Target=([i32;2],i32);fn deref(&self)->&Self::Target{&self.inner}}fn main(){let owner=Owner{inner:([5i32,9i32],17i32)};let value=&owner.0[1];}",
+            "struct Owner([i32;2]);fn main(){let owner=Owner([5i32,9i32]);let value=&owner.0[1];}",
+        ] {
+            // This fixture imports the real source library Deref contract.
+            // A bare parser has no embedded std namespace.
+            crate::compiler::compile_observed(source.into(), 1, true)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "struct Owner{inner:[i32;2]}fn unused(owner:Owner){let value=&owner.0;}fn main(){}",
+            "struct Owner([i32;2]);fn unused(owner:Owner){let value=&owner.1;}fn main(){}",
+            "mod hidden{pub struct Owner([i32;2]);}fn unused(owner:hidden::Owner){let value=&owner.0;}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
+        }
     }
 
     #[test]

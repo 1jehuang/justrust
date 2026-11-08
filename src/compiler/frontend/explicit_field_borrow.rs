@@ -1,6 +1,82 @@
 //! Authored local field borrows through one canonical Deref adjustment.
 use super::*;
 
+/// Source data only: this never manufactures an expression occurrence.
+pub(super) fn authored_static_borrow<'a>(
+    source: &'a Expr,
+    budget: &ir::PlanBudget,
+) -> Result<Option<(ir::BorrowKind, std::borrow::Cow<'a, Place>)>, String> {
+    let Expr::BorrowValue { kind, value } = source else {
+        return Ok(match source {
+            Expr::Borrow { kind, place } => Some((*kind, std::borrow::Cow::Borrowed(place))),
+            _ => None,
+        });
+    };
+    let mut cursor = value.as_ref();
+    let mut count = 0usize;
+    let mut indexed = false;
+    let mut root_field = false;
+    let local = loop {
+        budget.charge_work(1)?;
+        if count >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("receiver place nesting limit128".into());
+        }
+        match cursor {
+            Expr::Field {
+                base,
+                field: FieldSelector::Named(_) | FieldSelector::Tuple(_),
+            } => {
+                count += 1;
+                root_field = true;
+                cursor = base;
+            }
+            Expr::Index { base, .. } => {
+                indexed = true;
+                root_field = false;
+                count += 1;
+                cursor = base;
+            }
+            Expr::Var(path) if indexed && root_field => {
+                break match (path.anchor(), path.segments()) {
+                    (PathAnchor::Relative, [name]) => LocalName::Named(*name),
+                    _ => return Ok(None),
+                };
+            }
+            _ => return Ok(None),
+        }
+    };
+    budget.retain_bytes(
+        count
+            .checked_mul(std::mem::size_of::<FieldSelector>())
+            .ok_or("source place allocation overflow")?,
+    )?;
+    let mut fields = Vec::new();
+    fields
+        .try_reserve_exact(count)
+        .map_err(|_| "source place allocation resource limit")?;
+    cursor = value;
+    loop {
+        budget.charge_work(1)?;
+        match cursor {
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                cursor = base;
+            }
+            Expr::Index { base, index, .. } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                cursor = base;
+            }
+            Expr::Var(_) => break,
+            _ => return Err("authored static borrow source changed".into()),
+        }
+    }
+    fields.reverse();
+    Ok(Some((
+        *kind,
+        std::borrow::Cow::Owned(Place { local, fields }),
+    )))
+}
+
 impl type_check::Checker<'_> {
     pub(super) fn explicit_field_stored(
         &self,
@@ -99,6 +175,25 @@ impl type_check::Checker<'_> {
                     self.explicit_field_projection_push(&mut projection, ir::Projection::Deref)?;
                 }
                 FieldSelector::ConstantIndex(index) => {
+                    for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        let ir::Ty::Ref {
+                            kind: layer,
+                            referent,
+                        } = &ty
+                        else {
+                            break;
+                        };
+                        if kind == ir::BorrowKind::Mut && *layer == ir::BorrowKind::Shared {
+                            return Err(
+                                "E0596: cannot borrow through a shared reference as mutable".into(),
+                            );
+                        }
+                        ty = referent.as_ref().clone();
+                        self.explicit_field_projection_push(
+                            &mut projection,
+                            ir::Projection::Deref,
+                        )?;
+                    }
                     ty = self.index_type(&ty, *index)?;
                     self.explicit_field_projection_push(
                         &mut projection,
@@ -164,10 +259,11 @@ impl type_check::Checker<'_> {
         &mut self,
         source: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
-        let Expr::Borrow { kind, place } = source else {
+        let Some((kind, place)) = authored_static_borrow(source, &self.signatures.plan()?.budget)?
+        else {
             return Ok(None);
         };
-        let Some(owner) = self.explicit_field_borrow_owner(place)? else {
+        let Some(owner) = self.explicit_field_borrow_owner(&place)? else {
             return Ok(None);
         };
         // The authored Borrow owns STEP1. This root Place is just the operand,
@@ -176,28 +272,23 @@ impl type_check::Checker<'_> {
             local: place.local,
             fields: Vec::new(),
         };
-        let spec = if *kind == ir::BorrowKind::Mut {
+        let spec = if kind == ir::BorrowKind::Mut {
             ("ops", "DerefMut", "deref_mut")
         } else {
             ("ops", "Deref", "deref")
         };
-        let carrier = self.operator_call(
-            spec,
-            owner,
-            None,
-            operators::First::Place(*kind, &root),
-            &[],
-        )?;
+        let carrier =
+            self.operator_call(spec, owner, None, operators::First::Place(kind, &root), &[])?;
         self.record_operator(
             deref_coercion::site(source as *const Expr as usize, 1),
             carrier,
         )?;
         let carrier_ty = self.exprs[carrier.0].ty.clone();
         let (projection, _) =
-            self.explicit_field_borrow_projection(*kind, carrier_ty.clone(), &place.fields)?;
+            self.explicit_field_borrow_projection(kind, carrier_ty.clone(), &place.fields)?;
         let local = self.temporary("$explicit_deref_field", carrier_ty, false)?;
         self.register_borrow_temporary(local, false, None)?;
-        let borrowed = self.borrow_expression(*kind, ir::Place { local, projection })?;
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
         let ty = self.exprs[borrowed.0].ty.clone();
         let result = self.for_expr(
             ty,

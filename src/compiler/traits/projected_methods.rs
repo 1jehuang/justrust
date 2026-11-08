@@ -2259,6 +2259,102 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn projected_borrow_origin_composition_preserves_source_authority() {
+        for actual in ["i32", "&'a i32"] {
+            let source = format!(
+                "struct Payload<T,U>{{value:T,other:U}}struct Owner<T,U>{{payload:Payload<T,U>}}struct Impostor<T,U>{{payload:Payload<T,U>}}trait Project{{type Out;fn project(&self)->&Self::Out;}}impl<T,U> Project for Owner<T,U>{{type Out=Payload<T,U>;fn project(&self)->&Payload<T,U>{{&self.payload}}}}fn scoped<'a>(owner:Owner<{actual},bool>){{}}fn other<'a>(owner:Impostor<{actual},bool>){{}}fn main(){{}}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+            let world = plan.trait_world().unwrap();
+            let declaration = plan.function_decl(0).unwrap();
+            let facts = world.callable_facts(declaration).unwrap();
+            let self_ty = plan.signature(declaration).unwrap().signature.params[0].clone();
+            let owner = owners(&world)[0];
+            let call = TraitCall {
+                trait_ref: TraitRef {
+                    declaration: owner.trait_ref.declaration,
+                    self_ty: self_ty.clone(),
+                    args: Arc::from([]),
+                },
+                item: owner.items[0].0,
+                method_args: Arc::from([]),
+            };
+            let callee = Callee::TraitItem(call.clone());
+            let required = world.instantiate_trait_signature(&call, &facts).unwrap();
+            facts
+                .validate_signature(SignatureSubject::Call(&callee), &required)
+                .unwrap();
+            let selected = world.resolve_trait_call(&call, &facts).unwrap();
+            facts
+                .validate_signature(
+                    SignatureSubject::Call(&selected.callee),
+                    &selected.signature,
+                )
+                .unwrap();
+            assert!(!required.ref_contract.results.is_empty());
+            for change in 0..3 {
+                let mut forged = required.clone();
+                let contract = Arc::make_mut(&mut forged.ref_contract);
+                let rows = Arc::make_mut(&mut contract.results);
+                match change {
+                    0 => rows[0].returns = ir::ReturnContract::SharedInputPaths(Arc::from([])),
+                    1 => rows[0].region = ir::RegionParamId(contract.region_count),
+                    _ => contract.input_regions = Arc::from([]),
+                }
+                assert!(
+                    matches!(facts.validate_signature(SignatureSubject::Call(&callee), &forged),
+                        Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                    "forged origin {change}, actual {actual}"
+                );
+            }
+            let Ty::Struct(nominal) = &self_ty else {
+                panic!("expected owner")
+            };
+            for change in 0..3 {
+                let mut forged = nominal.def().clone();
+                match change {
+                    0 => {
+                        let mut fields = forged.fields.read(&world.budget).unwrap().to_vec();
+                        fields[0].ty = Ty::Bool;
+                        forged.fields = fields.into();
+                    }
+                    1 => Arc::make_mut(&mut forged.type_args).swap(0, 1),
+                    _ => {
+                        let other = plan.signature(plan.function_decl(1).unwrap()).unwrap();
+                        let Ty::Struct(other) = &other.signature.params[0] else {
+                            panic!("expected impostor")
+                        };
+                        let name = forged.name;
+                        forged = other.def().clone();
+                        forged.name = name;
+                    }
+                }
+                let mut wrong = call.clone();
+                wrong.trait_ref.self_ty = Ty::Struct(ir::StructTy::new(forged));
+                assert!(
+                    world.resolve_trait_call(&wrong, &facts).is_err(),
+                    "forged nominal {change}, actual {actual}"
+                );
+            }
+            let foreign_plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+            let foreign_world = foreign_plan.trait_world().unwrap();
+            let foreign_facts = foreign_world
+                .callable_facts(foreign_plan.function_decl(0).unwrap())
+                .unwrap();
+            assert!(world.resolve_trait_call(&call, &foreign_facts).is_err());
+            let mut foreign_call = call.clone();
+            foreign_call.trait_ref.self_ty = foreign_plan
+                .signature(foreign_plan.function_decl(0).unwrap())
+                .unwrap()
+                .signature
+                .params[0]
+                .clone();
+            assert!(world.resolve_trait_call(&foreign_call, &facts).is_err());
+        }
+    }
+
     fn paired() -> Arc<ValidatedTraitWorld> {
         world(
             "struct S;trait Has<A,B>{type Out;fn get(self)->Self::Out;}impl Has<i32,bool> for S{type Out=i128;fn get(self)->Self::Out{7i128}}impl Has<bool,i32> for S{type Out=bool;fn get(self)->Self::Out{true}}fn main(){}",

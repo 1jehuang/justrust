@@ -1266,14 +1266,38 @@ impl type_check::Checker<'_> {
         kind: ir::BorrowKind,
         base: &Expr,
         owner: &ir::Ty,
-        array: ir::Ty,
+        _array: ir::Ty,
         original: &Expr,
         constant: bool,
     ) -> Result<ir::ExprId, String> {
         let carrier = self
             .receiver_overloaded_deref(base, owner, kind)?
             .ok_or("unsupported: overloaded deref for builtin array index borrow")?;
+        self.borrow_checked_array_reference(kind, carrier, original, constant)
+    }
+
+    pub(super) fn borrow_checked_array_reference(
+        &mut self,
+        kind: ir::BorrowKind,
+        carrier: ir::ExprId,
+        original: &Expr,
+        constant: bool,
+    ) -> Result<ir::ExprId, String> {
         let carrier_ty = self.exprs[carrier.0].ty.clone();
+        let ir::Ty::Ref {
+            kind: source_kind,
+            referent,
+        } = &carrier_ty
+        else {
+            return Err("checked array index carrier must be a reference".into());
+        };
+        if kind == ir::BorrowKind::Mut && *source_kind == ir::BorrowKind::Shared {
+            return Err("cannot borrow as mutable through a shared reference".into());
+        }
+        if !matches!(referent.as_ref(), ir::Ty::Array { .. }) {
+            return Err("checked array index carrier must refer to an array".into());
+        }
+        let array = referent.as_ref().clone();
         let local = self.temporary("$index_deref", carrier_ty, true)?;
         self.charge_node(std::mem::size_of::<ir::LocalId>() + 3 * 64)?;
         self.register_borrow_temporary(local, false, None)?;

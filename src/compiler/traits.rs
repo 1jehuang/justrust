@@ -11511,6 +11511,44 @@ impl TraitCx for ValidatedTraitWorld {
                 ..(*signature.ref_contract).clone()
             };
             return_matches = self.return_refines(&required, &direct.signature.ref_contract)?;
+            if !return_matches
+                && !target.type_args.is_empty()
+                && self.type_contains_projection(
+                    &self.item_header(call.item)?.schema.signature.result,
+                    0,
+                )?
+            {
+                // Compose the two independent origin derivations only after
+                // authenticating both equal type inventories under the exact
+                // caller's source facts. Keep each declaration's own regions.
+                let mut validation = TraitScratch::default();
+                self.validate_signature_with(
+                    SignatureSubject::Call(&Callee::TraitItem(call.clone())),
+                    &signature,
+                    facts,
+                    &mut validation,
+                )?;
+                self.validate_signature_with(
+                    SignatureSubject::Call(&Callee::Direct(target.clone())),
+                    &direct.signature,
+                    facts,
+                    &mut validation,
+                )?;
+                let results = charged(
+                    &self.budget,
+                    ir::derive_return_contracts(
+                        &direct.signature.params,
+                        &direct.signature.result,
+                        &direct.signature.ref_contract,
+                        &self.budget,
+                    ),
+                )?;
+                let concrete = ir::RefContract {
+                    results,
+                    ..(*direct.signature.ref_contract).clone()
+                };
+                return_matches = self.return_refines(&required, &concrete)?;
+            }
             if !return_matches && !target.type_args.is_empty() {
                 // Substituting an erased reference type argument (`Borrowed =
                 // &str`) gives its inner region a fresh identity bound to no

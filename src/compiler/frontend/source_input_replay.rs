@@ -370,6 +370,11 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
         }
         Expr::Var(path) => return Ok(is_local_shaped_path(path)),
         Expr::Borrow { .. } | Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => return Ok(true),
+        Expr::BorrowValue { .. } => {
+            return explicit_field_borrow::authored_static_borrow(source, budget)
+                .map(|source| source.is_some())
+                .map_err(|e| source_error(budget, &e));
+        }
         Expr::Str(text) => {
             source_clone::clone_text(text, budget).map_err(|e| source_error(budget, &e))?;
             return Ok(true);
@@ -484,6 +489,103 @@ fn authored_call_index(
     found.ok_or_else(|| FactsError::invalid(budget, "authored call source role missing"))
 }
 
+fn original_nonstored_field(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    node: &sr::SourceNode,
+    field: &FieldSelector,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    validate_original_occurrence(original, node, budget)?;
+    let binding = inventory
+        .operand_nodes
+        .get(&node.path)
+        .ok_or_else(|| FactsError::invalid(budget, "projected source operand binding missing"))?;
+    validate_original_occurrence(original, binding, budget)?;
+    let index = source_binding_index(&inventory.bindings, binding, budget)?
+        .ok_or_else(|| FactsError::invalid(budget, "projected source lexical binding missing"))?;
+    let site = &inventory.bindings[index];
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let annotation = match site.parameter {
+        Some(parameter) => Some(
+            &function
+                .params
+                .get(parameter)
+                .ok_or_else(|| FactsError::invalid(budget, "projected source parameter missing"))?
+                .1,
+        ),
+        None => site.annotation.as_ref(),
+    };
+    let path = if let Some(annotation) = annotation {
+        match annotation {
+            Type::Named(path) => path.clone(),
+            Type::Apply(path) => path
+                .path(inventory.names.as_ref())
+                .map_err(|e| source_error(budget, &e))?,
+            _ => return Ok(false),
+        }
+    } else {
+        let Some(Stmt::Let { value, .. }) = source_statement(function, inventory, binding, budget)?
+        else {
+            return Ok(false);
+        };
+        let mut value = value;
+        let mut depth = 0;
+        while let Expr::Apply { value: inner, .. } = value {
+            sr::depth(budget, depth)?;
+            sr::work(budget, 1)?;
+            depth += 1;
+            value = inner;
+        }
+        match value {
+            Expr::Struct { name, .. } | Expr::TupleStruct { name, .. } => name.clone(),
+            _ => return Ok(false),
+        }
+    };
+    let key = name_scope::path_key(original.plan.program.names.as_ref(), &path, Namespace::Type)
+        .map_err(|e| source_error(budget, &e))?;
+    let Some(declaration) = original.plan.registry.nominals.get(&key) else {
+        return Ok(false);
+    };
+    let Some(source) = original.plan.nominal_schemas.get(declaration) else {
+        return Err(FactsError::invalid(
+            budget,
+            "projected source nominal schema missing",
+        ));
+    };
+    let NominalSchema::Struct(source) = source.as_ref() else {
+        return Ok(false);
+    };
+    let stored = match (source.shape, field) {
+        (StructShape::Tuple, FieldSelector::Tuple(index)) => source.fields.get(*index).is_some_and(
+            |field| matches!(field.name, FieldName::Tuple(actual) if actual == *index),
+        ),
+        (StructShape::Record, FieldSelector::Named(name)) => {
+            let class = crate::compiler::semantic_name::LookupClass::Member;
+            let expected = inventory
+                .names
+                .key(*name, class)
+                .map_err(|e| source_error(budget, &native_adapter::name_diagnostic(e)))?;
+            let mut stored = false;
+            for field in &source.fields {
+                sr::work(budget, 1)?;
+                if let FieldName::Named(name) = field.name {
+                    stored |=
+                        inventory.names.key(name, class).map_err(|e| {
+                            source_error(budget, &native_adapter::name_diagnostic(e))
+                        })? == expected;
+                }
+            }
+            stored
+        }
+        _ => false,
+    };
+    Ok(!stored)
+}
+
 pub(super) fn supported(
     source: &Expr,
     node: &sr::SourceNode,
@@ -498,8 +600,36 @@ pub(super) fn supported(
     if authored_float_width(source, budget, depth)?.is_some() {
         return Ok(true);
     }
+    if matches!(source, Expr::BorrowValue { .. }) {
+        let Some((kind, place)) = explicit_field_borrow::authored_static_borrow(source, budget)
+            .map_err(|e| source_error(budget, &e))?
+        else {
+            return Ok(false);
+        };
+        let Some(original) = original else {
+            return Ok(false);
+        };
+        let LocalName::Named(root) = place.local else {
+            return Ok(false);
+        };
+        Replay::borrow_coercion_field_site(
+            original,
+            inventory,
+            node,
+            kind,
+            root,
+            (&place.fields, true),
+            budget,
+        )?;
+        let Some(first) = place.fields.first() else {
+            return Ok(false);
+        };
+        if !original_nonstored_field(original, inventory, node, first, budget)? {
+            return Ok(false);
+        }
+    }
     match source {
-        Expr::Var(_) | Expr::Borrow { .. } => {
+        Expr::Var(_) | Expr::Borrow { .. } | Expr::BorrowValue { .. } => {
             sr::work(budget, node.path.len())?;
             let Some(binding) = inventory.operand_nodes.get(&node.path) else {
                 return Ok(false);
@@ -2589,6 +2719,9 @@ impl Replay<'_> {
             {
                 self.projected_borrow(source, node, id, block, depth + 1)?
             }
+            (source @ Expr::BorrowValue { .. }, ir::ExprKind::Block(block)) => {
+                self.projected_borrow(source, node, id, block, depth + 1)?
+            }
             (source @ Expr::Borrow { place, .. }, ir::ExprKind::Call { .. })
                 if place.fields.is_empty() =>
             {
@@ -3281,10 +3414,43 @@ mod literal_context_tests {
     }
 
     #[test]
+    fn projected_borrow_value_keeps_builtin_stored_field_route() {
+        let source = "struct Owner{values:[i32;2]}fn take<T>(value:&T){}fn main(){let owner=Owner{values:[3i32,7i32]};take(&owner.values[1]);}";
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "stored-index-borrow-source.rs",
+            source,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("stored indexed borrow source body");
+        };
+        let original = publication.original().source_for_test();
+        assert!(
+            replay_source_body(
+                &original,
+                publication.source(),
+                publication.facts(),
+                &budget
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn projected_borrow_replays_original_fields_and_rejects_forgeries() {
         for (formal, borrow, kind) in [
             ("&[T;2]", "&owner.values.0", ir::BorrowKind::Shared),
             ("&mut[T;2]", "&mut owner.values.0", ir::BorrowKind::Mut),
+            ("&T", "&owner.values.0[1]", ir::BorrowKind::Shared),
+            ("&mut T", "&mut owner.values.0[1]", ir::BorrowKind::Mut),
         ] {
             let source = format!(
                 "use std::ops::{{Deref,DerefMut}};struct Target<T>{{values:([T;2],[T;2]),other:([T;2],[T;2])}}struct Owner<T>{{inner:Target<T>}}impl<T> Deref for Owner<T>{{type Target=Target<T>;fn deref(&self)->&Target<T>{{&self.inner}}}}impl<T> DerefMut for Owner<T>{{fn deref_mut(&mut self)->&mut Target<T>{{&mut self.inner}}}}fn take<T>(v:{formal}){{}}fn main(){{let mut owner:Owner<i32>=Owner{{inner:Target{{values:([3i32,7i32],[5i32,9i32]),other:([11i32,13i32],[17i32,19i32])}}}};take({borrow});}}"
@@ -3475,7 +3641,7 @@ mod literal_context_tests {
             let inventory =
                 SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
                     .unwrap();
-            let (pointer, root, fields) = function
+            let (pointer, root, fields, indexed_value) = function
                 .body
                 .statements
                 .iter()
@@ -3483,13 +3649,18 @@ mod literal_context_tests {
                     let Stmt::Expr(Expr::Call { args, .. }) = statement else {
                         return None;
                     };
-                    let Expr::Borrow { place, .. } = &args[0] else {
-                        return None;
-                    };
+                    let (_, place) =
+                        explicit_field_borrow::authored_static_borrow(&args[0], &budget)
+                            .unwrap()?;
                     let LocalName::Named(root) = place.local else {
                         return None;
                     };
-                    Some((&args[0] as *const Expr as usize, root, &place.fields))
+                    Some((
+                        &args[0] as *const Expr as usize,
+                        root,
+                        place.fields.clone(),
+                        matches!(&args[0], Expr::BorrowValue { .. }),
+                    ))
                 })
                 .unwrap();
             let second = inventory.call_pointers[&deref_coercion::site(pointer, 2)];
@@ -3532,7 +3703,7 @@ mod literal_context_tests {
                     "projected original mutation {mutation}"
                 );
             }
-            for mutation in 0..8 {
+            for mutation in 0..10 {
                 let mut forged = SourceInventory::build(
                     &plan.program,
                     function,
@@ -3565,11 +3736,14 @@ mod literal_context_tests {
                     unreachable!()
                 };
                 let wrong_member = [FieldSelector::Named(other), fields[1].clone()];
+                let mut wrong_index = fields.clone();
+                *wrong_index.last_mut().unwrap() = FieldSelector::ConstantIndex(0);
                 let expected_fields: &[FieldSelector] = match mutation {
                     5 => &wrong,
                     6 => &wrong_tail,
                     7 => &wrong_member,
-                    _ => fields,
+                    8 => &wrong_index,
+                    _ => &fields,
                 };
                 assert_eq!(
                     Replay::borrow_coercion_field_site(
@@ -3578,7 +3752,14 @@ mod literal_context_tests {
                         &original.calls[*index].node,
                         kind,
                         root,
-                        expected_fields,
+                        (
+                            expected_fields,
+                            if mutation == 9 {
+                                !indexed_value
+                            } else {
+                                indexed_value
+                            },
+                        ),
                         &budget
                     )
                     .unwrap_err()

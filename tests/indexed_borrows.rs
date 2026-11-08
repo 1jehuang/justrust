@@ -75,6 +75,88 @@ fn unused(account:&RefCell<Account>){let mut view=account.borrow_mut();let a=&mu
 }
 
 #[test]
+fn indexed_formatting_preserves_field_authority() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "indexed-formatting-field-authority",
+        &[
+            Case {
+                name: "stored_field_precedes_deref_target_index",
+                source: r#"use std::ops::Deref;struct Target{values:[i32;2]}struct Owner{values:[i32;2],target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{println!("deref");&self.target}}
+fn main(){let owner=Owner{values:[3i32,5i32],target:Target{values:[7i32,9i32]}};println!("{}",owner.values[1]);}"#,
+                expect: Expect::Run("5\n"),
+            },
+            Case {
+                name: "deref_field_index_evaluates_once",
+                source: r#"use std::ops::Deref;struct Target{values:[i32;2]}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{println!("deref");&self.target}}
+fn index()->usize{println!("index");1usize}fn main(){let owner=Owner{target:Target{values:[7i32,9i32]}};println!("{}",owner.values[index()]);}"#,
+                expect: Expect::Run("deref\nindex\n9\n"),
+            },
+            Case {
+                name: "stored_tuple_field_precedes_deref_target",
+                source: r#"use std::ops::Deref;struct Owner([i32;2],([i32;2],));
+impl Deref for Owner{type Target=([i32;2],);fn deref(&self)->&Self::Target{println!("deref");&self.1}}
+fn main(){let owner=Owner([3i32,5i32],([7i32,9i32],));println!("{}",owner.0[1]);}"#,
+                expect: Expect::Run("5\n"),
+            },
+            Case {
+                name: "private_stored_field_does_not_fall_back",
+                source: r#"mod hidden{pub struct Owner{values:[i32;2]}}fn unused(owner:hidden::Owner){println!("{}",owner.values[0]);}fn main(){}"#,
+                expect: Expect::Invalid("E0616"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
+fn explicit_indexed_deref_borrows_reference_free_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "explicit-indexed-deref-reference-free",
+        &[
+            Case {
+                name: "generic_indexed_borrow_value_arguments",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target<T>{values:[T;2]}struct Owner<T>{target:Target<T>}
+impl<T> Deref for Owner<T>{type Target=Target<T>;fn deref(&self)->&Target<T>{&self.target}}
+impl<T> DerefMut for Owner<T>{fn deref_mut(&mut self)->&mut Target<T>{&mut self.target}}
+fn read<T:Copy>(value:&T)->T{*value}fn change(value:&mut i32){*value+=10;}
+fn main(){let mut owner:Owner<i32>=Owner{target:Target{values:[3i32,7i32]}};let before=read(&owner.values[1]);change(&mut owner.values[0]);println!("{} {}",before,owner.values[0]);}"#,
+                expect: Expect::Run("7 13\n"),
+            },
+            Case {
+                name: "tuple_indexed_borrow_value_arguments",
+                source: r#"use std::ops::{Deref,DerefMut};struct Owner{target:([i32;2],i32)}
+impl Deref for Owner{type Target=([i32;2],i32);fn deref(&self)->&Self::Target{&self.target}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Self::Target{&mut self.target}}
+fn read(value:&i32)->i32{*value}fn change(value:&mut i32){*value+=10;}
+fn main(){let mut owner=Owner{target:([3i32,7i32],11i32)};let before=read(&owner.0[1]);change(&mut owner.0[0]);println!("{} {}",before,owner.0[0]);}"#,
+                expect: Expect::Run("7 13\n"),
+            },
+            Case {
+                name: "unused_immutable_indexed_owner_rejects",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target{values:[i32;2]}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Target{&mut self.target}}
+fn unused(owner:Owner){let value=&mut owner.values[0];*value=9;}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_overlapping_indexed_owner_rejects",
+                source: r#"use std::ops::{Deref,DerefMut};struct Target{values:[i32;2]}struct Owner{target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{&self.target}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Target{&mut self.target}}
+fn unused(mut owner:Owner){let a=&mut owner.values[0];let b=&mut owner.values[0];*a+=*b;}fn main(){}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn returned_promotion_unproven_scope_is_explicit_unsupported() {
     use std::{fs, process::Command};
     let directory =

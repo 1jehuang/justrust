@@ -11,7 +11,10 @@ impl Replay<'_> {
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         sr::depth(self.budget, depth)?;
-        let Expr::Borrow { kind, place } = source else {
+        let Some((kind, place)) =
+            explicit_field_borrow::authored_static_borrow(source, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+        else {
             return Err(FactsError::invalid(
                 self.budget,
                 "projected borrow lost source syntax",
@@ -66,7 +69,7 @@ impl Replay<'_> {
         // by the shared coercion replay, not inferred from this checked Block.
         let carrier = self.explicit_borrow_coercion(source, node, *value, depth + 1)?;
         let (projection, referent) = checker
-            .explicit_field_borrow_projection(*kind, carrier.clone(), &place.fields)
+            .explicit_field_borrow_projection(kind, carrier.clone(), &place.fields)
             .map_err(|e| source_error(self.budget, &e))?;
         sr::work(self.budget, self.original.binding_mapping.len())?;
         sr::work(self.budget, self.original.scoped_initializers.len())?;
@@ -103,10 +106,10 @@ impl Replay<'_> {
             self.checked.exprs.get(id.0).ok_or_else(|| {
                 FactsError::invalid(self.budget, "projected borrow block missing")
             })?;
-        let result = self.reference(*kind, referent)?;
+        let result = self.reference(kind, referent)?;
         if !matches!(&borrowed.kind,
             ir::ExprKind::Borrow { kind: actual_kind, place: actual_place, timing: ir::BorrowTiming::Immediate }
-                if actual_kind == kind && actual_place.local == *local && actual_place.projection == projection)
+                if *actual_kind == kind && actual_place.local == *local && actual_place.projection == projection)
             || temporary.mutable
             || !self.equal(&temporary.ty, &carrier)?
             || !self.equal(&borrowed.ty, &result)?

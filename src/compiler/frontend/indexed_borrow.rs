@@ -395,7 +395,22 @@ impl type_check::Checker<'_> {
         &mut self,
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
-        self.indexed_place_borrow(ir::BorrowKind::Shared, value, true)
+        if let Some(reference) = self.indexed_place_borrow(ir::BorrowKind::Shared, value, true)? {
+            return Ok(Some(reference));
+        }
+        let Expr::DynamicIndex { base, .. } = value else {
+            return Ok(None);
+        };
+        if !matches!(base.as_ref(), Expr::Field { .. })
+            || !matches!(self.method_receiver_hint(base)?, Some(ir::Ty::Array { .. }))
+        {
+            return Ok(None);
+        }
+        let Some(carrier) = self.borrow_call_rooted_field(ir::BorrowKind::Shared, base)? else {
+            return Ok(None);
+        };
+        self.borrow_checked_array_reference(ir::BorrowKind::Shared, carrier, value, false)
+            .map(Some)
     }
 
     fn indexed_place_borrow(
@@ -449,6 +464,54 @@ impl type_check::Checker<'_> {
         }
         steps.reverse();
         let root = self.lookup(root)?;
+        // Decide builtin eligibility before lowering any runtime index. A
+        // non-stored nominal field belongs to canonical field lowering, not
+        // to this builtin place-borrow fast path.
+        let mut eligibility = self.locals[root.0].ty.clone();
+        let mut eligibility_depth = 0;
+        for step in &steps {
+            self.signatures.plan()?.budget.charge_work(1)?;
+            if matches!(step, IndexedBorrowStep::Deref) {
+                if eligibility_depth >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("place projection nesting exceeds limit128".into());
+                }
+                let ir::Ty::Ref { referent, .. } = &eligibility else {
+                    return Ok(None);
+                };
+                eligibility = referent.as_ref().clone();
+                eligibility_depth += 1;
+            } else {
+                while let ir::Ty::Ref { referent, .. } = &eligibility {
+                    if eligibility_depth >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("place projection nesting exceeds limit128".into());
+                    }
+                    eligibility = referent.as_ref().clone();
+                    eligibility_depth += 1;
+                }
+                eligibility = match step {
+                    IndexedBorrowStep::Field(field) => {
+                        if let ir::Ty::Struct(nominal) = &eligibility
+                            && !self.explicit_field_stored(nominal, field)?
+                        {
+                            return Ok(None);
+                        }
+                        self.field_type(&eligibility, field)?.1
+                    }
+                    IndexedBorrowStep::Const(index, _) => match &eligibility {
+                        ir::Ty::Array { .. } => self.index_type(&eligibility, *index)?,
+                        ir::Ty::Slice { element } => element.as_ref().clone(),
+                        _ => return Ok(None),
+                    },
+                    IndexedBorrowStep::Runtime(..) => match &eligibility {
+                        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+                            element.as_ref().clone()
+                        }
+                        _ => return Ok(None),
+                    },
+                    IndexedBorrowStep::Deref => unreachable!(),
+                };
+            }
+        }
         let mut ty = self.locals[root.0].ty.clone();
         let mut writable = self.locals[root.0].mutable;
         let mut projection = Vec::with_capacity(steps.len() + 2);

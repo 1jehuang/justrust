@@ -10,7 +10,15 @@ impl Replay<'_> {
         root: AstIdent,
         budget: &ir::PlanBudget,
     ) -> Result<usize, FactsError> {
-        Self::borrow_coercion_field_site(original, inventory, node, kind, root, &[], budget)
+        Self::borrow_coercion_field_site(
+            original,
+            inventory,
+            node,
+            kind,
+            root,
+            (&[], false),
+            budget,
+        )
     }
 
     pub(super) fn borrow_coercion_field_site(
@@ -19,9 +27,10 @@ impl Replay<'_> {
         node: &sr::SourceNode,
         kind: ir::BorrowKind,
         root: AstIdent,
-        fields: &[FieldSelector],
+        field_shape: (&[FieldSelector], bool),
         budget: &ir::PlanBudget,
     ) -> Result<usize, FactsError> {
+        let (fields, indexed_value) = field_shape;
         validate_original_occurrence(original, node, budget)?;
         let function = original
             .plan
@@ -38,10 +47,11 @@ impl Replay<'_> {
                 let DepthNode::Expr(expr) = part else {
                     return Ok(());
                 };
-                let Expr::Borrow {
-                    kind: source_kind,
-                    place,
-                } = expr
+                if matches!(expr, Expr::BorrowValue { .. }) != indexed_value {
+                    return Ok(());
+                }
+                let Some((source_kind, place)) =
+                    explicit_field_borrow::authored_static_borrow(expr, budget)?
                 else {
                     return Ok(());
                 };
@@ -49,7 +59,7 @@ impl Replay<'_> {
                     return Ok(());
                 };
                 let class = crate::compiler::semantic_name::LookupClass::Local;
-                if *source_kind != kind
+                if source_kind != kind
                     || place.fields.len() != fields.len()
                     || inventory
                         .names
@@ -145,7 +155,10 @@ impl Replay<'_> {
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         sr::depth(self.budget, depth)?;
-        let Expr::Borrow { kind, place } = source else {
+        let Some((kind, place)) =
+            explicit_field_borrow::authored_static_borrow(source, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+        else {
             return Err(FactsError::invalid(
                 self.budget,
                 "coercion lost authored borrow syntax",
@@ -157,7 +170,6 @@ impl Replay<'_> {
                 "coercion requires an authored named local root",
             ));
         };
-        let kind = *kind;
         let (local, source_ty) = self.operand(node, depth + 1)?;
         let owner = &source_ty;
         if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
@@ -264,7 +276,7 @@ impl Replay<'_> {
                 node,
                 kind,
                 root,
-                &place.fields,
+                (&place.fields, matches!(source, Expr::BorrowValue { .. })),
                 self.budget,
             )?
         };

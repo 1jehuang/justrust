@@ -17,6 +17,21 @@ impl SourceInventory {
         loop {
             sr::depth(budget, depth)?;
             sr::work(budget, 1)?;
+            if matches!(expr, Expr::BorrowValue { .. })
+                && let Some((_, place)) =
+                    explicit_field_borrow::authored_static_borrow(expr, budget)
+                        .map_err(|e| source_error(budget, &e))?
+                && let Some(binding) = self.lookup(place.local, budget)?
+            {
+                reserve_source_map(&mut self.operand_nodes, budget)?;
+                if self
+                    .operand_nodes
+                    .insert(node.path.clone(), binding)
+                    .is_some()
+                {
+                    return Err(FactsError::invalid(budget, "duplicate lexical source node"));
+                }
+            }
             let call_receiver = match expr {
                 Expr::MethodCall { receiver, .. } => Some((receiver.as_ref(), 10)),
                 // `guard()[i]`: index autoderef may call `Deref` on the owned
@@ -70,6 +85,63 @@ impl SourceInventory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_borrow_value_roles_keep_original_occurrence() {
+        let program = parse("struct Owner{values:[i32;2]}fn main(){let owner=Owner{values:[1i32,2i32]};let borrowed=&owner.values[1];}").unwrap();
+        let function = program.functions.last().unwrap();
+        let Stmt::Let { value: source, .. } = &function.body.statements[1] else {
+            panic!("borrow initializer")
+        };
+        assert!(matches!(source, Expr::BorrowValue { .. }));
+        let budget = ir::PlanBudget::default();
+        assert!(
+            source_input_replay::copy_arguments(std::slice::from_ref(source), &budget)
+                .unwrap()
+                .is_some()
+        );
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        let pointer = source as *const Expr as usize;
+        let first = &inventory.calls[inventory.call_pointers[&deref_coercion::site(pointer, 1)]];
+        assert_eq!(
+            inventory.operand_nodes[&first.node.path],
+            inventory.bindings[0].node
+        );
+        for step in 1..=deref_coercion::MAX_DEREF_STEPS {
+            let role =
+                &inventory.calls[inventory.call_pointers[&deref_coercion::site(pointer, step)]];
+            assert!(role.operator_candidate);
+            assert_eq!(role.node, first.node);
+        }
+        for source in [
+            "struct Owner{values:[i32;2]}fn make()->Owner{Owner{values:[1i32,2i32]}}fn main(){&make().values[1]}",
+            "struct Owner{values:[i32;2]}fn index()->usize{1usize}fn main(){let owner=Owner{values:[1i32,2i32]};&owner.values[index()]}",
+            "struct Owner{values:[i32;2]}fn main(){let owner=Owner{values:[1i32,2i32]};&owner.values}",
+        ] {
+            let program = parse(source).unwrap();
+            let source = program
+                .functions
+                .last()
+                .unwrap()
+                .body
+                .tail
+                .as_deref()
+                .unwrap();
+            if matches!(source, Expr::BorrowValue { .. }) {
+                assert!(
+                    source_input_replay::copy_arguments(std::slice::from_ref(source), &budget)
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    explicit_field_borrow::authored_static_borrow(source, &budget)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
 
     #[test]
     fn transparent_operand_chain_preserves_original_call_authority() {
