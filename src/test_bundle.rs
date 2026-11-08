@@ -224,10 +224,13 @@ fn pack(target: String, messages: PathBuf, artifact_root: PathBuf, out: PathBuf)
                 use std::os::unix::fs::PermissionsExt;
                 dest.set_permissions(fs::Permissions::from_mode(0o755))?;
             }
+            let size = dest.metadata()?.len();
+            // Close before hashing: Windows hashers cannot share a write handle.
+            drop(dest);
             tests.push(Test {
                 path,
                 sha256: crate::toolchain::sha256(&destination)?,
-                size: dest.metadata()?.len(),
+                size,
             });
         }
         let manifest = Manifest {
