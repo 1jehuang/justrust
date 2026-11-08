@@ -12,7 +12,7 @@
 Rebuilding every step of the Rust build toolchain from scratch to be faster,
 more parallelizable, and more cacheable.
 
-[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](docs/compiler/FINDINGS.md) · [Changelog](CHANGELOG.md)
+[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Changelog](CHANGELOG.md)
 
 </div>
 
