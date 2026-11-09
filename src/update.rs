@@ -109,6 +109,26 @@ fn schedule(after: f64) {
     }
 }
 
+/// The hosted fleet said which release it runs (`fleet_version` on a ready
+/// connect). When it is newer than this binary, make the background check
+/// due now, so the update lands right after this build instead of within
+/// the daily interval. The check itself still asks the release endpoint and
+/// verifies the download, so a wrong advertisement can only cause a check.
+pub fn fleet_advertised(version: &str) {
+    if disabled_reason().is_some() || !newer(version, VERSION) {
+        return;
+    }
+    let Some(d) = dir() else { return };
+    // Once per advertised version: a failing install keeps its retry delay.
+    let seen = d.join("fleet-seen");
+    if std::fs::read_to_string(&seen).is_ok_and(|s| s.trim() == version) {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&d);
+    let _ = std::fs::write(&seen, version);
+    let _ = std::fs::write(d.join("next-check"), format!("{}", paths::now()));
+}
+
 /// This platform's release asset name (`justrust-<target>.tar.gz`).
 pub fn target() -> Option<&'static str> {
     Some(match (std::env::consts::OS, std::env::consts::ARCH) {

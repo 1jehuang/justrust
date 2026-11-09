@@ -1141,6 +1141,8 @@ pub struct Ready {
     pub host_keys: Vec<String>,
     pub credits: Credits,
     pub builds: Option<Builds>,
+    /// The release the hosted fleet expects clients to run (`fleet_version`).
+    pub fleet_version: Option<String>,
 }
 
 fn safe_host(s: &str) -> bool {
@@ -1196,6 +1198,14 @@ fn parse_ready(b: &Value) -> Result<Ready> {
         host_keys,
         credits: Credits::from(&b["credits"]),
         builds: Builds::from(&b["builds"]),
+        fleet_version: b["fleet_version"]
+            .as_str()
+            .filter(|v| {
+                v.len() <= 64
+                    && v.bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c))
+            })
+            .map(str::to_owned),
     })
 }
 
@@ -1490,6 +1500,9 @@ pub fn ensure_ready() -> Result<Target> {
         ready_at: now(),
     };
     write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
+    if let Some(v) = &r.fleet_version {
+        crate::update::fleet_advertised(v);
+    }
     if let Some(b) = &r.builds {
         eprintln!("hosted: ready at {} ({})", t.dest, b.describe());
     } else if let Some(h) = r.credits.hours_left() {
@@ -2267,6 +2280,20 @@ mod tests {
     #[test]
     fn known_hosts_pins_returned_keys() {
         let r = parse_ready(&serde_json::from_str(READY).unwrap()).unwrap();
+        assert_eq!(r.fleet_version, None);
+        let fv = |s: &str| {
+            parse_ready(
+                &serde_json::from_str(&format!(
+                    r#"{{"address":"1.2.3.4","host_keys":["ssh-ed25519 A"],"fleet_version":{s}}}"#
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+            .fleet_version
+        };
+        assert_eq!(fv(r#""0.1.0-alpha.42""#).as_deref(), Some("0.1.0-alpha.42"));
+        assert_eq!(fv("null"), None);
+        assert_eq!(fv(r#""1.0; rm -rf /""#), None);
         assert_eq!(
             known_hosts(&r),
             "[203.0.113.7]:2222 ssh-ed25519 AAAAC3Nza host1\n[203.0.113.7]:2222 ecdsa-sha2-nistp256 AAAAE2V\n"
