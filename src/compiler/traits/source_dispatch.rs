@@ -134,11 +134,20 @@ impl ValidatedFacts {
                 }
                 item.receiver
             }
-            Callee::Untupled(_) => {
-                return Err(FactsError::invalid(
-                    self.budget(),
-                    "untupled function calls cannot authorize a method receiver loan",
-                ));
+            Callee::Untupled(call) => {
+                let selected = self.world.source_trait_target(
+                    call,
+                    self,
+                    context,
+                    scratch.for_world(self.world.id),
+                )?;
+                if !matches!(selected, Callee::Untupled(_)) {
+                    return Err(FactsError::invalid(
+                        self.budget(),
+                        "source untupled receiver lost its authenticated function item",
+                    ));
+                }
+                self.world.item_header(call.item)?.receiver
             }
         };
         let active = scratch.for_world(self.world.id);
@@ -305,7 +314,11 @@ impl ValidatedTraitWorld {
                     "source function item entry changed its exact callable tuple",
                 ));
             }
-            return Ok(Callee::Direct(target.as_ref().clone()));
+            // Callable-trait operands retain their receiver and argument tuple.
+            // The existing untupled adapter owns conversion to the function's
+            // direct ABI. Selecting the direct item here would change only the
+            // signature and leave those original operands under the wrong ABI.
+            return Ok(Callee::Untupled(call.clone()));
         }
         let mut arguments = self.trait_arguments(&call.trait_ref)?;
         for argument in call.method_args.iter() {

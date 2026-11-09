@@ -5292,8 +5292,63 @@ impl CarrierBuilder<'_, '_> {
         let view = self.calls[block.0].clone();
         let authority = self.authority.clone();
         let facts = authority.as_deref().or(self.facts.validated());
-        let family_replay = match (&view, facts) {
-            (Some(view), Some(facts)) => {
+        let family_replay = match (&view, facts, self.physical) {
+            (Some(view), Some(facts), Some(physical)) => {
+                let validation = physical
+                    .validate_cfg(self.f, facts)
+                    .and_then(|()| {
+                        physical.validate_call(
+                            self.f.blocks[block.0].terminator.origin,
+                            &target,
+                            &signature,
+                        )
+                    })
+                    .and_then(|()| {
+                        self.physical_calls
+                            .get(block.0)
+                            .and_then(Option::as_ref)
+                            .ok_or_else(|| "physical call lost its exact carrier flow".to_string())?
+                            .validate_boundary(
+                                view,
+                                facts,
+                                ir::SignatureSubject::Call(&target),
+                                &signature,
+                            )
+                    });
+                if let Err(message) = validation {
+                    if super::traits::FactsError::from_message(&self.ledger, &message).is_resource()
+                    {
+                        return Err(Exhausted);
+                    }
+                    self.problem(block, None, Problem::Invalid(message))?;
+                    return Ok(());
+                }
+                // Physical ingress has a separate, independently normalized
+                // boundary. Its original declaration can retain opaque tails
+                // already proven empty by that boundary. They cannot request
+                // an ordinary declaration replay for this physical view.
+                let contract = view.contract();
+                self.budget
+                    .spend(contract.inputs.len() + contract.results.len() + 1)?;
+                if contract
+                    .inputs
+                    .iter()
+                    .map(|row| &row.location)
+                    .chain(contract.results.iter().map(|row| &row.location))
+                    .any(|location| location.channel.family().is_some())
+                {
+                    self.problem(
+                        block,
+                        None,
+                        Problem::Unsupported(
+                            "unsupported: physical call retains a symbolic carrier family".into(),
+                        ),
+                    )?;
+                    return Ok(());
+                }
+                None
+            }
+            (Some(view), Some(facts), None) => {
                 let contract = view.original_contract();
                 self.budget
                     .spend(contract.inputs.len() + contract.results.len() + 1)?;
