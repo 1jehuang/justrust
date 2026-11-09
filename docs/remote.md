@@ -2,8 +2,7 @@
 
 justrust can run `check`, `clippy`, and `test` on a bigger machine and
 stream the compact output back, choosing local or remote per build from
-measured walls. Phase 4 of [toolchain.md](toolchain.md). Why remote, the
-shared cache, and licensing are in [remote-strategy.md](remote-strategy.md).
+measured walls.
 
 Hosted builds (the Jcode build fleet) are the remote path going forward.
 The `aws` backend (a machine in your own AWS account) is legacy and is

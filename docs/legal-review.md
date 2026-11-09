@@ -30,6 +30,5 @@ reviewed yet. Update the status column as items are answered.
 
 ## Decisions already made
 
-See [remote-strategy.md](remote-strategy.md#open-source-and-licensing) for
-the reasoning: FSL outbound for the whole compiler, inbound Apache 2.0 with no CLA
+The decisions: FSL outbound for the whole compiler, inbound Apache 2.0 with no CLA
 to keep contributing frictionless, and a switch to a CLA if review requires.
