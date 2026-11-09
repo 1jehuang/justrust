@@ -3555,9 +3555,14 @@ impl CarrierContractView {
             return Ok((false, source_replay));
         }
         if let Some((closure, mode)) = &self.closure_result {
-            facts
-                .world
-                .validate_closure_result_carrier(self, closure, *mode, facts)?;
+            let mut fresh = TraitScratch::default();
+            facts.world.validate_closure_result_carrier(
+                self,
+                closure,
+                *mode,
+                facts,
+                scratch.unwrap_or(&mut fresh),
+            )?;
             return Ok((false, source_replay));
         }
         if let Some(evidence) = &self.projected {
@@ -12537,7 +12542,12 @@ impl ValidatedTraitWorld {
                 self.require_in(predicate, context, scratch)?,
             )?;
         }
-        self.canonicalize_projected_closure_direct(target, &mut instantiated.signature, context)?;
+        self.canonicalize_projected_closure_direct_with(
+            target,
+            &mut instantiated.signature,
+            context,
+            scratch,
+        )?;
         Ok(DirectCallProof {
             target: target.clone(),
             signature: instantiated.signature,

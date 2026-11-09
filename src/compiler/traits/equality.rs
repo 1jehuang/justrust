@@ -1378,15 +1378,31 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         facts: &ValidatedFacts,
     ) -> Result<ProjectionReduction> {
+        self.normalize_projection_for_facts_with_scratch(
+            projection,
+            facts,
+            &mut ProofScratch::default(),
+        )
+    }
+    pub(super) fn normalize_projection_for_facts_with_scratch(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut ProofScratch,
+    ) -> Result<ProjectionReduction> {
         if self.checked_closure_projection(projection, facts.env())?
             || self
                 .opaque_associated_binding(projection, facts.env())?
                 .is_some()
-            || self.goal_is_closed_in(&projection.trait_ref, ProofContext::from_facts(facts))?
+            || self.goal_is_closed_in_with(
+                &projection.trait_ref,
+                ProofContext::from_facts(facts),
+                scratch,
+            )?
             || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
         {
             Ok(ProjectionReduction::Implementation(
-                self.normalize_associated_type(projection, facts)?,
+                self.normalize_associated_type_with_scratch(projection, facts, scratch)?,
             ))
         } else {
             Ok(ProjectionReduction::Equality(

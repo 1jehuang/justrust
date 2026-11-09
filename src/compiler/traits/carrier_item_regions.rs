@@ -2185,7 +2185,11 @@ impl ValidatedTraitWorld {
                 args: actual_arguments.into(),
             },
         };
-        let reduction = self.normalize_projection_for_facts(&actual, facts)?;
+        let reduction = self.normalize_projection_for_facts_with_scratch(
+            &actual,
+            facts,
+            scratch.for_world(self.id),
+        )?;
         // A callable result can leave its receiver storage entirely. Its exact
         // parent-sealed receipt instead selects a tuple argument component.
         if let Ty::Closure(closure) = &actual.trait_ref.self_ty {

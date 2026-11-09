@@ -131,11 +131,27 @@ impl ValidatedTraitWorld {
     // source schema and all predicates. Recheck its sealed structural ABI
     // before applying the same origin-free representation normalization used
     // by the required callable producer.
+    #[cfg(test)]
     pub(super) fn canonicalize_projected_closure_direct(
         &self,
         target: &CallTarget,
         signature: &mut Signature,
         context: ProofContext<'_>,
+    ) -> Result<()> {
+        self.canonicalize_projected_closure_direct_with(
+            target,
+            signature,
+            context,
+            &mut ProofScratch::default(),
+        )
+    }
+
+    pub(super) fn canonicalize_projected_closure_direct_with(
+        &self,
+        target: &CallTarget,
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.check_context(context)?;
         if self
@@ -146,7 +162,7 @@ impl ValidatedTraitWorld {
             return Ok(());
         }
         let adapter = self.decode_closure_adapter(target)?;
-        self.validate_closure_metadata(adapter.closure, context.env())?;
+        self.validate_closure_metadata_with(adapter.closure, context.env(), &mut active.replays)?;
         let captured = adapter
             .closure
             .result_receipt()
@@ -548,18 +564,40 @@ mod tests {
                 .canonicalize_projected_closure_direct(&target, &mut same, context)
                 .unwrap();
             assert!(Arc::ptr_eq(&original, &same.ref_contract));
+            let mut active = ProofScratch::default();
+            for _ in 0..3 {
+                world
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut same,
+                        context,
+                        &mut active,
+                    )
+                    .unwrap();
+                assert!(Arc::ptr_eq(&original, &same.ref_contract));
+            }
             let mut changed = same.clone();
             changed.result = Ty::Bool;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut changed,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
             let mut changed = same.clone();
             changed.params[1] = Ty::Unit;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut changed,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
             let foreign = world.closure_target(&closures.bodies[1].ty, mode).unwrap();
@@ -567,7 +605,12 @@ mod tests {
             wrong.type_args = foreign.type_args;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&wrong, &mut same, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &wrong,
+                        &mut same,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
         }

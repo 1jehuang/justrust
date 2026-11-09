@@ -502,10 +502,11 @@ impl ValidatedTraitWorld {
             // The same sealed adapter owns direct source and executable result
             // topology. Normalize only after its exact schema and obligations
             // have been authenticated, never by relaxing contract equality.
-            self.canonicalize_projected_closure_direct(
+            self.canonicalize_projected_closure_direct_with(
                 target,
                 &mut application.signature,
                 context,
+                active,
             )?;
         }
         Ok((declaration, arguments, application))

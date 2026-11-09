@@ -215,7 +215,31 @@ impl ValidatedTraitWorld {
         subject: SignatureSubject<'_>,
         facts: &ValidatedFacts,
     ) -> Result<CarrierContractView> {
-        self.validate_closure_metadata(&closure, facts.env())?;
+        self.closure_result_carrier_parts_with_scratch(
+            closure,
+            mode,
+            signature,
+            subject,
+            facts,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    pub(super) fn closure_result_carrier_parts_with_scratch(
+        &self,
+        closure: Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        signature: Signature,
+        subject: SignatureSubject<'_>,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierContractView> {
+        scratch.for_facts(facts);
+        self.validate_closure_metadata_with(
+            &closure,
+            facts.env(),
+            &mut scratch.for_world(self.id).replays,
+        )?;
         if !closure.supports(mode) {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -225,7 +249,7 @@ impl ValidatedTraitWorld {
         self.require_closure_owner_predicates(
             &closure,
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         let receipt = closure.result_receipt().ok_or_else(|| {
             FactsError::invalid(
@@ -440,6 +464,7 @@ impl ValidatedTraitWorld {
         closure: &Arc<ir::ClosureTy>,
         mode: ir::ClosureKind,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
         // Reconstruct the exact actual subject, not a provider-length guess.
         let direct_callee =
@@ -485,7 +510,8 @@ impl ValidatedTraitWorld {
         let signature = match subject {
             SignatureSubject::Body => self.closure_body_signature(facts)?,
             SignatureSubject::Call(Callee::Direct(target)) => {
-                self.discharge_direct(target, facts)?.signature
+                self.discharge_direct_with(target, facts, scratch)?
+                    .signature
             }
             _ => unreachable!(),
         };
@@ -513,8 +539,14 @@ impl ValidatedTraitWorld {
                 "closure result changed its actual body/call subject",
             ));
         }
-        let expected =
-            self.closure_result_carrier_parts(closure.clone(), mode, signature, subject, facts)?;
+        let expected = self.closure_result_carrier_parts_with_scratch(
+            closure.clone(),
+            mode,
+            signature,
+            subject,
+            facts,
+            scratch,
+        )?;
         if view.declaration != expected.declaration
             || view.arguments != expected.arguments
             || !self.same_env(&view.original_env, &expected.original_env)?

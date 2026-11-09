@@ -79,6 +79,15 @@ impl ValidatedTraitWorld {
         closure: &ir::ClosureTy,
         env: &GenericEnv,
     ) -> Result<()> {
+        self.validate_closure_metadata_with(closure, env, &mut NominalReplays::default())
+    }
+
+    pub(super) fn validate_closure_metadata_with(
+        &self,
+        closure: &ir::ClosureTy,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         self.replay_closure_owner_substitution(closure, env)?;
         if self.schema.closure_owner_site(closure.provider())?
             != Some((closure.owner(), closure.site()))
@@ -133,9 +142,8 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        let mut replays = NominalReplays::default();
         for ty in closure.types() {
-            self.validate_ty_metadata_with(ty, env, 0, &mut replays)?;
+            self.validate_ty_metadata_with(ty, env, 0, replays)?;
         }
         if let Some(receipt) = closure.result_receipt() {
             let expected_result = if receipt.capture_witness().is_some() {

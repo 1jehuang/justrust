@@ -684,6 +684,14 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         facts: &ValidatedFacts,
     ) -> Result<NormalizedAssociatedType> {
+        self.normalize_associated_type_with_scratch(projection, facts, &mut ProofScratch::default())
+    }
+    pub(super) fn normalize_associated_type_with_scratch(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut ProofScratch,
+    ) -> Result<NormalizedAssociatedType> {
         self.check_normalization_budget()?;
         self.check_facts(facts, false)?;
         let context = NormalizationContext {
@@ -691,10 +699,17 @@ impl ValidatedTraitWorld {
             staged: false,
             executable_storage: true,
         };
-        let mut stack = NormalizationStack::default();
-        let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
-        self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
-        Ok(NormalizedAssociatedType(evidence))
+        let mut stack = NormalizationStack {
+            obligations: std::mem::take(scratch),
+            ..NormalizationStack::default()
+        };
+        let result = (|| {
+            let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
+            self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
+            Ok(NormalizedAssociatedType(evidence))
+        })();
+        *scratch = stack.obligations;
+        result
     }
 
     /// Normalize raw local annotations after the caller releases source-state locks.
