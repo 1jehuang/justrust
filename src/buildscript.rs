@@ -136,6 +136,10 @@ fn keyed_env(name: &str) -> bool {
             | "CARGO_BUILD_TARGET_DIR"
     ) || name.starts_with("CARGO_TERM_")
         || name.starts_with("JUSTRUST_")
+        // Cargo's own configuration, as in depcache::keyed_env. Cargo reruns
+        // a build script for env only via `rerun-if-env-changed`, which the
+        // result key covers, so this matches cargo's own semantics.
+        || crate::depcache::cargo_config_env(name)
     {
         return false;
     }
@@ -1172,6 +1176,10 @@ mod tests {
             "TMUX_PANE",
             "CCACHE_DIR_X",
             "JUSTRUST_RUN_DIR",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_ZIGBUILD_ZIG_PATH",
         ] {
             assert!(!keyed_env(k), "{k}");
         }

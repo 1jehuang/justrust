@@ -472,6 +472,7 @@ pub(crate) fn keyed_env(name: &str) -> bool {
             | "CARGO_TARGET_DIR"
             | "CARGO_BUILD_TARGET_DIR"
     ) || name.starts_with("CARGO_TERM_")
+        || cargo_config_env(name)
     {
         return false;
     }
@@ -480,6 +481,40 @@ pub(crate) fn keyed_env(name: &str) -> bool {
         || matches!(
             name,
             "OUT_DIR" | "SOURCE_DATE_EPOCH" | "LIBRARY_PATH" | "SDKROOT" | "RUST_TARGET_PATH"
+        )
+}
+
+/// Cargo configuration in the environment (`CARGO_PROFILE_*`,
+/// `CARGO_TARGET_*`, `CARGO_BUILD_*`, `CARGO_INCREMENTAL`, cargo-zigbuild's
+/// own variables, ...). Cargo consumes these and passes their effect to
+/// rustc as arguments, which are keyed. rustc only inherits them because
+/// it inherits the whole environment. Keying them split every dependency's
+/// key on whichever agent or tool happened to export one: 2151 repeat
+/// hosted misses on `CARGO_BUILD_RUSTC_WRAPPER`, ~1500 on
+/// `CARGO_INCREMENTAL`/`CARGO_PROFILE_*`, ~1100 on `CARGO_ZIGBUILD_*`
+/// (hosted runs, 2026-10-20 to 2026-11-08). A crate that reads one through `env!`/`option_env!` still
+/// gets it in dep-info, and restore checks those values (`Entry::env`).
+pub(crate) fn cargo_config_env(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "CARGO_BUILD_",
+        "CARGO_PROFILE_",
+        "CARGO_TARGET_",
+        "CARGO_ZIGBUILD_",
+        "CARGO_UNSTABLE_",
+        "CARGO_NET_",
+        "CARGO_HTTP_",
+        "CARGO_REGISTRY_",
+        "CARGO_REGISTRIES_",
+        "CARGO_SOURCE_",
+        "CARGO_ALIAS_",
+        "CARGO_INSTALL_",
+        "CARGO_CACHE_",
+        "CARGO_FUTURE_INCOMPAT_",
+    ];
+    PREFIXES.iter().any(|p| name.starts_with(p))
+        || matches!(
+            name,
+            "CARGO_INCREMENTAL" | "CARGO_LOG" | "CARGO_TARGET_APPLIES_TO_HOST"
         )
 }
 
@@ -1992,6 +2027,19 @@ mod tests {
         assert!(!keyed_env("CARGO_HOME"));
         assert!(!keyed_env("CARGO_TARGET_DIR"));
         assert!(!keyed_env("CARGO_BUILD_JOBS"));
+        for k in [
+            "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "CARGO_TARGET_APPLIES_TO_HOST",
+            "CARGO_ZIGBUILD_ZIG_PATH",
+            "CARGO_UNSTABLE_TARGET_APPLIES_TO_HOST",
+        ] {
+            assert!(!keyed_env(k), "{k}");
+        }
+        assert!(keyed_env("CARGO_MANIFEST_DIR"));
+        assert!(keyed_env("RUSTC_BOOTSTRAP"));
         assert!(keyed_env("CARGO_PKG_NAME"));
         assert!(keyed_env("CARGO_ENCODED_RUSTFLAGS"));
     }
@@ -2016,14 +2064,12 @@ mod tests {
         env2.extend([
             e("LIBRARY_PATH"),
             e("CARGO_PROFILE_DEV_DEBUG"),
+            e("RUSTC_ICE"),
             e("LIBRARY_PATH"),
         ]);
         assert_eq!(
             user_keyed_env(&env2),
-            vec![
-                "CARGO_PROFILE_DEV_DEBUG".to_owned(),
-                "LIBRARY_PATH".to_owned()
-            ]
+            vec!["LIBRARY_PATH".to_owned(), "RUSTC_ICE".to_owned()]
         );
     }
 
