@@ -3,7 +3,7 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
-## Unreleased
+## 0.1.0-alpha.22
 
 - **Hosted machines run the fleet version, not each client's build.** On
   connect, the machine installs the advertised release (checksum and
