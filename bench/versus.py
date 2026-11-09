@@ -211,6 +211,12 @@ def stack_env(st: Stack, s: suite.Scenario, target: Path, rid: str) -> dict[str,
         # No justrust shim on PATH (~/.local/bin/cargo is justrust here).
         env["PATH"] = ":".join(p for p in env.get("PATH", "").split(":")
                                if not (Path(p) / "cargo").resolve().name.startswith("justrust"))
+        # Pin the system rustc. A bare `rustc` resolves to the rustup proxy,
+        # and Cargo runs registry crates with their package dir as cwd, so a
+        # dependency's rust-toolchain.toml (ff pins 1.56.0) would switch
+        # compilers mid-build and fail with `Unrecognized option: check-cfg`.
+        if Path("/usr/bin/rustc").exists():
+            env["RUSTC"] = "/usr/bin/rustc"
         env.update(s.env)
         env.update(st.env)
         return env
