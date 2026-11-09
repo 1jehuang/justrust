@@ -24840,7 +24840,7 @@ impl PlanCtx {
                 owner: info.param_env.binder(),
                 index: 0,
             });
-            let supertraits = {
+            let (supertraits, supertrait_equalities) = {
                 let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(id)?);
                 let mut rows = Vec::new();
@@ -24858,18 +24858,20 @@ impl PlanCtx {
                     if rows.len() >= tr::MAX_PREDICATES {
                         return Err("predicate environment limit exceeded".into());
                     }
-                    let application = state
-                        .source_trait_application(
-                            &self.registry,
-                            path,
-                            &self_ty,
-                            &bindings,
-                            caller,
-                            budget,
-                        )?
-                        .reject_equalities()?;
+                    let application = state.source_trait_application(
+                        &self.registry,
+                        path,
+                        &self_ty,
+                        &bindings,
+                        caller,
+                        budget,
+                    )?;
                     budget.retain_bytes(256)?;
-                    rows.try_reserve_exact(1).map_err(|_| {
+                    let count = application.equalities.len().saturating_add(1);
+                    if rows.len().saturating_add(count) > tr::MAX_PREDICATES {
+                        return Err("predicate environment limit exceeded".into());
+                    }
+                    rows.try_reserve_exact(count).map_err(|_| {
                         super::source::SourceError::from_token(
                             super::token_session::TokenError::Budget(
                                 self.registry.names.budget().poison_allocation(),
@@ -24877,9 +24879,16 @@ impl PlanCtx {
                         )
                         .to_string()
                     })?;
-                    rows.push(ir::Predicate::Implements(application));
+                    rows.push(ir::Predicate::Implements(application.trait_ref));
+                    for equality in application.equalities {
+                        rows.push(ir::Predicate::ProjectionEq {
+                            projection: equality.projection,
+                            ty: equality.ty,
+                        });
+                    }
                 }
                 budget.charge_work(rows.len())?;
+                let mut equalities = Vec::new();
                 budget.retain_bytes(
                     rows.len()
                         .checked_mul(2 * std::mem::size_of::<ir::TraitRef>())
@@ -24905,14 +24914,10 @@ impl PlanCtx {
                 for row in rows {
                     match row {
                         ir::Predicate::Implements(application) => applications.push(application),
-                        ir::Predicate::ProjectionEq { .. } => {
-                            return Err(
-                                "unsupported: associated equality in trait implications".into()
-                            );
-                        }
+                        equality @ ir::Predicate::ProjectionEq { .. } => equalities.push(equality),
                     }
                 }
-                applications
+                (applications, equalities)
             };
             traits.push(tr::TraitHeader {
                 declaration: id,
@@ -24924,6 +24929,7 @@ impl PlanCtx {
                 items: self.registry.trait_items[ti].clone().into(),
                 associated_types: self.registry.trait_associated_types[ti].clone().into(),
                 supertraits: supertraits.into(),
+                supertrait_equalities: supertrait_equalities.into(),
             });
             for declaration in &self.registry.trait_associated_types[ti] {
                 let info = self.declaration(*declaration)?;

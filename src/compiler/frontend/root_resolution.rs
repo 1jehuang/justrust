@@ -5183,13 +5183,14 @@ fn resolve_trait_decl(
         resolver.type_params = declaration.type_params.clone();
         resolver.self_nominal = None;
         resolver.self_allowed = true;
+        // Supertrait and where-clause equalities become trait implication rows.
         defer_equality_boundary(
-            resolver.bounds(&mut declaration.bounds, declaration.module),
+            resolver.bounds_with_equality_policy(&mut declaration.bounds, declaration.module, true),
             &mut equality_boundary,
         )?;
         for path in &mut declaration.supertraits {
             defer_equality_boundary(
-                resolver.trait_path(path, declaration.module),
+                resolver.trait_application(path, declaration.module, true),
                 &mut equality_boundary,
             )?;
         }

@@ -79,6 +79,18 @@ impl Checker<'_> {
         if locations.is_empty() {
             return Ok(None);
         }
+        // A string literal tail is `&'static str`: it carries no borrow from
+        // inputs or captures, so the result needs no origin contract.
+        if body.statements.is_empty()
+            && matches!(result, ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent } if matches!(referent.as_ref(), ir::Ty::Str))
+            && let Some(tail) = body.tail
+            && matches!(
+                self.exprs.get(tail.0).map(|e| &e.kind),
+                Some(ir::ExprKind::Str(_))
+            )
+        {
+            return Ok(None);
+        }
         if let Some(tail) = body.tail
             && matches!(
                 self.exprs.get(tail.0).map(|e| &e.kind),

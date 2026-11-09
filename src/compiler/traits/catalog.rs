@@ -487,6 +487,7 @@ impl CoreCatalogBuilder {
                         items: required.into(),
                         associated_types: Arc::from([]),
                         supertraits: supers.into(),
+                        supertrait_equalities: Arc::from([]),
                     },
                 )?;
             } else if !matches!(item, CatalogItem::PhantomData | CatalogItem::ManuallyDrop) {
