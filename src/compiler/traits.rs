@@ -2292,6 +2292,9 @@ pub(in crate::compiler) struct NominalReplays {
     /// Metadata answers belong to one exact world and original caller context.
     metadata_context: Option<(WorldId, Option<(usize, usize, FactsPhase, DeclId)>)>,
     metadata_caller: Option<body_validation::Context>,
+    // Exact caller identity is computation-local, so its charge must leave
+    // with this replay arena rather than become permanent fact storage.
+    _metadata_caller_storage: Option<ir::PlanReservation>,
     /// Pin the exact outer environment allocation used by the context key.
     _metadata_env: Option<Arc<GenericEnv>>,
     /// A raw nested computation never borrows caller-authorized records. Its
@@ -2627,7 +2630,18 @@ impl NominalReplays {
         });
         let context = Some((world, caller));
         if self.metadata_context.is_none() {
-            self.metadata_caller = facts.map(body_validation::Context::retain).transpose()?;
+            let storage = facts
+                .map(|facts| {
+                    charged(
+                        facts.budget(),
+                        facts
+                            .budget()
+                            .reserve_bytes(std::mem::size_of::<body_validation::Context>()),
+                    )
+                })
+                .transpose()?;
+            self.metadata_caller = facts.map(body_validation::Context::retain_in_reserved_arena);
+            self._metadata_caller_storage = storage;
             self._metadata_env = facts.map(|facts| facts.env().clone());
             self.metadata_context = context;
         }

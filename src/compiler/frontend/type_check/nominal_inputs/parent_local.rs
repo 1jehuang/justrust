@@ -781,13 +781,14 @@ mod tests {
                 assert_eq!(target.type_args.as_ref(), &[mapped.clone()]);
                 let classified = closed.world().instance_facts(&target).unwrap();
                 assert!(classified.is_source_callable(target.declaration).unwrap());
-                assert!(
-                    classified
-                        .original_callable_schema(tr::OriginalCallableSubject::Direct(
-                            target.declaration
-                        ),)
-                        .is_err()
-                );
+                let source_view = classified
+                    .original_callable_schema(tr::OriginalCallableSubject::Direct(
+                        target.declaration,
+                    ))
+                    .unwrap();
+                source_view.validate_for(&classified).unwrap();
+                // Original source metadata is not a physical storage proof.
+                assert!(classified.validate_ty(&mapped).is_err());
                 let generic_call = ir::TraitCall {
                     trait_ref: ir::TraitRef {
                         declaration: source_plan.registry.trait_ids[4],
