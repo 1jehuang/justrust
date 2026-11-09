@@ -81,6 +81,8 @@ pub struct AttributeOutput {
     pub test_main: Option<Range<usize>>,
     /// Built-in derive expansions: (filtered-text offset just after the item, generated impls).
     pub derives: Vec<(usize, String)>,
+    /// `#[path = "..."]` on `mod name;`: (offset of the `mod` keyword, path).
+    pub module_paths: Vec<(usize, String)>,
     pub attributes: Vec<AttributeRecord>,
     pub inactive_items: Vec<InactiveItem>,
 }
@@ -208,6 +210,8 @@ fn prepare_with_context(
         cap_lints_allow,
         levels: lint_names::Levels::default(),
         associated_naming: true,
+        pending_path: None,
+        module_paths: Vec::new(),
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
@@ -242,6 +246,7 @@ fn prepare_with_context(
         derives: filter.derives,
         tests: filter.tests,
         test_main: filter.test_main,
+        module_paths: filter.module_paths,
     })
 }
 struct Filter<'a> {
@@ -276,6 +281,9 @@ struct Filter<'a> {
     pending: PendingTest,
     tests: Vec<TestItem>,
     test_main: Option<Range<usize>>,
+    /// `#[path]` admitted on the module item being walked.
+    pending_path: Option<String>,
+    module_paths: Vec<(usize, String)>,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -773,6 +781,7 @@ impl Filter<'_> {
                     | "repr"
                     | "unsafe"
                     | "no_std"
+                    | "path"
                     | "macro_export"
                     | "forbid"
                     | "deny"
@@ -946,6 +955,22 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                "path" if owner == Owner::Module => {
+                    let MetaValue::String(path) = &meta.value else {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "expected path = \"file.rs\"",
+                        ));
+                    };
+                    if self.pending_path.replace(path.clone()).is_some() {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "duplicate path attribute",
+                        ));
+                    }
+                }
                 // Codegen hints: `cold` only affects layout, and
                 // `track_caller` only the reported panic location on stderr.
                 "cold" | "track_caller"
@@ -1109,6 +1134,7 @@ impl Filter<'_> {
                     cursor += 1;
                 }
             }
+            self.pending_path = None;
             let item_owner = match kind {
                 "fn" => Owner::Function,
                 "mod" => Owner::Module,
@@ -1146,11 +1172,23 @@ impl Filter<'_> {
                 item_owner,
                 Some(self.tokens[item_start].range.start..self.tokens[stop - 1].range.end),
             )? {
+                self.pending_path = None;
                 self.inactive(
                     self.tokens[item_start].range.start..self.tokens[stop - 1].range.end,
                 )?;
                 self.mask(self.tokens[first].range.start..self.tokens[stop - 1].range.end);
             } else {
+                if let Some(path) = self.pending_path.take() {
+                    if body.is_some() {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            self.tokens[keyword].range.clone(),
+                            "path attributes on inline modules are unsupported",
+                        ));
+                    }
+                    self.module_paths
+                        .push((self.tokens[keyword].range.start, path));
+                }
                 // Item calls may introduce exported declarations. Until their
                 // declaration output is admitted, original export inventories
                 // must not claim a complete macro namespace. Function bodies
@@ -2365,12 +2403,12 @@ mod tests {
                 .iter()
                 .any(|a| a.name == "path" && !a.effective)
         );
-        assert_eq!(
-            prep("#[cfg_attr(all(),path=\"x\")] mod real;")
-                .unwrap_err()
-                .kind,
-            AttributeErrorKind::Unsupported
-        );
+        let out = prep("#[cfg_attr(all(),path=\"x.rs\")] mod real;").unwrap();
+        assert_eq!(out.module_paths, vec![(31, "x.rs".to_string())]);
+        assert!(prep("#[path=\"x.rs\"] mod inline {}").is_err());
+        assert!(prep("#[path=\"x.rs\"] fn f() {}").is_err());
+        assert!(prep("#[path] mod m;").is_err());
+        assert!(prep("#[path=\"a.rs\"] #[path=\"b.rs\"] mod m;").is_err());
     }
     #[test]
     fn sequential_cfg_short_circuit_and_deferred_unknown_policy() {
