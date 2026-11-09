@@ -11,6 +11,7 @@ mod const_pattern;
 mod lexical_calls;
 mod manually_drop;
 mod primitive_owners;
+mod private_in_public;
 mod stored_closures;
 mod trait_globs;
 
@@ -5362,6 +5363,7 @@ fn resolve_impl_block(
             validate_depth(DepthNode::Type(&associated.value))?;
             resolver.ty(&mut associated.value, block.module)?;
         }
+        resolver.check_private_in_public_impl(block)?;
         for constant in &mut block.associated_constants {
             clone_vector(&block.type_params, &resolver.alias_budget)?;
             resolver.type_params = block.type_params.clone();

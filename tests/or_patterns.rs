@@ -95,6 +95,25 @@ fn main() { println!("live"); }"#,
                 expect: Expect::Invalid("E0261"),
             },
             Case {
+                name: "private_assoc_type_in_public_impl",
+                source: r#"struct Bar;
+pub trait PubTr { type A; }
+impl PubTr for u8 { type A = Bar; }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("E0446"),
+            },
+            Case {
+                name: "private_assoc_type_for_private_self",
+                source: r#"struct Bar;
+struct Priv;
+pub trait PubTr { type A; fn n() -> i32 { 7 } }
+impl PubTr for Priv { type A = Bar; }
+pub struct P;
+impl PubTr for P { type A = P; }
+fn main() { println!("{} {}", <Priv as PubTr>::n(), <P as PubTr>::n()); }"#,
+                expect: Expect::Run("7 7\n"),
+            },
+            Case {
                 name: "consistent_ref_binding",
                 source: r#"fn f(x: (i32, i32)) -> i32 { match x { (ref a, 1) | (1, ref a) => *a, _ => 0 } }
 fn main() { println!("{} {}", f((5, 1)), f((2, 2))); }"#,
