@@ -106,6 +106,17 @@ pub trait Iterator: Sized {
         FilterMap { iterator: self, f }
     }
 
+    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U::IntoIter, F> {
+        FlatMap { iterator: self, f, front: Option::None }
+    }
+
+    fn flatten(self) -> Flatten<Self, <Self::Item as IntoIterator>::IntoIter>
+    where
+        Self::Item: IntoIterator,
+    {
+        Flatten { iterator: self, front: Option::None }
+    }
+
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
         loop {
             match self.next() {
@@ -274,6 +285,25 @@ pub trait Iterator: Sized {
                     }
                 }
                 Option::None => return Option::Some(best),
+            }
+        }
+    }
+    fn partition<B: super::default::Default + Extend<Self::Item>, F: FnMut(&Self::Item) -> bool>(
+        mut self,
+        mut f: F,
+    ) -> (B, B) {
+        let mut left: B = super::default::Default::default();
+        let mut right: B = super::default::Default::default();
+        loop {
+            match self.next() {
+                Option::Some(item) => {
+                    if f(&item) {
+                        left.extend_one(item);
+                    } else {
+                        right.extend_one(item);
+                    }
+                }
+                Option::None => return (left, right),
             }
         }
     }
@@ -1146,6 +1176,11 @@ pub trait IntoIterator {
     fn into_iter(self) -> Self::IntoIter;
 }
 
+pub trait Extend<A> {
+    fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T);
+    fn extend_one(&mut self, item: A);
+}
+
 pub trait FromIterator<A>: Sized {
     fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self;
 }
@@ -1451,4 +1486,65 @@ impl Iterator for super::ops::Range<usize> {
             Option::None
         }
     }
+}
+
+pub struct FlatMap<I, J, F> {
+    iterator: I,
+    f: F,
+    front: Option<J>,
+}
+
+impl<A, B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = A>, F: FnMut(A) -> U> Iterator for FlatMap<I, J, F> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        loop {
+            if let Option::Some(inner) = &mut self.front {
+                match inner.next() {
+                    Option::Some(value) => return Option::Some(value),
+                    Option::None => {}
+                }
+            }
+            match self.iterator.next() {
+                Option::Some(item) => self.front = Option::Some((self.f)(item).into_iter()),
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<A, B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = A>, F: FnMut(A) -> U> IntoIterator for FlatMap<I, J, F> {
+    type Item = B;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct Flatten<I, J> {
+    iterator: I,
+    front: Option<J>,
+}
+
+impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>> Iterator for Flatten<I, J> {
+    type Item = B;
+
+    fn next(&mut self) -> Option<B> {
+        loop {
+            if let Option::Some(inner) = &mut self.front {
+                match inner.next() {
+                    Option::Some(value) => return Option::Some(value),
+                    Option::None => {}
+                }
+            }
+            match self.iterator.next() {
+                Option::Some(item) => self.front = Option::Some(item.into_iter()),
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>> IntoIterator for Flatten<I, J> {
+    type Item = B;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
 }

@@ -81,3 +81,5 @@ pub mod slice;
 pub mod iter;
 pub mod test;
 pub mod io;
+pub mod error;
+pub mod sets;

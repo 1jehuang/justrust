@@ -127,6 +127,10 @@ impl<T> SliceMethods for [T] {
 /// without an associated-type projection in the returned slice carriers.
 pub trait SliceMutRefMethods<'a, T> {
     fn split_at_mut(self, mid: usize) -> (&'a mut [T], &'a mut [T]);
+    fn split_first_mut(self) -> super::option::Option<(&'a mut T, &'a mut [T])>;
+    fn split_last_mut(self) -> super::option::Option<(&'a mut T, &'a mut [T])>;
+    fn first_mut(self) -> super::option::Option<&'a mut T>;
+    fn last_mut(self) -> super::option::Option<&'a mut T>;
 }
 
 impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
@@ -142,6 +146,43 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
             (from_raw_parts_mut(data, mid), from_raw_parts_mut(right, len - mid))
         }
     }
+    fn split_first_mut(self) -> super::option::Option<(&'a mut T, &'a mut [T])> {
+        let len = self.len();
+        if len == 0usize {
+            return super::option::Option::None;
+        }
+        let data = __justrust_slice_as_mut_ptr!(self);
+        unsafe {
+            let rest = <*mut T as super::ptr::MutPtr<T>>::add(data, 1usize);
+            super::option::Option::Some((&mut *data, from_raw_parts_mut(rest, len - 1usize)))
+        }
+    }
+    fn split_last_mut(self) -> super::option::Option<(&'a mut T, &'a mut [T])> {
+        let len = self.len();
+        if len == 0usize {
+            return super::option::Option::None;
+        }
+        let data = __justrust_slice_as_mut_ptr!(self);
+        unsafe {
+            let last = <*mut T as super::ptr::MutPtr<T>>::add(data, len - 1usize);
+            super::option::Option::Some((&mut *last, from_raw_parts_mut(data, len - 1usize)))
+        }
+    }
+    fn first_mut(self) -> super::option::Option<&'a mut T> {
+        if self.len() == 0usize {
+            return super::option::Option::None;
+        }
+        let data = __justrust_slice_as_mut_ptr!(self);
+        unsafe { super::option::Option::Some(&mut *data) }
+    }
+    fn last_mut(self) -> super::option::Option<&'a mut T> {
+        let len = self.len();
+        if len == 0usize {
+            return super::option::Option::None;
+        }
+        let data = __justrust_slice_as_mut_ptr!(self);
+        unsafe { super::option::Option::Some(&mut *<*mut T as super::ptr::MutPtr<T>>::add(data, len - 1usize)) }
+    }
 }
 
 /// Element-returning `[T]` methods. Implemented for `&'a [T]` so the trait
@@ -151,6 +192,8 @@ pub trait SliceRefMethods<'a, T> {
     fn first(self) -> super::option::Option<&'a T>;
     fn last(self) -> super::option::Option<&'a T>;
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]);
+    fn split_first(self) -> super::option::Option<(&'a T, &'a [T])>;
+    fn split_last(self) -> super::option::Option<(&'a T, &'a [T])>;
 }
 
 impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
@@ -165,6 +208,22 @@ impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]) {
         assert!(mid <= self.len());
         (&self[..mid], &self[mid..])
+    }
+
+    fn split_first(self) -> super::option::Option<(&'a T, &'a [T])> {
+        if self.len() == 0usize {
+            super::option::Option::None
+        } else {
+            super::option::Option::Some((&self[0usize], &self[1usize..]))
+        }
+    }
+    fn split_last(self) -> super::option::Option<(&'a T, &'a [T])> {
+        let len = self.len();
+        if len == 0usize {
+            super::option::Option::None
+        } else {
+            super::option::Option::Some((&self[len - 1usize], &self[..len - 1usize]))
+        }
     }
 
     fn first(self) -> super::option::Option<&'a T> {
@@ -372,3 +431,4 @@ impl<'a, T> SliceIter<'a, T> for &'a [T] {
         Iter::new(self)
     }
 }
+

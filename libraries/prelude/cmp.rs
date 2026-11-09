@@ -711,3 +711,39 @@ pub fn min<T: Ord>(a: T, b: T) -> T {
         _ => a,
     }
 }
+
+/// Reverses the ordering of the wrapped value.
+pub struct Reverse<T>(pub T);
+
+impl<T: PartialEq> PartialEq for Reverse<T> {
+    fn eq(&self, other: &Reverse<T>) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T: Eq> Eq for Reverse<T> {}
+impl<T: PartialOrd> PartialOrd for Reverse<T> {
+    fn partial_cmp(&self, other: &Reverse<T>) -> Option<Ordering> {
+        other.0.partial_cmp(&self.0)
+    }
+}
+impl<T: Ord> Ord for Reverse<T> {
+    fn cmp(&self, other: &Reverse<T>) -> Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+impl<T: Clone> Clone for Reverse<T> {
+    fn clone(&self) -> Reverse<T> {
+        Reverse(self.0.clone())
+    }
+}
+impl<T: Copy> Copy for Reverse<T> {}
+impl<T: super::fmt::Debug> super::fmt::Debug for Reverse<T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.debug_tuple("Reverse").field(&self.0).finish()
+    }
+}
+impl<T: super::default::Default> super::default::Default for Reverse<T> {
+    fn default() -> Reverse<T> {
+        Reverse(super::default::Default::default())
+    }
+}

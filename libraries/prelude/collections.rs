@@ -506,3 +506,5 @@ impl<K: super::cmp::Ord, V> super::ops::Index<&K> for BTreeMap<K, V> {
         }
     }
 }
+
+pub use super::sets::{BTreeSet, BinaryHeap, HashSet, VecDeque};
