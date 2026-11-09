@@ -1531,16 +1531,17 @@ impl Filter<'_> {
             return Ok(true);
         }
         // A block statement: `#[cfg(p)] { ... }`.
-        if first < end && self.tokens[first].text(self.text) == "{" {
-            if let Some(c) = self.tokens[first].close {
-                if active {
-                    self.mask(a.range.clone());
-                } else {
-                    self.mask(a.range.start..self.tokens[c].range.end);
-                }
-                self.consumed.push(a.range.start);
-                return Ok(true);
+        if first < end
+            && self.tokens[first].text(self.text) == "{"
+            && let Some(c) = self.tokens[first].close
+        {
+            if active {
+                self.mask(a.range.clone());
+            } else {
+                self.mask(a.range.start..self.tokens[c].range.end);
             }
+            self.consumed.push(a.range.start);
+            return Ok(true);
         }
         let is_let = first < end && self.tokens[first].text(self.text) == "let";
         let mut stop = None;
@@ -3197,12 +3198,11 @@ mod tests {
     #[test]
     fn exported_namespace_completeness_tracks_only_active_item_calls() {
         // Activity tracking does not grant unsupported lint-owner semantics.
-        for source in ["#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}"] {
-            assert_eq!(
-                prep(source).unwrap_err().kind,
-                AttributeErrorKind::Unsupported
-            );
-        }
+        let source = "#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}";
+        assert_eq!(
+            prep(source).unwrap_err().kind,
+            AttributeErrorKind::Unsupported
+        );
         // A fully evaluated cfg leaves the call active, so it still counts.
         for source in [
             "#[cfg(all())] make!(); fn main(){}",

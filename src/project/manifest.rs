@@ -1754,10 +1754,10 @@ fn validate_locked_version(requirement: &str, locked: &str) -> Result<(), Manife
                 None => return unsupported(),
             }
         }
-        if text.split('.').count() > 3 || (wanted.is_empty() && op != "^") {
-            if !(wanted.is_empty() && text.split('.').all(|p| matches!(p, "*" | "x" | "X"))) {
-                return unsupported();
-            }
+        if (text.split('.').count() > 3 || (wanted.is_empty() && op != "^"))
+            && !(wanted.is_empty() && text.split('.').all(|p| matches!(p, "*" | "x" | "X")))
+        {
+            return unsupported();
         }
         if pre.is_some() && wanted.len() == 3 && wanted[..] == actual[..] {
             pre_allowed = true;

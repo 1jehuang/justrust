@@ -6648,11 +6648,7 @@ impl ValidatedTraitWorld {
                         "supertrait equality row is not an equality",
                     ));
                 };
-                if !h
-                    .supertraits
-                    .iter()
-                    .any(|goal| *goal == projection.trait_ref)
-                {
+                if !h.supertraits.contains(&projection.trait_ref) {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "supertrait equality has no matching supertrait",

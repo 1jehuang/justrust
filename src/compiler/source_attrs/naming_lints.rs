@@ -227,10 +227,8 @@ impl Scan<'_> {
                         self.upper(at, "static variable")?;
                     }
                 }
-                "const" => {
-                    if self.t(i + 2) == ":" {
-                        self.upper(i + 1, "constant")?;
-                    }
+                "const" if self.t(i + 2) == ":" => {
+                    self.upper(i + 1, "constant")?;
                 }
                 _ => {}
             }
