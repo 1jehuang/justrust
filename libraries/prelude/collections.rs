@@ -1,28 +1,60 @@
 //! Native std::collections. HashMap<K, V> is ordinary source: a dense entry
 //! vector with cached hashes. Iteration order is unspecified, like std's.
-use super::hash::{DefaultHasher, Hash, Hasher};
+use super::hash::{BuildHasher, Hash, Hasher, RandomState};
 use super::option::Option;
 use super::vec::Vec;
 
-fn hash_of<K: ?Sized + Hash>(key: &K) -> u64 {
-    let mut state = DefaultHasher::new();
+fn hash_with<K: ?Sized + Hash, S: BuildHasher>(builder: &S, key: &K) -> u64 {
+    let mut state = builder.build_hasher();
     key.hash(&mut state);
     state.finish()
 }
 
-pub struct HashMap<K, V> {
+pub struct HashMap<K, V, S = RandomState> {
     hashes: Vec<u64>,
     keys: Vec<K>,
     values: Vec<V>,
+    hash_builder: S,
 }
 
-impl<K: Hash + Eq, V> HashMap<K, V> {
-    pub fn new() -> HashMap<K, V> {
-        HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new() }
+impl<K: Hash + Eq, V> HashMap<K, V, RandomState> {
+    pub fn new() -> HashMap<K, V, RandomState> {
+        HashMap::with_hasher(RandomState::new())
     }
 
+    pub fn with_capacity(capacity: usize) -> HashMap<K, V, RandomState> {
+        HashMap::with_capacity_and_hasher(capacity, RandomState::new())
+    }
+}
+
+impl<K, V, S> HashMap<K, V, S> {
+    pub fn with_hasher(hash_builder: S) -> HashMap<K, V, S> {
+        HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new(), hash_builder }
+    }
+
+    pub fn with_capacity_and_hasher(_capacity: usize, hash_builder: S) -> HashMap<K, V, S> {
+        HashMap::with_hasher(hash_builder)
+    }
+
+    pub fn hasher(&self) -> &S {
+        &self.hash_builder
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.keys.capacity()
+    }
+
+    pub fn clear(&mut self) {
+        self.hashes.clear();
+        self.keys.clear();
+        self.values.clear();
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
+
     fn find_key(&self, key: &K) -> Option<usize> {
-        let h = hash_of(key);
+        let h = hash_with(&self.hash_builder, key);
         let mut i = 0usize;
         while i < self.keys.len() {
             if self.hashes[i] == h && self.keys.get_ref(i).eq(key) {
@@ -37,7 +69,7 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     where
         K: super::borrow::Borrow<Q>,
     {
-        let h = hash_of(key);
+        let h = hash_with(&self.hash_builder, key);
         let mut i = 0usize;
         while i < self.keys.len() {
             let stored: &Q = self.keys.get_ref(i).borrow();
@@ -97,7 +129,7 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
                 Option::Some(old)
             }
             Option::None => {
-                self.hashes.push(hash_of(&key));
+                self.hashes.push(hash_with(&self.hash_builder, &key));
                 self.keys.push(key);
                 self.values.push(value);
                 Option::None
@@ -119,11 +151,11 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
         }
     }
 
-    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V> {
+    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V, S> {
         Entry { map: self, key }
     }
 
-    pub fn iter<'a>(&'a self) -> Iter<'a, K, V> {
+    pub fn iter<'a>(&'a self) -> Iter<'a, K, V, S> {
         Iter { map: self, index: 0usize }
     }
 
@@ -136,19 +168,19 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     }
 }
 
-pub struct Entry<'a, K, V> {
-    map: &'a mut HashMap<K, V>,
+pub struct Entry<'a, K, V, S = RandomState> {
+    map: &'a mut HashMap<K, V, S>,
     key: K,
 }
 
-impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
+impl<'a, K: Hash + Eq, V, S: BuildHasher> Entry<'a, K, V, S> {
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
         let map = self.map;
         let index = match map.find_key(&self.key) {
             Option::Some(i) => i,
             Option::None => {
                 let value = default();
-                map.hashes.push(hash_of(&self.key));
+                map.hashes.push(hash_with(&map.hash_builder, &self.key));
                 map.keys.push(self.key);
                 map.values.push(value);
                 map.values.len() - 1usize
@@ -166,7 +198,7 @@ impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
             Option::Some(i) => i,
             Option::None => {
                 let value = default(&self.key);
-                map.hashes.push(hash_of(&self.key));
+                map.hashes.push(hash_with(&map.hash_builder, &self.key));
                 map.keys.push(self.key);
                 map.values.push(value);
                 map.values.len() - 1usize
@@ -183,7 +215,7 @@ impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
         let index = match map.find_key(&self.key) {
             Option::Some(i) => i,
             Option::None => {
-                map.hashes.push(hash_of(&self.key));
+                map.hashes.push(hash_with(&map.hash_builder, &self.key));
                 map.keys.push(self.key);
                 map.values.push(default);
                 map.values.len() - 1usize
@@ -196,14 +228,14 @@ impl<'a, K: Hash + Eq, V> Entry<'a, K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq, V: super::default::Default> Entry<'a, K, V> {
+impl<'a, K: Hash + Eq, V: super::default::Default, S: BuildHasher> Entry<'a, K, V, S> {
     pub fn or_default(self) -> &'a mut V {
         let map = self.map;
         let index = match map.find_key(&self.key) {
             Option::Some(i) => i,
             Option::None => {
                 let value = V::default();
-                map.hashes.push(hash_of(&self.key));
+                map.hashes.push(hash_with(&map.hash_builder, &self.key));
                 map.keys.push(self.key);
                 map.values.push(value);
                 map.values.len() - 1usize
@@ -216,12 +248,12 @@ impl<'a, K: Hash + Eq, V: super::default::Default> Entry<'a, K, V> {
     }
 }
 
-pub struct Iter<'a, K, V> {
-    map: &'a HashMap<K, V>,
+pub struct Iter<'a, K, V, S = RandomState> {
+    map: &'a HashMap<K, V, S>,
     index: usize,
 }
 
-impl<'a, K, V> super::iter::Iterator for Iter<'a, K, V> {
+impl<'a, K, V, S> super::iter::Iterator for Iter<'a, K, V, S> {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<(&'a K, &'a V)> {
         if self.index < self.map.keys.len() {
@@ -234,18 +266,18 @@ impl<'a, K, V> super::iter::Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> super::iter::IntoIterator for Iter<'a, K, V> {
+impl<'a, K, V, S> super::iter::IntoIterator for Iter<'a, K, V, S> {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V>;
-    fn into_iter(self) -> Iter<'a, K, V> {
+    type IntoIter = Iter<'a, K, V, S>;
+    fn into_iter(self) -> Iter<'a, K, V, S> {
         self
     }
 }
 
-impl<'a, K: Hash + Eq, V> super::iter::IntoIterator for &'a HashMap<K, V> {
+impl<'a, K: Hash + Eq, V, S: BuildHasher> super::iter::IntoIterator for &'a HashMap<K, V, S> {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V>;
-    fn into_iter(self) -> Iter<'a, K, V> {
+    type IntoIter = Iter<'a, K, V, S>;
+    fn into_iter(self) -> Iter<'a, K, V, S> {
         self.iter()
     }
 }
@@ -477,7 +509,7 @@ impl<K, V> super::iter::Iterator for IntoIter<K, V> {
     }
 }
 
-impl<K, V> super::iter::IntoIterator for HashMap<K, V> {
+impl<K, V, S> super::iter::IntoIterator for HashMap<K, V, S> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
     fn into_iter(self) -> IntoIter<K, V> {
@@ -485,8 +517,8 @@ impl<K, V> super::iter::IntoIterator for HashMap<K, V> {
     }
 }
 
-impl<K: Hash + Eq + super::borrow::Borrow<Q>, Q: ?Sized + Hash + Eq, V> super::ops::Index<&Q>
-    for HashMap<K, V>
+impl<K: Hash + Eq + super::borrow::Borrow<Q>, Q: ?Sized + Hash + Eq, V, S: BuildHasher> super::ops::Index<&Q>
+    for HashMap<K, V, S>
 {
     type Output = V;
     fn index(&self, key: &Q) -> &V {
@@ -509,9 +541,9 @@ impl<K: super::cmp::Ord, V> super::ops::Index<&K> for BTreeMap<K, V> {
 
 pub use super::sets::{BTreeSet, BinaryHeap, HashSet, VecDeque};
 
-impl<K, V> super::default::Default for HashMap<K, V> {
-    fn default() -> HashMap<K, V> {
-        HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new() }
+impl<K, V, S: super::default::Default> super::default::Default for HashMap<K, V, S> {
+    fn default() -> HashMap<K, V, S> {
+        HashMap::with_hasher(S::default())
     }
 }
 

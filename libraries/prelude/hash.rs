@@ -343,3 +343,40 @@ impl<A: Hash, B: Hash, C: Hash, D: Hash> Hash for (A, B, C, D) {
         <D as Hash>::hash(&(*self).3, &mut *state);
     }
 }
+
+/// std's default `BuildHasher` for HashMap/HashSet. Keys are fixed (no
+/// per-process randomness); iteration order is unspecified either way.
+pub struct RandomState {
+    seed: u64,
+}
+
+impl Clone for RandomState {
+    fn clone(&self) -> RandomState {
+        RandomState { seed: self.seed }
+    }
+}
+
+impl RandomState {
+    pub fn new() -> RandomState {
+        RandomState { seed: 0u64 }
+    }
+}
+
+impl super::default::Default for RandomState {
+    fn default() -> RandomState {
+        RandomState::new()
+    }
+}
+
+impl super::fmt::Debug for RandomState {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.write_str("RandomState { .. }")
+    }
+}
+
+impl BuildHasher for RandomState {
+    type Hasher = DefaultHasher;
+    fn build_hasher(&self) -> DefaultHasher {
+        DefaultHasher::new()
+    }
+}
