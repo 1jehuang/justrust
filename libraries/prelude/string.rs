@@ -922,3 +922,134 @@ impl super::borrow::Borrow<str> for String {
         self.as_str()
     }
 }
+
+/// Error returned by `str::from_utf8` for an invalid byte sequence.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct Utf8Error {
+    valid_up_to: usize,
+    error_len: Option<u8>,
+}
+
+impl Utf8Error {
+    pub fn valid_up_to(&self) -> usize {
+        self.valid_up_to
+    }
+    pub fn error_len(&self) -> Option<usize> {
+        match self.error_len {
+            Option::Some(n) => Option::Some(n as usize),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl super::fmt::Debug for Utf8Error {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        match self.error_len {
+            Option::Some(n) => write!(
+                f,
+                "Utf8Error {{ valid_up_to: {}, error_len: Some({}) }}",
+                self.valid_up_to, n
+            ),
+            Option::None => write!(
+                f,
+                "Utf8Error {{ valid_up_to: {}, error_len: None }}",
+                self.valid_up_to
+            ),
+        }
+    }
+}
+
+impl super::fmt::Display for Utf8Error {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        match self.error_len {
+            Option::Some(n) => write!(
+                f,
+                "invalid utf-8 sequence of {} bytes from index {}",
+                n, self.valid_up_to
+            ),
+            Option::None => write!(
+                f,
+                "incomplete utf-8 byte sequence from index {}",
+                self.valid_up_to
+            ),
+        }
+    }
+}
+
+fn utf8_cont(v: &[u8], at: usize) -> bool {
+    at < v.len() && (v[at] & 0xC0u8) == 0x80u8
+}
+
+/// Validate `v` as UTF-8, following core::str::validations.
+pub fn str_from_utf8(v: &[u8]) -> Result<&str, Utf8Error> {
+    let n = v.len();
+    let mut i = 0usize;
+    while i < n {
+        let b = v[i];
+        let start = i;
+        if b < 0x80u8 {
+            i += 1usize;
+            continue;
+        }
+        let width = if b >= 0xC2u8 && b <= 0xDFu8 {
+            2usize
+        } else if b >= 0xE0u8 && b <= 0xEFu8 {
+            3usize
+        } else if b >= 0xF0u8 && b <= 0xF4u8 {
+            4usize
+        } else {
+            0usize
+        };
+        let mut bad: Option<u8> = Option::None;
+        let mut incomplete = false;
+        if width == 0usize {
+            bad = Option::Some(1u8);
+        } else if i + 1usize >= n {
+            incomplete = true;
+        } else {
+            let b1 = v[i + 1usize];
+            let second_ok = match width {
+                2usize => (b1 & 0xC0u8) == 0x80u8,
+                3usize => match b {
+                    0xE0u8 => b1 >= 0xA0u8 && b1 <= 0xBFu8,
+                    0xEDu8 => b1 >= 0x80u8 && b1 <= 0x9Fu8,
+                    _ => (b1 & 0xC0u8) == 0x80u8,
+                },
+                _ => match b {
+                    0xF0u8 => b1 >= 0x90u8 && b1 <= 0xBFu8,
+                    0xF4u8 => b1 >= 0x80u8 && b1 <= 0x8Fu8,
+                    _ => (b1 & 0xC0u8) == 0x80u8,
+                },
+            };
+            if !second_ok {
+                bad = Option::Some(1u8);
+            } else {
+                let mut k = 2usize;
+                while k < width {
+                    if i + k >= n {
+                        incomplete = true;
+                        break;
+                    }
+                    if !utf8_cont(v, i + k) {
+                        bad = Option::Some(k as u8);
+                        break;
+                    }
+                    k += 1usize;
+                }
+            }
+        }
+        if incomplete {
+            return Result::Err(Utf8Error { valid_up_to: start, error_len: Option::None });
+        }
+        if let Option::Some(e) = bad {
+            return Result::Err(Utf8Error { valid_up_to: start, error_len: Option::Some(e) });
+        }
+        i += width;
+    }
+    // &[u8] and &str share the (data, len) fat pointer layout.
+    if n == 0usize {
+        return Result::Ok("");
+    }
+    let ptr = &v[0] as *const u8 as usize;
+    Result::Ok(str_from_raw_parts(ptr, n))
+}

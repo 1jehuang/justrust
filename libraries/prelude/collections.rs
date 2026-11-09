@@ -508,3 +508,15 @@ impl<K: super::cmp::Ord, V> super::ops::Index<&K> for BTreeMap<K, V> {
 }
 
 pub use super::sets::{BTreeSet, BinaryHeap, HashSet, VecDeque};
+
+impl<K, V> super::default::Default for HashMap<K, V> {
+    fn default() -> HashMap<K, V> {
+        HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new() }
+    }
+}
+
+impl<K, V> super::default::Default for BTreeMap<K, V> {
+    fn default() -> BTreeMap<K, V> {
+        BTreeMap { keys: Vec::new(), values: Vec::new() }
+    }
+}
