@@ -363,6 +363,22 @@ fn warm() {
 /// Local median above which a signed-in hosted user may start the machine.
 const HOSTED_START_LOCAL_SECS: f64 = 20.0;
 
+/// Hosted is the default, but a command that recently finished locally in
+/// under this many seconds stays local: hosted overhead (sync, queueing,
+/// output) is a second or more, so it cannot win by enough.
+const HOSTED_MIN_LOCAL_SECS: f64 = 5.0;
+
+/// Hosted default exception: fast, warm local history for this command.
+/// Without local history we stay hosted (the local target dir may be stale).
+pub fn hosted_stays_local(local: Option<f64>, cold_target: bool) -> Option<String> {
+    match local {
+        Some(l) if !cold_target && l < HOSTED_MIN_LOCAL_SECS => Some(format!(
+            "local ~{l:.1}s for this command, under the {HOSTED_MIN_LOCAL_SECS:.0}s hosted threshold"
+        )),
+        _ => None,
+    }
+}
+
 /// Median local wall for exactly these args in `cwd`, recent samples only.
 fn local_median(args: &[String], cwd: &str, entries: &[IndexEntry], now: f64) -> Option<f64> {
     let mut v: Vec<&IndexEntry> = entries
@@ -640,6 +656,16 @@ pub fn maybe_remote(full: &[OsString]) {
     } else if hosted_default {
         if recently_failed(now) {
             return say_local("remote failed in the last 10 minutes");
+        }
+        if let Ok(cwd_path) = std::env::current_dir() {
+            let cwd = cwd_path.to_string_lossy().into_owned();
+            let entries = load_entries(&cwd);
+            if let Some(why) = hosted_stays_local(
+                local_median(&args, &cwd, &entries, now),
+                cold_target(&cwd_path),
+            ) {
+                return say_local(&why);
+            }
         }
         "default for hosted builds; --local or JUSTRUST_REMOTE=auto to change".to_string()
     } else {
@@ -990,6 +1016,15 @@ mod tests {
         assert!(!is_remote(&cold_rule(run(&["check"], &h), true)));
         // `build` stays local even when cold.
         assert!(!is_remote(&cold_rule(run(&["build"], &[]), true)));
+    }
+
+    #[test]
+    fn hosted_threshold_rule() {
+        assert!(hosted_stays_local(Some(1.2), false).is_some());
+        assert!(hosted_stays_local(Some(4.9), false).is_some());
+        assert!(hosted_stays_local(Some(5.0), false).is_none());
+        assert!(hosted_stays_local(Some(1.2), true).is_none());
+        assert!(hosted_stays_local(None, false).is_none());
     }
 
     #[test]
