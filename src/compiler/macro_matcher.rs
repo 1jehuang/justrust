@@ -696,6 +696,16 @@ fn syntactic(
             // expr, stmt, ty, path, pat, pat_param, meta
             let mut angle = 0i64;
             let typeish = matches!(kind, FragmentKind::Ty | FragmentKind::Path);
+            // A type or path is one operand chain, not a token run. Once a
+            // complete operand has been consumed at angle depth 0 only `::`,
+            // generic arguments, `+` bounds, `->`, a type-macro `!` or
+            // `Fn(..)` arguments extend it: `$($t:ty)*` over `i8 i16` is two
+            // types.
+            let mut operand_end = false;
+            let mut operand_ident = false;
+            let mut after_plus = false;
+            let mut after_bang = false;
+            let mut binder = false;
             let literal_end = if matches!(kind, FragmentKind::Expr | FragmentKind::Expr2021) {
                 literal_expr_boundary(events, position, session)?
             } else {
@@ -709,6 +719,7 @@ fn syntactic(
                 if matches!(event.kind, EventKind::Close(_)) {
                     break;
                 }
+                let angle_at = angle;
                 if let Some((chars, len)) = punct_of(event) {
                     let op = &chars[..len as usize];
                     let stop = match op {
@@ -764,12 +775,80 @@ fn syntactic(
                         break;
                     }
                 }
-                if typeish
-                    && trees > 0
-                    && angle == 0
-                    && let EventKind::Open(Delimiter::Brace | Delimiter::Bracket) = event.kind
-                {
-                    break;
+                if typeish && angle_at == 0 {
+                    let punct = punct_of(event);
+                    let op = punct.as_ref().map(|(chars, len)| &chars[..*len as usize]);
+                    let word = ident_of(event, session)?;
+                    if operand_end {
+                        let continues = match (op, word) {
+                            (Some(op), _) => {
+                                matches!(op, [':', ':'] | ['+'] | ['-', '>'] | ['!'])
+                                    || op.first() == Some(&'<')
+                            }
+                            (None, Some(_)) => false,
+                            (None, None) => {
+                                operand_ident
+                                    && matches!(event.kind, EventKind::Open(Delimiter::Parenthesis))
+                            }
+                        };
+                        if !continues {
+                            break;
+                        }
+                    }
+                    if trees > 0
+                        && !after_bang
+                        && matches!(event.kind, EventKind::Open(Delimiter::Brace))
+                    {
+                        break;
+                    }
+                    if angle == 0 {
+                        let (complete, ident) = match (op, word) {
+                            (Some(['!']), _) if operand_end => {
+                                after_bang = true;
+                                (false, false)
+                            }
+                            (Some(['!'] | ['_']), _) => (true, false),
+                            (Some(_), _) => (false, false),
+                            (None, Some(word)) => {
+                                if word == "for" {
+                                    binder = true;
+                                }
+                                let prefix = matches!(
+                                    word,
+                                    "mut"
+                                        | "const"
+                                        | "dyn"
+                                        | "impl"
+                                        | "unsafe"
+                                        | "extern"
+                                        | "fn"
+                                        | "for"
+                                );
+                                (!prefix, !prefix)
+                            }
+                            (None, None) => match event.kind {
+                                EventKind::Open(_) => {
+                                    after_bang = false;
+                                    (true, false)
+                                }
+                                EventKind::Atom(LogicalToken::Lifetime { .. }) => {
+                                    (after_plus, false)
+                                }
+                                _ => (false, false),
+                            },
+                        };
+                        after_plus = matches!(op, Some(['+']));
+                        operand_end = complete;
+                        operand_ident = ident;
+                    } else {
+                        operand_end = false;
+                        operand_ident = false;
+                    }
+                } else if typeish && angle == 0 {
+                    // Generic arguments closed. A `for<..>` binder is a prefix.
+                    operand_end = !binder;
+                    operand_ident = false;
+                    binder = false;
                 }
                 end = next_tree(end);
                 trees += 1;

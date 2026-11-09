@@ -860,6 +860,22 @@ mod tests {
     }
 
     #[test]
+    fn separator_free_type_repetition_splits_adjacent_types() {
+        let mut f = Fixture::new(
+            "{ ($($t:ty)*) => { $( ($t) )* } } {i8 i16 u64} {Vec<u8> &'a mut T [u8; 2] (A, B) a::b::C<D>} {dyn A + 'a Box<dyn Fn(u8) -> u8> fn(u8) -> u8} {Fn(u8) -> u8 m!{x} *const T}",
+        );
+        let definition = f.definition(0).unwrap();
+        for (index, expected) in [(1, 3), (2, 5), (3, 3), (4, 3)] {
+            let output = f
+                .expand(&definition, f.part(index))
+                .unwrap()
+                .tokens(&f.session)
+                .unwrap();
+            assert_eq!(output.len(&f.session).unwrap(), expected, "part {index}");
+        }
+    }
+
+    #[test]
     fn logical_tt_and_raw_identifier_controls() {
         let mut f =
             Fixture::new("{ ($x:tt) => {one}; ($($x:tt)*) => {many} } {>>=} {> > =} {'a} {++}");
