@@ -1,8 +1,5 @@
 {
   "requirements": [
-    {
-      "kind": "credential",
-      "name": "github"
-    }
+    {"kind": "credential", "name": "github"}
   ]
 }
