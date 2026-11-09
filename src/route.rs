@@ -718,6 +718,7 @@ pub fn maybe_remote(full: &[OsString]) {
             } else {
                 "remote unavailable"
             };
+            let _ = LOCAL_REASON.set(format!("{kind}: {msg}"));
             crate::remote_hosted::report_local_build(
                 &format!("{kind}: {msg}"),
                 ROUTED_CMD.get().map(String::as_str),

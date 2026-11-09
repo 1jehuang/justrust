@@ -807,6 +807,8 @@ pub fn report_local_build(reason: &str, cmd: Option<&str>) {
 pub struct LocalRunLabels {
     cmd: String,
     project: Option<String>,
+    /// Why the router kept this build local.
+    reason: Option<String>,
 }
 
 impl LocalRunLabels {
@@ -832,7 +834,11 @@ impl LocalRunLabels {
                 .and_then(|n| n.to_str())
                 .map(str::to_string)
         });
-        Some(Self { cmd, project })
+        Some(Self {
+            cmd,
+            project,
+            reason: crate::route::local_reason(),
+        })
     }
 }
 
@@ -853,6 +859,9 @@ fn local_run_body(
     });
     if let Some(p) = &l.project {
         body["project"] = json!(run_label(p, 160));
+    }
+    if let Some(r) = &l.reason {
+        body["reason"] = json!(run_label(r, 200));
     }
     let h = crate::procfs::hostname();
     if !h.is_empty() {
@@ -1837,11 +1846,13 @@ mod tests {
         let l = LocalRunLabels {
             cmd: "test\n-p   a".into(),
             project: Some("proj".into()),
+            reason: Some("router: check is faster locally".into()),
         };
         let b = local_run_body(&l, "20261108-1-2", "done", Some(101), Some(1.234));
         assert_eq!(b["state"], "done");
         assert_eq!(b["cmd"], "test -p a");
         assert_eq!(b["project"], "proj");
+        assert_eq!(b["reason"], "router: check is faster locally");
         assert_eq!(b["exit_code"], 101);
         assert_eq!(b["wall_s"], 1.23);
         let b = local_run_body(&l, "x", "running", None, None);
