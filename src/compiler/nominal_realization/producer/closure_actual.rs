@@ -114,6 +114,30 @@ pub(super) fn resolve_actual<'a>(
             };
             actuals.push(ty);
         }
-        replay_template(&types, provider, &template, &actuals, budget)
+        let ir::Ty::Closure(closure) =
+            replay_template(&types, provider, &template, &actuals, budget)?
+        else {
+            return Err(Error::new("closure template replay changed its type kind"));
+        };
+        // Owner substitution authenticates the source shape, but nonparameter
+        // children (for example String in a closure result) can still name
+        // source applications. Resolve every semantic child through the same
+        // current-engine graph reads as nominal arguments before publishing.
+        let mut pending = topology::storage(closure.types().count(), budget)?;
+        for child in closure.types() {
+            let term = Term::from_ty(child, budget, depth + 1)?;
+            pending.push(resolve(cx, term, world, catalog, budget, depth + 1));
+        }
+        let children = all(pending).await?;
+        let mut children = children.into_iter();
+        let mapped = closure.try_map(|_| {
+            children
+                .next()
+                .ok_or_else(|| Error::new("closure semantic child read omitted its output"))
+        })?;
+        if children.next().is_some() {
+            return Err(Error::new("closure semantic child read changed its arity"));
+        }
+        Ok(ir::Ty::Closure(Arc::new(mapped)))
     })
 }

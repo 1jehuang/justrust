@@ -6,6 +6,30 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn generic_iterator_closure_realizes_nominal_result_metadata() {
+    oracle::check(
+        "generic_iterator_closure_nominal_result",
+        &[
+            Case {
+                name: "display_map_collect",
+                source: r#"use std::fmt::Display;fn render<T:Display>(values:&[T])->String{let parts:Vec<String>=values.iter().map(|x|format!("{}",x)).collect();parts.join(" < ")}fn main(){println!("{}",render::<i32>(&[1i32,2,3]));println!("{}",render::<String>(&[String::from("apple"),String::from("pear")]));}"#,
+                expect: Expect::Run("1 < 2 < 3\napple < pear\n"),
+            },
+            Case {
+                name: "unused_wrong_nominal_result",
+                source: "fn bad<T>(values:&[T]){let _:Vec<String>=values.iter().map(|_|1i32).collect();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_missing_display_bound",
+                source: r#"fn bad<T>(values:&[T]){let _:Vec<String>=values.iter().map(|x|format!("{}",x)).collect();}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unused_outer_opaque_binding_is_not_a_closure_capture() {
     oracle::check(
         "unused_outer_opaque_binding",
