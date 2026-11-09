@@ -1,0 +1,369 @@
+//! Lint names known to stock rustc 1.98 (builtin lints and groups), and
+//! names it accepts with a renamed/removed warning. Any other name under a
+//! lint level is an `unknown_lints` warning, never an error.
+
+pub(super) const KNOWN: &[&str] = &[
+    "aarch64_softfloat_neon",
+    "absolute_paths_not_starting_with_crate",
+    "ambiguous_associated_items",
+    "ambiguous_derive_helpers",
+    "ambiguous_glob_imported_traits",
+    "ambiguous_glob_imports",
+    "ambiguous_glob_reexports",
+    "ambiguous_import_visibilities",
+    "ambiguous_negative_literals",
+    "ambiguous_panic_imports",
+    "ambiguous_wide_pointer_comparisons",
+    "anonymous_parameters",
+    "arithmetic_overflow",
+    "array_into_iter",
+    "asm_sub_register",
+    "async_fn_in_trait",
+    "bad_asm_style",
+    "bare_trait_objects",
+    "binary_asm_labels",
+    "bindings_with_variant_name",
+    "boxed_slice_into_iter",
+    "break_with_label_and_loop",
+    "clashing_extern_declarations",
+    "closure_returning_async_block",
+    "coherence_leak_check",
+    "conflicting_repr_hints",
+    "confusable_idents",
+    "const_evaluatable_unchecked",
+    "const_item_interior_mutations",
+    "const_item_mutation",
+    "c_void_returns",
+    "dangerous_implicit_autorefs",
+    "dangling_pointers_from_locals",
+    "dangling_pointers_from_temporaries",
+    "dead_code",
+    "dead_code_pub_in_binary",
+    "default_overrides_default_fields",
+    "dependency_on_unit_never_type_fallback",
+    "deprecated",
+    "deprecated_in_future",
+    "deprecated_llvm_intrinsic",
+    "deprecated_safe",
+    "deprecated_safe_2024",
+    "deprecated_where_clause_location",
+    "deref_into_dyn_supertrait",
+    "deref_nullptr",
+    "double_negations",
+    "drop_bounds",
+    "dropping_copy_types",
+    "dropping_references",
+    "duplicate_features",
+    "duplicate_macro_attributes",
+    "duplicate_tools",
+    "dyn_drop",
+    "edition_2024_expr_fragment_specifier",
+    "elided_lifetimes_in_paths",
+    "ellipsis_inclusive_range_patterns",
+    "enum_intrinsics_non_enums",
+    "explicit_builtin_cfgs_in_flags",
+    "explicit_outlives_requirements",
+    "exported_private_dependencies",
+    "ffi_unwind_calls",
+    "float_literal_f32_fallback",
+    "forbidden_lint_groups",
+    "forgetting_copy_types",
+    "forgetting_references",
+    "for_loops_over_fallibles",
+    "function_casts_as_integer",
+    "function_item_references",
+    "future_incompatible",
+    "hidden_glob_reexports",
+    "if_let_rescope",
+    "ill_formed_attribute_input",
+    "implicit_provenance_casts",
+    "impl_trait_overcaptures",
+    "impl_trait_redundant_captures",
+    "improper_ctypes",
+    "improper_ctypes_definitions",
+    "improper_gpu_kernel_arg",
+    "incomplete_features",
+    "incomplete_include",
+    "ineffective_unstable_trait_impl",
+    "inline_no_sanitize",
+    "integer_to_ptr_transmutes",
+    "internal_eq_trait_method_impls",
+    "internal_features",
+    "invalid_atomic_ordering",
+    "invalid_doc_attributes",
+    "invalid_from_utf8",
+    "invalid_from_utf8_unchecked",
+    "invalid_macro_export_arguments",
+    "invalid_nan_comparisons",
+    "invalid_null_arguments",
+    "invalid_reference_casting",
+    "invalid_runtime_symbol_definitions",
+    "invalid_type_param_default",
+    "invalid_value",
+    "irrefutable_let_patterns",
+    "keyword_idents",
+    "keyword_idents_2018",
+    "keyword_idents_2024",
+    "large_assignments",
+    "late_bound_lifetime_arguments",
+    "legacy_derive_helpers",
+    "let_underscore",
+    "let_underscore_drop",
+    "let_underscore_lock",
+    "linker_info",
+    "linker_messages",
+    "long_running_const_eval",
+    "macro_expanded_macro_exports_accessed_by_absolute_paths",
+    "macro_use_extern_crate",
+    "malformed_diagnostic_attributes",
+    "malformed_diagnostic_filters",
+    "malformed_diagnostic_format_literals",
+    "map_unit_fn",
+    "meta_variable_misuse",
+    "method_call_on_diverging_infer_var",
+    "mismatched_lifetime_syntaxes",
+    "misplaced_diagnostic_attributes",
+    "missing_abi",
+    "missing_copy_implementations",
+    "missing_debug_implementations",
+    "missing_docs",
+    "missing_gpu_kernel_export_name",
+    "missing_unsafe_on_extern",
+    "mixed_script_confusables",
+    "multiple_supertrait_upcastable",
+    "must_not_suspend",
+    "mutable_transmutes",
+    "named_arguments_used_positionally",
+    "named_asm_labels",
+    "never_type_fallback_flowing_into_unsafe",
+    "no_mangle_const_items",
+    "non_ascii_idents",
+    "non_camel_case_types",
+    "non_contiguous_range_endpoints",
+    "non_exhaustive_omitted_patterns",
+    "non_fmt_panics",
+    "non_local_definitions",
+    "non_shorthand_field_patterns",
+    "non_snake_case",
+    "nonstandard_style",
+    "non_upper_case_globals",
+    "noop_method_call",
+    "opaque_hidden_inferred_bound",
+    "out_of_scope_macro_calls",
+    "overflowing_literals",
+    "overlapping_range_endpoints",
+    "path_statements",
+    "patterns_in_fns_without_body",
+    "private_bounds",
+    "private_interfaces",
+    "proc_macro_derive_resolution_fallback",
+    "ptr_to_integer_transmute_in_consts",
+    "pub_use_of_private_extern_crate",
+    "raw_borrows_via_references",
+    "recursion_depth_exceeding_limit",
+    "redundant_imports",
+    "redundant_lifetimes",
+    "redundant_semicolons",
+    "refining_impl_trait",
+    "refining_impl_trait_internal",
+    "refining_impl_trait_reachable",
+    "renamed_and_removed_lints",
+    "repr_c_enums_larger_than_int",
+    "resolving_to_items_shadowing_supertrait_items",
+    "rtsan_nonblocking_async",
+    "rust_2018_compatibility",
+    "rust_2018_idioms",
+    "rust_2021_compatibility",
+    "rust_2021_incompatible_closure_captures",
+    "rust_2021_incompatible_or_patterns",
+    "rust_2021_prefixes_incompatible_syntax",
+    "rust_2021_prelude_collisions",
+    "rust_2024_compatibility",
+    "rust_2024_guarded_string_incompatible_syntax",
+    "rust_2024_incompatible_pat",
+    "rust_2024_prelude_collisions",
+    "self_constructor_from_outer_item",
+    "semicolon_in_expressions_from_macros",
+    "semicolon_in_expressions_from_non_local_macros",
+    "shadowing_supertrait_items",
+    "single_use_lifetimes",
+    "special_module_name",
+    "stable_features",
+    "static_mut_refs",
+    "suspicious_double_ref_op",
+    "suspicious_runtime_symbol_definitions",
+    "tail_call_track_caller",
+    "tail_expr_drop_order",
+    "test_unstable_lint",
+    "text_direction_codepoint_in_comment",
+    "text_direction_codepoint_in_literal",
+    "trivial_bounds",
+    "trivial_casts",
+    "trivial_numeric_casts",
+    "type_alias_bounds",
+    "tyvar_behind_raw_pointer",
+    "uncommon_codepoints",
+    "unconditional_panic",
+    "unconditional_recursion",
+    "uncovered_param_in_projection",
+    "undropped_manually_drops",
+    "unexpected_cfgs",
+    "unfulfilled_lint_expectations",
+    "ungated_async_fn_track_caller",
+    "uninhabited_static",
+    "unit_bindings",
+    "unknown_crate_types",
+    "unknown_diagnostic_attributes",
+    "unknown_lints",
+    "unknown_or_malformed_diagnostic_attributes",
+    "unnameable_test_items",
+    "unnameable_types",
+    "unnecessary_transmutes",
+    "unpredictable_function_pointer_comparisons",
+    "unqualified_local_imports",
+    "unreachable_cfg_select_predicates",
+    "unreachable_code",
+    "unreachable_patterns",
+    "unreachable_pub",
+    "unsafe_attr_outside_unsafe",
+    "unsafe_code",
+    "unsafe_op_in_unsafe_fn",
+    "unstable_features",
+    "unstable_name_collisions",
+    "unstable_syntax_pre_expansion",
+    "unsupported_calling_conventions",
+    "unused",
+    "unused_allocation",
+    "unused_assignments",
+    "unused_associated_type_bounds",
+    "unused_attributes",
+    "unused_braces",
+    "unused_comparisons",
+    "unused_crate_dependencies",
+    "unused_doc_comments",
+    "unused_extern_crates",
+    "unused_features",
+    "unused_import_braces",
+    "unused_imports",
+    "unused_labels",
+    "unused_lifetimes",
+    "unused_macro_rules",
+    "unused_macros",
+    "unused_must_use",
+    "unused_mut",
+    "unused_parens",
+    "unused_qualifications",
+    "unused_results",
+    "unused_unsafe",
+    "unused_variables",
+    "unused_visibilities",
+    "useless_deprecated",
+    "useless_ptr_null_checks",
+    "uses_power_alignment",
+    "varargs_without_pattern",
+    "variant_size_differences",
+    "warnings",
+    "while_true",
+];
+pub(super) const RENAMED: &[(&str, &str)] = &[
+    ("single_use_lifetime", "single_use_lifetimes"),
+    ("elided_lifetime_in_path", "elided_lifetimes_in_paths"),
+    ("bare_trait_object", "bare_trait_objects"),
+    ("unstable_name_collision", "unstable_name_collisions"),
+    ("unused_doc_comment", "unused_doc_comments"),
+    ("async_idents", "keyword_idents_2018"),
+    ("exceeding_bitshifts", "arithmetic_overflow"),
+    ("redundant_semicolon", "redundant_semicolons"),
+    ("overlapping_patterns", "overlapping_range_endpoints"),
+    (
+        "disjoint_capture_migration",
+        "rust_2021_incompatible_closure_captures",
+    ),
+    (
+        "or_patterns_back_compat",
+        "rust_2021_incompatible_or_patterns",
+    ),
+    ("non_fmt_panic", "non_fmt_panics"),
+    ("unused_tuple_struct_fields", "dead_code"),
+    ("static_mut_ref", "static_mut_refs"),
+    (
+        "temporary_cstring_as_ptr",
+        "dangling_pointers_from_temporaries",
+    ),
+    ("elided_named_lifetimes", "mismatched_lifetime_syntaxes"),
+    ("fuzzy_provenance_casts", "implicit_provenance_casts"),
+    ("lossy_provenance_casts", "implicit_provenance_casts"),
+];
+
+/// Lints whose deny/forbid level the native compiler enforces exactly. Any
+/// other known lint at deny/forbid is explicitly unsupported (uncapped).
+pub(super) const ENFORCED: &[&str] = &["non_camel_case_types", "non_upper_case_globals"];
+
+/// Builtin lint groups whose members include an enforced lint, with the full
+/// member list. A group can be raised to deny/forbid only when every member
+/// is enforced; lowering it applies to every enforced member.
+pub(super) const GROUPS: &[(&str, &[&str])] = &[(
+    "nonstandard_style",
+    &[
+        "non_camel_case_types",
+        "non_snake_case",
+        "non_upper_case_globals",
+    ],
+)];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Level {
+    Allow,
+    Warn,
+    Deny,
+    Forbid,
+}
+
+/// Effective levels of the enforced lints at one source position. Absent
+/// lints are at their default (`warn`).
+#[derive(Clone, Debug, Default)]
+pub(super) struct Levels(Vec<(&'static str, Level)>);
+
+impl Levels {
+    pub(super) fn get(&self, lint: &str) -> Level {
+        self.0
+            .iter()
+            .find(|(name, _)| *name == lint)
+            .map_or(Level::Warn, |(_, level)| *level)
+    }
+    pub(super) fn denied(&self, lint: &str) -> bool {
+        self.get(lint) >= Level::Deny
+    }
+    /// Set `lint` to `level`. A forbidden lint may only be re-forbidden or
+    /// re-denied (which keeps forbid); lowering it is E0453.
+    pub(super) fn set(&mut self, lint: &'static str, level: Level) -> Result<(), String> {
+        let current = self.get(lint);
+        if current == Level::Forbid {
+            if level < Level::Deny {
+                return Err(format!(
+                    "E0453: lowering `{lint}` is incompatible with previous forbid"
+                ));
+            }
+            return Ok(());
+        }
+        self.0.retain(|(name, _)| *name != lint);
+        self.0.push((lint, level));
+        Ok(())
+    }
+}
+
+/// Canonical spelling of a lint name, following stock renames.
+pub(super) fn canonical(name: &str) -> &str {
+    RENAMED
+        .iter()
+        .find(|(old, _)| *old == name)
+        .map_or(name, |(_, new)| new)
+}
+
+pub(super) fn enforced(name: &str) -> Option<&'static str> {
+    ENFORCED.iter().copied().find(|lint| *lint == name)
+}
+
+pub(super) fn known(name: &str) -> bool {
+    KNOWN.contains(&name)
+}
