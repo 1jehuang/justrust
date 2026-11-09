@@ -285,6 +285,58 @@ impl ValidatedTraitWorld {
         }
         Ok(false)
     }
+    // Lifetime reachability cannot make unrelated rigid slice element types
+    // interchangeable. This only excludes impossible descriptor origins, never
+    // grants an origin or replaces the independent region checks below.
+    fn shared_slice_source_compatible(
+        &self,
+        signature: &Signature,
+        destination_root: &Ty,
+        destination: &ir::CarrierLocation,
+        input: &ir::InputCarrier,
+    ) -> Result<bool> {
+        if !matches!(destination.channel, ir::CarrierChannel::Fixed(_)) {
+            return Ok(true);
+        }
+        let descriptor = charged(
+            &self.budget,
+            ir::carrier_at(destination_root, destination, &self.budget),
+        )?;
+        let Some(element) = descriptor.shared_slice_element() else {
+            return Ok(true);
+        };
+        let root = signature.params.get(input.param).ok_or_else(|| {
+            FactsError::invalid(&self.budget, "slice source parameter outside signature")
+        })?;
+        if matches!(input.location.channel, ir::CarrierChannel::Fixed(_)) {
+            let incoming = charged(
+                &self.budget,
+                ir::carrier_at(root, &input.location, &self.budget),
+            )?;
+            if let Some(incoming_element) = incoming.shared_slice_element() {
+                return self.eq_ty(element, incoming_element, 0);
+            }
+        }
+        if let ir::CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = input.location.channel
+            && input
+                .location
+                .path
+                .0
+                .ends_with(&[ir::CarrierStep::Referent, ir::CarrierStep::SliceElement])
+            && let Ty::Param(destination_parameter) = element
+            && charged(
+                &self.budget,
+                ir::carrier_at(root, &input.location, &self.budget),
+            )? == Ty::Param(parameter)
+        {
+            return Ok(*destination_parameter == parameter);
+        }
+        Ok(true)
+    }
+
     pub(super) fn source_carrier_eligible(
         &self,
         source: &ir::SourceRegionEnv,
@@ -292,6 +344,9 @@ impl ValidatedTraitWorld {
         destination: &ir::CarrierLocation,
         input: &ir::InputCarrier,
     ) -> Result<Option<bool>> {
+        if !self.shared_slice_source_compatible(signature, &signature.result, destination, input)? {
+            return Ok(Some(false));
+        }
         // A mutable element or slice borrow keeps the stored origins of that
         // exact native owner alive. This is return-origin retention only: it
         // neither makes a heap summary writable nor supplies its lifetime.
@@ -606,6 +661,14 @@ impl ValidatedTraitWorld {
         // an origin from a different parameter, descriptor or native field.
         if self.retains_shared_native_field_family(signature, destination, input)? {
             return Ok(Some(true));
+        }
+        if !self.shared_slice_source_compatible(
+            signature,
+            &signature.params[destination.param],
+            &destination.location,
+            input,
+        )? {
+            return Ok(Some(false));
         }
         let Some(output) = source.carriers.iter().find(|row| {
             row.parameter == Some(destination.param) && row.location == destination.location
@@ -1444,6 +1507,149 @@ mod tests {
                 .carrier_contract_refines(&required, &provided)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn shared_slice_write_sources_require_compatible_element_types_and_lifetimes() {
+        for (regions, expected_same_type) in [("'a", true), ("'b", false)] {
+            let budget = PlanBudget::default();
+            let text = format!(
+                "struct Slots<'a,'b,K,V>{{keys:&'a[K],values:&'a[V],other:&{regions}[K],spare:&'b[K]}}\
+                 fn inspect<'a,'b,K,V>(slots:&mut Slots<'a,'b,K,V>){{}}fn main(){{}}"
+            );
+            let program = crate::compiler::frontend::parse(&text).unwrap();
+            let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let world = plan.trait_world().unwrap();
+            let declaration = plan.function_decl(0).unwrap();
+            let signature = world
+                .normalized_declaration_schema(declaration)
+                .unwrap()
+                .signature;
+            let source = world
+                .validate_source_regions(declaration, &signature)
+                .unwrap();
+            let field = |index| ir::InputCarrier {
+                param: 0,
+                location: ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Referent,
+                        ir::CarrierStep::Field(index),
+                    ])),
+                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+                },
+            };
+            assert_eq!(
+                world
+                    .source_write_eligible(&source, &signature, &field(0), &field(1))
+                    .unwrap(),
+                Some(false),
+                "equal lifetime must not equate independent K and V slice descriptors",
+            );
+            assert_eq!(
+                world
+                    .source_write_eligible(&source, &signature, &field(0), &field(2))
+                    .unwrap(),
+                Some(expected_same_type),
+                "same-type descriptors still require the source lifetime to outlive the destination",
+            );
+            let family = |index| {
+                let mut input = field(index);
+                let element = charged(
+                    &budget,
+                    ir::carrier_at(&signature.params[0], &input.location, &budget),
+                )
+                .unwrap();
+                let Some(Ty::Param(parameter)) = element.shared_slice_element() else {
+                    panic!("test field must be a shared slice of a rigid parameter");
+                };
+                input.location.path = ir::CarrierPath(Arc::from([
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::Field(index),
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::SliceElement,
+                ]));
+                input.location.channel = ir::CarrierChannel::ParamTail {
+                    parameter: *parameter,
+                    prefix: 0,
+                };
+                input
+            };
+            assert_eq!(
+                world
+                    .source_write_eligible(&source, &signature, &field(0), &family(1))
+                    .unwrap(),
+                Some(false),
+                "a sibling V family cannot become a K descriptor origin via a shared lifetime",
+            );
+            assert_eq!(
+                world
+                    .source_write_eligible(&source, &signature, &field(0), &family(0))
+                    .unwrap(),
+                Some(true),
+                "the descriptor must retain its own K family",
+            );
+            if expected_same_type {
+                assert_eq!(
+                    world
+                        .source_write_eligible(&source, &signature, &field(0), &family(2))
+                        .unwrap(),
+                    Some(true),
+                    "matching K families with a shared lifetime remain admissible",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn returned_slice_descriptors_reject_unrelated_element_families() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "struct Slots<'a,K,V>{keys:&'a[K],values:&'a[V]}fn forward<'a,K,V>(slots:Slots<'a,K,V>)->Slots<'a,K,V>{slots}fn main(){}",
+        ).unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let signature = world
+            .normalized_declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        let source = world
+            .validate_source_regions(declaration, &signature)
+            .unwrap();
+        let destination = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([ir::CarrierStep::Field(0)])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        for (field, expected) in [(0, true), (1, false)] {
+            let descriptor = ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([ir::CarrierStep::Field(field)])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            };
+            let ty = ir::carrier_at(&signature.params[0], &descriptor, &budget).unwrap();
+            let Some(Ty::Param(parameter)) = ty.shared_slice_element() else {
+                panic!("expected rigid slice element");
+            };
+            let input = ir::InputCarrier {
+                param: 0,
+                location: ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Field(field),
+                        ir::CarrierStep::Referent,
+                        ir::CarrierStep::SliceElement,
+                    ])),
+                    channel: ir::CarrierChannel::ParamTail {
+                        parameter: *parameter,
+                        prefix: 0,
+                    },
+                },
+            };
+            assert_eq!(
+                world
+                    .source_carrier_eligible(&source, &signature, &destination, &input)
+                    .unwrap(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
