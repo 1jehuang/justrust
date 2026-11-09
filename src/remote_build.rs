@@ -695,10 +695,21 @@ impl Infra {
     pub fn is_billing(&self) -> bool {
         self.0.starts_with(BILLING)
     }
+
+    /// The attempt failed before reaching the service, for a reason in
+    /// this project or invocation (no workspace, cwd outside the synced
+    /// roots). Says nothing about remote health, so it must not pause
+    /// hosted routing for other builds.
+    pub fn is_client_side(&self) -> bool {
+        self.0.starts_with(CLIENT_SIDE)
+    }
 }
 
 /// Marks an [`Infra`] whose text is a billing instruction.
 pub const BILLING: &str = "justrust: ";
+
+/// Marks an [`Infra`] caused by this invocation, not the remote.
+pub const CLIENT_SIDE: &str = "local: ";
 
 /// Hosted only: charge this run before anything runs remotely. Err holds
 /// the line to show; the build then runs locally.
@@ -909,10 +920,13 @@ fn run_remote_inner(
     let infra = |m: String| Ok(Err(Infra(m)));
     let roots = match source_roots(&cwd) {
         Ok(r) => r,
-        Err(e) => return infra(format!("{e:#}")),
+        Err(e) => return infra(format!("{CLIENT_SIDE}{e:#}")),
     };
     if !roots.iter().any(|r| cwd.starts_with(r)) {
-        return infra(format!("{} is not inside a synced root", cwd.display()));
+        return infra(format!(
+            "{CLIENT_SIDE}{} is not inside a synced root",
+            cwd.display()
+        ));
     }
     let mut label = vec![sub.to_string()];
     label.extend(args.iter().cloned());
@@ -1456,6 +1470,16 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn client_side_failures_are_distinguished_from_remote_ones() {
+        use super::{CLIENT_SIDE, Infra};
+        assert!(
+            Infra(format!("{CLIENT_SIDE}cargo metadata failed: no Cargo.toml")).is_client_side()
+        );
+        assert!(!Infra("the hosted build service is unavailable".into()).is_client_side());
+        assert!(!Infra(format!("{}signed out", super::BILLING)).is_client_side());
+    }
+
     #[test]
     fn compile_output_streams_diagnostics_but_not_remote_artifacts() {
         let mut stream = super::CompileOutput::default();

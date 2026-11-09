@@ -517,6 +517,24 @@ fn recently_failed(now: f64) -> bool {
         .is_some_and(|t| now - t < FAIL_BACKOFF)
 }
 
+/// The local-fallback reason during a backoff, naming the failure that
+/// started it so recorded runs say why hosted was skipped.
+fn backoff_reason() -> String {
+    let cause = fail_file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|s| {
+            s.lines()
+                .next()
+                .and_then(|l| l.split_once(' '))
+                .map(|(_, m)| m.chars().take(160).collect::<String>())
+        })
+        .filter(|m| !m.is_empty());
+    match cause {
+        Some(m) => format!("remote failed in the last 10 minutes ({m})"),
+        None => "remote failed in the last 10 minutes".into(),
+    }
+}
+
 fn explain() -> bool {
     matches!(
         std::env::var("JUSTRUST_REMOTE_EXPLAIN").ok().as_deref(),
@@ -655,7 +673,7 @@ pub fn maybe_remote(full: &[OsString]) {
         "JUSTRUST_REMOTE=force".to_string()
     } else if hosted_default {
         if recently_failed(now) {
-            return say_local("remote failed in the last 10 minutes");
+            return say_local(&backoff_reason());
         }
         if let Ok(cwd_path) = std::env::current_dir() {
             let cwd = cwd_path.to_string_lossy().into_owned();
@@ -670,7 +688,7 @@ pub fn maybe_remote(full: &[OsString]) {
         "default for hosted builds; --local or JUSTRUST_REMOTE=auto to change".to_string()
     } else {
         if recently_failed(now) {
-            return say_local("remote failed in the last 10 minutes");
+            return say_local(&backoff_reason());
         }
         let Ok(cwd_path) = std::env::current_dir() else {
             return;
@@ -724,13 +742,20 @@ pub fn maybe_remote(full: &[OsString]) {
     eprintln!("justrust: remote ({reason})");
     let start = m == Mode::Force || backend == Backend::Hosted;
     match remote_build::run_remote(sub, &args[1..], start) {
-        Ok(Ok(o)) => std::process::exit(o.code),
+        Ok(Ok(o)) => {
+            // The remote works again: end any backoff now, so concurrent
+            // agents stop falling back to local for the rest of the window.
+            if let Some(f) = fail_file() {
+                let _ = std::fs::remove_file(f);
+            }
+            std::process::exit(o.code)
+        }
         Ok(Err(Infra(msg))) => {
             if remote_required() {
                 eprintln!("justrust: remote required, refusing local fallback: {msg}");
                 std::process::exit(1);
             }
-            if let Some(f) = fail_file() {
+            if let Some(f) = fail_file().filter(|_| !Infra(msg.clone()).is_client_side()) {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));
             }
             let billing = Infra(msg.clone()).is_billing();
