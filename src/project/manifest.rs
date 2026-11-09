@@ -87,6 +87,11 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     pub features: BTreeMap<String, Vec<String>>,
     pub locked: Option<usize>,
+    /// The package declares a build script (or build-dependencies). Rejected
+    /// only when a unit actually compiles this package.
+    pub build_script: bool,
+    /// `[lib] proc-macro = true`; rejected when a unit needs it.
+    pub proc_macro: bool,
     /// Authenticated registry source (crates.io cache): compiled with lints
     /// capped at allow, like Cargo does for non-path dependencies.
     pub registry: bool,
@@ -240,8 +245,20 @@ fn read_lockfile(path: &Path, inputs: &mut Recorder) -> Result<Lockfile, Manifes
         return Ok(Lockfile::default());
     }
     let table = read_toml(path, "lockfile", inputs)?;
-    if !matches!(get(&table, "version"), Some(Value::Integer(3 | 4))) {
-        return err("unsupported Cargo.lock format version (expected 3 or 4)");
+    // Version 1 and 2 lockfiles have no `version` key. Version 1 keeps
+    // checksums in `[metadata]` as `"checksum NAME VERSION (SOURCE)" = HASH`.
+    if !matches!(get(&table, "version"), None | Some(Value::Integer(3 | 4))) {
+        return err("unsupported Cargo.lock format version (expected 1 through 4)");
+    }
+    let mut metadata_checksums = BTreeMap::new();
+    if let Some(Value::Table(metadata)) = get(&table, "metadata") {
+        for (key, value) in metadata {
+            if let (Some(spec), Value::String(sum)) = (key.strip_prefix("checksum "), &value.value)
+            {
+                let dep = parse_lock_dependency_ref(spec)?;
+                metadata_checksums.insert((dep.name, dep.version, dep.source), sum.clone());
+            }
+        }
     }
     let Some(Value::Array(packages)) = get(&table, "package") else {
         return Ok(Lockfile::default());
@@ -261,7 +278,12 @@ fn read_lockfile(path: &Path, inputs: &mut Recorder) -> Result<Lockfile, Manifes
             ))
         })?;
         let source = get_str(pkg, "source", "package")?;
-        let checksum = get_str(pkg, "checksum", "package")?;
+        let checksum = match get_str(pkg, "checksum", "package")? {
+            Some(sum) => Some(sum),
+            None => metadata_checksums
+                .get(&(name.clone(), Some(version.clone()), source.clone()))
+                .cloned(),
+        };
         let dependencies = match get(pkg, "dependencies") {
             Some(Value::Array(list)) => list
                 .iter()
@@ -570,11 +592,20 @@ fn load_observed(manifest: &Path, inputs: &mut Recorder) -> Result<Workspace, Ma
                 DependencySource::Registry(registry) => {
                     // Freeze successful discovery once. Missing optional sources
                     // remain unavailable in this workspace even if installed later.
-                    let selected = registry_source_root(registry, loader.inputs);
-                    if dep.optional && selected.is_err() {
+                    if dep.dev && loader.packages[i].registry {
                         continue;
                     }
-                    let index = loader.registry_package(registry, selected?)?;
+                    let selected = registry_source_root(registry, loader.inputs);
+                    if (dep.optional || dep.dev) && selected.is_err() {
+                        continue;
+                    }
+                    let loaded = loader.registry_package(registry, selected?);
+                    // A development-only edge that cannot be loaded stays
+                    // unbound and is reported only if a test unit needs it.
+                    let index = match loaded {
+                        Err(_) if dep.dev => continue,
+                        loaded => loaded?,
+                    };
                     if loader.packages[index].name != dep.package {
                         return err(format!(
                             "locked registry package `{}` resolved to `{}`",
@@ -830,17 +861,16 @@ impl Loader<'_> {
             None => self.find_package_lock(&name, &version, None),
         };
         let mut dependencies = Vec::new();
+        let mut has_build_deps = false;
         for (section, dev) in [
             ("dependencies", false),
             ("dev-dependencies", true),
             ("build-dependencies", false),
         ] {
             if let Some(Value::Table(deps)) = get(&table, section) {
-                if section == "build-dependencies" && !deps.is_empty() {
-                    return err(format!(
-                        "`{}`: build-dependencies (build scripts) are unsupported",
-                        path.display()
-                    ));
+                if section == "build-dependencies" {
+                    has_build_deps |= !deps.is_empty();
+                    continue;
                 }
                 for (key, spec) in deps {
                     dependencies.push(self.dependency(
@@ -873,11 +903,9 @@ impl Loader<'_> {
                     let Value::Table(deps) = &dependencies_value.value else {
                         return err(format!("target.{selector}.{section}: expected a table"));
                     };
-                    if active && section == "build-dependencies" && !deps.is_empty() {
-                        return err(format!(
-                            "`{}`: build-dependencies (build scripts) are unsupported",
-                            path.display()
-                        ));
+                    if section == "build-dependencies" {
+                        has_build_deps |= active && !deps.is_empty();
+                        continue;
                     }
                     for (key, spec) in deps {
                         let mut dependency =
@@ -895,12 +923,16 @@ impl Loader<'_> {
             Some(v) => return err(format!("package.build: unexpected {}", v.type_name())),
             None => self.inputs.is_file(&dir.join("build.rs")),
         };
-        if build_script {
-            return err(format!(
-                "`{}`: build scripts are unsupported",
-                path.display()
-            ));
-        }
+        // Proc-macro libraries are rejected, like build scripts, only when
+        // a compiled unit needs them.
+        let proc_macro = matches!(
+            get(&table, "lib"),
+            Some(Value::Table(lib)) if matches!(
+                get(lib, "proc-macro").or(get(lib, "proc_macro")),
+                Some(Value::Boolean(true))
+            )
+        );
+        let build_script = build_script || has_build_deps;
         let mut features = BTreeMap::new();
         if let Some(Value::Table(table)) = get(&table, "features") {
             for (feature, list) in table {
@@ -922,6 +954,8 @@ impl Loader<'_> {
             dependencies,
             features,
             locked,
+            build_script,
+            proc_macro,
             registry: false,
         });
         Ok(index)
@@ -950,11 +984,23 @@ impl Loader<'_> {
         {
             return err("registry package path dependencies are unsupported");
         }
+        // Published crates often omit the tests, benches and examples their
+        // manifest names. Only the library is compiled for a dependency.
+        let missing: Vec<bool> = cached
+            .targets
+            .iter()
+            .map(|t| t.kind != TargetKind::Lib && !self.inputs.is_file(&t.path))
+            .collect();
+        let mut keep = missing.iter().map(|m| !m);
+        self.packages[loaded]
+            .targets
+            .retain(|_| keep.next().unwrap());
+        let cached = &self.packages[loaded];
         for target in &cached.targets {
             let target_path = self
                 .inputs
                 .canonicalize(&target.path)
-                .map_err(|e| ManifestError(e.to_string()))?;
+                .map_err(|e| ManifestError(format!("{}: {e}", target.path.display())))?;
             if !target_path.starts_with(&cached.root) {
                 return err("registry target escapes authenticated package source");
             }
@@ -1080,7 +1126,8 @@ impl Loader<'_> {
         } else if get(&table, "git").is_some() {
             DependencySource::Git
         } else if let Some(locked) = locked {
-            match self.locked_registry_dependency(locked, &package)? {
+            let requirement = get_str(&table, "version", &what)?;
+            match self.locked_registry_dependency(locked, &package, requirement.as_deref())? {
                 Some(pkg) => DependencySource::Registry(pkg),
                 None => DependencySource::UnresolvedRegistry,
             }
@@ -1113,16 +1160,35 @@ impl Loader<'_> {
         &self,
         locked: usize,
         package: &str,
+        requirement: Option<&str>,
     ) -> Result<Option<LockedRegistryPackage>, ManifestError> {
         let locked_package = &self.lockfile.packages[locked];
-        let mut dependencies = locked_package
+        let named: Vec<_> = locked_package
             .dependencies
             .iter()
-            .filter(|dep| dep.name == package);
-        let dep = dependencies.next();
-        if dependencies.next().is_some() {
-            return err(format!("Cargo.lock dependency `{package}` is ambiguous"));
-        }
+            .filter(|dep| dep.name == package)
+            .collect();
+        let dep = if named.len() > 1 {
+            // Several locked versions of one package: the manifest
+            // requirement selects exactly one of them, as in Cargo.
+            let Some(requirement) = requirement else {
+                return err(format!("Cargo.lock dependency `{package}` is ambiguous"));
+            };
+            let fitting: Vec<_> = named
+                .into_iter()
+                .filter(|dep| {
+                    dep.version
+                        .as_deref()
+                        .is_some_and(|v| validate_locked_version(requirement, v).is_ok())
+                })
+                .collect();
+            if fitting.len() != 1 {
+                return err(format!("Cargo.lock dependency `{package}` is ambiguous"));
+            }
+            fitting.into_iter().next()
+        } else {
+            named.into_iter().next()
+        };
         let Some(dep) = dep else {
             return Ok(None);
         };
@@ -1198,9 +1264,6 @@ fn discover_targets(
     let lib_default = dir.join("src/lib.rs");
     if lib_table.is_some() || (auto("autolib") && inputs.is_file(&lib_default)) {
         let t = lib_table.unwrap_or_default();
-        if let Some(Value::Boolean(true)) = get(&t, "proc-macro") {
-            return err("proc-macro crates are unsupported");
-        }
         targets.push(Target {
             kind: TargetKind::Lib,
             name: get_str(&t, "name", "lib")?
@@ -1639,47 +1702,115 @@ fn authenticate_registry_binding(
 }
 
 fn validate_locked_version(requirement: &str, locked: &str) -> Result<(), ManifestError> {
-    // Explicitly bounded Cargo requirement slice. Never guess at unsupported ranges.
-    let requirement = requirement.trim();
-    let (exact, text) = if let Some(text) = requirement.strip_prefix('=') {
-        (true, text.trim())
-    } else {
-        (false, requirement.strip_prefix('^').unwrap_or(requirement))
-    };
-    let parse = |text: &str| -> Option<Vec<u64>> {
-        text.split('.')
-            .map(|part| {
-                if part.is_empty()
-                    || !part.bytes().all(|b| b.is_ascii_digit())
-                    || (part.len() > 1 && part.starts_with('0'))
-                {
-                    None
-                } else {
-                    part.parse().ok()
-                }
-            })
-            .collect()
-    };
-    let wanted = parse(text).filter(|v| !v.is_empty() && v.len() <= 3);
-    let actual = parse(locked).filter(|v| v.len() == 3);
-    let (Some(wanted), Some(actual)) = (wanted, actual) else {
-        return err(format!(
+    // Cargo semver requirements: comma-separated comparators of the forms
+    // `^x.y.z`, `~x.y.z`, `=x.y.z`, `>`, `>=`, `<`, `<=`, bare `x.y.z`
+    // (caret), and wildcards. Build metadata is ignored. Anything else is
+    // rejected rather than guessed.
+    let unsupported = || {
+        err(format!(
             "unsupported locked registry version requirement `{requirement}` or version `{locked}`"
-        ));
+        ))
     };
-    let mut lower = [0; 3];
-    lower[..wanted.len()].copy_from_slice(&wanted);
+    let num = |part: &str| -> Option<u64> {
+        if part.is_empty()
+            || !part.bytes().all(|b| b.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            None
+        } else {
+            part.parse().ok()
+        }
+    };
+    let locked_core = locked.split('+').next().unwrap_or(locked);
+    let (locked_core, locked_pre) = match locked_core.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (locked_core, None),
+    };
+    let actual: Option<Vec<u64>> = locked_core.split('.').map(num).collect();
+    let Some(actual) = actual.filter(|v| v.len() == 3) else {
+        return unsupported();
+    };
     let actual = [actual[0], actual[1], actual[2]];
-    let matches = if exact {
-        actual[..wanted.len()] == wanted
-    } else {
-        let pivot = wanted
+    let mut all = true;
+    let mut pre_allowed = false;
+    for comparator in requirement.split(',') {
+        let comparator = comparator.trim();
+        let (op, text) = ["<=", ">=", "<", ">", "=", "^", "~"]
             .iter()
-            .position(|n| *n != 0)
-            .unwrap_or(wanted.len() - 1);
-        actual >= lower && actual[..=pivot] == lower[..=pivot]
-    };
-    if !matches {
+            .find_map(|op| comparator.strip_prefix(op).map(|rest| (*op, rest.trim())))
+            .unwrap_or(("^", comparator));
+        let text = text.split('+').next().unwrap_or(text);
+        let (text, pre) = match text.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (text, None),
+        };
+        let mut wanted = Vec::new();
+        for part in text.split('.') {
+            if matches!(part, "*" | "x" | "X") {
+                break;
+            }
+            match num(part) {
+                Some(n) => wanted.push(n),
+                None => return unsupported(),
+            }
+        }
+        if text.split('.').count() > 3 || (wanted.is_empty() && op != "^") {
+            if !(wanted.is_empty() && text.split('.').all(|p| matches!(p, "*" | "x" | "X"))) {
+                return unsupported();
+            }
+        }
+        if pre.is_some() && wanted.len() == 3 && wanted[..] == actual[..] {
+            pre_allowed = true;
+        }
+        let mut lower = [0u64; 3];
+        lower[..wanted.len()].copy_from_slice(&wanted);
+        let lower_pre = pre.filter(|_| wanted.len() == 3);
+        let cmp_lower = actual
+            .cmp(&lower)
+            .then_with(|| match (locked_pre, lower_pre) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => a.cmp(b),
+            });
+        let prefix_eq = |n: usize| actual[..n] == lower[..n];
+        let ok = match op {
+            "=" => prefix_eq(wanted.len()) && (wanted.len() < 3 || locked_pre == lower_pre),
+            ">" => {
+                if wanted.len() == 3 {
+                    cmp_lower.is_gt()
+                } else {
+                    actual[..wanted.len()] > lower[..wanted.len()]
+                }
+            }
+            ">=" => cmp_lower.is_ge(),
+            "<" => cmp_lower.is_lt(),
+            "<=" => {
+                if wanted.len() == 3 {
+                    cmp_lower.is_le()
+                } else {
+                    actual[..wanted.len()] <= lower[..wanted.len()]
+                }
+            }
+            "~" => cmp_lower.is_ge() && prefix_eq(wanted.len().clamp(1, 2)),
+            _ => {
+                if wanted.is_empty() {
+                    true
+                } else {
+                    let pivot = wanted
+                        .iter()
+                        .position(|n| *n != 0)
+                        .unwrap_or(wanted.len() - 1);
+                    cmp_lower.is_ge() && prefix_eq(pivot + 1)
+                }
+            }
+        };
+        all &= ok;
+    }
+    if locked_pre.is_some() && !pre_allowed {
+        all = false;
+    }
+    if !all {
         return err(format!(
             "Cargo.lock version `{locked}` does not satisfy manifest requirement `{requirement}`"
         ));
@@ -1838,4 +1969,35 @@ pub(super) fn sha256(input: &[u8]) -> String {
         write!(&mut output, "{word:08x}").unwrap();
     }
     output
+}
+
+#[cfg(test)]
+mod version_requirement_tests {
+    use super::validate_locked_version as v;
+
+    #[test]
+    fn cargo_requirements() {
+        for (req, ver) in [
+            ("1", "1.4.2"),
+            ("^0.9", "0.9.3"),
+            ("~1.4.0", "1.4.2"),
+            ("~1", "1.9.0"),
+            ("0.9", "0.9.0+wasi-snapshot-preview1"),
+            ("=1.2.3", "1.2.3"),
+            (">=1.0, <2", "1.5.0"),
+            ("*", "3.0.0"),
+            ("1.0.0-rc.1", "1.0.0-rc.2"),
+        ] {
+            assert!(v(req, ver).is_ok(), "{req} {ver}");
+        }
+        for (req, ver) in [
+            ("~1.4.0", "1.5.0"),
+            ("^0.9", "0.10.0"),
+            ("1", "2.0.0"),
+            (">=1.0, <2", "2.0.0"),
+            ("1", "1.1.0-beta"),
+        ] {
+            assert!(v(req, ver).is_err(), "{req} {ver}");
+        }
+    }
 }

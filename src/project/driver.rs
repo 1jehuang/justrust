@@ -209,6 +209,18 @@ fn externs_for(
         if !seen.insert(index) {
             continue;
         }
+        if package.build_script {
+            return Err(err(format!(
+                "`{}`: build scripts are unsupported",
+                package.root.join("Cargo.toml").display()
+            )));
+        }
+        if package.proc_macro {
+            return Err(err(format!(
+                "`{}`: proc-macro crates are unsupported",
+                package.root.join("Cargo.toml").display()
+            )));
+        }
         if let Some(existing) = out.iter().find(|e| e.name == name) {
             return Err(err(format!(
                 "two dependency crates named `{name}` ({} and {}) are unsupported",
@@ -427,6 +439,18 @@ impl Driver {
         let mut announced = BTreeSet::new();
         for unit in &units {
             let package = &self.ws.packages[unit.package];
+            if package.build_script {
+                return Err(err(format!(
+                    "`{}`: build scripts are unsupported",
+                    package.root.join("Cargo.toml").display()
+                )));
+            }
+            if package.proc_macro {
+                return Err(err(format!(
+                    "`{}`: proc-macro crates are unsupported",
+                    package.root.join("Cargo.toml").display()
+                )));
+            }
             if announced.insert(unit.package) {
                 eprintln!(
                     "{:>12} {} v{} ({})",
