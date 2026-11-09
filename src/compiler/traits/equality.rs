@@ -1798,7 +1798,9 @@ impl ValidatedTraitWorld {
         reductions: &mut ReductionRows,
         depth: usize,
     ) -> Result<Ty> {
-        self.map_equality_type(ty, &context.env, depth, &mut |projection| {
+        // Declaration equality reduction publishes source applications. Physical
+        // field storage is realized only for a later closed executable root.
+        self.map_equality_type_for_use(ty, &context.env, depth, false, &mut |projection| {
             if let Some(normal) =
                 self.normalize_exact_owner_projection(context.declaration, projection)?
             {
@@ -1838,7 +1840,7 @@ impl ValidatedTraitWorld {
                 )?;
                 Ok(rhs)
             } else {
-                self.normalize_closed_projected_type(
+                self.normalize_closed_projected_type_for_use(
                     &self.projection_type(projection)?,
                     ProofContext {
                         transport: ParentLocalTransport::default(),
@@ -1848,6 +1850,8 @@ impl ValidatedTraitWorld {
                         phase: FactsPhase::Schema,
                     },
                     true,
+                    &mut ProofScratch::default(),
+                    false,
                 )
                 .map(|value| value.0)
             }
@@ -1858,6 +1862,17 @@ impl ValidatedTraitWorld {
         ty: &Ty,
         env: &GenericEnv,
         depth: usize,
+        reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
+    ) -> Result<Ty> {
+        self.map_equality_type_for_use(ty, env, depth, true, reduce)
+    }
+
+    fn map_equality_type_for_use(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        executable_storage: bool,
         reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
     ) -> Result<Ty> {
         self.check_normalization_budget()?;
@@ -1872,7 +1887,13 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut values,
-                        self.map_equality_type(part, env, depth + 1, reduce)?,
+                        self.map_equality_type_for_use(
+                            part,
+                            env,
+                            depth + 1,
+                            executable_storage,
+                            reduce,
+                        )?,
                     )?;
                 }
                 Ty::Tuple(values.into())
@@ -1880,7 +1901,13 @@ impl ValidatedTraitWorld {
             Ty::Array { element, len } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Array {
-                    element: Arc::new(self.map_equality_type(element, env, depth + 1, reduce)?),
+                    element: Arc::new(self.map_equality_type_for_use(
+                        element,
+                        env,
+                        depth + 1,
+                        executable_storage,
+                        reduce,
+                    )?),
                     len: *len,
                 }
             }
@@ -1888,20 +1915,43 @@ impl ValidatedTraitWorld {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(self.map_equality_type(referent, env, depth + 1, reduce)?),
+                    referent: Arc::new(self.map_equality_type_for_use(
+                        referent,
+                        env,
+                        depth + 1,
+                        executable_storage,
+                        reduce,
+                    )?),
                 }
             }
             Ty::Slice { element } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ty::Slice {
-                    element: Arc::new(self.map_equality_type(element, env, depth + 1, reduce)?),
+                    element: Arc::new(self.map_equality_type_for_use(
+                        element,
+                        env,
+                        depth + 1,
+                        executable_storage,
+                        reduce,
+                    )?),
                 }
             }
-            Ty::Struct(_) | Ty::Enum(_) => {
-                self.normalize_nominal_actuals(ty, env, depth, |argument| {
-                    self.map_equality_type(argument, env, depth + 1, reduce)
-                })?
-            }
+            Ty::Struct(_) | Ty::Enum(_) => self.normalize_nominal_actuals_for_use(
+                ty,
+                env,
+                depth,
+                None,
+                executable_storage,
+                |argument| {
+                    self.map_equality_type_for_use(
+                        argument,
+                        env,
+                        depth + 1,
+                        executable_storage,
+                        reduce,
+                    )
+                },
+            )?,
             _ => ty.clone(),
         })
     }

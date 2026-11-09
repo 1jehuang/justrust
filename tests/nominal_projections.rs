@@ -66,6 +66,15 @@ fn generic_closed_nominal_closure_actual_uses_parent_metadata() {
     oracle::stock_native(
         r#"struct Hold<F>{value:F}impl<F:FnOnce()->i32> Hold<F>{fn run(self)->i32{let f=self.value;f()}}fn hold<F:FnOnce()->i32>(f:F)->Hold<F>{Hold::<F>{value:f}}fn main(){let n=37i32;let h=hold(move||n);println!("{}",h.run());}"#,
     );
+    oracle::stock_native(
+        r#"struct Pending<I:Iterator>{outer:I,inner:Option<std::ops::Range<I::Item>>}fn pending<I:Iterator>(outer:I,inner:std::ops::Range<I::Item>)->Pending<I>{Pending::<I>{outer,inner:Some(inner)}}fn invoke<F:FnOnce()->Option<std::ops::Range<i32>>>(f:F)->Option<std::ops::Range<i32>>{f()}fn main(){let stored=pending(0i32..1i32,2i32..7i32);if let Some(range)=invoke(move||stored.inner){println!("{}",range.end-range.start);}}"#,
+    );
+    oracle::stock_native(
+        r#"struct Pending<I:Iterator>{inner:Option<std::ops::Range<I::Item>>}fn forward<I:Iterator<Item=i32>>(value:Pending<I>)->Pending<I>{value}fn main(){let stored=forward::<std::ops::Range<i32>>(Pending::<std::ops::Range<i32>>{inner:Some(2i32..7i32)});if let Some(range)=stored.inner{println!("{}",range.end-range.start);}}"#,
+    );
+    oracle::stock_and_native_reject(
+        "struct Pending<I:Iterator>{inner:Option<std::ops::Range<I::Item>>}fn wrong<I:Iterator<Item=i32>>()->Pending<I>{Pending::<I>{inner:Some(false)}}fn main(){}",
+    );
     oracle::stock_and_native_reject(
         "struct Hold<F>{value:F}fn hold<F:FnOnce()->i32>(f:F)->Hold<F>{Hold::<F>{value:f}}fn wrong(){let _h=hold(||false);}fn main(){}",
     );

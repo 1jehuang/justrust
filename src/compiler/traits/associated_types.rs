@@ -1837,12 +1837,13 @@ impl ValidatedTraitWorld {
             )?,
             args: normal_args.into(),
         };
-        self.validate_ref_with_facts(
+        self.validate_ref_with_facts_for_use(
             &selected_goal,
             context.proof.env(),
             None,
             &mut stack.obligations.replays,
             context.proof.metadata_facts(),
+            context.executable_storage,
         )?;
         if let Some(raw_rhs) = self.dynamic_associated_binding(
             &ir::AssociatedTypeProjection {

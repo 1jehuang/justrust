@@ -1139,7 +1139,7 @@ impl OriginalCallableView {
         &self.facts
     }
     pub(super) fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
-        facts.world.check_original_context(facts)?;
+        facts.world.check_original_context_for_use(facts, false)?;
         if !std::ptr::eq(self.facts.as_ref(), facts) {
             return Err(FactsError::invalid(
                 facts.budget(),
@@ -1430,7 +1430,9 @@ impl ValidatedFacts {
         self: &Arc<Self>,
         subject: OriginalCallableSubject<'_>,
     ) -> Result<Arc<OriginalCallableView>> {
-        self.world.check_original_context(self)?;
+        // The original header authenticates source selection and binder metadata,
+        // never physical storage. Mapped signatures and bodies own that proof.
+        self.world.check_original_context_for_use(self, false)?;
         let declaration = match subject {
             OriginalCallableSubject::Direct(declaration) => declaration,
             OriginalCallableSubject::TraitItem(call) => {
@@ -4376,6 +4378,18 @@ impl ValidatedTraitWorld {
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
+        self.validate_ref_with_facts_for_use(goal, env, maybe_unsized, replays, caller, true)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn validate_ref_with_facts_for_use(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
+    ) -> Result<()> {
         self.validate_ty_metadata_with_facts(&goal.self_ty, env, 0, replays, caller)?;
         for argument in goal.args.iter() {
             self.validate_ty_metadata_with_facts(argument, env, 0, replays, caller)?;
@@ -4388,26 +4402,28 @@ impl ValidatedTraitWorld {
             ));
         }
         let header = self.trait_header(goal.declaration)?;
-        self.validate_predicate_formation(
+        self.validate_predicate_formation_for_use(
             &goal.self_ty,
             env,
             TypeUse::Root,
             maybe_unsized,
             replays,
             caller,
+            executable_storage,
         )?;
         for argument in goal.args.iter() {
             if matches!(argument, Ty::Str) {
                 // Preserve the raw actual metadata allowance and its charge.
                 charged(&self.budget, self.budget.charge_work(1))?;
             } else {
-                self.validate_predicate_formation(
+                self.validate_predicate_formation_for_use(
                     argument,
                     env,
                     TypeUse::Actual,
                     None,
                     replays,
                     caller,
+                    executable_storage,
                 )?;
             }
             charged(&self.budget, ir::reject_references(argument, &self.budget))?;
@@ -4430,10 +4446,37 @@ impl ValidatedTraitWorld {
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
+        self.validate_predicate_formation_for_use(
+            ty,
+            env,
+            usage,
+            maybe_unsized,
+            replays,
+            caller,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn validate_predicate_formation_for_use(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        usage: TypeUse,
+        maybe_unsized: Option<ParamId>,
+        replays: &mut NominalReplays,
+        caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
+    ) -> Result<()> {
         if caller.is_none() {
-            return replays
-                .raw_formations
-                .check(self, ty, env, usage, maybe_unsized, 0);
+            return replays.raw_formations.check_for_use(
+                self,
+                ty,
+                env,
+                usage,
+                maybe_unsized,
+                0,
+                executable_storage,
+            );
         }
         replays.predicate_formations.logical_nominals = true;
         if replays.predicate_formations.maybe_unsized != maybe_unsized {
@@ -12278,7 +12321,13 @@ impl ValidatedTraitWorld {
                 &mut scratch.closedness_storage,
                 executable_storage,
             ),
-            None => self.goal_is_closed_with(goal, context.env(), scratch),
+            None => self.goal_is_closed_with_storage_for_use(
+                goal,
+                context.env(),
+                &mut scratch.closedness,
+                &mut scratch.closedness_storage,
+                executable_storage,
+            ),
         }
     }
     fn closedness_of_root(
@@ -12444,18 +12493,39 @@ impl ValidatedTraitWorld {
         rows: &mut Vec<ClosednessValidation>,
         storage: &mut Vec<ir::PlanReservation>,
     ) -> Result<bool> {
-        let root = self.closedness_of_root_with_storage(
+        self.goal_is_closed_with_storage_for_use(goal, env, rows, storage, true)
+    }
+
+    fn goal_is_closed_with_storage_for_use(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        rows: &mut Vec<ClosednessValidation>,
+        storage: &mut Vec<ir::PlanReservation>,
+        executable_storage: bool,
+    ) -> Result<bool> {
+        let root = self.closedness_of_root_for_use(
             &goal.self_ty,
             env,
             TypeUse::Root,
             0,
             rows,
             storage,
+            None,
+            executable_storage,
         )?;
         let mut closed = !root.has_parameters && !root.has_opaque;
         for ty in goal.args.iter() {
-            let actual =
-                self.closedness_of_root_with_storage(ty, env, TypeUse::Actual, 0, rows, storage)?;
+            let actual = self.closedness_of_root_for_use(
+                ty,
+                env,
+                TypeUse::Actual,
+                0,
+                rows,
+                storage,
+                None,
+                executable_storage,
+            )?;
             closed &= !actual.has_parameters && !actual.has_opaque;
         }
         Ok(closed)
@@ -16351,6 +16421,55 @@ mod tests {
         assert_eq!(policies.closedness.len(), 2);
         assert!(!policies.closedness[0].executable_storage);
         assert!(policies.closedness[1].executable_storage);
+        // Source selection replay can have no caller facts. Its storage policy
+        // must still reach every raw root and remain isolated in the same memo.
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &world.empty,
+            phase: FactsPhase::Closed,
+        };
+        let goal = TraitRef {
+            declaration: c.value_trait,
+            self_ty: second.clone(),
+            args: Arc::from([]),
+        };
+        let mut raw_policies = ProofScratch::default();
+        for executable_storage in [false, true, false, true] {
+            assert!(
+                world
+                    .goal_is_closed_in_for_use(
+                        &goal,
+                        context,
+                        &mut raw_policies,
+                        executable_storage,
+                    )
+                    .unwrap()
+            );
+        }
+        assert_eq!(raw_policies.closedness.len(), 2);
+        assert!(!raw_policies.closedness[0].executable_storage);
+        assert!(raw_policies.closedness[1].executable_storage);
+        assert!(
+            raw_policies
+                .closedness
+                .iter()
+                .all(|row| row.context.is_none())
+        );
+        let mut forged = match &c.leaf {
+            Ty::Struct(value) => value.def().clone(),
+            _ => unreachable!(),
+        };
+        forged.module = fixture_modules().core_root();
+        let forged_goal = TraitRef {
+            self_ty: Ty::Struct(StructTy::new(forged)),
+            ..goal.clone()
+        };
+        assert!(matches!(
+            world.goal_is_closed_in_for_use(&forged_goal, context, &mut raw_policies, false),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
         let foreign = c.build().unwrap();
         assert!(
             matches!(foreign.closedness_of_root_with_facts_storage(&second, facts.env(), TypeUse::Root, 0, &mut scratch.closedness, &mut scratch.closedness_storage, Some(&facts)), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
@@ -20646,6 +20765,21 @@ mod tests {
                 .unwrap();
             assert_eq!(replays.raw_formations.retained_roots(), roots);
         }
+        // Logical formation must not borrow physical answers or grant a later
+        // physical root authority. Both policies retain their own complete walk.
+        world
+            .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
+            .unwrap();
+        let logical_roots = replays.raw_formations.retained_roots();
+        assert!(logical_roots > roots);
+        world
+            .validate_ref_with(&goal, facts.env(), None, &mut replays)
+            .unwrap();
+        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
+        world
+            .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
+            .unwrap();
+        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
         let Ty::Struct(original) = &c.leaf else {
             panic!("nominal fixture")
         };
@@ -20662,7 +20796,13 @@ mod tests {
         assert!(matches!(replays.raw_formations.check(
             &world, &forged, facts.env(), TypeUse::Root, None, 0,
         ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        assert!(matches!(replays.raw_formations.check_for_use(
+            &world, &forged, facts.env(), TypeUse::Root, None, 0, false,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         let foreign = case().build().unwrap();
+        assert!(matches!(replays.raw_formations.check_for_use(
+            &foreign, &c.leaf, facts.env(), TypeUse::Root, None, 0, false,
+        ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         assert!(matches!(replays.raw_formations.check(
             &foreign, &c.leaf, facts.env(), TypeUse::Root, None, 0,
         ), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
@@ -21362,6 +21502,36 @@ mod tests {
         assert!(
             matches!(Arc::new(forged).original_callable_schema(OriginalCallableSubject::Direct(c.caller)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );
+        let target = CallTarget {
+            declaration: c.caller,
+            type_args: Arc::from([c.boxed.clone()]),
+        };
+        let closed = world.instance_facts(&target).unwrap();
+        let closed_view = closed
+            .original_callable_schema(OriginalCallableSubject::Direct(c.caller))
+            .unwrap();
+        closed_view.validate_for(&closed).unwrap();
+        for change in 0..4 {
+            let mut forged = (*closed).clone();
+            if change == 0 {
+                forged.predicates = facts.predicates.clone();
+            } else {
+                let FactsSubject::ClosedInstance(target) = &mut forged.subject else {
+                    unreachable!()
+                };
+                match change {
+                    1 => target.type_args = Arc::from([]),
+                    2 => target.type_args = Arc::from([c.caller_parameter.clone()]),
+                    _ => target.declaration.snapshot = SnapshotId::standalone().unwrap(),
+                }
+            }
+            let forged = Arc::new(forged);
+            assert!(matches!(
+                forged.original_callable_schema(OriginalCallableSubject::Direct(c.caller)),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+            ));
+            assert!(closed_view.validate_for(&forged).is_err());
+        }
     }
 
     #[test]

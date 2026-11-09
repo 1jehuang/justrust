@@ -3,8 +3,9 @@
 //! context. It is never evidence for another phase, caller, or usage position.
 use super::*;
 
-/// Complete raw type-formation successes. These records never derive from
-/// metadata-only validation and never authorize a caller-specific operation.
+/// Complete raw type-formation successes under an exact source/storage policy.
+/// These never derive from metadata-only validation, cross policies, or
+/// authorize a caller-specific operation.
 #[derive(Default)]
 pub(super) struct RawFormations {
     entries: Vec<RawFormation>,
@@ -21,6 +22,7 @@ struct RawFormation {
     env: GenericEnv,
     usage: TypeUse,
     maybe_unsized: Option<ParamId>,
+    executable_storage: bool,
     key: TypeNode,
     ty: Ty,
     height: usize,
@@ -37,6 +39,7 @@ impl RawFormations {
         self.storage.len() * scratch_row_bytes::<RawFormation>().unwrap()
     }
 
+    // Nonprojected raw roots still require complete physical formation.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check(
         &mut self,
@@ -46,6 +49,20 @@ impl RawFormations {
         usage: TypeUse,
         maybe_unsized: Option<ParamId>,
         depth: usize,
+    ) -> Result<()> {
+        self.check_for_use(world, ty, env, usage, maybe_unsized, depth, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_for_use(
+        &mut self,
+        world: &ValidatedTraitWorld,
+        ty: &Ty,
+        env: &GenericEnv,
+        usage: TypeUse,
+        maybe_unsized: Option<ParamId>,
+        depth: usize,
+        executable_storage: bool,
     ) -> Result<()> {
         world.check_normalization_budget()?;
         charged(&world.budget, world.budget.check_depth(depth))?;
@@ -74,6 +91,7 @@ impl RawFormations {
                     && previous.limits == limits(&world.budget)
                     && previous.usage == usage
                     && previous.maybe_unsized == maybe_unsized
+                    && previous.executable_storage == executable_storage
                     && previous.key == key
                     && world.same_env(&previous.env, env)?
                     && same_type_allocation(&previous.ty, ty)
@@ -90,6 +108,7 @@ impl RawFormations {
         // Each root still owns its own complete formation walk and flags.
         let mut walk = TypeWalk {
             maybe_unsized,
+            logical_nominals: !executable_storage,
             nominal_session: self.nominal_session.take(),
             ..TypeWalk::default()
         };
@@ -112,6 +131,7 @@ impl RawFormations {
                     env: env.clone(),
                     usage,
                     maybe_unsized,
+                    executable_storage,
                     key,
                     ty: ty.clone(),
                     height,
