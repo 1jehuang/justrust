@@ -1,0 +1,10 @@
+      belief: [3]
+    darkness: [4]
+ foolishness: [2]
+ incredulity: [3]
+      season: [4]
+      wisdom: [2]
+["it=8", "of=8", "the=8", "was=8", "age=2"]
+the -> ["age", "best", "epoch", "season", "worst"]
+60 chars: it was the epoch of 
+ILD

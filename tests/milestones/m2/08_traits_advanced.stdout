@@ -1,0 +1,9 @@
+rex says woof
+["Dog { name: \"rex\" }", "Dog { name: \"ace\" }"] Some("rex")
+["ace", "rex"]
+Some(3)
+[4, 3, 2, 1] 126
+2
+rex says woof
+ace says woof
+true

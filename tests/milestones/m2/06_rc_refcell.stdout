@@ -1,0 +1,9 @@
+sum=20 strong=1 weak=3
+parent of 2 is Some(1)
+leaf rc=2
+[1, 2, 3, 4] true
+true
+true
+fib=12586269025 hits=47
+Some(5)
+None

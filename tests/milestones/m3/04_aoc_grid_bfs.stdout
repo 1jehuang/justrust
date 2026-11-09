@@ -1,0 +1,3 @@
+bfs Some(17) reachable=44
+dijkstra 52
+wall regions 6

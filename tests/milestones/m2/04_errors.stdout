@@ -1,0 +1,14 @@
+ok 6
+  boxed ok 6
+err parse: invalid digit found in string
+  boxed err parse: invalid digit found in string
+err negative: -6
+  boxed err negative: -6
+err empty
+  boxed err empty
+ok 110
+  boxed err too big
+Some('R') None
+Ok([1, 2, 3])
+true
+24 -99 Err("parse: invalid digit found in string")

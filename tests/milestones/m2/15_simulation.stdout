@@ -1,0 +1,4 @@
+  job0 Job { id: 0, kind: Io, cost: 8 }
+fifo wait=424 [(Cpu, 55), (Io, 28)]
+  job0 Job { id: 0, kind: Io, cost: 8 }
+sjf wait=257 [(Cpu, 55), (Io, 28)]

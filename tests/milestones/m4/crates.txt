@@ -1,0 +1,25 @@
+# M4 crate ladder: unchanged crates.io crates, roughly easiest first.
+# name version  (sources come from the local cargo registry cache)
+cfg-if 1.0.4
+adler2 2.0.1
+fnv 1.0.7
+scopeguard 1.2.0
+static_assertions 1.1.0
+hex 0.4.3
+itoa 1.0.18
+strsim 0.11.1
+heck 0.5.0
+lazy_static 1.5.1
+byteorder 1.5.0
+either 1.19.0
+arrayvec 0.7.8
+smallvec 1.16.5
+crc32fast 1.5.4
+semver 1.0.28
+ryu 1.0.23
+bitflags 2.13.2
+log 0.4.35
+base64 0.22.1
+unicode-ident 1.0.27
+unicode-width 0.2.3
+memchr 2.8.3

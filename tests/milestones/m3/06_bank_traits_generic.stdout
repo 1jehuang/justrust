@@ -1,0 +1,9 @@
+ok
+err: need 100 have 80
+err: frozen 3
+err: no account 9
+ok
+AccountId(1) = 150
+AccountId(2) = 0
+AccountId(3) = 0
+1->2:30 2->1:80

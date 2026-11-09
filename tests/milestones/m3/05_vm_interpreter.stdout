@@ -1,0 +1,3 @@
+Ok(()) out=["2432902008176640000", "7"] steps=275
+Err("stack underflow")
+Err("step limit")

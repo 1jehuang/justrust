@@ -1,0 +1,4 @@
+{"n":null,"name":"jr","nested":{"x":[1,[2,[3]]]},"ok":true,"tags":["a","b\n","é"],"v":150} depth=5
+error: unexpected at 6
+error: expected ':' at 5
+-0.25 depth=0

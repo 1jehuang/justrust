@@ -1,0 +1,6 @@
+clicked Click { x: 3, y: -4 }
+quadrant 4
+key 'q' upper=Q
+clicked Click { x: -1, y: 2 }
+quadrant 2
+total=0

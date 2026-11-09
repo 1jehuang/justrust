@@ -1,0 +1,7 @@
+error: bad field count 2
+error: invalid digit found in string
+eng    n=2 avg=  127500.0 senior=carol
+ops    n=2 avg=   88500.0 senior=erin
+sales  n=1 avg=   70000.0 senior=dan
+CAROL & ALICE
+Some(Record { name: "erin", dept: "ops", salary: 92000, years: 6 })

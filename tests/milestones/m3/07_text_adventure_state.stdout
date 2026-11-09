@@ -1,0 +1,15 @@
+> look: Hall: []
+> go n: you enter Library
+> go e: the vault is locked
+> go s: you enter Hall
+> go w: you enter Garden
+> take key: took key
+> take sword: no sword here
+> go e: you enter Hall
+> go n: you enter Library
+> use key: click
+> go e: you enter Vault
+> take gold: took gold
+> inv: ["key", "gold"]
+> dance: ?
+> go x: ?

@@ -1,0 +1,11 @@
+Ok(12.5)
+Ok(3.0)
+Err("div by zero")
+Err("unbound y")
+["neg", "zero", "small", "even", "odd"]
+origin; axis 3; axis -2; diag; 
+1..5
+1 2 [3, 4, 5]
+in range 2
+true
+42
