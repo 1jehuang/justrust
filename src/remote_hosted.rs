@@ -412,19 +412,33 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
         path,
         std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some(),
     );
-    let (mut cmd, config) = curl_with_timing(c, method, path, body, timing);
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("running curl (install curl for hosted remote builds)")?;
-    child
-        .stdin
-        .take()
-        .context("curl stdin")?
-        .write_all(config.as_bytes())?;
-    let out = child.wait_with_output()?;
+    let run = |ipv6: bool| -> Result<std::process::Output> {
+        let (mut cmd, config) = curl_with_timing(c, method, path, body, timing);
+        if ipv6 {
+            cmd.arg("-6");
+        }
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("running curl (install curl for hosted remote builds)")?;
+        child
+            .stdin
+            .take()
+            .context("curl stdin")?
+            .write_all(config.as_bytes())?;
+        Ok(child.wait_with_output()?)
+    };
+    let mut out = run(false)?;
+    // Some networks reset TLS to our domains over IPv4 by SNI while IPv6
+    // passes. Retry once over IPv6 when the connection itself failed.
+    if retry_over_ipv6(out.status.code()) {
+        let v6 = run(true)?;
+        if v6.status.success() {
+            out = v6;
+        }
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let (text, code, metrics) = curl_response(&stdout, timing);
     if !out.status.success() || code == 0 {
@@ -451,6 +465,18 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
         code,
         body: serde_json::from_str(text).unwrap_or(Value::Null),
     })
+}
+
+/// curl exit codes for a connection that failed before any HTTP exchange:
+/// 7 (connect failed) and 35 (TLS handshake reset). Such a request never
+/// reached the server, so repeating a POST is safe. 56 (receive failure) is
+/// excluded because it can happen after the server processed the request.
+fn retry_over_ipv6(code: Option<i32>) -> bool {
+    matches!(code, Some(7 | 35))
+        && !matches!(
+            std::env::var("JUSTRUST_IPV6_RETRY").as_deref(),
+            Ok("off" | "0" | "false")
+        )
 }
 
 /// Turn a non-2xx response into user guidance.
@@ -2044,6 +2070,16 @@ mod tests {
         ] {
             assert!(!admission_timing_enabled(method, path, trace));
         }
+    }
+
+    #[test]
+    fn ipv6_retry_only_for_pre_request_connection_failures() {
+        assert!(retry_over_ipv6(Some(35)));
+        assert!(retry_over_ipv6(Some(7)));
+        assert!(!retry_over_ipv6(Some(0)));
+        assert!(!retry_over_ipv6(Some(28)));
+        assert!(!retry_over_ipv6(Some(56)));
+        assert!(!retry_over_ipv6(None));
     }
 
     #[test]
