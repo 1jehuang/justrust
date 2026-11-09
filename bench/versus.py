@@ -215,8 +215,11 @@ def stack_env(st: Stack, s: suite.Scenario, target: Path, rid: str) -> dict[str,
         # and Cargo runs registry crates with their package dir as cwd, so a
         # dependency's rust-toolchain.toml (ff pins 1.56.0) would switch
         # compilers mid-build and fail with `Unrecognized option: check-cfg`.
+        # Same for doctests: rustdoc must match the rustc that built the rlibs.
         if Path("/usr/bin/rustc").exists():
             env["RUSTC"] = "/usr/bin/rustc"
+        if Path("/usr/bin/rustdoc").exists():
+            env["RUSTDOC"] = "/usr/bin/rustdoc"
         env.update(s.env)
         env.update(st.env)
         return env
