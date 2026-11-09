@@ -4,6 +4,8 @@
 use super::*;
 use crate::compiler::cfg;
 
+mod storage;
+
 #[derive(Clone, Debug)]
 pub(super) struct NominalCarrierAuthority {
     canonical: Arc<CarrierContractView>,
@@ -40,12 +42,21 @@ impl<'a> NominalCarrierSource<'a> {
         self.scratch
     }
 
+    #[cfg(test)]
     pub(in crate::compiler) fn new(function: &'a cfg::Function, facts: &'a ValidatedFacts) -> Self {
+        Self::with_scratch(function, facts, TraitScratch::default())
+    }
+
+    pub(in crate::compiler) fn with_scratch(
+        function: &'a cfg::Function,
+        facts: &'a ValidatedFacts,
+        scratch: TraitScratch,
+    ) -> Self {
         Self {
             function,
             facts,
             validated: false,
-            scratch: TraitScratch::default(),
+            scratch,
         }
     }
 
@@ -73,7 +84,7 @@ impl<'a> NominalCarrierSource<'a> {
                 &mut self.scratch,
             )?;
         } else {
-            facts.validate_signature(SignatureSubject::Body, &signature)?;
+            facts.validate_signature_with(SignatureSubject::Body, &signature, &mut self.scratch)?;
         }
         let mut different = false;
         for (before, after) in canonical
@@ -103,7 +114,7 @@ impl<'a> NominalCarrierSource<'a> {
         }
         if !self.validated {
             self.function
-                .validate_provenance(facts, facts.budget())
+                .validate_provenance_with_scratch(facts, facts.budget(), &mut self.scratch)
                 .map_err(|error| FactsError::from_message(facts.budget(), &error))?;
             self.validated = true;
         }
@@ -154,7 +165,11 @@ impl<'a> NominalCarrierSource<'a> {
                 &mut self.scratch,
             )?;
         } else {
-            facts.validate_signature(SignatureSubject::Call(target), signature)?;
+            facts.validate_signature_with(
+                SignatureSubject::Call(target),
+                signature,
+                &mut self.scratch,
+            )?;
         }
         let mut different = false;
         for (before, after) in canonical
@@ -185,7 +200,7 @@ impl<'a> NominalCarrierSource<'a> {
         }
         if !self.validated {
             function
-                .validate_provenance(facts, facts.budget())
+                .validate_provenance_with_scratch(facts, facts.budget(), &mut self.scratch)
                 .map_err(|error| FactsError::from_message(facts.budget(), &error))?;
             self.validated = true;
         }
@@ -221,7 +236,7 @@ impl NominalCarrierAuthority {
         scratch: &mut TraitScratch,
     ) -> Result<CarrierContractView> {
         let original = &self.canonical;
-        original.validate_for_with_scratch(facts, scratch)?;
+        let original_replay = original.validate_for_replay_with_scratch(facts, scratch)?;
         let subject = match &self.target {
             Some(Callee::Direct(target)) => {
                 if !matches!(&original.result_subject, parameter_equality::EqualityResultSubject::Direct(actual) if actual == target)
@@ -265,6 +280,12 @@ impl NominalCarrierAuthority {
                 subject,
                 &self.signature,
                 facts,
+                original_replay.as_ref().ok_or_else(|| {
+                    FactsError::invalid(
+                        facts.budget(),
+                        "nominal transport lost original source reconstruction",
+                    )
+                })?,
                 scratch,
             )?),
             None => {
@@ -276,9 +297,10 @@ impl NominalCarrierAuthority {
         let subject = world.equality_result_subject(subject, facts)?;
         let raw = world.normalized_declaration_schema(original.declaration)?;
         let retained = world.declaration_carriers(original.declaration)?;
+        let storage_arguments = self.storage_arguments(facts)?;
         let mut view = world.transport_carrier_parts_with_scratch(
             original.declaration,
-            original.arguments.clone(),
+            storage_arguments,
             signature_copy(&self.signature, facts.budget())?,
             facts,
             raw,
@@ -288,6 +310,9 @@ impl NominalCarrierAuthority {
             subject,
             scratch,
         )?;
+        // Storage expansion uses the exact mapped parameter occurrences, but
+        // never retags canonical source entry arguments or receipt identities.
+        view.arguments = original.arguments.clone();
         view.source_schema = source_schema;
         view.executable_storage = original.executable_storage;
         // Restricted equality results are recomputed from the transported
@@ -480,6 +505,108 @@ mod tests {
     #[test]
     fn graph_source_carrier_transport_reissues_exact_sealed_inputs() {
         for workers in [1, 8] {
+            {
+                let (_, facts, _, view) = graph_subject_source(
+                    workers,
+                    false,
+                    Some(
+                        "fn main(){let mut calls=0i32;let mut it=(0i32..2i32).flat_map(|n|{calls+=1;0i32..n});let _=it.next();}",
+                    ),
+                );
+                let authority = view.nominal.as_ref().unwrap();
+                assert_eq!(view.arguments, authority.canonical.arguments);
+                let mut scratch = TraitScratch::default();
+                for _ in 0..3 {
+                    view.validate_for_with_scratch(&facts, &mut scratch)
+                        .unwrap();
+                    for input in view.contract.inputs.iter() {
+                        ir::carrier_at(
+                            &view.result_signature.params[input.param],
+                            &input.location,
+                            facts.budget(),
+                        )
+                        .unwrap();
+                    }
+                    for parameter in view.original_env.ordered_params() {
+                        if let Some(Ty::Struct(actual)) = view
+                            .family_actual_with_scratch(
+                                &ir::CarrierFamily::Parameter(parameter),
+                                &facts,
+                                &mut scratch,
+                            )
+                            .unwrap()
+                        {
+                            assert!(actual.id().index.is_graph());
+                        }
+                    }
+                }
+                let family = ir::CarrierFamily::Parameter(
+                    view.original_env.ordered_params().next().unwrap(),
+                );
+                let replay = view.replay_for_families(&facts, &mut scratch).unwrap();
+                let before = facts.budget().usage_snapshot().work;
+                let expected = view
+                    .family_actual_with_scratch(&family, &facts, &mut scratch)
+                    .unwrap();
+                let repeated = facts.budget().usage_snapshot().work - before;
+                let before = facts.budget().usage_snapshot().work;
+                for _ in 0..3 {
+                    assert_eq!(
+                        view.family_actual_with_replay(&family, &facts, &replay, &mut scratch)
+                            .unwrap(),
+                        expected
+                    );
+                }
+                let borrowed = facts.budget().usage_snapshot().work - before;
+                assert!(
+                    borrowed < repeated.saturating_mul(3),
+                    "family consumers reconstructed full view: {borrowed}/{repeated}"
+                );
+                let detached = (*view).clone();
+                assert!(
+                    detached
+                        .family_actual_with_replay(&family, &facts, &replay, &mut scratch)
+                        .is_err()
+                );
+                let mut changed_stage = detached.clone();
+                changed_stage.phase = FactsPhase::Schema;
+                assert!(
+                    changed_stage
+                        .family_actual_with_replay(&family, &facts, &replay, &mut scratch)
+                        .is_err()
+                );
+                let (_, foreign, _, _) = graph_view(workers);
+                assert!(
+                    view.family_actual_with_replay(&family, &foreign, &replay, &mut scratch)
+                        .is_err()
+                );
+                let mut forged = (*view).clone();
+                let mut inputs = forged.contract.inputs.to_vec();
+                assert!(!inputs.is_empty());
+                let mut path = inputs[0].location.path.0.to_vec();
+                path.push(ir::CarrierStep::Field(usize::MAX));
+                inputs[0].location.path = ir::CarrierPath(path.into());
+                forged.contract.inputs = inputs.into();
+                assert!(
+                    forged
+                        .validate_for_with_scratch(&facts, &mut scratch)
+                        .is_err()
+                );
+                assert!(
+                    forged
+                        .family_actual_with_replay(&family, &facts, &replay, &mut scratch)
+                        .is_err()
+                );
+                assert_eq!(
+                    view.family_actual_with_replay(&family, &facts, &replay, &mut scratch)
+                        .unwrap(),
+                    expected
+                );
+                facts.budget().poison_ledger_for_tests();
+                assert!(
+                    matches!(view.family_actual_with_replay(&family, &facts, &replay, &mut scratch), Err(error) if error.is_resource())
+                );
+            }
             let (_, facts, _, view) = graph_subject_source(
                 workers,
                 false,
@@ -495,10 +622,128 @@ mod tests {
                     .unwrap()
             );
             let mut scratch = TraitScratch::default();
+            let canonical = &nominal.canonical;
+            let canonical_replay = canonical
+                .validate_for_replay_with_scratch(&facts, &mut scratch)
+                .unwrap()
+                .unwrap();
+            let subject = SignatureSubject::Call(nominal.target.as_ref().unwrap());
+            for _ in 0..3 {
+                let reissued = original
+                    .reissue_for_signature(
+                        canonical,
+                        subject,
+                        &view.result_signature,
+                        &facts,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .unwrap();
+                assert!(
+                    reissued
+                        .same_authority(transported, facts.budget())
+                        .unwrap()
+                );
+            }
+            let detached_canonical = (**canonical).clone();
+            assert!(
+                original
+                    .reissue_for_signature(
+                        &detached_canonical,
+                        subject,
+                        &view.result_signature,
+                        &facts,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            let mut changed_canonical = (**canonical).clone();
+            changed_canonical.phase = FactsPhase::Schema;
+            assert!(
+                original
+                    .reissue_for_signature(
+                        &changed_canonical,
+                        subject,
+                        &view.result_signature,
+                        &facts,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            assert!(
+                transported
+                    .reissue_for_signature(
+                        canonical,
+                        subject,
+                        &view.result_signature,
+                        &facts,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            let mut changed_signature = view.result_signature.clone();
+            changed_signature.result = Ty::Bool;
+            assert!(
+                original
+                    .reissue_for_signature(
+                        canonical,
+                        subject,
+                        &changed_signature,
+                        &facts,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
             view.validate_for_with_scratch(&facts, &mut scratch)
                 .unwrap();
             view.validate_for_with_scratch(&facts, &mut scratch)
                 .unwrap();
+            let source_replay = transported
+                .replay_with_scratch(&view, &facts, &mut scratch)
+                .unwrap();
+            for _ in 0..3 {
+                facts
+                    .world
+                    .validate_equality_results_with_source_replay(
+                        &view,
+                        &facts,
+                        Some(&source_replay),
+                        &mut scratch,
+                    )
+                    .unwrap();
+            }
+            assert!(facts.world.validate_equality_results_with_source_replay(
+                &view, &facts, None, &mut scratch,
+            ).is_err());
+            let detached_view = (*view).clone();
+            assert!(
+                facts
+                    .world
+                    .validate_equality_results_with_source_replay(
+                        &detached_view,
+                        &facts,
+                        Some(&source_replay),
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            let mut changed_stage = (*view).clone();
+            changed_stage.phase = FactsPhase::Schema;
+            assert!(
+                facts
+                    .world
+                    .validate_equality_results_with_source_replay(
+                        &changed_stage,
+                        &facts,
+                        Some(&source_replay),
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
             let operations = nominal_normalization::NominalOperations::default();
             let replay_roots = || -> Result<()> {
                 for ty in view
@@ -619,6 +864,29 @@ mod tests {
             );
             let (_, foreign, _, _) = graph_view(workers);
             assert!(
+                original
+                    .reissue_for_signature(
+                        canonical,
+                        subject,
+                        &view.result_signature,
+                        &foreign,
+                        &canonical_replay,
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            assert!(
+                facts
+                    .world
+                    .validate_equality_results_with_source_replay(
+                        &view,
+                        &foreign,
+                        Some(&source_replay),
+                        &mut scratch,
+                    )
+                    .is_err()
+            );
+            assert!(
                 transported
                     .transport()
                     .validate_with_replay(&foreign.world, &foreign, &mut rows)
@@ -660,6 +928,19 @@ mod tests {
             view.validate_for_with_scratch(&facts, &mut scratch)
                 .unwrap();
             facts.budget().poison_ledger_for_tests();
+            assert!(matches!(original.reissue_for_signature(
+                canonical,
+                subject,
+                &view.result_signature,
+                &facts,
+                &canonical_replay,
+                &mut scratch,
+            ), Err(error) if error.is_resource()));
+            assert!(
+                matches!(facts.world.validate_equality_results_with_source_replay(
+                &view, &facts, Some(&source_replay), &mut scratch,
+            ), Err(error) if error.is_resource())
+            );
             assert!(
                 matches!(transported.transport().validate_with_replay(&facts.world, &facts, &mut rows), Err(error) if error.is_resource())
             );
@@ -671,6 +952,132 @@ mod tests {
                 matches!(view.validate_for_with_scratch(&facts, &mut scratch), Err(error) if error.is_resource())
             );
         }
+    }
+
+    #[test]
+    fn storage_wrapper_occurrences_preserve_ordered_children_and_identity() {
+        use crate::compiler::frontend::{self, PlanCtx};
+        let program = frontend::parse("fn id<T>(x:T)->T{x}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let other = plan.function_decl(1).unwrap();
+        let schema = world.callable_schema(declaration).unwrap();
+        let parameter = Ty::Param(schema.env.ordered_params().next().unwrap());
+        let foreign_plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let foreign_world = foreign_plan.trait_world().unwrap();
+        let make = |kind, ty: Ty, foreign| {
+            let identity = if foreign { other } else { declaration };
+            let catalog = if foreign {
+                &foreign_world.catalog
+            } else {
+                &world.catalog
+            };
+            match kind {
+                0 => Ty::PhantomData(ir::PhantomDataTy::new(catalog, ty, &budget).unwrap()),
+                1 => Ty::ManuallyDrop(ir::ManuallyDropTy::new(catalog, ty, &budget).unwrap()),
+                2 => Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                    inputs: if foreign {
+                        Arc::from([])
+                    } else {
+                        Arc::from([ty.clone()])
+                    },
+                    output: ty,
+                })),
+                3 => Ty::FnItem(Arc::new(CallTarget {
+                    declaration: identity,
+                    type_args: Arc::from([ty]),
+                })),
+                4 => Ty::Closure(Arc::new(ir::ClosureTy::new(
+                    declaration,
+                    Arc::from([ty.clone()]),
+                    0,
+                    identity,
+                    Arc::from([ty.clone()]),
+                    ty.clone(),
+                    Arc::from([ty]),
+                    ir::ClosureKind::Fn,
+                ))),
+                5 => Ty::Opaque(Arc::new(ir::OpaqueTy::new(
+                    identity,
+                    Arc::from([ty.clone()]),
+                    0,
+                    Arc::from([ir::OpaqueBound::new(
+                        declaration,
+                        Arc::from([ir::OpaqueBoundArg::Type(ty)]),
+                        Arc::from([]),
+                    )]),
+                    Arc::from([]),
+                ))),
+                _ => Ty::Dyn(Arc::new(ir::DynTy {
+                    principal: identity,
+                    args: Arc::from([ty.clone()]),
+                    associated_types: Arc::from([(declaration, ty)]),
+                })),
+            }
+        };
+        for kind in 0..7 {
+            let original = make(kind, parameter.clone(), false);
+            let mapped = make(kind, Ty::Bool, false);
+            let mut found = [None];
+            storage::storage_occurrences(
+                &world,
+                &schema.env,
+                &[Ty::Bool],
+                &original,
+                &mapped,
+                &mut found,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap();
+            assert_eq!(
+                found,
+                [Some(Ty::Bool)],
+                "wrapper {kind} lost its semantic child"
+            );
+            for rejected in [
+                make(kind, Ty::Bool, true),
+                make(kind, Ty::Int(ir::IntTy::U8), false),
+            ] {
+                assert!(
+                    storage::storage_occurrences(
+                        &world,
+                        &schema.env,
+                        &[Ty::Bool],
+                        &original,
+                        &rejected,
+                        &mut [None],
+                        &mut Vec::new(),
+                        0,
+                    )
+                    .is_err(),
+                    "wrapper {kind} accepted changed identity or child"
+                );
+            }
+        }
+        assert!(
+            storage::storage_occurrences(
+                &world,
+                &schema.env,
+                &[Ty::Bool],
+                &Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(parameter)
+                },
+                &Ty::Bool,
+                &mut [None],
+                &mut Vec::new(),
+                0,
+            )
+            .is_err()
+        );
+        budget.poison_ledger_for_tests();
+        assert!(matches!(storage::storage_occurrences(
+            &world, &schema.env, &[Ty::Bool], &Ty::Bool, &Ty::Bool,
+            &mut [None], &mut Vec::new(), 0,
+        ), Err(error) if error.is_resource()));
     }
 
     #[test]

@@ -497,21 +497,30 @@ impl ValidatedTraitWorld {
 
     /// Recompute the obligation set even if the caller removed the optional
     /// authority. No client-supplied flags decide whether sealing is required.
-    pub(super) fn validate_equality_results(
+    pub(super) fn validate_equality_results_with_source_replay(
         &self,
         view: &CarrierContractView,
         facts: &ValidatedFacts,
-    ) -> Result<()> {
-        self.validate_equality_results_with_scratch(view, facts, &mut TraitScratch::default())
-    }
-
-    pub(super) fn validate_equality_results_with_scratch(
-        &self,
-        view: &CarrierContractView,
-        facts: &ValidatedFacts,
+        source_replay: Option<&source_carriers::SourceCarrierReplay<'_>>,
         scratch: &mut TraitScratch,
     ) -> Result<()> {
-        let expected = self.derive_equality_results_with_scratch(view, facts, None, scratch)?;
+        self.check_facts(facts, true)?;
+        if view.source_schema.is_some() != source_replay.is_some() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "equality replay changed source reconstruction domain",
+            ));
+        }
+        if let Some(replay) = source_replay {
+            replay.validate_for(view, facts)?;
+        }
+        let expected = self.derive_equality_results_in(
+            view,
+            facts,
+            None,
+            source_replay,
+            scratch.for_world(self.id),
+        )?;
         match (&view.equality_results, expected) {
             (None, None) => Ok(()),
             (Some(stored), Some(expected)) => {

@@ -211,6 +211,7 @@ impl ValidatedTraitWorld {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn map_universal_projection_type_in(
         &self,
         ty: &Ty,
@@ -230,15 +231,13 @@ impl ValidatedTraitWorld {
         {
             transport.validate(self, facts)?;
         }
-        if let Some((facts, transport)) = invocation {
-            if !transport.is_empty()
-                && matches!(ty, Ty::Struct(_) | Ty::Enum(_))
-                && self.type_contains_projection(ty, depth + 1)?
-            {
-                if let Some(realized) = operations.select(transport, self, ty, facts)? {
-                    return Ok(realized);
-                }
-            }
+        if let Some((facts, transport)) = invocation
+            && !transport.is_empty()
+            && matches!(ty, Ty::Struct(_) | Ty::Enum(_))
+            && self.type_contains_projection(ty, depth + 1)?
+            && let Some(realized) = operations.select(transport, self, ty, facts)?
+        {
+            return Ok(realized);
         }
         let mapped = match ty {
             Ty::AssociatedType(projection) => {
@@ -836,6 +835,7 @@ impl ValidatedTraitWorld {
         // The evidence is tied to this caller, never the empty closed context.
         if selection.0.world != self.id
             || selection.0.environment != facts.predicates.index
+            || !selection.0.executable_storage
             || selection.0.phase != FactsPhase::Universal
             || !self.eq_predicate(
                 &selection.0.goal,
@@ -1264,6 +1264,7 @@ impl ValidatedTraitWorld {
             if !self.same_projection(projection, expected)?
                 || proof.0.world != expected_proof.0.world
                 || proof.0.environment != expected_proof.0.environment
+                || proof.0.executable_storage != expected_proof.0.executable_storage
                 || proof.0.phase != expected_proof.0.phase
                 || !self.eq_predicate(&proof.0.goal, &expected_proof.0.goal)?
                 || !self.same_universal_required_selection(proof, expected_proof, 0)?
@@ -1292,6 +1293,7 @@ impl ValidatedTraitWorld {
             || evidence.source_regions != replay.source_regions
             || evidence.selection.0.world != replay.selection.0.world
             || evidence.selection.0.environment != replay.selection.0.environment
+            || evidence.selection.0.executable_storage != replay.selection.0.executable_storage
             || evidence.selection.0.phase != replay.selection.0.phase
             || !self.same_universal_required_selection(&evidence.selection, &replay.selection, 0)?
             || !self.eq_predicate(&evidence.selection.0.goal, &replay.selection.0.goal)?
@@ -1866,6 +1868,7 @@ mod tests {
         ] {
             let mut forged = (*evidence).clone();
             forged.selection = ProofEvidence(Arc::new(ProofRecord {
+                executable_storage: evidence.selection.0.executable_storage,
                 world: evidence.selection.0.world,
                 environment: evidence.selection.0.environment,
                 phase: evidence.selection.0.phase,
@@ -2006,6 +2009,7 @@ mod tests {
                             original: None,
                             source_metadata: None,
                             predicates: &facts.predicates,
+                            executable_storage: true,
                             phase
                         },
                         &mut ProofScratch::default(),

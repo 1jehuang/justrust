@@ -778,7 +778,7 @@ mod tests {
                 let ir::Callee::Direct(target) = closed_call else {
                     panic!("callee kind changed")
                 };
-                assert_eq!(target.type_args.as_ref(), &[mapped.clone()]);
+                assert_eq!(target.type_args.as_ref(), std::slice::from_ref(&mapped));
                 let classified = closed.world().instance_facts(&target).unwrap();
                 assert!(classified.is_source_callable(target.declaration).unwrap());
                 let source_view = classified
@@ -2127,7 +2127,7 @@ mod tests {
                 .discharge_direct_with_nominals(
                     &target,
                     facts,
-                    &[stripped.clone()],
+                    std::slice::from_ref(&stripped),
                     &mut invocation_scratch
                 )
                 .is_err()
@@ -2186,7 +2186,7 @@ mod tests {
                 .discharge_direct_with_nominals(
                     &target,
                     facts,
-                    &[changed.clone()],
+                    std::slice::from_ref(&changed),
                     &mut invocation_scratch
                 )
                 .is_err()

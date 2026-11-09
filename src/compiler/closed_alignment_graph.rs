@@ -104,20 +104,18 @@ pub(super) async fn produce(
             // records and sever the authority of its authored type receipts.
             // Universal templates and other instances still form their own facts.
             let mut same_closed_publication = false;
-            if template.closure.is_none() && template.publication.is_some() {
-                if let Some(source_target) = original_facts.target() {
-                    if source_target.declaration == target.declaration
-                        && source_target.type_args.len() == target.type_args.len()
-                    {
-                        same_closed_publication = true;
-                        for (source, current) in
-                            source_target.type_args.iter().zip(target.type_args.iter())
-                        {
-                            if !ir::identical_type(source, current, budget).map_err(Error::new)? {
-                                same_closed_publication = false;
-                                break;
-                            }
-                        }
+            if template.closure.is_none()
+                && template.publication.is_some()
+                && let Some(source_target) = original_facts.target()
+                && source_target.declaration == target.declaration
+                && source_target.type_args.len() == target.type_args.len()
+            {
+                same_closed_publication = true;
+                for (source, current) in source_target.type_args.iter().zip(target.type_args.iter())
+                {
+                    if !ir::identical_type(source, current, budget).map_err(Error::new)? {
+                        same_closed_publication = false;
+                        break;
                     }
                 }
             }

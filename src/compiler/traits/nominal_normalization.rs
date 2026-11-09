@@ -1136,6 +1136,7 @@ impl ValidatedTraitWorld {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn normalize_nominal_actuals_in(
         &self,
         original: &Ty,
@@ -1280,6 +1281,7 @@ impl ValidatedTraitWorld {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_reapplied_nominal_in(
         &self,
         original: &Ty,

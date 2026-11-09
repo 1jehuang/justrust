@@ -824,6 +824,33 @@ pub(super) struct DirectDemands {
     pub cleanup_opaque: Vec<Arc<ir::OpaqueTy>>,
 }
 impl DirectDemands {
+    fn contains_cleanup(
+        &self,
+        target: &ir::CallTarget,
+        budget: &ir::PlanBudget,
+    ) -> Result<bool, String> {
+        budget.charge_work(self.cleanup.len().max(1))?;
+        if self.cleanup.contains(target) {
+            return Ok(true);
+        }
+        // This is an instance-demand identity check, not storage admission.
+        // BODY/LOWER independently authenticate the realized payload and its
+        // current-engine graph reads. Source and realized nominal application
+        // IDs differ, but the executable node is keyed by declaration and its
+        // complete ordered canonical arguments, never those allocation IDs.
+        let key = graph_key::encode(target, budget)?;
+        for sealed in &self.cleanup {
+            budget.charge_work(1)?;
+            if sealed.declaration == target.declaration
+                && sealed.type_args.len() == target.type_args.len()
+                && graph_key::encode(sealed, budget)? == key
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Every implicit cleanup destructor in `function` must be one of this
     /// instance's own sealed cleanup demands, so BUILD links it.
     pub fn validate_cleanup(
@@ -835,8 +862,7 @@ impl DirectDemands {
             budget.charge_work(1)?;
             if let super::cfg::Terminator::Drop { cleanup, .. } = &block.terminator.value {
                 for target in cleanup.destructor().targets() {
-                    budget.charge_work(self.cleanup.len().max(1))?;
-                    if !self.cleanup.contains(&target) {
+                    if !self.contains_cleanup(&target, budget)? {
                         return Err("cleanup target lacks sealed implicit instance demand".into());
                     }
                 }
@@ -993,16 +1019,15 @@ fn direct_demands_in(
     let schema = context.function_schema(target.declaration)?;
     let env = source_facts.map_or(schema.env, |facts| facts.env().clone());
     let mut same_closed_source = false;
-    if let Some(source_target) = source_facts.and_then(|facts| facts.target()) {
-        if source_target.declaration == target.declaration
-            && source_target.type_args.len() == target.type_args.len()
-        {
-            same_closed_source = true;
-            for (source, current) in source_target.type_args.iter().zip(target.type_args.iter()) {
-                if !ir::identical_type(source, current, budget)? {
-                    same_closed_source = false;
-                    break;
-                }
+    if let Some(source_target) = source_facts.and_then(|facts| facts.target())
+        && source_target.declaration == target.declaration
+        && source_target.type_args.len() == target.type_args.len()
+    {
+        same_closed_source = true;
+        for (source, current) in source_target.type_args.iter().zip(target.type_args.iter()) {
+            if !ir::identical_type(source, current, budget)? {
+                same_closed_source = false;
+                break;
             }
         }
     }
@@ -2219,6 +2244,20 @@ mod tests {
         assert_eq!(second.type_args.len(), 1);
         assert_ne!(first.type_args, second.type_args);
         assert_ne!(plan.symbol(first).unwrap(), plan.symbol(second).unwrap());
+        let mut demands = DirectDemands::default();
+        demands.cleanup(first.clone(), &budget).unwrap();
+        assert!(demands.contains_cleanup(first, &budget).unwrap());
+        assert!(!demands.contains_cleanup(second, &budget).unwrap());
+        let mut wrong = first.clone();
+        wrong.type_args = Arc::from([ir::Ty::Int(ir::IntTy::U16)]);
+        assert!(!demands.contains_cleanup(&wrong, &budget).unwrap());
+        wrong.type_args = Arc::from([first.type_args[0].clone(), ir::Ty::Bool]);
+        assert!(!demands.contains_cleanup(&wrong, &budget).unwrap());
+        wrong = first.clone();
+        wrong.declaration.snapshot = ir::SnapshotId::standalone().unwrap();
+        assert!(!demands.contains_cleanup(&wrong, &budget).unwrap());
+        demands.cleanup.clear();
+        assert!(!demands.contains_cleanup(first, &budget).unwrap());
     }
 
     #[test]

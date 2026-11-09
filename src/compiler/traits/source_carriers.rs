@@ -27,6 +27,12 @@ impl SourceCarrierReplay<'_> {
         facts.world.check_facts(facts, true)?;
         if !std::ptr::eq(self.view, view)
             || !std::ptr::eq(self.facts, facts)
+            || view.world != facts.world.id
+            || view.registry != facts.registry_snapshot()
+            || view.environment != facts.predicates.index
+            || view.phase != facts.phase()
+            || !view.budget.same_authority(facts.budget())
+            || view.executable_storage
             || !matches!(&view.source_schema, Some(source) if std::ptr::eq(source.as_ref(), self.authority))
         {
             return Err(FactsError::invalid(
@@ -49,6 +55,7 @@ impl SourceCarrierAuthority {
         subject: SignatureSubject<'_>,
         signature: &Signature,
         facts: &ValidatedFacts,
+        original_replay: &SourceCarrierReplay<'_>,
         scratch: &mut TraitScratch,
     ) -> Result<Arc<Self>> {
         if !matches!(&original.source_schema, Some(source) if std::ptr::eq(self, source.as_ref())) {
@@ -57,7 +64,10 @@ impl SourceCarrierAuthority {
                 "source transport changed its original capsule",
             ));
         }
-        self.validate_with_scratch(original, facts, scratch)?;
+        // The caller just completed the original view's full validators in
+        // this operation. Borrow that exact reconstruction, never an owned
+        // success row or an equal-content view from another invocation.
+        original_replay.validate_for(original, facts)?;
         let result_subject = facts.world.equality_result_subject(subject, facts)?;
         if !facts
             .world
@@ -93,23 +103,6 @@ impl SourceCarrierAuthority {
     pub(super) fn transport(&self) -> ParentLocalTransport<'_> {
         ParentLocalTransport::new(&self.inputs)
     }
-    pub(super) fn validate(
-        &self,
-        view: &CarrierContractView,
-        facts: &ValidatedFacts,
-    ) -> Result<()> {
-        self.validate_with_scratch(view, facts, &mut TraitScratch::default())
-    }
-
-    pub(super) fn validate_with_scratch(
-        &self,
-        view: &CarrierContractView,
-        facts: &ValidatedFacts,
-        scratch: &mut TraitScratch,
-    ) -> Result<()> {
-        self.replay_with_scratch(view, facts, scratch).map(|_| ())
-    }
-
     pub(super) fn replay_with_scratch<'a>(
         &'a self,
         view: &'a CarrierContractView,
@@ -156,7 +149,7 @@ impl SourceCarrierAuthority {
         }
         let context = ProofContext {
             transport: ParentLocalTransport::new(&inputs),
-            ..ProofContext::from_facts(facts)
+            ..ProofContext::from_facts(facts).for_storage(false)
         };
         context
             .transport
@@ -191,10 +184,12 @@ impl SourceCarrierAuthority {
                     "source carrier replay lost original origins",
                 )
             })?;
+        let storage_arguments =
+            world.carrier_storage_arguments(declaration, &arguments, &view.result_signature)?;
         retain::<Ty>(facts.budget(), view.result_signature.params.len())?;
         let expected = world.transport_carrier_parts_with_scratch(
             declaration,
-            arguments,
+            storage_arguments,
             view.result_signature.clone(),
             facts,
             raw,
@@ -266,7 +261,7 @@ impl ValidatedFacts {
         let (_, _, initial) = self.world.source_carrier_application(
             &result_subject,
             self,
-            ProofContext::from_facts(self),
+            ProofContext::from_facts(self).for_storage(false),
             scratch.for_world(self.world.id),
         )?;
         let inputs = match subject {
@@ -279,7 +274,7 @@ impl ValidatedFacts {
         };
         let context = ProofContext {
             transport: ParentLocalTransport::new(&inputs),
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
         context
             .transport
@@ -348,51 +343,80 @@ impl ValidatedFacts {
         signature: &Signature,
         scratch: &mut TraitScratch,
     ) -> Result<()> {
+        self.validate_source_flow_signatures_with_scratch(subject, &[signature], scratch)
+    }
+
+    /// One receipt operation may compare several realizations of the same
+    /// source call. Reconstruct its canonical application once only when the
+    /// complete ordered source-field receipts agree. Each operand still
+    /// authenticates its transport, type metadata and stored contract. Nothing
+    /// from this reconstruction survives the operation or admits another call.
+    pub(in crate::compiler) fn validate_source_flow_signatures_with_scratch(
+        &self,
+        subject: SignatureSubject<'_>,
+        signatures: &[&Signature],
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
         self.world.check_facts(self, true)?;
         let result_subject = self.world.equality_result_subject(subject, self)?;
-        let inputs = match subject {
-            SignatureSubject::Body => {
-                self.parent_local_signature_inputs_with_scratch(signature, scratch)?
+        let mut reconstruction: Option<(Vec<Ty>, InstantiatedSchema)> = None;
+        for signature in signatures {
+            self.world.check_facts(self, true)?;
+            let inputs = match subject {
+                SignatureSubject::Body => {
+                    self.parent_local_signature_inputs_with_scratch(signature, scratch)?
+                }
+                SignatureSubject::Call(callee) => {
+                    self.parent_local_call_inputs_with_scratch(callee, signature, scratch)?
+                }
+            };
+            let context = ProofContext {
+                transport: ParentLocalTransport::new(&inputs),
+                ..ProofContext::from_facts(self).for_storage(false)
+            };
+            context
+                .transport
+                .validate_with_scratch(&self.world, self, scratch)?;
+            let same_inputs = match &reconstruction {
+                Some((previous, _)) => {
+                    schema_instantiation::same_transport(previous, &inputs, self.budget(), 0)?
+                }
+                None => false,
+            };
+            if !same_inputs {
+                let (_, _, expected) = self.world.source_carrier_application(
+                    &result_subject,
+                    self,
+                    context,
+                    scratch.for_world(self.world.id),
+                )?;
+                reconstruction = Some((inputs, expected));
             }
-            SignatureSubject::Call(callee) => {
-                self.parent_local_call_inputs_with_scratch(callee, signature, scratch)?
+            let expected = &reconstruction.as_ref().unwrap().1.signature;
+            if !self.world.eq_signature(expected, signature)? {
+                return Err(FactsError::invalid(
+                    self.budget(),
+                    "source flow changed its exact canonical signature or reference contract",
+                ));
             }
-        };
-        let context = ProofContext {
-            transport: ParentLocalTransport::new(&inputs),
-            ..ProofContext::from_facts(self)
-        };
-        context
-            .transport
-            .validate_with_scratch(&self.world, self, scratch)?;
-        let (_, _, expected) = self.world.source_carrier_application(
-            &result_subject,
-            self,
-            context,
-            scratch.for_world(self.world.id),
-        )?;
-        if !self.world.eq_signature(&expected.signature, signature)? {
-            return Err(FactsError::invalid(
+            for ty in signature
+                .params
+                .iter()
+                .chain(std::iter::once(&signature.result))
+            {
+                self.validate_ty_metadata_scratch(ty, self.budget(), scratch)?;
+            }
+            charged(
                 self.budget(),
-                "source flow changed its exact canonical signature or reference contract",
-            ));
+                ir::validate_stored_ref_contract(
+                    &signature.params,
+                    &signature.result,
+                    &signature.ref_contract,
+                    self.budget(),
+                ),
+            )?;
         }
-        for ty in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            self.validate_ty_metadata_scratch(ty, self.budget(), scratch)?;
-        }
-        charged(
-            self.budget(),
-            ir::validate_stored_ref_contract(
-                &signature.params,
-                &signature.result,
-                &signature.ref_contract,
-                self.budget(),
-            ),
-        )
+        Ok(())
     }
 }
 
@@ -442,12 +466,13 @@ impl ValidatedTraitWorld {
                         "source flow changed required item or method argument arity",
                     ));
                 }
-                self.validate_ref_with_facts(
+                self.validate_ref_with_facts_for_use(
                     &call.trait_ref,
                     context.env(),
                     None,
                     &mut active.replays,
                     Some(facts),
+                    false,
                 )?;
                 self.require_in(
                     &Predicate::Implements(call.trait_ref.clone()),
@@ -461,7 +486,7 @@ impl ValidatedTraitWorld {
                 (item.declaration, arguments.into(), item.schema.clone())
             }
         };
-        let application = self.instantiate_scratch_for_use(
+        let mut application = self.instantiate_scratch_for_use(
             &schema,
             &arguments,
             context,
@@ -472,6 +497,16 @@ impl ValidatedTraitWorld {
         )?;
         for predicate in application.predicates.iter() {
             self.require_in(predicate, context, active)?;
+        }
+        if let parameter_equality::EqualityResultSubject::Direct(target) = subject {
+            // The same sealed adapter owns direct source and executable result
+            // topology. Normalize only after its exact schema and obligations
+            // have been authenticated, never by relaxing contract equality.
+            self.canonicalize_projected_closure_direct(
+                target,
+                &mut application.signature,
+                context,
+            )?;
         }
         Ok((declaration, arguments, application))
     }

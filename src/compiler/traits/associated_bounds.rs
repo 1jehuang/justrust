@@ -220,125 +220,143 @@ impl ValidatedTraitWorld {
         implementation: Option<&projected_methods::OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
         self.check_proof_context_caller(context)?;
-        let invocation = context
-            .metadata_facts()
-            .map(|facts| (facts, context.metadata_transport()));
-        let predicates = self.associated_bounds_for_with(associated, owner, context, active)?;
-        for predicate in predicates.iter() {
-            let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-                if projection.item == associated
-                    && self.eq_predicate(
-                        &Predicate::Implements(projection.trait_ref.clone()),
-                        &Predicate::Implements(owner.clone()),
-                    )?
-                {
-                    return Ok(normal.clone());
-                }
-                let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-                if let Some(implementation) = implementation {
-                    return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
-                }
-                let closed =
-                    self.goal_is_closed_in_for_use(&projection.trait_ref, context, active, false)?;
-                if closed
-                    || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
-                {
-                    let (normal, dependencies) = self.normalize_closed_projected_type_for_use(
-                        &raw,
+        let operations = std::mem::take(&mut active.nominal_operations);
+        let result = (|| {
+            let context = ProofContext {
+                transport: operations.transport(context.transport),
+                ..context
+            };
+            let invocation = context
+                .metadata_facts()
+                .map(|facts| (facts, context.metadata_transport()));
+            let predicates = self.associated_bounds_for_with(associated, owner, context, active)?;
+            for predicate in predicates.iter() {
+                let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+                    if projection.item == associated
+                        && self.eq_predicate(
+                            &Predicate::Implements(projection.trait_ref.clone()),
+                            &Predicate::Implements(owner.clone()),
+                        )?
+                    {
+                        return Ok(normal.clone());
+                    }
+                    let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                    if let Some(implementation) = implementation {
+                        return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
+                    }
+                    let closed = self.goal_is_closed_in_for_use(
+                        &projection.trait_ref,
                         context,
-                        !self.owner_normalization_finalized,
                         active,
                         false,
                     )?;
-                    for dependency in dependencies.iter() {
-                        self.validate_projected_dependency_with_for_use(
-                            dependency,
+                    if closed
+                        || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    {
+                        let (normal, dependencies) = self.normalize_closed_projected_type_for_use(
+                            &raw,
                             context,
-                            active,
                             !self.owner_normalization_finalized,
+                            active,
                             false,
                         )?;
-                    }
-                    return Ok(normal);
-                }
-                Ok(raw)
-            };
-            let normalized = match predicate {
-                Predicate::Implements(goal) => {
-                    let mut args = Vec::new();
-                    for argument in goal.args.iter() {
-                        push(
-                            &self.budget,
-                            &mut args,
-                            self.map_universal_projection_type_for_use(
-                                argument,
-                                context.env(),
-                                0,
-                                invocation,
+                        for dependency in dependencies.iter() {
+                            self.validate_projected_dependency_with_for_use(
+                                dependency,
+                                context,
+                                active,
+                                !self.owner_normalization_finalized,
                                 false,
-                                &mut reduce,
-                            )?,
-                        )?;
+                            )?;
+                        }
+                        return Ok(normal);
                     }
-                    Predicate::Implements(TraitRef {
-                        declaration: goal.declaration,
-                        self_ty: self.map_universal_projection_type_for_use(
-                            &goal.self_ty,
-                            context.env(),
-                            0,
-                            invocation,
-                            false,
-                            &mut reduce,
-                        )?,
-                        args: args.into(),
-                    })
-                }
-                Predicate::ProjectionEq { projection, ty } => {
-                    let mut args = Vec::new();
-                    for argument in projection.trait_ref.args.iter() {
-                        push(
-                            &self.budget,
-                            &mut args,
-                            self.map_universal_projection_type_for_use(
-                                argument,
-                                context.env(),
-                                0,
-                                invocation,
-                                false,
-                                &mut reduce,
-                            )?,
-                        )?;
-                    }
-                    Predicate::ProjectionEq {
-                        projection: ir::AssociatedTypeProjection {
-                            trait_ref: TraitRef {
-                                declaration: projection.trait_ref.declaration,
-                                self_ty: self.map_universal_projection_type_for_use(
-                                    &projection.trait_ref.self_ty,
+                    Ok(raw)
+                };
+                let normalized = match predicate {
+                    Predicate::Implements(goal) => {
+                        let mut args = Vec::new();
+                        for argument in goal.args.iter() {
+                            push(
+                                &self.budget,
+                                &mut args,
+                                self.map_universal_projection_type_in(
+                                    argument,
                                     context.env(),
                                     0,
                                     invocation,
                                     false,
+                                    &operations,
                                     &mut reduce,
                                 )?,
-                                args: args.into(),
-                            },
-                            item: projection.item,
-                        },
-                        ty: self.map_universal_projection_type_for_use(
-                            ty,
-                            context.env(),
-                            0,
-                            invocation,
-                            false,
-                            &mut reduce,
-                        )?,
+                            )?;
+                        }
+                        Predicate::Implements(TraitRef {
+                            declaration: goal.declaration,
+                            self_ty: self.map_universal_projection_type_in(
+                                &goal.self_ty,
+                                context.env(),
+                                0,
+                                invocation,
+                                false,
+                                &operations,
+                                &mut reduce,
+                            )?,
+                            args: args.into(),
+                        })
                     }
-                }
-            };
-            self.require_in(&normalized, context, active)?;
-        }
-        Ok(())
+                    Predicate::ProjectionEq { projection, ty } => {
+                        let mut args = Vec::new();
+                        for argument in projection.trait_ref.args.iter() {
+                            push(
+                                &self.budget,
+                                &mut args,
+                                self.map_universal_projection_type_in(
+                                    argument,
+                                    context.env(),
+                                    0,
+                                    invocation,
+                                    false,
+                                    &operations,
+                                    &mut reduce,
+                                )?,
+                            )?;
+                        }
+                        Predicate::ProjectionEq {
+                            projection: ir::AssociatedTypeProjection {
+                                trait_ref: TraitRef {
+                                    declaration: projection.trait_ref.declaration,
+                                    self_ty: self.map_universal_projection_type_in(
+                                        &projection.trait_ref.self_ty,
+                                        context.env(),
+                                        0,
+                                        invocation,
+                                        false,
+                                        &operations,
+                                        &mut reduce,
+                                    )?,
+                                    args: args.into(),
+                                },
+                                item: projection.item,
+                            },
+                            ty: self.map_universal_projection_type_in(
+                                ty,
+                                context.env(),
+                                0,
+                                invocation,
+                                false,
+                                &operations,
+                                &mut reduce,
+                            )?,
+                        }
+                    }
+                };
+                self.require_in(&normalized, context, active)?;
+            }
+            Ok(())
+        })();
+        active.nominal_operations = operations;
+        result
     }
 }
 
@@ -423,6 +441,18 @@ mod tests {
                 None,
             )
             .unwrap();
+        for _ in 0..2 {
+            world
+                .discharge_associated_bound_predicates(
+                    item,
+                    &owner,
+                    &normal,
+                    context,
+                    &mut active,
+                    None,
+                )
+                .unwrap();
+        }
         for row in rows.iter() {
             world
                 .require_in(row, context, &mut ProofScratch::default())

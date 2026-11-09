@@ -40,6 +40,7 @@ fn generic_projected_signature_does_not_invent_an_implementation() {
                 original: None,
                 source_metadata: None,
                 predicates: &world.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             },
         )

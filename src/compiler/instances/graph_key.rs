@@ -269,6 +269,7 @@ pub(in crate::compiler) fn decode_with_closures(
         context,
         budget,
         closures,
+        decoded: std::collections::HashMap::new(),
     };
     if reader.word()? != VERSION {
         return Err("unsupported canonical instance graph key version".into());
@@ -332,6 +333,7 @@ pub(in crate::compiler) fn decode_opaque_with_closures(
         context,
         budget,
         closures,
+        decoded: std::collections::HashMap::new(),
     };
     if reader.word()? != VERSION {
         return Err("unsupported opaque graph key version".into());
@@ -360,6 +362,7 @@ struct Reader<'a> {
     context: &'a frontend::PlanCtx,
     budget: &'a ir::PlanBudget,
     closures: &'a ClosureReplay<'a>,
+    decoded: std::collections::HashMap<usize, ir::Ty>,
 }
 impl Reader<'_> {
     fn word(&mut self) -> Result<u64, String> {
@@ -412,6 +415,144 @@ impl Reader<'_> {
         }
     }
     fn ty(&mut self, facts: ir::FactsCtx<'_>, depth: usize) -> Result<ir::Ty, String> {
+        let start = self.at;
+        if let Some(value) = self.decoded.remove(&start) {
+            self.word()?;
+            let length = self.count()?;
+            self.at += length;
+            return Ok(value);
+        }
+        // Discover bounded wire frames first. Semantic reconstruction then
+        // consumes completed children without retaining recursive decoder frames.
+        let mut pending = vec![(start, depth)];
+        let mut order = Vec::new();
+        while let Some((at, depth)) = pending.pop() {
+            self.budget.check_depth(depth)?;
+            self.budget.charge_work(1)?;
+            self.budget
+                .retain_bytes(std::mem::size_of::<(usize, usize)>() * 4)?;
+            self.at = at;
+            let tag = self.word()?;
+            let length = self.count()?;
+            let end = self
+                .at
+                .checked_add(length)
+                .ok_or("instance key frame overflow")?;
+            let outer_words = self.words;
+            self.words = &outer_words[..end];
+            let children = self.children(tag, depth);
+            self.words = outer_words;
+            pending.extend(children?);
+            order.push((at, depth));
+        }
+        for (at, depth) in order.into_iter().rev() {
+            self.at = at;
+            let value = self.decode_ty(facts, depth)?;
+            // Semantic replay may enter trait proofs. Do not retain the large
+            // reconstruction match frame while validating a completed value.
+            facts.validate_ty_metadata(&value)?;
+            self.decoded.insert(at, value);
+        }
+        self.at = start;
+        let value = self
+            .decoded
+            .remove(&start)
+            .ok_or("missing decoded instance key root")?;
+        self.word()?;
+        let length = self.count()?;
+        self.at += length;
+        Ok(value)
+    }
+
+    fn child_frame(
+        &mut self,
+        depth: usize,
+        children: &mut Vec<(usize, usize)>,
+    ) -> Result<(), String> {
+        self.budget.check_depth(depth)?;
+        self.budget
+            .retain_bytes(std::mem::size_of::<(usize, usize)>() * 2)?;
+        let at = self.at;
+        self.word()?;
+        let length = self.count()?;
+        self.at += length;
+        children.push((at, depth));
+        Ok(())
+    }
+
+    fn child_list(
+        &mut self,
+        depth: usize,
+        children: &mut Vec<(usize, usize)>,
+    ) -> Result<(), String> {
+        self.budget.check_depth(depth)?;
+        let count = self.count()?;
+        for _ in 0..count {
+            self.child_frame(depth + 1, children)?;
+        }
+        Ok(())
+    }
+
+    fn skip_declaration(&mut self) -> Result<(), String> {
+        self.word()?;
+        self.word()?;
+        Ok(())
+    }
+
+    fn children(&mut self, tag: u64, depth: usize) -> Result<Vec<(usize, usize)>, String> {
+        let mut children = Vec::new();
+        match tag {
+            8 | 9 | 11 => {
+                self.word()?;
+                self.child_frame(depth + 1, &mut children)?;
+            }
+            12 => self.child_frame(depth + 1, &mut children)?,
+            10 => self.child_list(depth + 1, &mut children)?,
+            13 | 14 | 17 | 18 => {
+                self.skip_declaration()?;
+                self.child_list(depth + 1, &mut children)?;
+            }
+            20..=22 => {
+                self.skip_declaration()?;
+                self.child_frame(depth + 1, &mut children)?;
+            }
+            19 => {
+                self.child_list(depth + 1, &mut children)?;
+                self.child_frame(depth + 1, &mut children)?;
+            }
+            16 => {
+                self.skip_declaration()?;
+                self.word()?;
+                self.child_list(depth + 1, &mut children)?;
+                let regions = self.count()?;
+                for _ in 0..regions {
+                    self.skip_declaration()?;
+                    self.word()?;
+                }
+                let bounds = self.count()?;
+                for _ in 0..bounds {
+                    self.skip_declaration()?;
+                    let arguments = self.count()?;
+                    for _ in 0..arguments {
+                        match self.word()? {
+                            0 => {}
+                            1 => self.child_frame(depth + 1, &mut children)?,
+                            _ => return Err("invalid opaque self argument tag".into()),
+                        }
+                    }
+                    let equalities = self.count()?;
+                    for _ in 0..equalities {
+                        self.skip_declaration()?;
+                        self.child_frame(depth + 1, &mut children)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(children)
+    }
+
+    fn decode_ty(&mut self, facts: ir::FactsCtx<'_>, depth: usize) -> Result<ir::Ty, String> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         let tag = self.word()?;
@@ -606,7 +747,6 @@ impl Reader<'_> {
         if self.at != end {
             return Err("instance key type frame length mismatch".into());
         }
-        facts.validate_ty_metadata(&value)?;
         Ok(value)
     }
 }
@@ -641,7 +781,31 @@ mod tests {
     #[test]
     fn canonical_decode_roundtrips_and_rejects_foreign_or_malformed_keys() {
         let (context, budget, declaration) = fixture();
-        for value in [
+        let mut nested = ir::Ty::Bool;
+        for _ in 0..8 {
+            nested = ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(nested),
+            };
+        }
+        let values = [
+            nested,
+            ir::Ty::Cell(
+                ir::CellTy::new(
+                    context.trait_world().unwrap().canonical_catalog(),
+                    ir::Ty::Bool,
+                    &budget,
+                )
+                .unwrap(),
+            ),
+            ir::Ty::ManuallyDrop(
+                ir::ManuallyDropTy::new(
+                    context.trait_world().unwrap().canonical_catalog(),
+                    ir::Ty::Bool,
+                    &budget,
+                )
+                .unwrap(),
+            ),
             ir::Ty::PhantomData(
                 ir::PhantomDataTy::new(
                     context.trait_world().unwrap().canonical_catalog(),
@@ -661,7 +825,36 @@ mod tests {
                 inputs: Arc::from([]),
                 output: ir::Ty::Never,
             })),
-        ] {
+        ];
+        let intrinsic_arguments = [
+            ir::Ty::Unit,
+            ir::Ty::Never,
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Float(ir::FloatTy::F64),
+            ir::Ty::Char,
+            ir::Ty::RawPtr {
+                kind: ir::BorrowKind::Shared,
+                pointee: Arc::new(ir::Ty::Bool),
+            },
+            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)])),
+            ir::Ty::Array {
+                element: Arc::new(ir::Ty::Bool),
+                len: 2,
+            },
+            ir::Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                inputs: Arc::from([ir::Ty::Bool]),
+                output: ir::Ty::Unit,
+            })),
+        ];
+        let world = context.trait_world().unwrap();
+        for value in values
+            .into_iter()
+            .chain(intrinsic_arguments.map(|argument| {
+                ir::Ty::PhantomData(
+                    ir::PhantomDataTy::new(world.canonical_catalog(), argument, &budget).unwrap(),
+                )
+            }))
+        {
             let target = ir::CallTarget {
                 declaration,
                 type_args: Arc::from([value]),
@@ -694,6 +887,20 @@ mod tests {
             type_args: Arc::from([]),
         };
         assert!(decode(&encode(&wrong_arity, &budget).unwrap(), &context, &budget).is_err());
+        // Hostile wire nesting must fail before recursive metadata construction
+        // or destruction. Build the wire directly, not a recursive Ty fixture.
+        let nesting = budget.limits().depth + 1;
+        let mut deep = vec![
+            VERSION,
+            declaration.snapshot.graph_word(),
+            declaration.index,
+            1,
+        ];
+        for level in 0..nesting {
+            deep.extend([8, (3 * (nesting - level)) as u64, 0]);
+        }
+        deep.extend([3, 0]);
+        assert!(decode(&deep, &context, &budget).is_err());
     }
     #[test]
     fn nominal_alias_coordinates_share_and_nested_frames_remain_bounded() {

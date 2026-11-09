@@ -1787,7 +1787,12 @@ impl ClosureBodyShape {
         if !identical_type(&self.1, &body.result, budget)? {
             return Err("closure source receipt changed its result type".into());
         }
-        self.0.validate(body, facts, budget)
+        self.0.validate(
+            body,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
     }
     /// Rebuild task-local checked storage from a pure immutable graph payload.
     /// No substitution proof or enclosing publication is retained in the payload.
@@ -2164,8 +2169,9 @@ impl GeneratedBodyShape {
         source: &CheckedFunction,
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
     ) -> Result<(), String> {
-        source.preflight_plan(FactsCtx::from_validated(facts), budget)?;
+        source.preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, scratch)?;
         budget.charge_work(
             self.name
                 .len()
@@ -2262,6 +2268,20 @@ impl BodySubstitutionProof {
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
     ) -> Result<(), String> {
+        self.validate_with_scratch(
+            source,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    fn validate_with_scratch(
+        &self,
+        source: &CheckedFunction,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
         if facts.phase() != super::traits::FactsPhase::Closed
             || !self.template.budget().same_authority(budget)
             || !facts.budget().same_authority(budget)
@@ -2327,6 +2347,17 @@ impl BodySubstitutionProof {
             }
         }
         if let Some(engine) = self.engine {
+            for expression in &source.exprs {
+                budget.charge_work(1)?;
+                if let ExprKind::TypeAlignment(query) = &expression.kind {
+                    query.validate_engine(engine)?;
+                    query.validate_with_scratch(
+                        FactsCtx::from_validated(facts),
+                        budget,
+                        scratch,
+                    )?;
+                }
+            }
             budget.retain_bytes(
                 source
                     .params
@@ -2357,7 +2388,7 @@ impl BodySubstitutionProof {
                 },
                 facts,
                 budget,
-                &mut super::traits::TraitScratch::default(),
+                scratch,
             )?;
         }
         super::frontend::nominal_call_receipts::closed::replay(
@@ -2368,8 +2399,9 @@ impl BodySubstitutionProof {
             &self.target.type_args,
             facts,
             budget,
+            scratch,
         )?;
-        self.generated.validate(source, facts, budget)?;
+        self.generated.validate(source, facts, budget, scratch)?;
         Ok(())
     }
     /// Recover shared scalar and aggregate families whose original parameter
@@ -2678,6 +2710,20 @@ impl BodySubstitutionProof {
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
     ) -> Result<(), String> {
+        self.validate_cfg_with_scratch(
+            function,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    pub(in crate::compiler) fn validate_cfg_with_scratch(
+        &self,
+        function: &super::cfg::Function,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
         if facts.phase() != super::traits::FactsPhase::Closed
             || !self.template.budget().same_authority(budget)
             || !facts.budget().same_authority(budget)
@@ -2732,14 +2778,9 @@ impl BodySubstitutionProof {
             return Err("CFG substitution changed result or canonical reference contract".into());
         }
         if let Some(engine) = self.engine {
-            let mut scratch = super::traits::TraitScratch::default();
             for local in &function.locals {
                 super::nominal_realization::substitution::replay_closed_storage_with(
-                    engine,
-                    &local.ty,
-                    facts,
-                    budget,
-                    &mut scratch,
+                    engine, &local.ty, facts, budget, scratch,
                 )?;
             }
             budget.retain_bytes(
@@ -2772,7 +2813,7 @@ impl BodySubstitutionProof {
                 },
                 facts,
                 budget,
-                &mut scratch,
+                scratch,
             )?;
             super::frontend::nominal_call_receipts::closed::replay_expressions(
                 self.closed_calls.as_deref(),
@@ -2782,6 +2823,7 @@ impl BodySubstitutionProof {
                 &self.target.type_args,
                 facts,
                 budget,
+                scratch,
             )?;
             for block in &function.blocks {
                 budget.charge_work(1)?;
@@ -3616,6 +3658,16 @@ pub trait SubstitutionCx {
     }
     fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
         None
+    }
+    fn realize_alignment_query(
+        &mut self,
+        query: &mut TypeAlignmentQuery,
+        queried: Ty,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<(), String> {
+        query.substitute(queried);
+        Ok(())
     }
     fn record_canonical_call_realization(
         &mut self,
@@ -4551,7 +4603,15 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             ExprKind::Block(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
-            ExprKind::TypeAlignment(query) => query.substitute(visitor.ty(query.queried_type())?),
+            ExprKind::TypeAlignment(query) => {
+                let queried = visitor.ty(query.queried_type())?;
+                visitor.cx.realize_alignment_query(
+                    query,
+                    queried,
+                    visitor.facts,
+                    visitor.budget,
+                )?;
+            }
             ExprKind::RuntimeQuery(_)
             | ExprKind::FnItem
             | ExprKind::CharToInt { .. }
@@ -4748,6 +4808,16 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
     }
     fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
         self.inner.current_engine()
+    }
+    fn realize_alignment_query(
+        &mut self,
+        query: &mut TypeAlignmentQuery,
+        queried: Ty,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        self.inner
+            .realize_alignment_query(query, queried, caller, budget)
     }
     fn realize_canonical_call_signature(
         &mut self,
@@ -12081,7 +12151,9 @@ impl CheckedFunction {
                 | ExprKind::LabeledBlock { body: value, .. } => {
                     block(value, facts, budget, 0, scratch)?
                 }
-                ExprKind::TypeAlignment(query) => query.validate(facts, budget)?,
+                ExprKind::TypeAlignment(query) => {
+                    query.validate_with_scratch(facts, budget, scratch)?
+                }
                 ExprKind::RuntimeQuery(query) => query.validate(facts, budget)?,
                 ExprKind::NativeSyscall(values)
                 | ExprKind::RawSlice { args: values, .. }
@@ -12683,7 +12755,7 @@ impl CheckedFunction {
         )?;
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
-                proof.validate(self, authority, authority.budget())?;
+                proof.validate_with_scratch(self, authority, authority.budget(), scratch)?;
             } else {
                 validate_call_evidence_with_policy_scratch(
                     self,

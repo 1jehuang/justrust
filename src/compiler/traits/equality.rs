@@ -5,6 +5,14 @@ use super::*;
 mod reduction_rows;
 use reduction_rows::ReductionRows;
 
+pub(super) struct AssignmentSource {
+    world: WorldId,
+    implementation: DeclId,
+    associated: DeclId,
+    source: Arc<AssociatedTypeSource>,
+    rhs: Ty,
+}
+
 #[cfg(test)]
 mod freeze_tests;
 #[cfg(test)]
@@ -180,6 +188,7 @@ impl NormalizedProjectionEquality {
         if !world.eq_ty(&actual, &evidence.rhs, 0)?
             || evidence.membership.0.world != world.id
             || evidence.membership.0.environment != facts.predicates.index
+            || !evidence.membership.0.executable_storage
             || evidence.membership.0.phase != facts.phase()
             || !world.eq_predicate(
                 &evidence.membership.0.goal,
@@ -630,8 +639,14 @@ impl ValidatedTraitWorld {
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
     ) -> Result<()> {
-        self.validate_equality_domain_policy(projection, rhs, env, replays, caller, |goal, env| {
-            match caller {
+        self.validate_equality_domain_policy(
+            projection,
+            rhs,
+            env,
+            replays,
+            caller,
+            true,
+            |goal, env| match caller {
                 Some(facts) => self.goal_is_closed_in_for_use(
                     goal,
                     ProofContext::from_facts(facts),
@@ -639,19 +654,20 @@ impl ValidatedTraitWorld {
                     false,
                 ),
                 None => self.goal_is_closed(goal, env),
-            }
-        })
+            },
+        )
     }
     // Only callers already owning a proof arena use its existing completed-root
     // inventory. Metadata replays and closedness have disjoint mutable borrows;
     // no arena, authority, or retained allocation is created by this adapter.
-    pub(super) fn validate_equality_domain_with_active(
+    pub(super) fn validate_equality_domain_with_active_for_use(
         &self,
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         env: &GenericEnv,
         active: &mut ProofScratch,
         caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
     ) -> Result<()> {
         let ProofScratch {
             replays,
@@ -659,7 +675,7 @@ impl ValidatedTraitWorld {
             closedness_storage,
             ..
         } = active;
-        self.validate_equality_domain_with_storage(
+        self.validate_equality_domain_with_storage_for_use(
             projection,
             rhs,
             env,
@@ -667,10 +683,11 @@ impl ValidatedTraitWorld {
             caller,
             closedness,
             closedness_storage,
+            executable_storage,
         )
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn validate_equality_domain_with_storage(
+    pub(super) fn validate_equality_domain_with_storage_for_use(
         &self,
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
@@ -679,9 +696,16 @@ impl ValidatedTraitWorld {
         caller: Option<&ValidatedFacts>,
         closedness: &mut Vec<ClosednessValidation>,
         closedness_storage: &mut Vec<ir::PlanReservation>,
+        executable_storage: bool,
     ) -> Result<()> {
-        self.validate_equality_domain_policy(projection, rhs, env, replays, caller, |goal, env| {
-            match caller {
+        self.validate_equality_domain_policy(
+            projection,
+            rhs,
+            env,
+            replays,
+            caller,
+            executable_storage,
+            |goal, env| match caller {
                 Some(facts) => self.goal_is_closed_with_facts_storage_for_use(
                     goal,
                     facts,
@@ -689,10 +713,17 @@ impl ValidatedTraitWorld {
                     closedness_storage,
                     false,
                 ),
-                None => self.goal_is_closed_with_storage(goal, env, closedness, closedness_storage),
-            }
-        })
+                None => self.goal_is_closed_with_storage_for_use(
+                    goal,
+                    env,
+                    closedness,
+                    closedness_storage,
+                    executable_storage,
+                ),
+            },
+        )
     }
+    #[allow(clippy::too_many_arguments)]
     fn validate_equality_domain_policy(
         &self,
         projection: &ir::AssociatedTypeProjection,
@@ -700,6 +731,7 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
         mut goal_is_closed: impl FnMut(&TraitRef, &GenericEnv) -> Result<bool>,
     ) -> Result<()> {
         self.check_normalization_budget()?;
@@ -729,7 +761,7 @@ impl ValidatedTraitWorld {
             self.validate_equality_reference_domain(rhs, 0)?;
             return Ok(());
         }
-        if !self.shared_assignment_metadata(projection, rhs, env)? {
+        if !self.shared_assignment_metadata_with_replays(projection, rhs, env, replays)? {
             self.validate_equality_reference_domain(rhs, 0)?;
         }
         if matches!(rhs, Ty::AssociatedType(_)) {
@@ -740,10 +772,18 @@ impl ValidatedTraitWorld {
             // any closed projection that never normalizes.
             return Ok(());
         }
-        if caller.is_none() {
+        if caller.is_none() && executable_storage {
             self.validate_ty(rhs, env, None, true, 0)
         } else {
-            self.validate_predicate_formation(rhs, env, TypeUse::Root, None, replays, caller)
+            self.validate_predicate_formation_for_use(
+                rhs,
+                env,
+                TypeUse::Root,
+                None,
+                replays,
+                caller,
+                executable_storage,
+            )
         }
     }
 
@@ -811,6 +851,15 @@ impl ValidatedTraitWorld {
         let source = self
             .schema
             .associated_type_source(value.implementation, value.associated)?;
+        self.validate_assignment_source(value, source)
+    }
+
+    fn validate_assignment_source(
+        &self,
+        value: &AssociatedTypeValue,
+        source: Arc<AssociatedTypeSource>,
+    ) -> Result<Arc<AssociatedTypeSource>> {
+        self.check_normalization_budget()?;
         let retained = &value.source;
         if source.implementation != value.implementation
             || source.associated != value.associated
@@ -881,12 +930,29 @@ impl ValidatedTraitWorld {
     /// Domain admission is not membership: candidate predicates are still
     /// discharged by the enclosing selection, and equality is rechecked from
     /// that selection's witness. This stage must not recursively select itself.
+    #[cfg(test)]
     fn shared_assignment_metadata(
         &self,
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         env: &GenericEnv,
     ) -> Result<bool> {
+        self.shared_assignment_metadata_with_replays(
+            projection,
+            rhs,
+            env,
+            &mut NominalReplays::default(),
+        )
+    }
+
+    fn shared_assignment_metadata_with_replays(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        env: &GenericEnv,
+        replays: &mut NominalReplays,
+    ) -> Result<bool> {
+        self.check_normalization_budget()?;
         let tuple = matches!(rhs, Ty::Tuple(fields) if !fields.is_empty());
         if tuple {
             if !self.shared_assignment_payload(rhs, 0)? {
@@ -972,7 +1038,43 @@ impl ValidatedTraitWorld {
                 ));
             }
             let value = self.associated_value(header.declaration, projection.item)?;
-            let source = self.checked_assignment_source(value)?;
+            let mut reconstruction = None;
+            for previous in replays.assignment_sources.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if previous.world == self.id
+                    && previous.implementation == value.implementation
+                    && previous.associated == value.associated
+                {
+                    reconstruction = Some((previous.source.clone(), previous.rhs.clone()));
+                    break;
+                }
+            }
+            let (source, raw) = match reconstruction {
+                Some((source, raw)) => (self.validate_assignment_source(value, source)?, raw),
+                None => {
+                    let source = self.checked_assignment_source(value)?;
+                    let raw = self
+                        .schema
+                        .associated_type_rhs(header.declaration, projection.item)?;
+                    if !self.eq_ty(&raw, &value.rhs, 0)? {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "associated metadata RHS source changed",
+                        ));
+                    }
+                    if replays.assignment_sources.len() < MAX_SCRATCH_OBLIGATIONS {
+                        replays.assignment_sources.prepare(self)?;
+                        replays.assignment_sources.values.push(AssignmentSource {
+                            world: self.id,
+                            implementation: value.implementation,
+                            associated: value.associated,
+                            source: source.clone(),
+                            rhs: raw.clone(),
+                        });
+                    }
+                    (source, raw)
+                }
+            };
             if tuple {
                 // A source tuple of shared parameter tails retains its original
                 // declaration and every ordered substitution. This is metadata
@@ -1021,9 +1123,6 @@ impl ValidatedTraitWorld {
                     })?,
                 )?;
             }
-            let raw = self
-                .schema
-                .associated_type_rhs(header.declaration, projection.item)?;
             if !self.eq_ty(&raw, &value.rhs, 0)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -1133,12 +1232,13 @@ impl ValidatedTraitWorld {
                 &mut active.transport_validation,
             )?;
         }
-        self.validate_equality_domain_with_active(
+        self.validate_equality_domain_with_active_for_use(
             projection,
             rhs,
             context.env(),
             active,
             context.metadata_facts(),
+            context.executable_storage,
         )?;
         self.require_equality_rhs_sized(rhs, context, active)
     }
@@ -1183,6 +1283,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed,
                     },
                     &mut ProofScratch::default(),
@@ -1482,7 +1583,13 @@ impl ValidatedTraitWorld {
                 &mut active.closedness_storage,
                 false,
             ),
-            None => self.goal_is_closed_with(goal, context.env(), active),
+            None => self.goal_is_closed_with_storage_for_use(
+                goal,
+                context.env(),
+                &mut active.closedness,
+                &mut active.closedness_storage,
+                false,
+            ),
         }
     }
 
@@ -1490,20 +1597,6 @@ impl ValidatedTraitWorld {
     /// Replay the selected original assignment and its exact substitution without
     /// admitting its residual projections to rigid equality. Callers must still
     /// validate their own narrower source protocol before normalizing this type.
-    pub(super) fn replay_implementation_assignment(
-        &self,
-        projection: &ir::AssociatedTypeProjection,
-        membership: &ProofEvidence,
-        context: ProofContext<'_>,
-    ) -> Result<Ty> {
-        self.replay_implementation_assignment_with(
-            projection,
-            membership,
-            context,
-            &mut ProofScratch::default(),
-        )
-    }
-
     pub(super) fn replay_implementation_assignment_with(
         &self,
         projection: &ir::AssociatedTypeProjection,
@@ -1524,6 +1617,7 @@ impl ValidatedTraitWorld {
         };
         if record.world != self.id
             || record.environment != context.predicates.index
+            || record.executable_storage != context.executable_storage
             || record.phase != context.phase
             || !context.matches_source(&record.source_metadata)?
             || !self.eq_predicate(
@@ -1654,8 +1748,23 @@ impl ValidatedTraitWorld {
         membership: &ProofEvidence,
         context: ProofContext<'_>,
     ) -> Result<Ty> {
+        self.implementation_equality_rhs_with(
+            projection,
+            membership,
+            context,
+            &mut ProofScratch::default(),
+        )
+    }
+
+    pub(super) fn implementation_equality_rhs_with(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        membership: &ProofEvidence,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<Ty> {
         let instantiated =
-            self.replay_implementation_assignment(projection, membership, context)?;
+            self.replay_implementation_assignment_with(projection, membership, context, active)?;
         // Residual projections stay symbolic only for rigid parameter subjects
         // whose membership the genuine caller context proves. Anything else
         // (closed or nominal nested projection) stays outside this path.
@@ -1671,7 +1780,7 @@ impl ValidatedTraitWorld {
             self.require_in(
                 &Predicate::Implements(nested.trait_ref.clone()),
                 context,
-                &mut ProofScratch::default(),
+                active,
             )?;
             self.projection_type(nested)
         })?;
@@ -1847,6 +1956,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Schema,
                     },
                     true,
@@ -2171,6 +2281,22 @@ mod tests {
             active.replays.predicate_formations.complete.len(),
             formations
         );
+        // Raw equality formation owns a distinct closedness row. It cannot
+        // reuse a checked caller's completed proof, nor rebind that caller.
+        assert_eq!(
+            active
+                .closedness
+                .iter()
+                .filter(|row| row.context.is_some())
+                .count(),
+            completed
+        );
+        assert!(active.closedness.iter().any(|row| row.context.is_none()));
+        let raw_completed = active.closedness.len();
+        case.world
+            .validate_predicates_with_active(&rows, case.facts.env(), None, &mut active, None)
+            .unwrap();
+        assert_eq!(active.closedness.len(), raw_completed);
         let foreign = active_equality_fixture();
         assert!(
             foreign
@@ -2208,7 +2334,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(active.closedness.len(), completed);
+        assert_eq!(active.closedness.len(), raw_completed);
         // A valid early equality must not run its domain check before late metadata.
         let mut invalid = rows.clone();
         let mut forged = case.projection.clone();
@@ -2241,7 +2367,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(active.closedness.len(), completed);
+        assert_eq!(active.closedness.len(), raw_completed);
         // Duplicates keep canonical insertion policy. Contradictory RHS rows keep
         // conflict rejection even after genuine successes have warmed the arena.
         let mut duplicate = rows.clone();
@@ -2604,6 +2730,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &world.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed
                     },
                     &mut active,
@@ -3226,6 +3353,20 @@ mod tests {
                 .shared_assignment_metadata(&projection, &rhs, &probe.env)
                 .unwrap()
         );
+        let mut replays = NominalReplays::default();
+        for _ in 0..2 {
+            assert!(
+                world
+                    .shared_assignment_metadata_with_replays(
+                        &projection,
+                        &rhs,
+                        &probe.env,
+                        &mut replays
+                    )
+                    .unwrap()
+            );
+            assert_eq!(replays.assignment_sources.len(), 1);
+        }
         world
             .validate_equality_domain(&projection, &rhs, &probe.env)
             .unwrap();
@@ -3238,7 +3379,29 @@ mod tests {
                 .shared_assignment_metadata(&projection, &forged, &probe.env)
                 .unwrap()
         );
+        assert!(
+            !world
+                .shared_assignment_metadata_with_replays(
+                    &projection,
+                    &forged,
+                    &probe.env,
+                    &mut replays
+                )
+                .unwrap()
+        );
+        assert_eq!(replays.assignment_sources.len(), 1);
         assert!(world.reject_projected_references(&rhs, 0).is_err());
+        assert!(world.budget.charge_work(usize::MAX).is_err());
+        assert!(
+            world
+                .shared_assignment_metadata_with_replays(
+                    &projection,
+                    &rhs,
+                    &probe.env,
+                    &mut replays
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -3408,6 +3571,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &world.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed
                     },
                     &mut scratch

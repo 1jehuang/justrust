@@ -34,6 +34,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &caller,
+                executable_storage: true,
                 phase: FactsPhase::Schema,
             };
             let mut active = ProofScratch::default();

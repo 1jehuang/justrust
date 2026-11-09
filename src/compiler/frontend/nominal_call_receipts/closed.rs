@@ -160,8 +160,20 @@ impl ClosedReceipt {
         // Selection proves only the canonical target/obligations. Executable
         // authority comes below from every mapped physical root and exact
         // current-engine graph capability, never from this entry proof.
-        validate_original_callee(&selected, &self.receipt.target, budget)
-            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        validate_original_callee_with(&selected, &self.receipt.target, budget, |source, mapped| {
+            super::super::super::nominal_realization::substitution::replay_closed_type_mapping_with(
+                None,
+                self.engine,
+                source,
+                mapped,
+                facts,
+                budget,
+                scratch,
+            )
+            .map(|()| true)
+            .map_err(|error| source_error(budget, &error))
+        })
+        .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let derived = conversion_rows(&self.receipt.original, &self.receipt.mapped, budget)?;
         if derived.len() != self.conversions.len()
             || derived
@@ -184,6 +196,7 @@ impl ClosedReceipt {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::compiler) fn replay(
     rows: Option<&[ClosedReceipt]>,
     engine: Option<crate::engine::EngineAuthority>,
@@ -192,6 +205,7 @@ pub(in crate::compiler) fn replay(
     arguments: &[ir::Ty],
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<(), String> {
     replay_expressions(
         rows,
@@ -201,11 +215,13 @@ pub(in crate::compiler) fn replay(
         arguments,
         facts,
         budget,
+        scratch,
     )
 }
 
 /// Replay every original occurrence and its complete typed realization payload.
 /// CFG lowering retains these expressions in its immutable body proof.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::compiler) fn replay_expressions(
     rows: Option<&[ClosedReceipt]>,
     engine: Option<crate::engine::EngineAuthority>,
@@ -214,6 +230,7 @@ pub(in crate::compiler) fn replay_expressions(
     arguments: &[ir::Ty],
     facts: &tr::ValidatedFacts,
     budget: &ir::PlanBudget,
+    scratch: &mut tr::TraitScratch,
 ) -> Result<(), String> {
     let calls = expressions
         .iter()
@@ -252,7 +269,6 @@ pub(in crate::compiler) fn replay_expressions(
         return Ok(());
     };
     let mut count = 0;
-    let mut scratch = tr::TraitScratch::default();
     for (expression, target, signature) in calls {
         budget.charge_work(1)?;
         let row = rows
@@ -269,15 +285,16 @@ pub(in crate::compiler) fn replay_expressions(
         }
         facts
             .world()
-            .replay_nominal_call_selection(
+            .replay_nominal_call_selection_with_scratch(
                 original_selection,
                 &row.selection,
                 template.env(),
                 arguments,
+                scratch,
             )
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         row.validate_current_engine(engine.ok_or("closed call receipt omitted engine authority")?)?;
-        row.validate_with(facts, budget, &mut scratch)?;
+        row.validate_with(facts, budget, scratch)?;
         if !ir::identical_call_types(
             &row.receipt.target,
             &row.receipt.mapped,
@@ -380,6 +397,52 @@ mod tests {
             ir::Ty::Tuple(items) => items.iter().find_map(first_nominal),
             _ => None,
         }
+    }
+
+    #[test]
+    fn issued_closed_call_nested_nominal_actuals_replay_typed_mapping() {
+        let source = "struct Item{value:i32}fn raw<U>(value:U)->u32{1}fn forward<T>(v:T)->T{let item=Item{value:1i32};let reference=&item;let n=raw(&reference);v}fn main(){let n=forward(7u32);}";
+        let (body, engine) = issued_body_fixture(source);
+        let rows = issued_rows(&body);
+        assert_eq!(rows.len(), 1);
+        let ir::Callee::Direct(target) = &rows[0].receipt.target else {
+            panic!("fixture raw call is direct")
+        };
+        let ir::Ty::Ref { referent, .. } = &target.type_args[0] else {
+            panic!("outer borrow actual")
+        };
+        let ir::Ty::Ref { referent, .. } = referent.as_ref() else {
+            panic!("nested borrow actual")
+        };
+        let ir::Ty::Struct(item) = referent.as_ref() else {
+            panic!("nominal actual")
+        };
+        assert!(item.id().index.is_graph());
+        assert!(!reject_changed_rows(&body, engine, Some(rows.clone())));
+        let (_, foreign_engine) = issued_body_fixture(source);
+        assert!(reject_changed_rows(
+            &body,
+            foreign_engine,
+            Some(rows.clone())
+        ));
+        let mut changed = rows.to_vec();
+        let ir::Callee::Direct(target) = &mut changed[0].receipt.target else {
+            unreachable!()
+        };
+        target.type_args = Arc::from([ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Bool),
+            }),
+        }]);
+        assert!(reject_changed_rows(&body, engine, Some(changed.into())));
+        let mut changed = rows.to_vec();
+        let ir::Callee::Direct(target) = &mut changed[0].selection else {
+            unreachable!()
+        };
+        target.type_args = Arc::from([]);
+        assert!(reject_changed_rows(&body, engine, Some(changed.into())));
     }
 
     #[test]

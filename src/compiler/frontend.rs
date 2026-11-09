@@ -2957,6 +2957,17 @@ fn validate_original_callee(
     actual: &ir::Callee,
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
+    validate_original_callee_with(original, actual, budget, |a, b| {
+        replay_type_equal(a, b, budget)
+    })
+}
+
+fn validate_original_callee_with(
+    original: &ir::Callee,
+    actual: &ir::Callee,
+    budget: &ir::PlanBudget,
+    mut equal: impl FnMut(&ir::Ty, &ir::Ty) -> Result<bool, FactsError>,
+) -> Result<(), FactsError> {
     sr::work(budget, 1)?;
     let role = match (original, actual) {
         (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
@@ -2987,7 +2998,7 @@ fn validate_original_callee(
         match (left.next(), right.next()) {
             (None, None) => break,
             (Some(a), Some(b)) => {
-                if !replay_type_equal(a, b, budget)? {
+                if !equal(a, b)? {
                     return Err(FactsError::invalid(
                         budget,
                         "original solved call actual changed",

@@ -52,13 +52,15 @@ impl ValidatedTraitWorld {
         result
     }
 
-    pub(in crate::compiler) fn replay_nominal_call_selection(
+    pub(in crate::compiler) fn replay_nominal_call_selection_with_scratch(
         &self,
         original: &ir::Callee,
         selected: &ir::Callee,
         env: &GenericEnv,
         arguments: &[Ty],
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
+        let active = scratch.for_world(self.id);
         let same_role = match (original, selected) {
             (ir::Callee::Direct(a), ir::Callee::Direct(b)) => {
                 a.declaration == b.declaration && a.type_args.len() == b.type_args.len()
@@ -108,6 +110,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &self.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             };
             // This authenticates the selected source application, not its
@@ -119,11 +122,13 @@ impl ValidatedTraitWorld {
                 &substituted.signature.result,
                 context,
                 false,
-                &mut ProofScratch::default(),
+                active,
                 false,
             )?;
             for dependency in &dependencies {
-                self.validate_projected_dependency_for_use(dependency, context, false)?;
+                self.validate_projected_dependency_with_for_use(
+                    dependency, context, active, false, false,
+                )?;
             }
             if !self.eq_ty(&normalized, actual, 0)? {
                 return Err(FactsError::invalid(
@@ -200,6 +205,7 @@ impl ValidatedTraitWorld {
             original: None,
             source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         for (source, retained) in input
@@ -256,6 +262,7 @@ impl ValidatedTraitWorld {
             original: None,
             source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         let mut obligations = Vec::new();
@@ -526,6 +533,7 @@ impl ValidatedTraitWorld {
                                 original: None,
                                 source_metadata: None,
                                 predicates: &world.empty,
+                                executable_storage: true,
                                 phase: FactsPhase::Schema,
                             },
                         )?;
@@ -751,6 +759,7 @@ impl ValidatedTraitWorld {
             original: None,
             source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         self.require_sharing(
@@ -771,6 +780,7 @@ impl ValidatedTraitWorld {
                     original: None,
                     source_metadata: None,
                     predicates: &self.empty,
+                    executable_storage: true,
                     phase: FactsPhase::Schema,
                 },
             )?;
@@ -1081,6 +1091,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &self.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             },
             &mut ProofScratch::default(),
@@ -1097,7 +1108,7 @@ mod tests {
     fn closed_selection_normalizes_only_the_exact_substituted_projection() {
         for source in [
             "struct S;trait Has<A>{type Out;type Other;}impl Has<i32> for S{type Out=i32;type Other=bool;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
-            "struct S;trait Has<A>{type Out;type Other;}trait It{type Item;}struct Buffer<I:It>{value:Option<I::Item>}impl Has<i32> for S{type Out=Buffer<S>;type Other=bool;}impl It for S{type Item=i32;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
+            "enum Option<T>{None,Some(T)}struct S;trait Has<A>{type Out;type Other;}trait It{type Item;}struct Buffer<I:It>{value:Option<I::Item>}impl<X:It> Has<i32> for X{type Out=Buffer<X>;type Other=bool;}impl It for S{type Item=i32;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
         ] {
             let source = crate::compiler::frontend::parse(source).unwrap();
             let plan = crate::compiler::frontend::PlanCtx::from_program(
@@ -1129,16 +1140,44 @@ mod tests {
                     type_args: Arc::from([ty]),
                 })
             };
-            let arguments = [implementation.trait_ref.self_ty.clone()];
-            let expected = implementation.associated_types[0].rhs.clone();
-            world
-                .replay_nominal_call_selection(
-                    &target(raw.clone()),
-                    &target(expected.clone()),
-                    &caller.schema.env,
-                    &arguments,
-                )
-                .unwrap();
+            let actual_self = if implementation.schema_env.is_generic() {
+                world.headers.impls[1].trait_ref.self_ty.clone()
+            } else {
+                implementation.trait_ref.self_ty.clone()
+            };
+            let arguments = [actual_self];
+            let expected = if implementation.schema_env.is_generic() {
+                let schema = GenericSchema {
+                    env: implementation.schema_env.clone(),
+                    signature: Signature {
+                        params: Vec::new(),
+                        result: implementation.associated_types[0].rhs.clone(),
+                        ref_contract: Arc::new(ir::RefContract::default()),
+                    },
+                    predicates: Arc::from([]),
+                };
+                // Reconstruct closed source identity from its genuine generic
+                // header, rather than declaring unresolved physical storage.
+                world
+                    .substitute_projected_schema(&schema, &arguments, &world.empty.env)
+                    .unwrap()
+                    .signature
+                    .result
+            } else {
+                implementation.associated_types[0].rhs.clone()
+            };
+            let mut selection_scratch = TraitScratch::default();
+            for _ in 0..3 {
+                world
+                    .replay_nominal_call_selection_with_scratch(
+                        &target(raw.clone()),
+                        &target(expected.clone()),
+                        &caller.schema.env,
+                        &arguments,
+                        &mut selection_scratch,
+                    )
+                    .unwrap();
+            }
             // Structural substitution itself still cannot erase a projection.
             assert!(
                 world
@@ -1148,11 +1187,12 @@ mod tests {
             for forged in [Ty::Unit, Ty::Int(ir::IntTy::U64)] {
                 assert!(
                     world
-                        .replay_nominal_call_selection(
+                        .replay_nominal_call_selection_with_scratch(
                             &target(raw.clone()),
                             &target(forged),
                             &caller.schema.env,
                             &arguments,
+                            &mut selection_scratch,
                         )
                         .is_err()
                 );
@@ -1164,11 +1204,12 @@ mod tests {
             for forged in [wrong_argument, wrong_item] {
                 assert!(
                     world
-                        .replay_nominal_call_selection(
+                        .replay_nominal_call_selection_with_scratch(
                             &target(Ty::AssociatedType(Arc::new(forged))),
                             &target(expected.clone()),
                             &caller.schema.env,
                             &arguments,
+                            &mut selection_scratch,
                         )
                         .is_err()
                 );
@@ -1295,6 +1336,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         let obligation = input
@@ -1408,6 +1450,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &foreign_world.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Schema,
                     },
                     &mut shared,

@@ -2019,6 +2019,14 @@ impl Function {
         facts: &super::traits::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
+        self.validate_provenance_with_scratch(facts, budget, &mut TraitScratch::default())
+    }
+    pub(in crate::compiler) fn validate_provenance_with_scratch(
+        &self,
+        facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        scratch: &mut TraitScratch,
+    ) -> Result<(), String> {
         if !facts.budget().same_authority(budget) {
             return Err("CFG provenance changed planning authority".into());
         }
@@ -2081,7 +2089,7 @@ impl Function {
                             request,
                             proof,
                             ir::FactsCtx::from_validated(facts),
-                            &mut TraitScratch::default(),
+                            scratch,
                         )?;
                     }
                 }
@@ -2142,7 +2150,7 @@ impl Function {
             return Err("CFG provenance requires its exact canonical lowering snapshot".into());
         }
         if let Some(proof) = &self.body_substitution {
-            proof.validate_cfg(self, facts, budget)?;
+            proof.validate_cfg_with_scratch(self, facts, budget, scratch)?;
         }
         // One sorted index replaces a per-block linear scan of all evidence,
         // which was O(blocks * evidence) on every validation. The first
@@ -8320,7 +8328,11 @@ mod original_replay_transport_tests {
         assert!(shape.original_publication.is_none());
         raw.validate_with_facts(ir::FactsCtx::from_validated(facts))
             .unwrap();
-        raw.validate_provenance(facts, &budget).unwrap();
+        let mut provenance_scratch = TraitScratch::default();
+        for _ in 0..3 {
+            raw.validate_provenance_with_scratch(facts, &budget, &mut provenance_scratch)
+                .unwrap();
+        }
         assert!(
             raw.validate_source_publication(&publication, &budget)
                 .is_err()
@@ -8341,15 +8353,27 @@ mod original_replay_transport_tests {
                 .validate_with_facts(ir::FactsCtx::from_validated(facts))
                 .is_err()
         );
-        assert!(detached.validate_provenance(facts, &budget).is_err());
+        assert!(
+            detached
+                .validate_provenance_with_scratch(facts, &budget, &mut provenance_scratch)
+                .is_err()
+        );
         let other = published(&plan, 1, &budget);
         let other_raw = lower_with_facts(other.source(), other.facts(), &budget).unwrap();
         let mut transplanted = raw.clone();
         transplanted.lowering_proof = other_raw.lowering_proof.clone();
-        assert!(transplanted.validate_provenance(facts, &budget).is_err());
         assert!(
-            raw.validate_provenance(facts, &ir::PlanBudget::default())
+            transplanted
+                .validate_provenance_with_scratch(facts, &budget, &mut provenance_scratch)
                 .is_err()
+        );
+        assert!(
+            raw.validate_provenance_with_scratch(
+                facts,
+                &ir::PlanBudget::default(),
+                &mut provenance_scratch
+            )
+            .is_err()
         );
     }
 

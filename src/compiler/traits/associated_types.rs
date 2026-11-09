@@ -1427,6 +1427,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &self.empty,
+                executable_storage: true,
                 phase: FactsPhase::Schema,
             },
             staged: true,
@@ -1557,6 +1558,10 @@ impl ValidatedTraitWorld {
         dependencies: &mut Vec<Arc<NormalizationEvidence>>,
         depth: usize,
     ) -> Result<Ty> {
+        let context = NormalizationContext {
+            proof: context.proof.for_storage(context.executable_storage),
+            ..context
+        };
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
@@ -1761,6 +1766,10 @@ impl ValidatedTraitWorld {
         context: NormalizationContext<'_>,
         stack: &mut NormalizationStack,
     ) -> Result<Arc<NormalizationEvidence>> {
+        let context = NormalizationContext {
+            proof: context.proof.for_storage(context.executable_storage),
+            ..context
+        };
         self.check_normalization_budget()?;
         self.check_proof_context_caller(context.proof)?;
         charged(&self.budget, self.budget.check_depth(stack.active.len()))?;
@@ -2430,7 +2439,9 @@ impl ValidatedTraitWorld {
             }
             self.validate_universal_projection_type(normal, env, 0)?;
         }
-        if context.metadata_facts().is_some() && !matches!(normal, Ty::Str) {
+        let context = context.for_storage(executable_storage);
+        if (context.metadata_facts().is_some() || !executable_storage) && !matches!(normal, Ty::Str)
+        {
             if executable_storage {
                 self.validate_ty_inner_with_facts(
                     normal,
@@ -2448,13 +2459,14 @@ impl ValidatedTraitWorld {
                     &mut active.replays,
                     context.metadata_facts(),
                 )?;
-                self.validate_predicate_formation(
+                self.validate_predicate_formation_for_use(
                     normal,
                     env,
                     TypeUse::Actual,
                     None,
                     &mut active.replays,
                     context.metadata_facts(),
+                    executable_storage,
                 )?;
             }
         } else {
@@ -2499,6 +2511,10 @@ impl ValidatedTraitWorld {
         context: NormalizationContext<'_>,
         proofs: &mut ProofScratch,
     ) -> Result<()> {
+        let context = NormalizationContext {
+            proof: context.proof.for_storage(context.executable_storage),
+            ..context
+        };
         self.check_normalization_budget()?;
         self.check_proof_context_caller(context.proof)?;
         let original_matches = match (&evidence.key.original_metadata, context.proof.original) {
@@ -2624,6 +2640,7 @@ impl ValidatedTraitWorld {
             || evidence.key.executable_storage != context.executable_storage
             || evidence.key.finalized != self.owner_normalization_finalized
             || evidence.membership.0.world != self.id
+            || evidence.membership.0.executable_storage != context.executable_storage
             || evidence.membership.0.environment
                 != if caller_membership {
                     context.proof.predicates.index

@@ -146,6 +146,7 @@ impl ValidatedTraitWorld {
                     original: None,
                     source_metadata: None,
                     predicates: &self.empty,
+                    executable_storage: true,
                     phase: FactsPhase::Schema,
                 };
                 self.require_in(&expected, context, &mut ProofScratch::default())?;
@@ -190,6 +191,7 @@ impl ValidatedTraitWorld {
                             original: None,
                             source_metadata: None,
                             predicates: &self.empty,
+                            executable_storage: true,
                             phase: FactsPhase::Schema,
                         },
                         &mut ProofScratch::default(),
@@ -343,6 +345,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Schema,
                     };
                     for (actual, expected) in a.iter().zip(b.iter()) {

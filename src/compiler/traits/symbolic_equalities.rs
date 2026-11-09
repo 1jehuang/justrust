@@ -113,6 +113,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed
                     },
                     &mut ProofScratch::default()

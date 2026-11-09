@@ -28,11 +28,7 @@ impl ValidatedTraitWorld {
         let Ty::AssociatedType(projection) = &goal.self_ty else {
             return Ok(None);
         };
-        let closed = if context.original.is_some() {
-            self.goal_is_closed_in(&projection.trait_ref, context)?
-        } else {
-            self.goal_is_closed(&projection.trait_ref, context.env())?
-        };
+        let closed = self.goal_is_closed_in_with(&projection.trait_ref, context, active)?;
         if !closed
             && self
                 .opaque_associated_binding(projection, context.env())?
@@ -45,11 +41,12 @@ impl ValidatedTraitWorld {
             // Other open-subject obligations still require exact contextual facts.
             return Ok(Some(ProofOutcome::NotProven));
         }
-        let (normal, reductions) = self.normalize_closed_projected_type_with(
+        let (normal, reductions) = self.normalize_closed_projected_type_for_use(
             &goal.self_ty,
             context,
             !self.owner_normalization_finalized,
             active,
+            context.executable_storage,
         )?;
         let normalized = Predicate::Implements(TraitRef {
             declaration: goal.declaration,
@@ -93,6 +90,7 @@ impl ValidatedTraitWorld {
         };
         if evidence.0.world != self.id
             || evidence.0.environment != context.predicates.index
+            || evidence.0.executable_storage != context.executable_storage
             || evidence.0.phase != context.phase
             || original.declaration != normalized.declaration
             || !self.eq_types(&original.args, &normalized.args, 0)?
@@ -102,10 +100,12 @@ impl ValidatedTraitWorld {
                 "projected subject evidence lost caller or trait identity",
             ));
         }
-        let (normal, replay) = self.normalize_closed_projected_type(
+        let (normal, replay) = self.normalize_closed_projected_type_for_use(
             &original.self_ty,
             context,
             !self.owner_normalization_finalized,
+            &mut ProofScratch::default(),
+            context.executable_storage,
         )?;
         if replay.len() != reductions.len() || !self.eq_ty(&normal, &normalized.self_ty, 0)? {
             return Err(FactsError::invalid(
@@ -125,16 +125,25 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    pub(super) fn validate_predicate_ref_with_facts(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn validate_predicate_ref_with_facts_for_use(
         &self,
         goal: &TraitRef,
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
     ) -> Result<()> {
         if !matches!(goal.self_ty, Ty::AssociatedType(_)) {
-            return self.validate_ref_with_facts(goal, env, maybe_unsized, replays, caller);
+            return self.validate_ref_with_facts_for_use(
+                goal,
+                env,
+                maybe_unsized,
+                replays,
+                caller,
+                executable_storage,
+            );
         }
         self.validate_ty_metadata_with_facts(&goal.self_ty, env, 0, replays, caller)?;
         let info = self.info(goal.declaration)?;
@@ -149,18 +158,19 @@ impl ValidatedTraitWorld {
         }
         for argument in goal.args.iter() {
             self.validate_ty_metadata_with_facts(argument, env, 0, replays, caller)?;
-            if caller.is_none() {
+            if caller.is_none() && executable_storage {
                 self.validate_actual(argument, env)?;
             } else if matches!(argument, Ty::Str) {
                 charged(&self.budget, self.budget.charge_work(1))?;
             } else {
-                self.validate_predicate_formation(
+                self.validate_predicate_formation_for_use(
                     argument,
                     env,
                     TypeUse::Actual,
                     None,
                     replays,
                     caller,
+                    executable_storage,
                 )?;
             }
             charged(&self.budget, ir::reject_references(argument, &self.budget))?;

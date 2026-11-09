@@ -405,12 +405,13 @@ pub(super) struct AcyclicRead {
     fact: Arc<RealizedNominal>,
 }
 impl AcyclicRead {
-    pub(super) fn retain_for_substitution(
+    pub(super) fn retain_for_substitution_with_scratch(
         &self,
         ty: &ir::Ty,
         engine: crate::engine::EngineAuthority,
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
+        scratch: &mut traits::TraitScratch,
     ) -> Result<ir::Ty, String> {
         if self.fact.identity.0.authority() != engine {
             return Err("foreign engine nominal substitution capability".into());
@@ -510,9 +511,8 @@ impl AcyclicRead {
         // actuals, source fields and complete normalization receipt inventory.
         // Empty-environment closedness means substitution cannot change a field
         // or an actual. Retain this same typed read, never re-intern its ID.
-        self.replay(ty, facts.world())
-            .map_err(|error| error.to_string())?;
-        caller.validate_ty_with_budget(ty, budget)?;
+        scratch.replay_nominal(&ReadNominal::Acyclic(self.clone()), ty, facts)?;
+        caller.validate_ty_with_budget_scratch(ty, budget, scratch)?;
         budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
         Ok(ty.clone())
     }
@@ -574,26 +574,6 @@ impl AcyclicRead {
             ));
         }
         Ok(())
-    }
-
-    pub(super) fn replay(
-        &self,
-        ty: &ir::Ty,
-        world: &traits::ValidatedTraitWorld,
-    ) -> Result<(), Error> {
-        self.replay_with(ty, world, &mut traits::NominalReplays::default())
-    }
-
-    /// Replay against `world`, skipping the world proof replay when this
-    /// node's computation already replayed the same retained fact. The exact
-    /// definition check always runs. Only successes are recorded.
-    pub(super) fn replay_with(
-        &self,
-        ty: &ir::Ty,
-        world: &traits::ValidatedTraitWorld,
-        replays: &mut traits::NominalReplays,
-    ) -> Result<(), Error> {
-        ReadNominal::Acyclic(self.clone()).replay_with(ty, world, replays)
     }
 
     fn replay_uncached(
@@ -982,9 +962,18 @@ mod tests {
         )
         .unwrap();
         assert!(specialization.ty(&ty).is_ok());
-        capability
-            .retain_for_substitution(&ty, engine.authority(), caller, &budget)
-            .unwrap();
+        let mut retention_scratch = traits::TraitScratch::default();
+        for _ in 0..3 {
+            capability
+                .retain_for_substitution_with_scratch(
+                    &ty,
+                    engine.authority(),
+                    caller,
+                    &budget,
+                    &mut retention_scratch,
+                )
+                .unwrap();
+        }
         let foreign_engine = crate::engine::Engine::new(provider);
         let mut foreign_specialization = super::super::opaque_specialization::Specialization::new(
             &publication,
@@ -1000,7 +989,13 @@ mod tests {
         assert!(foreign_specialization.ty(&nested).is_err());
         assert!(
             capability
-                .retain_for_substitution(&ty, foreign_engine.authority(), caller, &budget)
+                .retain_for_substitution_with_scratch(
+                    &ty,
+                    foreign_engine.authority(),
+                    caller,
+                    &budget,
+                    &mut retention_scratch,
+                )
                 .is_err()
         );
         assert!(
@@ -1023,7 +1018,13 @@ mod tests {
             );
             assert!(
                 capability
-                    .retain_for_substitution(&changed, engine.authority(), caller, &budget)
+                    .retain_for_substitution_with_scratch(
+                        &changed,
+                        engine.authority(),
+                        caller,
+                        &budget,
+                        &mut retention_scratch,
+                    )
                     .is_err(),
                 "typed read accepted altered definition mode {mode}"
             );

@@ -113,14 +113,9 @@ fn validate(
     budget: &ir::PlanBudget,
     scratch: &mut tr::TraitScratch,
 ) -> Result<(), FactsError> {
-    facts.validate_source_flow_signature_with_scratch(
+    facts.validate_source_flow_signatures_with_scratch(
         ir::SignatureSubject::Call(&receipt.target),
-        &receipt.original,
-        scratch,
-    )?;
-    facts.validate_source_flow_signature_with_scratch(
-        ir::SignatureSubject::Call(&receipt.target),
-        &receipt.mapped,
+        &[&receipt.original, &receipt.mapped],
         scratch,
     )?;
     if !Arc::ptr_eq(&receipt.original.ref_contract, &receipt.mapped.ref_contract)
@@ -613,22 +608,11 @@ mod tests {
                 .expect(
                     "genuine source projection still requires physical reminting for execution",
                 );
-            validate(
-                row,
-                publication.facts(),
-                &budget,
-                &mut tr::TraitScratch::default(),
-            )
-            .unwrap();
-            assert!(
-                validate(
-                    row,
-                    foreign.facts(),
-                    &budget,
-                    &mut tr::TraitScratch::default()
-                )
-                .is_err()
-            );
+            let mut receipt_scratch = tr::TraitScratch::default();
+            for _ in 0..3 {
+                validate(row, publication.facts(), &budget, &mut receipt_scratch).unwrap();
+            }
+            assert!(validate(row, foreign.facts(), &budget, &mut receipt_scratch).is_err());
             let mut canonical_scratch = tr::TraitScratch::default();
             for _ in 0..2 {
                 publication
@@ -654,15 +638,7 @@ mod tests {
             );
             let mut forged = row.clone();
             forged.mapped.result = ir::Ty::Bool;
-            assert!(
-                validate(
-                    &forged,
-                    publication.facts(),
-                    &budget,
-                    &mut tr::TraitScratch::default()
-                )
-                .is_err()
-            );
+            assert!(validate(&forged, publication.facts(), &budget, &mut receipt_scratch).is_err());
         }
     }
 

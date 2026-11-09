@@ -46,6 +46,18 @@ pub(in crate::compiler) fn replay_closed_signature_with(
     .map(|_| ())
 }
 
+pub(in crate::compiler) fn replay_closed_type_mapping_with(
+    context: Option<&frontend::PlanCtx>,
+    engine: EngineAuthority,
+    source: &ir::Ty,
+    mapped: &ir::Ty,
+    facts: &crate::compiler::traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+    scratch: &mut crate::compiler::traits::TraitScratch,
+) -> Result<(), String> {
+    calls::replay_type_mapping(context, engine, source, mapped, facts, budget, scratch)
+}
+
 pub(in crate::compiler) fn replay_closed_storage_with(
     engine: EngineAuthority,
     ty: &ir::Ty,
@@ -81,6 +93,7 @@ pub(in crate::compiler) async fn instantiate_checked_with_constants(
     let mut nominals = ExecutableNominals::default();
     loop {
         let mut adapter = ReadSubstitution {
+            nominal_scratch: crate::compiler::traits::TraitScratch::default(),
             context,
             engine: Some(engine),
             executable: Some(&mut nominals),
@@ -163,6 +176,7 @@ pub(in crate::compiler) fn substitute_ty_with_scratch(
     scratch: &mut crate::compiler::traits::TraitScratch,
 ) -> Result<ir::Ty, String> {
     let mut adapter = ReadSubstitution {
+        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
         context,
         engine,
         executable: None,
@@ -252,6 +266,7 @@ fn substitute_source_ty_for_use(
         .validate_ty_metadata_scratch(ty, budget, source_scratch)
         .map_err(|error| error.into_legacy_diagnostic(budget))?;
     let mut adapter = ReadSubstitution {
+        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
         context,
         engine,
         executable: None,
@@ -309,6 +324,7 @@ pub(in crate::compiler) fn substitute_callee_with_scratch(
     scratch: &mut crate::compiler::traits::TraitScratch,
 ) -> Result<ir::Callee, String> {
     let mut adapter = ReadSubstitution {
+        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
         context,
         engine,
         executable: None,
@@ -361,6 +377,7 @@ pub(in crate::compiler) fn substitute_source_call_with_scratch(
         .try_reserve_exact(inputs.len())
         .map_err(|_| "call substitution nominal input allocation failed")?;
     let mut adapter = ReadSubstitution {
+        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
         context,
         engine,
         executable: None,
@@ -403,6 +420,7 @@ pub(in crate::compiler) fn substitute_source_call_with_scratch(
 }
 
 struct ReadSubstitution<'a> {
+    nominal_scratch: crate::compiler::traits::TraitScratch,
     context: &'a mut frontend::PlanCtx,
     engine: Option<EngineAuthority>,
     remint: Option<ParentLocalRemint<'a>>,
@@ -428,6 +446,37 @@ struct ParentLocalRemint<'a> {
 impl ir::SubstitutionCx for ReadSubstitution<'_> {
     fn realizes_executable_nominals(&self) -> bool {
         self.executable.is_some()
+    }
+    fn realize_alignment_query(
+        &mut self,
+        query: &mut ir::TypeAlignmentQuery,
+        queried: ir::Ty,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        if self.executable.is_none() {
+            return ir::SubstitutionCx::realize_alignment_query(
+                self.context,
+                query,
+                queried,
+                caller,
+                budget,
+            );
+        }
+        let engine = self
+            .engine
+            .ok_or("alignment realization requires current engine")?;
+        let facts = caller
+            .validated()
+            .ok_or("alignment realization requires validated facts")?;
+        query.substitute_realized(
+            queried,
+            engine,
+            self.context,
+            facts,
+            budget,
+            &mut self.nominal_scratch,
+        )
     }
     fn substitute_parent_local_nominal(
         &mut self,
@@ -549,7 +598,7 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
             (canonical, mapped),
             caller,
             budget,
-            &mut crate::compiler::traits::TraitScratch::default(),
+            &mut self.nominal_scratch,
         )
         .map(Some)
     }
@@ -573,7 +622,13 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
             _ => return Err("typed nominal identity substitution requires a nominal".into()),
         }
         .ok_or("graph nominal substitution omitted its typed read")?;
-        capability.retain_for_substitution(source, engine, caller, budget)
+        capability.retain_for_substitution_with_scratch(
+            source,
+            engine,
+            caller,
+            budget,
+            &mut self.nominal_scratch,
+        )
     }
 
     fn intern_nominal(
@@ -643,13 +698,14 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
                 .find(|read| read.application_key() == &key)
             {
                 let definition = read.definition().map_err(|error| error.to_string())?;
-                read.replay(&definition, facts.world())
-                    .map_err(|error| error.to_string())?;
-                return read.retain_for_substitution(
+                self.nominal_scratch
+                    .replay_nominal(read, &definition, facts)?;
+                return read.retain_for_substitution_with_scratch(
                     &definition,
                     self.engine.ok_or("executable nominal omitted engine")?,
                     caller,
                     budget,
+                    &mut self.nominal_scratch,
                 );
             }
             budget.retain_bytes(std::mem::size_of::<super::RealizationKey>())?;

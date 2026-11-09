@@ -69,17 +69,15 @@ impl<'a> Specialization<'a> {
             .validate_source(publication.source(), publication.facts(), budget)
             .map_err(|error| source_fact_error(error, budget))?;
         let mut same_closed_source = false;
-        if let Some(source_target) = publication.facts().target() {
-            if source_target.declaration == target.declaration
-                && source_target.type_args.len() == target.type_args.len()
-            {
-                same_closed_source = true;
-                for (source, current) in source_target.type_args.iter().zip(target.type_args.iter())
-                {
-                    if !ir::identical_type(source, current, budget).map_err(Error::new)? {
-                        same_closed_source = false;
-                        break;
-                    }
+        if let Some(source_target) = publication.facts().target()
+            && source_target.declaration == target.declaration
+            && source_target.type_args.len() == target.type_args.len()
+        {
+            same_closed_source = true;
+            for (source, current) in source_target.type_args.iter().zip(target.type_args.iter()) {
+                if !ir::identical_type(source, current, budget).map_err(Error::new)? {
+                    same_closed_source = false;
+                    break;
                 }
             }
         }

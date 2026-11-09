@@ -60,6 +60,7 @@ mod source_carriers;
 mod source_dispatch;
 mod symbolic_equalities;
 mod universal_carriers;
+pub(in crate::compiler) use universal_carriers::CarrierViewReplay;
 mod universal_methods;
 mod universal_projections;
 pub use associated_constants::{
@@ -1178,40 +1179,71 @@ impl ValidatedFacts {
         &self,
         declaration: DeclId,
     ) -> Result<Option<Arc<super::frontend::NativeEmptySource>>> {
-        self.world.check_original_context(self)?;
+        self.native_sequence_empty_with_scratch(declaration, &mut TraitScratch::default())
+    }
+
+    pub(in crate::compiler) fn native_sequence_empty_with_scratch(
+        &self,
+        declaration: DeclId,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Arc<super::frontend::NativeEmptySource>>> {
+        self.world
+            .check_original_context_for_use_with_scratch(self, false, scratch)?;
         if self.phase() == FactsPhase::Schema {
             return Ok(None);
         }
         self.world.schema.native_sequence_empty(declaration)
     }
 
-    pub(in crate::compiler) fn native_sequence_element(
+    pub(in crate::compiler) fn native_sequence_element_with_scratch(
         &self,
         declaration: DeclId,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Arc<super::frontend::NativeElementSource>>> {
-        self.world.check_original_context(self)?;
+        self.world
+            .check_original_context_for_use_with_scratch(self, false, scratch)?;
         if self.phase() == FactsPhase::Schema {
             return Ok(None);
         }
         self.world.schema.native_sequence_element(declaration)
     }
 
+    #[cfg(test)]
     pub(in crate::compiler) fn native_sequence_swap(
         &self,
         declaration: DeclId,
     ) -> Result<Option<Arc<super::frontend::NativeSequenceSwap>>> {
-        self.world.check_original_context(self)?;
+        self.native_sequence_swap_with_scratch(declaration, &mut TraitScratch::default())
+    }
+
+    pub(in crate::compiler) fn native_sequence_swap_with_scratch(
+        &self,
+        declaration: DeclId,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSwap>>> {
+        self.world
+            .check_original_context_for_use_with_scratch(self, false, scratch)?;
         if self.phase() == FactsPhase::Schema {
             return Ok(None);
         }
         self.world.schema.native_sequence_swap(declaration)
     }
 
+    #[cfg(test)]
     pub(in crate::compiler) fn native_sequence_slot(
         &self,
         declaration: DeclId,
     ) -> Result<Option<Arc<super::frontend::NativeSequenceSlot>>> {
-        self.world.check_original_context(self)?;
+        self.native_sequence_slot_with_scratch(declaration, &mut TraitScratch::default())
+    }
+
+    pub(in crate::compiler) fn native_sequence_slot_with_scratch(
+        &self,
+        declaration: DeclId,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Arc<super::frontend::NativeSequenceSlot>>> {
+        self.world
+            .check_original_context_for_use_with_scratch(self, false, scratch)?;
         if self.phase() == FactsPhase::Schema {
             return Ok(None);
         }
@@ -1382,6 +1414,27 @@ impl ValidatedFacts {
                 "source call entry requires closed caller facts",
             ));
         }
+        self.source_call_entry_in(target, nominals, scratch)
+    }
+    pub(in crate::compiler) fn source_header_call_entry_with_nominals(
+        &self,
+        target: &CallTarget,
+        nominals: &[Ty],
+        scratch: &mut TraitScratch,
+    ) -> Result<SourceHeaderCallProof> {
+        Ok(SourceHeaderCallProof {
+            entry: self.source_call_entry_in(target, nominals, scratch)?,
+        })
+    }
+    fn source_call_entry_in(
+        &self,
+        target: &CallTarget,
+        nominals: &[Ty],
+        scratch: &mut TraitScratch,
+    ) -> Result<SourceCallEntryProof> {
+        let world = &self.world;
+        world.check_normalization_budget()?;
+        world.check_facts(self, true)?;
         scratch.for_facts(self);
         let validation =
             std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
@@ -1389,7 +1442,7 @@ impl ValidatedFacts {
         transport.validate_with_scratch(world, self, scratch)?;
         let context = ProofContext {
             transport,
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
         world.ensure_provider(target.declaration)?;
         world.validate_closure_direct(target, context)?;
@@ -1719,6 +1772,7 @@ impl ValidatedFacts {
             return self.must_copy(ty);
         }
         scratch.for_facts(self);
+        self.validate_ty_scratch(ty, scratch)?;
         let address = type_allocation(ty);
         if let Some(address) = address
             && let Some(candidates) = scratch.copy_index.get(&address)
@@ -1730,7 +1784,6 @@ impl ValidatedFacts {
                 }
             }
         }
-        self.validate_ty_scratch(ty, scratch)?;
         if matches!(
             ty,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never
@@ -1826,6 +1879,7 @@ enum ProofOrigin {
 }
 #[derive(Clone, Debug)]
 struct ProofRecord {
+    executable_storage: bool,
     world: WorldId,
     environment: usize,
     phase: FactsPhase,
@@ -1861,16 +1915,27 @@ pub(in crate::compiler) struct SourceCallEntryProof {
     inputs: Arc<[Ty]>,
     _evidence: Arc<[ProofEvidence]>,
 }
-impl SourceCallEntryProof {
-    pub(in crate::compiler) fn target(&self) -> &CallTarget {
-        &self.target
-    }
+/// Source dependency metadata for an authenticated universal or closed header.
+/// This cannot be used as a selected closed-entry or executable call proof.
+#[derive(Clone, Debug)]
+pub(in crate::compiler) struct SourceHeaderCallProof {
+    entry: SourceCallEntryProof,
+}
+impl SourceHeaderCallProof {
     pub(in crate::compiler) fn validate(
         &self,
         target: &CallTarget,
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<()> {
+        self.entry.validate_identity(target, facts)?;
+        facts
+            .source_header_call_entry_with_nominals(target, &self.entry.inputs, scratch)
+            .map(|_| ())
+    }
+}
+impl SourceCallEntryProof {
+    fn validate_identity(&self, target: &CallTarget, facts: &ValidatedFacts) -> Result<()> {
         facts.world.check_facts(facts, true)?;
         if self.target.declaration != target.declaration
             || !same_types(&self.target.type_args, &target.type_args)
@@ -1881,6 +1946,18 @@ impl SourceCallEntryProof {
                 "source call entry changed exact target or owning caller",
             ));
         }
+        Ok(())
+    }
+    pub(in crate::compiler) fn target(&self) -> &CallTarget {
+        &self.target
+    }
+    pub(in crate::compiler) fn validate(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        self.validate_identity(target, facts)?;
         facts
             .source_call_entry_with_nominals(target, &self.inputs, scratch)
             .map(|_| ())
@@ -1935,6 +2012,7 @@ impl ResolvedTraitCall {
 }
 #[derive(Clone, Debug)]
 struct GoalKey {
+    executable_storage: bool,
     environment: usize,
     phase: FactsPhase,
     source_metadata: Option<body_validation::SourceKey>,
@@ -1953,6 +2031,7 @@ struct MemoEntry {
 /// by `&mut`; never stored in `ValidatedTraitWorld` or any published fact.
 #[derive(Clone)]
 struct SourceProofContext {
+    executable_storage: bool,
     world: WorldId,
     environment: usize,
     phase: FactsPhase,
@@ -1967,8 +2046,16 @@ struct CheckedProofArena {
     proofs: Box<ProofScratch>,
     _storage: ir::PlanReservation,
 }
+struct CompletedRigidProjection {
+    world: WorldId,
+    env: GenericEnv,
+    projection: ir::AssociatedTypeProjection,
+    ready: bool,
+    finalized: bool,
+}
 struct CompletedPredicateFormation {
     world: WorldId,
+    executable_storage: bool,
     caller: Option<body_validation::Context>,
     env: GenericEnv,
     maybe_unsized: Option<ParamId>,
@@ -1986,6 +2073,8 @@ struct ProofScratch {
     signature_formations: body_validation::Validated,
     predicate_formations: Vec<CompletedPredicateFormation>,
     predicate_formation_storage: Vec<ir::PlanReservation>,
+    rigid_projections: Vec<CompletedRigidProjection>,
+    rigid_projection_storage: Vec<ir::PlanReservation>,
     checked: Option<Box<ProofScratch>>,
     // Scratch allocation admission ends with this arena, not the whole node.
     _checked_storage: Option<ir::PlanReservation>,
@@ -2321,6 +2410,8 @@ pub(in crate::compiler) struct NominalReplays {
     predicate_formation_storage: Vec<ir::PlanReservation>,
     associated_bound_declarations: Vec<(WorldId, DeclId, Arc<[Predicate]>)>,
     associated_bound_declaration_storage: Vec<ir::PlanReservation>,
+    /// Immutable source reconstruction, not an equality or membership verdict.
+    assignment_sources: MeteredReplayRows<equality::AssignmentSource>,
     nominal_declaration_replays: Vec<(DeclId, NominalDeclarationProof)>,
     nominal_declaration_replay_storage: Vec<ir::PlanReservation>,
     // Clones pin each allocation for the memo's lifetime, so pointer
@@ -2855,6 +2946,22 @@ pub struct TraitScratch {
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
 impl TraitScratch {
+    pub(in crate::compiler) fn replay_nominal(
+        &mut self,
+        read: &crate::compiler::nominal_realization::ReadNominal,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+    ) -> std::result::Result<(), String> {
+        facts
+            .world
+            .check_facts(facts, false)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+        self.for_facts(facts);
+        let proofs = self.for_world(facts.world.id);
+        read.replay_with(ty, facts.world(), &mut proofs.replays)
+            .map_err(|e| e.to_string())
+    }
+
     fn for_world(&mut self, world: WorldId) -> &mut ProofScratch {
         if self.world != Some(world) {
             *self = TraitScratch {
@@ -2903,6 +3010,7 @@ impl ProofScratch {
         }
         let matches = |saved: &SourceProofContext| -> Result<bool> {
             Ok(saved.world == world.id
+                && saved.executable_storage == context.executable_storage
                 && saved.environment == context.predicates.index
                 && saved.phase == context.phase
                 && saved
@@ -2921,6 +3029,7 @@ impl ProofScratch {
             }
         }
         let key = SourceProofContext {
+            executable_storage: context.executable_storage,
             world: world.id,
             environment: context.predicates.index,
             phase: context.phase,
@@ -3098,6 +3207,7 @@ struct ProofContext<'a> {
     // or executable result authority. This is distinct from a raw context.
     source_metadata: Option<SourceMetadata<'a>>,
     predicates: &'a PredicateEnv,
+    executable_storage: bool,
     phase: FactsPhase,
 }
 impl<'a> ProofContext<'a> {
@@ -3107,7 +3217,14 @@ impl<'a> ProofContext<'a> {
             original: (facts.phase() != FactsPhase::Schema).then_some(facts),
             source_metadata: None,
             predicates: &facts.predicates,
+            executable_storage: true,
             phase: facts.phase(),
+        }
+    }
+    fn for_storage(self, executable_storage: bool) -> Self {
+        Self {
+            executable_storage,
+            ..self
         }
     }
     fn env(self) -> &'a Arc<GenericEnv> {
@@ -3153,6 +3270,7 @@ impl<'a> ProofContext<'a> {
                 inputs: self.metadata_transport(),
             }),
             predicates: &world.empty,
+            executable_storage: self.executable_storage,
             phase: FactsPhase::Closed,
         }
     }
@@ -3357,10 +3475,7 @@ impl CarrierContractView {
         Ok(())
     }
     pub fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
-        if self.validate_carrier_authorities(facts)? {
-            facts.world.validate_equality_results(self, facts)?;
-        }
-        Ok(())
+        self.validate_for_with_scratch(facts, &mut TraitScratch::default())
     }
 
     pub(in crate::compiler) fn validate_for_with_scratch(
@@ -3368,25 +3483,35 @@ impl CarrierContractView {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<()> {
-        if self.validate_carrier_authorities_with_scratch(facts, Some(&mut *scratch))? {
-            facts
-                .world
-                .validate_equality_results_with_scratch(self, facts, scratch)?;
+        self.validate_for_replay_with_scratch(facts, scratch)
+            .map(|_| ())
+    }
+
+    fn validate_for_replay_with_scratch<'a>(
+        &'a self,
+        facts: &'a ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<source_carriers::SourceCarrierReplay<'a>>> {
+        let (ordinary, source_replay) =
+            self.validate_carrier_authorities_with_scratch(facts, Some(&mut *scratch))?;
+        if ordinary {
+            facts.world.validate_equality_results_with_source_replay(
+                self,
+                facts,
+                source_replay.as_ref(),
+                scratch,
+            )?;
         }
-        Ok(())
+        Ok(source_replay)
     }
 
     // True selects ordinary equality-result replay. Nominal and closure views
     // retain their independent, complete authority validators.
-    fn validate_carrier_authorities(&self, facts: &ValidatedFacts) -> Result<bool> {
-        self.validate_carrier_authorities_with_scratch(facts, None)
-    }
-
-    fn validate_carrier_authorities_with_scratch(
-        &self,
-        facts: &ValidatedFacts,
+    fn validate_carrier_authorities_with_scratch<'a>(
+        &'a self,
+        facts: &'a ValidatedFacts,
         mut scratch: Option<&mut TraitScratch>,
-    ) -> Result<bool> {
+    ) -> Result<(bool, Option<source_carriers::SourceCarrierReplay<'a>>)> {
         if self.physical.is_some() {
             return Err(FactsError::invalid(
                 facts.budget(),
@@ -3412,24 +3537,28 @@ impl CarrierContractView {
                 "carrier view changed source/executable authority policy",
             ));
         }
-        if let Some(source) = &self.source_schema {
-            match scratch.as_deref_mut() {
-                Some(scratch) => source.validate_with_scratch(self, facts, scratch)?,
-                None => source.validate(self, facts)?,
-            }
-        }
+        let source_replay = if let Some(source) = &self.source_schema {
+            let mut fresh = TraitScratch::default();
+            Some(source.replay_with_scratch(
+                self,
+                facts,
+                scratch.as_deref_mut().unwrap_or(&mut fresh),
+            )?)
+        } else {
+            None
+        };
         if let Some(authority) = &self.nominal {
             match scratch {
                 Some(scratch) => authority.validate_with_scratch(self, facts, scratch)?,
                 None => authority.validate(self, facts)?,
             }
-            return Ok(false);
+            return Ok((false, source_replay));
         }
         if let Some((closure, mode)) = &self.closure_result {
             facts
                 .world
                 .validate_closure_result_carrier(self, closure, *mode, facts)?;
-            return Ok(false);
+            return Ok((false, source_replay));
         }
         if let Some(evidence) = &self.projected {
             let mut fresh = TraitScratch::default();
@@ -3437,7 +3566,7 @@ impl CarrierContractView {
                 self,
                 evidence,
                 facts,
-                scratch.as_deref_mut().unwrap_or(&mut fresh),
+                scratch.unwrap_or(&mut fresh),
             )?;
         }
         if let Some(evidence) = &self.equality_required {
@@ -3445,7 +3574,7 @@ impl CarrierContractView {
                 .world
                 .validate_equality_required_carrier(self, evidence, facts)?;
         }
-        Ok(true)
+        Ok((true, source_replay))
     }
 }
 
@@ -3942,6 +4071,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &env,
+                executable_storage: true,
                 phase: FactsPhase::Universal,
             };
             let mut arguments = Vec::new();
@@ -4595,6 +4725,7 @@ impl ValidatedTraitWorld {
             maybe_unsized,
             replays,
             caller,
+            true,
             |projection, ty, replays| {
                 self.validate_equality_domain_with_facts(projection, ty, env, replays, caller)
             },
@@ -4607,6 +4738,24 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         active: &mut ProofScratch,
         caller: Option<&ValidatedFacts>,
+    ) -> Result<()> {
+        self.validate_predicates_with_active_for_use(
+            predicates,
+            env,
+            maybe_unsized,
+            active,
+            caller,
+            true,
+        )
+    }
+    fn validate_predicates_with_active_for_use(
+        &self,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        active: &mut ProofScratch,
+        caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
     ) -> Result<()> {
         self.check_normalization_budget()?;
         if let Some(caller) = caller {
@@ -4651,6 +4800,7 @@ impl ValidatedTraitWorld {
         for previous in &active.predicate_formations {
             charged(&self.budget, self.budget.charge_work(1))?;
             if previous.world == self.id
+                && previous.executable_storage == executable_storage
                 && previous.maybe_unsized == maybe_unsized
                 && previous.ready == self.owner_normalization_ready
                 && previous.finalized == self.owner_normalization_finalized
@@ -4678,8 +4828,9 @@ impl ValidatedTraitWorld {
             maybe_unsized,
             replays,
             caller,
+            executable_storage,
             |projection, ty, replays| {
-                self.validate_equality_domain_with_storage(
+                self.validate_equality_domain_with_storage_for_use(
                     projection,
                     ty,
                     env,
@@ -4687,6 +4838,7 @@ impl ValidatedTraitWorld {
                     caller,
                     closedness,
                     closedness_storage,
+                    executable_storage,
                 )
             },
         )?;
@@ -4702,6 +4854,7 @@ impl ValidatedTraitWorld {
                 &mut active.predicate_formation_storage,
                 CompletedPredicateFormation {
                     world: self.id,
+                    executable_storage,
                     caller,
                     env: env.clone(),
                     maybe_unsized,
@@ -4759,6 +4912,7 @@ impl ValidatedTraitWorld {
         }
         Ok(true)
     }
+    #[allow(clippy::too_many_arguments)]
     fn validate_predicates_policy(
         &self,
         predicates: &[Predicate],
@@ -4766,6 +4920,7 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
         mut equality_domain: impl FnMut(
             &ir::AssociatedTypeProjection,
             &Ty,
@@ -4789,12 +4944,13 @@ impl ValidatedTraitWorld {
         }
         for predicate in predicates {
             match predicate {
-                Predicate::Implements(goal) => self.validate_predicate_ref_with_facts(
+                Predicate::Implements(goal) => self.validate_predicate_ref_with_facts_for_use(
                     goal,
                     env,
                     maybe_unsized,
                     replays,
                     caller,
+                    executable_storage,
                 )?,
                 Predicate::ProjectionEq { projection, ty } => {
                     equality_domain(projection, ty, replays)?;
@@ -4892,6 +5048,61 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         if let Some(caller) = caller {
+            self.check_facts(caller, true)?;
+            if matches!(ty, Ty::Param(_)) {
+                // Header replay can check a marker's original parameter while
+                // authenticating a closed caller. Its declared Sized row is
+                // independent of that caller and must not recursively prove
+                // itself by re-entering the same header with fresh scratch.
+                // Reuse the complete original-binder resolver below, including
+                // canonical catalog, retained schema and foreign-binder checks.
+                match self.validate_phantom_sized_argument(ty, None, depth) {
+                    Ok(()) => return Ok(()),
+                    Err(error) if error.kind() == FactsErrorKind::Unsupported => {}
+                    Err(error) => return Err(error),
+                }
+                // A ?Sized declaration may still have an explicit Sized row in
+                // this exact caller. Only that case needs the caller proof.
+            }
+        }
+        // These are the structural Sized rules used by prove_builtin. Metadata
+        // and marker catalog authority are checked by the enclosing type walk.
+        // Re-entering a caller proof for an intrinsic leaf would authenticate
+        // the same closed marker actual again with a fresh proof scratch.
+        match ty {
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::Ref { .. }
+            | Ty::RawPtr { .. }
+            | Ty::FnPointer(_)
+            | Ty::FnItem(_)
+            | Ty::Cell(_)
+            | Ty::PhantomData(_) => return Ok(()),
+            Ty::Tuple(parts) => {
+                for part in parts.iter() {
+                    self.validate_phantom_sized_argument(part, caller, depth + 1)?;
+                }
+                return Ok(());
+            }
+            Ty::Array { element, .. } | Ty::DependentArray { element, .. } => {
+                return self.validate_phantom_sized_argument(element, caller, depth + 1);
+            }
+            Ty::ManuallyDrop(wrapper) => {
+                return self.validate_phantom_sized_argument(wrapper.argument(), caller, depth + 1);
+            }
+            Ty::Closure(closure) => {
+                for capture in closure.captures() {
+                    self.validate_phantom_sized_argument(capture, caller, depth + 1)?;
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        if let Some(caller) = caller {
             retain::<Ty>(&self.budget, 0)?;
             let outcome = self.prove_in(
                 &Predicate::Implements(TraitRef {
@@ -4925,6 +5136,15 @@ impl ValidatedTraitWorld {
                 }
                 let owner = parameter.owner.declaration;
                 let info = self.info(owner)?;
+                if info.own_env.binder() != parameter.owner
+                    || !info.own_env.contains(*parameter)
+                    || !info.env.contains(*parameter)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "original Sized parameter has foreign binder authority",
+                    ));
+                }
                 match info.kind {
                     DeclKind::Struct | DeclKind::Enum => {
                         let schema = self.schema.nominal_declaration_schema(owner)?;
@@ -6830,6 +7050,7 @@ impl ValidatedTraitWorld {
                                 original: None,
                                 source_metadata: None,
                                 predicates: &env,
+                                executable_storage: true,
                                 phase: FactsPhase::Universal,
                             },
                             &mut ProofScratch::default(),
@@ -7000,6 +7221,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &env,
+                executable_storage: true,
                 phase: FactsPhase::Universal,
             };
             let mut expected = if !method_arguments.is_empty() {
@@ -7891,9 +8113,15 @@ impl ValidatedTraitWorld {
             )
             && matches!(output.location.channel, ir::CarrierChannel::Fixed(_))
         {
-            if let Some(sources) =
-                self.projected_item_result_sources(declaration, result, output, raw, args, facts)?
-            {
+            if let Some(sources) = self.projected_item_result_sources(
+                declaration,
+                result,
+                output,
+                raw,
+                args,
+                facts,
+                scratch,
+            )? {
                 for source in sources.iter() {
                     let mut admitted = false;
                     for input in declared_inputs {
@@ -9866,15 +10094,25 @@ impl ValidatedTraitWorld {
         }
         Ok(true)
     }
-    fn check_original_context(&self, facts: &ValidatedFacts) -> Result<()> {
-        self.check_original_context_for_use(facts, true)
-    }
     // Source-provider classification authenticates the same caller identity,
     // but grants neither a physical header nor executable signature authority.
     fn check_original_context_for_use(
         &self,
         facts: &ValidatedFacts,
         executable_storage: bool,
+    ) -> Result<()> {
+        self.check_original_context_for_use_with_scratch(
+            facts,
+            executable_storage,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    fn check_original_context_for_use_with_scratch(
+        &self,
+        facts: &ValidatedFacts,
+        executable_storage: bool,
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
         self.check_facts(facts, true)?;
         self.check_context(ProofContext::from_facts(facts))?;
@@ -9904,12 +10142,11 @@ impl ValidatedTraitWorld {
                         "original header read changed its closed caller subject or empty context",
                     ));
                 }
-                let mut scratch = TraitScratch::default();
                 for ty in target.type_args.iter() {
                     if executable_storage {
                         self.validate_ty(ty, self.empty.env(), None, true, 0)?;
                     } else {
-                        facts.validate_ty_metadata_scratch(ty, &self.budget, &mut scratch)?;
+                        facts.validate_ty_metadata_scratch(ty, &self.budget, scratch)?;
                     }
                 }
             }
@@ -9943,6 +10180,7 @@ impl ValidatedTraitWorld {
         for proof in facts.requirements.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
             if proof.0.world != self.id
+                || !proof.0.executable_storage
                 || proof.0.source_metadata.is_some()
                 || proof.0.environment != self.empty.index
                 || proof.0.phase != FactsPhase::Closed
@@ -10180,6 +10418,7 @@ impl ValidatedTraitWorld {
         caller: Option<&ValidatedFacts>,
         executable_storage: bool,
     ) -> Result<InstantiatedSchema> {
+        let facts = facts.for_storage(executable_storage);
         self.check_proof_context_caller(facts)?;
         if let Some(caller) = caller {
             self.check_facts(caller, true)?;
@@ -10241,13 +10480,14 @@ impl ValidatedTraitWorld {
                     ir::validate_root_reference_actual(arg, &self.budget),
                 )?;
                 if !matches!(arg, Ty::Str) {
-                    self.validate_predicate_formation(
+                    self.validate_predicate_formation_for_use(
                         arg,
                         facts.env(),
                         TypeUse::Actual,
                         None,
                         &mut active.replays,
                         caller,
+                        executable_storage,
                     )?;
                 }
             }
@@ -10287,6 +10527,16 @@ impl ValidatedTraitWorld {
         }
         result.predicates =
             self.normalize_instantiated_projection_predicates(&result.predicates, facts, active)?;
+        if !executable_storage {
+            self.realize_source_closure_item_contract(
+                schema,
+                args,
+                declaration,
+                &mut result.signature,
+                facts,
+                active,
+            )?;
+        }
         if executable_storage {
             self.validate_signature_shape_with_scratch(
                 &result.signature,
@@ -10312,13 +10562,14 @@ impl ValidatedTraitWorld {
                     &mut active.replays,
                     caller,
                 )?;
-                self.validate_predicate_formation(
+                self.validate_predicate_formation_for_use(
                     ty,
                     facts.env(),
                     TypeUse::Root,
                     None,
                     &mut active.replays,
                     caller,
+                    executable_storage,
                 )?;
             }
             charged(
@@ -10331,12 +10582,13 @@ impl ValidatedTraitWorld {
                 ),
             )?;
         }
-        self.validate_predicates_with_active(
+        self.validate_predicates_with_active_for_use(
             &result.predicates,
             facts.env(),
             None,
             active,
             caller,
+            executable_storage,
         )?;
         // The complete predicate batch, including ordinary membership rows,
         // already passed metadata validation above. Only equality discharge is
@@ -11190,6 +11442,7 @@ impl ValidatedTraitWorld {
     }
     fn same_key(&self, a: &GoalKey, b: &GoalKey) -> Result<bool> {
         Ok(a.environment == b.environment
+            && a.executable_storage == b.executable_storage
             && a.phase == b.phase
             && self.same_source_metadata(&a.source_metadata, &b.source_metadata)?
             && a.finalized == b.finalized
@@ -11226,7 +11479,10 @@ impl ValidatedTraitWorld {
             ));
         }
         if let Predicate::ProjectionEq { ty, .. } = predicate {
-            let mut walk = TypeWalk::default();
+            let mut walk = TypeWalk {
+                logical_nominals: !context.executable_storage,
+                ..TypeWalk::default()
+            };
             self.validate_ty_inner_with_facts(
                 ty,
                 context.env(),
@@ -11280,23 +11536,26 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         self.check_normalization_budget()?;
         match predicate {
-            Predicate::Implements(goal) => self.validate_predicate_ref_with_facts(
+            Predicate::Implements(goal) => self.validate_predicate_ref_with_facts_for_use(
                 goal,
                 facts.env(),
                 None,
                 &mut active.replays,
                 facts.metadata_facts(),
+                facts.executable_storage,
             )?,
             Predicate::ProjectionEq { projection, ty } => self
-                .validate_equality_domain_with_active(
+                .validate_equality_domain_with_active_for_use(
                     projection,
                     ty,
                     facts.env(),
                     active,
                     facts.metadata_facts(),
+                    facts.executable_storage,
                 )?,
         }
         let key = GoalKey {
+            executable_storage: facts.executable_storage,
             environment: facts.predicates.index,
             phase: facts.phase,
             source_metadata: facts.source_key()?,
@@ -11322,6 +11581,7 @@ impl ValidatedTraitWorld {
         let bucket = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            key.executable_storage.hash(&mut hasher);
             key.environment.hash(&mut hasher);
             key.phase.hash(&mut hasher);
             key.finalized.hash(&mut hasher);
@@ -11406,6 +11666,7 @@ impl ValidatedTraitWorld {
             };
             if membership.0.world != self.id
                 || membership.0.environment != facts.predicates.index
+                || membership.0.executable_storage != facts.executable_storage
                 || membership.0.phase != facts.phase
                 || !facts.matches_source(&membership.0.source_metadata)?
                 || !self.eq_predicate(
@@ -11452,6 +11713,7 @@ impl ValidatedTraitWorld {
         }
         retain::<ProofRecord>(&self.budget, 1)?;
         Ok(ProofOutcome::Proved(ProofEvidence(Arc::new(ProofRecord {
+            executable_storage: facts.executable_storage,
             world: self.id,
             environment: facts.predicates.index,
             phase: facts.phase,
@@ -11480,15 +11742,7 @@ impl ValidatedTraitWorld {
         if let Predicate::Implements(goal) = predicate
             && goal.declaration == self.catalog.id(CatalogItem::Sync)
             && let Ty::AssociatedType(projection) = &goal.self_ty
-            && !match facts.metadata_facts() {
-                Some(caller) => self.goal_is_closed_with_facts_storage(
-                    &projection.trait_ref,
-                    caller,
-                    &mut active.closedness,
-                    &mut active.closedness_storage,
-                )?,
-                None => self.goal_is_closed_with(&projection.trait_ref, facts.env(), active)?,
-            }
+            && !self.goal_is_closed_in_with(&projection.trait_ref, facts, active)?
             && self
                 .opaque_associated_binding(projection, facts.env())?
                 .is_none()
@@ -11930,7 +12184,7 @@ impl ValidatedTraitWorld {
                 self_ty: ty.clone(),
                 args: Arc::from([]),
             });
-            let child = if context.metadata_facts().is_some() {
+            let child = if context.metadata_facts().is_some() || !context.executable_storage {
                 let normalized = self.normalize_instantiated_projection_predicates(
                     std::slice::from_ref(&child),
                     context,
@@ -11948,6 +12202,16 @@ impl ValidatedTraitWorld {
             }
         }
         for supertrait in self.supers_for(goal, context.env())? {
+            let supertrait = if context.metadata_facts().is_some() || !context.executable_storage {
+                let normalized = self.normalize_instantiated_projection_predicates(
+                    std::slice::from_ref(&supertrait),
+                    context,
+                    active,
+                )?;
+                normalized[0].clone()
+            } else {
+                supertrait
+            };
             if matches!(
                 self.prove_in(&supertrait, context, active)?,
                 ProofOutcome::NotProven
@@ -12286,14 +12550,22 @@ impl ValidatedTraitWorld {
     fn goal_is_closed_in(&self, goal: &TraitRef, context: ProofContext<'_>) -> Result<bool> {
         self.check_proof_context_caller(context)?;
         if context.metadata_facts().is_none() {
-            return self.goal_is_closed(goal, context.env());
+            return self.goal_is_closed_in_for_use(
+                goal,
+                context,
+                &mut ProofScratch::default(),
+                context.executable_storage,
+            );
         }
         // The raw classifier memo has no caller-facts coordinate. A checked
         // root must replay its sealed metadata under this exact invocation,
         // not reuse a classification authenticated in a different context.
         let classify = |ty: &Ty, usage| -> Result<bool> {
             charged(&self.budget, self.budget.check_depth(0))?;
-            let mut walk = TypeWalk::default();
+            let mut walk = TypeWalk {
+                logical_nominals: !context.executable_storage,
+                ..TypeWalk::default()
+            };
             self.validate_ty_inner_with_facts(
                 ty,
                 context.env(),
@@ -12316,7 +12588,7 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         scratch: &mut ProofScratch,
     ) -> Result<bool> {
-        self.goal_is_closed_in_for_use(goal, context, scratch, true)
+        self.goal_is_closed_in_for_use(goal, context, scratch, context.executable_storage)
     }
 
     fn goal_is_closed_in_for_use(
@@ -12477,9 +12749,7 @@ impl ValidatedTraitWorld {
                     env: env.clone(),
                     usage,
                     executable_storage,
-                    context: caller
-                        .map(|facts| body_validation::Context::retain(facts))
-                        .transpose()?,
+                    context: caller.map(body_validation::Context::retain).transpose()?,
                     result,
                     completed_closed_walk: walk,
                 },
@@ -12641,7 +12911,10 @@ impl ValidatedTraitWorld {
         }
         let mut closed = true;
         for ty in call.method_args.iter() {
-            let mut walk = TypeWalk::default();
+            let mut walk = TypeWalk {
+                logical_nominals: !context.executable_storage,
+                ..TypeWalk::default()
+            };
             self.validate_ty_inner_with_facts(
                 ty,
                 context.env(),
@@ -12973,6 +13246,7 @@ impl ValidatedTraitWorld {
             }
         };
         if membership.0.world != self.id
+            || membership.0.executable_storage != caller.executable_storage
             || membership.0.environment != self.empty.index
             || membership.0.phase != FactsPhase::Closed
             || !self.eq_predicate(
@@ -13353,6 +13627,7 @@ impl TraitCx for ValidatedTraitWorld {
         };
         let evidence = self.require_in(&predicate, closed, scratch)?;
         if evidence.0.world != self.id
+            || evidence.0.executable_storage != closed.executable_storage
             || !closed.matches_source(&evidence.0.source_metadata)?
             || evidence.0.environment != self.empty.index
             || evidence.0.phase != FactsPhase::Closed
@@ -14270,6 +14545,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &owner,
+            executable_storage: true,
             phase: FactsPhase::Universal,
         };
         let arguments: Vec<_> = implementation
@@ -16036,6 +16312,32 @@ mod tests {
             index: 0,
         };
         world
+            .validate_phantom_sized_argument(&Ty::Param(canonical_parameter), Some(&facts), 0)
+            .unwrap();
+        for invalid in [
+            ParamId {
+                index: 1,
+                ..canonical_parameter
+            },
+            ParamId {
+                owner: BinderId {
+                    declaration: DeclId {
+                        snapshot: SnapshotId::standalone().unwrap(),
+                        index: canonical_parameter.owner.declaration.index,
+                    },
+                },
+                ..canonical_parameter
+            },
+        ] {
+            assert_eq!(
+                world
+                    .validate_phantom_sized_argument(&Ty::Param(invalid), Some(&facts), 0)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::InvalidMetadata
+            );
+        }
+        world
             .validate_phantom_sized_argument(&Ty::Param(canonical_parameter), None, 0)
             .unwrap();
         assert!(
@@ -16442,6 +16744,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         let goal = TraitRef {
@@ -17230,6 +17533,83 @@ mod tests {
                 )
                 .unwrap();
         }
+        let before = budget.usage_snapshot().work;
+        for _ in 0..2 {
+            facts
+                .validate_source_flow_signature_with_scratch(
+                    SignatureSubject::Call(&callee),
+                    &signature,
+                    &mut source_scratch,
+                )
+                .unwrap();
+        }
+        let separate = budget.usage_snapshot().work - before;
+        let before = budget.usage_snapshot().work;
+        facts
+            .validate_source_flow_signatures_with_scratch(
+                SignatureSubject::Call(&callee),
+                &[&signature, &signature],
+                &mut source_scratch,
+            )
+            .unwrap();
+        let paired = budget.usage_snapshot().work - before;
+        assert!(
+            paired < separate,
+            "source receipt reconstructed twice: {paired}/{separate}"
+        );
+        let mut changed_pair = signature.clone();
+        changed_pair.result = Ty::Bool;
+        assert!(
+            facts
+                .validate_source_flow_signatures_with_scratch(
+                    SignatureSubject::Call(&callee),
+                    &[&signature, &changed_pair],
+                    &mut source_scratch,
+                )
+                .is_err()
+        );
+        let mut changed_pair = signature.clone();
+        Arc::make_mut(&mut changed_pair.ref_contract).results = Arc::from([]);
+        assert!(
+            facts
+                .validate_source_flow_signatures_with_scratch(
+                    SignatureSubject::Call(&callee),
+                    &[&signature, &changed_pair],
+                    &mut source_scratch,
+                )
+                .is_err()
+        );
+        let mut changed_pair = signature.clone();
+        changed_pair.params.clear();
+        assert!(
+            facts
+                .validate_source_flow_signatures_with_scratch(
+                    SignatureSubject::Call(&callee),
+                    &[&signature, &changed_pair],
+                    &mut source_scratch,
+                )
+                .is_err()
+        );
+        let foreign_pair = Callee::Direct(CallTarget {
+            declaration: nested_header(&budget).declaration,
+            type_args: target.type_args.clone(),
+        });
+        assert!(
+            facts
+                .validate_source_flow_signatures_with_scratch(
+                    SignatureSubject::Call(&foreign_pair),
+                    &[&signature, &signature],
+                    &mut source_scratch,
+                )
+                .is_err()
+        );
+        facts
+            .validate_source_flow_signatures_with_scratch(
+                SignatureSubject::Call(&callee),
+                &[&signature, &signature],
+                &mut source_scratch,
+            )
+            .unwrap();
         let mut erased_source = source_view.as_ref().clone();
         erased_source.source_schema = None;
         assert!(erased_source.validate_for(&facts).is_err());
@@ -17424,6 +17804,14 @@ mod tests {
                 .is_err()
         );
         let failure = facts.budget().first_resource_failure();
+        assert!(matches!(
+            facts.validate_source_flow_signatures_with_scratch(
+                SignatureSubject::Call(&callee),
+                &[&signature, &signature],
+                &mut source_scratch,
+            ),
+            Err(error) if error.kind() == FactsErrorKind::Resource
+        ));
         assert!(matches!(world.discharge_in_with_facts(
             &target, ProofContext::from_facts(&facts), &mut raw_proofs, Some(&facts),
         ), Err(error) if error.kind() == FactsErrorKind::Resource));
@@ -19000,6 +19388,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         let ProofOutcome::Proved(requirement) = world
@@ -19199,6 +19588,53 @@ mod tests {
                 .is_err()
         );
         assert_eq!(batch.predicate_formations.len(), 5);
+        let mut stage_batch = ProofScratch::default();
+        for caller in [None, Some(facts.as_ref())] {
+            for executable_storage in [false, true, false, true] {
+                world
+                    .validate_predicates_with_active_for_use(
+                        &batch_rows,
+                        facts.env(),
+                        None,
+                        &mut stage_batch,
+                        caller,
+                        executable_storage,
+                    )
+                    .unwrap();
+            }
+        }
+        assert_eq!(stage_batch.predicate_formations.len(), 4);
+        for (index, row) in stage_batch.predicate_formations.iter().enumerate() {
+            assert_eq!(row.executable_storage, index % 2 == 1);
+            assert_eq!(row.caller.is_some(), index >= 2);
+        }
+        for executable_storage in [false, true] {
+            assert!(
+                world
+                    .validate_predicates_with_active_for_use(
+                        &malformed,
+                        facts.env(),
+                        None,
+                        &mut stage_batch,
+                        None,
+                        executable_storage,
+                    )
+                    .is_err()
+            );
+            assert!(
+                world
+                    .validate_predicates_with_active_for_use(
+                        &foreign_parameter,
+                        facts.env(),
+                        None,
+                        &mut stage_batch,
+                        None,
+                        executable_storage,
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(stage_batch.predicate_formations.len(), 4);
         assert!(
             matches!(foreign.validate_predicates_with_facts(&predicates, facts.env(), Some(policy), &mut replays, Some(&facts)), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
         );
@@ -19279,6 +19715,42 @@ mod tests {
             };
             assert!(!proof.same_allocation(&other_proof));
         }
+        // Logical selection uses the same caller seals and ordered goals,
+        // but never reuses or exports executable-stage proof records.
+        let logical_source = source.for_storage(false);
+        assert!(!logical_source.closed_selection(&world).executable_storage);
+        let ProofOutcome::Proved(logical_proof) =
+            world.prove_in(&goal, logical_source, &mut scratch).unwrap()
+        else {
+            panic!("logical closed implementation must be selected");
+        };
+        assert!(!logical_proof.0.executable_storage);
+        assert!(proof.0.executable_storage);
+        assert!(!logical_proof.same_allocation(&proof));
+        for context in [source, logical_source, source, logical_source] {
+            let ProofOutcome::Proved(warm) = world.prove_in(&goal, context, &mut scratch).unwrap()
+            else {
+                panic!("stage-isolated warm proof disappeared");
+            };
+            let expected = if context.executable_storage {
+                &proof
+            } else {
+                &logical_proof
+            };
+            assert!(warm.same_allocation(expected));
+        }
+        let ProofOutcome::Proved(logical_raw) = world
+            .prove_in(&goal, raw.for_storage(false), &mut scratch)
+            .unwrap()
+        else {
+            panic!("logical raw implementation must be selected");
+        };
+        assert!(logical_raw.0.source_metadata.is_none());
+        assert!(!logical_raw.0.executable_storage);
+        let mut invalid_entry = (*facts).clone();
+        invalid_entry.requirements = Arc::from([logical_raw]);
+        assert!(matches!(world.check_facts(&invalid_entry, true),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
         let assumed = c.goal(c.caller_parameter.clone());
         assert!(matches!(
             world.prove_in(&assumed, caller, &mut scratch).unwrap(),
@@ -19308,6 +19780,9 @@ mod tests {
         ] {
             assert!(
                 matches!(world.prove_in(&goal, forged, &mut scratch), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+            );
+            assert!(
+                matches!(world.prove_in(&goal, forged.for_storage(false), &mut scratch), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
             );
         }
         let foreign = c.build().unwrap();
@@ -19514,6 +19989,7 @@ mod tests {
                 original: None,
                 source_metadata: None,
                 predicates: context.predicates,
+                executable_storage: true,
                 phase: context.phase,
             };
             checked
@@ -19539,6 +20015,7 @@ mod tests {
             original: Some(&facts),
             source_metadata: None,
             predicates: other.predicates.as_ref(),
+            executable_storage: true,
             phase: facts.phase(),
         };
         let foreign_phase = ProofContext {
@@ -20491,7 +20968,9 @@ mod tests {
             }
         }
         fn live_nested_inventory(replays: &NominalReplays) -> usize {
-            live_replay_rows(&replays.facts)
+            usize::from(replays._metadata_caller_storage.is_some())
+                * std::mem::size_of::<body_validation::Context>()
+                + live_replay_rows(&replays.facts)
                 + live_replay_rows(&replays.inputs)
                 + live_replay_rows(&replays.types)
                 + live_replay_rows(&replays.type_index)
@@ -20974,6 +21453,7 @@ mod tests {
         let facts = world.callable_facts(c.caller).unwrap();
         let goal = c.goal(c.caller_parameter.clone());
         let key = GoalKey {
+            executable_storage: true,
             environment: facts.predicates.index,
             phase: facts.phase(),
             source_metadata: None,
@@ -21187,6 +21667,7 @@ mod tests {
         cyclic
             .with_caller_arena(world.id, Some(&facts), |arena| {
                 arena.active.push(GoalKey {
+                    executable_storage: ProofContext::from_facts(&facts).executable_storage,
                     environment: facts.predicates.index,
                     phase: facts.phase(),
                     source_metadata: None,
@@ -21525,6 +22006,47 @@ mod tests {
             .original_callable_schema(OriginalCallableSubject::Direct(c.caller))
             .unwrap();
         closed_view.validate_for(&closed).unwrap();
+        let summaries = |facts: &ValidatedFacts, scratch: &mut TraitScratch| -> Result<()> {
+            assert!(
+                facts
+                    .native_sequence_empty_with_scratch(c.caller, scratch)?
+                    .is_none()
+            );
+            assert!(
+                facts
+                    .native_sequence_element_with_scratch(c.caller, scratch)?
+                    .is_none()
+            );
+            assert!(
+                facts
+                    .native_sequence_swap_with_scratch(c.caller, scratch)?
+                    .is_none()
+            );
+            assert!(
+                facts
+                    .native_sequence_slot_with_scratch(c.caller, scratch)?
+                    .is_none()
+            );
+            Ok(())
+        };
+        let mut native_scratch = TraitScratch::default();
+        let before = world.budget.usage_snapshot().work;
+        summaries(&closed, &mut native_scratch).unwrap();
+        let cold = world.budget.usage_snapshot().work - before;
+        let before = world.budget.usage_snapshot().work;
+        summaries(&closed, &mut native_scratch).unwrap();
+        let warm = world.budget.usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "native summary lost source metadata arena: {warm}/{cold}"
+        );
+        assert!(summaries(&schema, &mut native_scratch).is_err());
+        assert!(
+            other
+                .check_original_context_for_use_with_scratch(&closed, false, &mut native_scratch)
+                .is_err()
+        );
+        summaries(&closed, &mut native_scratch).unwrap();
         for change in 0..4 {
             let mut forged = (*closed).clone();
             if change == 0 {
@@ -21545,7 +22067,13 @@ mod tests {
                 Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
             ));
             assert!(closed_view.validate_for(&forged).is_err());
+            assert!(summaries(&forged, &mut native_scratch).is_err());
         }
+        summaries(&closed, &mut native_scratch).unwrap();
+        world.budget.poison_ledger_for_tests();
+        assert!(
+            matches!(summaries(&closed, &mut native_scratch), Err(error) if error.is_resource())
+        );
     }
 
     #[test]
@@ -22065,6 +22593,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         assert!(world.validate_topology(proof, wrong).is_err());

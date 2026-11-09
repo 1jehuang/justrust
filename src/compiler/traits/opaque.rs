@@ -51,6 +51,7 @@ impl ValidatedTraitWorld {
             original: None,
             source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         let (normal, dependencies) =
@@ -139,22 +140,35 @@ impl ValidatedTraitWorld {
             .substitute_carrier_schema(&schema, args, facts, scratch.for_world(self.id))?
             .signature
             .result;
-        let actual = self
-            .normalize_closed_projected_type_with(
-                &actual,
-                ProofContext::from_facts(facts),
-                false,
-                scratch.for_world(self.id),
-            )?
-            .0;
         let Ty::Opaque(opaque) = &actual else {
             return Err(FactsError::invalid(
                 &self.budget,
                 "opaque family substitution changed its outer declaration identity",
             ));
         };
-        self.validate_opaque_metadata(opaque, facts.env())?;
-        Ok(actual)
+        // The opaque envelope stays abstract, but its public bound payloads
+        // must use the same proven closed projection reductions as the mapped
+        // signature. Normalizing only the outer Opaque leaves stale equations
+        // in carrier locations and cannot name an actual result occurrence.
+        retain::<ir::OpaqueTy>(&self.budget, 1)?;
+        retain::<Ty>(&self.budget, opaque.owner_args().len())?;
+        retain::<ir::OpaqueBound>(&self.budget, opaque.bounds().len())?;
+        for bound in opaque.bounds() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            retain::<ir::OpaqueBoundArg>(&self.budget, bound.args().len())?;
+            retain::<(DeclId, Ty)>(&self.budget, bound.equalities().len())?;
+        }
+        let mapped = opaque.try_map(|child| {
+            self.normalize_closed_projected_type_with(
+                child,
+                ProofContext::from_facts(facts),
+                false,
+                scratch.for_world(self.id),
+            )
+            .map(|(normal, _)| normal)
+        })?;
+        self.validate_opaque_metadata(&mapped, facts.env())?;
+        Ok(Ty::Opaque(Arc::new(mapped)))
     }
     pub(super) fn prove_opaque(
         &self,

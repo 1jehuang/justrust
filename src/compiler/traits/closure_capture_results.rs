@@ -513,7 +513,7 @@ impl ValidatedTraitWorld {
                 let mut projections = Vec::new();
                 push(&self.budget, &mut projections, ir::Projection::Deref)?;
                 for step in suffix {
-                    push(&self.budget, &mut projections, step.clone())?;
+                    push(&self.budget, &mut projections, *step)?;
                 }
                 let input = if borrowing
                     && location.path.0.is_empty()

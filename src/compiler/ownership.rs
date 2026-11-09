@@ -333,7 +333,33 @@ impl CarrierEffectTable {
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<Option<Arc<borrow::CarrierEffects>>, super::traits::FactsError> {
         Ok(self
-            .lookup_proof(target, caller, facts, view, caller_validated, scratch)?
+            .lookup_proof(
+                target,
+                caller,
+                facts,
+                view,
+                (caller_validated, None),
+                scratch,
+            )?
+            .map(|proof| proof.effects.clone()))
+    }
+    pub(super) fn lookup_replayed(
+        &self,
+        target: &super::ir::Callee,
+        caller: &cfg::Function,
+        replay: &super::traits::CarrierViewReplay<'_>,
+        caller_validated: bool,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<Option<Arc<borrow::CarrierEffects>>, FactsError> {
+        Ok(self
+            .lookup_proof(
+                target,
+                caller,
+                replay.facts(),
+                replay.view(),
+                (caller_validated, Some(replay)),
+                scratch,
+            )?
             .map(|proof| proof.effects.clone()))
     }
     /// Reuse the exact universal-body ingress. An unproved empty-looking value
@@ -374,8 +400,14 @@ impl CarrierEffectTable {
         caller_validated: bool,
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<bool, FactsError> {
-        let Some(proof) =
-            self.lookup_proof(target, caller, facts, view, caller_validated, scratch)?
+        let Some(proof) = self.lookup_proof(
+            target,
+            caller,
+            facts,
+            view,
+            (caller_validated, None),
+            scratch,
+        )?
         else {
             return Ok(false);
         };
@@ -436,9 +468,10 @@ impl CarrierEffectTable {
         caller: &cfg::Function,
         facts: &ValidatedFacts,
         view: &super::traits::CarrierContractView,
-        caller_validated: bool,
+        validation: (bool, Option<&super::traits::CarrierViewReplay<'_>>),
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<Option<&Arc<CarrierEffectProof>>, super::traits::FactsError> {
+        let (caller_validated, replay) = validation;
         let budget = facts.budget();
         if !budget.same_authority(&self.budget) || facts.phase() != FactsPhase::Closed {
             return Err(super::traits::FactsError::invalid(
@@ -448,10 +481,13 @@ impl CarrierEffectTable {
         }
         if !caller_validated {
             caller
-                .validate_provenance(facts, budget)
+                .validate_provenance_with_scratch(facts, budget, scratch)
                 .map_err(|message| super::traits::FactsError::from_message(budget, &message))?;
         }
-        view.validate_for_with_scratch(facts, scratch)?;
+        match replay {
+            Some(replay) => replay.validate_for(view, facts)?,
+            None => view.validate_for_with_scratch(facts, scratch)?,
+        }
         for template in self.templates.iter() {
             budget
                 .charge_work(1)
@@ -2927,6 +2963,7 @@ struct Transfer<'a> {
     phase: Phase,
     const_context: bool,
     normal_drop_cache: &'a mut [Option<bool>],
+    trait_scratch: &'a mut super::traits::TraitScratch,
     /// Downcasts (as offsets from the projection end) proven by a place
     /// proof for the place whose targets are being checked.
     proven: Vec<usize>,
@@ -3374,7 +3411,7 @@ impl Transfer<'_> {
             .map_err(|_| Exhausted)?;
         preflight_ty(&ty, 0, self.budget)?;
         if let FactsCtx::Validated(authority) = self.facts {
-            return match authority.must_copy(&ty) {
+            return match authority.must_copy_scratch(&ty, self.trait_scratch) {
                 Ok(permission) => Ok(Some(permission)),
                 Err(error) if error.is_resource() => Err(Exhausted),
                 Err(error) => {
@@ -3386,7 +3423,10 @@ impl Transfer<'_> {
         }
         // Structural-only bootstrap and fixture contexts cannot mint a native
         // capability. Production always queries the exact retained authority.
-        self.facts.must_copy(&ty).map(Some).map_err(|_| Exhausted)
+        self.facts
+            .must_copy_scratch(&ty, self.trait_scratch)
+            .map(Some)
+            .map_err(|_| Exhausted)
     }
     fn deny_copy(&mut self, place: &Place, message: &'static str) -> Result<(), Exhausted> {
         let message = if let FactsCtx::Validated(authority) = self.facts {
@@ -3852,7 +3892,12 @@ impl Transfer<'_> {
         if depth > 128 {
             return Err(Exhausted);
         }
-        if !state.may_init.get(node) || self.facts.must_copy(ty).map_err(|_| Exhausted)? {
+        if !state.may_init.get(node)
+            || self
+                .facts
+                .must_copy_scratch(ty, self.trait_scratch)
+                .map_err(|_| Exhausted)?
+        {
             return Ok(false);
         }
         let facts = self.facts.validated().ok_or(Exhausted)?;
@@ -4452,6 +4497,9 @@ fn analyze_with_context(
                 .ok_or(Exhausted)?,
         )?;
         let mut normal_drop_cache = vec![None; f.locals.len()];
+        // The fixed point and diagnostic replay query the same immutable facts.
+        // Keep their exact type formation and Copy proofs in one local arena.
+        let mut trait_scratch = super::traits::TraitScratch::default();
         for local in &f.params {
             seed.must_live.set(local.0, true);
             seed.may_live.set(local.0, true);
@@ -4502,6 +4550,7 @@ fn analyze_with_context(
                     loans: loans.as_ref(),
                     phase: Phase::Read,
                     normal_drop_cache: &mut normal_drop_cache,
+                    trait_scratch: &mut trait_scratch,
                     proven: Vec::new(),
                     loan_suffix: None,
                     const_context,
@@ -4587,6 +4636,7 @@ fn analyze_with_context(
                     loans: loans.as_ref(),
                     phase: Phase::Read,
                     normal_drop_cache: &mut normal_drop_cache,
+                    trait_scratch: &mut trait_scratch,
                     proven: Vec::new(),
                     loan_suffix: None,
                     const_context,
@@ -5669,6 +5719,14 @@ mod tests {
                 )
                 .unwrap()
         );
+        let view_replay = source_view
+            .replay_for_families(&parent.facts, &mut replay_scratch)
+            .unwrap();
+        let replayed = table
+            .lookup_replayed(&callee, &caller, &view_replay, true, &mut replay_scratch)
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &replayed));
         let mut wrong_target = callee.clone();
         let super::super::ir::Callee::Direct(target) = &mut wrong_target else {
             panic!("direct native source")
@@ -6500,6 +6558,35 @@ mod tests {
         assert!(proof.analysis().passed());
         assert!(proof.analysis().stats.moves > 0);
         assert!(proof.analysis().stats.operands_read > proof.analysis().stats.moves);
+        let mut copy_scratch = super::super::traits::TraitScratch::default();
+        for _ in 0..3 {
+            assert!(
+                !facts
+                    .must_copy_scratch(parameter, &mut copy_scratch)
+                    .unwrap()
+            );
+        }
+        assert!(
+            schema
+                .must_copy_scratch(parameter, &mut copy_scratch)
+                .is_err()
+        );
+        assert!(
+            facts
+                .must_copy_scratch(&Ty::Bool, &mut copy_scratch)
+                .unwrap()
+        );
+        assert!(
+            !facts
+                .must_copy_scratch(parameter, &mut copy_scratch)
+                .unwrap()
+        );
+        assert!(budget.charge_work(usize::MAX).is_err());
+        assert!(
+            facts
+                .must_copy_scratch(parameter, &mut copy_scratch)
+                .is_err()
+        );
     }
 
     #[test]
@@ -8328,6 +8415,7 @@ mod tests {
                 loans: Some(&plan),
                 phase: Phase::Write,
                 normal_drop_cache: &mut [],
+                trait_scratch: &mut crate::compiler::traits::TraitScratch::default(),
                 proven: Vec::new(),
                 loan_suffix: None,
                 const_context: false,
@@ -9336,6 +9424,7 @@ mod tests {
                 loans: None,
                 phase: Phase::Read,
                 normal_drop_cache: &mut [],
+                trait_scratch: &mut crate::compiler::traits::TraitScratch::default(),
                 proven: Vec::new(),
                 loan_suffix: None,
                 const_context: false,
@@ -9698,6 +9787,7 @@ mod tests {
             loans: None,
             phase: Phase::Read,
             normal_drop_cache: &mut [],
+            trait_scratch: &mut crate::compiler::traits::TraitScratch::default(),
             proven: Vec::new(),
             loan_suffix: None,
             const_context: false,
@@ -11074,6 +11164,7 @@ mod tests {
             loans: None,
             phase: Phase::Read,
             normal_drop_cache: &mut [],
+            trait_scratch: &mut crate::compiler::traits::TraitScratch::default(),
             proven: Vec::new(),
             loan_suffix: None,
             const_context: false,

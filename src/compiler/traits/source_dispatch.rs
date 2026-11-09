@@ -29,7 +29,7 @@ impl ValidatedFacts {
         transport.validate_with_scratch(&self.world, self, scratch)?;
         let context = ProofContext {
             transport,
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
         let subject = self
             .world
@@ -76,7 +76,7 @@ impl ValidatedFacts {
         )?;
         let context = ProofContext {
             transport,
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
         let (_, _, application) = self.world.source_carrier_application(
             &parameter_equality::EqualityResultSubject::Direct(target.clone()),
@@ -112,22 +112,15 @@ impl ValidatedFacts {
         transport.validate_with_scratch(&self.world, self, scratch)?;
         let context = ProofContext {
             transport,
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
-        let (schema, arguments, declaration, receiver) = match callee {
+        let receiver = match callee {
             Callee::Direct(target) => {
                 self.world.ensure_provider(target.declaration)?;
                 self.world.validate_closure_direct(target, context)?;
-                let receiver = self
-                    .world
+                self.world
                     .closure_dispatch_receiver(target)?
-                    .unwrap_or(self.world.info(target.declaration)?.receiver);
-                (
-                    self.world.callable_schema(target.declaration)?,
-                    target.type_args.to_vec(),
-                    target.declaration,
-                    receiver,
-                )
+                    .unwrap_or(self.world.info(target.declaration)?.receiver)
             }
             Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {
                 let item = self.world.item_header(call.item)?;
@@ -139,28 +132,7 @@ impl ValidatedFacts {
                         "source receiver changed canonical trait item or method arity",
                     ));
                 }
-                self.world.validate_ref_with_facts(
-                    &call.trait_ref,
-                    context.env(),
-                    None,
-                    &mut scratch.for_world(self.world.id).replays,
-                    Some(self),
-                )?;
-                self.world.require_in(
-                    &Predicate::Implements(call.trait_ref.clone()),
-                    context,
-                    scratch.for_world(self.world.id),
-                )?;
-                let mut arguments = self.world.trait_arguments(&call.trait_ref)?;
-                for argument in call.method_args.iter() {
-                    push(self.budget(), &mut arguments, argument.clone())?;
-                }
-                (
-                    item.schema.clone(),
-                    arguments,
-                    item.declaration,
-                    item.receiver,
-                )
+                item.receiver
             }
             Callee::Untupled(_) => {
                 return Err(FactsError::invalid(
@@ -170,18 +142,12 @@ impl ValidatedFacts {
             }
         };
         let active = scratch.for_world(self.world.id);
-        let expected = self.world.instantiate_scratch_for_use(
-            &schema,
-            &arguments,
-            context,
-            Some(declaration),
-            active,
-            Some(self),
-            false,
-        )?;
-        for predicate in expected.predicates.iter() {
-            self.world.require_in(predicate, context, active)?;
-        }
+        let subject = self
+            .world
+            .equality_result_subject(SignatureSubject::Call(callee), self)?;
+        let (_, _, expected) = self
+            .world
+            .source_carrier_application(&subject, self, context, active)?;
         if !self.world.eq_signature(&expected.signature, signature)? {
             return Err(FactsError::invalid(
                 self.budget(),
@@ -232,7 +198,7 @@ impl ValidatedFacts {
         transport.validate_with_scratch(&self.world, self, scratch)?;
         let context = ProofContext {
             transport,
-            ..ProofContext::from_facts(self)
+            ..ProofContext::from_facts(self).for_storage(false)
         };
         let selected = match callee {
             Callee::Direct(target) => Callee::Direct(target.clone()),
@@ -283,12 +249,13 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
     ) -> Result<Callee> {
         self.check_proof_context_caller(caller)?;
-        self.validate_ref_with_facts(
+        self.validate_ref_with_facts_for_use(
             &call.trait_ref,
             caller.env(),
             None,
             &mut active.replays,
             Some(facts),
+            false,
         )?;
         let item = self.item_header(call.item)?;
         if item.trait_decl != call.trait_ref.declaration
@@ -392,7 +359,8 @@ impl ValidatedTraitWorld {
         }
         let closed = caller.closed_selection(self);
         let evidence = self.require_in(&predicate, closed, active)?;
-        if evidence.0.world != self.id
+        if evidence.0.executable_storage != closed.executable_storage
+            || evidence.0.world != self.id
             || !closed.matches_source(&evidence.0.source_metadata)?
             || evidence.0.environment != self.empty.index
             || evidence.0.phase != FactsPhase::Closed

@@ -179,6 +179,7 @@ impl ReadNominal {
             .record_fact(self, world)
             .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))
     }
+    #[cfg(test)]
     pub(in crate::compiler) fn retain_for_substitution(
         &self,
         ty: &ir::Ty,
@@ -186,8 +187,25 @@ impl ReadNominal {
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
+        self.retain_for_substitution_with_scratch(
+            ty,
+            engine,
+            caller,
+            budget,
+            &mut traits::TraitScratch::default(),
+        )
+    }
+
+    pub(in crate::compiler) fn retain_for_substitution_with_scratch(
+        &self,
+        ty: &ir::Ty,
+        engine: crate::engine::EngineAuthority,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        scratch: &mut traits::TraitScratch,
+    ) -> Result<ir::Ty, String> {
         if let Self::Acyclic(read) = self {
-            return read.retain_for_substitution(ty, engine, caller, budget);
+            return read.retain_for_substitution_with_scratch(ty, engine, caller, budget, scratch);
         }
         if self.engine_authority() != engine {
             return Err("foreign engine recursive nominal substitution capability".into());
@@ -200,8 +218,8 @@ impl ReadNominal {
         }
         // Component replay checks the entire finite symbolic source inventory
         // and every successful external receipt under the same engine/world.
-        self.replay(ty, facts.world()).map_err(|e| e.to_string())?;
-        caller.validate_ty_with_budget(ty, budget)?;
+        scratch.replay_nominal(self, ty, facts)?;
+        caller.validate_ty_with_budget_scratch(ty, budget, scratch)?;
         budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
         Ok(ty.clone())
     }

@@ -500,6 +500,7 @@ impl ValidatedTraitWorld {
             original: None,
             source_metadata: None,
             predicates: &owner.predicates,
+            executable_storage: true,
             phase: FactsPhase::Universal,
         })
     }
@@ -690,6 +691,7 @@ impl ValidatedTraitWorld {
                             original: None,
                             source_metadata: None,
                             predicates: &owner.predicates,
+                            executable_storage: true,
                             phase: FactsPhase::Universal,
                         },
                         &mut ProofScratch::default(),
@@ -707,6 +709,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &owner.predicates,
+                        executable_storage: true,
                         phase: FactsPhase::Universal,
                     };
                     // A supertrait's assignment is not owned by this impl.
@@ -799,6 +802,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &owner.predicates,
+                        executable_storage: true,
                         phase: FactsPhase::Universal,
                     };
                     if matches!(projection.trait_ref.self_ty, Ty::Param(_))
@@ -814,6 +818,7 @@ impl ValidatedTraitWorld {
                             original: None,
                             source_metadata: None,
                             predicates: &owner.predicates,
+                            executable_storage: true,
                             phase: FactsPhase::Universal,
                         },
                         !owner.finalized,
@@ -914,6 +919,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &owner.predicates,
+                        executable_storage: true,
                         phase: FactsPhase::Universal,
                     },
                     &mut ProofScratch::default(),
@@ -1183,6 +1189,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed,
                     }
                 };
@@ -1449,6 +1456,7 @@ impl ValidatedTraitWorld {
                     original: None,
                     source_metadata: None,
                     predicates: &self.empty,
+                    executable_storage: true,
                     phase: FactsPhase::Closed,
                 }
             },
@@ -1713,6 +1721,7 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &owner,
+                executable_storage: true,
                 phase: FactsPhase::Universal,
             },
         )?;
@@ -1999,6 +2008,7 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<ProjectedCarrierBase> {
         if evidence.selection.0.world != self.id
+            || !evidence.selection.0.executable_storage
             || evidence.selection.0.environment
                 != if matches!(
                     &evidence.selection.0.origin,
@@ -2656,6 +2666,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         let subject = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
@@ -2670,6 +2681,7 @@ mod tests {
         active
             .with_caller_arena(world.id, context.metadata_facts(), |arena| {
                 arena.active.push(GoalKey {
+                    executable_storage: context.executable_storage,
                     environment: context.predicates.index,
                     phase: context.phase,
                     source_metadata: context.source_key()?,
@@ -2965,6 +2977,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &world.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed,
                     },
                     Some(declaration),
@@ -3012,6 +3025,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &world.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Closed,
                     },
                     Some(declaration),

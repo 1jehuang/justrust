@@ -288,6 +288,22 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
                     _ => false,
                 }
         }
+        (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+            Arc::ptr_eq(a, b)
+                || (a.declaration() == b.declaration()
+                    && same_input(a.argument(), b.argument(), budget, depth + 1)?)
+        }
+        (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+            Arc::ptr_eq(a, b)
+                || (a.declaration() == b.declaration()
+                    && same_input(a.argument(), b.argument(), budget, depth + 1)?)
+        }
+        (Ty::Cell(a), Ty::Cell(b)) => {
+            Arc::ptr_eq(a, b)
+                || (a.declaration() == b.declaration()
+                    && a.is_concrete() == b.is_concrete()
+                    && same_input(a.argument(), b.argument(), budget, depth + 1)?)
+        }
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b) || same_inputs(a, b, budget, depth + 1)?,
         (
             Ty::Ref {
@@ -386,6 +402,29 @@ mod tests {
     #[test]
     fn raw_schema_cache_reuses_only_complete_retained_inputs() {
         let (world, schema, facts) = fixture();
+        let (foreign_world, _, _) = fixture();
+        // Closed caller identity must be reflexive for every canonical wrapper.
+        // A failed reflexive comparison repeatedly allocates nested metadata
+        // arenas before the ordinary bounded type walk can run.
+        for kind in 0..3 {
+            let wrap = |catalog: &CoreCatalog, argument| match kind {
+                0 => Ty::PhantomData(
+                    ir::PhantomDataTy::new(catalog, argument, &world.budget).unwrap(),
+                ),
+                1 => Ty::ManuallyDrop(
+                    ir::ManuallyDropTy::new(catalog, argument, &world.budget).unwrap(),
+                ),
+                _ => Ty::Cell(ir::CellTy::new(catalog, argument, &world.budget).unwrap()),
+            };
+            let original = wrap(&world.catalog, Ty::Bool);
+            let rebuilt = wrap(&world.catalog, Ty::Bool);
+            let changed = wrap(&world.catalog, Ty::Int(ir::IntTy::U8));
+            let foreign = wrap(&foreign_world.catalog, Ty::Bool);
+            assert!(same_input(&original, &original.clone(), &world.budget, 0).unwrap());
+            assert!(same_input(&original, &rebuilt, &world.budget, 0).unwrap());
+            assert!(!same_input(&original, &changed, &world.budget, 0).unwrap());
+            assert!(!same_input(&original, &foreign, &world.budget, 0).unwrap());
+        }
         let context = ProofContext::from_facts(&facts);
         let mut scratch = ProofScratch::default();
         let args = [Ty::Int(ir::IntTy::I32)];
@@ -443,6 +482,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: context.predicates,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         world
@@ -606,6 +646,7 @@ mod tests {
             original: None,
             source_metadata: None,
             predicates: context.predicates,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         world
@@ -741,6 +782,7 @@ mod tests {
                         original: None,
                         source_metadata: None,
                         predicates: &forged_context,
+                        executable_storage: true,
                         phase: context.phase
                     },
                     None,

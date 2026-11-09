@@ -1,7 +1,69 @@
 //! Exact associated-projection families in declaration carrier transport.
 use super::*;
 
+/// A lexical borrow of one fully replayed immutable view and its exact caller.
+/// It carries no family answers and cannot be retained in facts or scratch.
+#[derive(Clone, Copy)]
+pub(in crate::compiler) struct CarrierViewReplay<'a> {
+    view: &'a CarrierContractView,
+    facts: &'a ValidatedFacts,
+}
+
+impl<'a> CarrierViewReplay<'a> {
+    pub(in crate::compiler) fn view(&self) -> &'a CarrierContractView {
+        self.view
+    }
+    pub(in crate::compiler) fn facts(&self) -> &'a ValidatedFacts {
+        self.facts
+    }
+
+    pub(in crate::compiler) fn validate_for(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        facts.world.check_facts(facts, true)?;
+        facts.world.check_context(ProofContext::from_facts(facts))?;
+        facts.world.check_normalization_budget()?;
+        checked_module(
+            facts.budget(),
+            facts
+                .world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        if !std::ptr::eq(self.view, view)
+            || !std::ptr::eq(self.facts, facts)
+            || view.physical.is_some()
+            || view.world != facts.world.id
+            || view.registry != facts.registry_snapshot()
+            || view.environment != facts.predicates.index
+            || view.phase != facts.phase()
+            || !view.budget.same_authority(facts.budget())
+            || view.executable_storage != view.source_schema.is_none()
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "carrier replay borrow changed exact view or live caller context",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl CarrierContractView {
+    pub(in crate::compiler) fn replay_for_families<'a>(
+        &'a self,
+        facts: &'a ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierViewReplay<'a>> {
+        self.validate_for_with_scratch(facts, scratch)?;
+        Ok(CarrierViewReplay { view: self, facts })
+    }
+
     pub fn family_actual(
         &self,
         family: &ir::CarrierFamily,
@@ -16,9 +78,29 @@ impl CarrierContractView {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<Option<Ty>> {
-        self.validate_for_with_scratch(facts, scratch)?;
+        let replay = self.replay_for_families(facts, scratch)?;
+        self.family_actual_with_replay(family, facts, &replay, scratch)
+    }
+
+    pub(in crate::compiler) fn family_actual_with_replay(
+        &self,
+        family: &ir::CarrierFamily,
+        facts: &ValidatedFacts,
+        replay: &CarrierViewReplay<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Ty>> {
+        replay.validate_for(self, facts)?;
         match family {
             ir::CarrierFamily::Parameter(parameter) => {
+                if let Some(nominal) = &self.nominal {
+                    let arguments = nominal.storage_arguments(facts)?;
+                    return Ok(self
+                        .original_env
+                        .ordered_params()
+                        .position(|p| p == *parameter)
+                        .and_then(|index| arguments.get(index))
+                        .cloned());
+                }
                 Ok(self.parameter_actual(*parameter)?.map(|(_, ty)| ty.clone()))
             }
             ir::CarrierFamily::Opaque(opaque) => {
