@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--computed-operation-export NEW_DIR exports only newly computed native-link v1 operations (<=16 MiB), requires --cache-dir. No publication authority.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\nJR_GRAPH_LOCALITY=llc opts workers into one allowed shared-cache CPU domain when it fits; default placement is unchanged. Placement is best-effort, reported in JSON.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--cap-lints allow] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--computed-operation-export NEW_DIR exports only newly computed native-link v1 operations (<=16 MiB), requires --cache-dir. No publication authority.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\nJR_GRAPH_LOCALITY=llc opts workers into one allowed shared-cache CPU domain when it fits; default placement is unchanged. Placement is best-effort, reported in JSON.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -160,6 +160,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     cfg: compiler::source::CfgSet::native_x86_64_linux(),
                     cap_lints_allow: false,
                 });
+            }
+            Some("--cap-lints") => {
+                let value = args.next().ok_or("missing --cap-lints level")?;
+                // Only `allow` changes acceptance; other caps only lower
+                // error-level lints that the native compiler enforces.
+                match value.to_str() {
+                    Some("allow") => source_options.cap_lints_allow = true,
+                    _ => return Err("--cap-lints supports only `allow`".into()),
+                }
             }
             Some("--panic") => {
                 let value = args.next().ok_or("missing panic strategy")?;

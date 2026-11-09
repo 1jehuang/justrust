@@ -11583,6 +11583,8 @@ struct Parser<'input, 'names> {
     pending_regions: RegionDecls,
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
     impl_regions: RegionDecls,
+    /// While parsing an impl header, `'_` introduces a fresh impl lifetime.
+    impl_header_anonymous: Option<Option<AstIdent>>,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
@@ -11776,6 +11778,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -13291,6 +13294,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -13718,6 +13722,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -14329,6 +14334,24 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 let region = if self.eat("'static") {
                     RegionName::Static
+                } else if self.is("'_")
+                    && let Some(slot) = self.impl_header_anonymous
+                {
+                    // An impl header's `'_` is a fresh, distinct impl lifetime.
+                    if slot.is_some() {
+                        return Err(self.unsupported(
+                            "multiple anonymous lifetimes in one impl header are unsupported",
+                        ));
+                    }
+                    let ident = self.input.mint_name(&self.token(), self.names)?;
+                    self.cursor.bump();
+                    self.impl_header_anonymous = Some(Some(ident));
+                    let mut params = std::mem::take(&mut self.impl_regions.params);
+                    let reserved = self.reserve_parser_items(&mut params, 1);
+                    self.impl_regions.params = params;
+                    reserved?;
+                    self.impl_regions.params.push(ident);
+                    RegionName::Named(ident)
                 } else if self.eat("'_") {
                     RegionName::Infer
                 } else {
@@ -15781,17 +15804,30 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
-            let first_ty = self.ty()?;
-            let (trait_path, self_ty) = if self.eat("for") {
-                let path = match first_ty {
-                    Type::Named(name) => self.unapplied_trait_path(&name)?,
-                    Type::Apply(path) => path,
-                    _ => return Err(self.error("expected a trait declaration before for")),
-                };
-                self.check_trait_path(&path)?;
-                (Some(TraitPath::Source(path)), self.ty()?)
-            } else {
-                (None, first_ty)
+            self.impl_header_anonymous = Some(None);
+            let first_ty = self.ty();
+            let (trait_path, self_ty) = match first_ty {
+                Err(error) => {
+                    self.impl_header_anonymous = None;
+                    return Err(error);
+                }
+                Ok(first_ty) if self.eat("for") => {
+                    let path = match first_ty {
+                        Type::Named(name) => self.unapplied_trait_path(&name),
+                        Type::Apply(path) => Ok(path),
+                        _ => Err(self.error("expected a trait declaration before for")),
+                    };
+                    let header = path.and_then(|path| {
+                        self.check_trait_path(&path)?;
+                        Ok((Some(TraitPath::Source(path)), self.ty()?))
+                    });
+                    self.impl_header_anonymous = None;
+                    header?
+                }
+                Ok(first_ty) => {
+                    self.impl_header_anonymous = None;
+                    (None, first_ty)
+                }
             };
             if declaration_unsafety && trait_path.is_none() {
                 return Err(self.error("E0197: inherent impls cannot be unsafe"));
@@ -24800,7 +24836,7 @@ impl PlanCtx {
                 owner: info.param_env.binder(),
                 index: 0,
             });
-            let supertraits = {
+            let (supertraits, supertrait_equalities) = {
                 let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(id)?);
                 let mut rows = Vec::new();
@@ -24818,18 +24854,20 @@ impl PlanCtx {
                     if rows.len() >= tr::MAX_PREDICATES {
                         return Err("predicate environment limit exceeded".into());
                     }
-                    let application = state
-                        .source_trait_application(
-                            &self.registry,
-                            path,
-                            &self_ty,
-                            &bindings,
-                            caller,
-                            budget,
-                        )?
-                        .reject_equalities()?;
+                    let application = state.source_trait_application(
+                        &self.registry,
+                        path,
+                        &self_ty,
+                        &bindings,
+                        caller,
+                        budget,
+                    )?;
                     budget.retain_bytes(256)?;
-                    rows.try_reserve_exact(1).map_err(|_| {
+                    let count = application.equalities.len().saturating_add(1);
+                    if rows.len().saturating_add(count) > tr::MAX_PREDICATES {
+                        return Err("predicate environment limit exceeded".into());
+                    }
+                    rows.try_reserve_exact(count).map_err(|_| {
                         super::source::SourceError::from_token(
                             super::token_session::TokenError::Budget(
                                 self.registry.names.budget().poison_allocation(),
@@ -24837,9 +24875,16 @@ impl PlanCtx {
                         )
                         .to_string()
                     })?;
-                    rows.push(ir::Predicate::Implements(application));
+                    rows.push(ir::Predicate::Implements(application.trait_ref));
+                    for equality in application.equalities {
+                        rows.push(ir::Predicate::ProjectionEq {
+                            projection: equality.projection,
+                            ty: equality.ty,
+                        });
+                    }
                 }
                 budget.charge_work(rows.len())?;
+                let mut equalities = Vec::new();
                 budget.retain_bytes(
                     rows.len()
                         .checked_mul(2 * std::mem::size_of::<ir::TraitRef>())
@@ -24865,14 +24910,10 @@ impl PlanCtx {
                 for row in rows {
                     match row {
                         ir::Predicate::Implements(application) => applications.push(application),
-                        ir::Predicate::ProjectionEq { .. } => {
-                            return Err(
-                                "unsupported: associated equality in trait implications".into()
-                            );
-                        }
+                        equality @ ir::Predicate::ProjectionEq { .. } => equalities.push(equality),
                     }
                 }
-                applications
+                (applications, equalities)
             };
             traits.push(tr::TraitHeader {
                 declaration: id,
@@ -24884,6 +24925,7 @@ impl PlanCtx {
                 items: self.registry.trait_items[ti].clone().into(),
                 associated_types: self.registry.trait_associated_types[ti].clone().into(),
                 supertraits: supertraits.into(),
+                supertrait_equalities: supertrait_equalities.into(),
             });
             for declaration in &self.registry.trait_associated_types[ti] {
                 let info = self.declaration(*declaration)?;

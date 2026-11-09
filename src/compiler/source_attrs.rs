@@ -8,6 +8,10 @@ use super::source_probe::VerifiedIdentityContext;
 use std::ops::Range;
 #[path = "source_attrs/doc_metadata.rs"]
 mod doc_metadata;
+#[path = "source_attrs/lint_names.rs"]
+mod lint_names;
+#[path = "source_attrs/naming_lints.rs"]
+mod naming_lints;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttributeErrorKind {
@@ -202,6 +206,8 @@ fn prepare_with_context(
         deny_unsafe_code: false,
         unsafe_code_relaxed: false,
         cap_lints_allow,
+        levels: lint_names::Levels::default(),
+        associated_naming: true,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
@@ -243,6 +249,10 @@ struct Filter<'a> {
     deny_unsafe_code: bool,
     /// Some `allow`/`warn`/`expect(unsafe_code)` appears in the crate.
     unsafe_code_relaxed: bool,
+    /// Effective levels of the natively enforced lints at the walk position.
+    levels: lint_names::Levels,
+    /// The associated items being walked belong to a trait or inherent impl.
+    associated_naming: bool,
     /// Lints are capped at allow (registry dependency), so lint levels never
     /// change acceptance.
     cap_lints_allow: bool,
@@ -331,7 +341,52 @@ impl Filter<'_> {
                 }
                 continue;
             }
-            if matches!(level, "deny" | "forbid") && !self.cap_lints_allow {
+            if self.cap_lints_allow {
+                continue;
+            }
+            let lint = lint_names::canonical(lint);
+            let new_level = match level {
+                "forbid" => lint_names::Level::Forbid,
+                "deny" => lint_names::Level::Deny,
+                "warn" => lint_names::Level::Warn,
+                _ => lint_names::Level::Allow,
+            };
+            let members: Vec<&'static str> = match lint_names::GROUPS
+                .iter()
+                .find(|(group, _)| *group == lint)
+            {
+                Some((_, members)) => {
+                    if new_level >= lint_names::Level::Deny
+                        && members.iter().any(|m| lint_names::enforced(m).is_none())
+                    {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range.clone(),
+                            &format!(
+                                "`{level}({lint})` is unsupported: the native compiler does not check every lint in group `{lint}`"
+                            ),
+                        ));
+                    }
+                    members
+                        .iter()
+                        .filter_map(|m| lint_names::enforced(m))
+                        .collect()
+                }
+                None => lint_names::enforced(lint).into_iter().collect(),
+            };
+            if !members.is_empty() {
+                for member in members {
+                    self.levels
+                        .set(member, new_level)
+                        .map_err(|m| error(AttributeErrorKind::Syntax, meta.range.clone(), &m))?;
+                }
+                continue;
+            }
+            // Stock only warns about unknown lints, at any level.
+            if !lint_names::known(lint) {
+                continue;
+            }
+            if matches!(level, "deny" | "forbid") {
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     meta.range.clone(),
@@ -592,6 +647,8 @@ impl Filter<'_> {
                 // meaning is decided by `lint_level` like at any other owner.
                 if lint_level_attribute(&self.text[attr.content.clone()])
                     || cfg_attribute(&self.text[attr.content.clone()])
+                    || (owner == Owner::AssociatedFunction
+                        && function_hint_attribute(&self.text[attr.content.clone()]))
                 {
                     continue;
                 }
@@ -883,6 +940,11 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                // Codegen hints: `cold` only affects layout, and
+                // `track_caller` only the reported panic location on stderr.
+                "cold" | "track_caller"
+                    if matches!(owner, Owner::Function | Owner::AssociatedFunction)
+                        && matches!(meta.value, MetaValue::Word) => {}
                 // Tool attributes are inert for compilation.
                 "rustfmt" | "clippy"
                     if self.text[meta.range.clone()]
@@ -950,7 +1012,23 @@ impl Filter<'_> {
             inner.push(attr);
             i = next;
         }
-        if !self.attributes(&inner, owner, None)? {
+        let saved_levels = self.levels.clone();
+        let result = self.scope_items(start, i, end, region, owner, depth, &inner);
+        self.levels = saved_levels;
+        result
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn scope_items(
+        &mut self,
+        _start: usize,
+        mut i: usize,
+        end: usize,
+        region: Range<usize>,
+        owner: Owner,
+        depth: usize,
+        inner: &[Attr],
+    ) -> Result<(), AttributeError> {
+        if !self.attributes(inner, owner, None)? {
             self.inactive(region.clone())?;
             self.mask(region);
             return Ok(());
@@ -1033,8 +1111,32 @@ impl Filter<'_> {
                 | "static" | "type" => Owner::FreeItem,
                 _ => Owner::Unsupported,
             };
+            let saved_levels = self.levels.clone();
+            let result = self.scope_item(
+                first, item_start, keyword, kind, body, stop, &attrs, item_owner, depth,
+            );
+            self.levels = saved_levels;
+            result?;
+            i = stop;
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn scope_item(
+        &mut self,
+        first: usize,
+        item_start: usize,
+        keyword: usize,
+        kind: &str,
+        body: Option<(usize, usize)>,
+        stop: usize,
+        attrs: &[Attr],
+        item_owner: Owner,
+        depth: usize,
+    ) -> Result<(), AttributeError> {
+        {
             if !self.attributes(
-                &attrs,
+                attrs,
                 item_owner,
                 Some(self.tokens[item_start].range.start..self.tokens[stop - 1].range.end),
             )? {
@@ -1081,16 +1183,54 @@ impl Filter<'_> {
                         self.module_path.pop();
                         result?;
                     } else if matches!(kind, "impl" | "trait") {
+                        // Stock checks associated names in traits and inherent
+                        // impls only; trait impls follow the trait.
+                        let trait_impl = kind == "impl"
+                            && (keyword + 1..open).any(|t| {
+                                self.tokens[t].text(self.text) == "for"
+                                    && self.tokens.get(t + 1).map(|n| n.text(self.text))
+                                        != Some("<")
+                            });
+                        self.associated_naming = !trait_impl;
                         self.associated_function_attributes(open + 1, close)?;
                     } else if kind != "macro_rules" {
                         let fields = matches!(kind, "struct" | "enum" | "union");
                         self.reject_nested_with(open + 1, close, fields)?;
                     }
                 }
+                // Modules and associated items are checked under their own levels.
+                let naming_end = match (kind, body) {
+                    ("mod" | "impl" | "trait", Some((open, _))) => open,
+                    ("macro_rules" | "use", _) => item_start,
+                    _ => stop,
+                };
+                self.naming_lints(item_start, naming_end)?;
             }
-            i = stop;
         }
         Ok(())
+    }
+    fn naming_lints(&self, start: usize, end: usize) -> Result<(), AttributeError> {
+        let lints = naming_lints::NamingLints {
+            camel: self.levels.denied("non_camel_case_types"),
+            upper: self.levels.denied("non_upper_case_globals"),
+        };
+        if !lints.camel && !lints.upper {
+            return Ok(());
+        }
+        // Items nested in a function body may lower the level themselves;
+        // stay exact by not judging bodies that carry their own lint levels.
+        if self.tokens[start..end]
+            .iter()
+            .any(|t| matches!(t.text(self.text), "allow" | "expect" | "warn"))
+        {
+            return Err(error(
+                AttributeErrorKind::Unsupported,
+                self.tokens[start].range.clone(),
+                "nested lint levels under a denied naming lint are unsupported",
+            ));
+        }
+        naming_lints::check(self.text, &self.tokens, start, end, lints)
+            .map_err(|v| error(AttributeErrorKind::Syntax, v.range, &v.message))
     }
     fn test_attribute(&mut self, meta: &Meta) -> Result<(), AttributeError> {
         let meta = &parse_meta(&self.text[meta.range.clone()], meta.range.start)?;
@@ -1430,6 +1570,8 @@ impl Filter<'_> {
                     inline = Some(attr);
                 }
             }
+            let saved_levels = self.levels.clone();
+            let mut active = true;
             if !attrs.is_empty() {
                 let item = self.tokens[member].range.start..self.tokens[stop - 1].range.end;
                 if !self.attributes(&attrs, owner, Some(item.clone()))? {
@@ -1438,8 +1580,23 @@ impl Filter<'_> {
                     // the free-item inactive validator cannot parse `self`
                     // receivers, so only mask it here.
                     self.mask(attrs[0].range.start..self.tokens[stop - 1].range.end);
+                    active = false;
                 }
             }
+            let naming = if active && self.associated_naming {
+                self.naming_lints(member, stop)
+            } else if active {
+                // Trait impl members: the member name follows the trait, but
+                // function generic parameters and body items are checked.
+                match kind {
+                    "fn" => self.naming_lints(member, stop),
+                    _ => Ok(()),
+                }
+            } else {
+                Ok(())
+            };
+            self.levels = saved_levels;
+            naming?;
             i = stop;
         }
         Ok(())
@@ -1464,6 +1621,11 @@ fn valid_identity_metadata(meta: &Meta) -> bool {
         ("rustc_diagnostic_item", MetaValue::String(value)) => value == "convert_identity",
         _ => false,
     }
+}
+
+/// Bare `#[cold]` / `#[track_caller]` hints on a function.
+fn function_hint_attribute(content: &str) -> bool {
+    matches!(content.trim(), "cold" | "track_caller")
 }
 
 /// Lint-level attribute names (`#[allow(..)]` and friends).
@@ -2571,7 +2733,6 @@ mod tests {
             "forbid(unused_attributes)",
             "unsafe(no_mangle)",
             "export_name=\"external\"",
-            "track_caller",
         ] {
             for attrs in [
                 format!("#[inline]#[{semantic}]"),
@@ -2912,6 +3073,23 @@ mod nested_inert_tests {
         prepare(text, &CfgSet::default())
     }
 
+    #[test]
+    fn function_hints_are_admitted() {
+        for text in [
+            "#[cold] fn f() {}",
+            "#[track_caller] fn f() {}",
+            "impl S { #[track_caller] #[inline] fn f() {} #[cold] fn g(&self) {} }",
+        ] {
+            assert!(prep(text).is_ok(), "{text}");
+        }
+        for text in [
+            "#[cold] struct S;",
+            "#[track_caller(x)] fn f() {}",
+            "impl S { #[cold] const C: u8 = 0; }",
+        ] {
+            assert!(prep(text).is_err(), "{text}");
+        }
+    }
     #[test]
     fn field_docs_and_tool_attributes_are_inert() {
         for text in [

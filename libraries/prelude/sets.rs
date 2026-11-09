@@ -1,33 +1,49 @@
 //! Native HashSet, BTreeSet, VecDeque and BinaryHeap as ordinary source over
 //! a dense Vec. HashSet iteration order is unspecified, as in std.
-use super::hash::{DefaultHasher, Hash, Hasher};
+use super::hash::{BuildHasher, Hash, Hasher, RandomState};
 use super::option::Option;
 use super::vec::Vec;
 use super::cmp::{Ord, Ordering};
 
-fn hash_of<K: ?Sized + Hash>(key: &K) -> u64 {
-    let mut state = DefaultHasher::new();
+fn hash_with<K: ?Sized + Hash, S: BuildHasher>(builder: &S, key: &K) -> u64 {
+    let mut state = builder.build_hasher();
     key.hash(&mut state);
     state.finish()
 }
 
-pub struct HashSet<T> {
+pub struct HashSet<T, S = RandomState> {
     hashes: Vec<u64>,
     items: Vec<T>,
+    hash_builder: S,
 }
 
-impl<T: Hash + Eq> HashSet<T> {
-    pub fn new() -> HashSet<T> {
-        HashSet { hashes: Vec::new(), items: Vec::new() }
+impl<T: Hash + Eq> HashSet<T, RandomState> {
+    pub fn new() -> HashSet<T, RandomState> {
+        HashSet::with_hasher(RandomState::new())
     }
-    pub fn with_capacity(_capacity: usize) -> HashSet<T> {
-        HashSet::new()
+    pub fn with_capacity(_capacity: usize) -> HashSet<T, RandomState> {
+        HashSet::with_hasher(RandomState::new())
     }
+}
+
+impl<T, S> HashSet<T, S> {
+    pub fn with_hasher(hash_builder: S) -> HashSet<T, S> {
+        HashSet { hashes: Vec::new(), items: Vec::new(), hash_builder }
+    }
+    pub fn with_capacity_and_hasher(_capacity: usize, hash_builder: S) -> HashSet<T, S> {
+        HashSet::with_hasher(hash_builder)
+    }
+    pub fn hasher(&self) -> &S {
+        &self.hash_builder
+    }
+}
+
+impl<T: Hash + Eq, S: BuildHasher> HashSet<T, S> {
     fn find<Q: ?Sized + Hash + Eq>(&self, value: &Q) -> Option<usize>
     where
         T: super::borrow::Borrow<Q>,
     {
-        let h = hash_of(value);
+        let h = hash_with(&self.hash_builder, value);
         let mut i = 0usize;
         while i < self.items.len() {
             let stored: &Q = self.items.get_ref(i).borrow();
@@ -67,7 +83,7 @@ impl<T: Hash + Eq> HashSet<T> {
         }
     }
     pub fn insert(&mut self, value: T) -> bool {
-        let h = hash_of(&value);
+        let h = hash_with(&self.hash_builder, &value);
         let mut i = 0usize;
         while i < self.items.len() {
             if self.hashes[i] == h && self.items.get_ref(i).eq(&value) {
@@ -107,7 +123,7 @@ impl<T: Hash + Eq> HashSet<T> {
     pub fn iter<'a>(&'a self) -> super::slice::Iter<'a, T> {
         self.items.iter()
     }
-    fn filtered<'a>(&'a self, other: &HashSet<T>, keep_present: bool, out: &mut Vec<&'a T>) {
+    fn filtered<'a>(&'a self, other: &HashSet<T, S>, keep_present: bool, out: &mut Vec<&'a T>) {
         let mut i = 0usize;
         while i < self.items.len() {
             let item = self.items.get_ref(i);
@@ -117,30 +133,30 @@ impl<T: Hash + Eq> HashSet<T> {
             i += 1usize;
         }
     }
-    pub fn intersection<'a>(&'a self, other: &'a HashSet<T>) -> super::vec::IntoIter<&'a T> {
+    pub fn intersection<'a>(&'a self, other: &'a HashSet<T, S>) -> super::vec::IntoIter<&'a T> {
         let mut out = Vec::new();
         self.filtered(other, true, &mut out);
         out.into_iter()
     }
-    pub fn difference<'a>(&'a self, other: &'a HashSet<T>) -> super::vec::IntoIter<&'a T> {
+    pub fn difference<'a>(&'a self, other: &'a HashSet<T, S>) -> super::vec::IntoIter<&'a T> {
         let mut out = Vec::new();
         self.filtered(other, false, &mut out);
         out.into_iter()
     }
-    pub fn union<'a>(&'a self, other: &'a HashSet<T>) -> super::vec::IntoIter<&'a T> {
+    pub fn union<'a>(&'a self, other: &'a HashSet<T, S>) -> super::vec::IntoIter<&'a T> {
         let mut out = Vec::new();
         self.filtered(other, true, &mut out);
         self.filtered(other, false, &mut out);
         other.filtered(self, false, &mut out);
         out.into_iter()
     }
-    pub fn symmetric_difference<'a>(&'a self, other: &'a HashSet<T>) -> super::vec::IntoIter<&'a T> {
+    pub fn symmetric_difference<'a>(&'a self, other: &'a HashSet<T, S>) -> super::vec::IntoIter<&'a T> {
         let mut out = Vec::new();
         self.filtered(other, false, &mut out);
         other.filtered(self, false, &mut out);
         out.into_iter()
     }
-    pub fn is_subset(&self, other: &HashSet<T>) -> bool {
+    pub fn is_subset(&self, other: &HashSet<T, S>) -> bool {
         let mut i = 0usize;
         while i < self.items.len() {
             if !other.contains(self.items.get_ref(i)) {
@@ -150,10 +166,10 @@ impl<T: Hash + Eq> HashSet<T> {
         }
         true
     }
-    pub fn is_superset(&self, other: &HashSet<T>) -> bool {
+    pub fn is_superset(&self, other: &HashSet<T, S>) -> bool {
         other.is_subset(self)
     }
-    pub fn is_disjoint(&self, other: &HashSet<T>) -> bool {
+    pub fn is_disjoint(&self, other: &HashSet<T, S>) -> bool {
         let mut i = 0usize;
         while i < self.items.len() {
             if other.contains(self.items.get_ref(i)) {
@@ -176,9 +192,9 @@ impl<T: Hash + Eq> HashSet<T> {
     }
 }
 
-impl<T: Hash + Eq> super::iter::FromIterator<T> for HashSet<T> {
-    fn from_iter<I: super::iter::IntoIterator<Item = T>>(source: I) -> HashSet<T> {
-        let mut set = HashSet::new();
+impl<T: Hash + Eq, S: BuildHasher + super::default::Default> super::iter::FromIterator<T> for HashSet<T, S> {
+    fn from_iter<I: super::iter::IntoIterator<Item = T>>(source: I) -> HashSet<T, S> {
+        let mut set = HashSet::with_hasher(S::default());
         let mut iterator = source.into_iter();
         loop {
             match iterator.next() {
@@ -191,7 +207,7 @@ impl<T: Hash + Eq> super::iter::FromIterator<T> for HashSet<T> {
     }
 }
 
-impl<'a, T: Hash + Eq> super::iter::IntoIterator for &'a HashSet<T> {
+impl<'a, T: Hash + Eq, S: BuildHasher> super::iter::IntoIterator for &'a HashSet<T, S> {
     type Item = &'a T;
     type IntoIter = super::slice::Iter<'a, T>;
     fn into_iter(self) -> super::slice::Iter<'a, T> {
@@ -199,7 +215,7 @@ impl<'a, T: Hash + Eq> super::iter::IntoIterator for &'a HashSet<T> {
     }
 }
 
-impl<T> super::iter::IntoIterator for HashSet<T> {
+impl<T, S> super::iter::IntoIterator for HashSet<T, S> {
     type Item = T;
     type IntoIter = super::vec::IntoIter<T>;
     fn into_iter(self) -> super::vec::IntoIter<T> {
@@ -207,26 +223,26 @@ impl<T> super::iter::IntoIterator for HashSet<T> {
     }
 }
 
-impl<T: Hash + Eq> super::default::Default for HashSet<T> {
-    fn default() -> HashSet<T> {
-        HashSet::new()
+impl<T, S: super::default::Default> super::default::Default for HashSet<T, S> {
+    fn default() -> HashSet<T, S> {
+        HashSet::with_hasher(S::default())
     }
 }
 
-impl<T: Clone> Clone for HashSet<T> {
-    fn clone(&self) -> HashSet<T> {
-        HashSet { hashes: self.hashes.clone(), items: self.items.clone() }
+impl<T: Clone, S: Clone> Clone for HashSet<T, S> {
+    fn clone(&self) -> HashSet<T, S> {
+        HashSet { hashes: self.hashes.clone(), items: self.items.clone(), hash_builder: self.hash_builder.clone() }
     }
 }
 
-impl<T: Hash + Eq> super::cmp::PartialEq for HashSet<T> {
-    fn eq(&self, other: &HashSet<T>) -> bool {
+impl<T: Hash + Eq, S: BuildHasher> super::cmp::PartialEq for HashSet<T, S> {
+    fn eq(&self, other: &HashSet<T, S>) -> bool {
         self.len() == other.len() && self.is_subset(other)
     }
 }
-impl<T: Hash + Eq> super::cmp::Eq for HashSet<T> {}
+impl<T: Hash + Eq, S: BuildHasher> super::cmp::Eq for HashSet<T, S> {}
 
-impl<T: super::fmt::Debug> super::fmt::Debug for HashSet<T> {
+impl<T: super::fmt::Debug, S> super::fmt::Debug for HashSet<T, S> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
         let mut list = f.debug_set();
         let mut i = 0usize;
@@ -723,7 +739,7 @@ impl<T: super::fmt::Debug> super::fmt::Debug for BinaryHeap<T> {
     }
 }
 
-impl<T: Hash + Eq> super::iter::Extend<T> for HashSet<T> {
+impl<T: Hash + Eq, S: BuildHasher> super::iter::Extend<T> for HashSet<T, S> {
     fn extend<I: super::iter::IntoIterator<Item = T>>(&mut self, iter: I) {
         let mut iterator = iter.into_iter();
         loop {

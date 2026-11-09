@@ -565,6 +565,8 @@ pub struct TraitHeader {
     pub items: Arc<[DeclId]>,
     pub associated_types: Arc<[DeclId]>,
     pub supertraits: Arc<[TraitRef]>,
+    /// `trait T: U<A = X>` rows. Each projection's trait is in `supertraits`.
+    pub supertrait_equalities: Arc<[Predicate]>,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemHeader {
@@ -5440,6 +5442,31 @@ impl ValidatedTraitWorld {
             for goal in h.supertraits.iter() {
                 self.validate_ref_in(goal, &h.env, Some(h.self_param))?;
             }
+            if h.supertrait_equalities.len() > MAX_PREDICATES {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "supertrait header limit exceeded",
+                ));
+            }
+            for row in h.supertrait_equalities.iter() {
+                let Predicate::ProjectionEq { projection, .. } = row else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "supertrait equality row is not an equality",
+                    ));
+                };
+                if !h
+                    .supertraits
+                    .iter()
+                    .any(|goal| *goal == projection.trait_ref)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "supertrait equality has no matching supertrait",
+                    ));
+                }
+                self.validate_predicate_metadata(row, &h.env)?;
+            }
             if let Some(canonical) = self
                 .catalog
                 .headers()
@@ -6138,11 +6165,15 @@ impl ValidatedTraitWorld {
                 Predicate::Implements(requirement.clone()),
             )?;
         }
+        for equality in header.supertrait_equalities.iter() {
+            push(&self.budget, &mut declared, equality.clone())?;
+        }
         if declared.is_empty() {
             return Ok(declared);
         }
         // Preserve the old zero-argument path and its reference-Self behavior.
         if header.env.total_arity() == 1
+            && header.supertrait_equalities.is_empty()
             && header.supertraits.iter().all(|requirement| {
                 matches!(requirement.self_ty, Ty::Param(p) if p == header.self_param)
                     && requirement.args.is_empty()
@@ -13271,6 +13302,7 @@ mod tests {
                     items: Arc::from([]),
                     associated_types: Arc::from([]),
                     supertraits: Arc::from([]),
+                    supertrait_equalities: Arc::from([]),
                 },
                 TraitHeader {
                     declaration: id(2),
@@ -13282,6 +13314,7 @@ mod tests {
                     items: Arc::from([id(3)]),
                     associated_types: Arc::from([]),
                     supertraits: Arc::from([]),
+                    supertrait_equalities: Arc::from([]),
                 },
             ]),
             items: Arc::from([TraitItemHeader {

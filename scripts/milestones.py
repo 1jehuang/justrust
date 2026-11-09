@@ -220,13 +220,13 @@ def eval_ui_one(jr, path, work):
     stock = stock_ui(path, work)
     exe = work / ("jr-" + hashlib.sha1(rel.encode()).hexdigest()[:12])
     if stock["kind"] == "run" and stock["accept"]:
-        c, _, err = run([jr, path, "-o", exe])
+        c, _, err = run([jr, path, "--cap-lints", "allow", "-o", exe])
         if c != 0:
             return rel, False, "compile: " + first_error(err), True
         rc, out, _ = run([exe], timeout=30)
         ok = rc == stock["exit"] and out.decode(errors="replace") == stock["stdout"]
         return rel, ok, "" if ok else "wrong run result (miscompile)", True
-    c, _, err = run([jr, path, "--check"])
+    c, _, err = run([jr, path, "--cap-lints", "allow", "--check"])
     if (c == 0) == stock["accept"]:
         return rel, True, "", stock["accept"]
     if stock["accept"]:
