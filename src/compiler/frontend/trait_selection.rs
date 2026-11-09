@@ -700,6 +700,36 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
         scratch: &mut tr::TraitScratch,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.lookup_associated_with_nominals(
+            owner,
+            name,
+            method_args,
+            caller,
+            module,
+            dot,
+            filter,
+            traits_only,
+            budget,
+            &[],
+            scratch,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lookup_associated_with_nominals(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        dot: bool,
+        filter: Option<ReceiverKind>,
+        traits_only: bool,
+        budget: &ir::PlanBudget,
+        nominals: &[ir::Ty],
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         self.program
             .modules
@@ -729,17 +759,9 @@ impl PlanCtx {
             }
             let impl_env = self.param_env(associated.impl_decl)?;
             let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
-            let mut bindings = HashMap::new();
-            if !match_impl_type(
-                &associated.self_pattern,
-                owner,
-                &impl_env,
-                &mut bindings,
-                budget,
-                0,
-            )? {
+            let Some(bindings) = self.match_inherent_head(*id, owner, caller, budget)? else {
                 continue;
-            }
+            };
             if selected.is_some() {
                 return Err("ambiguous inherent associated item".into());
             }
@@ -774,13 +796,22 @@ impl PlanCtx {
                 declaration: *id,
                 type_args: args.into(),
             };
-            let signature = self.instantiate_signature(&target, caller, budget)?;
             let ir::FactsCtx::Validated(facts) = caller else {
                 return Err("associated call requires validated facts".into());
             };
+            let signature = if nominals.is_empty() {
+                self.instantiate_signature(&target, caller, budget)?
+            } else {
+                facts
+                    .service()
+                    .discharge_direct_with_nominals(&target, facts, nominals, scratch)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                    .signature()
+                    .clone()
+            };
             let proof = facts
                 .service()
-                .discharge_direct_with(&target, facts, scratch)
+                .discharge_direct_with_nominals(&target, facts, nominals, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
             if !facts
                 .world()
@@ -803,7 +834,7 @@ impl PlanCtx {
             .method_trait_candidates(owner, name, caller, module, budget)?
             .as_slice()
         {
-            if let Some(call) = self.select_trait_filtered_with_scratch(
+            if let Some(call) = self.select_trait_filtered_with_nominals(
                 application,
                 name,
                 method_args,
@@ -811,6 +842,7 @@ impl PlanCtx {
                 dot,
                 filter,
                 budget,
+                nominals,
                 scratch,
             )? {
                 // Selection may return a concrete implementation target instead
@@ -1037,6 +1069,32 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
         scratch: &mut tr::TraitScratch,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.select_trait_filtered_with_nominals(
+            trait_ref,
+            name,
+            method_args,
+            caller,
+            dot,
+            filter,
+            budget,
+            &[],
+            scratch,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_trait_filtered_with_nominals(
+        &self,
+        trait_ref: &ir::TraitRef,
+        name: &AstIdent,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        dot: bool,
+        filter: Option<ReceiverKind>,
+        budget: &ir::PlanBudget,
+        nominals: &[ir::Ty],
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         for argument in method_args {
             budget.charge_work(1)?;
@@ -1072,9 +1130,10 @@ impl PlanCtx {
         };
         match facts
             .service()
-            .prove_goal_with(
+            .prove_goal_with_nominals(
                 &ir::Predicate::Implements(call.trait_ref.clone()),
                 facts,
+                nominals,
                 scratch,
             )
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
@@ -1084,7 +1143,7 @@ impl PlanCtx {
         }
         let signature = facts
             .service()
-            .instantiate_trait_signature_with(&call, facts, scratch)
+            .instantiate_trait_signature_with_nominals(&call, facts, nominals, scratch)
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
         let receiver = self.declaration(item)?.receiver;
         if dot && receiver == ReceiverKind::None {

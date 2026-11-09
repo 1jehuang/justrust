@@ -2958,6 +2958,17 @@ fn validate_original_callee(
     actual: &ir::Callee,
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
+    validate_original_callee_with(original, actual, budget, |a, b| {
+        replay_type_equal(a, b, budget)
+    })
+}
+
+fn validate_original_callee_with(
+    original: &ir::Callee,
+    actual: &ir::Callee,
+    budget: &ir::PlanBudget,
+    mut equal: impl FnMut(&ir::Ty, &ir::Ty) -> Result<bool, FactsError>,
+) -> Result<(), FactsError> {
     sr::work(budget, 1)?;
     let role = match (original, actual) {
         (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
@@ -2988,7 +2999,7 @@ fn validate_original_callee(
         match (left.next(), right.next()) {
             (None, None) => break,
             (Some(a), Some(b)) => {
-                if !replay_type_equal(a, b, budget)? {
+                if !equal(a, b)? {
                     return Err(FactsError::invalid(
                         budget,
                         "original solved call actual changed",
@@ -22694,6 +22705,7 @@ struct PlanState {
     source_context: Option<SourceTypeContext>,
     default_expansions: Vec<(ir::DeclId, usize)>,
     source_metadata: nominal_schema::SourceMetadataCache,
+    parent_local_replays: type_check::nominal_inputs::parent_local::ParentLocalReplayMemo,
     /// Unpublished source-construction obligations, discharged before returning
     /// the outermost completed application. Never retained in PlanCtx/facts.
     deferred_carriers: Vec<ir::Ty>,
@@ -22710,6 +22722,7 @@ impl PlanState {
             source_context: None,
             default_expansions: Vec::new(),
             source_metadata: nominal_schema::SourceMetadataCache::default(),
+            parent_local_replays: Default::default(),
             deferred_carriers: Vec::new(),
             schemas: schemas.clone(),
             nominals: NominalInterner {
@@ -24226,9 +24239,7 @@ impl PlanCtx {
                 // Trait impls may target reference types (`impl Tr for &T`).
                 block.trait_path.is_some(),
             )?;
-            if raw_type_has_projection(&self_ty, budget, 0)? {
-                return Err("unsupported: projection-bearing impl heads".into());
-            }
+            impl_storage::authenticate(&mut state, &registry, &self_ty, caller, budget)?;
             let nominal = match &self_ty {
                 ir::Ty::Struct(t) => t.def().source_decl,
                 ir::Ty::Enum(t) => t.def().source_decl,
@@ -24979,7 +24990,7 @@ impl PlanCtx {
             } else {
                 ir::FactsCtx::Concrete
             };
-            let self_ty = self.source_ty(&block.self_ty, &bindings, caller, budget)?;
+            let self_ty = impl_storage::source_header(self, bi, budget)?;
             bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
             let mut predicates = Vec::new();
             append_implicit_sized(&self.registry, &info.env, &mut predicates, budget)?;
@@ -25610,6 +25621,25 @@ impl PlanCtx {
         };
         caller.validate_ty_metadata_with_budget(&out, budget)?;
         Ok(out)
+    }
+    pub(super) fn source_inference_signature(
+        &self,
+        target: &ir::CallTarget,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Signature, String> {
+        self.check_budget(budget)?;
+        if let Some(facts) = caller.validated() {
+            if !facts.budget().same_authority(budget)
+                || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+            {
+                return Err("source inference changed caller world or budget authority".into());
+            }
+            return facts
+                .source_direct_call_signature_with_scratch(target, &mut tr::TraitScratch::default())
+                .map_err(|error| error.into_legacy_diagnostic(budget));
+        }
+        self.instantiate_signature(target, caller, budget)
     }
     pub fn instantiate_signature(
         &self,
@@ -26285,6 +26315,107 @@ impl SchemaAdapter {
         tr::FactsError::from_message(&self.budget, &e)
     }
 }
+impl SchemaAdapter {
+    fn instantiate_source_schema(
+        &self,
+        schema: &tr::GenericSchema,
+        args: &[ir::Ty],
+        caller: &ir::GenericEnv,
+        checked: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+        metadata_scratch: &mut tr::TraitScratch,
+    ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
+        if !budget.same_authority(&self.budget) {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "schema budget authority mismatch",
+            ));
+        }
+        budget
+            .retain_bytes(256 + schema.signature.params.len() * 128 + schema.predicates.len() * 256)
+            .map_err(|e| self.error(e))?;
+        let mut cx = nominal_schema::SourceSchemaSubstitution::new(
+            self.raw_plan().map_err(|e| self.error(e))?,
+        );
+        let facts = match checked {
+            Some(facts) => ir::FactsCtx::Validated(facts),
+            None => ir::FactsCtx::Universal(caller),
+        };
+        let mut schema_only_item = false;
+        for scope in schema.env.scopes() {
+            budget.charge_work(1).map_err(|e| self.error(e))?;
+            let declaration = self
+                .registry
+                .declaration(scope.binder().declaration)
+                .map_err(|e| self.error(e))?;
+            schema_only_item |= declaration.kind == ir::DeclKind::TraitItem;
+        }
+        let mut projection_actuals = false;
+        for argument in args {
+            projection_actuals |= ir::contains_associated_types(argument, budget)
+                .map_err(|error| self.error(error))?;
+        }
+        let mut sub = |ty: &ir::Ty| {
+            // This adapter produces structural schema metadata. A checked
+            // invocation validates its storage receipts here, but normalization
+            // must remain in the world, where its explicit remint inputs live.
+            if projection_actuals || checked.is_some() {
+                ir::substitute_schema_metadata_ty_scratch(
+                    ty,
+                    &schema.env,
+                    args,
+                    facts,
+                    &mut cx,
+                    self,
+                    budget,
+                    metadata_scratch,
+                )
+            } else if schema_only_item {
+                ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
+            } else {
+                ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
+            }
+            .map_err(|e| self.error(e))
+        };
+        let params = schema
+            .signature
+            .params
+            .iter()
+            .map(&mut sub)
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = sub(&schema.signature.result)?;
+        let mut predicates = Vec::new();
+        for row in schema.predicates.iter() {
+            let r = row.trait_ref();
+            let self_ty = sub(&r.self_ty)?;
+            let args = r.args.iter().map(&mut sub).collect::<Result<Vec<_>, _>>()?;
+            let trait_ref = ir::TraitRef {
+                declaration: r.declaration,
+                self_ty,
+                args: args.into(),
+            };
+            predicates.push(match row {
+                ir::Predicate::Implements(_) => ir::Predicate::Implements(trait_ref),
+                ir::Predicate::ProjectionEq { projection, ty } => ir::Predicate::ProjectionEq {
+                    projection: ir::AssociatedTypeProjection {
+                        trait_ref,
+                        item: projection.item,
+                    },
+                    ty: sub(ty)?,
+                },
+            });
+        }
+        Ok(tr::InstantiatedSchema {
+            signature: ir::Signature {
+                params,
+                result,
+                ref_contract: schema.signature.ref_contract.clone(),
+            },
+            predicates: predicates.into(),
+        })
+    }
+}
+
 impl tr::SchemaCx for SchemaAdapter {
     fn native_box_application(
         &self,
@@ -26314,9 +26445,7 @@ impl tr::SchemaCx for SchemaAdapter {
             .map_err(|e| self.error(e))?;
         Ok(Some(Box::new(SourceNominalValidationSession {
             adapter: self.clone(),
-            state: self.scratch(),
-            context: None,
-            validated: Vec::new(),
+            arenas: Vec::new(),
             _storage: storage,
         })))
     }
@@ -26733,85 +26862,40 @@ impl tr::SchemaCx for SchemaAdapter {
         caller: &ir::GenericEnv,
         budget: &ir::PlanBudget,
     ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
-        if !budget.same_authority(&self.budget) {
-            return Err(tr::FactsError::invalid(
-                budget,
-                "schema budget authority mismatch",
-            ));
-        }
-        budget
-            .retain_bytes(256 + schema.signature.params.len() * 128 + schema.predicates.len() * 256)
-            .map_err(|e| self.error(e))?;
-        let mut cx = self.raw_plan().map_err(|e| self.error(e))?;
-        let facts = ir::FactsCtx::Universal(caller);
-        let mut schema_only_item = false;
-        for scope in schema.env.scopes() {
-            budget.charge_work(1).map_err(|e| self.error(e))?;
-            let declaration = self
-                .registry
-                .declaration(scope.binder().declaration)
-                .map_err(|e| self.error(e))?;
-            schema_only_item |= declaration.kind == ir::DeclKind::TraitItem;
-        }
-        let mut projection_actuals = false;
-        for argument in args {
-            projection_actuals |= ir::contains_associated_types(argument, budget)
-                .map_err(|error| self.error(error))?;
-        }
-        let mut sub = |ty: &ir::Ty| {
-            if projection_actuals {
-                ir::substitute_schema_metadata_ty(
-                    ty,
-                    &schema.env,
-                    args,
-                    facts,
-                    &mut cx,
-                    self,
-                    budget,
-                )
-            } else if schema_only_item {
-                ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
-            } else {
-                ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
-            }
-            .map_err(|e| self.error(e))
-        };
-        let params = schema
-            .signature
-            .params
-            .iter()
-            .map(&mut sub)
-            .collect::<Result<Vec<_>, _>>()?;
-        let result = sub(&schema.signature.result)?;
-        let mut predicates = Vec::new();
-        for row in schema.predicates.iter() {
-            let r = row.trait_ref();
-            let self_ty = sub(&r.self_ty)?;
-            let args = r.args.iter().map(&mut sub).collect::<Result<Vec<_>, _>>()?;
-            let trait_ref = ir::TraitRef {
-                declaration: r.declaration,
-                self_ty,
-                args: args.into(),
-            };
-            predicates.push(match row {
-                ir::Predicate::Implements(_) => ir::Predicate::Implements(trait_ref),
-                ir::Predicate::ProjectionEq { projection, ty } => ir::Predicate::ProjectionEq {
-                    projection: ir::AssociatedTypeProjection {
-                        trait_ref,
-                        item: projection.item,
-                    },
-                    ty: sub(ty)?,
-                },
-            });
-        }
-        Ok(tr::InstantiatedSchema {
-            signature: ir::Signature {
-                params,
-                result,
-                ref_contract: schema.signature.ref_contract.clone(),
-            },
-            predicates: predicates.into(),
-        })
+        self.instantiate_source_schema(
+            schema,
+            args,
+            caller,
+            None,
+            budget,
+            &mut tr::TraitScratch::default(),
+        )
+    }
+    fn instantiate_schema_with_facts(
+        &self,
+        schema: &tr::GenericSchema,
+        args: &[ir::Ty],
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
+        self.instantiate_source_schema(
+            schema,
+            args,
+            facts.env(),
+            Some(facts),
+            budget,
+            &mut tr::TraitScratch::default(),
+        )
+    }
+    fn instantiate_schema_with_facts_scratch(
+        &self,
+        schema: &tr::GenericSchema,
+        args: &[ir::Ty],
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
+        self.instantiate_source_schema(schema, args, facts.env(), Some(facts), budget, scratch)
     }
     /// Remint `original`'s source declaration with normalized actuals
     /// through the canonical interner, never reusing the original identity.
@@ -26847,6 +26931,32 @@ impl tr::SchemaCx for SchemaAdapter {
         self.scratch()
             .intern(&self.registry, declaration, arguments, caller, budget, 0)
             .map_err(|e| self.error(e))
+    }
+    fn reapply_nominal_with_facts(
+        &self,
+        original: &ir::Ty,
+        arguments: &[ir::Ty],
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, tr::FactsError> {
+        tr::SchemaCx::validate_nominal_with_facts(self, original, facts, budget)?;
+        let declaration = match original {
+            ir::Ty::Struct(value) => value.def().source_decl,
+            ir::Ty::Enum(value) => value.def().source_decl,
+            _ => {
+                return Err(
+                    self.error("nominal reapplication requires a nominal application".into())
+                );
+            }
+        };
+        let caller = if facts.env().total_arity() == 0 {
+            ir::FactsCtx::Concrete
+        } else {
+            ir::FactsCtx::Universal(facts.env())
+        };
+        self.scratch()
+            .intern(&self.registry, declaration, arguments, caller, budget, 0)
+            .map_err(|error| self.error(error))
     }
     fn nominal_declaration_schema(
         &self,
@@ -26954,6 +27064,49 @@ impl SchemaAdapter {
                 _ => None,
             };
             if let Some((id, pointer)) = nominal {
+                if let ir::NominalIndex::ParentLocal { owner, .. } = id.index {
+                    if id.snapshot != cx.registry.declarations[0].id.snapshot
+                        || owner.snapshot != id.snapshot
+                        || cx.registry.declaration(owner)?.kind != ir::DeclKind::Function
+                    {
+                        return Err("foreign parent-local nominal".into());
+                    }
+                    let (declaration, receipt) = match ty {
+                        ir::Ty::Struct(value) => {
+                            (value.def().source_decl, value.parent_local_receipt())
+                        }
+                        ir::Ty::Enum(value) => {
+                            (value.def().source_decl, value.parent_local_receipt())
+                        }
+                        _ => return Err("parent-local nominal changed kind".into()),
+                    };
+                    let info = cx.registry.declaration(declaration)?;
+                    if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum) {
+                        return Err("parent-local source declaration changed kind".into());
+                    }
+                    let symbolic = symbolic_args(&info.param_env, b)?;
+                    let original = state.intern(
+                        &cx.registry,
+                        declaration,
+                        &symbolic,
+                        ir::FactsCtx::Universal(&info.env),
+                        b,
+                        depth + 1,
+                    )?;
+                    let receipt = receipt.ok_or("unreceipted parent-local storage")?;
+                    if receipt.declaration() != declaration {
+                        return Err("parent-local source receipt changed declaration".into());
+                    }
+                    state.parent_local_replays.replay(
+                        receipt,
+                        ty,
+                        &original,
+                        facts.ok_or(
+                            "parent-local source receipt requires current validated facts",
+                        )?,
+                        b,
+                    )?;
+                }
                 // Only an already authenticated immutable definition allocation
                 // can skip replay. Equal IDs on a different payload still replay.
                 if let Some(height) = memo.get(&(id, pointer), b)? {
@@ -27154,25 +27307,120 @@ impl SchemaAdapter {
 /// replay; a different payload is always authenticated, even with an equal ID.
 struct SourceNominalValidationSession {
     adapter: SchemaAdapter,
+    arenas: Vec<SourceNominalValidationArena>,
+    _storage: ir::PlanReservation,
+}
+struct SourceNominalValidationArena {
     state: PlanState,
-    context: Option<(ir::GenericEnv, Option<tr::ValidatedFacts>)>,
+    context: (ir::GenericEnv, Option<tr::SourceNominalContext>),
     validated: Vec<(ir::Ty, ir::PlanReservation)>,
     _storage: ir::PlanReservation,
 }
-impl tr::NominalValidationSession for SourceNominalValidationSession {
-    fn validate_node(
+impl SourceNominalValidationArena {
+    fn new(
+        adapter: &SchemaAdapter,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, tr::FactsError> {
+        let storage = budget
+            .reserve_bytes(2 * std::mem::size_of::<Self>())
+            .map_err(|error| adapter.error(error))?;
+        Ok(Self {
+            state: adapter.scratch(),
+            context: (
+                env.clone(),
+                facts.map(tr::SourceNominalContext::retain).transpose()?,
+            ),
+            validated: Vec::new(),
+            _storage: storage,
+        })
+    }
+    fn matches(
+        &self,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+    ) -> Result<bool, tr::FactsError> {
+        if !std::ptr::eq(self.context.0.scopes(), env.scopes())
+            || !std::ptr::eq(self.context.0.const_binders(), env.const_binders())
+        {
+            return Ok(false);
+        }
+        match (self.context.1.as_ref(), facts) {
+            (None, None) => Ok(true),
+            (Some(previous), Some(current)) => previous.matches(current),
+            _ => Ok(false),
+        }
+    }
+    fn validate(
         &mut self,
+        adapter: &SchemaAdapter,
         ty: &ir::Ty,
         env: &ir::GenericEnv,
         facts: Option<&tr::ValidatedFacts>,
         budget: &ir::PlanBudget,
     ) -> Result<(), tr::FactsError> {
+        for (previous, _) in &self.validated {
+            budget
+                .charge_work(1)
+                .map_err(|error| adapter.error(error))?;
+            if tr::schema_instantiation::same_inputs(
+                std::slice::from_ref(previous),
+                std::slice::from_ref(ty),
+                budget,
+                0,
+            )? {
+                return Ok(());
+            }
+        }
+        adapter.validate_nominal_tree_in(ty, env, budget, false, facts, &mut self.state)?;
+        if matches!(ty, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
+            let storage = budget
+                .reserve_bytes(2 * std::mem::size_of::<(ir::Ty, ir::PlanReservation)>())
+                .map_err(|error| adapter.error(error))?;
+            budget
+                .charge_work(self.validated.len())
+                .map_err(|error| adapter.error(error))?;
+            self.validated.try_reserve_exact(1).map_err(|_| {
+                adapter.error("infrastructure: nominal validation input retention failed".into())
+            })?;
+            if self.validated.capacity() > 2 * (self.validated.len() + 1) {
+                return Err(adapter
+                    .error("nominal validation input allocation exceeded reservation".into()));
+            }
+            self.validated.push((ty.clone(), storage));
+        }
+        Ok(())
+    }
+}
+impl SourceNominalValidationSession {
+    fn with_arena<T>(
+        &mut self,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+        operation: impl FnOnce(
+            &SchemaAdapter,
+            &mut SourceNominalValidationArena,
+        ) -> Result<T, tr::FactsError>,
+    ) -> Result<T, tr::FactsError> {
         if !budget.same_authority(&self.adapter.budget) {
             return Err(tr::FactsError::invalid(
                 budget,
                 "nominal session budget authority mismatch",
             ));
         }
+        self.adapter
+            .catalog
+            .modules()
+            .budget()
+            .check()
+            .map_err(|_| {
+                tr::FactsError::resource(
+                    budget,
+                    "source nominal session module authority resource boundary",
+                )
+            })?;
         if let Some(facts) = facts
             && (!facts.budget().same_authority(budget)
                 || facts.registry_snapshot() != self.adapter.registry.declarations[0].id.snapshot)
@@ -27185,62 +27433,106 @@ impl tr::NominalValidationSession for SourceNominalValidationSession {
         budget
             .charge_work(1)
             .map_err(|error| self.adapter.error(error))?;
-        let same_context = self
-            .context
-            .as_ref()
-            .is_some_and(|(previous_env, previous)| {
-                std::ptr::eq(previous_env.scopes(), env.scopes())
-                    && match (previous.as_ref(), facts) {
-                        (None, None) => true,
-                        (Some(previous), Some(current)) => {
-                            Arc::ptr_eq(previous.world(), current.world())
-                                && Arc::ptr_eq(previous.predicates(), current.predicates())
-                                && previous.phase() == current.phase()
-                                && previous.declaration() == current.declaration()
-                                && previous.target() == current.target()
-                        }
-                        _ => false,
-                    }
-            });
-        if !same_context {
-            self.validated = Vec::new();
-            self.state = self.adapter.scratch();
-            self.context = Some((env.clone(), facts.cloned()));
-        }
-        for (previous, _) in &self.validated {
+        for arena in &mut self.arenas {
             budget
                 .charge_work(1)
                 .map_err(|error| self.adapter.error(error))?;
-            let same = match (previous, ty) {
-                (ir::Ty::Struct(a), ir::Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
-                (ir::Ty::Enum(a), ir::Ty::Enum(b)) => std::ptr::eq(a.def(), b.def()),
-                _ => false,
+            if arena.matches(env, facts)? {
+                return operation(&self.adapter, arena);
+            }
+        }
+        let mut arena = SourceNominalValidationArena::new(&self.adapter, env, facts, budget)?;
+        let result = operation(&self.adapter, &mut arena)?;
+        // Saturation only declines caching. No caller's successes are retagged.
+        if self.arenas.len() >= budget.limits().applications {
+            return Ok(result);
+        }
+        self.arenas.try_reserve_exact(1).map_err(|_| {
+            self.adapter
+                .error("infrastructure: nominal session arena allocation failed".into())
+        })?;
+        if self.arenas.capacity() > 2 * (self.arenas.len() + 1) {
+            return Err(self
+                .adapter
+                .error("nominal session arena exceeded reservation".into()));
+        }
+        self.arenas.push(arena);
+        Ok(result)
+    }
+}
+impl tr::NominalValidationSession for SourceNominalValidationSession {
+    fn replay_node(
+        &mut self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        self.with_arena(env, facts, budget, |adapter, arena| {
+            adapter.validate_nominal_tree_in(ty, env, budget, false, facts, &mut arena.state)
+        })
+    }
+    fn validate_node(
+        &mut self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        self.with_arena(env, facts, budget, |adapter, arena| {
+            arena.validate(adapter, ty, env, facts, budget)
+        })
+    }
+    fn validate_full(
+        &mut self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<bool, tr::FactsError> {
+        self.with_arena(env, facts, budget, |adapter, arena| {
+            // No full-validation verdict cache: recursive payload, source
+            // receipts and ordered actuals are rechecked on every invocation.
+            adapter.validate_nominal_tree_in(ty, env, budget, true, facts, &mut arena.state)?;
+            Ok(true)
+        })
+    }
+    fn reapply(
+        &mut self,
+        original: &ir::Ty,
+        arguments: &[ir::Ty],
+        env: &ir::GenericEnv,
+        facts: Option<&tr::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<ir::Ty>, tr::FactsError> {
+        self.with_arena(env, facts, budget, |adapter, arena| {
+            adapter.validate_nominal_tree_in(
+                original,
+                env,
+                budget,
+                true,
+                facts,
+                &mut arena.state,
+            )?;
+            let declaration = match original {
+                ir::Ty::Struct(value) => value.def().source_decl,
+                ir::Ty::Enum(value) => value.def().source_decl,
+                _ => {
+                    return Err(adapter
+                        .error("nominal reapplication requires a nominal application".into()));
+                }
             };
-            if same {
-                return Ok(());
-            }
-        }
-        self.adapter
-            .validate_nominal_tree_in(ty, env, budget, false, facts, &mut self.state)?;
-        if matches!(ty, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
-            let storage = budget
-                .reserve_bytes(2 * std::mem::size_of::<(ir::Ty, ir::PlanReservation)>())
-                .map_err(|error| self.adapter.error(error))?;
-            budget
-                .charge_work(self.validated.len())
-                .map_err(|error| self.adapter.error(error))?;
-            self.validated.try_reserve_exact(1).map_err(|_| {
-                self.adapter
-                    .error("infrastructure: nominal validation input retention failed".into())
-            })?;
-            if self.validated.capacity() > 2 * (self.validated.len() + 1) {
-                return Err(self
-                    .adapter
-                    .error("nominal validation input allocation exceeded reservation".into()));
-            }
-            self.validated.push((ty.clone(), storage));
-        }
-        Ok(())
+            let caller = if env.total_arity() == 0 {
+                ir::FactsCtx::Concrete
+            } else {
+                ir::FactsCtx::Universal(env)
+            };
+            arena
+                .state
+                .intern(&adapter.registry, declaration, arguments, caller, budget, 0)
+                .map(Some)
+                .map_err(|error| adapter.error(error))
+        })
     }
 }
 fn raw_type_has_projection(
@@ -28409,6 +28701,7 @@ pub(in crate::compiler) use native_sequence::NativeElementRole;
 pub use native_sequence::{
     NativeElementSource, NativeEmptySource, NativeSequenceSlot, NativeSequenceSwap,
 };
+mod impl_storage;
 mod nominal_declarations;
 mod nominal_realization;
 mod nominal_schema;
@@ -28416,6 +28709,7 @@ pub(in crate::compiler) use native_sequence::NativeSequenceBinding;
 mod nominal_source_shapes;
 /// One immutable per-body view with a shared canonical application service.
 mod type_check;
+pub(in crate::compiler) use type_check::nominal_inputs::parent_local::ParentLocalReceipt;
 use type_check::*;
 pub(in crate::compiler) use type_check::{
     NominalCallableOutput, NominalDeclarationFields, NominalDeclarationRecipe, NominalDemand,
@@ -28958,6 +29252,7 @@ mod registry_resource_tests {
             budget: budget.clone(),
         };
         let env = ir::GenericEnv::new(&[], &budget).unwrap();
+        let alternate_env = ir::GenericEnv::new(&[], &budget).unwrap();
         let baseline = budget.usage_snapshot().bytes;
         let mut session = adapter.nominal_validation_session().unwrap().unwrap();
         let before = budget.usage_snapshot().work;
@@ -28970,8 +29265,90 @@ mod registry_resource_tests {
             warm < cold,
             "canonical reconstruction was not reused: {warm}/{cold}"
         );
+        session
+            .validate_node(&ty, &alternate_env, None, &budget)
+            .unwrap();
+        let before = budget.usage_snapshot().work;
+        session.validate_node(&ty, &env, None, &budget).unwrap();
+        let resumed = budget.usage_snapshot().work - before;
+        assert!(
+            resumed < cold,
+            "A/B/A discarded A's canonical arena: {resumed}/{cold}"
+        );
         drop(session);
         assert_eq!(budget.usage_snapshot().bytes, baseline);
+        {
+            let mut full = adapter.nominal_validation_session().unwrap().unwrap();
+            let before = budget.usage_snapshot().work;
+            assert!(full.validate_full(&ty, &env, None, &budget).unwrap());
+            let cold = budget.usage_snapshot().work - before;
+            let before = budget.usage_snapshot().work;
+            assert!(full.validate_full(&ty, &env, None, &budget).unwrap());
+            let warm = budget.usage_snapshot().work - before;
+            assert!(
+                warm < cold,
+                "full reconstruction did not reuse construction state: {warm}/{cold}"
+            );
+            let result = full
+                .reapply(&ty, &[ir::Ty::Bool], &env, None, &budget)
+                .unwrap()
+                .unwrap();
+            let ir::Ty::Struct(result) = result else {
+                panic!("reapplication changed kind")
+            };
+            assert_eq!(result.def().source_decl, base.def().source_decl);
+            assert_eq!(&*result.def().type_args, &[ir::Ty::Bool]);
+            assert!(full.reapply(&ty, &[], &env, None, &budget).is_err());
+        }
+        let first = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let second = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
+        let retained = tr::SourceNominalContext::retain(&first).unwrap();
+        assert!(retained.matches(&first).unwrap());
+        assert!(!retained.matches(&second).unwrap());
+        let mut checked = adapter.nominal_validation_session().unwrap().unwrap();
+        checked
+            .validate_node(&ty, first.env(), Some(&first), &budget)
+            .unwrap();
+        checked
+            .validate_node(&ty, second.env(), Some(&second), &budget)
+            .unwrap();
+        checked.validate_node(&ty, &env, None, &budget).unwrap();
+        checked
+            .validate_node(&ty, first.env(), Some(&first), &budget)
+            .unwrap();
+        let foreign_program = parse("fn other(){}fn main(){}").unwrap();
+        let foreign_plan = PlanCtx::from_program(&foreign_program, &budget).unwrap();
+        let foreign_facts = foreign_plan
+            .callable_facts(foreign_plan.function_decl(0).unwrap())
+            .unwrap();
+        assert!(
+            checked
+                .validate_node(&ty, foreign_facts.env(), Some(&foreign_facts), &budget)
+                .is_err()
+        );
+        assert!(
+            checked
+                .validate_full(&ty, first.env(), Some(&first), &budget)
+                .unwrap()
+        );
+        assert!(checked.validate_full(&ty, &env, None, &budget).unwrap());
+        assert!(
+            checked
+                .validate_full(&ty, foreign_facts.env(), Some(&foreign_facts), &budget)
+                .is_err()
+        );
+        assert!(
+            checked
+                .reapply(
+                    &ty,
+                    &[ir::Ty::Bool],
+                    foreign_facts.env(),
+                    Some(&foreign_facts),
+                    &budget
+                )
+                .is_err()
+        );
+        drop(checked);
         let mut session = adapter.nominal_validation_session().unwrap().unwrap();
         let ir::Ty::Struct(valid) = &ty else {
             unreachable!()
@@ -28981,10 +29358,34 @@ mod registry_resource_tests {
         let forged = ir::Ty::Struct(ir::StructTy::new(definition));
         session.validate_node(&ty, &env, None, &budget).unwrap();
         assert!(session.validate_node(&forged, &env, None, &budget).is_err());
+        assert!(session.validate_full(&ty, &env, None, &budget).unwrap());
+        assert!(session.validate_full(&forged, &env, None, &budget).is_err());
+        assert!(
+            session
+                .reapply(&forged, &[ir::Ty::Bool], &env, None, &budget)
+                .is_err()
+        );
         drop(session);
         let foreign = ir::PlanBudget::default();
         let mut session = adapter.nominal_validation_session().unwrap().unwrap();
         assert!(session.validate_node(&ty, &env, None, &foreign).is_err());
+        session.validate_node(&ty, &env, None, &budget).unwrap();
+        let modules = adapter.catalog.modules().budget();
+        let counter = crate::compiler::expansion_budget::Counter::Work;
+        assert!(
+            modules
+                .charge(counter, modules.limits().counters[counter as usize])
+                .is_err()
+        );
+        assert!(
+            matches!(session.validate_node(&ty, &env, None, &budget), Err(error) if error.is_resource())
+        );
+        assert!(
+            matches!(session.validate_full(&ty, &env, None, &budget), Err(error) if error.is_resource())
+        );
+        assert!(
+            matches!(session.reapply(&ty, &[ir::Ty::Bool], &env, None, &budget), Err(error) if error.is_resource())
+        );
     }
 
     #[test]

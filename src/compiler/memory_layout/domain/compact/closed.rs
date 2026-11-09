@@ -133,6 +133,7 @@ impl Method {
             return Err("opaque source invocation changed own method arity".into());
         }
         let mut required = self.closed.clone();
+        let mut cleanup_scratch = traits::TraitScratch::default();
         for (slot, actual) in actuals.iter().enumerate() {
             budget.charge_work(1)?;
             if self.own.parameters[slot] {
@@ -142,7 +143,15 @@ impl Method {
                 super::super::normalize_raw_pointee(actual, &[], &mut required, budget)?;
             }
             if self.own.drop_parameters[slot] {
-                super::super::normalize_drop(actual, facts, &[], &mut required, budget, 0)?;
+                super::super::normalize_drop(
+                    actual,
+                    facts,
+                    &mut cleanup_scratch,
+                    &[],
+                    &mut required,
+                    budget,
+                    0,
+                )?;
             }
             if let Some(limit) = self.own.semantic_limits[slot] {
                 super::super::normalize_semantic_size(actual, &[], limit, &mut required, budget)?;
@@ -208,6 +217,7 @@ pub(in crate::compiler) struct Header {
     queries: Arc<[(ir::ExprId, ir::Ty)]>,
     virtual_sites: Arc<[ir::ExprId]>,
     opaque_calls: Arc<[OpaqueCall]>,
+    cleanup_opaque: Arc<[(SelectedSite, Arc<ir::OpaqueTy>)]>,
     packs: Arc<[Pack]>,
 }
 fn canonical_contract_type(
@@ -260,6 +270,7 @@ impl Header {
             queries: Arc::from([]),
             virtual_sites: Arc::from([]),
             opaque_calls: Arc::from([]),
+            cleanup_opaque: Arc::from([]),
             packs: Arc::from([]),
         })
     }
@@ -311,8 +322,12 @@ impl Header {
             return Err("opaque source pack added unrelated provider summary".into());
         }
         let mut selected = Vec::new();
+        let mut entry_scratch = traits::TraitScratch::default();
         for (site, target, proof) in source.selected.iter() {
             budget.charge_work(1)?;
+            proof
+                .validate(target, &source.facts, &mut entry_scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
             if proof.target() != target {
                 return Err("closed alignment target omitted canonical call proof".into());
             }
@@ -324,6 +339,7 @@ impl Header {
             queries: source.queries,
             virtual_sites: source.virtual_sites,
             opaque_calls: source.opaque_sites,
+            cleanup_opaque: source.cleanup_opaque,
             packs: packs.into(),
         })
     }
@@ -339,6 +355,55 @@ impl Header {
     #[cfg(test)]
     pub(in crate::compiler) fn virtual_sites(&self) -> &[ir::ExprId] {
         &self.virtual_sites
+    }
+    /// Authenticate cleanup against the exact authored producer pack. This
+    /// grants no method, Drop proof, representation or executable glue.
+    fn validate_cleanup_pack(
+        &self,
+        opaque: &Arc<ir::OpaqueTy>,
+        facts: &traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        if facts.phase() != traits::FactsPhase::Closed {
+            return Err("opaque cleanup requires closed producer facts".into());
+        }
+        let expected = crate::compiler::instances::graph_key::encode(&self.target, budget)?;
+        budget.retain_bytes(
+            opaque
+                .owner_args()
+                .len()
+                .saturating_mul(std::mem::size_of::<ir::Ty>()),
+        )?;
+        let owner = ir::CallTarget {
+            declaration: opaque.owner(),
+            type_args: opaque.owner_args().into(),
+        };
+        let subject = facts
+            .target()
+            .ok_or("opaque cleanup omitted producer facts")?;
+        if crate::compiler::instances::graph_key::encode(&owner, budget)? != expected
+            || crate::compiler::instances::graph_key::encode(subject, budget)? != expected
+        {
+            return Err("opaque cleanup changed canonical producer owner actuals".into());
+        }
+        let canonical = canonical_contract_type(&ir::Ty::Opaque(opaque.clone()), facts, budget)?;
+        let mut found = false;
+        for pack in self.packs.iter() {
+            budget.charge_work(1)?;
+            if contract_types_equal(
+                &canonical,
+                &canonical_contract_type(&ir::Ty::Opaque(pack.opaque.clone()), facts, budget)?,
+                facts,
+                budget,
+            )? {
+                found = true;
+            }
+        }
+        if !found {
+            return Err("opaque cleanup omitted exact source producer pack".into());
+        }
+        Ok(())
     }
     pub(in crate::compiler) fn resolve(
         &self,
@@ -626,6 +691,16 @@ mod tests {
             "different graph allocations must retain the complete canonical descriptor"
         );
         assert!(producer.resolve(&invocation, &facts, &budget).is_ok());
+        producer
+            .validate_cleanup_pack(opaque, &facts, &budget)
+            .unwrap();
+        let mut missing_pack = (*producer).clone();
+        missing_pack.packs = Arc::from([]);
+        assert!(
+            missing_pack
+                .validate_cleanup_pack(opaque, &facts, &budget)
+                .is_err()
+        );
         for forged in [
             ir::OpaqueTy::new(
                 opaque.owner(),
@@ -661,8 +736,14 @@ mod tests {
                 })
                 .unwrap(),
         ] {
+            let forged = Arc::new(forged);
+            assert!(
+                producer
+                    .validate_cleanup_pack(&forged, &facts, &budget)
+                    .is_err()
+            );
             let mut changed = invocation.clone();
-            changed.call.trait_ref.self_ty = ir::Ty::Opaque(Arc::new(forged));
+            changed.call.trait_ref.self_ty = ir::Ty::Opaque(forged);
             assert!(producer.resolve(&changed, &facts, &budget).is_err());
         }
         let mut wrong_argument = invocation.clone();
@@ -679,7 +760,20 @@ mod tests {
             opaque.captured_regions().into(),
         )));
         assert!(producer.resolve(&wrong_order, &facts, &budget).is_err());
+        let ir::Ty::Opaque(wrong_descriptor) = &wrong_order.call.trait_ref.self_ty else {
+            unreachable!()
+        };
+        assert!(
+            producer
+                .validate_cleanup_pack(wrong_descriptor, &facts, &budget)
+                .is_err()
+        );
         let foreign_facts = plan.instance_facts(&root).unwrap();
+        assert!(
+            producer
+                .validate_cleanup_pack(opaque, &foreign_facts, &budget)
+                .is_err()
+        );
         assert!(
             producer
                 .resolve(&invocation, &foreign_facts, &budget)

@@ -248,6 +248,37 @@ fn borrowed_opaque_dispatch_replays_exact_source_wrappers() {
                     budget,
                     cx.authority(),
                 )?;
+                let original_ty = &publication.source().locals.first().unwrap().ty;
+                let first_mapping = specialization.ty(original_ty)?;
+                let warm_mapping = specialization.ty(original_ty)?;
+                assert!(
+                    ir::identical_type(&first_mapping, &warm_mapping, budget)
+                        .map_err(Error::new)?
+                );
+                let mut wrong_owner = caller.clone();
+                wrong_owner.declaration = types.callable_decl(0).map_err(Error::new)?;
+                assert!(
+                    instances::source_direct_demands(
+                        &wrong_owner,
+                        publication,
+                        &mut types.as_ref().clone(),
+                        budget,
+                        Some(cx.authority()),
+                    )
+                    .is_err()
+                );
+                let mut wrong_arity = caller.clone();
+                wrong_arity.type_args = Arc::from([]);
+                assert!(
+                    opaque_specialization::Specialization::new(
+                        publication,
+                        &wrong_arity,
+                        &types,
+                        budget,
+                        cx.authority(),
+                    )
+                    .is_err()
+                );
                 let (ir::Callee::TraitItem(call), _) = specialization.call(occurrence)? else {
                     return Err(Error::new("fixture changed invocation kind"));
                 };

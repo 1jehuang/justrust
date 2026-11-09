@@ -16,7 +16,9 @@ pub use associated_const::AssociatedConstOperand;
 pub use promotion::PromotedArray;
 #[path = "ir/schema_metadata.rs"]
 mod schema_metadata;
-pub(super) use schema_metadata::substitute_schema_metadata_ty;
+pub(super) use schema_metadata::{
+    substitute_schema_metadata_ty, substitute_schema_metadata_ty_scratch,
+};
 #[cfg(test)]
 #[path = "ir/closed_call_receipt_tests.rs"]
 pub(in crate::compiler) mod closed_call_receipt_tests;
@@ -530,6 +532,15 @@ pub fn validate_callee_scratch(
     facts: FactsCtx<'_>,
     scratch: &mut super::traits::TraitScratch,
 ) -> Result<(), String> {
+    validate_callee_for_use_scratch(target, signature, facts, scratch, true)
+}
+pub(super) fn validate_callee_for_use_scratch(
+    target: &Callee,
+    signature: &Signature,
+    facts: FactsCtx<'_>,
+    scratch: &mut super::traits::TraitScratch,
+    executable_storage: bool,
+) -> Result<(), String> {
     if target.type_arguments().len() > 32 {
         return Err("generic call argument limit exceeded".into());
     }
@@ -539,7 +550,13 @@ pub fn validate_callee_scratch(
         return Err("trait argument limit exceeded".into());
     }
     for ty in target.metadata_types() {
-        facts.validate_ty_scratch(ty, scratch)?;
+        if !executable_storage && let Some(authority) = facts.validated() {
+            authority
+                .validate_ty_metadata_scratch(ty, authority.budget(), scratch)
+                .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+        } else {
+            facts.validate_ty_scratch(ty, scratch)?;
+        }
     }
     if let Some(authority) = facts.validated() {
         if authority.phase() == super::traits::FactsPhase::Closed
@@ -547,9 +564,16 @@ pub fn validate_callee_scratch(
         {
             return Err("unresolved trait call in closed body".into());
         }
-        authority
-            .validate_signature_with(SignatureSubject::Call(target), signature, scratch)
-            .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
+        if executable_storage {
+            authority.validate_signature_with(SignatureSubject::Call(target), signature, scratch)
+        } else {
+            authority.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(target),
+                signature,
+                scratch,
+            )
+        }
+        .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
     } else if matches!(target, Callee::TraitItem(_)) {
         return Err("trait call requires validated facts".into());
     }
@@ -607,6 +631,21 @@ pub trait TraitCx: Send + Sync {
     ) -> Result<Signature, super::traits::FactsError> {
         self.instantiate_trait_signature(call, facts)
     }
+    fn instantiate_trait_signature_with_nominals(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+        nominals: &[Ty],
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<Signature, super::traits::FactsError> {
+        if !nominals.is_empty() {
+            return Err(super::traits::FactsError::unsupported(
+                facts.budget(),
+                "trait service does not support sealed nominal invocation inputs",
+            ));
+        }
+        self.instantiate_trait_signature_with(call, facts, scratch)
+    }
     /// Validate builtin function item dispatch; returns the trait signature.
     fn validate_untupled(
         &self,
@@ -640,18 +679,63 @@ pub trait TraitCx: Send + Sync {
         facts: &super::traits::ValidatedFacts,
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<super::traits::ProofOutcome, super::traits::FactsError>;
+    fn prove_goal_with_nominals(
+        &self,
+        goal: &Predicate,
+        facts: &super::traits::ValidatedFacts,
+        nominals: &[Ty],
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::ProofOutcome, super::traits::FactsError> {
+        if !nominals.is_empty() {
+            return Err(super::traits::FactsError::unsupported(
+                facts.budget(),
+                "trait service does not support sealed nominal invocation inputs",
+            ));
+        }
+        self.prove_goal_with(goal, facts, scratch)
+    }
     fn discharge_direct_with(
         &self,
         target: &CallTarget,
         facts: &super::traits::ValidatedFacts,
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<super::traits::DirectCallProof, super::traits::FactsError>;
+    fn discharge_direct_with_nominals(
+        &self,
+        target: &CallTarget,
+        facts: &super::traits::ValidatedFacts,
+        nominals: &[Ty],
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::DirectCallProof, super::traits::FactsError> {
+        if !nominals.is_empty() {
+            return Err(super::traits::FactsError::unsupported(
+                facts.budget(),
+                "trait service does not support sealed nominal invocation inputs",
+            ));
+        }
+        self.discharge_direct_with(target, facts, scratch)
+    }
     fn resolve_trait_call_with(
         &self,
         call: &TraitCall,
         facts: &super::traits::ValidatedFacts,
         scratch: &mut super::traits::TraitScratch,
     ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError>;
+    fn resolve_trait_call_with_nominals(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+        nominals: &[Ty],
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError> {
+        if !nominals.is_empty() {
+            return Err(super::traits::FactsError::unsupported(
+                facts.budget(),
+                "trait service does not support sealed nominal dispatch inputs",
+            ));
+        }
+        self.resolve_trait_call_with(call, facts, scratch)
+    }
 }
 /// Exact executed item and signature of a validated untupled call.
 #[derive(Clone, Debug)]
@@ -1482,7 +1566,14 @@ pub fn bind_call_evidence(
 #[derive(Clone, Copy)]
 enum CallEvidencePolicy<'a> {
     Legacy,
+    // Only constructed from replayed original publication evidence. It never
+    // authorizes executable signature/layout validation or a DirectCallProof.
     Original(&'a super::source_replay::ValidatedOriginalCalls),
+}
+impl CallEvidencePolicy<'_> {
+    fn source_metadata(self) -> bool {
+        matches!(self, Self::Original(_))
+    }
 }
 
 pub(super) fn validate_call_evidence(
@@ -1544,9 +1635,16 @@ fn validate_call_evidence_with_policy_scratch(
         else {
             return Err("call evidence does not name a call".into());
         };
-        facts
-            .validate_signature_with(SignatureSubject::Call(target), signature, trait_scratch)
-            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        if policy.source_metadata() {
+            facts.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(target),
+                signature,
+                trait_scratch,
+            )
+        } else {
+            facts.validate_signature_with(SignatureSubject::Call(target), signature, trait_scratch)
+        }
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
         if evidence.arguments.len() != args.len() || args.len() != signature.params.len() {
             return Err("call evidence argument arity mismatch".into());
         }
@@ -1689,7 +1787,12 @@ impl ClosureBodyShape {
         if !identical_type(&self.1, &body.result, budget)? {
             return Err("closure source receipt changed its result type".into());
         }
-        self.0.validate(body, facts, budget)
+        self.0.validate(
+            body,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
     }
     /// Rebuild task-local checked storage from a pure immutable graph payload.
     /// No substitution proof or enclosing publication is retained in the payload.
@@ -2066,8 +2169,9 @@ impl GeneratedBodyShape {
         source: &CheckedFunction,
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
     ) -> Result<(), String> {
-        source.preflight_plan(FactsCtx::from_validated(facts), budget)?;
+        source.preflight_plan_with_scratch(FactsCtx::from_validated(facts), budget, scratch)?;
         budget.charge_work(
             self.name
                 .len()
@@ -2123,6 +2227,10 @@ pub struct BodySubstitutionProof {
     engine: Option<crate::engine::EngineAuthority>,
 }
 impl BodySubstitutionProof {
+    /// This marker grants no authority until complete CFG provenance replay.
+    pub(super) fn has_typed_engine(&self) -> bool {
+        self.engine.is_some()
+    }
     pub(in crate::compiler) fn identity(&self) -> &super::source_replay::OriginalBodyId {
         &self.identity
     }
@@ -2159,6 +2267,20 @@ impl BodySubstitutionProof {
         source: &CheckedFunction,
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
+    ) -> Result<(), String> {
+        self.validate_with_scratch(
+            source,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    fn validate_with_scratch(
+        &self,
+        source: &CheckedFunction,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
     ) -> Result<(), String> {
         if facts.phase() != super::traits::FactsPhase::Closed
             || !self.template.budget().same_authority(budget)
@@ -2224,6 +2346,51 @@ impl BodySubstitutionProof {
                 return Err("body substitution changed generated expression type".into());
             }
         }
+        if let Some(engine) = self.engine {
+            for expression in &source.exprs {
+                budget.charge_work(1)?;
+                if let ExprKind::TypeAlignment(query) = &expression.kind {
+                    query.validate_engine(engine)?;
+                    query.validate_with_scratch(
+                        FactsCtx::from_validated(facts),
+                        budget,
+                        scratch,
+                    )?;
+                }
+            }
+            budget.retain_bytes(
+                source
+                    .params
+                    .len()
+                    .checked_mul(std::mem::size_of::<Ty>())
+                    .ok_or("typed body parameter storage overflow")?,
+            )?;
+            let mut params = Vec::new();
+            params
+                .try_reserve_exact(source.params.len())
+                .map_err(|_| "typed body parameter allocation failed")?;
+            for id in &source.params {
+                params.push(
+                    source
+                        .locals
+                        .get(id.0)
+                        .ok_or("typed body parameter outside locals")?
+                        .ty
+                        .clone(),
+                );
+            }
+            super::nominal_realization::substitution::replay_closed_body_signature_with(
+                engine,
+                &Signature {
+                    params,
+                    result: source.result.clone(),
+                    ref_contract: source.ref_contract.clone(),
+                },
+                facts,
+                budget,
+                scratch,
+            )?;
+        }
         super::frontend::nominal_call_receipts::closed::replay(
             self.closed_calls.as_deref(),
             self.engine,
@@ -2232,8 +2399,9 @@ impl BodySubstitutionProof {
             &self.target.type_args,
             facts,
             budget,
+            scratch,
         )?;
-        self.generated.validate(source, facts, budget)?;
+        self.generated.validate(source, facts, budget, scratch)?;
         Ok(())
     }
     /// Recover shared scalar and aggregate families whose original parameter
@@ -2542,6 +2710,20 @@ impl BodySubstitutionProof {
         facts: &super::traits::ValidatedFacts,
         budget: &PlanBudget,
     ) -> Result<(), String> {
+        self.validate_cfg_with_scratch(
+            function,
+            facts,
+            budget,
+            &mut super::traits::TraitScratch::default(),
+        )
+    }
+    pub(in crate::compiler) fn validate_cfg_with_scratch(
+        &self,
+        function: &super::cfg::Function,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
         if facts.phase() != super::traits::FactsPhase::Closed
             || !self.template.budget().same_authority(budget)
             || !facts.budget().same_authority(budget)
@@ -2588,6 +2770,85 @@ impl BodySubstitutionProof {
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
             {
                 return Err("CFG substitution generated local type mismatch".into());
+            }
+        }
+        if !identical_type(&function.result, &self.result, budget)?
+            || !Arc::ptr_eq(&function.ref_contract, &self.generated.contract)
+        {
+            return Err("CFG substitution changed result or canonical reference contract".into());
+        }
+        if let Some(engine) = self.engine {
+            for local in &function.locals {
+                super::nominal_realization::substitution::replay_closed_storage_with(
+                    engine, &local.ty, facts, budget, scratch,
+                )?;
+            }
+            budget.retain_bytes(
+                function
+                    .params
+                    .len()
+                    .checked_mul(std::mem::size_of::<Ty>())
+                    .ok_or("typed CFG parameter storage overflow")?,
+            )?;
+            let mut params = Vec::new();
+            params
+                .try_reserve_exact(function.params.len())
+                .map_err(|_| "typed CFG parameter allocation failed")?;
+            for parameter in &function.params {
+                params.push(
+                    function
+                        .locals
+                        .get(parameter.0)
+                        .ok_or("typed CFG parameter outside locals")?
+                        .ty
+                        .clone(),
+                );
+            }
+            super::nominal_realization::substitution::replay_closed_body_signature_with(
+                engine,
+                &Signature {
+                    params,
+                    result: function.result.clone(),
+                    ref_contract: function.ref_contract.clone(),
+                },
+                facts,
+                budget,
+                scratch,
+            )?;
+            super::frontend::nominal_call_receipts::closed::replay_expressions(
+                self.closed_calls.as_deref(),
+                Some(engine),
+                &self.generated.exprs,
+                &self.template,
+                &self.target.type_args,
+                facts,
+                budget,
+                scratch,
+            )?;
+            for block in &function.blocks {
+                budget.charge_work(1)?;
+                let super::cfg::Terminator::Call {
+                    target, signature, ..
+                } = &block.terminator.value
+                else {
+                    continue;
+                };
+                let expression = block
+                    .terminator
+                    .origin
+                    .and_then(|origin| self.generated.exprs.get(origin.0))
+                    .ok_or("typed CFG call lost exact body occurrence")?;
+                let ExprKind::Call {
+                    target: expected,
+                    signature: expected_signature,
+                    ..
+                } = &expression.kind
+                else {
+                    return Err("typed CFG call changed original operation kind".into());
+                };
+                if !identical_call_types(expected, expected_signature, target, signature, budget)? {
+                    return Err("typed CFG call changed realized signature or target".into());
+                }
             }
         }
         Ok(())
@@ -3358,8 +3619,55 @@ pub trait SubstitutionCx {
     ) -> Result<Ty, String> {
         Err("graph nominal substitution requires current-engine typed reads".into())
     }
+    /// Keep a parent-local source application only under its exact issuer,
+    /// or let an explicitly source-authenticated adapter issue closed evidence.
+    fn substitute_parent_local_nominal(
+        &mut self,
+        source: &Ty,
+        arguments: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        let facts = caller
+            .validated()
+            .ok_or("parent-local substitution requires owning facts")?;
+        let original = match source {
+            Ty::Struct(value) => &value.def().type_args,
+            Ty::Enum(value) => &value.def().type_args,
+            _ => return Err("parent-local substitution requires sealed nominal input".into()),
+        };
+        if original.len() != arguments.len() {
+            return Err("parent-local substitution changed argument arity".into());
+        }
+        for (original, actual) in original.iter().zip(arguments) {
+            if !identical_type(original, actual, budget)? {
+                return Err(
+                    "unsupported: generic parent-local closure nominal substitution".into(),
+                );
+            }
+        }
+        facts
+            .validate_ty_metadata_with_budget(source, budget)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        Ok(source.clone())
+    }
+    /// Executable closure must canonicalize even unchanged source nominal roots.
+    /// Source-only adapters retain their exact authored allocation instead.
+    fn realizes_executable_nominals(&self) -> bool {
+        false
+    }
     fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
         None
+    }
+    fn realize_alignment_query(
+        &mut self,
+        query: &mut TypeAlignmentQuery,
+        queried: Ty,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<(), String> {
+        query.substitute(queried);
+        Ok(())
     }
     fn record_canonical_call_realization(
         &mut self,
@@ -3486,17 +3794,92 @@ pub(super) fn substitute_ty_with_scratch(
         return Err("generic argument arity mismatch".into());
     }
     for argument in args {
-        caller.validate_ty_with_budget_scratch(argument, budget, scratch)?;
+        validate_substitution_actual(argument, caller, cx, budget, scratch)?;
         validate_root_reference_actual(argument, budget)?;
     }
     let substituted = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
-    if let Some(facts) = caller.validated() {
-        facts
-            .normalize_substituted_projection_type(&substituted, budget)
-            .map_err(|error| error.into_legacy_diagnostic(budget))
+    let normalized = if let Some(facts) = caller.validated() {
+        if cx.realizes_executable_nominals() {
+            facts
+                .normalize_substituted_projection_metadata(&substituted, budget, scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+        } else {
+            facts
+                .normalize_substituted_projection_type(&substituted, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+        }
     } else {
-        Ok(substituted)
+        substituted
+    };
+    if cx.realizes_executable_nominals() {
+        // Simultaneous generic arguments and projection normal forms are
+        // caller-owned outputs, not callee syntax. They may introduce a closed
+        // source nominal after the original walk has finished. Canonicalize
+        // all such roots through typed graph reads, never substitute them a
+        // second time under the callee binder or compare mixed identities.
+        let rigid = GenericEnv::new(&[], budget)?;
+        let realized = substitute_ty_walk(&normalized, &rigid, &[], caller, cx, budget, 0)?;
+        caller.validate_ty_with_budget_scratch(&realized, budget, scratch)?;
+        Ok(realized)
+    } else {
+        Ok(normalized)
     }
+}
+
+/// Generic actuals retain their original identity for exact instance authority,
+/// but their source semantic children can still contain closed projections.
+/// Executable admission must validate the independently realized normal form,
+/// not demand physical storage from the unnormalized source descriptor.
+fn validate_substitution_actual(
+    argument: &Ty,
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<(), String> {
+    if !cx.realizes_executable_nominals() {
+        return caller.validate_ty_with_budget_scratch(argument, budget, scratch);
+    }
+    caller.validate_ty_metadata_with_budget(argument, budget)?;
+    let rigid = GenericEnv::new(&[], budget)?;
+    let realized = substitute_ty_with_scratch(argument, &rigid, &[], caller, cx, budget, scratch)?;
+    caller.validate_ty_with_budget_scratch(&realized, budget, scratch)
+}
+
+/// Close authenticated authored type metadata before graph layout realization.
+/// This does not issue an executable signature or physical field-layout proof.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn substitute_source_ty_with_scratch(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    source: &super::traits::ValidatedFacts,
+    destination: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    source_scratch: &mut super::traits::TraitScratch,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Ty, String> {
+    destination
+        .validate_source_type_closing_context(source, env, args)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    if args.len() != env.total_arity() {
+        return Err("generic argument arity mismatch".into());
+    }
+    source
+        .validate_ty_metadata_scratch(ty, budget, source_scratch)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    let caller = FactsCtx::Validated(destination);
+    for argument in args {
+        destination
+            .validate_ty_metadata_scratch(argument, budget, scratch)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        validate_root_reference_actual(argument, budget)?;
+    }
+    let substituted = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
+    destination
+        .normalize_substituted_source_type(&substituted, source, env, args, budget, scratch)
+        .map_err(|error| error.into_legacy_diagnostic(budget))
 }
 
 /// Unsealed structural substitution for nonexecuting trait-item schemas only.
@@ -3596,18 +3979,14 @@ fn substitute_ty_walk(
     budget.charge_nodes(1)?;
     Ok(match ty {
         Ty::DependentArray { element, length } => {
-            let element = Arc::new(substitute_ty_walk(
-                element,
-                env,
-                args,
-                caller,
-                cx,
-                budget,
-                depth + 1,
-            )?);
-            let mapped = Ty::DependentArray {
-                element,
-                length: *length,
+            let actual = substitute_ty_walk(element, env, args, caller, cx, budget, depth + 1)?;
+            let mapped = if identical_type(element, &actual, budget)? {
+                ty.clone()
+            } else {
+                Ty::DependentArray {
+                    element: Arc::new(actual),
+                    length: *length,
+                }
             };
             caller.validate_ty_metadata_with_budget(&mapped, budget)?;
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
@@ -3618,9 +3997,20 @@ fn substitute_ty_walk(
                 std::mem::size_of::<OpaqueTy>()
                     + opaque.types().count() * std::mem::size_of::<Ty>(),
             )?;
-            Ty::Opaque(Arc::new(opaque.try_map(|ty| {
-                substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
-            })?))
+            let mapped = opaque
+                .try_map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))?;
+            let mut unchanged = true;
+            for (original, actual) in opaque.types().zip(mapped.types()) {
+                if !identical_type(original, actual, budget)? {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if unchanged {
+                ty.clone()
+            } else {
+                Ty::Opaque(Arc::new(mapped))
+            }
         }
         Ty::Closure(closure) => {
             budget.retain_bytes(
@@ -3759,27 +4149,33 @@ fn substitute_ty_walk(
                     .checked_mul(std::mem::size_of::<Ty>())
                     .ok_or("substitution size overflow")?,
             )?;
-            Ty::Tuple(
-                fields
-                    .iter()
-                    .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into(),
-            )
+            let mapped = fields
+                .iter()
+                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut unchanged = true;
+            for (original, actual) in fields.iter().zip(&mapped) {
+                if !identical_type(original, actual, budget)? {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if unchanged {
+                ty.clone()
+            } else {
+                Ty::Tuple(mapped.into())
+            }
         }
         Ty::Array { element, len } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
-            Ty::Array {
-                element: Arc::new(substitute_ty_walk(
-                    element,
-                    env,
-                    args,
-                    caller,
-                    cx,
-                    budget,
-                    depth + 1,
-                )?),
-                len: *len,
+            let actual = substitute_ty_walk(element, env, args, caller, cx, budget, depth + 1)?;
+            if identical_type(element, &actual, budget)? {
+                ty.clone()
+            } else {
+                Ty::Array {
+                    element: Arc::new(actual),
+                    len: *len,
+                }
             }
         }
         Ty::Slice { element } => {
@@ -3795,38 +4191,36 @@ fn substitute_ty_walk(
                 // carrier contract from the substituted shape.
                 validate_shared_slice_element(&actual, caller, budget)?;
             }
-            Ty::Slice {
-                element: Arc::new(actual),
+            if identical_type(element, &actual, budget)? {
+                ty.clone()
+            } else {
+                Ty::Slice {
+                    element: Arc::new(actual),
+                }
             }
         }
         Ty::RawPtr { kind, pointee } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
-            Ty::RawPtr {
-                kind: *kind,
-                pointee: Arc::new(substitute_ty_walk(
-                    pointee,
-                    env,
-                    args,
-                    caller,
-                    cx,
-                    budget,
-                    depth + 1,
-                )?),
+            let actual = substitute_ty_walk(pointee, env, args, caller, cx, budget, depth + 1)?;
+            if identical_type(pointee, &actual, budget)? {
+                ty.clone()
+            } else {
+                Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(actual),
+                }
             }
         }
         Ty::Ref { kind, referent } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
-            Ty::Ref {
-                kind: *kind,
-                referent: Arc::new(substitute_ty_walk(
-                    referent,
-                    env,
-                    args,
-                    caller,
-                    cx,
-                    budget,
-                    depth + 1,
-                )?),
+            let actual = substitute_ty_walk(referent, env, args, caller, cx, budget, depth + 1)?;
+            if identical_type(referent, &actual, budget)? {
+                ty.clone()
+            } else {
+                Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(actual),
+                }
             }
         }
         Ty::Struct(value) => {
@@ -3841,7 +4235,23 @@ fn substitute_ty_walk(
                         "unsupported: generic parent-local closure nominal substitution".into(),
                     );
                 }
-                return Ok(ty.clone());
+                budget.retain_bytes(std::mem::size_of_val(value.def().type_args.as_ref()))?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(value.def().type_args.len())
+                    .map_err(|_| "parent-local substitution argument allocation failed")?;
+                for argument in value.def().type_args.iter() {
+                    arguments.push(substitute_ty_walk(
+                        argument,
+                        env,
+                        args,
+                        caller,
+                        cx,
+                        budget,
+                        depth + 1,
+                    )?);
+                }
+                return cx.substitute_parent_local_nominal(ty, &arguments, caller, budget);
             }
             let app = NominalAppInfo {
                 source_decl: value.def().source_decl,
@@ -3856,6 +4266,27 @@ fn substitute_ty_walk(
                 .iter()
                 .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
+            // A substitution that changes no ordered actual must retain the
+            // authenticated source allocation, not construct an equivalent
+            // application that loses a sealed parent's exact input identity.
+            // Raw callers and changed actuals still use canonical reminting.
+            if !cx.realizes_executable_nominals()
+                && let Some(facts) = caller.validated()
+            {
+                let mut unchanged = true;
+                for (original, mapped) in app.type_args.iter().zip(&arguments) {
+                    if !identical_type(original, mapped, budget)? {
+                        unchanged = false;
+                        break;
+                    }
+                }
+                if unchanged {
+                    facts
+                        .validate_ty_metadata_with_budget(ty, budget)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                    return Ok(ty.clone());
+                }
+            }
             cx.intern_substituted_nominal(
                 &NominalSubstitutionRequest {
                     original: value.def().id,
@@ -3878,7 +4309,23 @@ fn substitute_ty_walk(
                         "unsupported: generic parent-local closure nominal substitution".into(),
                     );
                 }
-                return Ok(ty.clone());
+                budget.retain_bytes(std::mem::size_of_val(value.def().type_args.as_ref()))?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(value.def().type_args.len())
+                    .map_err(|_| "parent-local substitution argument allocation failed")?;
+                for argument in value.def().type_args.iter() {
+                    arguments.push(substitute_ty_walk(
+                        argument,
+                        env,
+                        args,
+                        caller,
+                        cx,
+                        budget,
+                        depth + 1,
+                    )?);
+                }
+                return cx.substitute_parent_local_nominal(ty, &arguments, caller, budget);
             }
             let app = NominalAppInfo {
                 source_decl: value.def().source_decl,
@@ -3893,6 +4340,27 @@ fn substitute_ty_walk(
                 .iter()
                 .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
+            // A substitution that changes no ordered actual must retain the
+            // authenticated source allocation, not construct an equivalent
+            // application that loses a sealed parent's exact input identity.
+            // Raw callers and changed actuals still use canonical reminting.
+            if !cx.realizes_executable_nominals()
+                && let Some(facts) = caller.validated()
+            {
+                let mut unchanged = true;
+                for (original, mapped) in app.type_args.iter().zip(&arguments) {
+                    if !identical_type(original, mapped, budget)? {
+                        unchanged = false;
+                        break;
+                    }
+                }
+                if unchanged {
+                    facts
+                        .validate_ty_metadata_with_budget(ty, budget)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                    return Ok(ty.clone());
+                }
+            }
             cx.intern_substituted_nominal(
                 &NominalSubstitutionRequest {
                     original: value.def().id,
@@ -3978,8 +4446,15 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
     if args.len() != env.total_arity() {
         return Err("generic instance argument arity mismatch".into());
     }
+    let mut actual_scratch = super::traits::TraitScratch::default();
     for ty in args {
-        FactsCtx::from_validated(closed_facts).validate_ty_with_budget(ty, budget)?;
+        validate_substitution_actual(
+            ty,
+            FactsCtx::from_validated(closed_facts),
+            cx,
+            budget,
+            &mut actual_scratch,
+        )?;
         validate_root_reference_actual(ty, budget)?;
         if matches!(ty, Ty::Ref { .. }) && template.carrier_effects().is_none() {
             return Err(format!(
@@ -4109,7 +4584,10 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                 )?;
                 *signature = visitor.signature(signature)?;
                 signature.ref_contract = closed_facts
-                    .carrier_contract(SignatureSubject::Call(target))
+                    .source_carrier_contract_with_scratch(
+                        SignatureSubject::Call(target),
+                        &mut super::traits::TraitScratch::default(),
+                    )
                     .map_err(|error| error.into_legacy_diagnostic(budget))?
                     .ref_contract()
                     .clone();
@@ -4125,7 +4603,15 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             ExprKind::Block(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
-            ExprKind::TypeAlignment(query) => query.substitute(visitor.ty(query.queried_type())?),
+            ExprKind::TypeAlignment(query) => {
+                let queried = visitor.ty(query.queried_type())?;
+                visitor.cx.realize_alignment_query(
+                    query,
+                    queried,
+                    visitor.facts,
+                    visitor.budget,
+                )?;
+            }
             ExprKind::RuntimeQuery(_)
             | ExprKind::FnItem
             | ExprKind::CharToInt { .. }
@@ -4172,7 +4658,10 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
     }
     visitor.block(&mut output.body, 0)?;
     output.ref_contract = closed_facts
-        .carrier_contract(SignatureSubject::Body)
+        .source_carrier_contract_with_scratch(
+            SignatureSubject::Body,
+            &mut super::traits::TraitScratch::default(),
+        )
         .map_err(|e| e.into_legacy_diagnostic(budget))?
         .ref_contract()
         .clone();
@@ -4291,8 +4780,44 @@ fn body_nominal_substitution_remains_single_valued() {
 }
 
 impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
+    fn substitute_parent_local_nominal(
+        &mut self,
+        source: &Ty,
+        arguments: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        let output = self
+            .inner
+            .substitute_parent_local_nominal(source, arguments, caller, budget)?;
+        let original = match source {
+            Ty::Struct(value) => value.id(),
+            Ty::Enum(value) => value.id(),
+            _ => return Err("parent-local substitution lost nominal kind".into()),
+        };
+        let instantiated = match &output {
+            Ty::Struct(value) => value.id(),
+            Ty::Enum(value) => value.id(),
+            _ => return Err("parent-local substitution produced non-nominal output".into()),
+        };
+        self.record_nominal_mapping(original, instantiated, budget)?;
+        Ok(output)
+    }
+    fn realizes_executable_nominals(&self) -> bool {
+        self.inner.realizes_executable_nominals()
+    }
     fn current_engine(&self) -> Option<crate::engine::EngineAuthority> {
         self.inner.current_engine()
+    }
+    fn realize_alignment_query(
+        &mut self,
+        query: &mut TypeAlignmentQuery,
+        queried: Ty,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        self.inner
+            .realize_alignment_query(query, queried, caller, budget)
     }
     fn realize_canonical_call_signature(
         &mut self,
@@ -4431,7 +4956,24 @@ fn substitute_callee_metadata(
     {
         return Err("callee substitution requires exact closed planning authority".into());
     }
-    let facts = FactsCtx::from_validated(closed_facts);
+    map_callee_metadata(callee, budget, |ty| {
+        substitute_ty_with_scratch(
+            ty,
+            env,
+            args,
+            FactsCtx::Validated(closed_facts),
+            cx,
+            budget,
+            scratch,
+        )
+    })
+}
+
+fn map_callee_metadata(
+    callee: &Callee,
+    budget: &PlanBudget,
+    mut map: impl FnMut(&Ty) -> Result<Ty, String>,
+) -> Result<Callee, String> {
     let mut types = |values: &[Ty]| -> Result<Arc<[Ty]>, String> {
         if values.len() > 32 {
             return Err("callee type argument limit exceeded".into());
@@ -4447,9 +4989,7 @@ fn substitute_callee_metadata(
             .try_reserve_exact(values.len())
             .map_err(|_| "callee argument allocation resource limit")?;
         for ty in values {
-            output.push(substitute_ty_with_scratch(
-                ty, env, args, facts, cx, budget, scratch,
-            )?);
+            output.push(map(ty)?);
         }
         Ok(output.into())
     };
@@ -4461,15 +5001,7 @@ fn substitute_callee_metadata(
         Callee::TraitItem(call) | Callee::Untupled(call) => {
             let method_args = types(&call.method_args)?;
             let trait_args = types(&call.trait_ref.args)?;
-            let self_ty = substitute_ty_with_scratch(
-                &call.trait_ref.self_ty,
-                env,
-                args,
-                facts,
-                cx,
-                budget,
-                scratch,
-            )?;
+            let self_ty = map(&call.trait_ref.self_ty)?;
             let rebuild = if matches!(callee, Callee::Untupled(_)) {
                 Callee::Untupled
             } else {
@@ -4491,15 +5023,7 @@ fn substitute_callee_metadata(
             }
             virtual_call.principal()?;
             let trait_args = types(&virtual_call.call.trait_ref.args)?;
-            let self_ty = substitute_ty_with_scratch(
-                &virtual_call.call.trait_ref.self_ty,
-                env,
-                args,
-                facts,
-                cx,
-                budget,
-                scratch,
-            )?;
+            let self_ty = map(&virtual_call.call.trait_ref.self_ty)?;
             Callee::Virtual(VirtualCall {
                 call: TraitCall {
                     trait_ref: TraitRef {
@@ -4544,26 +5068,130 @@ pub(super) fn substitute_callee_with_scratch(
     budget: &PlanBudget,
     scratch: &mut super::traits::TraitScratch,
 ) -> Result<Callee, String> {
+    substitute_callee_with_nominals_scratch(
+        callee,
+        env,
+        args,
+        closed_facts,
+        &[],
+        cx,
+        budget,
+        scratch,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn substitute_callee_with_nominals_scratch(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    nominals: &[Ty],
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Callee, String> {
     let substituted =
         substitute_callee_metadata(callee, env, args, closed_facts, cx, budget, scratch)?;
+    discharge_substituted_callee(substituted, closed_facts, nominals, budget, scratch)
+}
+
+/// Close source dependency inventory. Direct entries cannot become executable call proofs.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn substitute_source_callee_with_nominals_scratch(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    source: &super::traits::ValidatedFacts,
+    closed_facts: &super::traits::ValidatedFacts,
+    nominals: &[Ty],
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    source_scratch: &mut super::traits::TraitScratch,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Callee, String> {
+    let substituted = substitute_source_callee_metadata(
+        callee,
+        env,
+        args,
+        source,
+        closed_facts,
+        cx,
+        budget,
+        source_scratch,
+        scratch,
+    )?;
+    closed_facts
+        .source_callee_entry(&substituted, nominals, scratch)
+        .map_err(|error| error.into_legacy_diagnostic(budget))
+}
+
+/// Authenticated source-only callee inventory. This value carries no executable call proof.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn substitute_source_callee_metadata(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    source: &super::traits::ValidatedFacts,
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    source_scratch: &mut super::traits::TraitScratch,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Callee, String> {
+    if closed_facts.phase() != super::traits::FactsPhase::Closed
+        || !closed_facts.budget().same_authority(budget)
+    {
+        return Err("source callee substitution requires exact closed planning authority".into());
+    }
+    closed_facts
+        .validate_source_type_closing_context(source, env, args)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    map_callee_metadata(callee, budget, |ty| {
+        substitute_source_ty_with_scratch(
+            ty,
+            env,
+            args,
+            source,
+            closed_facts,
+            cx,
+            budget,
+            source_scratch,
+            scratch,
+        )
+    })
+}
+
+fn discharge_substituted_callee(
+    substituted: Callee,
+    closed_facts: &super::traits::ValidatedFacts,
+    nominals: &[Ty],
+    budget: &PlanBudget,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<Callee, String> {
     match substituted {
         Callee::Direct(target) => {
             closed_facts
                 .service()
-                .discharge_direct_with(&target, closed_facts, scratch)
+                .discharge_direct_with_nominals(&target, closed_facts, nominals, scratch)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Direct(target))
         }
         Callee::TraitItem(call) => Ok(closed_facts
             .service()
-            .resolve_trait_call_with(&call, closed_facts, scratch)
+            .resolve_trait_call_with_nominals(&call, closed_facts, nominals, scratch)
             .map_err(|e| e.into_legacy_diagnostic(budget))?
             .callee()
             .clone()),
         Callee::Virtual(virtual_call) => {
             closed_facts
                 .service()
-                .instantiate_trait_signature(&virtual_call.call, closed_facts)
+                .instantiate_trait_signature_with_nominals(
+                    &virtual_call.call,
+                    closed_facts,
+                    nominals,
+                    scratch,
+                )
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Virtual(virtual_call))
         }
@@ -4662,7 +5290,69 @@ fn canonicalize_call_metadata_with_scratch(
             target, signature, ..
         } = &mut expression.kind
         {
+            if let Some(cap) = source_cap {
+                let (callee, canonical) =
+                    facts.canonical_source_call_with_scratch(target, signature, scratch)?;
+                let mapped = cap
+                    .realized_source_call_signature(
+                        ExprId(expression_index),
+                        &callee,
+                        &canonical,
+                        signature,
+                        scratch,
+                    )?
+                    .unwrap_or(canonical);
+                facts.validate_source_flow_signature_with_scratch(
+                    SignatureSubject::Call(&callee),
+                    &mapped,
+                    scratch,
+                )?;
+                *target = callee;
+                *signature = mapped;
+                continue;
+            }
+            if facts.phase() == super::traits::FactsPhase::Closed && _cx.current_engine().is_some()
+            {
+                let selection = target.clone();
+                let (callee, canonical) =
+                    facts.canonical_source_call_with_scratch(target, signature, scratch)?;
+                signature.ref_contract = canonical.ref_contract.clone();
+                // This adapter must replay every mapped physical root and its
+                // current-engine typed graph reads before issuing the receipt.
+                // Canonical source metadata by itself never authorizes codegen.
+                let mapped = _cx
+                    .realize_canonical_call_signature(
+                        &callee,
+                        &canonical,
+                        signature,
+                        FactsCtx::from_validated(facts),
+                        budget,
+                    )
+                    .map_err(|e| FactsError::from_message(budget, &e))?
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            budget,
+                            "typed executable call omitted signature realization",
+                        )
+                    })?;
+                _cx.record_canonical_call_realization(
+                    ExprId(expression_index),
+                    &selection,
+                    &callee,
+                    CallRealizationSignatures {
+                        canonical: &canonical,
+                        mapped: &mapped,
+                    },
+                    FactsCtx::from_validated(facts),
+                    budget,
+                )
+                .map_err(|e| FactsError::from_message(budget, &e))?;
+                *target = callee;
+                *signature = mapped;
+                continue;
+            }
             facts.validate_signature_with(SignatureSubject::Call(target), signature, scratch)?;
+            let nominals = facts.parent_local_call_inputs(target, signature)?;
             budget
                 .retain_bytes(
                     signature
@@ -4680,7 +5370,7 @@ fn canonicalize_call_metadata_with_scratch(
                 Callee::Direct(target) => {
                     let proof = facts
                         .service()
-                        .discharge_direct_with(target, facts, scratch)?;
+                        .discharge_direct_with_nominals(target, facts, &nominals, scratch)?;
                     (
                         Callee::Direct(proof.target().clone()),
                         proof.signature().clone(),
@@ -4689,15 +5379,18 @@ fn canonicalize_call_metadata_with_scratch(
                 Callee::TraitItem(call) => {
                     let proof = facts
                         .service()
-                        .resolve_trait_call_with(call, facts, scratch)?;
+                        .resolve_trait_call_with_nominals(call, facts, &nominals, scratch)?;
                     (proof.callee().clone(), proof.signature().clone())
                 }
                 // Dynamic dispatch stays virtual in every phase. Its canonical
                 // signature is the trait item's at the object Self type.
                 Callee::Virtual(virtual_call) => {
-                    let signature = facts
-                        .service()
-                        .instantiate_trait_signature(&virtual_call.call, facts)?;
+                    let signature = facts.service().instantiate_trait_signature_with_nominals(
+                        &virtual_call.call,
+                        facts,
+                        &nominals,
+                        scratch,
+                    )?;
                     (Callee::Virtual(virtual_call.clone()), signature)
                 }
                 Callee::Untupled(call) => {
@@ -5360,21 +6053,34 @@ impl<D> NominalRef<D> {
 pub struct EnumTy(
     NominalRef<EnumDef>,
     Option<super::nominal_realization::ReadNominal>,
+    Option<Arc<super::frontend::ParentLocalReceipt>>,
 );
 
 impl EnumTy {
+    pub(in crate::compiler) fn parent_local_receipt(
+        &self,
+    ) -> Option<&Arc<super::frontend::ParentLocalReceipt>> {
+        self.2.as_ref()
+    }
+    pub(in crate::compiler) fn with_parent_local_receipt(
+        mut self,
+        receipt: Arc<super::frontend::ParentLocalReceipt>,
+    ) -> Self {
+        self.2 = Some(receipt);
+        self
+    }
     pub(super) fn new(def: EnumDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None)
     }
     pub(in crate::compiler) fn new_parent_local(def: EnumDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None)
     }
     pub fn from_ref(r: NominalRef<EnumDef>) -> Self {
-        Self(r, None)
+        Self(r, None, None)
     }
     /// Owned definition of a freshly built, unshared strong handle.
     pub fn into_def(self) -> Result<EnumDef, String> {
-        if self.1.is_some() {
+        if self.1.is_some() || self.2.is_some() {
             return Err("graph nominal cannot detach its typed read capability".into());
         }
         match self.0 {
@@ -6000,6 +6706,7 @@ pub struct StructTy(
     NominalRef<StructDef>,
     Option<super::nominal_realization::ReadNominal>,
     Option<Arc<super::frontend::NativeSequenceBinding>>,
+    Option<Arc<super::frontend::ParentLocalReceipt>>,
 );
 
 impl std::fmt::Debug for StructTy {
@@ -6025,6 +6732,18 @@ impl std::fmt::Debug for StructTy {
 }
 
 impl StructTy {
+    pub(in crate::compiler) fn parent_local_receipt(
+        &self,
+    ) -> Option<&Arc<super::frontend::ParentLocalReceipt>> {
+        self.3.as_ref()
+    }
+    pub(in crate::compiler) fn with_parent_local_receipt(
+        mut self,
+        receipt: Arc<super::frontend::ParentLocalReceipt>,
+    ) -> Self {
+        self.3 = Some(receipt);
+        self
+    }
     pub(super) fn with_native_sequence_binding(
         mut self,
         binding: Option<Arc<super::frontend::NativeSequenceBinding>>,
@@ -6040,17 +6759,17 @@ impl StructTy {
     /// The declaration builder must validate the entire by-value dependency DAG
     /// before constructing definitions in dependency-first order.
     pub(super) fn new(def: StructDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None, None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None, None)
     }
     pub(in crate::compiler) fn new_parent_local(def: StructDef) -> Self {
-        Self(NominalRef::Strong(Arc::new(def)), None, None)
+        Self(NominalRef::Strong(Arc::new(def)), None, None, None)
     }
     pub fn from_ref(r: NominalRef<StructDef>) -> Self {
-        Self(r, None, None)
+        Self(r, None, None, None)
     }
     /// Owned definition of a freshly built, unshared strong handle.
     pub fn into_def(self) -> Result<StructDef, String> {
-        if self.1.is_some() {
+        if self.1.is_some() || self.3.is_some() {
             return Err("graph nominal cannot detach its typed read capability".into());
         }
         match self.0 {
@@ -11432,7 +12151,9 @@ impl CheckedFunction {
                 | ExprKind::LabeledBlock { body: value, .. } => {
                     block(value, facts, budget, 0, scratch)?
                 }
-                ExprKind::TypeAlignment(query) => query.validate(facts, budget)?,
+                ExprKind::TypeAlignment(query) => {
+                    query.validate_with_scratch(facts, budget, scratch)?
+                }
                 ExprKind::RuntimeQuery(query) => query.validate(facts, budget)?,
                 ExprKind::NativeSyscall(values)
                 | ExprKind::RawSlice { args: values, .. }
@@ -12034,7 +12755,7 @@ impl CheckedFunction {
         )?;
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
-                proof.validate(self, authority, authority.budget())?;
+                proof.validate_with_scratch(self, authority, authority.budget(), scratch)?;
             } else {
                 validate_call_evidence_with_policy_scratch(
                     self,
@@ -12045,9 +12766,29 @@ impl CheckedFunction {
                 )?;
             }
         }
+        // A generated BODY has already replayed its independent typed graph
+        // signature receipts above. Its structural signature checks authenticate
+        // canonical source meaning, not a second unmapped declaration layout.
+        let source_signature_metadata = policy.source_metadata()
+            || self
+                .body_substitution
+                .as_ref()
+                .is_some_and(|proof| proof.engine.is_some());
         let validate_value = |ty: &Ty, scratch: &mut super::traits::TraitScratch| {
             if let Some(authority) = facts.validated() {
-                facts.validate_value_ty_with_budget_scratch(ty, authority.budget(), scratch)
+                if policy.source_metadata() {
+                    authority
+                        .validate_ty_metadata_scratch(ty, authority.budget(), scratch)
+                        .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+                    if matches!(ty, Ty::Param(_)) {
+                        authority
+                            .require_sized(ty)
+                            .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+                    }
+                    Ok(())
+                } else {
+                    facts.validate_value_ty_with_budget_scratch(ty, authority.budget(), scratch)
+                }
             } else {
                 facts.validate_value_ty(ty)
             }
@@ -12095,15 +12836,22 @@ impl CheckedFunction {
             .map(|id| self.locals[id.0].ty.clone())
             .collect();
         if let Some(authority) = facts.validated() {
-            validate_body_signature_with_scratch(
-                &Signature {
-                    ref_contract: self.ref_contract.clone(),
-                    params: parameter_types.clone(),
-                    result: self.result.clone(),
-                },
-                authority,
-                scratch,
-            )?;
+            let signature = Signature {
+                ref_contract: self.ref_contract.clone(),
+                params: parameter_types.clone(),
+                result: self.result.clone(),
+            };
+            if source_signature_metadata {
+                authority
+                    .validate_source_flow_signature_with_scratch(
+                        SignatureSubject::Body,
+                        &signature,
+                        scratch,
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+            } else {
+                validate_body_signature_with_scratch(&signature, authority, scratch)?;
+            }
         }
         if facts.validated().is_none() {
             self.ref_contract.validate(&parameter_types, &self.result)?;
@@ -12571,10 +13319,18 @@ impl CheckedFunction {
                                 let authority = facts
                                     .validated()
                                     .ok_or("mutable receiver requires canonical authority")?;
+                                let receiver = if source_signature_metadata {
+                                    authority.source_callee_receiver_for_signature(
+                                        target, signature, scratch,
+                                    )
+                                } else {
+                                    authority.callee_receiver_for_signature_scratch(
+                                        target, signature, scratch,
+                                    )
+                                }
+                                .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
                                 if *argument != 0
-                                    || authority
-                                        .callee_receiver_scratch(target, scratch)
-                                        .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                                    || receiver
                                         != (ReceiverMode::Borrowed {
                                             kind: BorrowKind::Mut,
                                         })
@@ -13274,9 +14030,25 @@ impl CheckedFunction {
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
-                        facts.validate_ty_scratch(ty, scratch)?;
+                        if policy.source_metadata()
+                            && let Some(authority) = facts.validated()
+                        {
+                            authority
+                                .validate_ty_metadata_scratch(ty, authority.budget(), scratch)
+                                .map_err(|error| {
+                                    error.into_legacy_diagnostic(authority.budget())
+                                })?;
+                        } else {
+                            facts.validate_ty_scratch(ty, scratch)?;
+                        }
                     }
-                    validate_callee_scratch(target, signature, facts, scratch)?;
+                    validate_callee_for_use_scratch(
+                        target,
+                        signature,
+                        facts,
+                        scratch,
+                        !source_signature_metadata,
+                    )?;
                     if facts.validated().is_none() {
                         signature
                             .ref_contract
@@ -16223,6 +16995,48 @@ mod tests {
         )
         .unwrap();
         assert!(FactsCtx::Concrete.validate_ty(&concrete).is_ok());
+        let compounds = |element: Ty| {
+            Ty::Tuple(Arc::from([
+                Ty::Ref {
+                    kind: BorrowKind::Mut,
+                    referent: Arc::new(element.clone()),
+                },
+                Ty::RawPtr {
+                    kind: BorrowKind::Shared,
+                    pointee: Arc::new(element.clone()),
+                },
+                Ty::Array {
+                    element: Arc::new(element.clone()),
+                    len: 2,
+                },
+                Ty::Slice {
+                    element: Arc::new(element),
+                },
+            ]))
+        };
+        let stable = compounds(Ty::Bool);
+        let mapped = substitute_ty(
+            &stable,
+            &env,
+            &[Ty::Int(IntTy::U64), Ty::Bool],
+            FactsCtx::Concrete,
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert!(identical_type(&stable, &mapped, &budget).unwrap());
+        let generic = compounds(params[0].clone());
+        let mapped = substitute_ty(
+            &generic,
+            &env,
+            &[Ty::Int(IntTy::U64), Ty::Bool],
+            FactsCtx::Concrete,
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert!(!identical_type(&generic, &mapped, &budget).unwrap());
+        assert_eq!(mapped, compounds(Ty::Int(IntTy::U64)));
 
         let projection = AssociatedTypeProjection {
             trait_ref: TraitRef {

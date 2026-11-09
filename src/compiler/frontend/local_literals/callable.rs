@@ -202,7 +202,7 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                 self.fixed(closure.result().clone()).map(Some)
             }
             Domain::Fixed(ir::Ty::FnItem(item)) => {
-                let signature = self.checker.signatures.plan()?.instantiate_signature(
+                let signature = self.checker.signatures.plan()?.source_inference_signature(
                     &item,
                     self.checker.facts(),
                     &self.checker.signatures.plan()?.budget,

@@ -23,6 +23,34 @@ fn unchanged_closures_iterators_actual_program() {
 }
 
 #[test]
+fn unchanged_generic_container_actual_program() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_generic_container_actual_program",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "14_generic_container",
+            source: include_str!("fixtures/full_programs/14_generic_container.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/14_generic_container.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn unchanged_sort_by_actual_program() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_sort_by_actual_program",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "34_sort_by",
+            source: include_str!("fixtures/full_programs/34_sort_by.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/34_sort_by.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
 fn unchanged_trait_objects_actual_program() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new();

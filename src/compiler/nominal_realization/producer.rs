@@ -2,6 +2,8 @@
 //! child reads. Recursive source schemas are explicitly unsupported before a
 //! closed node can wait on itself, never hidden behind an interner lookup.
 use super::*;
+pub(super) mod closure_actual;
+mod projection_dependencies;
 mod recursive_route;
 use coordinates::Term;
 use std::future::Future;
@@ -11,36 +13,42 @@ use std::task::Poll;
 type Pending<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 /// Poll every independent branch before suspending the runnable segment.
-async fn all<'a, T: Send + 'a>(mut pending: Vec<Pending<'a, T>>) -> Result<Vec<T>, Error> {
-    let mut results: Vec<Option<T>> = (0..pending.len()).map(|_| None).collect();
-    std::future::poll_fn(move |cx| {
-        let mut error = None;
-        for (future, result) in pending.iter_mut().zip(results.iter_mut()) {
-            if result.is_none() {
-                match future.as_mut().poll(cx) {
-                    Poll::Ready(Ok(value)) => *result = Some(value),
-                    Poll::Ready(Err(e)) => {
-                        if error.is_none() {
-                            error = Some(e);
+fn all<'a, T: Send + 'a>(mut pending: Vec<Pending<'a, T>>) -> Pending<'a, Vec<T>> {
+    // The scheduler stores only this finite erased future. In particular, a
+    // closure template's deeply recursive immutable metadata must not become
+    // part of every caller coroutine's auto-trait proof. T still proves Send
+    // here in safe Rust, independently of any caller's future structure.
+    Box::pin(async move {
+        let mut results: Vec<Option<T>> = (0..pending.len()).map(|_| None).collect();
+        std::future::poll_fn(move |cx| {
+            let mut error = None;
+            for (future, result) in pending.iter_mut().zip(results.iter_mut()) {
+                if result.is_none() {
+                    match future.as_mut().poll(cx) {
+                        Poll::Ready(Ok(value)) => *result = Some(value),
+                        Poll::Ready(Err(e)) => {
+                            if error.is_none() {
+                                error = Some(e);
+                            }
                         }
+                        Poll::Pending => {}
                     }
-                    Poll::Pending => {}
                 }
             }
-        }
-        if let Some(error) = error {
-            return Poll::Ready(Err(error));
-        }
-        if results.iter().all(Option::is_some) {
-            Poll::Ready(Ok(results
-                .iter_mut()
-                .map(|r| r.take().expect("complete branch"))
-                .collect()))
-        } else {
-            Poll::Pending
-        }
+            if let Some(error) = error {
+                return Poll::Ready(Err(error));
+            }
+            if results.iter().all(Option::is_some) {
+                Poll::Ready(Ok(results
+                    .iter_mut()
+                    .map(|r| r.take().expect("complete branch"))
+                    .collect()))
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
     })
-    .await
 }
 
 /// Function signature branches retain independently admitted scratch throughout suspension.
@@ -373,6 +381,10 @@ fn resolve<'a>(
                 }
                 ir::Ty::Dyn(Arc::new(object))
             }
+            Term::Closure(provider, args) => {
+                closure_actual::resolve_actual(cx, provider, args, world, catalog, b, depth + 1)
+                    .await?
+            }
             Term::Nominal(declaration, args) => {
                 let key = key(world, declaration, &args, b)?;
                 let mut read = read_manifest(cx, &[key], b).await?;
@@ -464,11 +476,9 @@ fn field<'a>(
                     .map_err(error)?;
                 dependencies = proofs;
                 let term = Term::from_ty(&t, b, 0)?;
-                if term.contains_nominal() {
-                    return Err(Error::new(
-                        "unsupported: nominal-valued associated field realization requires an expanded closed dependency cycle protocol",
-                    ));
-                }
+                // The complete closed application frontier was checked before
+                // any field futures were started. Only successful typed child
+                // reads below supply physical nominal storage.
                 resolve(
                     cx,
                     term,
@@ -611,6 +621,16 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     let input = world
         .close_nominal_input(declaration, source.proof(), &actuals)
         .map_err(|e| Error::new(e.into_legacy_diagnostic(b)))?;
+    let application_key = RealizationKey(key_words);
+    if !source.proof().schema().projections.is_empty() {
+        projection_dependencies::validate(
+            cx,
+            component_key::copy_application(&application_key, b)?,
+            actuals.clone(),
+            &world,
+        )
+        .await?;
+    }
     let inventory = source_fields(source.template(), b)?;
     let normalized = all(inventory
         .iter()
@@ -638,7 +658,7 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     cx.publish_fact(
         0,
         NominalPublication::Acyclic(Arc::new(RealizedNominal {
-            key: RealizationKey(key_words),
+            key: application_key,
             identity,
             declaration,
             source_application,

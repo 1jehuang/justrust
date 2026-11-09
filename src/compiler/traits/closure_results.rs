@@ -130,7 +130,7 @@ impl ValidatedTraitWorld {
         }
         let results = self.captured_result_carriers(closure, mode, signature, facts)?;
         let source_regions = self.validate_source_regions(closure.provider(), signature)?;
-        let (contract, _) = self.derive_carriers(signature, &source_regions)?;
+        let (contract, _) = self.derive_carriers(signature, &source_regions, facts.env())?;
         for returned in results.iter() {
             if returned.sources.is_empty()
                 || returned
@@ -215,7 +215,31 @@ impl ValidatedTraitWorld {
         subject: SignatureSubject<'_>,
         facts: &ValidatedFacts,
     ) -> Result<CarrierContractView> {
-        self.validate_closure_metadata(&closure, facts.env())?;
+        self.closure_result_carrier_parts_with_scratch(
+            closure,
+            mode,
+            signature,
+            subject,
+            facts,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    pub(super) fn closure_result_carrier_parts_with_scratch(
+        &self,
+        closure: Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        signature: Signature,
+        subject: SignatureSubject<'_>,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierContractView> {
+        scratch.for_facts(facts);
+        self.validate_closure_metadata_with(
+            &closure,
+            facts.env(),
+            &mut scratch.for_world(self.id).replays,
+        )?;
         if !closure.supports(mode) {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -225,7 +249,7 @@ impl ValidatedTraitWorld {
         self.require_closure_owner_predicates(
             &closure,
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         let receipt = closure.result_receipt().ok_or_else(|| {
             FactsError::invalid(
@@ -259,7 +283,8 @@ impl ValidatedTraitWorld {
             }
         }
         let source_regions = self.validate_source_regions(closure.provider(), &signature)?;
-        let (mut contract, regions) = self.derive_carriers(&signature, &source_regions)?;
+        let (mut contract, regions) =
+            self.derive_carriers(&signature, &source_regions, facts.env())?;
         if receipt.capture_witness().is_some() {
             let results = self.captured_result_carriers(&closure, mode, &signature, facts)?;
             for returned in results.iter() {
@@ -402,6 +427,8 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         retain::<NativeHeapInvariant>(&self.budget, 0)?;
         Ok(CarrierContractView {
+            source_schema: None,
+            executable_storage: true,
             native_heap_invariants: Arc::from([]),
             nominal: None,
             physical: None,
@@ -437,6 +464,7 @@ impl ValidatedTraitWorld {
         closure: &Arc<ir::ClosureTy>,
         mode: ir::ClosureKind,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
         // Reconstruct the exact actual subject, not a provider-length guess.
         let direct_callee =
@@ -482,7 +510,8 @@ impl ValidatedTraitWorld {
         let signature = match subject {
             SignatureSubject::Body => self.closure_body_signature(facts)?,
             SignatureSubject::Call(Callee::Direct(target)) => {
-                self.discharge_direct(target, facts)?.signature
+                self.discharge_direct_with(target, facts, scratch)?
+                    .signature
             }
             _ => unreachable!(),
         };
@@ -510,8 +539,14 @@ impl ValidatedTraitWorld {
                 "closure result changed its actual body/call subject",
             ));
         }
-        let expected =
-            self.closure_result_carrier_parts(closure.clone(), mode, signature, subject, facts)?;
+        let expected = self.closure_result_carrier_parts_with_scratch(
+            closure.clone(),
+            mode,
+            signature,
+            subject,
+            facts,
+            scratch,
+        )?;
         if view.declaration != expected.declaration
             || view.arguments != expected.arguments
             || !self.same_env(&view.original_env, &expected.original_env)?

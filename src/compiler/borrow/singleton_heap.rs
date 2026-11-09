@@ -279,7 +279,10 @@ impl CarrierBuilder<'_, '_> {
                     let source = match declaration {
                         Some(declaration) => {
                             let role = facts
-                                .native_sequence_element(declaration)
+                                .native_sequence_element_with_scratch(
+                                    declaration,
+                                    &mut self.carrier_scratch,
+                                )
                                 .map_err(|error| error.into_legacy_diagnostic(&self.ledger));
                             let Some(role) = self.metadata_value(role)? else {
                                 return Ok(());

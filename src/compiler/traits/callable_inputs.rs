@@ -57,15 +57,101 @@ fn canonicalize_empty_projected_result(
 }
 
 impl ValidatedTraitWorld {
+    // A required Fn item names its result through FnOnce::Output rather than a
+    // rigid result parameter. Its reference origins therefore come from the
+    // selected parent-sealed closure adapter, not generic parameter expansion.
+    // This supplies source topology only. Physical signature admission remains
+    // independent, and the ordinary stored-contract validator still runs.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn realize_source_closure_item_contract(
+        &self,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        declaration: Option<DeclId>,
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<()> {
+        let Some(declaration) = declaration else {
+            return Ok(());
+        };
+        let Some(position) = self.item_header_index.get(&self.budget, declaration)? else {
+            return Ok(());
+        };
+        let item = &self.headers.items[position];
+        let Some(Ty::Closure(closure)) = arguments.first() else {
+            return Ok(());
+        };
+        if self.closure_trait_kind(item.trait_decl)?.is_none() || closure.result_receipt().is_none()
+        {
+            return Ok(());
+        }
+        if context.executable_storage
+            || !self.same_env(&schema.env, &item.schema.env)?
+            || !self.eq_signature(&schema.signature, &item.schema.signature)?
+            || schema.predicates.len() != item.schema.predicates.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source closure item changed its canonical declaration schema",
+            ));
+        }
+        for (actual, original) in schema.predicates.iter().zip(item.schema.predicates.iter()) {
+            if !self.eq_predicate(actual, original)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source closure item changed its canonical predicates",
+                ));
+            }
+        }
+        let trait_arity = self.trait_header(item.trait_decl)?.env.total_arity();
+        if arguments.len() != trait_arity || trait_arity == 0 {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source closure item changed its ordered trait arguments",
+            ));
+        }
+        retain::<Ty>(&self.budget, arguments.len() - 1)?;
+        let goal = TraitRef {
+            declaration: item.trait_decl,
+            self_ty: arguments[0].clone(),
+            args: arguments[1..].into(),
+        };
+        let closed = context.closed_selection(self);
+        let selection = self.require_in(&Predicate::Implements(goal.clone()), closed, active)?;
+        if let Some(adapter) = self.closed_closure_argument_result_signature(
+            item, &goal, signature, &selection, closed, active,
+        )? {
+            signature.ref_contract = adapter.ref_contract;
+        }
+        Ok(())
+    }
+
     // Called only after the direct producer discharged the exact canonical
     // source schema and all predicates. Recheck its sealed structural ABI
     // before applying the same origin-free representation normalization used
     // by the required callable producer.
+    #[cfg(test)]
     pub(super) fn canonicalize_projected_closure_direct(
         &self,
         target: &CallTarget,
         signature: &mut Signature,
         context: ProofContext<'_>,
+    ) -> Result<()> {
+        self.canonicalize_projected_closure_direct_with(
+            target,
+            signature,
+            context,
+            &mut ProofScratch::default(),
+        )
+    }
+
+    pub(super) fn canonicalize_projected_closure_direct_with(
+        &self,
+        target: &CallTarget,
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.check_context(context)?;
         if self
@@ -76,7 +162,7 @@ impl ValidatedTraitWorld {
             return Ok(());
         }
         let adapter = self.decode_closure_adapter(target)?;
-        self.validate_closure_metadata(adapter.closure, context.env())?;
+        self.validate_closure_metadata_with(adapter.closure, context.env(), &mut active.replays)?;
         let captured = adapter
             .closure
             .result_receipt()
@@ -151,6 +237,7 @@ impl ValidatedTraitWorld {
         }
         if self.closure_trait_kind(item.trait_decl)? != Some(*kind)
             || item.trait_decl != goal.declaration
+            || selection.0.executable_storage != context.executable_storage
             || selection.0.world != self.id
             || selection.0.environment != self.empty.index
             || selection.0.phase != FactsPhase::Closed
@@ -267,6 +354,7 @@ impl ValidatedTraitWorld {
         };
         if self.closure_trait_kind(item.trait_decl)? != Some(kind)
             || item.trait_decl != goal.declaration
+            || selection.0.executable_storage != context.executable_storage
             || selection.0.world != self.id
             || selection.0.environment != self.empty.index
             || selection.0.phase != FactsPhase::Closed
@@ -414,8 +502,11 @@ mod tests {
         let closure = closures.bodies[0].ty.clone();
         let world = plan.trait_world().unwrap();
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         for mode in [
@@ -430,24 +521,83 @@ mod tests {
             assert!(
                 matches!(&direct.signature.ref_contract.results[0].returns, ir::ReturnContract::SharedInputPaths(rows) if rows.is_empty())
             );
+            let facts = world.instance_facts(&target).unwrap();
+            let (_, _, source) = world
+                .source_carrier_application(
+                    &parameter_equality::EqualityResultSubject::Direct(target.clone()),
+                    &facts,
+                    ProofContext::from_facts(&facts).for_storage(false),
+                    &mut ProofScratch::default(),
+                )
+                .unwrap();
+            assert!(
+                world
+                    .eq_signature(&source.signature, &direct.signature)
+                    .unwrap()
+            );
+            let callee = Callee::Direct(target.clone());
+            let mut source_scratch = TraitScratch::default();
+            assert_eq!(
+                facts
+                    .source_callee_receiver_for_signature(
+                        &callee,
+                        &source.signature,
+                        &mut source_scratch,
+                    )
+                    .unwrap(),
+                world.closure_dispatch_receiver(&target).unwrap().unwrap(),
+            );
+            let mut changed_source = source.signature.clone();
+            changed_source.result = Ty::Bool;
+            assert!(
+                facts
+                    .source_callee_receiver_for_signature(
+                        &callee,
+                        &changed_source,
+                        &mut source_scratch,
+                    )
+                    .is_err()
+            );
             let mut same = direct.signature.clone();
             let original = same.ref_contract.clone();
             world
                 .canonicalize_projected_closure_direct(&target, &mut same, context)
                 .unwrap();
             assert!(Arc::ptr_eq(&original, &same.ref_contract));
+            let mut active = ProofScratch::default();
+            for _ in 0..3 {
+                world
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut same,
+                        context,
+                        &mut active,
+                    )
+                    .unwrap();
+                assert!(Arc::ptr_eq(&original, &same.ref_contract));
+            }
             let mut changed = same.clone();
             changed.result = Ty::Bool;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut changed,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
             let mut changed = same.clone();
             changed.params[1] = Ty::Unit;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&target, &mut changed, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &target,
+                        &mut changed,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
             let foreign = world.closure_target(&closures.bodies[1].ty, mode).unwrap();
@@ -455,7 +605,12 @@ mod tests {
             wrong.type_args = foreign.type_args;
             assert!(
                 world
-                    .canonicalize_projected_closure_direct(&wrong, &mut same, context)
+                    .canonicalize_projected_closure_direct_with(
+                        &wrong,
+                        &mut same,
+                        context,
+                        &mut active
+                    )
                     .is_err()
             );
         }
@@ -500,8 +655,11 @@ mod tests {
                 args: Arc::from([world.closure_arguments(&closure).unwrap()]),
             };
             let context = ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &world.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             };
             let mut active = ProofScratch::default();
@@ -513,6 +671,35 @@ mod tests {
                 .unwrap();
             let signature = &application.instantiated.signature;
             assert_eq!(signature.ref_contract.results.len(), 1);
+            let source_context = context.for_storage(false);
+            let arguments = world.trait_arguments(&goal).unwrap();
+            let source = world
+                .instantiate_scratch_for_use(
+                    &item.schema,
+                    &arguments,
+                    source_context,
+                    Some(item.declaration),
+                    &mut active,
+                    None,
+                    false,
+                )
+                .unwrap();
+            assert!(world.eq_signature(&source.signature, signature).unwrap());
+            let mut forged_schema = item.schema.clone();
+            forged_schema.signature.result = Ty::Bool;
+            let mut forged_signature = signature.clone();
+            assert!(
+                world
+                    .realize_source_closure_item_contract(
+                        &forged_schema,
+                        &arguments,
+                        Some(item.declaration),
+                        &mut forged_signature,
+                        source_context,
+                        &mut active,
+                    )
+                    .is_err()
+            );
             assert!(
                 world
                     .closed_closure_tuple_input(item, &goal, signature, &selection, 1, context)
@@ -700,6 +887,7 @@ mod tests {
                             &selection,
                             ProofContext {
                                 original: None,
+                                source_metadata: None,
                                 ..context
                             },
                             &mut active,
@@ -916,6 +1104,7 @@ mod tests {
                             &mut direct_signature,
                             ProofContext {
                                 original: None,
+                                source_metadata: None,
                                 ..context
                             },
                         )
@@ -1064,8 +1253,11 @@ mod tests {
             args: Arc::from([world.closure_arguments(&closure).unwrap()]),
         };
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &world.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         let selection = world
@@ -1153,8 +1345,11 @@ mod tests {
         reject(&changed_goal, &signature, &ProofEvidence(Arc::new(record)));
         let (other, other_closure) = fixture();
         let foreign_context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &other.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         assert!(

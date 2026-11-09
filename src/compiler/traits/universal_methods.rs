@@ -63,14 +63,58 @@ impl ValidatedFacts {
         self.normalize_substituted_projection_type_after_metadata(ty, budget)
     }
 
+    /// Reduce a checked intermediate descriptor before its independent typed
+    /// graph realization. This authenticates all source metadata and projection
+    /// evidence, but cannot authorize executable fields on a source identity.
+    pub(in crate::compiler) fn normalize_substituted_projection_metadata(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
+        self.world.check_facts(self, false)?;
+        self.validate_ty_metadata_scratch(ty, budget, scratch)?;
+        self.normalize_substituted_projection_type_for_use(ty, budget, false)
+    }
+
+    pub(in crate::compiler) fn normalize_substituted_source_type(
+        &self,
+        ty: &Ty,
+        source: &ValidatedFacts,
+        env: &GenericEnv,
+        arguments: &[Ty],
+        budget: &PlanBudget,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
+        self.validate_source_type_closing_context(source, env, arguments)?;
+        self.validate_ty_metadata_scratch(ty, budget, scratch)?;
+        self.normalize_substituted_projection_type_for_use(ty, budget, false)
+    }
+
     fn normalize_substituted_projection_type_after_metadata(
         &self,
         ty: &Ty,
         budget: &PlanBudget,
     ) -> Result<Ty> {
+        self.normalize_substituted_projection_type_for_use(ty, budget, true)
+    }
+
+    fn normalize_substituted_projection_type_for_use(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+        executable_storage: bool,
+    ) -> Result<Ty> {
         let context = ProofContext::from_facts(self);
-        self.world
-            .map_universal_projection_type(ty, self.env(), 0, &mut |projection| {
+        self.world.map_universal_projection_type_for_use(
+            ty,
+            self.env(),
+            0,
+            context
+                .original
+                .map(|facts| (facts, ParentLocalTransport::default())),
+            executable_storage,
+            &mut |projection| {
                 let raw = Ty::AssociatedType(Arc::new(projection.clone()));
                 if self
                     .world
@@ -80,12 +124,20 @@ impl ValidatedFacts {
                 }
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
                     if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
-                        let (normal, dependencies) = self
-                            .world
-                            .normalize_closed_projected_type(&raw, context, false)?;
+                        let (normal, dependencies) =
+                            self.world.normalize_closed_projected_type_for_use(
+                                &raw,
+                                context,
+                                false,
+                                &mut ProofScratch::default(),
+                                executable_storage,
+                            )?;
                         for dependency in dependencies.iter() {
-                            self.world
-                                .validate_projected_dependency(dependency, context)?;
+                            self.world.validate_projected_dependency_for_use(
+                                dependency,
+                                context,
+                                executable_storage,
+                            )?;
                         }
                         return Ok(normal);
                     }
@@ -108,15 +160,23 @@ impl ValidatedFacts {
                     }
                     return Ok(raw);
                 }
-                let (normal, dependencies) = self
-                    .world
-                    .normalize_closed_projected_type(&raw, context, false)?;
+                let (normal, dependencies) = self.world.normalize_closed_projected_type_for_use(
+                    &raw,
+                    context,
+                    false,
+                    &mut ProofScratch::default(),
+                    executable_storage,
+                )?;
                 for dependency in dependencies.iter() {
-                    self.world
-                        .validate_projected_dependency(dependency, context)?;
+                    self.world.validate_projected_dependency_for_use(
+                        dependency,
+                        context,
+                        executable_storage,
+                    )?;
                 }
                 Ok(normal)
-            })
+            },
+        )
     }
 }
 
@@ -128,14 +188,66 @@ impl ValidatedTraitWorld {
         depth: usize,
         reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
     ) -> Result<Ty> {
+        self.map_universal_projection_type_for_use(ty, env, depth, None, true, reduce)
+    }
+
+    pub(super) fn map_universal_projection_type_for_use(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        invocation: Option<(&ValidatedFacts, ParentLocalTransport<'_>)>,
+        executable_storage: bool,
+        reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
+    ) -> Result<Ty> {
+        self.map_universal_projection_type_in(
+            ty,
+            env,
+            depth,
+            invocation,
+            executable_storage,
+            &nominal_normalization::NominalOperations::default(),
+            reduce,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn map_universal_projection_type_in(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+        invocation: Option<(&ValidatedFacts, ParentLocalTransport<'_>)>,
+        executable_storage: bool,
+        operations: &nominal_normalization::NominalOperations,
+        reduce: &mut impl FnMut(&ir::AssociatedTypeProjection) -> Result<Ty>,
+    ) -> Result<Ty> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
-        Ok(match ty {
+        let invocation =
+            invocation.map(|(facts, transport)| (facts, operations.transport(transport)));
+        if depth == 0
+            && let Some((facts, transport)) = invocation
+        {
+            transport.validate(self, facts)?;
+        }
+        if let Some((facts, transport)) = invocation
+            && !transport.is_empty()
+            && matches!(ty, Ty::Struct(_) | Ty::Enum(_))
+            && self.type_contains_projection(ty, depth + 1)?
+            && let Some(realized) = operations.select(transport, self, ty, facts)?
+        {
+            return Ok(realized);
+        }
+        let mapped = match ty {
             Ty::AssociatedType(projection) => {
-                let receiver = self.map_universal_projection_type(
+                let receiver = self.map_universal_projection_type_in(
                     &projection.trait_ref.self_ty,
                     env,
                     depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
                     reduce,
                 )?;
                 let mut arguments = Vec::new();
@@ -143,7 +255,15 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut arguments,
-                        self.map_universal_projection_type(argument, env, depth + 1, reduce)?,
+                        self.map_universal_projection_type_in(
+                            argument,
+                            env,
+                            depth + 1,
+                            invocation,
+                            executable_storage,
+                            operations,
+                            reduce,
+                        )?,
                     )?;
                 }
                 reduce(&ir::AssociatedTypeProjection {
@@ -158,20 +278,58 @@ impl ValidatedTraitWorld {
             Ty::Cell(wrapper) => Ty::Cell(wrapper.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
-                |child| self.map_universal_projection_type(child, env, depth + 1, reduce),
+                |child| {
+                    self.map_universal_projection_type_in(
+                        child,
+                        env,
+                        depth + 1,
+                        invocation,
+                        executable_storage,
+                        operations,
+                        reduce,
+                    )
+                },
             )?),
             Ty::ManuallyDrop(wrapper) => Ty::ManuallyDrop(wrapper.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
-                |child| self.map_universal_projection_type(child, env, depth + 1, reduce),
+                |child| {
+                    self.map_universal_projection_type_in(
+                        child,
+                        env,
+                        depth + 1,
+                        invocation,
+                        executable_storage,
+                        operations,
+                        reduce,
+                    )
+                },
             )?),
             Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
-                |child| self.map_universal_projection_type(child, env, depth + 1, reduce),
+                |child| {
+                    self.map_universal_projection_type_in(
+                        child,
+                        env,
+                        depth + 1,
+                        invocation,
+                        executable_storage,
+                        operations,
+                        reduce,
+                    )
+                },
             )?),
             Ty::Closure(closure) => Ty::Closure(Arc::new(closure.try_map(|child| {
-                self.map_universal_projection_type(child, env, depth + 1, reduce)
+                self.map_universal_projection_type_in(
+                    child,
+                    env,
+                    depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
+                    reduce,
+                )
             })?)),
             Ty::Opaque(opaque) => {
                 retain::<ir::OpaqueTy>(&self.budget, 1)?;
@@ -188,7 +346,15 @@ impl ValidatedTraitWorld {
                     // family remains its full source equation until a genuine
                     // conditional source certificate is available.
                     if self.raw_associated_ty_is_closed(child, depth + 1)? {
-                        self.map_universal_projection_type(child, env, depth + 1, reduce)
+                        self.map_universal_projection_type_in(
+                            child,
+                            env,
+                            depth + 1,
+                            invocation,
+                            executable_storage,
+                            operations,
+                            reduce,
+                        )
                     } else {
                         Ok(child.clone())
                     }
@@ -203,7 +369,15 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut actuals,
-                        self.map_universal_projection_type(actual, env, depth + 1, reduce)?,
+                        self.map_universal_projection_type_in(
+                            actual,
+                            env,
+                            depth + 1,
+                            invocation,
+                            executable_storage,
+                            operations,
+                            reduce,
+                        )?,
                     )?;
                 }
                 Ty::FnItem(Arc::new(CallTarget {
@@ -217,7 +391,15 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut args,
-                        self.map_universal_projection_type(argument, env, depth + 1, reduce)?,
+                        self.map_universal_projection_type_in(
+                            argument,
+                            env,
+                            depth + 1,
+                            invocation,
+                            executable_storage,
+                            operations,
+                            reduce,
+                        )?,
                     )?;
                 }
                 let mut associated_types = Vec::new();
@@ -227,7 +409,15 @@ impl ValidatedTraitWorld {
                         &mut associated_types,
                         (
                             *item,
-                            self.map_universal_projection_type(value, env, depth + 1, reduce)?,
+                            self.map_universal_projection_type_in(
+                                value,
+                                env,
+                                depth + 1,
+                                invocation,
+                                executable_storage,
+                                operations,
+                                reduce,
+                            )?,
                         ),
                     )?;
                 }
@@ -239,36 +429,48 @@ impl ValidatedTraitWorld {
             }
             Ty::Ref { kind, referent } => Ty::Ref {
                 kind: *kind,
-                referent: Arc::new(self.map_universal_projection_type(
+                referent: Arc::new(self.map_universal_projection_type_in(
                     referent,
                     env,
                     depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
                     reduce,
                 )?),
             },
             Ty::RawPtr { kind, pointee } => Ty::RawPtr {
                 kind: *kind,
-                pointee: Arc::new(self.map_universal_projection_type(
+                pointee: Arc::new(self.map_universal_projection_type_in(
                     pointee,
                     env,
                     depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
                     reduce,
                 )?),
             },
             Ty::Array { element, len } => Ty::Array {
-                element: Arc::new(self.map_universal_projection_type(
+                element: Arc::new(self.map_universal_projection_type_in(
                     element,
                     env,
                     depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
                     reduce,
                 )?),
                 len: *len,
             },
             Ty::Slice { element } => Ty::Slice {
-                element: Arc::new(self.map_universal_projection_type(
+                element: Arc::new(self.map_universal_projection_type_in(
                     element,
                     env,
                     depth + 1,
+                    invocation,
+                    executable_storage,
+                    operations,
                     reduce,
                 )?),
             },
@@ -278,18 +480,96 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut mapped,
-                        self.map_universal_projection_type(part, env, depth + 1, reduce)?,
+                        self.map_universal_projection_type_in(
+                            part,
+                            env,
+                            depth + 1,
+                            invocation,
+                            executable_storage,
+                            operations,
+                            reduce,
+                        )?,
                     )?;
                 }
                 Ty::Tuple(mapped.into())
             }
-            Ty::Struct(_) | Ty::Enum(_) => {
-                self.normalize_nominal_actuals(ty, env, depth, |actual| {
-                    self.map_universal_projection_type(actual, env, depth + 1, reduce)
-                })?
-            }
+            Ty::Struct(_) | Ty::Enum(_) => self.normalize_nominal_actuals_in(
+                ty,
+                env,
+                depth,
+                invocation.map(|(facts, _)| facts),
+                executable_storage,
+                operations,
+                |actual| {
+                    self.map_universal_projection_type_in(
+                        actual,
+                        env,
+                        depth + 1,
+                        invocation,
+                        executable_storage,
+                        operations,
+                        reduce,
+                    )
+                },
+            )?,
             _ => ty.clone(),
-        })
+        };
+        // Mapping must still visit every operand, replay transport, and reduce
+        // every requested projection. Once that work completes, a no-op must
+        // not mint a fresh closure/function/object identity: exact immutable
+        // allocation keys deliberately distinguish independently issued types.
+        let unchanged = match (ty, &mapped) {
+            (Ty::Closure(before), Ty::Closure(after)) => before.try_eq(after, |a, b| {
+                schema_instantiation::same_input(a, b, &self.budget, depth + 1)
+            })?,
+            (Ty::Opaque(before), Ty::Opaque(after)) => before.try_eq(after, |a, b| {
+                schema_instantiation::same_input(a, b, &self.budget, depth + 1)
+            })?,
+            (Ty::FnItem(before), Ty::FnItem(after)) => {
+                before.declaration == after.declaration
+                    && schema_instantiation::same_inputs(
+                        &before.type_args,
+                        &after.type_args,
+                        &self.budget,
+                        depth + 1,
+                    )?
+            }
+            (Ty::Dyn(before), Ty::Dyn(after)) => {
+                if before.principal != after.principal
+                    || before.associated_types.len() != after.associated_types.len()
+                    || !schema_instantiation::same_inputs(
+                        &before.args,
+                        &after.args,
+                        &self.budget,
+                        depth + 1,
+                    )?
+                {
+                    false
+                } else {
+                    let mut same = true;
+                    for ((left_item, left), (right_item, right)) in before
+                        .associated_types
+                        .iter()
+                        .zip(after.associated_types.iter())
+                    {
+                        if left_item != right_item
+                            || !schema_instantiation::same_input(
+                                left,
+                                right,
+                                &self.budget,
+                                depth + 1,
+                            )?
+                        {
+                            same = false;
+                            break;
+                        }
+                    }
+                    same
+                }
+            }
+            _ => false,
+        };
+        Ok(if unchanged { ty.clone() } else { mapped })
     }
 
     pub(super) fn normalize_instantiated_projection_signature(
@@ -298,50 +578,84 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<()> {
+        self.normalize_instantiated_projection_signature_for_use(signature, context, active, true)
+    }
+
+    pub(super) fn normalize_instantiated_projection_signature_for_use(
+        &self,
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+        executable_storage: bool,
+    ) -> Result<()> {
         self.check_context(context)?;
-        if !self.signature_contains_projection(signature)? {
-            return Ok(());
-        }
-        let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-            let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-            if let Some(ty) = self.declared_equality_rhs(
-                projection,
-                &context.predicates.predicates,
-                context.env(),
-            )? {
-                self.require_in(
-                    &Predicate::ProjectionEq {
-                        projection: projection.clone(),
-                        ty: ty.clone(),
-                    },
+        let operations = std::mem::take(&mut active.nominal_operations);
+        let result = (|| {
+            if !self.signature_contains_projection(signature)? {
+                return Ok(());
+            }
+            let context = ProofContext {
+                transport: operations.transport(context.transport),
+                ..context
+            };
+            let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+                let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                if let Some(ty) = self.declared_equality_rhs(
+                    projection,
+                    &context.predicates.predicates,
+                    context.env(),
+                )? {
+                    self.require_in(
+                        &Predicate::ProjectionEq {
+                            projection: projection.clone(),
+                            ty: ty.clone(),
+                        },
+                        context,
+                        active,
+                    )?;
+                    return Ok(ty);
+                }
+                if !self.raw_associated_ty_is_closed(&raw, 0)?
+                    && !self.checked_closure_projection(projection, context.env())?
+                    && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                {
+                    return Ok(raw);
+                }
+                // normalize_closed_projected_type validates every returned
+                // dependency under this exact context before returning.
+                let (normal, _) = self.normalize_closed_projected_type_for_use(
+                    &raw,
                     context,
+                    false,
                     active,
+                    executable_storage,
                 )?;
-                return Ok(ty);
+                Ok(normal)
+            };
+            for parameter in &mut signature.params {
+                *parameter = self.map_universal_projection_type_in(
+                    parameter,
+                    context.env(),
+                    0,
+                    context.original.map(|facts| (facts, context.transport)),
+                    executable_storage,
+                    &operations,
+                    &mut normalize,
+                )?;
             }
-            if !self.raw_associated_ty_is_closed(&raw, 0)?
-                && !self.checked_closure_projection(projection, context.env())?
-                && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
-            {
-                return Ok(raw);
-            }
-            // normalize_closed_projected_type validates every returned
-            // dependency under this exact context before returning.
-            let (normal, _) =
-                self.normalize_closed_projected_type_with(&raw, context, false, active)?;
-            Ok(normal)
-        };
-        for parameter in &mut signature.params {
-            *parameter =
-                self.map_universal_projection_type(parameter, context.env(), 0, &mut normalize)?;
-        }
-        signature.result = self.map_universal_projection_type(
-            &signature.result,
-            context.env(),
-            0,
-            &mut normalize,
-        )?;
-        Ok(())
+            signature.result = self.map_universal_projection_type_in(
+                &signature.result,
+                context.env(),
+                0,
+                context.original.map(|facts| (facts, context.transport)),
+                executable_storage,
+                &operations,
+                &mut normalize,
+            )?;
+            Ok(())
+        })();
+        active.nominal_operations = operations;
+        result
     }
 
     pub(super) fn normalize_instantiated_projection_predicates(
@@ -351,69 +665,97 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
     ) -> Result<Arc<[Predicate]>> {
         self.check_context(context)?;
-        let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-            let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-            if let Some(ty) = self.declared_equality_rhs(
-                projection,
-                &context.predicates.predicates,
-                context.env(),
-            )? {
-                self.require_in(
-                    &Predicate::ProjectionEq {
-                        projection: projection.clone(),
-                        ty: ty.clone(),
-                    },
-                    context,
-                    active,
-                )?;
-                return Ok(ty);
-            }
-            if !self.raw_associated_ty_is_closed(&raw, 0)?
-                && !self.checked_closure_projection(projection, context.env())?
-                && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
-            {
-                return Ok(raw);
-            }
-            // normalize_closed_projected_type validates every returned
-            // dependency under this exact context before returning.
-            let (normal, _) =
-                self.normalize_closed_projected_type_with(&raw, context, false, active)?;
-            Ok(normal)
-        };
-        let mut rows = Vec::new();
-        for predicate in predicates {
-            let goal = predicate.trait_ref();
-            let mut args = Vec::new();
-            for argument in goal.args.iter() {
-                push(
-                    &self.budget,
-                    &mut args,
-                    self.map_universal_projection_type(argument, context.env(), 0, &mut normalize)?,
-                )?;
-            }
-            let goal = TraitRef {
-                declaration: goal.declaration,
-                self_ty: self.map_universal_projection_type(
-                    &goal.self_ty,
+        let operations = std::mem::take(&mut active.nominal_operations);
+        let result = (|| {
+            let context = ProofContext {
+                transport: operations.transport(context.transport),
+                ..context
+            };
+            let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+                let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                if let Some(ty) = self.declared_equality_rhs(
+                    projection,
+                    &context.predicates.predicates,
                     context.env(),
-                    0,
-                    &mut normalize,
-                )?,
-                args: args.into(),
+                )? {
+                    self.require_in(
+                        &Predicate::ProjectionEq {
+                            projection: projection.clone(),
+                            ty: ty.clone(),
+                        },
+                        context,
+                        active,
+                    )?;
+                    return Ok(ty);
+                }
+                if !self.raw_associated_ty_is_closed(&raw, 0)?
+                    && !self.checked_closure_projection(projection, context.env())?
+                    && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                {
+                    return Ok(raw);
+                }
+                // normalize_closed_projected_type validates every returned
+                // dependency under this exact context before returning.
+                let (normal, _) = self
+                    .normalize_closed_projected_type_for_use(&raw, context, false, active, false)?;
+                Ok(normal)
             };
-            let row = match predicate {
-                Predicate::Implements(_) => Predicate::Implements(goal),
-                Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
-                    projection: ir::AssociatedTypeProjection {
-                        trait_ref: goal,
-                        item: projection.item,
+            let mut rows = Vec::new();
+            for predicate in predicates {
+                let goal = predicate.trait_ref();
+                let mut args = Vec::new();
+                for argument in goal.args.iter() {
+                    push(
+                        &self.budget,
+                        &mut args,
+                        self.map_universal_projection_type_in(
+                            argument,
+                            context.env(),
+                            0,
+                            context.original.map(|facts| (facts, context.transport)),
+                            false,
+                            &operations,
+                            &mut normalize,
+                        )?,
+                    )?;
+                }
+                let goal = TraitRef {
+                    declaration: goal.declaration,
+                    self_ty: self.map_universal_projection_type_in(
+                        &goal.self_ty,
+                        context.env(),
+                        0,
+                        context.original.map(|facts| (facts, context.transport)),
+                        false,
+                        &operations,
+                        &mut normalize,
+                    )?,
+                    args: args.into(),
+                };
+                let row = match predicate {
+                    Predicate::Implements(_) => Predicate::Implements(goal),
+                    Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
+                        projection: ir::AssociatedTypeProjection {
+                            trait_ref: goal,
+                            item: projection.item,
+                        },
+                        ty: self.map_universal_projection_type_in(
+                            ty,
+                            context.env(),
+                            0,
+                            context.original.map(|facts| (facts, context.transport)),
+                            false,
+                            &operations,
+                            &mut normalize,
+                        )?,
                     },
-                    ty: self.map_universal_projection_type(ty, context.env(), 0, &mut normalize)?,
-                },
-            };
-            push(&self.budget, &mut rows, row)?;
-        }
-        Ok(rows.into())
+                };
+                push(&self.budget, &mut rows, row)?;
+            }
+            Ok(rows.into())
+        })();
+        active.nominal_operations = operations;
+        result
     }
 
     pub(super) fn retain_universal_owner_projection(
@@ -443,9 +785,18 @@ impl ValidatedTraitWorld {
         call: &TraitCall,
         facts: &ValidatedFacts,
     ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
+        self.instantiate_universal_required_item_with(call, facts, &mut ProofScratch::default())
+    }
+
+    pub(super) fn instantiate_universal_required_item_with(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        active: &mut ProofScratch,
+    ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
         self.check_facts(facts, true)?;
         facts.validate_callee_metadata(&Callee::TraitItem(call.clone()))?;
-        if facts.phase() != FactsPhase::Universal || self.trait_call_is_closed(call, facts.env())? {
+        if facts.phase() != FactsPhase::Universal || self.trait_call_is_closed(call, facts)? {
             return Err(FactsError::invalid(
                 &self.budget,
                 "universal required method needs a rigid universal application",
@@ -461,15 +812,30 @@ impl ValidatedTraitWorld {
                 "universal required method changed owner or method arity",
             ));
         }
-        let context = ProofContext::from_facts(facts);
+        let mut nominals = Vec::new();
+        for actual in std::iter::once(&call.trait_ref.self_ty)
+            .chain(call.trait_ref.args.iter())
+            .chain(call.method_args.iter())
+        {
+            for nominal in facts.parent_local_receiver_inputs_with_active(actual, active)? {
+                push(&self.budget, &mut nominals, nominal)?;
+            }
+        }
+        let validation =
+            std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
+        let context = ProofContext {
+            transport: ParentLocalTransport::new(&nominals).with_validation(&validation),
+            ..ProofContext::from_facts(facts)
+        };
         let selection = self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut ProofScratch::default(),
+            active,
         )?;
         // The evidence is tied to this caller, never the empty closed context.
         if selection.0.world != self.id
             || selection.0.environment != facts.predicates.index
+            || !selection.0.executable_storage
             || selection.0.phase != FactsPhase::Universal
             || !self.eq_predicate(
                 &selection.0.goal,
@@ -483,11 +849,11 @@ impl ValidatedTraitWorld {
         }
         let mut arguments = self.trait_arguments(&call.trait_ref)?;
         for actual in call.method_args.iter() {
-            self.validate_ty_metadata_in(actual, facts.env(), 0)?;
+            facts.validate_ty_metadata(actual)?;
             push(&self.budget, &mut arguments, actual.clone())?;
         }
         let mut instantiated =
-            self.substitute_projected_schema(&item.schema, &arguments, facts.env())?;
+            self.substitute_projected_schema_with(&item.schema, &arguments, context, active)?;
         // A reference Self actual (`IntoIterator for &'a Vec<K>` in a generic
         // caller) expands the raw Self tail into exact input regions, derived
         // from the original schema as in `instantiate_projected_item`.
@@ -504,19 +870,14 @@ impl ValidatedTraitWorld {
                 || self
                     .opaque_associated_binding(projection, facts.env())?
                     .is_some()
-                || self.goal_is_closed(&projection.trait_ref, facts.env())?
+                || self.goal_is_closed_in_with(&projection.trait_ref, context, active)?
                 || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
                 || self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_some()
             {
                 let proof = self.normalize_projection_for_facts(projection, facts)?;
-                self.validate_equality_domain_in(
-                    projection,
-                    proof.ty(),
-                    context,
-                    &mut ProofScratch::default(),
-                )?;
+                self.validate_equality_domain_in(projection, proof.ty(), context, active)?;
                 let ty = proof.ty().clone();
                 push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
                 return Ok(ty);
@@ -524,16 +885,11 @@ impl ValidatedTraitWorld {
             let membership = self.require_in(
                 &Predicate::Implements(projection.trait_ref.clone()),
                 context,
-                &mut ProofScratch::default(),
+                active,
             )?;
             if matches!(membership.0.origin, ProofOrigin::Implementation { .. }) {
                 let ty = self.implementation_equality_rhs(projection, &membership, context)?;
-                self.validate_equality_domain_in(
-                    projection,
-                    &ty,
-                    context,
-                    &mut ProofScratch::default(),
-                )?;
+                self.validate_equality_domain_in(projection, &ty, context, active)?;
                 retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
                 retain::<Ty>(&self.budget, 1)?;
                 push(
@@ -547,17 +903,25 @@ impl ValidatedTraitWorld {
             Ok(Ty::AssociatedType(Arc::new(projection.clone())))
         };
         for parameter in &mut instantiated.signature.params {
-            *parameter =
-                self.map_universal_projection_type(parameter, facts.env(), 0, &mut reduce)?;
+            *parameter = self.map_universal_projection_type_for_use(
+                parameter,
+                facts.env(),
+                0,
+                Some((facts, context.transport)),
+                true,
+                &mut reduce,
+            )?;
         }
         let projected_result = charged(
             &self.budget,
             ir::contains_associated_types(&instantiated.signature.result, &self.budget),
         )?;
-        instantiated.signature.result = self.map_universal_projection_type(
+        instantiated.signature.result = self.map_universal_projection_type_for_use(
             &instantiated.signature.result,
             facts.env(),
             0,
+            Some((facts, context.transport)),
+            true,
             &mut reduce,
         )?;
         // A declaration result written as a projection has no reference
@@ -577,12 +941,19 @@ impl ValidatedTraitWorld {
         instantiated.predicates = self.normalize_instantiated_projection_predicates(
             &instantiated.predicates,
             context,
-            &mut ProofScratch::default(),
+            active,
         )?;
         for predicate in instantiated.predicates.iter() {
-            self.require_in(predicate, context, &mut ProofScratch::default())?;
+            self.require_in(predicate, context, active)?;
         }
-        self.validate_schema_signature(call.item, &instantiated.signature, facts.env(), None)?;
+        self.validate_schema_signature_with_scratch(
+            call.item,
+            &instantiated.signature,
+            facts.env(),
+            None,
+            Some(facts),
+            Some(&mut active.signature_formations),
+        )?;
         let source_regions = self.validate_source_regions(call.item, &instantiated.signature)?;
         retain::<UniversalMethodEvidence>(&self.budget, 1)?;
         retain::<Ty>(&self.budget, instantiated.signature.params.len())?;
@@ -620,8 +991,9 @@ impl ValidatedTraitWorld {
         item: DeclId,
         signature: &Signature,
         source: &ir::SourceRegionEnv,
+        env: &GenericEnv,
     ) -> Result<(ir::CarrierContract, ir::CarrierRegionSchema)> {
-        let (mut contract, regions) = self.derive_carriers(signature, source)?;
+        let (mut contract, regions) = self.derive_carriers(signature, source, env)?;
         let raw = &self.item_header(item)?.schema.signature;
         let declared_reference = charged(
             &self.budget,
@@ -673,6 +1045,7 @@ impl ValidatedTraitWorld {
             authority.call.item,
             &signature,
             &source_regions,
+            facts.env(),
         )?;
         let mut arguments = Vec::new();
         let mut components = Vec::new();
@@ -702,6 +1075,8 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         retain::<NativeHeapInvariant>(&self.budget, 0)?;
         Ok(CarrierContractView {
+            source_schema: None,
+            executable_storage: true,
             native_heap_invariants: Arc::from([]),
             nominal: None,
             physical: None,
@@ -889,6 +1264,7 @@ impl ValidatedTraitWorld {
             if !self.same_projection(projection, expected)?
                 || proof.0.world != expected_proof.0.world
                 || proof.0.environment != expected_proof.0.environment
+                || proof.0.executable_storage != expected_proof.0.executable_storage
                 || proof.0.phase != expected_proof.0.phase
                 || !self.eq_predicate(&proof.0.goal, &expected_proof.0.goal)?
                 || !self.same_universal_required_selection(proof, expected_proof, 0)?
@@ -917,6 +1293,7 @@ impl ValidatedTraitWorld {
             || evidence.source_regions != replay.source_regions
             || evidence.selection.0.world != replay.selection.0.world
             || evidence.selection.0.environment != replay.selection.0.environment
+            || evidence.selection.0.executable_storage != replay.selection.0.executable_storage
             || evidence.selection.0.phase != replay.selection.0.phase
             || !self.same_universal_required_selection(&evidence.selection, &replay.selection, 0)?
             || !self.eq_predicate(&evidence.selection.0.goal, &replay.selection.0.goal)?
@@ -1491,9 +1868,11 @@ mod tests {
         ] {
             let mut forged = (*evidence).clone();
             forged.selection = ProofEvidence(Arc::new(ProofRecord {
+                executable_storage: evidence.selection.0.executable_storage,
                 world: evidence.selection.0.world,
                 environment: evidence.selection.0.environment,
                 phase: evidence.selection.0.phase,
+                source_metadata: evidence.selection.0.source_metadata.clone(),
                 goal: evidence.selection.0.goal.clone(),
                 origin,
             }));
@@ -1626,8 +2005,11 @@ mod tests {
                         normal,
                         facts.env(),
                         ProofContext {
+                            transport: ParentLocalTransport::default(),
                             original: None,
+                            source_metadata: None,
                             predicates: &facts.predicates,
+                            executable_storage: true,
                             phase
                         },
                         &mut ProofScratch::default(),
@@ -1726,9 +2108,18 @@ mod tests {
     #[test]
     fn universal_required_method_rejects_forged_arguments_signature_and_caller() {
         let (world, facts, call) = fixture();
-        let (_, evidence) = world
-            .instantiate_universal_required_item(&call, &facts)
+        let mut active = ProofScratch::default();
+        let (application, evidence) = world
+            .instantiate_universal_required_item_with(&call, &facts, &mut active)
             .unwrap();
+        let (warm, _) = world
+            .instantiate_universal_required_item_with(&call, &facts, &mut active)
+            .unwrap();
+        assert!(
+            world
+                .eq_signature(&application.signature, &warm.signature)
+                .unwrap()
+        );
         let mut forged = (*evidence).clone();
         forged.signature.result = Ty::Bool;
         assert!(
@@ -1749,13 +2140,24 @@ mod tests {
         wrong_arity.method_args = Arc::from([Ty::Bool]);
         assert!(
             world
-                .instantiate_universal_required_item(&wrong_arity, &facts)
+                .instantiate_universal_required_item_with(&wrong_arity, &facts, &mut active)
                 .is_err()
         );
         let (_, foreign, _) = fixture();
         assert!(
             world
+                .instantiate_universal_required_item_with(&call, &foreign, &mut active)
+                .is_err()
+        );
+        assert!(
+            world
                 .validate_universal_required_evidence(&evidence, &foreign)
+                .is_err()
+        );
+        facts.budget().poison_ledger_for_tests();
+        assert!(
+            world
+                .instantiate_universal_required_item_with(&call, &facts, &mut active)
                 .is_err()
         );
     }

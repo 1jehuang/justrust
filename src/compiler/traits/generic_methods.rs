@@ -136,8 +136,14 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         scratch: &mut ProofScratch,
     ) -> Result<InstantiatedSchema> {
-        self.check_context(context)?;
-        self.validate_ref_with(goal, context.env(), None, &mut scratch.replays)?;
+        self.check_proof_context_caller(context)?;
+        self.validate_ref_with_facts(
+            goal,
+            context.env(),
+            None,
+            &mut scratch.replays,
+            context.metadata_facts(),
+        )?;
         if item.trait_decl != goal.declaration
             || self.info(item.declaration)?.own_env.arity() != method_args.len()
         {
@@ -155,8 +161,21 @@ impl ValidatedTraitWorld {
         }
         let projected = self.signature_contains_projection(&item.schema.signature)?;
         let result = if projected {
-            self.schema
-                .instantiate_schema(&item.schema, &arguments, context.env(), &self.budget)?
+            // This witness remains raw, exactly as the source adapter call was.
+            // Keep it separate from the later checked instantiation, but retain
+            // its exact schema and ordered actuals in this proof-local cache.
+            self.instantiate_raw_cached(
+                &item.schema,
+                &arguments,
+                ProofContext {
+                    transport: ParentLocalTransport::default(),
+                    original: None,
+                    source_metadata: context.source_metadata,
+                    ..context
+                },
+                Some(item.declaration),
+                &mut scratch.instantiations,
+            )?
         } else {
             self.instantiate_scratch_with_facts(
                 &item.schema,

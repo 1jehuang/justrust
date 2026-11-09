@@ -68,7 +68,24 @@ impl<'a> Specialization<'a> {
         publication
             .validate_source(publication.source(), publication.facts(), budget)
             .map_err(|error| source_fact_error(error, budget))?;
-        let closed = context.instance_facts(target).map_err(Error::new)?;
+        let mut same_closed_source = false;
+        if let Some(source_target) = publication.facts().target()
+            && source_target.declaration == target.declaration
+            && source_target.type_args.len() == target.type_args.len()
+        {
+            same_closed_source = true;
+            for (source, current) in source_target.type_args.iter().zip(target.type_args.iter()) {
+                if !ir::identical_type(source, current, budget).map_err(Error::new)? {
+                    same_closed_source = false;
+                    break;
+                }
+            }
+        }
+        let closed = if same_closed_source {
+            publication.facts().clone()
+        } else {
+            context.instance_facts(target).map_err(Error::new)?
+        };
         if closed.phase() != traits::FactsPhase::Closed
             || publication.facts().declaration() != target.declaration
             || closed.target() != Some(target)
@@ -94,19 +111,36 @@ impl<'a> Specialization<'a> {
     }
 
     pub(super) fn ty(&mut self, original: &ir::Ty) -> Result<ir::Ty, Error> {
+        self.closed
+            .validate_source_type_closing_context(
+                self.publication.facts(),
+                self.publication.facts().env(),
+                &self.target.type_args,
+            )
+            .map_err(|error| source_fact_error(error, self.budget))?;
+        self.publication
+            .facts()
+            .validate_ty_metadata_scratch(original, self.budget, &mut self.original_scratch)
+            .map_err(|error| source_fact_error(error, self.budget))?;
         for (source, mapped) in &self.types {
             if ir::identical_type(source, original, self.budget).map_err(Error::new)? {
+                self.closed
+                    .validate_ty_metadata_scratch(mapped, self.budget, &mut self.closed_scratch)
+                    .map_err(|error| source_fact_error(error, self.budget))?;
                 return Ok(mapped.clone());
             }
         }
-        let mapped = nominal_realization::substitution::substitute_ty(
+        let mapped = nominal_realization::substitution::substitute_source_ty_with_scratch(
             original,
+            self.publication.facts(),
             self.publication.facts().env(),
             &self.target.type_args,
-            ir::FactsCtx::from_validated(&self.closed),
+            &self.closed,
             &mut self.context,
             self.budget,
             Some(self.engine),
+            &mut self.original_scratch,
+            &mut self.closed_scratch,
         )
         .map_err(Error::new)?;
         self.budget

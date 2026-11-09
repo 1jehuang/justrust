@@ -36,13 +36,12 @@ impl PhysicalCarrierFlow {
         &self.view
     }
 
-    pub(in crate::compiler) fn validate_result(
+    pub(in crate::compiler) fn validate_boundary(
         &self,
         view: &traits::CarrierContractView,
         facts: &traits::ValidatedFacts,
         subject: ir::SignatureSubject<'_>,
         signature: &ir::Signature,
-        location: &ir::CarrierLocation,
     ) -> Result<(), String> {
         let budget = self.facts.budget();
         let same_subject = match (&self.target, subject) {
@@ -90,6 +89,19 @@ impl PhysicalCarrierFlow {
                 return Err("physical result flow changed its parameter metadata".into());
             }
         }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn validate_result(
+        &self,
+        view: &traits::CarrierContractView,
+        facts: &traits::ValidatedFacts,
+        subject: ir::SignatureSubject<'_>,
+        signature: &ir::Signature,
+        location: &ir::CarrierLocation,
+    ) -> Result<(), String> {
+        self.validate_boundary(view, facts, subject, signature)?;
+        let budget = self.facts.budget();
         for candidate in ir::carrier_locations(&signature.result, budget)?.iter() {
             budget.charge_work(1)?;
             if candidate == location {
@@ -876,7 +888,7 @@ mod tests {
     fn physical_borrowed_opaque_apply_matches_stock_workers1_8() {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
-        let source = "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)} fn make_adder(n:i32)->impl Fn(i32)->i32{move |x|x+n} fn main(){let a=make_adder(5);println!(\"{}\",apply(&a,10));}";
+        let source = "fn apply<F:Fn(i32)->i32>(f:F,x:i32)->i32{f(x)} fn make_adder(n:i32)->impl Fn(i32)->i32{move |x|x+n} fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x|g(f(x))} fn main(){let a=make_adder(5);println!(\"{}\",apply(&a,10));let c=compose(|x:i32|x*2,make_adder(1));println!(\"{}\",apply(&c,3));}";
         let directory = std::env::temp_dir().join(format!(
             "physical-borrowed-opaque-{}-{}",
             std::process::id(),
@@ -908,7 +920,7 @@ mod tests {
         );
         let expected = Command::new(&stock).output().unwrap();
         assert!(expected.status.success());
-        assert_eq!(expected.stdout, b"15\n");
+        assert_eq!(expected.stdout, b"15\n7\n");
         for workers in [1, 8] {
             let checked = compile(source.into(), workers, true)
                 .unwrap_or_else(|error| panic!("CHECK workers={workers}: {error}"));
@@ -1027,6 +1039,63 @@ mod tests {
                         .validate_carrier_view(physical.function(), &closed, None, &view)
                         .map_err(Error::new)?;
                     let flow = boundary.realize_flow(&closed).map_err(Error::new)?;
+                    flow.validate_boundary(
+                        flow.view(),
+                        &closed,
+                        ir::SignatureSubject::Body,
+                        &boundary.signature,
+                    )
+                    .map_err(Error::new)?;
+                    // Header replay must also protect carrier-free results,
+                    // where no validate_result call would exercise its guards.
+                    let cloned_view = flow.view().as_ref().clone();
+                    assert!(
+                        flow.validate_boundary(
+                            &cloned_view,
+                            &closed,
+                            ir::SignatureSubject::Body,
+                            &boundary.signature,
+                        )
+                        .is_err()
+                    );
+                    let cloned_facts = closed.as_ref().clone();
+                    assert!(
+                        flow.validate_boundary(
+                            flow.view(),
+                            &cloned_facts,
+                            ir::SignatureSubject::Body,
+                            &boundary.signature,
+                        )
+                        .is_err()
+                    );
+                    let other_subject = ir::Callee::Direct(target.clone());
+                    assert!(
+                        flow.validate_boundary(
+                            flow.view(),
+                            &closed,
+                            ir::SignatureSubject::Call(&other_subject),
+                            &boundary.signature,
+                        )
+                        .is_err()
+                    );
+                    let mut changed_signature = boundary.signature.clone();
+                    changed_signature.params.push(ir::Ty::Bool);
+                    assert!(
+                        flow.validate_boundary(
+                            flow.view(),
+                            &closed,
+                            ir::SignatureSubject::Body,
+                            &changed_signature,
+                        )
+                        .is_err()
+                    );
+                    flow.validate_boundary(
+                        flow.view(),
+                        &closed,
+                        ir::SignatureSubject::Body,
+                        &boundary.signature,
+                    )
+                    .map_err(Error::new)?;
                     for location in ir::carrier_locations(&boundary.signature.result, budget)
                         .map_err(Error::new)?
                         .iter()

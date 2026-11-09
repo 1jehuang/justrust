@@ -1,15 +1,106 @@
 //! Exact associated-projection families in declaration carrier transport.
 use super::*;
 
+/// A lexical borrow of one fully replayed immutable view and its exact caller.
+/// It carries no family answers and cannot be retained in facts or scratch.
+#[derive(Clone, Copy)]
+pub(in crate::compiler) struct CarrierViewReplay<'a> {
+    view: &'a CarrierContractView,
+    facts: &'a ValidatedFacts,
+}
+
+impl<'a> CarrierViewReplay<'a> {
+    pub(in crate::compiler) fn view(&self) -> &'a CarrierContractView {
+        self.view
+    }
+    pub(in crate::compiler) fn facts(&self) -> &'a ValidatedFacts {
+        self.facts
+    }
+
+    pub(in crate::compiler) fn validate_for(
+        &self,
+        view: &CarrierContractView,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        facts.world.check_facts(facts, true)?;
+        facts.world.check_context(ProofContext::from_facts(facts))?;
+        facts.world.check_normalization_budget()?;
+        checked_module(
+            facts.budget(),
+            facts
+                .world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        if !std::ptr::eq(self.view, view)
+            || !std::ptr::eq(self.facts, facts)
+            || view.physical.is_some()
+            || view.world != facts.world.id
+            || view.registry != facts.registry_snapshot()
+            || view.environment != facts.predicates.index
+            || view.phase != facts.phase()
+            || !view.budget.same_authority(facts.budget())
+            || view.executable_storage != view.source_schema.is_none()
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "carrier replay borrow changed exact view or live caller context",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl CarrierContractView {
+    pub(in crate::compiler) fn replay_for_families<'a>(
+        &'a self,
+        facts: &'a ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<CarrierViewReplay<'a>> {
+        self.validate_for_with_scratch(facts, scratch)?;
+        Ok(CarrierViewReplay { view: self, facts })
+    }
+
     pub fn family_actual(
         &self,
         family: &ir::CarrierFamily,
         facts: &ValidatedFacts,
     ) -> Result<Option<Ty>> {
-        self.validate_for(facts)?;
+        self.family_actual_with_scratch(family, facts, &mut TraitScratch::default())
+    }
+
+    pub fn family_actual_with_scratch(
+        &self,
+        family: &ir::CarrierFamily,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Ty>> {
+        let replay = self.replay_for_families(facts, scratch)?;
+        self.family_actual_with_replay(family, facts, &replay, scratch)
+    }
+
+    pub(in crate::compiler) fn family_actual_with_replay(
+        &self,
+        family: &ir::CarrierFamily,
+        facts: &ValidatedFacts,
+        replay: &CarrierViewReplay<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<Ty>> {
+        replay.validate_for(self, facts)?;
         match family {
             ir::CarrierFamily::Parameter(parameter) => {
+                if let Some(nominal) = &self.nominal {
+                    let arguments = nominal.storage_arguments(facts)?;
+                    return Ok(self
+                        .original_env
+                        .ordered_params()
+                        .position(|p| p == *parameter)
+                        .and_then(|index| arguments.get(index))
+                        .cloned());
+                }
                 Ok(self.parameter_actual(*parameter)?.map(|(_, ty)| ty.clone()))
             }
             ir::CarrierFamily::Opaque(opaque) => {
@@ -44,11 +135,12 @@ impl CarrierContractView {
                         "opaque family is absent from exact original carrier contract",
                     ));
                 }
-                Ok(Some(facts.world.realize_opaque_family(
+                Ok(Some(facts.world.realize_opaque_family_with_scratch(
                     opaque,
                     &self.original_env,
                     &self.arguments,
                     facts,
+                    scratch,
                 )?))
             }
             ir::CarrierFamily::Projection(projection) => {
@@ -87,11 +179,12 @@ impl CarrierContractView {
                         "projection family is absent from exact original carrier contract",
                     ));
                 }
-                Ok(Some(facts.world.realize_projection_family(
+                Ok(Some(facts.world.realize_projection_family_with_scratch(
                     projection,
                     &self.original_env,
                     &self.arguments,
                     facts,
+                    scratch,
                 )?))
             }
         }
@@ -99,15 +192,17 @@ impl CarrierContractView {
 }
 
 impl ValidatedTraitWorld {
-    pub(super) fn realize_projection_family(
+    pub(super) fn realize_projection_family_with_scratch(
         &self,
         projection: &Arc<ir::AssociatedTypeProjection>,
         env: &GenericEnv,
         args: &[Ty],
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Ty> {
         self.check_facts(facts, false)?;
-        self.validate_universal_projection(projection, env)?;
+        scratch.for_facts(facts);
+        self.validate_universal_projection_with(projection, env, scratch.for_world(self.id))?;
         let raw = Ty::AssociatedType(projection.clone());
         let schema = GenericSchema {
             env: Arc::new(env.clone()),
@@ -118,11 +213,17 @@ impl ValidatedTraitWorld {
             },
             predicates: Arc::from([]),
         };
-        let value = self.substitute_projected_schema(&schema, args, facts.env())?;
+        let value =
+            self.substitute_carrier_schema(&schema, args, facts, scratch.for_world(self.id))?;
         let actual = value.signature.result;
         if self.raw_associated_ty_is_closed(&actual, 0)? {
             return Ok(self
-                .normalize_closed_projected_type(&actual, ProofContext::from_facts(facts), false)?
+                .normalize_closed_projected_type_with(
+                    &actual,
+                    ProofContext::from_facts(facts),
+                    false,
+                    scratch.for_world(self.id),
+                )?
                 .0);
         }
         let Ty::AssociatedType(projection) = &actual else {
@@ -131,7 +232,182 @@ impl ValidatedTraitWorld {
                 "projection family substitution changed its outer identity",
             ));
         };
-        self.validate_universal_projection(projection, facts.env())?;
-        Ok(actual)
+        self.validate_universal_projection_with(
+            projection,
+            facts.env(),
+            scratch.for_world(self.id),
+        )?;
+        self.normalize_carrier_equality_type_with_scratch(&actual, facts, scratch)
+    }
+
+    // Carrier channels and the instantiated signature must use the same
+    // authenticated equality normal form. A rigid family stays rigid only
+    // when the caller has no reduction for that exact associated item.
+    fn normalize_carrier_equality_type_with_scratch(
+        &self,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
+        self.check_facts(facts, true)?;
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let inputs = facts.parent_local_signature_inputs_with_scratch(
+            &Signature {
+                params: Vec::new(),
+                result: ty.clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            scratch,
+        )?;
+        let context = ProofContext {
+            transport: ParentLocalTransport::new(&inputs),
+            ..ProofContext::from_facts(facts)
+        };
+        context
+            .transport
+            .validate_with_scratch(self, facts, scratch)?;
+        self.validate_ty_metadata_with_facts(
+            ty,
+            facts.env(),
+            0,
+            &mut scratch.for_world(self.id).replays,
+            Some(facts),
+        )?;
+        self.map_universal_projection_type_for_use(
+            ty,
+            facts.env(),
+            0,
+            Some((facts, context.transport)),
+            false,
+            &mut |projection| {
+                if let FactsSubject::UniversalCallable(declaration) = facts.subject
+                    && let Some(normal) =
+                        self.normalize_exact_owner_projection(declaration, projection)?
+                {
+                    return Ok(normal);
+                }
+                if self.checked_closure_projection(projection, facts.env())?
+                    || self.goal_is_closed_in_with(
+                        &projection.trait_ref,
+                        context,
+                        scratch.for_world(self.id),
+                    )?
+                    || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                {
+                    let evidence = self.normalize_closed_equality_projection_for_use(
+                        projection,
+                        context,
+                        scratch.for_world(self.id),
+                        false,
+                    )?;
+                    return Ok(evidence.ty().clone());
+                }
+                if self
+                    .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
+                    .is_some()
+                {
+                    let evidence = self.normalize_projection_equality(projection, facts)?;
+                    return Ok(evidence.ty().clone());
+                }
+                self.validate_universal_projection_with(
+                    projection,
+                    facts.env(),
+                    scratch.for_world(self.id),
+                )?;
+                self.require_in(
+                    &Predicate::Implements(projection.trait_ref.clone()),
+                    context,
+                    scratch.for_world(self.id),
+                )?;
+                retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                Ok(Ty::AssociatedType(Arc::new(projection.clone())))
+            },
+        )
+    }
+
+    /// A declaration-owned associated producer can carry another family only
+    /// when its canonical bound declares that exact output. Sharing a generic
+    /// owner or a field path alone never creates this edge.
+    pub(super) fn associated_carrier_source(
+        &self,
+        destination: &ir::CarrierChannel,
+        source: &ir::CarrierChannel,
+        env: &GenericEnv,
+    ) -> Result<bool> {
+        let ir::CarrierChannel::ProjectionTail {
+            projection: input,
+            prefix: 0,
+        } = source
+        else {
+            return Ok(false);
+        };
+        let wanted = match destination {
+            ir::CarrierChannel::ProjectionTail {
+                projection,
+                prefix: 0,
+            } => {
+                retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                Ty::AssociatedType(projection.clone())
+            }
+            ir::CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } => Ty::Param(*parameter),
+            _ => return Ok(false),
+        };
+        let rows = self.associated_bounds_for(input.item, &input.trait_ref, env)?;
+        for row in rows.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let Predicate::ProjectionEq {
+                projection: produced,
+                ty,
+            } = row
+            else {
+                continue;
+            };
+            if !self.eq_ty(
+                &produced.trait_ref.self_ty,
+                &Ty::AssociatedType(input.clone()),
+                0,
+            )? || !self.eq_ty(ty, &wanted, 0)?
+            {
+                continue;
+            }
+            // An assignment without its associated producer membership is not
+            // enough. The complete validated bound batch supplies both.
+            for member in rows.iter() {
+                if matches!(member, Predicate::Implements(_))
+                    && self
+                        .eq_predicate(member, &Predicate::Implements(produced.trait_ref.clone()))?
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub(super) fn substitute_carrier_schema(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        facts: &ValidatedFacts,
+        active: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
+        self.check_facts(facts, true)?;
+        let mut nominals = Vec::new();
+        for argument in args {
+            for nominal in facts.parent_local_receiver_inputs_with_active(argument, active)? {
+                push(&self.budget, &mut nominals, nominal)?;
+            }
+        }
+        let context = ProofContext {
+            transport: ParentLocalTransport::new(&nominals),
+            ..ProofContext::from_facts(facts)
+        };
+        context
+            .transport
+            .validate_with_replay(self, facts, &mut active.transport_validation)?;
+        self.substitute_projected_schema_with(schema, args, context, active)
     }
 }

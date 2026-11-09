@@ -21,6 +21,7 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<bool> {
+        let scratch = &mut TraitScratch::default();
         let parameter = view.original_env.ordered_params().next().unwrap();
         let actual = &view.arguments[0];
         let locations = charged(&self.budget, ir::carrier_locations(actual, &self.budget))?;
@@ -56,6 +57,7 @@ impl ValidatedTraitWorld {
                     &ir::CarrierPath::default(),
                     facts,
                     0,
+                    scratch,
                 )?
                 .is_some()
             {
@@ -77,6 +79,7 @@ impl ValidatedTraitWorld {
                 &ir::CarrierPath::default(),
                 facts,
                 0,
+                scratch,
             )?
             .is_some()
         {
@@ -101,7 +104,7 @@ impl ValidatedTraitWorld {
             predicates: &raw.predicates,
             self_ty: &raw.signature.params[0],
         };
-        if !self.closed_item_root_context(&raw, bound, input, &context, facts)? {
+        if !self.closed_item_root_context(&raw, bound, input, &context, facts, scratch)? {
             return Ok(false);
         }
         let actual_bridge = ir::AssociatedTypeProjection {
@@ -112,6 +115,7 @@ impl ValidatedTraitWorld {
                     &projection.trait_ref.self_ty,
                     &context,
                     facts,
+                    scratch,
                 )?,
                 args: Arc::from([]),
             },
@@ -119,20 +123,22 @@ impl ValidatedTraitWorld {
         let membership = self.require_in(
             &Predicate::Implements(actual_bridge.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
-        let replay = self.replay_implementation_assignment(
+        let replay = self.replay_implementation_assignment_with(
             &actual_bridge,
             &membership,
             ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
         )?;
         if !matches!(replay, Ty::AssociatedType(_)) {
             return Ok(false);
         }
-        match self.implementation_equality_rhs(
+        match self.implementation_equality_rhs_with(
             &actual_bridge,
             &membership,
             ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
         ) {
             Err(error) if error.kind() == FactsErrorKind::Unsupported => {}
             _ => return Ok(false),
@@ -159,10 +165,11 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            match self.replay_implementation_assignment(
+            match self.replay_implementation_assignment_with(
                 &actual_bridge,
                 &forged,
                 ProofContext::from_facts(facts),
+                scratch.for_world(self.id),
             ) {
                 Err(error) if error.kind() == FactsErrorKind::InvalidMetadata => {}
                 _ => return Ok(false),
@@ -174,7 +181,12 @@ impl ValidatedTraitWorld {
             args: Arc::from([]),
         };
         if !self
-            .item_region_predicates(&[Predicate::Implements(sized.clone())], &context, facts)?
+            .item_region_predicates(
+                &[Predicate::Implements(sized.clone())],
+                &context,
+                facts,
+                scratch,
+            )?
             .is_empty()
         {
             return Ok(false);
@@ -182,7 +194,12 @@ impl ValidatedTraitWorld {
         let mut lookalike = sized.clone();
         lookalike.declaration = bound.declaration;
         if self
-            .item_region_predicates(&[Predicate::Implements(lookalike)], &context, facts)?
+            .item_region_predicates(
+                &[Predicate::Implements(lookalike)],
+                &context,
+                facts,
+                scratch,
+            )?
             .len()
             != 1
         {
@@ -191,7 +208,12 @@ impl ValidatedTraitWorld {
         let mut malformed = sized;
         malformed.args = Arc::from([raw.signature.params[0].clone()]);
         if self
-            .item_region_predicates(&[Predicate::Implements(malformed)], &context, facts)?
+            .item_region_predicates(
+                &[Predicate::Implements(malformed)],
+                &context,
+                facts,
+                scratch,
+            )?
             .len()
             != 1
         {
@@ -210,16 +232,17 @@ impl ValidatedTraitWorld {
             return Ok(false);
         }
         let actual_output =
-            self.item_region_substitution(&raw.signature.result, &context, facts)?;
+            self.item_region_substitution(&raw.signature.result, &context, facts, scratch)?;
         let actual_element = self.item_region_substitution(
             &Ty::AssociatedType(Arc::new(input.clone())),
             &context,
             facts,
+            scratch,
         )?;
         // The original bridge projection supplies the genuine constructor
         // argument, not a fabricated type or an independently guessed wrapper.
         let actual_wrapper =
-            self.item_region_substitution(&projection.trait_ref.self_ty, &context, facts)?;
+            self.item_region_substitution(&projection.trait_ref.self_ty, &context, facts, scratch)?;
         let required_call = ir::TraitCall {
             trait_ref: TraitRef {
                 declaration: bound.declaration,
@@ -231,7 +254,7 @@ impl ValidatedTraitWorld {
         };
         let callee = Callee::TraitItem(required_call);
         let required_view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
-        required_view.validate_for(facts)?;
+        required_view.validate_for_with_scratch(facts, scratch)?;
         if required_view.contract.results.len() != 1
             || required_view.contract.results[0].sources.len() != 1
         {
@@ -283,6 +306,7 @@ impl ValidatedTraitWorld {
             required_projection,
             &required_context,
             facts,
+            scratch,
         )? {
             return Ok(false);
         }
@@ -312,6 +336,7 @@ impl ValidatedTraitWorld {
                 required_projection,
                 &required_context,
                 facts,
+                scratch,
             ) {
                 Ok(false) => {}
                 Err(error) if error.kind() == FactsErrorKind::InvalidMetadata => {}
@@ -357,9 +382,10 @@ impl ValidatedTraitWorld {
         foreign_bound.self_ty = raw.signature.params[0].clone();
         rows.push(Predicate::Implements(foreign_bound));
         forged.predicates = rows.into();
-        Ok(!self.closed_item_root_context(&forged, bound, input, &context, facts)?)
+        Ok(!self.closed_item_root_context(&forged, bound, input, &context, facts, scratch)?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn projected_item_result_sources(
         &self,
         declaration: DeclId,
@@ -368,6 +394,7 @@ impl ValidatedTraitWorld {
         raw: &GenericSchema,
         arguments: &[Ty],
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Arc<[ir::InputCarrier]>>> {
         charged(&self.budget, self.budget.charge_work(raw.predicates.len()))?;
         if matches!(raw.signature.result, Ty::Enum(_)) {
@@ -378,6 +405,7 @@ impl ValidatedTraitWorld {
                 raw,
                 arguments,
                 facts,
+                scratch,
             );
         }
         if matches!(raw.signature.result, Ty::Struct(_)) {
@@ -388,6 +416,7 @@ impl ValidatedTraitWorld {
                 raw,
                 arguments,
                 facts,
+                scratch,
             );
         }
         if facts.phase() != FactsPhase::Closed
@@ -424,7 +453,7 @@ impl ValidatedTraitWorld {
             predicates: &raw.predicates,
             self_ty: &raw.signature.params[0],
         };
-        let rows = self.item_region_predicates(&raw.predicates, &context, facts)?;
+        let rows = self.item_region_predicates(&raw.predicates, &context, facts, scratch)?;
         let mut bound = None;
         for predicate in rows {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -499,11 +528,12 @@ impl ValidatedTraitWorld {
                 projection,
                 &context,
                 facts,
+                scratch,
             )? {
                 return Ok(None);
             }
         } else {
-            if !self.closed_item_root_context(raw, goal, projection, &context, facts)? {
+            if !self.closed_item_root_context(raw, goal, projection, &context, facts, scratch)? {
                 return Ok(None);
             }
             // Only executable declarations have retained body obligations. A
@@ -515,8 +545,9 @@ impl ValidatedTraitWorld {
                 return Ok(None);
             }
         }
-        let actual_self = self.item_region_substitution(&goal.self_ty, &context, facts)?;
-        let actual_argument = self.item_region_substitution(&goal.args[0], &context, facts)?;
+        let actual_self = self.item_region_substitution(&goal.self_ty, &context, facts, scratch)?;
+        let actual_argument =
+            self.item_region_substitution(&goal.args[0], &context, facts, scratch)?;
         retain::<Ty>(&self.budget, 1)?;
         let actual_goal = TraitRef {
             declaration: goal.declaration,
@@ -526,7 +557,7 @@ impl ValidatedTraitWorld {
         let membership = self.require_in(
             &Predicate::Implements(actual_goal),
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         let ProofOrigin::Implementation {
             declaration,
@@ -554,8 +585,13 @@ impl ValidatedTraitWorld {
             predicates: &header.predicates,
             self_ty: &header.trait_ref.self_ty,
         };
-        let inverse =
-            self.item_region_locations(&header.trait_ref.self_ty, &selected, component, facts)?;
+        let inverse = self.item_region_locations(
+            &header.trait_ref.self_ty,
+            &selected,
+            component,
+            facts,
+            scratch,
+        )?;
         if inverse.is_empty() {
             return Ok(None);
         }
@@ -581,9 +617,14 @@ impl ValidatedTraitWorld {
                 {
                     return Ok(None);
                 }
-                for expanded in
-                    self.expand_carrier(location, selected.env, selected.arguments, &[], facts)?
-                {
+                for expanded in self.expand_carrier_with_scratch(
+                    location,
+                    selected.env,
+                    selected.arguments,
+                    &[],
+                    facts,
+                    scratch,
+                )? {
                     let Some(component) = expanded.component.as_ref() else {
                         continue;
                     };
@@ -597,6 +638,7 @@ impl ValidatedTraitWorld {
                         &ir::CarrierPath::default(),
                         facts,
                         0,
+                        scratch,
                     )?
                     else {
                         return Ok(None);
@@ -643,6 +685,7 @@ impl ValidatedTraitWorld {
         raw: &GenericSchema,
         arguments: &[Ty],
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Arc<[ir::InputCarrier]>>> {
         if facts.phase() != FactsPhase::Closed
             || raw.signature.params.len() != 1
@@ -832,6 +875,7 @@ impl ValidatedTraitWorld {
                 projection,
                 &context,
                 facts,
+                scratch,
             )? {
                 return Ok(None);
             }
@@ -850,7 +894,7 @@ impl ValidatedTraitWorld {
             return Ok(None);
         }
         let actual_self =
-            self.item_region_substitution(&header.trait_ref.self_ty, &context, facts)?;
+            self.item_region_substitution(&header.trait_ref.self_ty, &context, facts, scratch)?;
         let call = TraitCall {
             trait_ref: TraitRef {
                 declaration: header.trait_ref.declaration,
@@ -860,17 +904,10 @@ impl ValidatedTraitWorld {
             item: required_item,
             method_args: Arc::from([]),
         };
-        let mut scratch = TraitScratch::default();
-        let selected = self.resolve_trait_call_with(&call, facts, &mut scratch)?;
-        let Callee::Direct(target) = selected.callee() else {
-            return Ok(None);
-        };
-        if target.declaration != declaration || !self.eq_types(&target.type_args, arguments, 0)? {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "projected envelope changed selected implementation",
-            ));
-        }
+        // The unique original required-item mapping above authenticates the
+        // selected member. Replay its implementation obligation once below:
+        // the exact selected owner and ordered actuals determine that same
+        // member without rebuilding its complete signature a second time.
         let actual_projection = ir::AssociatedTypeProjection {
             item: projection.item,
             trait_ref: call.trait_ref.clone(),
@@ -890,12 +927,14 @@ impl ValidatedTraitWorld {
         if *selected_owner != owner || !self.eq_types(selected_arguments, arguments, 0)? {
             return Ok(None);
         }
-        let replayed = self.replay_implementation_assignment(
+        let replayed = self.replay_implementation_assignment_with(
             &actual_projection,
             &membership,
             ProofContext::from_facts(facts),
+            scratch.for_world(self.id),
         )?;
-        let expected = self.item_region_substitution(&Ty::Param(*parameter), &context, facts)?;
+        let expected =
+            self.item_region_substitution(&Ty::Param(*parameter), &context, facts, scratch)?;
         if !self.eq_ty(&replayed, &expected, 0)? {
             return Ok(None);
         }
@@ -923,9 +962,19 @@ impl ValidatedTraitWorld {
             } else {
                 self.item_region_prefix(&prefix, component)?
             };
-            self.item_projection_regions(output_projection, &selected, &context, &prefix, facts, 0)?
+            self.item_projection_regions(
+                output_projection,
+                &selected,
+                &context,
+                &prefix,
+                facts,
+                0,
+                scratch,
+            )?
         } else {
-            self.item_parameter_regions(*parameter, component, &context, &prefix, facts, 0)?
+            self.item_parameter_regions(
+                *parameter, component, &context, &prefix, facts, 0, scratch,
+            )?
         };
         let Some(locations) = locations else {
             return Ok(None);
@@ -951,17 +1000,19 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<bool> {
-        view.validate_for(facts)?;
+        let scratch = &mut TraitScratch::default();
+        view.validate_for_with_scratch(facts, scratch)?;
         let raw = self.normalized_declaration_schema(view.declaration)?;
         let [row] = view.original_contract.results.as_ref() else {
             return Ok(false);
         };
-        let expansions = self.expand_carrier(
+        let expansions = self.expand_carrier_with_scratch(
             &row.location,
             &raw.env,
             &view.arguments,
             &view.nominals,
             facts,
+            scratch,
         )?;
         let [output] = expansions.as_slice() else {
             return Ok(false);
@@ -974,13 +1025,15 @@ impl ValidatedTraitWorld {
                 &raw,
                 &view.arguments,
                 facts,
+                scratch,
             )?
             .as_deref()
             != Some(view.contract.results[0].sources.as_ref())
         {
             return Ok(false);
         }
-        for mutation in 0..7 {
+        for mutation in 0..9 {
+            let mut declaration = view.declaration;
             let mut forged = raw.clone();
             let mut row = row.clone();
             let mut args = view.arguments.clone();
@@ -1021,15 +1074,26 @@ impl ValidatedTraitWorld {
                 }
                 5 => args = Arc::from([]),
                 6 => forged.signature.params[0] = Ty::Bool,
+                7 => {
+                    let mut reordered = args.to_vec();
+                    reordered.swap(0, 1);
+                    args = reordered.into();
+                }
+                8 => {
+                    declaration = self.info(view.declaration)?.owner.ok_or_else(|| {
+                        FactsError::invalid(&self.budget, "projected envelope lost original owner")
+                    })?;
+                }
                 _ => unreachable!(),
             }
             match self.direct_projected_envelope_sources(
-                view.declaration,
+                declaration,
                 &row,
                 output,
                 &forged,
                 &args,
                 facts,
+                scratch,
             ) {
                 Ok(None) => {}
                 Err(error) if error.kind() == FactsErrorKind::InvalidMetadata => {}
@@ -1052,6 +1116,7 @@ impl ValidatedTraitWorld {
         raw: &GenericSchema,
         arguments: &[Ty],
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Arc<[ir::InputCarrier]>>> {
         if facts.phase() != FactsPhase::Closed
             || raw.signature.params.len() != 1
@@ -1144,12 +1209,12 @@ impl ValidatedTraitWorld {
             self_ty: &raw.signature.params[0],
         };
         if !self
-            .item_region_predicates(&header.predicates, &context, facts)?
+            .item_region_predicates(&header.predicates, &context, facts, scratch)?
             .is_empty()
         {
             return Ok(None);
         }
-        let rows = self.item_region_predicates(&raw.predicates, &context, facts)?;
+        let rows = self.item_region_predicates(&raw.predicates, &context, facts, scratch)?;
         let mut projection = None;
         for row in rows.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -1199,11 +1264,13 @@ impl ValidatedTraitWorld {
                     &header.trait_ref.self_ty,
                     &context,
                     facts,
+                    scratch,
                 )?,
                 args: Arc::from([self.item_region_substitution(
                     &Ty::Param(*element),
                     &context,
                     facts,
+                    scratch,
                 )?]),
             },
             item,
@@ -1211,9 +1278,10 @@ impl ValidatedTraitWorld {
                 &Ty::Param(input),
                 &context,
                 facts,
+                scratch,
             )?]),
         };
-        let selected = self.resolve_trait_call(&call, facts)?;
+        let selected = self.resolve_trait_call_with(&call, facts, scratch)?;
         let Callee::Direct(target) = selected.callee() else {
             return Ok(None);
         };
@@ -1238,12 +1306,13 @@ impl ValidatedTraitWorld {
         }
         let mut sources = None;
         for row in required_retained.contract.results.iter() {
-            for required_output in self.expand_carrier(
+            for required_output in self.expand_carrier_with_scratch(
                 &row.location,
                 &required_raw.env,
                 &required_arguments,
                 &[],
                 facts,
+                scratch,
             )? {
                 if !self.same_location(&required_output.location, &output.location)? {
                     continue;
@@ -1255,6 +1324,7 @@ impl ValidatedTraitWorld {
                     &required_raw,
                     &required_arguments,
                     facts,
+                    scratch,
                 )?
                 else {
                     return Ok(None);
@@ -1273,17 +1343,19 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<bool> {
-        view.validate_for(facts)?;
+        let scratch = &mut TraitScratch::default();
+        view.validate_for_with_scratch(facts, scratch)?;
         let raw = self.normalized_declaration_schema(view.declaration)?;
         let [result] = view.original_contract.results.as_ref() else {
             return Ok(false);
         };
-        let expansions = self.expand_carrier(
+        let expansions = self.expand_carrier_with_scratch(
             &result.location,
             &raw.env,
             &view.arguments,
             &view.nominals,
             facts,
+            scratch,
         )?;
         let [output] = expansions.as_slice() else {
             return Ok(false);
@@ -1295,6 +1367,7 @@ impl ValidatedTraitWorld {
             &raw,
             &view.arguments,
             facts,
+            scratch,
         )?;
         let Some(genuine) = genuine else {
             return Ok(false);
@@ -1344,6 +1417,7 @@ impl ValidatedTraitWorld {
                 &forged,
                 arguments,
                 facts,
+                scratch,
             ) {
                 Ok(None) => {}
                 Err(error) if error.kind() == FactsErrorKind::InvalidMetadata => {}
@@ -1379,6 +1453,7 @@ impl ValidatedTraitWorld {
         required: &ir::AssociatedTypeProjection,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<bool> {
         if context.env.total_arity() != 2
             || !input.trait_ref.args.is_empty()
@@ -1407,7 +1482,7 @@ impl ValidatedTraitWorld {
         if fields.len() != 1 || fields[0].ty != Ty::Param(iterator) {
             return Ok(false);
         }
-        let rows = self.item_region_predicates(context.predicates, context, facts)?;
+        let rows = self.item_region_predicates(context.predicates, context, facts, scratch)?;
         if rows.len() != 3 {
             return Ok(false);
         }
@@ -1437,7 +1512,8 @@ impl ValidatedTraitWorld {
                 return Ok(false);
             }
         }
-        let actual = self.item_region_substitution(&Ty::Param(parameter), context, facts)?;
+        let actual =
+            self.item_region_substitution(&Ty::Param(parameter), context, facts, scratch)?;
         self.require_in(
             &Predicate::Implements(TraitRef {
                 declaration: self.catalog.id(CatalogItem::Clone),
@@ -1445,7 +1521,7 @@ impl ValidatedTraitWorld {
                 args: Arc::from([]),
             }),
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         Ok(true)
     }
@@ -1458,6 +1534,7 @@ impl ValidatedTraitWorld {
         predicates: &'a [Predicate],
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Vec<&'a Predicate>> {
         let mut rows = Vec::new();
         for predicate in predicates {
@@ -1467,7 +1544,8 @@ impl ValidatedTraitWorld {
                 && goal.args.is_empty()
                 && matches!(goal.self_ty, Ty::Param(_))
             {
-                let self_ty = self.item_region_substitution(&goal.self_ty, context, facts)?;
+                let self_ty =
+                    self.item_region_substitution(&goal.self_ty, context, facts, scratch)?;
                 self.require_in(
                     &Predicate::Implements(TraitRef {
                         declaration: self.catalog.id(CatalogItem::Sized),
@@ -1475,7 +1553,7 @@ impl ValidatedTraitWorld {
                         args: Arc::from([]),
                     }),
                     ProofContext::from_facts(facts),
-                    &mut ProofScratch::default(),
+                    scratch.for_world(self.id),
                 )?;
             } else {
                 push(&self.budget, &mut rows, predicate)?;
@@ -1534,6 +1612,7 @@ impl ValidatedTraitWorld {
         input: &ir::AssociatedTypeProjection,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<bool> {
         let item = self.item_header(declaration)?;
         let info = self.info(declaration)?;
@@ -1573,7 +1652,7 @@ impl ValidatedTraitWorld {
             return Ok(false);
         }
         self.compare_predicate_rows(&raw.predicates, &original.predicates)?;
-        let rows = self.item_region_predicates(&raw.predicates, context, facts)?;
+        let rows = self.item_region_predicates(&raw.predicates, context, facts, scratch)?;
         if rows.len() != 3 {
             return Ok(false);
         }
@@ -1602,6 +1681,7 @@ impl ValidatedTraitWorld {
         alias: &ir::AssociatedTypeProjection,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<bool> {
         let Ty::Struct(wrapper) = context.self_ty else {
             return Ok(false);
@@ -1616,7 +1696,7 @@ impl ValidatedTraitWorld {
         if fields.len() != 1 || fields[0].ty != Ty::Param(*parameter) {
             return Ok(false);
         }
-        let rows = self.item_region_predicates(context.predicates, context, facts)?;
+        let rows = self.item_region_predicates(context.predicates, context, facts, scratch)?;
         Ok(rows.len() == 1
             && self.eq_predicate(rows[0], &Predicate::Implements(alias.trait_ref.clone()))?)
     }
@@ -1628,8 +1708,9 @@ impl ValidatedTraitWorld {
         input: &ir::AssociatedTypeProjection,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<bool> {
-        let rows = self.item_region_predicates(&raw.predicates, context, facts)?;
+        let rows = self.item_region_predicates(&raw.predicates, context, facts, scratch)?;
         if !(3..=4).contains(&rows.len()) || !input.trait_ref.args.is_empty() {
             return Ok(false);
         }
@@ -1701,16 +1782,19 @@ impl ValidatedTraitWorld {
             &Ty::AssociatedType(Arc::new(bridge.clone())),
             context,
             facts,
+            scratch,
         )?;
         let expected = self.item_region_substitution(
             &Ty::AssociatedType(Arc::new(input.clone())),
             context,
             facts,
+            scratch,
         )?;
         if !self.eq_ty(&actual, &expected, 0)? {
             return Ok(false);
         }
-        let self_ty = self.item_region_substitution(&bridge.trait_ref.self_ty, context, facts)?;
+        let self_ty =
+            self.item_region_substitution(&bridge.trait_ref.self_ty, context, facts, scratch)?;
         let membership = self.require_in(
             &Predicate::Implements(TraitRef {
                 declaration: bridge.trait_ref.declaration,
@@ -1718,7 +1802,7 @@ impl ValidatedTraitWorld {
                 args: Arc::from([]),
             }),
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         let ProofOrigin::Implementation {
             declaration,
@@ -1745,7 +1829,7 @@ impl ValidatedTraitWorld {
             self_ty: &header.trait_ref.self_ty,
         };
         let bridge_rows =
-            self.item_region_predicates(&header.predicates, &bridge_context, facts)?;
+            self.item_region_predicates(&header.predicates, &bridge_context, facts, scratch)?;
         if fields.len() != 1 || fields[0].ty != Ty::Param(*parameter) || bridge_rows.len() != 1 {
             return Ok(false);
         }
@@ -1776,8 +1860,9 @@ impl ValidatedTraitWorld {
         output: &ir::AssociatedTypeProjection,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<bool> {
-        let rows = self.item_region_predicates(context.predicates, context, facts)?;
+        let rows = self.item_region_predicates(context.predicates, context, facts, scratch)?;
         if rows.len() != 4 || output.trait_ref.args.len() != 1 {
             return Ok(false);
         }
@@ -1887,6 +1972,7 @@ impl ValidatedTraitWorld {
         ty: &Ty,
         context: &ItemRegionContext<'_>,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Ty> {
         retain::<ir::RefContract>(&self.budget, 1)?;
         let schema = GenericSchema {
@@ -1898,14 +1984,15 @@ impl ValidatedTraitWorld {
             },
             predicates: Arc::from([]),
         };
+        let active = scratch.for_world(self.id);
         let instantiated =
-            self.substitute_projected_schema(&schema, context.arguments, facts.env())?;
+            self.substitute_carrier_schema(&schema, context.arguments, facts, active)?;
         Ok(self
             .normalize_closed_projected_type_with(
                 &instantiated.signature.result,
                 ProofContext::from_facts(facts),
                 false,
-                &mut ProofScratch::default(),
+                active,
             )?
             .0)
     }
@@ -1916,6 +2003,7 @@ impl ValidatedTraitWorld {
         context: &ItemRegionContext<'_>,
         wanted: &ir::CarrierLocation,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<Vec<(ParamId, ir::CarrierLocation)>> {
         let mut matches = Vec::new();
         for location in charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.iter() {
@@ -1931,9 +2019,14 @@ impl ValidatedTraitWorld {
             {
                 continue;
             }
-            for expanded in
-                self.expand_carrier(location, context.env, context.arguments, &[], facts)?
-            {
+            for expanded in self.expand_carrier_with_scratch(
+                location,
+                context.env,
+                context.arguments,
+                &[],
+                facts,
+                scratch,
+            )? {
                 if self.same_location(&expanded.location, wanted)?
                     && let Some(component) = expanded.component
                 {
@@ -1972,6 +2065,7 @@ impl ValidatedTraitWorld {
         prefix: &ir::CarrierPath,
         facts: &ValidatedFacts,
         depth: usize,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Vec<ir::CarrierLocation>>> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
@@ -2010,9 +2104,14 @@ impl ValidatedTraitWorld {
                 // parameter merely because one occurrence is outside this slice.
                 return Ok(None);
             }
-            for expanded in
-                self.expand_carrier(location, context.env, context.arguments, &[], facts)?
-            {
+            for expanded in self.expand_carrier_with_scratch(
+                location,
+                context.env,
+                context.arguments,
+                &[],
+                facts,
+                scratch,
+            )? {
                 if let Some(component) = expanded.component.as_ref()
                     && self.same_location(component, wanted)?
                 {
@@ -2021,7 +2120,7 @@ impl ValidatedTraitWorld {
                 }
             }
         }
-        let rows = self.item_region_predicates(context.predicates, context, facts)?;
+        let rows = self.item_region_predicates(context.predicates, context, facts, scratch)?;
         if !physical.is_empty() {
             if !rows.is_empty() {
                 return Ok(None);
@@ -2046,7 +2145,15 @@ impl ValidatedTraitWorld {
         let Some(projection) = equality else {
             return Ok(None);
         };
-        self.item_projection_regions(projection, wanted, context, prefix, facts, depth + 1)
+        self.item_projection_regions(
+            projection,
+            wanted,
+            context,
+            prefix,
+            facts,
+            depth + 1,
+            scratch,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2058,14 +2165,15 @@ impl ValidatedTraitWorld {
         prefix: &ir::CarrierPath,
         facts: &ValidatedFacts,
         depth: usize,
+        scratch: &mut TraitScratch,
     ) -> Result<Option<Vec<ir::CarrierLocation>>> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         let actual_self =
-            self.item_region_substitution(&projection.trait_ref.self_ty, context, facts)?;
+            self.item_region_substitution(&projection.trait_ref.self_ty, context, facts, scratch)?;
         let mut actual_arguments = Vec::new();
         for argument in projection.trait_ref.args.iter() {
-            let actual = self.item_region_substitution(argument, context, facts)?;
+            let actual = self.item_region_substitution(argument, context, facts, scratch)?;
             push(&self.budget, &mut actual_arguments, actual)?;
         }
         retain::<Ty>(&self.budget, actual_arguments.len())?;
@@ -2077,11 +2185,15 @@ impl ValidatedTraitWorld {
                 args: actual_arguments.into(),
             },
         };
-        let reduction = self.normalize_projection_for_facts(&actual, facts)?;
+        let reduction = self.normalize_projection_for_facts_with_scratch(
+            &actual,
+            facts,
+            scratch.for_world(self.id),
+        )?;
         // A callable result can leave its receiver storage entirely. Its exact
         // parent-sealed receipt instead selects a tuple argument component.
         if let Ty::Closure(closure) = &actual.trait_ref.self_ty {
-            if !self.closed_item_callable_context(projection, context, facts)?
+            if !self.closed_item_callable_context(projection, context, facts, scratch)?
                 || !self.checked_closure_projection(&actual, facts.env())?
                 || !wanted.path.0.is_empty()
                 || wanted.channel != ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
@@ -2099,7 +2211,7 @@ impl ValidatedTraitWorld {
             };
             let target = Callee::Direct(self.closure_target(closure, mode)?);
             let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
-            view.validate_for(facts)?;
+            view.validate_for_with_scratch(facts, scratch)?;
             if view.contract.results.len() != 1
                 || view.contract.results[0].location != *wanted
                 || !self.eq_ty(reduction.ty(), closure.result(), 0)?
@@ -2140,12 +2252,13 @@ impl ValidatedTraitWorld {
                 prefix,
                 facts,
                 depth + 1,
+                scratch,
             );
         }
         let membership = self.require_in(
             &Predicate::Implements(actual.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut ProofScratch::default(),
+            scratch.for_world(self.id),
         )?;
         let ProofOrigin::Implementation {
             declaration,
@@ -2171,7 +2284,7 @@ impl ValidatedTraitWorld {
         };
         let alias = match &value.rhs {
             Ty::AssociatedType(alias)
-                if self.closed_item_projection_alias(alias, &next, facts)? =>
+                if self.closed_item_projection_alias(alias, &next, facts, scratch)? =>
             {
                 Some(alias.as_ref())
             }
@@ -2183,7 +2296,7 @@ impl ValidatedTraitWorld {
         let inverse = if alias.is_some() {
             Vec::new()
         } else {
-            self.item_region_locations(&value.rhs, &next, wanted, facts)?
+            self.item_region_locations(&value.rhs, &next, wanted, facts, scratch)?
         };
         if inverse.is_empty() && alias.is_none() {
             return Ok(None);
@@ -2192,20 +2305,26 @@ impl ValidatedTraitWorld {
         // hide the single-field parameter-to-projection correspondence. Only
         // this exact alias protocol may normalize a replayed residual projection.
         let canonical = if alias.is_some() {
-            let replay = self.replay_implementation_assignment(
+            let replay = self.replay_implementation_assignment_with(
                 &actual,
                 &membership,
                 ProofContext::from_facts(facts),
+                scratch.for_world(self.id),
             )?;
             self.normalize_closed_projected_type_with(
                 &replay,
                 ProofContext::from_facts(facts),
                 false,
-                &mut ProofScratch::default(),
+                scratch.for_world(self.id),
             )?
             .0
         } else {
-            self.implementation_equality_rhs(&actual, &membership, ProofContext::from_facts(facts))?
+            self.implementation_equality_rhs_with(
+                &actual,
+                &membership,
+                ProofContext::from_facts(facts),
+                scratch.for_world(self.id),
+            )?
         };
         if !self.eq_ty(&canonical, reduction.ty(), 0)? {
             return Ok(None);
@@ -2249,8 +2368,15 @@ impl ValidatedTraitWorld {
         let mut sources = Vec::new();
         for anchor in anchors {
             if let Some(alias) = alias {
-                let Some(found) =
-                    self.item_projection_regions(alias, wanted, &next, &anchor, facts, depth + 1)?
+                let Some(found) = self.item_projection_regions(
+                    alias,
+                    wanted,
+                    &next,
+                    &anchor,
+                    facts,
+                    depth + 1,
+                    scratch,
+                )?
                 else {
                     return Ok(None);
                 };
@@ -2267,6 +2393,7 @@ impl ValidatedTraitWorld {
                     &anchor,
                     facts,
                     depth + 1,
+                    scratch,
                 )?
                 else {
                     return Ok(None);
@@ -2326,7 +2453,11 @@ mod cloned_item_source_tests {
         let view = facts
             .carrier_contract(SignatureSubject::Call(calls[0]))
             .unwrap();
-        view.validate_for(&facts).unwrap();
+        let mut scratch = TraitScratch::default();
+        for _ in 0..3 {
+            view.validate_for_with_scratch(&facts, &mut scratch)
+                .unwrap();
+        }
         assert_eq!(view.contract.results.len(), 1);
         let expected = ir::InputCarrier {
             param: 0,
@@ -2364,7 +2495,7 @@ mod cloned_item_source_tests {
                 _ => Arc::make_mut(&mut forged.contract.results)[0].sources = Arc::from([]),
             }
             assert!(
-                matches!(forged.validate_for(&facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                matches!(forged.validate_for_with_scratch(&facts, &mut scratch), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
                 "forged original stored-field source mutation={mutation}"
             );
         }

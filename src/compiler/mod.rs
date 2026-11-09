@@ -2288,13 +2288,23 @@ impl Provider for CompilerProvider {
                     let template = facts.template(source_index).await?;
                     let source = this.validated_body(&types, source_index, &template)?;
                     let mut context = types.as_ref().clone();
-                    let mut demands = instances::direct_demands(
-                        &target,
-                        &source,
-                        &mut context,
-                        &this.0.budget,
-                        Some(cx.authority()),
-                    )
+                    let mut demands = if let Some(publication) = &template.publication {
+                        instances::source_direct_demands(
+                            &target,
+                            publication,
+                            &mut context,
+                            &this.0.budget,
+                            Some(cx.authority()),
+                        )
+                    } else {
+                        instances::direct_demands(
+                            &target,
+                            &source,
+                            &mut context,
+                            &this.0.budget,
+                            Some(cx.authority()),
+                        )
+                    }
                     .map_err(|error| {
                         Error::new(format!("{error}; instance caller={:?}", target.declaration))
                     })?;
@@ -2507,8 +2517,9 @@ impl Provider for CompilerProvider {
                                 &mut context,
                                 &this.0.budget,
                                 &constant_values,
-                                cx.authority(),
+                                &cx,
                             )
+                            .await
                             .map_err(Error::new)?,
                         );
                         InstanceBodyFact {

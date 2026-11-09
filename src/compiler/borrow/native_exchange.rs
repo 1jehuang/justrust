@@ -244,7 +244,9 @@ impl CarrierBuilder<'_, '_> {
         let Some(body) = self.body.clone() else {
             return Ok(());
         };
-        let source = match facts.native_sequence_swap(facts.declaration()) {
+        let source = match facts
+            .native_sequence_swap_with_scratch(facts.declaration(), &mut self.carrier_scratch)
+        {
             Ok(Some(source)) => source,
             Ok(None) => return Ok(()),
             Err(error) if error.is_resource() => return Err(Exhausted),
@@ -257,7 +259,9 @@ impl CarrierBuilder<'_, '_> {
             }
         };
         let f = self.f;
-        if let Err(message) = f.validate_provenance(facts, &self.ledger) {
+        if let Err(message) =
+            f.validate_provenance_with_scratch(facts, &self.ledger, &mut self.carrier_scratch)
+        {
             let error = super::super::traits::FactsError::from_message(&self.ledger, &message);
             if error.is_resource() {
                 return Err(Exhausted);

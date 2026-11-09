@@ -3,8 +3,9 @@
 //! context. It is never evidence for another phase, caller, or usage position.
 use super::*;
 
-/// Complete raw type-formation successes. These records never derive from
-/// metadata-only validation and never authorize a caller-specific operation.
+/// Complete raw type-formation successes under an exact source/storage policy.
+/// These never derive from metadata-only validation, cross policies, or
+/// authorize a caller-specific operation.
 #[derive(Default)]
 pub(super) struct RawFormations {
     entries: Vec<RawFormation>,
@@ -21,6 +22,7 @@ struct RawFormation {
     env: GenericEnv,
     usage: TypeUse,
     maybe_unsized: Option<ParamId>,
+    executable_storage: bool,
     key: TypeNode,
     ty: Ty,
     height: usize,
@@ -37,6 +39,7 @@ impl RawFormations {
         self.storage.len() * scratch_row_bytes::<RawFormation>().unwrap()
     }
 
+    // Nonprojected raw roots still require complete physical formation.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check(
         &mut self,
@@ -46,6 +49,20 @@ impl RawFormations {
         usage: TypeUse,
         maybe_unsized: Option<ParamId>,
         depth: usize,
+    ) -> Result<()> {
+        self.check_for_use(world, ty, env, usage, maybe_unsized, depth, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn check_for_use(
+        &mut self,
+        world: &ValidatedTraitWorld,
+        ty: &Ty,
+        env: &GenericEnv,
+        usage: TypeUse,
+        maybe_unsized: Option<ParamId>,
+        depth: usize,
+        executable_storage: bool,
     ) -> Result<()> {
         world.check_normalization_budget()?;
         charged(&world.budget, world.budget.check_depth(depth))?;
@@ -74,6 +91,7 @@ impl RawFormations {
                     && previous.limits == limits(&world.budget)
                     && previous.usage == usage
                     && previous.maybe_unsized == maybe_unsized
+                    && previous.executable_storage == executable_storage
                     && previous.key == key
                     && world.same_env(&previous.env, env)?
                     && same_type_allocation(&previous.ty, ty)
@@ -90,6 +108,7 @@ impl RawFormations {
         // Each root still owns its own complete formation walk and flags.
         let mut walk = TypeWalk {
             maybe_unsized,
+            logical_nominals: !executable_storage,
             nominal_session: self.nominal_session.take(),
             ..TypeWalk::default()
         };
@@ -112,6 +131,7 @@ impl RawFormations {
                     env: env.clone(),
                     usage,
                     maybe_unsized,
+                    executable_storage,
                     key,
                     ty: ty.clone(),
                     height,
@@ -133,7 +153,43 @@ pub(super) struct Validated {
     signature_walk: TypeWalk,
 }
 
-struct Context {
+// A proof record can itself occur in a caller's retained requirements. Keep
+// that immutable identity intact without exposing a recursive auto-trait
+// expansion through every published compiler fact. Only Context implements
+// this private interface, and all comparisons still replay its complete key.
+trait SourceIdentity: std::fmt::Debug + Send + Sync {
+    fn context(&self) -> &Context;
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SourceKey {
+    context: Arc<dyn SourceIdentity>,
+    inputs: Arc<[Ty]>,
+}
+
+impl SourceKey {
+    pub(super) fn retain(facts: &ValidatedFacts, inputs: &[Ty]) -> Result<Self> {
+        retain::<Ty>(facts.budget(), inputs.len())?;
+        Ok(Self {
+            context: Arc::new(Context::retain(facts)?),
+            inputs: inputs.into(),
+        })
+    }
+    pub(super) fn matches(&self, facts: &ValidatedFacts, inputs: &[Ty]) -> Result<bool> {
+        Ok(self.context.context().matches(facts)?
+            && schema_instantiation::same_transport(&self.inputs, inputs, facts.budget(), 0)?)
+    }
+    pub(super) fn matches_retained(&self, other: &Self, budget: &PlanBudget) -> Result<bool> {
+        Ok(self
+            .context
+            .context()
+            .matches_retained(other.context.context(), budget)?
+            && schema_instantiation::same_transport(&self.inputs, &other.inputs, budget, 0)?)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct Context {
     world: WorldId,
     registry: SnapshotId,
     predicates: Arc<PredicateEnv>,
@@ -144,6 +200,31 @@ struct Context {
     ready: bool,
     finalized: bool,
     limits: [usize; 6],
+}
+
+/// Complete checked authority retained by one source reconstruction session.
+/// This does not turn a raw source environment into executable facts.
+#[derive(Debug)]
+pub(in crate::compiler) struct SourceNominalContext(Context);
+
+impl SourceNominalContext {
+    pub(in crate::compiler) fn retain(facts: &ValidatedFacts) -> Result<Self> {
+        facts.world.check_normalization_budget()?;
+        facts.world.check_facts(facts, false)?;
+        Context::retain(facts).map(Self)
+    }
+
+    pub(in crate::compiler) fn matches(&self, facts: &ValidatedFacts) -> Result<bool> {
+        facts.world.check_normalization_budget()?;
+        facts.world.check_facts(facts, false)?;
+        self.0.matches(facts)
+    }
+}
+
+impl SourceIdentity for Context {
+    fn context(&self) -> &Context {
+        self
+    }
 }
 
 fn limits(budget: &PlanBudget) -> [usize; 6] {
@@ -159,13 +240,63 @@ fn limits(budget: &PlanBudget) -> [usize; 6] {
 }
 
 impl Context {
-    fn matches(&self, facts: &ValidatedFacts) -> Result<bool> {
+    fn same_requirements(
+        left: &Arc<[ProofEvidence]>,
+        right: &Arc<[ProofEvidence]>,
+        budget: &PlanBudget,
+    ) -> Result<bool> {
+        if Arc::ptr_eq(left, right) {
+            return Ok(true);
+        }
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        for (left, right) in left.iter().zip(right.iter()) {
+            charged(budget, budget.charge_work(1))?;
+            if !Arc::ptr_eq(&left.0, &right.0) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(super) fn matches_retained(&self, other: &Self, budget: &PlanBudget) -> Result<bool> {
+        charged(budget, budget.charge_work(1))?;
+        if self.world != other.world
+            || self.registry != other.registry
+            || !Arc::ptr_eq(&self.predicates, &other.predicates)
+            || !Self::same_requirements(&self.requirements, &other.requirements, budget)?
+            || self.mode != other.mode
+            || self.ready != other.ready
+            || self.finalized != other.finalized
+            || self.limits != other.limits
+            || match (&self.closure, &other.closure) {
+                (None, None) => false,
+                (Some(left), Some(right)) => !Arc::ptr_eq(left, right),
+                _ => true,
+            }
+        {
+            return Ok(false);
+        }
+        Ok(match (&self.subject, &other.subject) {
+            (FactsSubject::AssociatedConstant(a), FactsSubject::AssociatedConstant(b))
+            | (FactsSubject::SchemaItem(a), FactsSubject::SchemaItem(b))
+            | (FactsSubject::UniversalCallable(a), FactsSubject::UniversalCallable(b)) => a == b,
+            (FactsSubject::ClosedInstance(a), FactsSubject::ClosedInstance(b)) => {
+                a.declaration == b.declaration
+                    && schema_instantiation::same_inputs(&a.type_args, &b.type_args, budget, 0)?
+            }
+            _ => false,
+        })
+    }
+
+    pub(super) fn matches(&self, facts: &ValidatedFacts) -> Result<bool> {
         let world = &facts.world;
         charged(&world.budget, world.budget.charge_work(1))?;
         if self.world != world.id
             || self.registry != world.registry
             || !Arc::ptr_eq(&self.predicates, &facts.predicates)
-            || !Arc::ptr_eq(&self.requirements, &facts.requirements)
+            || !Self::same_requirements(&self.requirements, &facts.requirements, &world.budget)?
             || self.mode != facts.closure_mode
             || self.ready != world.owner_normalization_ready
             || self.finalized != world.owner_normalization_finalized
@@ -195,9 +326,16 @@ impl Context {
         })
     }
 
-    fn retain(facts: &ValidatedFacts) -> Result<Self> {
+    pub(super) fn retain(facts: &ValidatedFacts) -> Result<Self> {
         retain::<Self>(facts.budget(), 1)?;
-        Ok(Self {
+        Ok(Self::retain_in_reserved_arena(facts))
+    }
+
+    /// The owning proof box has already reserved its complete inline size,
+    /// including this context. Cloning these immutable Arc handles allocates
+    /// no context storage outside that scoped reservation.
+    pub(super) fn retain_in_reserved_arena(facts: &ValidatedFacts) -> Self {
+        Self {
             world: facts.world.id,
             registry: facts.world.registry,
             predicates: facts.predicates.clone(),
@@ -208,7 +346,7 @@ impl Context {
             ready: facts.world.owner_normalization_ready,
             finalized: facts.world.owner_normalization_finalized,
             limits: limits(facts.budget()),
-        })
+        }
     }
 }
 

@@ -142,8 +142,11 @@ impl ValidatedTraitWorld {
                 .raw_associated_ty_is_closed(&Ty::AssociatedType(Arc::new(projection.clone())), 0)?
             {
                 let context = ProofContext {
+                    transport: ParentLocalTransport::default(),
                     original: None,
+                    source_metadata: None,
                     predicates: &self.empty,
+                    executable_storage: true,
                     phase: FactsPhase::Schema,
                 };
                 self.require_in(&expected, context, &mut ProofScratch::default())?;
@@ -184,8 +187,11 @@ impl ValidatedTraitWorld {
                     self.require_in(
                         goal,
                         ProofContext {
+                            transport: ParentLocalTransport::default(),
                             original: None,
+                            source_metadata: None,
                             predicates: &self.empty,
+                            executable_storage: true,
                             phase: FactsPhase::Schema,
                         },
                         &mut ProofScratch::default(),
@@ -208,6 +214,42 @@ impl ValidatedTraitWorld {
             schema,
             membership: membership.into(),
         })
+    }
+
+    pub(super) fn replay_nominal_declaration_with(
+        &self,
+        replays: &mut NominalReplays,
+        declaration: DeclId,
+        proof: &NominalDeclarationProof,
+    ) -> Result<()> {
+        // Repeat live issuer and module admission even for a completed proof.
+        self.info(declaration)?;
+        for (retained_declaration, retained) in &replays.nominal_declaration_replays {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if *retained_declaration == declaration
+                && proof.world == self.id
+                && retained.world == self.id
+                && proof.schema.declaration == declaration
+                && retained.schema.representation_alignment == proof.schema.representation_alignment
+                && Arc::ptr_eq(&retained.schema.env, &proof.schema.env)
+                && Arc::ptr_eq(&retained.schema.predicates, &proof.schema.predicates)
+                && Arc::ptr_eq(&retained.schema.projections, &proof.schema.projections)
+                && Arc::ptr_eq(&retained.schema.defaults, &proof.schema.defaults)
+                && Arc::ptr_eq(&retained.membership, &proof.membership)
+            {
+                return Ok(());
+            }
+        }
+        self.replay_nominal_declaration(declaration, proof)?;
+        if replays.nominal_declaration_replays.len() < MAX_SCRATCH_OBLIGATIONS {
+            push_scratch_row(
+                &self.budget,
+                &mut replays.nominal_declaration_replays,
+                &mut replays.nominal_declaration_replay_storage,
+                (declaration, proof.clone()),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn replay_nominal_declaration(
@@ -299,8 +341,11 @@ impl ValidatedTraitWorld {
                 ) if a == b && ap == bp => {}
                 (Membership::Closed(a), Membership::Closed(b)) if a.len() == b.len() => {
                     let context = ProofContext {
+                        transport: ParentLocalTransport::default(),
                         original: None,
+                        source_metadata: None,
                         predicates: &self.empty,
+                        executable_storage: true,
                         phase: FactsPhase::Schema,
                     };
                     for (actual, expected) in a.iter().zip(b.iter()) {
@@ -347,12 +392,24 @@ mod tests {
         let declaration = plan.nominal_declaration(0).unwrap();
         let issued = world.nominal_declaration_wellformed(declaration).unwrap();
         assert_eq!(issued.schema.representation_alignment, None);
+        let mut replays = NominalReplays::default();
+        for _ in 0..2 {
+            world
+                .replay_nominal_declaration_with(&mut replays, declaration, &issued)
+                .unwrap();
+            assert_eq!(replays.nominal_declaration_replays.len(), 1);
+        }
         world
             .replay_nominal_declaration(declaration, &issued)
             .unwrap();
 
         let mut injected = issued.clone();
         injected.schema.representation_alignment = Some(3);
+        assert!(
+            world
+                .replay_nominal_declaration_with(&mut replays, declaration, &injected)
+                .is_err()
+        );
         let error = world
             .replay_nominal_declaration(declaration, &injected)
             .unwrap_err();
@@ -361,6 +418,11 @@ mod tests {
 
         let mut changed = injected;
         changed.schema.representation_alignment = Some(8);
+        assert!(
+            world
+                .replay_nominal_declaration_with(&mut replays, declaration, &changed)
+                .is_err()
+        );
         let error = world
             .replay_nominal_declaration(declaration, &changed)
             .unwrap_err();
@@ -370,6 +432,10 @@ mod tests {
         // Restoring the genuinely issued plain schema is valid. There is no
         // required alignment to omit from an authentic plain declaration.
         changed.schema.representation_alignment = None;
+        world
+            .replay_nominal_declaration_with(&mut replays, declaration, &changed)
+            .unwrap();
+        assert_eq!(replays.nominal_declaration_replays.len(), 1);
         world
             .replay_nominal_declaration(declaration, &changed)
             .unwrap();

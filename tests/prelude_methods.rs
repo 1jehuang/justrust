@@ -550,3 +550,47 @@ fn tuples_of_library_debug_elements_format_through_prelude_impls() {
         ],
     );
 }
+
+#[test]
+fn iter_adapters_reference_operators_windows_and_format_turbofish() {
+    differential(
+        r#"
+fn main() {
+    let v: Vec<i32> = (1..=10).collect();
+    let evens: Vec<i32> = v.iter().copied().filter(|x| x % 2 == 0).collect();
+    println!("{:?}", evens);
+    let folded = v.iter().fold(String::new(), |acc, x| acc + &x.to_string());
+    let mut s = folded.clone() + "!";
+    s += "?";
+    println!("{} {}", folded, s);
+    println!("{:?}", v.windows(2).map(|w| w[1] - w[0]).max());
+    println!("{:?}", v.windows(3).rev().map(|w| w[0]).collect::<Vec<_>>());
+    println!("{}", v[..2].windows(3).count());
+    println!("{:?}", v.chunks(4).map(|c| c.len()).collect::<Vec<_>>());
+    let text = format!("{:?}", v.iter().map(|c| c * 2).collect::<Vec<_>>());
+    println!("{}", text);
+    println!("{:?} {:?}", v.iter().map(|x| x + 1).max(), v.iter().map(|x| x - 1).min());
+}
+"#,
+    );
+}
+
+#[test]
+fn iter_adapter_operator_mismatches_stay_rejected() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iter-adapter-rejections",
+        &[
+            Case {
+                name: "string_plus_owned_string_is_e0308",
+                source: "fn unused(){let a=String::new();let b=String::new();let _c=a+b;}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "max_without_ord_is_e0277",
+                source: "struct N;fn unused(v:Vec<N>){let _m=v.into_iter().max();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}

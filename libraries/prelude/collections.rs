@@ -277,8 +277,8 @@ impl<'a, K, V> super::iter::IntoIterator for Iter<'a, K, V> {
 
 impl<'a, K: Hash + Eq, V, S: BuildHasher> super::iter::IntoIterator for &'a HashMap<K, V, S> {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V, S>;
-    fn into_iter(self) -> Iter<'a, K, V, S> {
+    type IntoIter = Iter<'a, K, V>;
+    fn into_iter(self) -> Iter<'a, K, V> {
         self.iter()
     }
 }

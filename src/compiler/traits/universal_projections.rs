@@ -8,7 +8,22 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         env: &GenericEnv,
     ) -> Result<()> {
-        self.validate_ty_metadata_in(&Ty::AssociatedType(Arc::new(projection.clone())), env, 0)?;
+        self.validate_universal_projection_with(projection, env, &mut ProofScratch::default())
+    }
+
+    pub(super) fn validate_universal_projection_with(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        env: &GenericEnv,
+        active: &mut ProofScratch,
+    ) -> Result<()> {
+        self.check_normalization_budget()?;
+        self.validate_ty_metadata_with(
+            &Ty::AssociatedType(Arc::new(projection.clone())),
+            env,
+            0,
+            &mut active.replays,
+        )?;
         if self.raw_associated_ty_is_closed(&Ty::AssociatedType(Arc::new(projection.clone())), 0)? {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -30,127 +45,170 @@ impl ValidatedTraitWorld {
                 "projection changed its canonical declaration environment",
             ));
         }
-        let mut predicates = Vec::new();
-        match info.kind {
-            DeclKind::Trait => {
-                self.append_predicate(
-                    &mut predicates,
-                    &Predicate::Implements(self.symbolic_trait_ref(declaration)?),
-                )?;
+        for previous in &active.rigid_projections {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if previous.world == self.id
+                && previous.ready == self.owner_normalization_ready
+                && previous.finalized == self.owner_normalization_finalized
+                && self.same_env(&previous.env, env)?
+                && self.same_projection(&previous.projection, projection)?
+            {
+                return Ok(());
             }
-            DeclKind::TraitItem => {
-                let item = self.item_header(declaration)?;
-                for predicate in item.schema.predicates.iter() {
-                    self.append_predicate(&mut predicates, predicate)?;
+        }
+        let result = (|| {
+            let mut predicates = Vec::new();
+            match info.kind {
+                DeclKind::Trait => {
+                    self.append_predicate(
+                        &mut predicates,
+                        &Predicate::Implements(self.symbolic_trait_ref(declaration)?),
+                    )?;
                 }
-                self.append_predicate(
-                    &mut predicates,
-                    &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
-                )?;
-            }
-            DeclKind::Function | DeclKind::AssociatedFunction => {
-                let callable = self.callable_header(declaration)?;
-                for predicate in callable.schema.predicates.iter() {
-                    self.append_predicate(&mut predicates, predicate)?;
-                }
-                if let Some(item) = self.source_default_item(declaration)? {
+                DeclKind::TraitItem => {
+                    let item = self.item_header(declaration)?;
+                    for predicate in item.schema.predicates.iter() {
+                        self.append_predicate(&mut predicates, predicate)?;
+                    }
                     self.append_predicate(
                         &mut predicates,
                         &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
                     )?;
                 }
-                if let Some(owner) = info.owner {
-                    for implementation in self.headers.impls.iter() {
-                        charged(&self.budget, self.budget.charge_work(1))?;
-                        if implementation.declaration == owner {
-                            for predicate in implementation.predicates.iter() {
-                                self.append_predicate(&mut predicates, predicate)?;
+                DeclKind::Function | DeclKind::AssociatedFunction => {
+                    let callable = self.callable_header(declaration)?;
+                    for predicate in callable.schema.predicates.iter() {
+                        self.append_predicate(&mut predicates, predicate)?;
+                    }
+                    if let Some(item) = self.source_default_item(declaration)? {
+                        self.append_predicate(
+                            &mut predicates,
+                            &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
+                        )?;
+                    }
+                    if let Some(owner) = info.owner {
+                        for implementation in self.headers.impls.iter() {
+                            charged(&self.budget, self.budget.charge_work(1))?;
+                            if implementation.declaration == owner {
+                                for predicate in implementation.predicates.iter() {
+                                    self.append_predicate(&mut predicates, predicate)?;
+                                }
+                                self.append_predicate(
+                                    &mut predicates,
+                                    &Predicate::Implements(implementation.trait_ref.clone()),
+                                )?;
+                                break;
                             }
-                            self.append_predicate(
-                                &mut predicates,
-                                &Predicate::Implements(implementation.trait_ref.clone()),
-                            )?;
-                            break;
                         }
                     }
                 }
-            }
-            DeclKind::TraitImpl => {
-                let implementation = self
-                    .headers
-                    .impls
-                    .iter()
-                    .find(|implementation| implementation.declaration == declaration)
-                    .ok_or_else(|| {
-                        FactsError::invalid(
-                            &self.budget,
-                            "projection impl binder has no canonical header",
-                        )
-                    })?;
-                for predicate in implementation.predicates.iter() {
-                    self.append_predicate(&mut predicates, predicate)?;
+                DeclKind::TraitImpl => {
+                    let implementation = self
+                        .headers
+                        .impls
+                        .iter()
+                        .find(|implementation| implementation.declaration == declaration)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "projection impl binder has no canonical header",
+                            )
+                        })?;
+                    for predicate in implementation.predicates.iter() {
+                        self.append_predicate(&mut predicates, predicate)?;
+                    }
+                    self.append_predicate(
+                        &mut predicates,
+                        &Predicate::Implements(implementation.trait_ref.clone()),
+                    )?;
                 }
-                self.append_predicate(
-                    &mut predicates,
-                    &Predicate::Implements(implementation.trait_ref.clone()),
-                )?;
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "projection binder is not a canonical trait or callable",
+                    ));
+                }
             }
-            _ => {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "projection binder is not a canonical trait or callable",
-                ));
-            }
-        }
-        // Membership discovery must not recursively execute type validation on
-        // unrelated projected supertrait actuals. Every row is substituted from
-        // an authenticated declaration and checked as canonical metadata here.
-        // Executable consumers still validate the selected projection separately.
-        let mut index = 0;
-        while index < predicates.len() {
-            if let Predicate::Implements(goal) = &predicates[index] {
-                let goal = goal.clone();
-                self.validate_predicate_metadata(&predicates[index], env)?;
-                let mut inherited = self.substitute_supertrait_predicates(&goal, env, false)?;
-                for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
-                    for row in self.associated_bounds_for(*associated, &goal, env)?.iter() {
-                        self.validate_predicate_metadata(row, env)?;
-                        self.append_predicate(&mut inherited, row)?;
+            // Membership discovery must not recursively execute type validation on
+            // unrelated projected supertrait actuals. Every row is substituted from
+            // an authenticated declaration and checked as canonical metadata here.
+            // Executable consumers still validate the selected projection separately.
+            let mut index = 0;
+            while index < predicates.len() {
+                if let Predicate::Implements(goal) = &predicates[index] {
+                    let goal = goal.clone();
+                    self.validate_predicate_metadata_with(
+                        &predicates[index],
+                        env,
+                        &mut active.replays,
+                    )?;
+                    let mut inherited = self.substitute_supertrait_predicates_with_replays(
+                        &goal,
+                        env,
+                        false,
+                        &mut active.replays,
+                    )?;
+                    for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
+                        for row in self
+                            .associated_bounds_for_raw_with(*associated, &goal, env, active)?
+                            .iter()
+                        {
+                            self.validate_predicate_metadata_with(row, env, &mut active.replays)?;
+                            self.append_predicate(&mut inherited, row)?;
+                        }
+                    }
+                    for row in inherited {
+                        self.append_predicate(&mut predicates, &row)?;
                     }
                 }
-                for row in inherited {
-                    self.append_predicate(&mut predicates, &row)?;
+                index += 1;
+            }
+            let expected = Predicate::Implements(projection.trait_ref.clone());
+            for predicate in predicates.iter() {
+                if self.eq_predicate(predicate, &expected)? {
+                    return Ok(());
                 }
             }
-            index += 1;
-        }
-        let expected = Predicate::Implements(projection.trait_ref.clone());
-        for predicate in predicates.iter() {
-            if self.eq_predicate(predicate, &expected)? {
-                return Ok(());
+            if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
+                let caller = self.predicate_env(declaration)?;
+                if matches!(
+                    self.prove_in(
+                        &expected,
+                        ProofContext {
+                            transport: ParentLocalTransport::default(),
+                            original: None,
+                            source_metadata: None,
+                            predicates: &caller,
+                            executable_storage: true,
+                            phase: FactsPhase::Schema,
+                        },
+                        active,
+                    )?,
+                    ProofOutcome::Proved(_)
+                ) {
+                    return Ok(());
+                }
             }
+            Err(FactsError::unproved(
+                &self.budget,
+                "E0277: associated projection has no exact declared trait membership",
+            ))
+        })();
+        if result.is_ok() && active.rigid_projections.len() < MAX_SCRATCH_OBLIGATIONS {
+            push_scratch_row(
+                &self.budget,
+                &mut active.rigid_projections,
+                &mut active.rigid_projection_storage,
+                CompletedRigidProjection {
+                    world: self.id,
+                    env: env.clone(),
+                    projection: projection.clone(),
+                    ready: self.owner_normalization_ready,
+                    finalized: self.owner_normalization_finalized,
+                },
+            )?;
         }
-        if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
-            let caller = self.predicate_env(declaration)?;
-            if matches!(
-                self.prove_in(
-                    &expected,
-                    ProofContext {
-                        original: None,
-                        predicates: &caller,
-                        phase: FactsPhase::Schema,
-                    },
-                    &mut ProofScratch::default(),
-                )?,
-                ProofOutcome::Proved(_)
-            ) {
-                return Ok(());
-            }
-        }
-        Err(FactsError::unproved(
-            &self.budget,
-            "E0277: associated projection has no exact declared trait membership",
-        ))
+        result
     }
 
     pub(super) fn normalize_universal_callable_schema(
@@ -175,8 +233,11 @@ impl ValidatedTraitWorld {
                             .normalize_closed_projected_type(
                                 ty,
                                 ProofContext {
+                                    transport: ParentLocalTransport::default(),
                                     original: None,
+                                    source_metadata: None,
                                     predicates: &world.empty,
+                                    executable_storage: true,
                                     phase: FactsPhase::Schema,
                                 },
                                 true,
@@ -365,11 +426,137 @@ mod tests {
     }
 
     #[test]
+    fn raw_logical_builtin_children_normalize_projected_actuals() {
+        let program = frontend::parse("trait Has{type Item;} impl Has for i32{type Item=i32;} struct Range<T>{start:T,end:T} struct Pending<I:Has>{value:Range<I::Item>} fn consume<I:Has>(value:Pending<I>){} fn main(){}").unwrap();
+        let ctx = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = ctx.trait_world().unwrap();
+        let declaration = ctx.function_decl(0).unwrap();
+        let facts = world.callable_facts(declaration).unwrap();
+        let original = facts
+            .original_callable_schema(OriginalCallableSubject::Direct(declaration))
+            .unwrap();
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &world.empty,
+            executable_storage: false,
+            phase: FactsPhase::Closed,
+        };
+        // A source header substitution is structural identity reconstruction,
+        // not permission to admit unresolved closed fields to execution.
+        let mut substitutions = schema_instantiation::Substitutions::default();
+        let ty = world
+            .instantiate_raw_cached(
+                &original.schema,
+                &[Ty::Int(ir::IntTy::I32)],
+                context,
+                Some(declaration),
+                &mut substitutions,
+            )
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        assert!(world.type_contains_projection(&ty, 0).unwrap());
+        let goal = Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Sized),
+            self_ty: ty.clone(),
+            args: Arc::from([]),
+        });
+        let mut active = ProofScratch::default();
+        let ProofOutcome::Proved(proof) = world.prove_in(&goal, context, &mut active).unwrap()
+        else {
+            panic!("logical builtin field predicates must normalize before formation");
+        };
+        assert!(!proof.0.executable_storage);
+        for _ in 0..3 {
+            let ProofOutcome::Proved(warm) = world.prove_in(&goal, context, &mut active).unwrap()
+            else {
+                panic!("logical builtin warm proof disappeared");
+            };
+            assert!(proof.same_allocation(&warm));
+        }
+        assert!(
+            world
+                .validate_ty(&ty, context.env(), None, true, 0)
+                .is_err()
+        );
+        assert!(
+            world
+                .prove_in(&goal, context.for_storage(true), &mut active)
+                .is_err()
+        );
+        let missing = Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Clone),
+            self_ty: ty,
+            args: Arc::from([]),
+        });
+        assert!(matches!(
+            world.prove_in(&missing, context, &mut active).unwrap(),
+            ProofOutcome::NotProven
+        ));
+    }
+
+    #[test]
     fn projected_argument_membership_closure_is_nonrecursive_and_exact() {
         let (world, facts, projection) = fixture();
         world
             .validate_universal_projection(&projection, facts.env())
             .unwrap();
+        let mut active = ProofScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_universal_projection_with(&projection, facts.env(), &mut active)
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        world
+            .validate_universal_projection_with(&projection, facts.env(), &mut active)
+            .unwrap();
+        let warm = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "raw membership metadata arena discarded: {warm}/{cold}"
+        );
+        let completed = active.rigid_projections.len();
+        assert!(completed > 0);
+        for _ in 0..3 {
+            world
+                .validate_universal_projection_with(&projection, facts.env(), &mut active)
+                .unwrap();
+            assert_eq!(active.rigid_projections.len(), completed);
+        }
+        let ordinary = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        ordinary.validate_for(&facts).unwrap();
+        let mut scratch = TraitScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        let source = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut scratch)
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        let warmed = facts
+            .source_carrier_contract_with_scratch(SignatureSubject::Body, &mut scratch)
+            .unwrap();
+        let warm = facts.budget().usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "carrier realization arena discarded: {warm}/{cold}"
+        );
+        assert_eq!(source.contract, warmed.contract);
+        assert_eq!(ordinary.contract, source.contract);
+        source
+            .validate_for_with_scratch(&facts, &mut scratch)
+            .unwrap();
+        source.validate_for(&facts).unwrap();
+        let mut forged = source.as_ref().clone();
+        forged.contract.inputs = Arc::from([]);
+        assert!(
+            forged
+                .validate_for_with_scratch(&facts, &mut scratch)
+                .is_err()
+        );
         let mut reordered = projection.clone();
         reordered.trait_ref.args = Arc::from([
             projection.trait_ref.args[1].clone(),
@@ -380,6 +567,11 @@ mod tests {
                 .validate_universal_projection(&reordered, facts.env())
                 .is_err()
         );
+        assert!(
+            world
+                .validate_universal_projection_with(&reordered, facts.env(), &mut active)
+                .is_err()
+        );
         let mut foreign_item = projection.clone();
         foreign_item.item.index = foreign_item.item.index.wrapping_add(1);
         assert!(
@@ -387,7 +579,24 @@ mod tests {
                 .validate_universal_projection(&foreign_item, facts.env())
                 .is_err()
         );
+        assert!(
+            world
+                .validate_universal_projection_with(&foreign_item, facts.env(), &mut active)
+                .is_err()
+        );
+        assert_eq!(active.rigid_projections.len(), completed);
         let (foreign, foreign_facts, _) = fixture();
+        assert!(
+            foreign
+                .validate_universal_projection_with(&projection, foreign_facts.env(), &mut active)
+                .is_err()
+        );
+        assert!(
+            world
+                .validate_universal_projection_with(&projection, foreign_facts.env(), &mut active)
+                .is_err()
+        );
+        assert_eq!(active.rigid_projections.len(), completed);
         assert!(
             foreign
                 .validate_universal_projection(&projection, foreign_facts.env())
@@ -398,5 +607,22 @@ mod tests {
                 .validate_universal_projection(&projection, foreign_facts.env())
                 .is_err()
         );
+        assert!(
+            source
+                .validate_for_with_scratch(&foreign_facts, &mut scratch)
+                .is_err()
+        );
+        source
+            .validate_for_with_scratch(&facts, &mut scratch)
+            .unwrap();
+        assert!(facts.budget().charge_work(usize::MAX).is_err());
+        let failure = facts.budget().first_resource_failure();
+        assert!(
+            matches!(world.validate_universal_projection_with(&projection, facts.env(), &mut active), Err(error) if error.is_resource())
+        );
+        assert!(
+            matches!(source.validate_for_with_scratch(&facts, &mut scratch), Err(error) if error.is_resource())
+        );
+        assert_eq!(facts.budget().first_resource_failure(), failure);
     }
 }

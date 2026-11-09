@@ -166,7 +166,9 @@ impl CarrierBuilder<'_, '_> {
             return Ok(());
         }
         let f = self.f;
-        if let Err(message) = f.validate_provenance(facts, &self.ledger) {
+        if let Err(message) =
+            f.validate_provenance_with_scratch(facts, &self.ledger, &mut self.carrier_scratch)
+        {
             let error = super::super::traits::FactsError::from_message(&self.ledger, &message);
             if error.is_resource() {
                 return Err(Exhausted);
@@ -343,7 +345,10 @@ impl CarrierBuilder<'_, '_> {
                 {
                     continue;
                 }
-                let slot = match facts.native_sequence_slot(target.declaration) {
+                let slot = match facts.native_sequence_slot_with_scratch(
+                    target.declaration,
+                    &mut self.carrier_scratch,
+                ) {
                     Ok(slot) => slot,
                     Err(error) if error.is_resource() => return Err(Exhausted),
                     Err(error) => {

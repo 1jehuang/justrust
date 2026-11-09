@@ -44,6 +44,7 @@ impl ClosedAssociatedConstant {
         let world = facts.world();
         world.check_facts(facts, true)?;
         if self.world != world.id
+            || !self.membership.0.executable_storage
             || self.membership.0.world != world.id
             || self.membership.0.environment != world.empty.index
             || self.membership.0.phase != FactsPhase::Closed
@@ -113,6 +114,7 @@ impl AssociatedConstantType {
             || self.caller != facts.declaration()
             || self.environment != facts.predicates.index
             || self.phase != facts.phase()
+            || !self.membership.0.executable_storage
             || self.membership.0.world != world.id
             || self.membership.0.environment != self.environment
             || self.membership.0.phase != self.phase
@@ -155,8 +157,11 @@ impl ValidatedTraitWorld {
             ));
         }
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &facts.predicates,
+            executable_storage: true,
             phase: facts.phase(),
         };
         let membership = match self.prove_in(
@@ -215,8 +220,11 @@ impl ValidatedTraitWorld {
         }
         self.validate_ref_in(application, facts.env(), None)?;
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Closed,
         };
         let membership = match self.prove_implementation_in(

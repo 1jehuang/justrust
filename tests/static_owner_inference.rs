@@ -48,6 +48,27 @@ fn main() {}
 }
 
 #[test]
+fn rc_trait_receiver_associated_owner_matches_stock() {
+    oracle::check(
+        "rc-trait-receiver-associated-owner",
+        &[Case {
+            name: "rc_clone_nested_owner_actuals",
+            source: r#"
+use std::rc::Rc;
+use std::cell::RefCell;
+struct Account { balance: i32 }
+fn main() {
+    let a = Rc::new(RefCell::new(Account { balance: 42i32 }));
+    let b = Rc::clone(&a);
+    println!("{}", b.borrow().balance);
+}
+"#,
+            expect: Expect::Run("42\n"),
+        }],
+    );
+}
+
+#[test]
 fn rc_trait_receiver_associated_owner_identity_matches_stock() {
     oracle::check(
         "rc-trait-receiver-associated-owner-identity",
@@ -191,6 +212,120 @@ fn unused_bad() { let a = Packet { value: 42u32 }; Packet::write(&a); }
 fn main() {}
 "#,
                 expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn inline_call_field_receivers_keep_solved_source_results() {
+    oracle::check(
+        "inline-call-field-receivers",
+        &[
+            Case {
+                name: "inline_and_bound_overloaded_receivers_agree",
+                source: r#"
+use std::ops::Deref;
+struct Value { n: u32 }
+struct Guard { value: Value }
+impl Deref for Guard {
+    type Target = Value;
+    fn deref(&self) -> &Value { &self.value }
+}
+struct Maker { marker: u32 }
+impl Maker {
+    fn make(&self) -> Guard { Guard { value: Value { n: 42u32 } } }
+}
+struct Wrapper { maker: Maker }
+impl Deref for Wrapper {
+    type Target = Maker;
+    fn deref(&self) -> &Maker { &self.maker }
+}
+fn main() {
+    let wrapper = Wrapper { maker: Maker { marker: 0u32 } };
+    let bound = wrapper.make();
+    println!("{}", bound.n);
+    println!("{}", wrapper.make().n);
+}
+"#,
+                expect: Expect::Run("42\n42\n"),
+            },
+            Case {
+                name: "owned_deref_field_format_keeps_noncopy_storage_and_effect_order",
+                source: r#"
+use std::ops::Deref;
+struct Value { text: String }
+struct Guard { value: Value }
+impl Deref for Guard {
+    type Target = Value;
+    fn deref(&self) -> &Value { println!("deref"); &self.value }
+}
+impl Drop for Guard { fn drop(&mut self) { println!("drop"); } }
+fn make() -> Guard {
+    println!("make");
+    Guard { value: Value { text: String::from("held") } }
+}
+fn next() -> i32 { println!("next"); 7 }
+fn main() {
+    println!("{} {}", make().text, next());
+    println!("after");
+}
+"#,
+                expect: Expect::Run("make\nderef\nnext\nheld 7\ndrop\nafter\n"),
+            },
+            Case {
+                name: "inline_receiver_does_not_invent_missing_field",
+                source: r#"
+use std::ops::Deref;
+struct Value { n: u32 }
+struct Guard { value: Value }
+impl Deref for Guard {
+    type Target = Value;
+    fn deref(&self) -> &Value { &self.value }
+}
+struct Maker { marker: u32 }
+impl Maker {
+    fn make(&self) -> Guard { Guard { value: Value { n: 42u32 } } }
+}
+struct Wrapper { maker: Maker }
+impl Deref for Wrapper {
+    type Target = Maker;
+    fn deref(&self) -> &Maker { &self.maker }
+}
+fn unused_bad() {
+    let wrapper = Wrapper { maker: Maker { marker: 0u32 } };
+    let value = wrapper.make().missing;
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0609"),
+            },
+            Case {
+                name: "inline_receiver_does_not_authorize_unavailable_deref_bound",
+                source: r#"
+use std::ops::Deref;
+struct Value { n: u32 }
+struct Guard<T> { value: T }
+impl<T: Copy> Deref for Guard<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.value }
+}
+struct Maker { marker: u32 }
+impl Maker {
+    fn make(&self) -> Guard<Value> { Guard { value: Value { n: 42u32 } } }
+}
+struct Wrapper { maker: Maker }
+impl Deref for Wrapper {
+    type Target = Maker;
+    fn deref(&self) -> &Maker { &self.maker }
+}
+fn unused_bad() {
+    let wrapper = Wrapper { maker: Maker { marker: 0u32 } };
+    let value = wrapper.make().n;
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0609"),
             },
         ],
     );

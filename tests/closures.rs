@@ -593,6 +593,21 @@ fn function_item_values_match_stock() {
                 expect: Expect::Run("9 8\n"),
             },
             Case {
+                name: "fnmut_function_item_tuple_abi_in_source_realization",
+                source: "fn subtract(a: i32, b: i32) -> i32 { a - b } fn run<F: FnMut(i32, i32) -> i32>(mut f: F) -> i32 { let a = f(20, 3); f(a, 2) } fn main() { let values = vec![3i32, 9, 2]; println!(\"{} {}\", run(subtract), values.iter().copied().fold(20, subtract)); }",
+                expect: Expect::Run("15 6\n"),
+            },
+            Case {
+                name: "unused_fn_item_wrong_tuple_arity",
+                source: "fn one(x: i32) -> i32 { x } fn unused() { let values = vec![1i32, 2]; let _ = values.iter().copied().fold(0, one); } fn main() {}",
+                expect: Expect::Invalid("E0593"),
+            },
+            Case {
+                name: "unused_fn_item_wrong_accumulator",
+                source: "fn unused() { let values = vec![1i32, 2]; let _ = values.iter().copied().fold(false, i32::max); } fn main() {}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
                 name: "fn_item_wrong_argument",
                 source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i64) -> i64>(f: F, v: i64) -> i64 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
                 expect: Expect::Invalid("E0631"),

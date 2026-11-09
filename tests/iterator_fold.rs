@@ -780,6 +780,105 @@ fn main() {
     );
 }
 
+/// Lazy source `FlatMap` retains owned inner iterators in both directions.
+#[test]
+fn iterator_flat_map_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-flat-map",
+        &[
+            Case {
+                name: "borrowed_cloned_inner",
+                source: r#"fn main(){let a=[2u8,3u8];let out:Vec<u8>=(0..3).flat_map(|_|a.iter().cloned()).collect();println!("{:?}",out);}"#,
+                expect: Expect::Run("[2, 3, 2, 3, 2, 3]\n"),
+            },
+            Case {
+                name: "lazy_capture_empty_and_exhaustion",
+                source: r#"fn main(){let mut calls=0i32;let mut it=(0i32..4i32).flat_map(|n|{calls+=1;println!("visit {}",n);0i32..n});println!("created");println!("{:?}",it.next());let out:Vec<i32>=it.collect();println!("{:?}",out);println!("calls {}",calls);let mut empty=(0i32..0i32).flat_map(|n|0i32..n);println!("{:?} {:?}",empty.next(),empty.next());}"#,
+                expect: Expect::Run(
+                    "created\nvisit 0\nvisit 1\nSome(0)\nvisit 2\nvisit 3\n[0, 1, 0, 1, 2]\ncalls 4\nNone None\n",
+                ),
+            },
+            Case {
+                name: "mixed_double_ended",
+                source: r#"fn main(){let mut it=(1i32..4i32).flat_map(|n|0i32..n);println!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",it.next(),it.next_back(),it.next_back(),it.next(),it.next_back(),it.next(),it.next_back(),it.next());let out:Vec<i32>=(1i32..4i32).flat_map(|n|0i32..n).rev().collect();println!("{:?}",out);}"#,
+                expect: Expect::Run(
+                    "Some(0) Some(2) Some(1) Some(0) Some(0) Some(1) None None\n[2, 1, 0, 1, 0, 0]\n",
+                ),
+            },
+            Case {
+                name: "owned_noncopy_inner",
+                source: r#"fn main(){let out:Vec<String>=(0i32..2i32).flat_map(|_|vec![String::from("a"),String::from("b")]).collect();println!("{:?}",out);}"#,
+                expect: Expect::Run("[\"a\", \"b\", \"a\", \"b\"]\n"),
+            },
+            Case {
+                name: "nonfused_inner_and_outer",
+                source: r#"struct Pulse{n:i32}impl Iterator for Pulse{type Item=i32;fn next(&mut self)->Option<i32>{self.n+=1;if self.n==2{None}else if self.n<4{Some(self.n)}else{None}}}impl IntoIterator for Wrap{type Item=i32;type IntoIter=Pulse;fn into_iter(self)->Pulse{Pulse{n:0}}}struct Wrap;fn main(){let out:Vec<i32>=(0i32..2i32).flat_map(|_|Wrap).collect();println!("{:?}",out);let mut it=Pulse{n:0}.flat_map(|n|0i32..n);println!("{:?} {:?} {:?}",it.next(),it.next(),it.next());}"#,
+                expect: Expect::Run("[1, 1]\nSome(0) None None\n"),
+            },
+            Case {
+                name: "non_iterator_result_unused",
+                source: "fn unused(){let _=(0i32..3i32).flat_map(|n|n+1);}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0277"),
+            },
+            Case {
+                name: "projected_storage_missing_impl_predicate_unused",
+                source: "struct Storage<T:Iterator>{inner:Option<T::Item>}impl<T> Storage<T>{fn unused(&self){}}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0277"),
+            },
+            Case {
+                name: "projected_storage_without_required_equality_unused",
+                source: "struct Storage<T:Iterator>{inner:Option<T::Item>}impl<T:Iterator> Storage<T>{fn unused(self)->Option<i32>{self.inner}}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0308"),
+            },
+            Case {
+                name: "projected_storage_contradictory_equality_unused",
+                source: "struct Storage<T:Iterator<Item=i32>>{inner:Option<T::Item>}impl<T:Iterator<Item=bool>> Storage<T>{fn unused(self){}}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0271"),
+            },
+            Case {
+                name: "wrong_callback_parameter_unused",
+                source: "fn unused(){let _=(0i32..3i32).flat_map(|n:bool|0i32..2i32);}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0631"),
+            },
+            Case {
+                name: "borrowed_inner_escape",
+                source: "fn main(){let item;{let a=vec![1i32,2i32];item=(0i32..1i32).flat_map(|_|a.iter()).next().unwrap();}println!(\"{}\",item);}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn iterator_flat_map_owned_results_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "iterator-flat-map-owned-results",
+        &[
+            Case {
+                name: "lazy_capture_empty_and_exhaustion",
+                source: r#"fn main(){let mut calls=0i32;let mut it=(0i32..4i32).flat_map(|n|{calls+=1;println!("visit {}",n);0i32..n});println!("created");println!("{:?}",it.next());let out:Vec<i32>=it.collect();println!("{:?}",out);println!("calls {}",calls);let mut empty=(0i32..0i32).flat_map(|n|0i32..n);println!("{:?} {:?}",empty.next(),empty.next());}"#,
+                expect: Expect::Run(
+                    "created\nvisit 0\nvisit 1\nSome(0)\nvisit 2\nvisit 3\n[0, 1, 0, 1, 2]\ncalls 4\nNone None\n",
+                ),
+            },
+            Case {
+                name: "mixed_double_ended",
+                source: r#"fn main(){let mut it=(1i32..4i32).flat_map(|n|0i32..n);println!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",it.next(),it.next_back(),it.next_back(),it.next(),it.next_back(),it.next(),it.next_back(),it.next());let out:Vec<i32>=(1i32..4i32).flat_map(|n|0i32..n).rev().collect();println!("{:?}",out);}"#,
+                expect: Expect::Run(
+                    "Some(0) Some(2) Some(1) Some(0) Some(0) Some(1) None None\n[2, 1, 0, 1, 0, 0]\n",
+                ),
+            },
+            Case {
+                name: "owned_noncopy_inner",
+                source: r#"fn main(){let out:Vec<String>=(0i32..2i32).flat_map(|_|vec![String::from("a"),String::from("b")]).collect();println!("{:?}",out);}"#,
+                expect: Expect::Run("[\"a\", \"b\", \"a\", \"b\"]\n"),
+            },
+        ],
+    );
+}
+
 /// `Iterator::filter_map` lazily selects mapped values in either direction.
 #[test]
 fn iterator_filter_map_matches_stock() {

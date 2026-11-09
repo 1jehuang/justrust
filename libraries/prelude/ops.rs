@@ -515,24 +515,24 @@ impl super::iter::DoubleEndedIterator for Range<usize> {
 // Primitive arithmetic impls, as in core. Operators on primitive operands are
 // builtin, so these bodies never recurse; the impls exist for generic bounds.
 macro_rules! primitive_binops {
-    ($($t:ty)*) => {$(
+    ($($t:ty),*) => {$(
         impl Add for $t { type Output = $t; fn add(self, rhs: $t) -> $t { self + rhs } }
         impl Sub for $t { type Output = $t; fn sub(self, rhs: $t) -> $t { self - rhs } }
         impl Mul for $t { type Output = $t; fn mul(self, rhs: $t) -> $t { self * rhs } }
         impl Div for $t { type Output = $t; fn div(self, rhs: $t) -> $t { self / rhs } }
         impl Rem for $t { type Output = $t; fn rem(self, rhs: $t) -> $t { self % rhs } }
-        impl AddAssign for $t { fn add_assign(&mut self, rhs: $t) { *self += rhs } }
-        impl SubAssign for $t { fn sub_assign(&mut self, rhs: $t) { *self -= rhs } }
-        impl MulAssign for $t { fn mul_assign(&mut self, rhs: $t) { *self *= rhs } }
-        impl DivAssign for $t { fn div_assign(&mut self, rhs: $t) { *self /= rhs } }
-        impl RemAssign for $t { fn rem_assign(&mut self, rhs: $t) { *self %= rhs } }
+        impl AddAssign for $t { fn add_assign(&mut self, rhs: $t) { *self += rhs; } }
+        impl SubAssign for $t { fn sub_assign(&mut self, rhs: $t) { *self -= rhs; } }
+        impl MulAssign for $t { fn mul_assign(&mut self, rhs: $t) { *self *= rhs; } }
+        impl DivAssign for $t { fn div_assign(&mut self, rhs: $t) { *self /= rhs; } }
+        impl RemAssign for $t { fn rem_assign(&mut self, rhs: $t) { *self %= rhs; } }
     )*};
 }
-primitive_binops! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 }
+primitive_binops! { i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64 }
 
 macro_rules! primitive_neg {
-    ($($t:ty)*) => {$(
+    ($($t:ty),*) => {$(
         impl Neg for $t { type Output = $t; fn neg(self) -> $t { -self } }
     )*};
 }
-primitive_neg! { i8 i16 i32 i64 i128 isize f32 f64 }
+primitive_neg! { i8, i16, i32, i64, i128, isize, f32, f64 }

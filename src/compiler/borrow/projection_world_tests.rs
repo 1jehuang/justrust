@@ -32,7 +32,24 @@ fn projection_family_actual_replays_open_and_closed_authority() {
         let ir::CarrierFamily::Projection(projection) = &family else {
             panic!("projection must not become a dummy parameter")
         };
-        let actual = view.family_actual(&family, facts).unwrap().unwrap();
+        let mut scratch = crate::compiler::traits::TraitScratch::default();
+        let before = facts.budget().usage_snapshot().work;
+        let actual = view
+            .family_actual_with_scratch(&family, facts, &mut scratch)
+            .unwrap()
+            .unwrap();
+        let cold = facts.budget().usage_snapshot().work - before;
+        let before = facts.budget().usage_snapshot().work;
+        let repeated = view
+            .family_actual_with_scratch(&family, facts, &mut scratch)
+            .unwrap()
+            .unwrap();
+        let warm = facts.budget().usage_snapshot().work - before;
+        assert_eq!(actual, repeated);
+        assert!(
+            warm < cold,
+            "family replay lost its operation arena: {warm}/{cold}"
+        );
         let budget = ir::PlanBudget::default();
         if closed {
             assert_eq!(actual, Ty::Int(ir::IntTy::I32));
@@ -55,12 +72,26 @@ fn projection_family_actual_replays_open_and_closed_authority() {
                 _ => forged.item.snapshot = ir::SnapshotId::standalone().unwrap(),
             }
             assert!(
-                view.family_actual(&ir::CarrierFamily::Projection(Arc::new(forged)), facts)
-                    .is_err(),
+                view.family_actual_with_scratch(
+                    &ir::CarrierFamily::Projection(Arc::new(forged)),
+                    facts,
+                    &mut scratch,
+                )
+                .is_err(),
                 "foreign projection mutation {mutation}"
             );
         }
         let foreign = source_template(source, index);
         assert!(view.family_actual(&family, foreign.facts()).is_err());
+        assert!(
+            view.family_actual_with_scratch(&family, foreign.facts(), &mut scratch)
+                .is_err()
+        );
+        assert!(facts.budget().charge_work(usize::MAX).is_err());
+        assert!(
+            view.family_actual_with_scratch(&family, facts, &mut scratch)
+                .unwrap_err()
+                .is_resource()
+        );
     }
 }

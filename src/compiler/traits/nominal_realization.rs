@@ -2,6 +2,8 @@
 //! No callable subject, fake function or retained mutable world is introduced.
 use super::*;
 
+mod dependency_fields;
+
 #[derive(Clone, Debug)]
 pub(in crate::compiler) struct ClosedNominalInput {
     world: WorldId,
@@ -27,22 +29,38 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         replays: &mut NominalReplays,
     ) -> Result<ProofEvidence> {
-        let mut scratch = ProofScratch {
-            replays: std::mem::take(replays),
-            ..ProofScratch::default()
-        };
+        if replays.obligation_proofs.is_none() {
+            replays._obligation_proofs_storage = Some(charged(
+                &self.budget,
+                self.budget
+                    .reserve_bytes(std::mem::size_of::<ProofScratch>()),
+            )?);
+            replays.obligation_proofs = Some(Box::default());
+        }
+        let mut scratch = replays.obligation_proofs.take().unwrap();
+        scratch.memo = std::mem::take(&mut replays.obligation_memo);
+        scratch.memo_index = std::mem::take(&mut replays.obligation_index);
+        scratch.active.clear();
+        scratch.cycles = 0;
+        scratch.replays = std::mem::take(replays);
         let result = self.require_in(predicate, context, &mut scratch);
-        *replays = std::mem::take(&mut scratch.replays);
+        let mut restored = std::mem::take(&mut scratch.replays);
+        restored.obligation_memo = std::mem::take(&mut scratch.memo);
+        restored.obligation_index = std::mem::take(&mut scratch.memo_index);
+        restored.obligation_proofs = Some(scratch);
+        *replays = restored;
         result
     }
 
-    pub(in crate::compiler) fn replay_nominal_call_selection(
+    pub(in crate::compiler) fn replay_nominal_call_selection_with_scratch(
         &self,
         original: &ir::Callee,
         selected: &ir::Callee,
         env: &GenericEnv,
         arguments: &[Ty],
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
+        let active = scratch.for_world(self.id);
         let same_role = match (original, selected) {
             (ir::Callee::Direct(a), ir::Callee::Direct(b)) => {
                 a.declaration == b.declaration && a.type_args.len() == b.type_args.len()
@@ -88,17 +106,29 @@ impl ValidatedTraitWorld {
             let substituted =
                 self.substitute_projected_schema(&schema, arguments, &self.empty.env)?;
             let context = ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &self.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             };
-            let (normalized, dependencies) = self.normalize_closed_projected_type(
+            // This authenticates the selected source application, not its
+            // executable storage. ClosedReceipt subsequently replays the
+            // current-engine typed mapped signature and every physical root.
+            // Reducing source field schemas here would demand layout from an
+            // identity that the canonical graph producer has not yet reminted.
+            let (normalized, dependencies) = self.normalize_closed_projected_type_for_use(
                 &substituted.signature.result,
                 context,
                 false,
+                active,
+                false,
             )?;
             for dependency in &dependencies {
-                self.validate_projected_dependency(dependency, context)?;
+                self.validate_projected_dependency_with_for_use(
+                    dependency, context, active, false, false,
+                )?;
             }
             if !self.eq_ty(&normalized, actual, 0)? {
                 return Err(FactsError::invalid(
@@ -152,7 +182,7 @@ impl ValidatedTraitWorld {
         if replays.contains_input(input, self)? {
             return Ok(());
         }
-        self.replay_nominal_declaration(input.declaration, &input.source)?;
+        self.replay_nominal_declaration_with(replays, input.declaration, &input.source)?;
         if input.actuals.len() != input.source.schema().env.total_arity()
             || input.obligations.len() != input.source.schema().predicates.len()
         {
@@ -171,8 +201,11 @@ impl ValidatedTraitWorld {
             }
         }
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         for (source, retained) in input
@@ -225,8 +258,11 @@ impl ValidatedTraitWorld {
             }
         }
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         let mut obligations = Vec::new();
@@ -270,7 +306,7 @@ impl ValidatedTraitWorld {
         actuals: &[Ty],
     ) -> Result<()> {
         self.replay_closed_nominal_input_with(replays, input)?;
-        self.replay_nominal_declaration(declaration, proof)?;
+        self.replay_nominal_declaration_with(replays, declaration, proof)?;
         if input.declaration != declaration || !self.eq_types(&input.actuals, actuals, 0)? {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -493,8 +529,11 @@ impl ValidatedTraitWorld {
                         world.validate_projected_dependency(
                             actual,
                             ProofContext {
+                                transport: ParentLocalTransport::default(),
                                 original: None,
+                                source_metadata: None,
                                 predicates: &world.empty,
+                                executable_storage: true,
                                 phase: FactsPhase::Schema,
                             },
                         )?;
@@ -716,8 +755,11 @@ impl ValidatedTraitWorld {
             item: original.item,
         };
         let context = ProofContext {
+            transport: ParentLocalTransport::default(),
             original: None,
+            source_metadata: None,
             predicates: &self.empty,
+            executable_storage: true,
             phase: FactsPhase::Schema,
         };
         self.require_sharing(
@@ -734,8 +776,11 @@ impl ValidatedTraitWorld {
             self.validate_projected_dependency(
                 dependency,
                 ProofContext {
+                    transport: ParentLocalTransport::default(),
                     original: None,
+                    source_metadata: None,
                     predicates: &self.empty,
+                    executable_storage: true,
                     phase: FactsPhase::Schema,
                 },
             )?;
@@ -1042,8 +1087,11 @@ impl ValidatedTraitWorld {
         self.require_in(
             &predicate,
             ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &self.empty,
+                executable_storage: true,
                 phase: FactsPhase::Closed,
             },
             &mut ProofScratch::default(),
@@ -1058,79 +1106,114 @@ mod tests {
 
     #[test]
     fn closed_selection_normalizes_only_the_exact_substituted_projection() {
-        let source = crate::compiler::frontend::parse(
+        for source in [
             "struct S;trait Has<A>{type Out;type Other;}impl Has<i32> for S{type Out=i32;type Other=bool;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
-        ).unwrap();
-        let plan =
-            crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
-                .unwrap();
-        let world = plan.trait_world().unwrap();
-        let caller = world
-            .headers
-            .callables
-            .iter()
-            .find(|h| h.schema.env.is_generic())
-            .unwrap();
-        let implementation = &world.headers.impls[0];
-        let parameter = caller.schema.env.ordered_params().next().unwrap();
-        let projection = ir::AssociatedTypeProjection {
-            trait_ref: TraitRef {
-                declaration: implementation.trait_ref.declaration,
-                self_ty: Ty::Param(parameter),
-                args: Arc::from([Ty::Int(ir::IntTy::I32)]),
-            },
-            item: implementation.associated_types[0].associated,
-        };
-        let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-        let target = |ty| {
-            ir::Callee::Direct(ir::CallTarget {
-                declaration: caller.declaration,
-                type_args: Arc::from([ty]),
-            })
-        };
-        let arguments = [implementation.trait_ref.self_ty.clone()];
-        let expected = implementation.associated_types[0].rhs.clone();
-        world
-            .replay_nominal_call_selection(
-                &target(raw.clone()),
-                &target(expected.clone()),
-                &caller.schema.env,
-                &arguments,
+            "enum Option<T>{None,Some(T)}struct S;trait Has<A>{type Out;type Other;}trait It{type Item;}struct Buffer<I:It>{value:Option<I::Item>}impl<X:It> Has<i32> for X{type Out=Buffer<X>;type Other=bool;}impl It for S{type Item=i32;}fn caller<T:Has<i32>>(x:T){}fn main(){}",
+        ] {
+            let source = crate::compiler::frontend::parse(source).unwrap();
+            let plan = crate::compiler::frontend::PlanCtx::from_program(
+                &source,
+                &ir::PlanBudget::default(),
             )
             .unwrap();
-        // Structural substitution itself still cannot erase a projection.
-        assert!(
-            world
-                .validate_rhs_substitution(&raw, &expected, &caller.schema.env, &arguments, 0,)
-                .is_err()
-        );
-        for forged in [Ty::Unit, Ty::Int(ir::IntTy::U64)] {
-            assert!(
+            let world = plan.trait_world().unwrap();
+            let caller = world
+                .headers
+                .callables
+                .iter()
+                .find(|h| h.schema.env.is_generic())
+                .unwrap();
+            let implementation = &world.headers.impls[0];
+            let parameter = caller.schema.env.ordered_params().next().unwrap();
+            let projection = ir::AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: implementation.trait_ref.declaration,
+                    self_ty: Ty::Param(parameter),
+                    args: Arc::from([Ty::Int(ir::IntTy::I32)]),
+                },
+                item: implementation.associated_types[0].associated,
+            };
+            let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+            let target = |ty| {
+                ir::Callee::Direct(ir::CallTarget {
+                    declaration: caller.declaration,
+                    type_args: Arc::from([ty]),
+                })
+            };
+            let actual_self = if implementation.schema_env.is_generic() {
+                world.headers.impls[1].trait_ref.self_ty.clone()
+            } else {
+                implementation.trait_ref.self_ty.clone()
+            };
+            let arguments = [actual_self];
+            let expected = if implementation.schema_env.is_generic() {
+                let schema = GenericSchema {
+                    env: implementation.schema_env.clone(),
+                    signature: Signature {
+                        params: Vec::new(),
+                        result: implementation.associated_types[0].rhs.clone(),
+                        ref_contract: Arc::new(ir::RefContract::default()),
+                    },
+                    predicates: Arc::from([]),
+                };
+                // Reconstruct closed source identity from its genuine generic
+                // header, rather than declaring unresolved physical storage.
                 world
-                    .replay_nominal_call_selection(
+                    .substitute_projected_schema(&schema, &arguments, &world.empty.env)
+                    .unwrap()
+                    .signature
+                    .result
+            } else {
+                implementation.associated_types[0].rhs.clone()
+            };
+            let mut selection_scratch = TraitScratch::default();
+            for _ in 0..3 {
+                world
+                    .replay_nominal_call_selection_with_scratch(
                         &target(raw.clone()),
-                        &target(forged),
-                        &caller.schema.env,
-                        &arguments,
-                    )
-                    .is_err()
-            );
-        }
-        let mut wrong_argument = projection.clone();
-        wrong_argument.trait_ref.args = Arc::from([Ty::Bool]);
-        let mut wrong_item = projection;
-        wrong_item.item = implementation.associated_types[1].associated;
-        for forged in [wrong_argument, wrong_item] {
-            assert!(
-                world
-                    .replay_nominal_call_selection(
-                        &target(Ty::AssociatedType(Arc::new(forged))),
                         &target(expected.clone()),
                         &caller.schema.env,
                         &arguments,
+                        &mut selection_scratch,
                     )
+                    .unwrap();
+            }
+            // Structural substitution itself still cannot erase a projection.
+            assert!(
+                world
+                    .validate_rhs_substitution(&raw, &expected, &caller.schema.env, &arguments, 0,)
                     .is_err()
             );
+            for forged in [Ty::Unit, Ty::Int(ir::IntTy::U64)] {
+                assert!(
+                    world
+                        .replay_nominal_call_selection_with_scratch(
+                            &target(raw.clone()),
+                            &target(forged),
+                            &caller.schema.env,
+                            &arguments,
+                            &mut selection_scratch,
+                        )
+                        .is_err()
+                );
+            }
+            let mut wrong_argument = projection.clone();
+            wrong_argument.trait_ref.args = Arc::from([Ty::Bool]);
+            let mut wrong_item = projection;
+            wrong_item.item = implementation.associated_types[1].associated;
+            for forged in [wrong_argument, wrong_item] {
+                assert!(
+                    world
+                        .replay_nominal_call_selection_with_scratch(
+                            &target(Ty::AssociatedType(Arc::new(forged))),
+                            &target(expected.clone()),
+                            &caller.schema.env,
+                            &arguments,
+                            &mut selection_scratch,
+                        )
+                        .is_err()
+                );
+            }
         }
     }
 
@@ -1247,10 +1330,46 @@ mod tests {
             .close_nominal_input(declaration, &source, &[Ty::Int(ir::IntTy::I32)])
             .unwrap();
         let projection = &source.schema().projections[0];
+        let mut shared = NominalReplays::default();
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &world.empty,
+            executable_storage: true,
+            phase: FactsPhase::Schema,
+        };
+        let obligation = input
+            .obligations
+            .first()
+            .expect("bounded nominal obligation");
+        let cold = world
+            .require_sharing(obligation, context, &mut shared)
+            .unwrap();
+        let arena = shared.obligation_proofs.as_ref().unwrap().as_ref() as *const ProofScratch;
+        assert!(shared.obligation_proofs.as_ref().unwrap().active.is_empty());
+        let warm = world
+            .require_sharing(obligation, context, &mut shared)
+            .unwrap();
+        assert!(Arc::ptr_eq(&cold.0, &warm.0));
+        assert_eq!(
+            arena,
+            shared.obligation_proofs.as_ref().unwrap().as_ref() as *const ProofScratch
+        );
+        assert!(shared.obligation_proofs.as_ref().unwrap().active.is_empty());
         let (normalized, receipts) = world
             .normalize_nominal_field_projection(&input, projection)
             .unwrap();
         assert_eq!(normalized, Ty::Int(ir::IntTy::I32));
+        assert_eq!(
+            world
+                .close_nominal_dependency_field(
+                    &input,
+                    &Ty::AssociatedType(Arc::new(projection.clone()))
+                )
+                .unwrap(),
+            normalized,
+        );
         assert!(!receipts.is_empty());
         let template = plan.nominal_realization_template(declaration).unwrap();
         world
@@ -1306,6 +1425,50 @@ mod tests {
         assert!(
             world
                 .normalize_nominal_field_projection(&input, &absent)
+                .is_err()
+        );
+        let foreign_world = foreign.trait_world().unwrap();
+        assert!(
+            foreign_world
+                .close_nominal_dependency_field(
+                    &input,
+                    &Ty::AssociatedType(Arc::new(projection.clone()))
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_dependency_field(&input, &Ty::AssociatedType(Arc::new(absent)))
+                .is_err()
+        );
+        assert!(
+            foreign_world
+                .require_sharing(
+                    obligation,
+                    ProofContext {
+                        transport: ParentLocalTransport::default(),
+                        original: None,
+                        source_metadata: None,
+                        predicates: &foreign_world.empty,
+                        executable_storage: true,
+                        phase: FactsPhase::Schema,
+                    },
+                    &mut shared,
+                )
+                .is_err()
+        );
+        assert!(world.budget.charge_work(usize::MAX).is_err());
+        assert!(
+            world
+                .close_nominal_dependency_field(
+                    &input,
+                    &Ty::AssociatedType(Arc::new(projection.clone()))
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .require_sharing(obligation, context, &mut shared)
                 .is_err()
         );
     }

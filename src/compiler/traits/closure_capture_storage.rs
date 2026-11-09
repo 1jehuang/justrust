@@ -155,7 +155,7 @@ fn source_storage(
             let mut projection = Vec::new();
             push(budget, &mut projection, ir::Projection::Deref)?;
             for step in suffix {
-                push(budget, &mut projection, step.clone())?;
+                push(budget, &mut projection, *step)?;
             }
             let root_borrow = matches!(node.kind, ir::CaptureResultKind::Borrow { .. })
                 && location.path.0.is_empty()

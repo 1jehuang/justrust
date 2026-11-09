@@ -8,8 +8,25 @@ impl ValidatedTraitWorld {
         &self,
         associated: DeclId,
     ) -> Result<Arc<[Predicate]>> {
+        self.associated_bound_predicates_with(associated, &mut NominalReplays::default())
+    }
+
+    fn associated_bound_predicates_with(
+        &self,
+        associated: DeclId,
+        replays: &mut NominalReplays,
+    ) -> Result<Arc<[Predicate]>> {
         let header = self.associated_header(associated)?;
         let predicates = self.schema.associated_type_predicates(associated)?;
+        // Header lookup above repeats live module, source and budget admission.
+        // Only this immutable source allocation can reuse its complete replay.
+        for (world, declaration, retained) in &replays.associated_bound_declarations {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if *world == self.id && *declaration == associated && Arc::ptr_eq(retained, &predicates)
+            {
+                return Ok(predicates);
+            }
+        }
         if predicates.len() > MAX_PREDICATES {
             return Err(FactsError::resource(
                 &self.budget,
@@ -18,7 +35,7 @@ impl ValidatedTraitWorld {
         }
         let mut memberships = Vec::new();
         for predicate in predicates.iter() {
-            self.validate_predicate_metadata(predicate, &header.env)?;
+            self.validate_predicate_metadata_with(predicate, &header.env, replays)?;
             if let Predicate::Implements(goal) = predicate {
                 if self.info(goal.declaration)?.kind != DeclKind::Trait
                     || goal.args.len().checked_add(1)
@@ -87,6 +104,14 @@ impl ValidatedTraitWorld {
                 "associated bound applications disagree with ordered source identities",
             ));
         }
+        if replays.associated_bound_declarations.len() < MAX_SCRATCH_OBLIGATIONS {
+            push_scratch_row(
+                &self.budget,
+                &mut replays.associated_bound_declarations,
+                &mut replays.associated_bound_declaration_storage,
+                (self.id, associated, predicates.clone()),
+            )?;
+        }
         Ok(predicates)
     }
 
@@ -97,6 +122,39 @@ impl ValidatedTraitWorld {
         caller: &GenericEnv,
     ) -> Result<Arc<[Predicate]>> {
         self.associated_bounds_for_inner(associated, owner, caller, None)
+    }
+
+    pub(super) fn associated_bounds_for_raw_with(
+        &self,
+        associated: DeclId,
+        owner: &TraitRef,
+        caller: &GenericEnv,
+        active: &mut ProofScratch,
+    ) -> Result<Arc<[Predicate]>> {
+        let header = self.associated_header(associated)?;
+        if header.trait_decl != owner.declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated bound specialization changed owning trait",
+            ));
+        }
+        let predicates = self.associated_bound_predicates_with(associated, &mut active.replays)?;
+        if predicates.is_empty() {
+            return Ok(predicates);
+        }
+        let schema = GenericSchema {
+            env: header.env.clone(),
+            signature: Signature {
+                params: Vec::new(),
+                result: Ty::Unit,
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates,
+        };
+        let arguments = self.trait_arguments(owner)?;
+        Ok(self
+            .substitute_projected_schema_raw_with(&schema, &arguments, caller, active)?
+            .predicates)
     }
 
     fn associated_bounds_for_with(
@@ -115,7 +173,7 @@ impl ValidatedTraitWorld {
         associated: DeclId,
         owner: &TraitRef,
         caller: &GenericEnv,
-        proof: Option<(ProofContext<'_>, &mut ProofScratch)>,
+        mut proof: Option<(ProofContext<'_>, &mut ProofScratch)>,
     ) -> Result<Arc<[Predicate]>> {
         let header = self.associated_header(associated)?;
         if header.trait_decl != owner.declaration {
@@ -124,7 +182,12 @@ impl ValidatedTraitWorld {
                 "associated bound specialization changed owning trait",
             ));
         }
-        let predicates = self.associated_bound_predicates(associated)?;
+        let predicates = match proof.as_mut() {
+            Some((_, active)) => {
+                self.associated_bound_predicates_with(associated, &mut active.replays)?
+            }
+            None => self.associated_bound_predicates(associated)?,
+        };
         if predicates.is_empty() {
             return Ok(predicates);
         }
@@ -156,103 +219,144 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
         implementation: Option<&projected_methods::OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
-        let predicates = self.associated_bounds_for_with(associated, owner, context, active)?;
-        for predicate in predicates.iter() {
-            let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-                if projection.item == associated
-                    && self.eq_predicate(
-                        &Predicate::Implements(projection.trait_ref.clone()),
-                        &Predicate::Implements(owner.clone()),
-                    )?
-                {
-                    return Ok(normal.clone());
-                }
-                let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-                if let Some(implementation) = implementation {
-                    return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
-                }
-                if self.goal_is_closed_with(&projection.trait_ref, context.env(), active)?
-                    || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
-                {
-                    let (normal, dependencies) = self.normalize_closed_projected_type_with(
-                        &raw,
-                        context,
-                        !self.owner_normalization_finalized,
-                        active,
-                    )?;
-                    for dependency in dependencies.iter() {
-                        self.validate_projected_dependency_with(dependency, context, active)?;
-                    }
-                    return Ok(normal);
-                }
-                Ok(raw)
+        self.check_proof_context_caller(context)?;
+        let operations = std::mem::take(&mut active.nominal_operations);
+        let result = (|| {
+            let context = ProofContext {
+                transport: operations.transport(context.transport),
+                ..context
             };
-            let normalized = match predicate {
-                Predicate::Implements(goal) => {
-                    let mut args = Vec::new();
-                    for argument in goal.args.iter() {
-                        push(
-                            &self.budget,
-                            &mut args,
-                            self.map_universal_projection_type(
-                                argument,
-                                context.env(),
-                                0,
-                                &mut reduce,
-                            )?,
-                        )?;
+            let invocation = context
+                .metadata_facts()
+                .map(|facts| (facts, context.metadata_transport()));
+            let predicates = self.associated_bounds_for_with(associated, owner, context, active)?;
+            for predicate in predicates.iter() {
+                let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
+                    if projection.item == associated
+                        && self.eq_predicate(
+                            &Predicate::Implements(projection.trait_ref.clone()),
+                            &Predicate::Implements(owner.clone()),
+                        )?
+                    {
+                        return Ok(normal.clone());
                     }
-                    Predicate::Implements(TraitRef {
-                        declaration: goal.declaration,
-                        self_ty: self.map_universal_projection_type(
-                            &goal.self_ty,
-                            context.env(),
-                            0,
-                            &mut reduce,
-                        )?,
-                        args: args.into(),
-                    })
-                }
-                Predicate::ProjectionEq { projection, ty } => {
-                    let mut args = Vec::new();
-                    for argument in projection.trait_ref.args.iter() {
-                        push(
-                            &self.budget,
-                            &mut args,
-                            self.map_universal_projection_type(
-                                argument,
-                                context.env(),
-                                0,
-                                &mut reduce,
-                            )?,
-                        )?;
+                    let raw = Ty::AssociatedType(Arc::new(projection.clone()));
+                    if let Some(implementation) = implementation {
+                        return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
                     }
-                    Predicate::ProjectionEq {
-                        projection: ir::AssociatedTypeProjection {
-                            trait_ref: TraitRef {
-                                declaration: projection.trait_ref.declaration,
-                                self_ty: self.map_universal_projection_type(
-                                    &projection.trait_ref.self_ty,
+                    let closed = self.goal_is_closed_in_for_use(
+                        &projection.trait_ref,
+                        context,
+                        active,
+                        false,
+                    )?;
+                    if closed
+                        || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    {
+                        let (normal, dependencies) = self.normalize_closed_projected_type_for_use(
+                            &raw,
+                            context,
+                            !self.owner_normalization_finalized,
+                            active,
+                            false,
+                        )?;
+                        for dependency in dependencies.iter() {
+                            self.validate_projected_dependency_with_for_use(
+                                dependency,
+                                context,
+                                active,
+                                !self.owner_normalization_finalized,
+                                false,
+                            )?;
+                        }
+                        return Ok(normal);
+                    }
+                    Ok(raw)
+                };
+                let normalized = match predicate {
+                    Predicate::Implements(goal) => {
+                        let mut args = Vec::new();
+                        for argument in goal.args.iter() {
+                            push(
+                                &self.budget,
+                                &mut args,
+                                self.map_universal_projection_type_in(
+                                    argument,
                                     context.env(),
                                     0,
+                                    invocation,
+                                    false,
+                                    &operations,
                                     &mut reduce,
                                 )?,
-                                args: args.into(),
-                            },
-                            item: projection.item,
-                        },
-                        ty: self.map_universal_projection_type(
-                            ty,
-                            context.env(),
-                            0,
-                            &mut reduce,
-                        )?,
+                            )?;
+                        }
+                        Predicate::Implements(TraitRef {
+                            declaration: goal.declaration,
+                            self_ty: self.map_universal_projection_type_in(
+                                &goal.self_ty,
+                                context.env(),
+                                0,
+                                invocation,
+                                false,
+                                &operations,
+                                &mut reduce,
+                            )?,
+                            args: args.into(),
+                        })
                     }
-                }
-            };
-            self.require_in(&normalized, context, active)?;
-        }
-        Ok(())
+                    Predicate::ProjectionEq { projection, ty } => {
+                        let mut args = Vec::new();
+                        for argument in projection.trait_ref.args.iter() {
+                            push(
+                                &self.budget,
+                                &mut args,
+                                self.map_universal_projection_type_in(
+                                    argument,
+                                    context.env(),
+                                    0,
+                                    invocation,
+                                    false,
+                                    &operations,
+                                    &mut reduce,
+                                )?,
+                            )?;
+                        }
+                        Predicate::ProjectionEq {
+                            projection: ir::AssociatedTypeProjection {
+                                trait_ref: TraitRef {
+                                    declaration: projection.trait_ref.declaration,
+                                    self_ty: self.map_universal_projection_type_in(
+                                        &projection.trait_ref.self_ty,
+                                        context.env(),
+                                        0,
+                                        invocation,
+                                        false,
+                                        &operations,
+                                        &mut reduce,
+                                    )?,
+                                    args: args.into(),
+                                },
+                                item: projection.item,
+                            },
+                            ty: self.map_universal_projection_type_in(
+                                ty,
+                                context.env(),
+                                0,
+                                invocation,
+                                false,
+                                &operations,
+                                &mut reduce,
+                            )?,
+                        }
+                    }
+                };
+                self.require_in(&normalized, context, active)?;
+            }
+            Ok(())
+        })();
+        active.nominal_operations = operations;
+        result
     }
 }
 
@@ -301,6 +405,54 @@ mod tests {
             .associated_bounds_for(item, &owner, facts.env())
             .unwrap();
         let context = ProofContext::from_facts(&facts);
+        let mut active = ProofScratch::default();
+        world
+            .validate_ty_metadata_with_facts(
+                &owner.self_ty,
+                facts.env(),
+                0,
+                &mut active.replays,
+                Some(&facts),
+            )
+            .unwrap();
+        let checked = active.replays.metadata_context;
+        for _ in 0..2 {
+            let warmed = world
+                .associated_bounds_for_with(item, &owner, context, &mut active)
+                .unwrap();
+            assert_eq!(warmed.len(), rows.len());
+            for (actual, expected) in warmed.iter().zip(rows.iter()) {
+                assert!(world.eq_predicate(actual, expected).unwrap());
+            }
+            assert_eq!(active.replays.metadata_context, checked);
+            assert_eq!(active.replays.associated_bound_declarations.len(), 1);
+        }
+        let normal = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: owner.clone(),
+            item,
+        }));
+        world
+            .discharge_associated_bound_predicates(
+                item,
+                &owner,
+                &normal,
+                context,
+                &mut ProofScratch::default(),
+                None,
+            )
+            .unwrap();
+        for _ in 0..2 {
+            world
+                .discharge_associated_bound_predicates(
+                    item,
+                    &owner,
+                    &normal,
+                    context,
+                    &mut active,
+                    None,
+                )
+                .unwrap();
+        }
         for row in rows.iter() {
             world
                 .require_in(row, context, &mut ProofScratch::default())
@@ -329,12 +481,30 @@ mod tests {
         assert!(world.check_facts(&foreign, false).is_err());
         assert!(
             world
+                .discharge_associated_bound_predicates(
+                    item,
+                    &owner,
+                    &normal,
+                    ProofContext::from_facts(&foreign),
+                    &mut ProofScratch::default(),
+                    None,
+                )
+                .is_err()
+        );
+        assert!(
+            world
                 .associated_bounds_for(item, &owner, foreign.env())
                 .is_err()
         );
         let mut foreign_item = item;
         foreign_item.snapshot = foreign.world.registry;
         assert!(world.associated_bound_predicates(foreign_item).is_err());
+        assert!(world.budget.charge_work(usize::MAX).is_err());
+        assert!(
+            world
+                .associated_bounds_for_with(item, &owner, context, &mut active)
+                .is_err()
+        );
     }
 
     #[test]

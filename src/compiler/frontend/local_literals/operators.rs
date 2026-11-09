@@ -198,8 +198,22 @@ impl Solver<'_, '_, '_> {
             if matches!(kind, Kind::Index(_)) {
                 let element = match self.domain(left) {
                     Domain::Array(element, _) | Domain::Slice(element) => element,
-                    // An iterator item projection can still normalize to a
-                    // slice or array. It supplies no indexing evidence yet.
+                    // `w[1]` with `w: &'a [T]` from a resolved projection
+                    // (`windows(2).map(|w| ..)`): the fixed carrier peels too.
+                    Domain::Fixed(ty) => {
+                        let mut ty = &ty;
+                        while let ir::Ty::Ref { referent, .. } = ty {
+                            ty = referent.as_ref();
+                        }
+                        match ty {
+                            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+                                self.fixed(element.as_ref().clone())?
+                            }
+                            _ => return Err(self.user_error("E0608: cannot index this type")),
+                        }
+                    }
+                    // An unreduced `<I as Iterator>::Item` carrier may still
+                    // become a slice reference; it adds no evidence yet.
                     Domain::Unknown | Domain::AssociatedProjection(_) => return Ok(false),
                     _ => return Err(self.user_error("E0608: cannot index this type")),
                 };
@@ -228,14 +242,15 @@ impl Solver<'_, '_, '_> {
                 {
                     return Ok(false);
                 }
-                // Borrowed iterator items may still have an open referent.
-                // Do not equate the reference with a scalar before the
-                // primitive forwarding implementation can be determined.
+                // `x % 2` with `x: &?T` from a still-unreduced projection
+                // (`filter(|x| ..)` over `Copied`): the referent decides
+                // between the `&T op T` forwarding impl and a mismatch, so
+                // wait for it rather than equating `&?T` with the scalar.
                 (Kind::Binary(op) | Kind::Assign(op), Some(right))
                     if !comparison(op)
                         && !self.projection_defaults
-                        && [left, right].into_iter().any(|term| {
-                            matches!(self.domain(term), Domain::Ref(_, inner)
+                        && [left, right].into_iter().any(|t| {
+                            matches!(self.domain(t), Domain::Ref(_, inner)
                             if matches!(
                                 self.domain(inner),
                                 Domain::Unknown | Domain::AssociatedProjection(_)
@@ -518,8 +533,8 @@ impl Solver<'_, '_, '_> {
             }
             receiver = next;
         }
-        // Exact RHS selection has priority. Otherwise a unique proved formal
-        // permits call-argument coercions such as `&String` to `&str`.
+        // `s + &t` (`t: String`): no `Add<&String>` impl, but a unique
+        // `Add<&str> for String` lets stock coerce the operand to its formal.
         if selected.is_none()
             && matches!(kind, Kind::Binary(op) if !comparison(op))
             && arguments.len() == 1

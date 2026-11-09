@@ -11,7 +11,11 @@ fn select_by<T, F: FnMut(&T, &T) -> super::cmp::Ordering>(
     compare: &mut F,
 ) -> T {
     let greater = compare(&best, &item) == super::cmp::Ordering::Greater;
-    if greater != keep_on_greater { best } else { item }
+    if greater != keep_on_greater {
+        best
+    } else {
+        item
+    }
 }
 
 pub trait Iterator: Sized {
@@ -59,7 +63,10 @@ pub trait Iterator: Sized {
     }
 
     fn enumerate(self) -> Enumerate<Self> {
-        Enumerate { iterator: self, count: 0usize }
+        Enumerate {
+            iterator: self,
+            count: 0usize,
+        }
     }
 
     fn rev(self) -> Rev<Self>
@@ -70,20 +77,33 @@ pub trait Iterator: Sized {
     }
 
     fn zip<U: IntoIterator>(self, other: U) -> Zip<Self, U::IntoIter> {
-        Zip { left: self, right: other.into_iter() }
+        Zip {
+            left: self,
+            right: other.into_iter(),
+        }
     }
 
     fn skip(self, n: usize) -> Skip<Self> {
-        Skip { iterator: self, remaining: n }
+        Skip {
+            iterator: self,
+            remaining: n,
+        }
     }
 
     fn take(self, n: usize) -> Take<Self> {
-        Take { iterator: self, remaining: n }
+        Take {
+            iterator: self,
+            remaining: n,
+        }
     }
 
     fn step_by(self, step: usize) -> StepBy<Self> {
         assert!(step != 0usize);
-        StepBy { iterator: self, skip: step - 1usize, first: true }
+        StepBy {
+            iterator: self,
+            skip: step - 1usize,
+            first: true,
+        }
     }
 
     fn copied(self) -> Copied<Self> {
@@ -99,7 +119,10 @@ pub trait Iterator: Sized {
     }
 
     fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
-        Filter { iterator: self, predicate }
+        Filter {
+            iterator: self,
+            predicate,
+        }
     }
 
     fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F> {
@@ -107,19 +130,34 @@ pub trait Iterator: Sized {
     }
 
     fn peekable(self) -> Peekable<Self, Self::Item> {
-        Peekable { iterator: self, peeked: Option::None, exhausted: false }
+        Peekable {
+            iterator: self,
+            peeked: Option::None,
+            exhausted: false,
+        }
     }
 
     fn chain<U: IntoIterator>(self, other: U) -> Chain<Self, U::IntoIter> {
-        Chain { first: Option::Some(self), second: other.into_iter() }
+        Chain {
+            first: Option::Some(self),
+            second: other.into_iter(),
+        }
     }
 
     fn take_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> TakeWhile<Self, P> {
-        TakeWhile { iterator: self, predicate, done: false }
+        TakeWhile {
+            iterator: self,
+            predicate,
+            done: false,
+        }
     }
 
     fn skip_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> SkipWhile<Self, P> {
-        SkipWhile { iterator: self, predicate, started: false }
+        SkipWhile {
+            iterator: self,
+            predicate,
+            started: false,
+        }
     }
 
     fn inspect<F: FnMut(&Self::Item)>(self, f: F) -> Inspect<Self, F> {
@@ -147,7 +185,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn reduce<F: FnMut(Self::Item, Self::Item) -> Self::Item>(mut self, mut f: F) -> Option<Self::Item> {
+    fn reduce<F: FnMut(Self::Item, Self::Item) -> Self::Item>(
+        mut self,
+        mut f: F,
+    ) -> Option<Self::Item> {
         let mut acc = match self.next() {
             Option::Some(first) => first,
             Option::None => return Option::None,
@@ -160,15 +201,24 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U::IntoIter, F> {
-        FlatMap { iterator: self, f, front: Option::None }
+    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U, F> {
+        FlatMap {
+            iterator: self,
+            f,
+            front: Option::None,
+            back: Option::None,
+            exhausted: false,
+        }
     }
 
     fn flatten(self) -> Flatten<Self, <Self::Item as IntoIterator>::IntoIter>
     where
         Self::Item: IntoIterator,
     {
-        Flatten { iterator: self, front: Option::None }
+        Flatten {
+            iterator: self,
+            front: Option::None,
+        }
     }
 
     fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
@@ -421,7 +471,9 @@ where
 {
     type Item = <super::ops::Range<T> as Iterator>::Item;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<T> IntoIterator for super::ops::RangeInclusive<T>
@@ -430,37 +482,49 @@ where
 {
     type Item = <super::ops::RangeInclusive<T> as Iterator>::Item;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<A: Iterator, B: Iterator> IntoIterator for Zip<A, B> {
     type Item = (A::Item, B::Item);
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<I: Iterator> IntoIterator for Skip<I> {
     type Item = I::Item;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<I: Iterator> IntoIterator for Take<I> {
     type Item = I::Item;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<I: Iterator> IntoIterator for StepBy<I> {
     type Item = I::Item;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 impl<I: Iterator> IntoIterator for Enumerate<I> {
     type Item = (usize, I::Item);
     type IntoIter = Enumerate<I>;
-    fn into_iter(self) -> Enumerate<I> { self }
+    fn into_iter(self) -> Enumerate<I> {
+        self
+    }
 }
 
 pub struct Zip<A, B> {
@@ -494,7 +558,7 @@ impl<I: Iterator> Iterator for Skip<I> {
         while remaining != 0usize {
             remaining -= 1usize;
             match self.iterator.next() {
-                Option::Some(_) => {},
+                Option::Some(_) => {}
                 Option::None => return Option::None,
             }
         }
@@ -535,7 +599,7 @@ impl<I: Iterator> Iterator for StepBy<I> {
         while remaining != 0usize {
             remaining -= 1usize;
             match self.iterator.next() {
-                Option::Some(_) => {},
+                Option::Some(_) => {}
                 Option::None => return Option::None,
             }
         }
@@ -1246,7 +1310,9 @@ pub struct CollectInput<I> {
 impl<I: Iterator> IntoIterator for CollectInput<I> {
     type Item = I::Item;
     type IntoIter = I;
-    fn into_iter(self) -> I { self.iterator }
+    fn into_iter(self) -> I {
+        self.iterator
+    }
 }
 
 pub struct Enumerate<I> {
@@ -1323,6 +1389,102 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> B> Iterator for Map<I, F> {
     }
 }
 
+pub struct FlatMap<I, U: IntoIterator, F> {
+    iterator: I,
+    f: F,
+    front: Option<U::IntoIter>,
+    back: Option<U::IntoIter>,
+    exhausted: bool,
+}
+
+impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> Iterator for FlatMap<I, U, F> {
+    type Item = U::Item;
+
+    fn next(&mut self) -> Option<U::Item> {
+        loop {
+            match self.front.take() {
+                Option::Some(mut inner) => match inner.next() {
+                    Option::Some(item) => {
+                        self.front = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => {}
+                },
+                Option::None => {}
+            }
+            if !self.exhausted {
+                match self.iterator.next() {
+                    Option::Some(item) => {
+                        self.front = Option::Some((self.f)(item).into_iter());
+                        continue;
+                    }
+                    Option::None => self.exhausted = true,
+                }
+            }
+            match self.back.take() {
+                Option::Some(mut inner) => match inner.next() {
+                    Option::Some(item) => {
+                        self.back = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => return Option::None,
+                },
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> IntoIterator
+    for FlatMap<I, U, F>
+{
+    type Item = U::Item;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
+    }
+}
+
+impl<A, I: DoubleEndedIterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> DoubleEndedIterator
+    for FlatMap<I, U, F>
+where
+    <U as IntoIterator>::IntoIter: DoubleEndedIterator,
+{
+    fn next_back(&mut self) -> Option<U::Item> {
+        loop {
+            match self.back.take() {
+                Option::Some(mut inner) => match inner.next_back() {
+                    Option::Some(item) => {
+                        self.back = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => {}
+                },
+                Option::None => {}
+            }
+            if !self.exhausted {
+                match self.iterator.next_back() {
+                    Option::Some(item) => {
+                        self.back = Option::Some((self.f)(item).into_iter());
+                        continue;
+                    }
+                    Option::None => self.exhausted = true,
+                }
+            }
+            match self.front.take() {
+                Option::Some(mut inner) => match inner.next_back() {
+                    Option::Some(item) => {
+                        self.front = Option::Some(inner);
+                        return Option::Some(item);
+                    }
+                    Option::None => return Option::None,
+                },
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
 pub struct FilterMap<I, F> {
     iterator: I,
     f: F,
@@ -1336,7 +1498,7 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> Iterator for FilterM
             match self.iterator.next() {
                 Option::Some(item) => match (self.f)(item) {
                     Option::Some(value) => return Option::Some(value),
-                    Option::None => {},
+                    Option::None => {}
                 },
                 Option::None => return Option::None,
             }
@@ -1347,16 +1509,20 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> Iterator for FilterM
 impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> IntoIterator for FilterMap<I, F> {
     type Item = B;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
-impl<A, B, I: DoubleEndedIterator<Item = A>, F: FnMut(A) -> Option<B>> DoubleEndedIterator for FilterMap<I, F> {
+impl<A, B, I: DoubleEndedIterator<Item = A>, F: FnMut(A) -> Option<B>> DoubleEndedIterator
+    for FilterMap<I, F>
+{
     fn next_back(&mut self) -> Option<B> {
         loop {
             match self.iterator.next_back() {
                 Option::Some(item) => match (self.f)(item) {
                     Option::Some(value) => return Option::Some(value),
-                    Option::None => {},
+                    Option::None => {}
                 },
                 Option::None => return Option::None,
             }
@@ -1542,43 +1708,14 @@ impl Iterator for super::ops::Range<usize> {
     }
 }
 
-pub struct FlatMap<I, J, F> {
-    iterator: I,
-    f: F,
-    front: Option<J>,
-}
-
-impl<A, B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = A>, F: FnMut(A) -> U> Iterator for FlatMap<I, J, F> {
-    type Item = B;
-
-    fn next(&mut self) -> Option<B> {
-        loop {
-            if let Option::Some(inner) = &mut self.front {
-                match inner.next() {
-                    Option::Some(value) => return Option::Some(value),
-                    Option::None => {}
-                }
-            }
-            match self.iterator.next() {
-                Option::Some(item) => self.front = Option::Some((self.f)(item).into_iter()),
-                Option::None => return Option::None,
-            }
-        }
-    }
-}
-
-impl<A, B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = A>, F: FnMut(A) -> U> IntoIterator for FlatMap<I, J, F> {
-    type Item = B;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
-}
-
 pub struct Flatten<I, J> {
     iterator: I,
     front: Option<J>,
 }
 
-impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>> Iterator for Flatten<I, J> {
+impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>>
+    Iterator for Flatten<I, J>
+{
     type Item = B;
 
     fn next(&mut self) -> Option<B> {
@@ -1597,10 +1734,14 @@ impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Itera
     }
 }
 
-impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>> IntoIterator for Flatten<I, J> {
+impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>>
+    IntoIterator for Flatten<I, J>
+{
     type Item = B;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 pub struct Peekable<I, T> {
@@ -1644,7 +1785,11 @@ impl<T, I: Iterator<Item = T>> Peekable<I, T> {
             Option::Some(value) => f(value),
             Option::None => false,
         };
-        if matched { self.peeked.take() } else { Option::None }
+        if matched {
+            self.peeked.take()
+        } else {
+            Option::None
+        }
     }
 }
 
@@ -1659,7 +1804,9 @@ impl<T, I: Iterator<Item = T>> Iterator for Peekable<I, T> {
 impl<T, I: Iterator<Item = T>> IntoIterator for Peekable<I, T> {
     type Item = T;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 pub struct Chain<A, B> {
@@ -1683,7 +1830,9 @@ impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Chain<A, B> {
 impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> IntoIterator for Chain<A, B> {
     type Item = T;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 pub struct TakeWhile<I, P> {
@@ -1715,7 +1864,9 @@ impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for TakeWhile<I, P
 impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for TakeWhile<I, P> {
     type Item = T;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 pub struct SkipWhile<I, P> {
@@ -1744,7 +1895,9 @@ impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for SkipWhile<I, P
 impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for SkipWhile<I, P> {
     type Item = T;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }
 
 pub struct Inspect<I, F> {
@@ -1768,5 +1921,7 @@ impl<T, I: Iterator<Item = T>, F: FnMut(&T)> Iterator for Inspect<I, F> {
 impl<T, I: Iterator<Item = T>, F: FnMut(&T)> IntoIterator for Inspect<I, F> {
     type Item = T;
     type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
+    fn into_iter(self) -> Self {
+        self
+    }
 }

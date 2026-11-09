@@ -1459,11 +1459,8 @@ mod tests {
             if source.region_count != 2 {
                 continue;
             }
-            let signature = world
-                .schema
-                .declaration_schema(declaration)
-                .unwrap()
-                .signature;
+            let schema = world.schema.declaration_schema(declaration).unwrap();
+            let signature = schema.signature;
             let a = ir::CarrierRegionTerm::Named(ir::SourceRegionId {
                 declaration,
                 index: 0,
@@ -1477,7 +1474,9 @@ mod tests {
                     .source_carrier_outlives(&source, &signature, &b, &a)
                     .unwrap()
             );
-            let (contract, _) = world.derive_carriers(&signature, &source).unwrap();
+            let (contract, _) = world
+                .derive_carriers(&signature, &source, &schema.env)
+                .unwrap();
             for output in contract.results.iter() {
                 for input in output.sources.iter() {
                     let row = source

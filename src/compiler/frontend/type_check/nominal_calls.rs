@@ -34,7 +34,7 @@ impl Checker<'_> {
             .validated()
             .ok_or("nominal call signature requires validated caller facts")?;
         facts
-            .validate_signature_with(
+            .validate_source_flow_signature_with_scratch(
                 ir::SignatureSubject::Call(target),
                 &signature,
                 &mut self.trait_scratch.borrow_mut(),
@@ -72,7 +72,7 @@ impl Checker<'_> {
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
         }
         facts
-            .validate_signature_with(
+            .validate_source_flow_signature_with_scratch(
                 ir::SignatureSubject::Call(target),
                 &mapped,
                 &mut self.trait_scratch.borrow_mut(),

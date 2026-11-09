@@ -405,12 +405,13 @@ pub(super) struct AcyclicRead {
     fact: Arc<RealizedNominal>,
 }
 impl AcyclicRead {
-    pub(super) fn retain_for_substitution(
+    pub(super) fn retain_for_substitution_with_scratch(
         &self,
         ty: &ir::Ty,
         engine: crate::engine::EngineAuthority,
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
+        scratch: &mut traits::TraitScratch,
     ) -> Result<ir::Ty, String> {
         if self.fact.identity.0.authority() != engine {
             return Err("foreign engine nominal substitution capability".into());
@@ -493,10 +494,12 @@ impl AcyclicRead {
                 | ir::Ty::Slice { element: ty } => child(ty)?,
                 // A closed object carries no nominal children to authenticate.
                 ir::Ty::Dyn(object) if object.is_closed_leaf() => {}
-                ir::Ty::Closure(_)
-                | ir::Ty::Dyn(_)
-                | ir::Ty::AssociatedType(_)
-                | ir::Ty::Param(_) => {
+                ir::Ty::Closure(closure) => {
+                    for ty in closure.types() {
+                        child(ty)?;
+                    }
+                }
+                ir::Ty::Dyn(_) | ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
                     return Err("unsupported: nonclosed nominal substitution provenance".into());
                 }
                 _ => {}
@@ -508,9 +511,8 @@ impl AcyclicRead {
         // actuals, source fields and complete normalization receipt inventory.
         // Empty-environment closedness means substitution cannot change a field
         // or an actual. Retain this same typed read, never re-intern its ID.
-        self.replay(ty, facts.world())
-            .map_err(|error| error.to_string())?;
-        caller.validate_ty_with_budget(ty, budget)?;
+        scratch.replay_nominal(&ReadNominal::Acyclic(self.clone()), ty, facts)?;
+        caller.validate_ty_with_budget_scratch(ty, budget, scratch)?;
         budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
         Ok(ty.clone())
     }
@@ -572,26 +574,6 @@ impl AcyclicRead {
             ));
         }
         Ok(())
-    }
-
-    pub(super) fn replay(
-        &self,
-        ty: &ir::Ty,
-        world: &traits::ValidatedTraitWorld,
-    ) -> Result<(), Error> {
-        self.replay_with(ty, world, &mut traits::NominalReplays::default())
-    }
-
-    /// Replay against `world`, skipping the world proof replay when this
-    /// node's computation already replayed the same retained fact. The exact
-    /// definition check always runs. Only successes are recorded.
-    pub(super) fn replay_with(
-        &self,
-        ty: &ir::Ty,
-        world: &traits::ValidatedTraitWorld,
-        replays: &mut traits::NominalReplays,
-    ) -> Result<(), Error> {
-        ReadNominal::Acyclic(self.clone()).replay_with(ty, world, replays)
     }
 
     fn replay_uncached(
@@ -980,9 +962,18 @@ mod tests {
         )
         .unwrap();
         assert!(specialization.ty(&ty).is_ok());
-        capability
-            .retain_for_substitution(&ty, engine.authority(), caller, &budget)
-            .unwrap();
+        let mut retention_scratch = traits::TraitScratch::default();
+        for _ in 0..3 {
+            capability
+                .retain_for_substitution_with_scratch(
+                    &ty,
+                    engine.authority(),
+                    caller,
+                    &budget,
+                    &mut retention_scratch,
+                )
+                .unwrap();
+        }
         let foreign_engine = crate::engine::Engine::new(provider);
         let mut foreign_specialization = super::super::opaque_specialization::Specialization::new(
             &publication,
@@ -993,9 +984,18 @@ mod tests {
         )
         .unwrap();
         assert!(foreign_specialization.ty(&ty).is_err());
+        let nested = ir::Ty::Tuple(Arc::from([ty.clone(), ir::Ty::Bool]));
+        assert!(specialization.ty(&nested).is_ok());
+        assert!(foreign_specialization.ty(&nested).is_err());
         assert!(
             capability
-                .retain_for_substitution(&ty, foreign_engine.authority(), caller, &budget)
+                .retain_for_substitution_with_scratch(
+                    &ty,
+                    foreign_engine.authority(),
+                    caller,
+                    &budget,
+                    &mut retention_scratch,
+                )
                 .is_err()
         );
         assert!(
@@ -1018,7 +1018,13 @@ mod tests {
             );
             assert!(
                 capability
-                    .retain_for_substitution(&changed, engine.authority(), caller, &budget)
+                    .retain_for_substitution_with_scratch(
+                        &changed,
+                        engine.authority(),
+                        caller,
+                        &budget,
+                        &mut retention_scratch,
+                    )
                     .is_err(),
                 "typed read accepted altered definition mode {mode}"
             );
@@ -1114,6 +1120,48 @@ mod tests {
             &budget,
         )
         .unwrap();
+        let foreign_engine = crate::engine::Engine::new(FactProvider {
+            key: RealizationKey::encode(world.nominal_realization_world(), declaration, &[], 32)
+                .unwrap(),
+            source: plan.nominal_realization_template(declaration).unwrap(),
+            proof: plan.publish_nominal_declaration(declaration).unwrap(),
+            input: world
+                .close_nominal_input(
+                    declaration,
+                    &plan.publish_nominal_declaration(declaration).unwrap(),
+                    &[],
+                )
+                .unwrap(),
+            stolen: None,
+            mutate: |_| {},
+            fields: Arc::from([]),
+        });
+        assert!(
+            substitution::replay_closed_signature(
+                foreign_engine.authority(),
+                &target,
+                &canonical,
+                &mapped,
+                ir::FactsCtx::from_validated(&facts),
+                &budget,
+            )
+            .is_err(),
+            "typed signature replay accepted foreign-engine physical roots"
+        );
+        let mut changed_result = mapped.clone();
+        changed_result.result = ir::Ty::Bool;
+        assert!(
+            substitution::replay_closed_signature(
+                engine.authority(),
+                &target,
+                &canonical,
+                &changed_result,
+                ir::FactsCtx::from_validated(&facts),
+                &budget,
+            )
+            .is_err(),
+            "typed signature replay accepted a forged mapped result"
+        );
         let nested_target = ir::CallTarget {
             declaration: plan.function_decl(2).unwrap(),
             type_args: Arc::from([]),
@@ -1357,5 +1405,147 @@ mod tests {
         assert_ne!(first, swapped);
         assert!(RealizationKey::encode(7, declaration, &[vec![]], 32).is_err());
         assert!(RealizationKey::encode(7, declaration, &[vec![1; 32]], 32).is_err());
+    }
+
+    #[test]
+    fn projected_nominal_dependency_cycle_rejects_before_physical_child_waits() {
+        struct ProjectionProvider(Arc<crate::compiler::Snapshot>);
+        impl crate::engine::Provider for ProjectionProvider {
+            fn outputs(&self, key: &Key) -> usize {
+                if key.kind == 998 {
+                    1
+                } else {
+                    crate::compiler::CompilerProvider(self.0.clone()).outputs(key)
+                }
+            }
+            fn start(&self, cx: Context, key: Key) -> crate::engine::TaskFuture {
+                if key.kind != 998 {
+                    return crate::compiler::CompilerProvider(self.0.clone()).start(cx, key);
+                }
+                Box::pin(async move {
+                    let types = crate::compiler::Facts { cx: &cx }.types().await?;
+                    let world = types.trait_world().map_err(Error::new)?;
+                    let budget = world.budget();
+                    let declaration = (0..types.nominal_declaration_count())
+                        .find_map(|index| {
+                            let declaration = types.nominal_declaration(index).ok()?;
+                            let ir::Ty::Struct(template) =
+                                types.nominal_realization_template(declaration).ok()?
+                            else {
+                                return None;
+                            };
+                            (template.def().name.rsplit("::").next() == Some("ProjectedCycle"))
+                                .then_some(declaration)
+                        })
+                        .ok_or_else(|| Error::new("missing projected cycle source"))?;
+                    let key = producer::key(
+                        world.nominal_realization_world(),
+                        declaration,
+                        &[coordinates::Term::Int(ir::IntTy::I32)],
+                        budget,
+                    )?;
+                    let read = read_manifest(&cx, &[key], budget).await?;
+                    cx.publish_fact(0, read.len())
+                })
+            }
+        }
+        for workers in [1, 8] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text("trait It{type Item;}impl It for i32{type Item=ProjectedCycle<i32>;}struct ProjectedCycle<I:It>{value:*const I::Item}fn main(){}".into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = crate::engine::Engine::new(ProjectionProvider(snapshot));
+            let root = engine.request(crate::compiler::keys::test_key(998, vec![]));
+            engine.run(workers).unwrap();
+            let error = root.completion().unwrap_err().to_string();
+            // Source declaration authentication can expose the same recursive
+            // assignment before the closed dependency frontier is requested.
+            // Both are explicit semantic cycle failures, never an engine wait
+            // cycle or successful publication of approximate storage.
+            assert!(
+                error.contains("recursive associated nominal dependencies require component projection evidence")
+                    || error == "owning-impl associated assignment cycle",
+                "{error}"
+            );
+            assert!(
+                !error.contains("unproductive dependency cycle"),
+                "physical child was requested before closed dependency discovery"
+            );
+        }
+    }
+
+    #[test]
+    fn closure_nominal_coordinates_replay_parent_provider_and_ordered_owner_arguments() {
+        let budget = ir::PlanBudget::default();
+        let program = super::super::frontend::parse(
+            "fn owner<A,B>(x:A,y:B){let _f=move||{let _x=x;let _y=y;};}fn main(){}",
+        )
+        .unwrap();
+        let types = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let (provider, owner) = (0..types.callable_count())
+            .find_map(|index| {
+                let provider = types.callable_decl(index).ok()?;
+                types
+                    .stored_closure_owner(provider)
+                    .ok()
+                    .flatten()
+                    .map(|(owner, _)| (provider, owner))
+            })
+            .unwrap();
+        let constants = types.prepare_body_constants(owner, &budget).unwrap();
+        let constants = types
+            .seal_body_constants(constants, Vec::new(), &budget)
+            .unwrap();
+        let (_, closures) = types
+            .publish_callable_body_with_closures(owner, constants, &budget)
+            .unwrap();
+        let template = &closures
+            .iter()
+            .find(|closure| closure.ty.provider() == provider)
+            .unwrap()
+            .ty;
+        let replay = |provider, template, arguments: &[ir::Ty]| {
+            producer::closure_actual::replay_template(
+                &types, provider, template, arguments, &budget,
+            )
+        };
+        let arguments = [ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)];
+        let concrete = replay(provider, template, &arguments).unwrap();
+        let term = coordinates::Term::from_ty(&concrete, &budget, 0).unwrap();
+        let words = term.encode(&budget).unwrap();
+        assert_eq!(coordinates::Term::decode(&words, &budget).unwrap(), term);
+        for end in 0..words.len() {
+            assert!(coordinates::Term::decode(&words[..end], &budget).is_err());
+        }
+        let swapped = replay(
+            provider,
+            template,
+            &[arguments[1].clone(), arguments[0].clone()],
+        )
+        .unwrap();
+        assert_ne!(
+            coordinates::Term::from_ty(&swapped, &budget, 0)
+                .unwrap()
+                .encode(&budget)
+                .unwrap(),
+            words
+        );
+        assert!(replay(owner, template, &arguments).is_err());
+        assert!(replay(provider, template, &arguments[..1]).is_err());
+        let foreign = ir::DeclId {
+            snapshot: ir::SnapshotId::standalone().unwrap(),
+            index: provider.index,
+        };
+        assert!(replay(foreign, template, &arguments).is_err());
+        let ir::Ty::Closure(forged_template) = concrete else {
+            unreachable!()
+        };
+        // Closed metadata cannot masquerade as the original universal template.
+        assert!(replay(provider, &forged_template, &arguments).is_err());
+        budget.charge_work(budget.limits().work).unwrap_err();
+        let failure = budget.first_resource_failure();
+        assert!(replay(provider, template, &arguments).is_err());
+        assert_eq!(budget.first_resource_failure(), failure);
     }
 }

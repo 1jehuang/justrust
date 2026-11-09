@@ -2111,6 +2111,9 @@ struct CarrierBuilder<'a, 'b> {
     // Fixed-point revisits query the same immutable carrier types. The trait
     // scratch retains exact payload/caller proofs and resets on facts changes.
     copy_scratch: super::traits::TraitScratch,
+    /// Construction and solver effect replay share exact caller-owned proof
+    /// arenas. Each lookup still validates its full immutable view and table.
+    carrier_scratch: super::traits::TraitScratch,
     bindings: Vec<CallCarrierBinding>,
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
@@ -2138,11 +2141,20 @@ impl CarrierBuilder<'_, '_> {
         if let Some(physical) = self.physical {
             physical.validate_cfg(function, facts)?;
             if let Some(proof) = &function.body_substitution {
-                proof.validate_cfg(function, facts, &self.ledger)?;
+                proof.validate_cfg_with_scratch(
+                    function,
+                    facts,
+                    &self.ledger,
+                    &mut self.carrier_scratch,
+                )?;
             }
         } else {
             // Canonical provenance includes the exact body-substitution proof.
-            function.validate_provenance(facts, &self.ledger)?;
+            function.validate_provenance_with_scratch(
+                facts,
+                &self.ledger,
+                &mut self.carrier_scratch,
+            )?;
         }
         self.validated_provenance = Some((function.clone(), facts.clone()));
         Ok(())
@@ -2880,9 +2892,17 @@ impl CarrierBuilder<'_, '_> {
         })
     }
     fn family_is_open(
-        &self,
+        &mut self,
         view: &super::traits::CarrierContractView,
         family: &ir::CarrierFamily,
+    ) -> Result<bool, Exhausted> {
+        self.family_is_open_with_replay(view, family, None)
+    }
+    fn family_is_open_with_replay(
+        &mut self,
+        view: &super::traits::CarrierContractView,
+        family: &ir::CarrierFamily,
+        replay: Option<&super::traits::CarrierViewReplay<'_>>,
     ) -> Result<bool, Exhausted> {
         match family {
             ir::CarrierFamily::Parameter(parameter) => Ok(view
@@ -2891,7 +2911,19 @@ impl CarrierBuilder<'_, '_> {
                 .is_none()),
             ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_) => {
                 let facts = self.authority.as_ref().ok_or(Exhausted)?;
-                match view.family_actual(family, facts).map_err(|_| Exhausted)? {
+                let actual = match replay {
+                    Some(replay) => view.family_actual_with_replay(
+                        family,
+                        facts,
+                        replay,
+                        &mut self.carrier_scratch,
+                    ),
+                    None => {
+                        view.family_actual_with_scratch(family, facts, &mut self.carrier_scratch)
+                    }
+                }
+                .map_err(|_| Exhausted)?;
+                match actual {
                     Some(Ty::AssociatedType(_)) | Some(Ty::Opaque(_)) => Ok(true),
                     Some(_) => Ok(false),
                     None => Err(Exhausted),
@@ -2902,11 +2934,12 @@ impl CarrierBuilder<'_, '_> {
     /// Transport carrier coordinates only, without granting mutation authority.
     /// Native lifetime invariants use this same owned-component projection but
     /// are not write envelopes: their only application is a monotone origin union.
-    fn transport_input_components(
+    fn transport_input_components_with_replay(
         &mut self,
         input: &InputCarrier,
         view: &super::traits::CarrierContractView,
         owned_destination: bool,
+        replay: Option<&super::traits::CarrierViewReplay<'_>>,
     ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
         let mut result = Vec::new();
         match &input.location.channel {
@@ -2941,7 +2974,7 @@ impl CarrierBuilder<'_, '_> {
                         Some(mapping.original.clone()),
                     ));
                 }
-                if result.is_empty() && self.family_is_open(view, &family)? {
+                if result.is_empty() && self.family_is_open_with_replay(view, &family, replay)? {
                     self.retain(size_of::<(InputCarrier, Option<CarrierLocation>)>(), 1)?;
                     result.push((input.clone(), None));
                 }
@@ -2983,7 +3016,17 @@ impl CarrierBuilder<'_, '_> {
         view: &super::traits::CarrierContractView,
         owned_destination: bool,
     ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
-        let mut result = self.transport_input_components(input, view, owned_destination)?;
+        self.transport_effect_input_with_replay(input, view, owned_destination, None)
+    }
+    fn transport_effect_input_with_replay(
+        &mut self,
+        input: &InputCarrier,
+        view: &super::traits::CarrierContractView,
+        owned_destination: bool,
+        replay: Option<&super::traits::CarrierViewReplay<'_>>,
+    ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
+        let mut result =
+            self.transport_input_components_with_replay(input, view, owned_destination, replay)?;
         if owned_destination {
             // A symbolic family may carry a deferred write envelope, but its
             // concrete expansion can include owned values that are not writable
@@ -3746,6 +3789,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             Some((validation, facts)) => (Some(validation), Some(facts)),
             None => (None, None),
         };
+        let mut carrier_scratch = super::traits::TraitScratch::default();
         let allocation_start = budget.reserved_bytes();
         // Closed layouts do not grant new read-cover authority. Retain only
         // original types from the exact validated template, without owning a
@@ -3797,7 +3841,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         let family_cover_locals = if let Some(proof) = &f.body_substitution {
             let authority = facts.validated().ok_or(Exhausted)?;
             proof
-                .validate_cfg(f, authority, &ledger)
+                .validate_cfg_with_scratch(f, authority, &ledger, &mut carrier_scratch)
                 .map_err(|_| Exhausted)?;
             budget.reserve_bytes(original_bytes)?;
             budget.spend(original_count)?;
@@ -3896,7 +3940,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     let FactsCtx::Validated(authority) = facts else {
                         return Err(Exhausted);
                     };
-                    f.validate_provenance(authority, &ledger)
+                    f.validate_provenance_with_scratch(authority, &ledger, &mut carrier_scratch)
                         .map_err(|_| Exhausted)?;
                     raw_provenance_validated = true;
                 }
@@ -4033,6 +4077,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             authority: None,
             validated_provenance: None,
             copy_scratch: super::traits::TraitScratch::default(),
+            carrier_scratch,
             bindings: vec![],
             regions: RegionRelations::default(),
             effect_table: None,
@@ -4153,6 +4198,11 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             .reserve_bytes(mul(builder.cells.len().div_ceil(64), size_of::<u64>())?)?;
         builder.initial.overwritten = Set::new(builder.cells.len());
         if let FactsCtx::Validated(authority) = facts {
+            let mut nominal_calls = super::traits::NominalCarrierSource::with_scratch(
+                f,
+                authority,
+                std::mem::take(&mut builder.carrier_scratch),
+            );
             let signature = body_signature(f, builder.budget)?;
             let body_view = if let Some(physical) = physical {
                 physical
@@ -4169,7 +4219,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         super::traits::FactsError::from_message(authority.budget(), &message)
                     })
             } else {
-                super::traits::NominalCarrierSource::new(f, authority).body()
+                nominal_calls.body()
             };
             match body_view {
                 Ok(view) => {
@@ -4214,7 +4264,6 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     ),
                 )?,
             }
-            let mut nominal_calls = super::traits::NominalCarrierSource::new(f, authority);
             for (index, block) in f.blocks.iter().enumerate() {
                 if let Terminator::Call {
                     target, signature, ..
@@ -4276,6 +4325,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     }
                 }
             }
+            builder.carrier_scratch = nominal_calls.into_scratch();
             builder.body_signature = Some(signature);
         }
         builder.prepare_native_storage()?;
@@ -5242,6 +5292,89 @@ impl CarrierBuilder<'_, '_> {
         let view = self.calls[block.0].clone();
         let authority = self.authority.clone();
         let facts = authority.as_deref().or(self.facts.validated());
+        let family_replay = match (&view, facts, self.physical) {
+            (Some(view), Some(facts), Some(physical)) => {
+                let validation = physical
+                    .validate_cfg(self.f, facts)
+                    .and_then(|()| {
+                        physical.validate_call(
+                            self.f.blocks[block.0].terminator.origin,
+                            &target,
+                            &signature,
+                        )
+                    })
+                    .and_then(|()| {
+                        self.physical_calls
+                            .get(block.0)
+                            .and_then(Option::as_ref)
+                            .ok_or_else(|| "physical call lost its exact carrier flow".to_string())?
+                            .validate_boundary(
+                                view,
+                                facts,
+                                ir::SignatureSubject::Call(&target),
+                                &signature,
+                            )
+                    });
+                if let Err(message) = validation {
+                    if super::traits::FactsError::from_message(&self.ledger, &message).is_resource()
+                    {
+                        return Err(Exhausted);
+                    }
+                    self.problem(block, None, Problem::Invalid(message))?;
+                    return Ok(());
+                }
+                // Physical ingress has a separate, independently normalized
+                // boundary. Its original declaration can retain opaque tails
+                // already proven empty by that boundary. They cannot request
+                // an ordinary declaration replay for this physical view.
+                let contract = view.contract();
+                self.budget
+                    .spend(contract.inputs.len() + contract.results.len() + 1)?;
+                if contract
+                    .inputs
+                    .iter()
+                    .map(|row| &row.location)
+                    .chain(contract.results.iter().map(|row| &row.location))
+                    .any(|location| location.channel.family().is_some())
+                {
+                    self.problem(
+                        block,
+                        None,
+                        Problem::Unsupported(
+                            "unsupported: physical call retains a symbolic carrier family".into(),
+                        ),
+                    )?;
+                    return Ok(());
+                }
+                None
+            }
+            (Some(view), Some(facts), None) => {
+                let contract = view.original_contract();
+                self.budget
+                    .spend(contract.inputs.len() + contract.results.len() + 1)?;
+                let needed = contract
+                    .inputs
+                    .iter()
+                    .map(|row| &row.location)
+                    .chain(contract.results.iter().map(|row| &row.location))
+                    .any(|location| {
+                        matches!(
+                            location.channel,
+                            CarrierChannel::ProjectionTail { .. }
+                                | CarrierChannel::OpaqueTail { .. }
+                        )
+                    });
+                if needed {
+                    Some(
+                        view.replay_for_families(facts, &mut self.carrier_scratch)
+                            .map_err(|_| Exhausted)?,
+                    )
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         if facts.is_some() && view.is_none() {
             self.problem(
                 block,
@@ -5547,7 +5680,7 @@ impl CarrierBuilder<'_, '_> {
                     }
                     _ => false,
                 };
-                match table.empty_result(
+                match table.empty_result_with_scratch(
                     &target,
                     self.f,
                     &facts,
@@ -5555,6 +5688,7 @@ impl CarrierBuilder<'_, '_> {
                     &signature,
                     &location,
                     caller_validated,
+                    &mut self.carrier_scratch,
                 ) {
                     Ok(empty) => empty,
                     Err(error) if error.is_resource() => return Err(Exhausted),
@@ -5609,7 +5743,24 @@ impl CarrierBuilder<'_, '_> {
                     }
                     _ => false,
                 };
-                match table.lookup(&target, self.f, &facts, view, caller_validated) {
+                let summary = match family_replay.as_ref() {
+                    Some(replay) => table.lookup_replayed(
+                        &target,
+                        self.f,
+                        replay,
+                        caller_validated,
+                        &mut self.carrier_scratch,
+                    ),
+                    None => table.lookup(
+                        &target,
+                        self.f,
+                        &facts,
+                        view,
+                        caller_validated,
+                        &mut self.carrier_scratch,
+                    ),
+                };
+                match summary {
                     Ok(summary) => {
                         self.call_effects[block.0] = Some(summary.clone());
                         summary
@@ -5640,9 +5791,12 @@ impl CarrierBuilder<'_, '_> {
                     summary.writes.as_ref()
                 });
             for write in declared_writes.iter() {
-                for (destination, component) in
-                    self.transport_effect_input(&write.destination, view, true)?
-                {
+                for (destination, component) in self.transport_effect_input_with_replay(
+                    &write.destination,
+                    view,
+                    true,
+                    family_replay.as_ref(),
+                )? {
                     let mut sources = Vec::new();
                     for source in write.sources.iter() {
                         let same_family =
@@ -5654,9 +5808,12 @@ impl CarrierBuilder<'_, '_> {
                                 .is_some_and(|family| {
                                     source.location.channel.family().as_ref() == Some(&family)
                                 });
-                        for (source, source_component) in
-                            self.transport_effect_input(source, view, false)?
-                        {
+                        for (source, source_component) in self.transport_effect_input_with_replay(
+                            source,
+                            view,
+                            false,
+                            family_replay.as_ref(),
+                        )? {
                             // Family substitution is elementwise, never a Cartesian
                             // union of unrelated actual carrier components.
                             if same_family
@@ -5865,9 +6022,12 @@ impl CarrierBuilder<'_, '_> {
         // never a target/write authorization, replacement or must-overwrite.
         if let Some(view) = &view {
             for invariant in view.native_heap_invariants() {
-                for (storage, component) in
-                    self.transport_input_components(&invariant.storage, view, true)?
-                {
+                for (storage, component) in self.transport_input_components_with_replay(
+                    &invariant.storage,
+                    view,
+                    true,
+                    family_replay.as_ref(),
+                )? {
                     let Some(Operand::Copy(actual) | Operand::Move(actual)) =
                         args.get(storage.param)
                     else {
@@ -5883,9 +6043,12 @@ impl CarrierBuilder<'_, '_> {
                     };
                     let mut origins = self.empty_origins()?;
                     for source in invariant.sources.iter() {
-                        for (source, source_component) in
-                            self.transport_effect_input(source, view, false)?
-                        {
+                        for (source, source_component) in self.transport_effect_input_with_replay(
+                            source,
+                            view,
+                            false,
+                            family_replay.as_ref(),
+                        )? {
                             if component.is_some()
                                 && source_component.is_some()
                                 && component != source_component
@@ -13019,6 +13182,95 @@ mod parameter_equality_tests {
             );
             ownership::verify_template(template).unwrap();
         }
+        // The callee itself retains a rigid associated result. Only the
+        // caller owns Out=U, so transporting the raw projection family must
+        // replay that equality before publishing a U result channel.
+        let template = source_template(
+            "trait Source:Sized{type Out;fn get(self)->Self::Out;} fn get<T:Source>(x:T)->T::Out{x.get()} fn forward<T:Source<Out=U>,U>(x:T)->U{get(x)} fn main(){}",
+            1,
+        );
+        let facts = template.facts();
+        let (target, signature) = template
+            .function()
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.value {
+                Terminator::Call {
+                    target, signature, ..
+                } => Some((target, signature)),
+                _ => None,
+            })
+            .unwrap();
+        let view = facts
+            .source_carrier_contract(ir::SignatureSubject::Call(target))
+            .unwrap();
+        let row = &view.contract().results[0];
+        assert!(matches!(
+            row.location.channel,
+            CarrierChannel::ParamTail { .. }
+        ));
+        for _ in 0..3 {
+            assert!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &row.location,
+                    &mut false
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+        let mut unrelated = row.location.clone();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        unrelated.channel = CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        };
+        assert!(matches!(
+            result_flow_problem(
+                Some(&view),
+                Some(facts),
+                ir::SignatureSubject::Call(target),
+                signature,
+                &unrelated,
+                &mut false
+            )
+            .unwrap(),
+            Some(Problem::Invalid(_))
+        ));
+        ownership::verify_template(template).unwrap();
+
+        // A different associated family is eligible only through its exact
+        // producer bound, not merely because both projections mention S.
+        let template = source_template(
+            "trait Make{type Out;fn get(&mut self)->Self::Out;} trait Source{type Item;type Producer:Make<Out=Self::Item>;type Other;} struct Wrap<S:Source>{producer:S::Producer,other:S::Other} fn next<S:Source>(x:&mut Wrap<S>)->S::Item{x.producer.get()} fn main(){}",
+            0,
+        );
+        let facts = template.facts();
+        let view = facts
+            .source_carrier_contract(ir::SignatureSubject::Body)
+            .unwrap();
+        let sources = &view.contract().results[0].sources;
+        assert!(!sources.is_empty());
+        assert!(
+            sources.iter().any(|source| source
+                .location
+                .path
+                .0
+                .contains(&ir::CarrierStep::Field(0)))
+        );
+        assert!(
+            !sources.iter().any(|source| source
+                .location
+                .path
+                .0
+                .contains(&ir::CarrierStep::Field(1)))
+        );
+        view.validate_for(facts).unwrap();
+        ownership::verify_template(template).unwrap();
     }
 
     #[test]

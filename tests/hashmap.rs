@@ -397,3 +397,143 @@ println!("{} {}",h.get(&1).unwrap(),t.get(&2).unwrap());}"#,
         ],
     );
 }
+
+#[test]
+fn receiver_bound_lazy_callback_results_remain_nonexecuting_hints() {
+    closure_oracle::check(
+        "receiver-bound-lazy-callback-results",
+        &[
+            Case {
+                name: "direct_and_compound_lazy_assignments_keep_rhs_before_factory",
+                source: r#"use std::collections::{HashMap,BTreeMap};
+fn main(){let mut h:HashMap<i32,i32>=HashMap::new();
+*h.entry(1).or_insert_with(||{println!("hash factory");4})+={println!("hash rhs");3};
+*h.entry(1).or_insert_with(||{println!("wrong hash factory");100})+={println!("occupied rhs");2};
+let mut t:BTreeMap<i32,i32>=BTreeMap::new();
+*t.entry(2).or_insert_with_key(|key|{println!("tree factory {}",key);*key})={println!("tree rhs");20};
+*t.entry(2).or_insert_with(||{println!("wrong tree factory");100})+=1;
+println!("{} {}",h.get(&1).unwrap(),t.get(&2).unwrap());}"#,
+                expect: Expect::Run(
+                    "hash rhs\nhash factory\noccupied rhs\ntree rhs\ntree factory 2\n9 21\n",
+                ),
+            },
+            Case {
+                name: "direct_assignment_preserves_noncopy_callback_and_value",
+                source: r#"use std::collections::{HashMap,BTreeMap};fn main(){
+let mut h:HashMap<i32,String>=HashMap::new();let seed=String::from("seed");
+*h.entry(1).or_insert_with(move||seed)=String::from("replacement");
+let skipped=String::from("skipped");*h.entry(1).or_insert_with(move||{println!("wrong factory");skipped})=String::from("final");
+let mut t:BTreeMap<i32,String>=BTreeMap::new();let value=String::from("tree seed");
+*t.entry(2).or_insert_with(move||value)=String::from("tree final");
+println!("{} {}",h.get(&1).unwrap(),t.get(&2).unwrap());}"#,
+                expect: Expect::Run("final tree final\n"),
+            },
+            Case {
+                name: "source_schema_result_is_not_specific_to_entry_names",
+                source: r#"struct Holder<T>{value:T}impl<T> Holder<T>{fn callback<F:FnOnce()->T>(&mut self,_factory:F)->&mut T{&mut self.value}}
+fn main(){let mut holder=Holder{value:7i32};*holder.callback(||{println!("wrong callback");100})+=5;println!("{}",holder.value);}"#,
+                expect: Expect::Run("12\n"),
+            },
+            Case {
+                name: "bad_callback_is_still_rejected_in_unused_compound_assignment",
+                source: "use std::collections::HashMap;fn unused(){let mut h:HashMap<i32,i32>=HashMap::new();*h.entry(1).or_insert_with(||true)+=1;}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "owned_guard_field_assignment_keeps_rhs_and_guard_destruction_order",
+                source: r#"use std::cell::RefCell;struct Value{count:i32}fn main(){let cell=RefCell::new(Value{count:1});
+cell.borrow_mut().count+={println!("rhs");cell.borrow_mut().count+=1;2};
+assert_eq!(cell.borrow().count,4);cell.borrow_mut().count=7;assert_eq!(cell.borrow().count,7);}"#,
+                expect: Expect::Run("rhs\n"),
+            },
+            Case {
+                name: "shared_guard_cannot_gain_mutability_from_implicit_field_hint",
+                source: "use std::cell::RefCell;struct Value{count:i32}fn unused(){let cell=RefCell::new(Value{count:1});cell.borrow().count+=1;}fn main(){}",
+                expect: Expect::Invalid("E0594"),
+            },
+            Case {
+                name: "bad_key_callback_is_still_rejected_in_unused_direct_assignment",
+                source: "use std::collections::BTreeMap;fn unused(){let mut h:BTreeMap<i32,String>=BTreeMap::new();*h.entry(1).or_insert_with_key(|_|false)=String::from(\"value\");}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "callback_result_hints_cannot_choose_ambiguous_trait_methods",
+                source: "struct Slot(i32);trait Left{fn callback<F:FnOnce()->i32>(&mut self,f:F)->&mut i32;}trait Right{fn callback<F:FnOnce()->i32>(&mut self,f:F)->&mut i32;}impl Left for Slot{fn callback<F:FnOnce()->i32>(&mut self,_f:F)->&mut i32{&mut self.0}}impl Right for Slot{fn callback<F:FnOnce()->i32>(&mut self,_f:F)->&mut i32{&mut self.0}}fn unused(){let mut slot=Slot(0);*slot.callback(||1)+=2;}fn main(){}",
+                expect: Expect::Invalid("E0034"),
+            },
+            Case {
+                name: "shared_inherent_receiver_cannot_fall_through_to_mutable_trait",
+                source: "struct Slot(i32);impl Slot{fn callback<F:FnOnce()->i32>(&self,_f:F)->&i32{&self.0}}trait Mutable{fn callback<F:FnOnce()->i32>(&mut self,f:F)->&mut i32;}impl Mutable for Slot{fn callback<F:FnOnce()->i32>(&mut self,_f:F)->&mut i32{&mut self.0}}fn unused(){let mut slot=Slot(0);*slot.callback(||1)=3;}fn main(){}",
+                expect: Expect::Invalid("E0594"),
+            },
+            Case {
+                name: "unknown_result_slot_cannot_be_fabricated_from_receiver",
+                source: "struct Slot;impl Slot{fn callback<F:FnOnce(),T>(&mut self,_f:F)->&mut T{panic!(\"unused\")}}fn unused(){let mut slot=Slot;let _value=slot.callback(||{});}fn main(){}",
+                expect: Expect::Invalid("E0282"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn receiver_bound_callback_shared_inventory_matches_stock() {
+    closure_oracle::check(
+        "receiver-bound-callback-shared-inventory",
+        &[Case {
+            name: "unchanged_rc_refcell_inventory",
+            source: r#"use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+struct Item { name: String, available: i32, reserved: i32 }
+struct Inventory { items: HashMap<String, Rc<RefCell<Item>>>, events: Vec<String> }
+impl Inventory {
+    fn add(&mut self, name: &str, quantity: i32) {
+        let key = name.to_string();
+        let item = self.items.entry(key).or_insert_with(|| Rc::new(RefCell::new(Item {
+            name: name.to_string(), available: 0, reserved: 0,
+        })));
+        item.borrow_mut().available += quantity;
+    }
+    fn reserve(&mut self, name: &str, quantity: i32) -> Result<(), String> {
+        let key = name.to_string();
+        let item = self.items.get(&key).ok_or_else(|| format!("unknown {}", name))?;
+        let mut item = item.try_borrow_mut().map_err(|_| format!("busy {}", name))?;
+        if quantity <= 0 || quantity > item.available {
+            return Err(format!("unavailable {}: {}", name, quantity));
+        }
+        item.available -= quantity;
+        item.reserved += quantity;
+        self.events.push(format!("reserved {} {}", quantity, item.name));
+        Ok(())
+    }
+    fn report(&self, names: &[&str]) {
+        let mut total = 0;
+        for name in names {
+            let key = name.to_string();
+            let item = self.items.get(&key).unwrap().borrow();
+            println!("{}: {} free, {} reserved", item.name, item.available, item.reserved);
+            total += item.available + item.reserved;
+        }
+        for event in &self.events { println!("{}", event); }
+        println!("total {} events {}", total, self.events.len());
+    }
+}
+fn main() {
+    let mut inventory = Inventory { items: HashMap::new(), events: Vec::new() };
+    inventory.add("bolts", 12);
+    inventory.add("washers", 20);
+    inventory.add("bolts", 8);
+    inventory.reserve("bolts", 7).unwrap();
+    inventory.reserve("washers", 9).unwrap();
+    println!("rejected: {}", inventory.reserve("bolts", 30).unwrap_err());
+    println!("rejected: {}", inventory.reserve("nuts", 1).unwrap_err());
+    inventory.report(&["bolts", "washers"]);
+}
+"#,
+            expect: Expect::Run(
+                "rejected: unavailable bolts: 30\nrejected: unknown nuts\nbolts: 13 free, 7 reserved\nwashers: 11 free, 9 reserved\nreserved 7 bolts\nreserved 9 washers\ntotal 40 events 2\n",
+            ),
+        }],
+    );
+}

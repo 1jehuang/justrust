@@ -30,8 +30,11 @@ impl ValidatedTraitWorld {
             })?;
             let caller = self.predicate_env(scope.binder().declaration)?;
             let context = ProofContext {
+                transport: ParentLocalTransport::default(),
                 original: None,
+                source_metadata: None,
                 predicates: &caller,
+                executable_storage: true,
                 phase: FactsPhase::Schema,
             };
             let mut active = ProofScratch::default();

@@ -17,12 +17,19 @@ pub enum TypeQueryKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct QueryRealization {
+    engine: crate::engine::EngineAuthority,
+    source: Ty,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAlignmentQuery {
     kind: TypeQueryKind,
     owner: DeclId,
     parameter: Option<ParamId>,
     queried: Ty,
     packed: Option<super::super::frontend::PackedReserveAuthority>,
+    realization: Option<QueryRealization>,
 }
 
 impl TypeAlignmentQuery {
@@ -63,6 +70,7 @@ impl TypeAlignmentQuery {
             parameter: Some(parameter),
             queried,
             packed: None,
+            realization: None,
         })
     }
 
@@ -83,6 +91,7 @@ impl TypeAlignmentQuery {
             parameter: None,
             queried,
             packed: Some(authority),
+            realization: None,
         })
     }
 
@@ -116,6 +125,46 @@ impl TypeAlignmentQuery {
 
     pub(super) fn substitute(&mut self, queried: Ty) {
         self.queried = queried;
+        self.realization = None;
+    }
+
+    pub(in crate::compiler) fn substitute_realized(
+        &mut self,
+        queried: Ty,
+        engine: crate::engine::EngineAuthority,
+        context: &crate::compiler::frontend::PlanCtx,
+        facts: &crate::compiler::traits::ValidatedFacts,
+        budget: &PlanBudget,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+    ) -> Result<(), String> {
+        let source = self.expected_type(facts)?;
+        crate::compiler::nominal_realization::substitution::replay_closed_type_mapping_with(
+            Some(context),
+            engine,
+            &source,
+            &queried,
+            facts,
+            budget,
+            scratch,
+        )?;
+        budget.retain_bytes(std::mem::size_of::<QueryRealization>())?;
+        self.queried = queried;
+        self.realization = Some(QueryRealization { engine, source });
+        Ok(())
+    }
+
+    pub(super) fn validate_engine(
+        &self,
+        engine: crate::engine::EngineAuthority,
+    ) -> Result<(), String> {
+        if self
+            .realization
+            .as_ref()
+            .is_some_and(|proof| proof.engine != engine)
+        {
+            return Err("alignment realization belongs to another engine".into());
+        }
+        Ok(())
     }
 
     pub(in crate::compiler) fn same_query(
@@ -124,7 +173,15 @@ impl TypeAlignmentQuery {
         budget: &PlanBudget,
     ) -> Result<bool, String> {
         budget.charge_work(1)?;
-        Ok(self.kind == other.kind
+        let same_realization = match (&self.realization, &other.realization) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.engine == b.engine && super::identical_type(&a.source, &b.source, budget)?
+            }
+            _ => false,
+        };
+        Ok(same_realization
+            && self.kind == other.kind
             && self.owner == other.owner
             && self.parameter == other.parameter
             && self.packed == other.packed
@@ -136,10 +193,45 @@ impl TypeAlignmentQuery {
         facts: FactsCtx<'_>,
         budget: &PlanBudget,
     ) -> Result<(), String> {
+        self.validate_with_scratch(
+            facts,
+            budget,
+            &mut crate::compiler::traits::TraitScratch::default(),
+        )
+    }
+
+    pub(super) fn validate_with_scratch(
+        &self,
+        facts: FactsCtx<'_>,
+        budget: &PlanBudget,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+    ) -> Result<(), String> {
         budget.charge_work(1)?;
         let facts = facts
             .validated()
             .ok_or("alignment query requires validated source facts")?;
+        let expected = self.expected_type(facts)?;
+        if let Some(proof) = &self.realization {
+            if !super::identical_type(&proof.source, &expected, budget)? {
+                return Err("alignment realization changed its exact source actual".into());
+            }
+            return crate::compiler::nominal_realization::substitution::replay_closed_type_mapping_with(
+                None, proof.engine, &expected, &self.queried, facts, budget,
+                scratch,
+            );
+        }
+        if !super::identical_type(&self.queried, &expected, budget)? {
+            return Err("alignment queried type differs from its exact source substitution".into());
+        }
+        FactsCtx::Validated(facts).validate_ty_with_budget_scratch(
+            &self.queried,
+            budget,
+            scratch,
+        )?;
+        Ok(())
+    }
+
+    fn expected_type(&self, facts: &crate::compiler::traits::ValidatedFacts) -> Result<Ty, String> {
         if facts.declaration() != self.owner || facts.registry_snapshot() != self.owner.snapshot {
             return Err("alignment query has a foreign canonical source owner".into());
         }
@@ -177,11 +269,7 @@ impl TypeAlignmentQuery {
                     .ok_or("alignment query canonical parameter missing")?,
             )
         };
-        if !super::identical_type(&self.queried, &expected, budget)? {
-            return Err("alignment queried type differs from its exact source substitution".into());
-        }
-        FactsCtx::Validated(facts).validate_ty_with_budget(&self.queried, budget)?;
-        Ok(())
+        Ok(expected)
     }
 }
 
@@ -414,6 +502,104 @@ mod tests {
             changed
                 .validate(FactsCtx::Validated(&facts), &budget)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn realized_alignment_query_rejects_foreign_engine_and_changed_payloads() {
+        use crate::compiler::ir::closed_call_receipt_tests::issued_body_fixture;
+        let source = "struct Item{value:i32}fn forward<T>(v:T)->T{let item=Item{value:1i32};v}fn main(){let n=forward(7u32);}";
+        let (body, engine) = issued_body_fixture(source);
+        let (_, foreign_engine) = issued_body_fixture(source);
+        assert_ne!(engine, foreign_engine);
+        let mapped = body
+            .checked
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.ty {
+                Ty::Struct(item) if item.id().index.is_graph() => Some(expr.ty.clone()),
+                _ => None,
+            })
+            .expect("fixture must retain an actual graph-realized nominal payload");
+        let mapped = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(mapped),
+        };
+        let declaration = body.facts.target().unwrap().declaration;
+        let source_facts = body.facts.world().callable_facts(declaration).unwrap();
+        let parameter = source_facts.env().ordered_params().next().unwrap();
+        let mut query = TypeAlignmentQuery::issue(Ty::Param(parameter), &source_facts).unwrap();
+        let target = ir::CallTarget {
+            declaration,
+            type_args: Arc::from([mapped.clone()]),
+        };
+        let facts = body.facts.world().instance_facts(&target).unwrap();
+        let budget = facts.budget();
+        crate::compiler::nominal_realization::substitution::replay_closed_type_mapping_with(
+            None,
+            engine,
+            &mapped,
+            &mapped,
+            &facts,
+            budget,
+            &mut crate::compiler::traits::TraitScratch::default(),
+        )
+        .unwrap();
+        query.queried = mapped.clone();
+        query.realization = Some(QueryRealization {
+            engine,
+            source: mapped,
+        });
+        query.validate_engine(engine).unwrap();
+        query.validate(FactsCtx::Validated(&facts), budget).unwrap();
+        assert!(query.same_query(&query.clone(), budget).unwrap());
+        assert!(query.validate_engine(foreign_engine).is_err());
+
+        let mut changed = query.clone();
+        changed.realization.as_mut().unwrap().engine = foreign_engine;
+        assert!(!query.same_query(&changed, budget).unwrap());
+        assert!(
+            changed
+                .validate(FactsCtx::Validated(&facts), budget)
+                .is_err()
+        );
+
+        let mut changed = query.clone();
+        changed.realization.as_mut().unwrap().source = Ty::Bool;
+        assert!(!query.same_query(&changed, budget).unwrap());
+        assert!(
+            changed
+                .validate(FactsCtx::Validated(&facts), budget)
+                .is_err()
+        );
+
+        let mut changed = query.clone();
+        changed.queried = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Bool),
+        };
+        assert!(!query.same_query(&changed, budget).unwrap());
+        assert!(
+            changed
+                .validate(FactsCtx::Validated(&facts), budget)
+                .is_err()
+        );
+
+        let mut changed = query;
+        changed.realization = None;
+        // Even an identity-shaped mapping must replay its nested graph read
+        // against the exact engine, independently of query receipt comparison.
+        assert!(
+            crate::compiler::nominal_realization::substitution::replay_closed_type_mapping_with(
+                None,
+                foreign_engine,
+                &changed.queried,
+                &changed.queried,
+                &facts,
+                budget,
+                &mut crate::compiler::traits::TraitScratch::default(),
+            )
+            .is_err()
         );
     }
 
