@@ -3442,10 +3442,54 @@ impl Resolver<'_> {
             Pattern::Alternatives(fields) => {
                 // Every alternative must bind exactly the same names (E0408).
                 let mut first: Option<std::collections::HashSet<_>> = None;
+                let mut modes: Vec<(NameKey, Option<ir::BorrowKind>)> = Vec::new();
                 for field in fields {
                     self.alias_budget.charge_work(1)?;
                     let mut row_names = std::collections::HashSet::new();
                     self.pattern(field, module, &mut row_names)?;
+                    // E0409: one name must use the same explicit binding mode
+                    // in every alternative.
+                    let mut stack = vec![&*field];
+                    while let Some(node) = stack.pop() {
+                        self.alias_budget.charge_work(1)?;
+                        match node {
+                            Pattern::Binding { name, by_ref, .. }
+                            | Pattern::At { name, by_ref, .. } => {
+                                let key = self.ident_key(*name, LookupClass::Local)?;
+                                match modes.iter().find(|(seen, _)| *seen == key) {
+                                    Some((_, mode)) if mode != by_ref => {
+                                        return Err(format!(
+                                            "E0409: variable `{}` is bound inconsistently across `|` patterns",
+                                            self.ident_display(*name)?
+                                        ));
+                                    }
+                                    Some(_) => {}
+                                    None => modes.push((key, *by_ref)),
+                                }
+                                if let Pattern::At { pattern, .. } = node {
+                                    stack.push(pattern);
+                                }
+                            }
+                            Pattern::Alternatives(items)
+                            | Pattern::Tuple(items)
+                            | Pattern::Array(items) => stack.extend(items.iter()),
+                            Pattern::TupleRest(rest)
+                            | Pattern::ArrayRest(rest)
+                            | Pattern::VariantRest { fields: rest, .. } => {
+                                stack.extend(rest.prefix.iter().chain(rest.suffix.iter()))
+                            }
+                            Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
+                                stack.push(pattern)
+                            }
+                            Pattern::Variant { fields, .. } => {
+                                stack.extend(fields.iter().map(|(_, p)| p))
+                            }
+                            Pattern::Struct { fields, .. } => {
+                                stack.extend(fields.iter().map(|(_, p)| p))
+                            }
+                            _ => {}
+                        }
+                    }
                     match &first {
                         None => first = Some(row_names),
                         Some(expected)

@@ -47,6 +47,7 @@ mod trait_method_source_tests;
 mod function_qualifiers;
 mod function_source;
 pub use function_source::packed_query::PackedReserveAuthority;
+mod declared_lifetimes;
 mod generated_callables;
 mod generated_debug;
 mod generated_derive;

@@ -82,6 +82,25 @@ fn main() { println!("live"); }"#,
                 expect: Expect::Invalid("E0408"),
             },
             Case {
+                name: "inconsistent_ref_binding_unused",
+                source: r#"fn unused(x: &Option<(i32, i32)>) -> i32 { match x { Some((x, 3)) | &Some((ref x, 5)) => *x, _ => 0 } }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("E0409"),
+            },
+            Case {
+                name: "undeclared_struct_lifetime_unused",
+                source: r#"struct S { a: &'a isize }
+enum E { V(Option<&'b u8>) }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("E0261"),
+            },
+            Case {
+                name: "consistent_ref_binding",
+                source: r#"fn f(x: (i32, i32)) -> i32 { match x { (ref a, 1) | (1, ref a) => *a, _ => 0 } }
+fn main() { println!("{} {}", f((5, 1)), f((2, 2))); }"#,
+                expect: Expect::Run("5 0\n"),
+            },
+            Case {
                 name: "nonexhaustive_unused",
                 source: r#"fn unused(c: char) -> i32 { match c { 'a' | 'b' => 1 } }
 fn main() { println!("live"); }"#,

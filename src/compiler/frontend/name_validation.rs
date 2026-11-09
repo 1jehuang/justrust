@@ -894,6 +894,12 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Type(&default.ty))?;
                 }
                 self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
+                declared_lifetimes::check_fields(
+                    self.program.names.as_ref(),
+                    &declaration.region_params,
+                    &declaration.fields,
+                    |amount| self.work(amount),
+                )?;
                 self.many(&declaration.fields, |field| {
                     Visit::Field(field, declaration.module)
                 })?;
@@ -933,6 +939,14 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Type(&default.ty))?;
                 }
                 self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
+                for variant in &declaration.variants {
+                    declared_lifetimes::check_fields(
+                        self.program.names.as_ref(),
+                        &declaration.region_params,
+                        &variant.fields,
+                        |amount| self.work(amount),
+                    )?;
+                }
                 self.many(&declaration.variants, |variant| {
                     Visit::Variant(variant, declaration.module)
                 })?;
