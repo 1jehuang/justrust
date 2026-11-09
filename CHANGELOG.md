@@ -3,8 +3,18 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
-## Unreleased
+## 0.1.0-alpha.21
 
+- **Hosted dependency cache hits again.** Cargo config env vars
+  (`CARGO_PROFILE_*`, `CARGO_BUILD_*`, `CARGO_INCREMENTAL`, ...) no longer
+  enter depcache and build-script keys, so they stop splitting the cache.
+  serde+regex+anyhow check: 0/18 hits (2.9s) became 18/18 (0.2s).
+- **Clients follow the hosted fleet version.** Hosted connects advertise the
+  release the fleet runs. A client older than that checks for the update
+  right away instead of within 24h.
+- **Fixed: update checks stuck on networks that reset IPv4 TLS.** They now
+  retry over IPv6, like hosted API requests.
+- **Hosted API requests retry over IPv6** when IPv4 connect or TLS fails.
 - **Test binaries come back as deltas of each other.** After a remote
   `test --no-run`, a new test binary is sent as a zstd delta against a
   similar one already sent in the same transfer. 24 fresh test binaries:
