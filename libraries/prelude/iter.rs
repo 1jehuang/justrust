@@ -346,8 +346,8 @@ pub trait Iterator: Sized {
         mut self,
         mut f: F,
     ) -> (B, B) {
-        let mut left: B = super::default::Default::default();
-        let mut right: B = super::default::Default::default();
+        let mut left: B = <B as super::default::Default>::default();
+        let mut right: B = <B as super::default::Default>::default();
         loop {
             match self.next() {
                 Option::Some(item) => {
