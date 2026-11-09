@@ -242,7 +242,13 @@ impl ValidatedTraitWorld {
                     }
                     let raw = Ty::AssociatedType(Arc::new(projection.clone()));
                     if let Some(implementation) = implementation {
-                        return self.normalize_owner_type(&raw, implementation, &mut Vec::new(), 0);
+                        return self.normalize_owner_type_for_use(
+                            &raw,
+                            implementation,
+                            &mut Vec::new(),
+                            0,
+                            false,
+                        );
                     }
                     let closed = self.goal_is_closed_in_for_use(
                         &projection.trait_ref,

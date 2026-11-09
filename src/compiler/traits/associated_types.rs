@@ -2431,7 +2431,7 @@ impl ValidatedTraitWorld {
         self.validate_associated_normal_form_for_use(item, normal, env, context, active, true)
     }
 
-    fn validate_associated_normal_form_for_use(
+    pub(super) fn validate_associated_normal_form_for_use(
         &self,
         item: Option<DeclId>,
         normal: &Ty,

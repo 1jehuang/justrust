@@ -622,6 +622,19 @@ impl ValidatedTraitWorld {
         active: &mut Vec<DeclId>,
         depth: usize,
     ) -> Result<Ty> {
+        self.normalize_owner_type_for_use(ty, owner, active, depth, true)
+    }
+
+    /// Declaration schemas retain canonical source applications. Only the
+    /// executable path may demand storage, which graph realization remints.
+    pub(super) fn normalize_owner_type_for_use(
+        &self,
+        ty: &Ty,
+        owner: &OwnerNormalizationContext<'_>,
+        active: &mut Vec<DeclId>,
+        depth: usize,
+        executable_storage: bool,
+    ) -> Result<Ty> {
         self.check_owner_context(owner)?;
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
@@ -674,15 +687,16 @@ impl ValidatedTraitWorld {
                         &owner.implementation.schema_env,
                     )?;
                     push(&self.budget, active, projection.item)?;
-                    let result = self.normalize_owner_type(
+                    let result = self.normalize_owner_type_for_use(
                         &substituted.signature.result,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     );
                     active.pop();
                     let normal = result?;
-                    self.validate_associated_normal_form(
+                    self.validate_associated_normal_form_for_use(
                         Some(projection.item),
                         &normal,
                         &owner.implementation.schema_env,
@@ -691,10 +705,11 @@ impl ValidatedTraitWorld {
                             original: None,
                             source_metadata: None,
                             predicates: &owner.predicates,
-                            executable_storage: true,
+                            executable_storage,
                             phase: FactsPhase::Universal,
                         },
                         &mut ProofScratch::default(),
+                        executable_storage,
                     )?;
                     Ok(normal)
                 } else if self.eq_ty(
@@ -709,7 +724,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &owner.predicates,
-                        executable_storage: true,
+                        executable_storage,
                         phase: FactsPhase::Universal,
                     };
                     // A supertrait's assignment is not owned by this impl.
@@ -784,11 +799,12 @@ impl ValidatedTraitWorld {
                         &owner.implementation.schema_env,
                     )?;
                     push(&self.budget, active, projection.item)?;
-                    let result = self.normalize_owner_type(
+                    let result = self.normalize_owner_type_for_use(
                         &substituted.signature.result,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     );
                     active.pop();
                     result
@@ -802,7 +818,7 @@ impl ValidatedTraitWorld {
                         original: None,
                         source_metadata: None,
                         predicates: &owner.predicates,
-                        executable_storage: true,
+                        executable_storage,
                         phase: FactsPhase::Universal,
                     };
                     if matches!(projection.trait_ref.self_ty, Ty::Param(_))
@@ -811,17 +827,19 @@ impl ValidatedTraitWorld {
                     {
                         return Ok(symbolic);
                     }
-                    self.normalize_closed_projected_type(
+                    self.normalize_closed_projected_type_for_use(
                         ty,
                         ProofContext {
                             transport: ParentLocalTransport::default(),
                             original: None,
                             source_metadata: None,
                             predicates: &owner.predicates,
-                            executable_storage: true,
+                            executable_storage,
                             phase: FactsPhase::Universal,
                         },
                         !owner.finalized,
+                        &mut ProofScratch::default(),
+                        executable_storage,
                     )
                     .map(|(normal, _)| normal)
                 }
@@ -832,7 +850,13 @@ impl ValidatedTraitWorld {
                     push(
                         &self.budget,
                         &mut normalized,
-                        self.normalize_owner_type(part, owner, active, depth + 1)?,
+                        self.normalize_owner_type_for_use(
+                            part,
+                            owner,
+                            active,
+                            depth + 1,
+                            executable_storage,
+                        )?,
                     )?;
                 }
                 Ok(Ty::Tuple(normalized.into()))
@@ -840,11 +864,12 @@ impl ValidatedTraitWorld {
             Ty::Array { element, len } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ok(Ty::Array {
-                    element: Arc::new(self.normalize_owner_type(
+                    element: Arc::new(self.normalize_owner_type_for_use(
                         element,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     )?),
                     len: *len,
                 })
@@ -853,11 +878,12 @@ impl ValidatedTraitWorld {
                 retain::<Ty>(&self.budget, 1)?;
                 Ok(Ty::RawPtr {
                     kind: *kind,
-                    pointee: Arc::new(self.normalize_owner_type(
+                    pointee: Arc::new(self.normalize_owner_type_for_use(
                         pointee,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     )?),
                 })
             }
@@ -865,30 +891,42 @@ impl ValidatedTraitWorld {
                 retain::<Ty>(&self.budget, 1)?;
                 Ok(Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(self.normalize_owner_type(
+                    referent: Arc::new(self.normalize_owner_type_for_use(
                         referent,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     )?),
                 })
             }
             Ty::Slice { element } => {
                 retain::<Ty>(&self.budget, 1)?;
                 Ok(Ty::Slice {
-                    element: Arc::new(self.normalize_owner_type(
+                    element: Arc::new(self.normalize_owner_type_for_use(
                         element,
                         owner,
                         active,
                         depth + 1,
+                        executable_storage,
                     )?),
                 })
             }
-            Ty::Struct(_) | Ty::Enum(_) => self.normalize_nominal_actuals(
+            Ty::Struct(_) | Ty::Enum(_) => self.normalize_nominal_actuals_for_use(
                 ty,
                 &owner.implementation.schema_env,
                 depth,
-                |argument| self.normalize_owner_type(argument, owner, active, depth + 1),
+                None,
+                executable_storage,
+                |argument| {
+                    self.normalize_owner_type_for_use(
+                        argument,
+                        owner,
+                        active,
+                        depth + 1,
+                        executable_storage,
+                    )
+                },
             ),
             _ if self.type_contains_projection(ty, depth)? => Err(FactsError::unsupported(
                 &self.budget,
@@ -907,7 +945,13 @@ impl ValidatedTraitWorld {
                     trait_ref: implementation.trait_ref.clone(),
                     item: value.associated,
                 }));
-                let normal = self.normalize_owner_type(&projection, &owner, &mut Vec::new(), 0)?;
+                let normal = self.normalize_owner_type_for_use(
+                    &projection,
+                    &owner,
+                    &mut Vec::new(),
+                    0,
+                    false,
+                )?;
                 // The owner context contains only actual impl constraints, never
                 // its own head or an equality manufactured from this assignment.
                 self.discharge_associated_bound_predicates(
@@ -969,10 +1013,15 @@ impl ValidatedTraitWorld {
             self.validate_projected_value_schema(schema, self.info(declaration)?.receiver)?;
             let mut normalized = clone_schema(schema, &self.budget)?;
             for ty in &mut normalized.signature.params {
-                *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
+                *ty = self.normalize_owner_type_for_use(ty, &owner, &mut Vec::new(), 0, false)?;
             }
-            normalized.signature.result =
-                self.normalize_owner_type(&schema.signature.result, &owner, &mut Vec::new(), 0)?;
+            normalized.signature.result = self.normalize_owner_type_for_use(
+                &schema.signature.result,
+                &owner,
+                &mut Vec::new(),
+                0,
+                false,
+            )?;
             self.complete_projected_contract(&mut normalized.signature)?;
             self.validate_schema_signature(
                 declaration,
@@ -1033,7 +1082,7 @@ impl ValidatedTraitWorld {
             retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
             let ty = Ty::AssociatedType(Arc::new(projection.clone()));
             return self
-                .normalize_owner_type(&ty, &owner, &mut Vec::new(), 0)
+                .normalize_owner_type_for_use(&ty, &owner, &mut Vec::new(), 0, false)
                 .map(Some);
         }
         Ok(None)
@@ -1335,10 +1384,15 @@ impl ValidatedTraitWorld {
             Some(item.declaration),
         )?;
         for ty in &mut value.signature.params {
-            *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
+            *ty = self.normalize_owner_type_for_use(ty, &owner, &mut Vec::new(), 0, false)?;
         }
-        value.signature.result =
-            self.normalize_owner_type(&value.signature.result, &owner, &mut Vec::new(), 0)?;
+        value.signature.result = self.normalize_owner_type_for_use(
+            &value.signature.result,
+            &owner,
+            &mut Vec::new(),
+            0,
+            false,
+        )?;
         self.complete_projected_contract(&mut value.signature)?;
         // Independently establish the required declaration's contract in the real
         // implementation environment. Never copy the provided target's topology.
@@ -3101,6 +3155,39 @@ mod tests {
             let proof = world.discharge_direct(&target, &facts).unwrap();
             assert!(world.eq_ty(&proof.signature.result, &actual, 0).unwrap());
         }
+    }
+
+    #[test]
+    fn projected_owner_source_schema_does_not_claim_nominal_storage() {
+        let world = world(
+            "trait It{type Item;}struct Cursor;impl It for Cursor{type Item=i32;}enum Slot<T>{Empty,Value(T)}struct Buffer<I:It>{value:Slot<I::Item>}trait Make{type Out;}struct C;impl Make for C{type Out=Buffer<Cursor>;}fn main(){}",
+        );
+        let owner = owners(&world)
+            .into_iter()
+            .find(|owner| {
+                owner.associated_types.iter().any(|value| {
+                    matches!(&value.rhs, Ty::Struct(_))
+                        && world.type_contains_projection(&value.rhs, 0).unwrap()
+                })
+            })
+            .unwrap();
+        let context = world.owner_context(owner).unwrap();
+        let value = &owner.associated_types[0];
+        let projection = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: owner.trait_ref.clone(),
+            item: value.associated,
+        }));
+        let source = world
+            .normalize_owner_type_for_use(&projection, &context, &mut Vec::new(), 0, false)
+            .unwrap();
+        assert!(world.eq_ty(&source, &value.rhs, 0).unwrap());
+        assert!(world.type_contains_projection(&source, 0).unwrap());
+        // Source replay is not a storage receipt. The ordinary executable
+        // entry point must still require independent canonical field reminting.
+        let error = world
+            .normalize_owner_type(&projection, &context, &mut Vec::new(), 0)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
     }
 
     #[test]
