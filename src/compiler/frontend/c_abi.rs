@@ -185,28 +185,40 @@ impl Parser<'_, '_> {
                         self.unsupported("combined representation attributes are unsupported")
                     );
                 }
-                if self.eat("C") {
-                    self.pending_repr_c = true;
-                } else if self.eat("align") {
-                    self.expect("(")?;
-                    if primitive_constants::original_token(self).is_none() {
+                loop {
+                    if self.pending_repr_c && self.is("C")
+                        || self.pending_repr_align.is_some() && self.is("align")
+                    {
                         return Err(
-                            self.unsupported("representation alignment requires original source")
+                            self.unsupported("duplicate representation hints are unsupported")
                         );
                     }
-                    let literal = parse_integer_literal(self.token().text)
-                        .map_err(|error| self.unsupported(&error))?;
-                    if literal.suffix.is_some() {
-                        return Err(self.unsupported("suffixed representation alignment literal"));
+                    if self.eat("C") {
+                        self.pending_repr_c = true;
+                    } else if self.eat("align") {
+                        self.expect("(")?;
+                        if primitive_constants::original_token(self).is_none() {
+                            return Err(self
+                                .unsupported("representation alignment requires original source"));
+                        }
+                        let literal = parse_integer_literal(self.token().text)
+                            .map_err(|error| self.unsupported(&error))?;
+                        if literal.suffix.is_some() {
+                            return Err(
+                                self.unsupported("suffixed representation alignment literal")
+                            );
+                        }
+                        self.pending_repr_align = Some(self.token().span);
+                        self.cursor.bump();
+                        self.eat(",");
+                        self.expect(")")?;
+                    } else {
+                        return Err(self.unsupported("unsupported representation attribute"));
                     }
-                    self.pending_repr_align = Some(self.token().span);
-                    self.cursor.bump();
-                    self.eat(",");
-                    self.expect(")")?;
-                } else {
-                    return Err(self.unsupported("unsupported representation attribute"));
+                    if !self.eat(",") || self.is(")") {
+                        break;
+                    }
                 }
-                self.eat(",");
                 self.expect(")")?;
             } else if self.is("unsafe") {
                 self.reject_forbidden_unsafe()?;

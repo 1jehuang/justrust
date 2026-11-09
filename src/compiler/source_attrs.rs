@@ -647,6 +647,8 @@ impl Filter<'_> {
                 // meaning is decided by `lint_level` like at any other owner.
                 if lint_level_attribute(&self.text[attr.content.clone()])
                     || cfg_attribute(&self.text[attr.content.clone()])
+                    || (owner == Owner::AssociatedFunction
+                        && function_hint_attribute(&self.text[attr.content.clone()]))
                 {
                     continue;
                 }
@@ -707,7 +709,10 @@ impl Filter<'_> {
             }
             return Ok(false);
         }
-        if owner == Owner::Unsupported && !attrs.is_empty() {
+        // An active `cfg` that left no other attribute behind (for example on
+        // an item macro invocation) is already fully applied: keep the item.
+        let only_active_cfg = effective.is_empty() && attrs.iter().all(|attr| !attr.doc);
+        if owner == Owner::Unsupported && !attrs.is_empty() && !only_active_cfg {
             return Err(error(
                 AttributeErrorKind::Unsupported,
                 attrs[0].range.clone(),
@@ -829,13 +834,16 @@ impl Filter<'_> {
                     let valid = match (&*meta.name, &meta.value) {
                         ("repr", MetaValue::List(values)) => {
                             owner == Owner::FreeItem
-                                && values.len() == 1
-                                && ((values[0].name == "C"
-                                    && matches!(values[0].value, MetaValue::Word))
-                                    || (values[0].name == "align"
-                                        && matches!(&values[0].value, MetaValue::List(args)
-                                            if args.len() == 1 && args[0].name.is_empty()
-                                                && matches!(args[0].value, MetaValue::OtherLiteral))))
+                                && matches!(values.len(), 1 | 2)
+                                && values.iter().filter(|v| v.name == "C").count() <= 1
+                                && values.iter().filter(|v| v.name == "align").count() <= 1
+                                && values.iter().all(|value| {
+                                    (value.name == "C" && matches!(value.value, MetaValue::Word))
+                                        || (value.name == "align"
+                                            && matches!(&value.value, MetaValue::List(args)
+                                                if args.len() == 1 && args[0].name.is_empty()
+                                                    && matches!(args[0].value, MetaValue::OtherLiteral)))
+                                })
                         }
                         ("unsafe", MetaValue::List(values)) => {
                             owner == Owner::Function
@@ -938,6 +946,11 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                // Codegen hints: `cold` only affects layout, and
+                // `track_caller` only the reported panic location on stderr.
+                "cold" | "track_caller"
+                    if matches!(owner, Owner::Function | Owner::AssociatedFunction)
+                        && self.text[meta.range.clone()].trim() == meta.name => {}
                 // Tool attributes are inert for compilation.
                 "rustfmt" | "clippy"
                     if self.text[meta.range.clone()]
@@ -1614,6 +1627,11 @@ fn valid_identity_metadata(meta: &Meta) -> bool {
         ("rustc_diagnostic_item", MetaValue::String(value)) => value == "convert_identity",
         _ => false,
     }
+}
+
+/// Bare `#[cold]` / `#[track_caller]` hints on a function.
+fn function_hint_attribute(content: &str) -> bool {
+    matches!(content.trim(), "cold" | "track_caller")
 }
 
 /// Lint-level attribute names (`#[allow(..)]` and friends).
@@ -2753,7 +2771,6 @@ mod tests {
             "forbid(unused_attributes)",
             "unsafe(no_mangle)",
             "export_name=\"external\"",
-            "track_caller",
         ] {
             for attrs in [
                 format!("#[inline]#[{semantic}]"),
@@ -3048,17 +3065,25 @@ mod tests {
     #[test]
     fn exported_namespace_completeness_tracks_only_active_item_calls() {
         // Activity tracking does not grant unsupported lint-owner semantics.
-        for source in [
-            "#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}",
-            "#[cfg(all())] make!(); fn main(){}",
-            "#[cfg_attr(all(), cfg(all()))] make!(); fn main(){}",
-            "#[cfg_attr(any(), cfg(any()))] make!(); fn main(){}",
-        ] {
+        for source in ["#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}"] {
             assert_eq!(
                 prep(source).unwrap_err().kind,
                 AttributeErrorKind::Unsupported
             );
         }
+        // A fully evaluated cfg leaves the call active, so it still counts.
+        for source in [
+            "#[cfg(all())] make!(); fn main(){}",
+            "#[cfg_attr(all(), cfg(all()))] make!(); fn main(){}",
+            "#[cfg_attr(any(), cfg(any()))] make!(); fn main(){}",
+        ] {
+            assert!(prep(source).unwrap().has_item_macro_invocations, "{source}");
+        }
+        assert!(
+            !prep("#[cfg(any())] make!(); fn main(){}")
+                .unwrap()
+                .has_item_macro_invocations
+        );
         for source in [
             "make!(); fn main(){}",
             "mod private { maker::make!{} } fn main(){}",
@@ -3094,6 +3119,27 @@ mod nested_inert_tests {
         prepare(text, &CfgSet::default())
     }
 
+    #[test]
+    fn function_hints_are_admitted() {
+        for text in [
+            "#[cold] fn f() {}",
+            "#[track_caller] fn f() {}",
+            "impl S { #[track_caller] #[inline] fn f() {} #[cold] fn g(&self) {} }",
+            "#[cfg(all())] m! { 1 2 }",
+            "#[cfg(any())] m! { 1 2 }",
+        ] {
+            assert!(prep(text).is_ok(), "{text}");
+        }
+        for text in [
+            "#[cold] struct S;",
+            "#[track_caller(x)] fn f() {}",
+            "impl S { #[cold] const C: u8 = 0; }",
+            "#[inline] m! { 1 2 }",
+            "#[cfg_attr(all(), inline)] m! { 1 2 }",
+        ] {
+            assert!(prep(text).is_err(), "{text}");
+        }
+    }
     #[test]
     fn field_docs_and_tool_attributes_are_inert() {
         for text in [
