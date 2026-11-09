@@ -47,7 +47,7 @@ const RECENT_READY_S: u64 = 60;
 
 pub const SIGNED_OUT: &str = "not signed in for hosted builds. Run `justrust login --no-wait` and ask your user to open the URL it prints (builds stay local until then).";
 pub const SUBSCRIBE: &str = "remote builds need a plan ($20/mo, 5,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
-pub const START_TRIAL: &str = "remote builds need a card on file: run `justrust upgrade --no-wait` and ask your user to open the URL it prints to start the free first month (card required, 500 builds, then $20/mo with 5,000 builds a month). Builds run locally until then.";
+pub const START_TRIAL: &str = "remote builds need a card on file: run `justrust upgrade --no-wait` and ask your user to open the URL it prints to start the free trial (card required, 7 days or 500 builds, whichever comes first, then $20/mo with 5,000 builds a month). Builds run locally until then.";
 pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (5,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const END_TRIAL: &str = "free trial builds used up: ask your user to start their plan now at https://jcode.sh/account (it starts on its own when the trial ends). Builds run locally until then.";

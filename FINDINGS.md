@@ -213,6 +213,109 @@ largest remaining lever is the tests themselves, chiefly the clean-room
 conformance suites (see `justrust profile --days 7`, slowest runs), not
 the client.
 
+## 2026-11-07: cloud preview tests spend most time rebuilding shared upstream crates
+
+Hosted Jcode run `20261107-220157498-173455` passed 16 scoped preview
+checks in 36.7 s wall. The test workload itself took 0.93 s, while the
+279k-line TUI test crate compiled for 18.0 s and the 191k-line app-core
+crate for 9.7 s after concurrent `jcode-base::mobile_sync` changes.
+Inventory run `20261107-220239597-177095` passed eight tests in 30.8 s
+wall, including 15.56 s waiting on the shared build-directory lock and
+13.81 s compiling. Both were verified hosted. Coordinate a single scoped
+acceptance matrix after source stabilization to avoid overlapping lock
+waits. No application crate restructuring or controlled speedup claim.
+
+## 2026-11-06: simulator CLI path overrides differ between hosted and local
+
+Mobile microphone check `20261106-035127653-1930762` ran on hosted in 13.7 s
+(12.53 s recorded command). It passed the full CLI GPUI path override family,
+but reported six missing `Window::set_emulate_touch_from_mouse` methods even
+though that public method exists in the local GPUI checkout at
+`crates/gpui/src/window.rs:5607`. The same simulator sources and overrides
+passed a subsequent explicit local check in 5.9 s. Investigate whether hosted
+source discovery/synchronization honors command-line `--config patch` paths.
+Do not interpret this as a controlled timing comparison or bypass billing.
+The successful local targeted run `20261106-035307288-1951020` compiled the
+mobile test host in 14.89 s and ran 43 voice tests in 1.09 s. Its waste report
+identified upstream-triggered host rebuilding and single-threaded frontend
+work. No unrequested application crate restructuring was performed.
+
+## 2026-11-06: mobile performance validation confirms hosted outage and shared CPU contention
+
+Mobile run `20261106-024131785-1102213` explicitly requested hosted checks,
+but `POST /internal/builds/charge` again returned HTTP 404 and the client fell
+back locally without bypassing billing. The earlier mobile check
+`20261106-023639277-1040988` spent 14.82 s wall, 13.13 s compiling two leaf
+units. `justrust show` attributed about 7 s to a busy machine: other builds
+used about 15 of 16 cores, with up to 14 other rustc processes. The first
+focused performance regression run `20261106-024218268-1109247` spent
+22.87 s compiling the 278-test mobile host to run two tests, with an estimated
+11.2 s CPU-contention cost and 0.91 s package-cache lock wait. Coordinating
+agents around a single full matrix avoided redundant acceptance builds.
+After source stabilization, `20261106-024707363-1160353` compiled the host in
+5.32 s and ran 142 app tests in 37.4 s; these differing workloads are not a
+controlled build-speed comparison. Hosted routing restoration is still needed.
+No unrequested crate split or speedup claim is made.
+
+## 2026-11-06: mobile handoff tests hit hosted billing endpoint outage
+
+Jcode run `20261106-001033925-4185040` requested `--remote` but fell back
+locally because the hosted API returned HTTP 404 for
+`POST /internal/builds/charge`. No billing bypass was attempted. All six
+mobile push tests passed in 0.38 s, but compiling the 1896-test app-core
+host took 50.25 s (142.3 s CPU, 5001 MB), of 79.3 s total. A preceding
+TUI check `20261106-000953181-4178248` took 29.2 s and also used the local
+fallback after a recent remote failure. The server routing issue needs
+restoration before hosted measurements are meaningful. Small transport
+tests in a leaf crate could reduce the test-host compilation cost when a
+broader crate split is otherwise justified. No restructuring or speedup
+is claimed for this feature.
+
+## 2026-11-02: session proxy regression edit recompiles app-core test host
+
+Hosted Jcode run `20261102-000345653-1545518` passed 2 session HTTP proxy tests
+in 0.70 s, but compiling `jcode_app_core (test)` took 22.41 s, 74.7 s CPU,
+and 5003 MB peak rustc memory. The subsequent unchanged-source websearch run
+`20261102-000410129-1546364` kept all 488 units fresh and passed 30 tests in
+0.81 s. The oversized 188k-line app-core test host dominates this edit loop,
+not the HTTP fixture runtime. A future small HTTP/session policy leaf crate
+could isolate edits when a broader refactor is justified. No restructuring or
+speedup is claimed for this task.
+
+## 2026-10-30: SSH control error regression rebuilds the whole TUI test host
+
+Hosted Jcode run `20261030-044427028-2001821` passed 3 runtime-control
+regressions in 0.09 s, but compiled `jcode_tui (test)` for 10.41 s
+(2992 MB largest rustc, 22.6 s CPU). The following SSH filter run
+`20261030-044438397-2001820` kept all 596 units fresh and passed 70
+tests in 0.60 s. The costly step is rebuilding the 262k-line TUI crate,
+not test execution. Pure request-ownership/event-policy tests are a
+future leaf-crate opportunity. No project restructuring or speedup is claimed.
+
+## 2026-10-30: lane dependency type edit fans out into app-core tests
+
+Hosted Jcode run `20261030-030011606-1157593` passed 19 lane scheduling
+regressions in 0.02 s, but spent 32.91 s compiling and 35.3 s end to end.
+`jcode_app_core (test)` cost 22.90 s and 5589 MB peak rustc memory, while
+`jcode_base` cost 9.10 s after a `jcode-task-types` root-file edit. The
+preceding hosted check `20261030-025944820-1155147` spent 8.50 s compiling
+and 16.0 s end to end. Shared type changes fan out across the large app-core
+test crate. Consider keeping pure scheduling tests in a small leaf crate
+when future refactoring is otherwise justified. No restructuring or
+measured speedup is claimed for this feature.
+
+## 2026-10-30: session preview edit loop is dominated by the TUI test crate
+
+Hosted Jcode picker run `20261029-231403444-3849568` passed 144 tests
+with 9 ignored. One edited local unit, `jcode_tui (test)`, cost 8.69 s
+of a 9.3 s host run, versus 0.43 s running tests; 595 units stayed fresh.
+The largest rustc used 2843 MB and 17.5 s CPU. Focused check
+`20261029-231342770-3847088` cost 1.91 s compilation and 2.6 s
+client-visible, also on hosted. This is a crate-boundary opportunity,
+not a measured speedup. Keep future pure preview layout/data adapters in
+the existing leaf picker crate where feasible. No project restructuring
+was performed for this UI cleanup.
+
 ## 2026-10-30: smaller account host is live, not a measured speedup
 
 Resized the owner's existing AWS host from 96 to 32 physical cores and 384
@@ -350,6 +453,30 @@ Hosted validation: check `20261029-181020029-1085452`, four shim tests
 `20261029-181117478-1095482`, hosted-control regression
 `20261029-181138802-1100882`, full test `20261029-181156594-1106065`
 (829 passed). No blanket compiler default promotion follows from this audit.
+
+## 2026-10-27: Shared provider catalog refresh regression loop
+
+Hosted run `20261027-231526802-3847146` passed two app-core discovery
+regressions, with 18.13s compile and 19.1s total for a 1,775-test binary.
+`jcode_app_core` alone took 18.10s and 4,627 MB peak rustc memory after an
+upstream base edit. Follow-up `20261027-231548792-3845861` passed one manual
+refresh test with 9.96s compile (base 3.71s, app-core 6.25s). Both disabled
+build slots after the hosted reflink probe failed. These observations support
+investigating slot availability and isolating frequently edited provider
+lifecycle code in smaller crates, not claiming an unmeasured speedup. No
+project restructuring was performed as part of the provider behavior fix.
+
+## 2026-10-27: Jcode CI repair acceptance loop
+
+Hosted run `20261027-201625003-3046022` passed all 69 CLI tests, but
+reported 6.6s of downstream recompilation after an app-core tool-description
+edit. The next ACP-only run `20261027-201653758-3045781` passed 23 tests
+and spent 4.95s compiling after a concurrent TUI state edit, including 2.07s
+rebuilding the root test crate. Both runs disabled build slots because the
+reflink probe failed and used the shared target directory. These observations
+identify dependency invalidation and shared-target contention risks, not a
+measured optimization. Keep source snapshots coherent during acceptance and
+investigate the hosted reflink failure without adding per-agent target trees.
 
 ## 2026-10-26: Next optimization targets from recent real work
 
@@ -9135,6 +9262,67 @@ and the corrected single-test acceptance passed. Final installed hosted run
 `output.jsonl` before the test process exited. These fixes do not require a
 cloud infrastructure deployment or a change to tenant resource limits.
 
+## 2026-10-29: Jcode title-resume cache edit loop
+
+Hosted run `20261029-175652455-973032` passed 15 session/crash tests in
+19.1s host time (22.3s client wall). Recompiling `jcode_base` took 6.92s
+for the library plus 11.45s for its 2,010-test binary, while the selected
+tests took 0.26s. The report attributes 18.4s to the 156k-line base crate.
+This is a project crate-boundary cost, not an observed hosted outage.
+No project restructuring was performed as part of the scoped resume fix.
+Local corpus benchmark `20261029-175701334-975185` was necessarily local
+because it reads the user's session files. It spent 8.65s compiling the
+test binary to run one benchmark, plus 4.19s on the library. No build-loop
+speedup is claimed from this observation.
+
+## 2026-10-29: Jcode CI repair validation contention
+
+Hosted base-check run `20261029-192855188-1525395` passed in 34.14s,
+including 20.48s waiting for the shared target-directory lock (60% of wall)
+and 12.90s compiling. `justrust show` confirms `where remote on hosted`.
+The base library/test units cost 4.20s/6.38s respectively. Coordinated later
+workspace checks sequentially rather than launching competing broad builds.
+Run `20261029-193030418-1535066` passed in 22.4s with no reported lock wait,
+and Clippy `20261029-193055835-1539437` passed in 18.6s. These are different
+commands and cache states, not a controlled before/after speedup measurement.
+No crate restructuring or justrust behavior change was needed for the CI fix.
+
+## 2026-10-29: Jcode cloud recovery check fallback contention
+
+Run `20261029-202057682-2008340` (`check -p jcode-tui --tests`) passed
+in 216.92s, but `show` reported local execution because remote had failed
+within the previous ten minutes. JUSTRUST_REMOTE was unset. Other builds
+used 14.8 of 16 cores on average, with up to 42 other rustc processes and
+176.9s CPU pressure stalls. The report estimated about 100.2s contention
+cost and 103.8s oversized-crate cost, which overlap rather than add.
+The next focused tests request `--remote` explicitly to verify the outage
+instead of silently repeating broad local builds. No speedup is claimed
+and no unrelated project restructuring was attempted.
+
+## 2026-10-29: Jcode session-environment validation
+
+Hosted run `20261029-205929605-2525915` (`test -p jcode-app-core --lib
+session_env -- --nocapture`) passed 5 tests in 38.26s. `justrust show`
+confirmed `where remote on hosted`: 14.65s target-directory lock wait and
+23.21s compile, including a 19.35s app-core test unit (181k lines, 1793 tests
+compiled for 5 selected tests). Test execution itself was 0.10s. Shared-checkout
+agents were building concurrently, so coordinate validation commands rather
+than create target directories or worktrees. Existing crate-boundary findings
+apply, but no unrelated crate restructuring was attempted. No speedup claim.
+
+## 2026-10-29: Jcode account-priority validation loop
+
+Startup routing run `20261029-202744270-2071219` silently used local fallback
+(`where local`, remote failed within ten minutes): 94.59s wall, 91.36s compile,
+with the base test unit taking 52.79s and 40.88s machine-wide CPU stalls.
+Explicit hosted retry `20261029-202942377-2090118` succeeded, proving hosted
+was reachable, but spent 11.23 of 11.35s waiting on the shared build-directory
+lock. Hosted provider suite `20261029-203214361-2117409` passed 183 tests in
+14.9s, with base lib/test rebuilds costing 4.58s/7.62s. These are different
+commands/cache states, not a controlled speedup comparison. This reinforces
+existing crate-boundary and shared-target contention findings. No restructuring
+was performed for the account-priority feature.
+
 ## 2026-10-30: Query-retention frontier and uncontrolled Desktop pair
 
 The scalar retention experiment now passes 66 shared-cache no/yes/no transitions
@@ -9215,6 +9403,44 @@ with 62 fresh units, no compilation and zero source-validation time
 observations under contention, not a comprehensive matched speedup or default
 promotion. See `docs/daemon-native-no-candidate-installed.md` and retained raw
 acceptance fixtures/logs for the exact contract, rebuild exclusions and hashes.
+
+### Jcode issue-triage hosted contention, 2026-10-30 UTC
+
+Hosted run `20261029-232508550-3953373` spent 27.27s wall, including
+10.94s build-directory lock wait and 16.02s compilation, to run nine handoff
+tests. `jcode_app_core` test compilation took 10.37s after a shared
+`jcode-message-types` edit. Run `20261029-232536531-3955853` waited 20.42s
+of 32.7s wall while other issue workers built in the same target directory.
+These are observed parallel-agent contention and downstream invalidation,
+not a demonstrated compiler speed regression or a measured speedup. The
+coordinator subsequently consolidated scoped-branch verification into one
+sequential hosted test batch. No crate split or scheduling-policy change was
+made as part of the issue fixes.
+
+### Jcode cloud callback configuration, 2026-10-30 UTC
+
+Hosted check `20261030-013628481-456048` took 24.70s, including 5.00s
+startup and 19.54s compilation. A jcode-base configuration edit invalidated
+jcode-app-core (9.4s rustc wall) and jcode-tui (4.7s). Targeted TUI test run
+`20261030-013751999-461651` took 33.05s, including 31.87s compilation but
+only 0.07s for seven tests. The TUI test crate compiled in 17.0s and
+jcode-app-core in 14.9s. This is measured shared-crate invalidation, not a
+demonstrated speedup. Extracting configuration types or callback policy into
+smaller leaf crates could reduce the rebuild scope, but no project restructuring
+was undertaken for this scoped feature.
+
+### Jcode recent-window-closure highlights, 2026-10-30 UTC
+
+Hosted storage test run `20261030-031516241-1249207` took 18.49s,
+including 18.27s compilation to execute two tests in 0.00s. The base test
+crate consumed 13.22s and the base library 4.69s after the new closure
+tracking module changed the shared crate. Hosted attachment test run
+`20261030-031535477-1252482` took 31.7s, including 16.16s target-directory
+lock wait behind concurrent coordinator validation and 15.31s compiling
+the application-core test crate for three tests (0.02s). TUI tests were
+subsequently left to the coordinator rather than duplicated. These are
+observed shared-crate invalidation and concurrent-target contention, not
+a speedup claim. No crate split was attempted for the scoped feature.
 
 ## 2026-10-30: matched Blaze warm-runtime comparison and item retention
 
@@ -9441,6 +9667,10 @@ The fixed-five `bench/suite.py resident` comparison remained below the absolute 
 
 Sixteen calibrated alternating actual profiles retained 373 selected-file callback intervals per edit: old cumulative 7,627,533-9,105,572 ns versus new 326,941-506,480 ns, with zero reported transport drops. Callback timing includes source lookup, hashing and the predicate and is included within semantic diagnostics, not additive critical-path savings. The initial uncalibrated missing-marker failure remains retained, not reclassified as zero. Instrumentation provenance, failed v21 controls and the restored-tree 349-test acceptance are independently replayable in `bench/results/resident-diagnostics-phases-20261030/`; helper evidence is retained separately under `bench/results/resident-diagnostic-flat-hash-20261030/`. No experimental binary was installed over the client and no shipping default changed.
 
+## 2026-10-30: Firefox C/C++ ThinLTO hosted build
+
+Authenticated hosted run `20261030-053341530-2554024` completed the isolated full Firefox build workflow in 758.75 seconds. `justrust show` confirmed remote on hosted. The report measured gkrust at 379.13 seconds and 23,511 MB peak rustc memory, webrender at 64.01 seconds (101k lines), Cargo startup at 16.73 seconds, and 5.52 seconds of compiler-idle gaps. Total build peak was 30,378 MB. The oversized-crate waste finding estimates about 51.4 seconds, but its estimates overlap and are not a measured speedup. No Firefox crate split or frontend threading change was attempted because the user requested browser runtime startup optimization, not an invasive upstream build restructuring. The repeated target-laptop compositor-event comparison found no startup benefit from C/C++ ThinLTO: median 277.303 ms release versus 280.740 ms ThinLTO, 20 initialized-profile repetitions per condition. Compilation latency and runtime startup remain distinct metrics.
+
 ## 2026-10-30: resolved builtin test diagnostics avoid unrelated body collection
 
 Native experimental licensed Blaze-derived resident source fe8df07f3 adds a diagnostic-only skeleton for semantically resolved builtin `#[test]` attributes. Global executable outline behavior is unchanged. Unknown/proc-shadowed attributes and ambiguous module contexts retain conservative fallback. Native eight new differential/cache tests and all 359 resident tests pass, with all 700 original benchmark harness tests passing. Failed v27 fixture evidence is preserved separately from repaired v28; production logic was unchanged by fixture repair.
@@ -9449,6 +9679,9 @@ Actual v28 profile records show 373 selected bodies before versus one after each
 
 This is a replicated scoped workload improvement in the experimental native engine, not a comprehensive/default-promotion result, significance claim, or general faster-than-Blaze conclusion. Shipping client defaults are unchanged. Dedicated 13 v27/v28 build/unit summaries are exported in f00a170c7. Full evidence521340ffd independently replays 992 artifacts, four suites (88 total rows), two warm diagnostics (282 total rows), 12 profiles and 31 offline mutation/relocation controls. Broader native four-workload runs rwc01/rwc02 also passed all 80 executed edits including ordinary-function edits and exact failure/recovery gates, but portable retention is separate. The final expanded benchmark harness regression passes 712 tests. No runtime latency is inferred from test counts.
 
+## 2026-10-31: resume picker edit/test loop remains dominated by oversized TUI crate
+
+Hosted Jcode run `20261031-041228674-676987` rebuilt the 264k-line `jcode_tui` test crate in 9.00 seconds (18.7 CPU seconds, 2972 MB largest rustc) to run four focused resume regression tests in about 0.12 seconds afterward. Final run `20261031-041514223-694110` compiled that test crate in 5.69 seconds and waited 2.57 seconds for the shared target lock. Earlier attribution run `20261031-041409509-688756` was fully fresh but waited 6.54 seconds for another build. These are measured edit-loop/coordination costs, not runtime performance costs. Crate extraction could improve repeated UI test edits, but restructuring was deliberately not included in the user's scoped resume runtime optimization. Coordinated consolidated suite runs avoided some redundant compilation, with no compiler/profile or hosted isolation changes attempted.
 
 ## 2026-10-31: opt-in native manifest content generation avoids same-byte worker restarts
 
@@ -9492,11 +9725,23 @@ The corrected controlled-local pinned filtered-test run completed 126 correctnes
 
 An initial run was confounded by speculative justrust prebuilds and retained separately, not used as primary timing evidence. The corrected run disables buildd/prebuild, moves expensive checks before source mutation and proves exactly 42 measured shipping-client recordings with no extras. Representative corrected run IDs include `20261101-123754213-3479372` (cold), `20261101-123807946-3482115` (test-body edit) and `20261101-123815969-3483801` (assertion recovery). All 42 slim summaries are in `data/runs/three-stack-nospec-20261101/`. Full methods, all samples and portable evidence are linked from `docs/three-stack-benchmarks.md`. Forty harness tests, 801 benchmark Python tests and an independent 30-test archive audit passed.
 
+## 2026-11-01: Jcode todo dependency schema check
+
+Run `20261101-160938218-1792376` attempted hosted check but the endpoint reset its connection, so justrust fell back locally. Check passed in 24.33 s with 23.58 s compiling. `jcode_app_core` took 14.32 s and `jcode_base` 7.28 s, with 477 fresh units and 8 compiled units. Waste reported oversized crates and upstream invalidation, plus 3.13 s machine-wide CPU stalls. Follow-up belongs in scoped crate-boundary work, not this schema rename. No speedup measured or claimed.
+
 ## 2026-11-01: initial hosted sync dominates a small client security edit
 
 During the Linux IPv4 TCP mitigation bootstrap change, hosted check run `20261101-124212878-807573` spent 372.1 s end-to-end, including 363.325 s in the first source sync and 8.1 s in the recorded check. The subsequent hosted targeted test `20261101-124825000-807146` spent 21.3 s total, including 0.528 s sync and 20.2 s recorded test command. Both passed on hosted. No speedup is claimed: first-sync versus subsequent-sync are different cache states. The first sync traversed the vendored compiler fixture tree, including hundreds of literal target-directory exceptions. Investigate reducing first-sync source scope/round trips without dropping test fixtures, but do not restructure the crate or ignore source paths on this security task.
 
 Waste diagnostics separately reported 7.1 s recompiling the 85k-line client in check and 19.3 s total oversized-crate compilation for the filtered tests. The targeted test ran 2 of 859 available tests; exact guard regression follow-up `20261101-124949565-849371` passed too. These findings identify follow-up work, not evidence of a performance regression caused by the mitigation.
+
+## 2026-11-01: cloud directory info-widget edit loop
+
+Run `20261101-173610331-348056` spent 23.23 s compiling the 267k-line `jcode_tui` test crate to run four focused tests (23.52 s wall, 595 fresh units). Its report estimated 21.5 s oversized-crate waste and 11.6 s compiling a 3273-test binary for four cases. Later integration run `20261101-181550981-555271` passed 69 cloud tests in 15.1 s, including 7.74 s recompiling the TUI after an unrelated upstream app-core edit. These are different source/cache states, not a measured speedup. A forced hosted check reported kernel-security-maintenance resume pause and safely fell back locally. Consider moving frequently edited widget rendering/tests to an existing small presentation leaf crate in separate scoped architecture work, not restructuring during this feature.
+
+## 2026-11-01: resume picker UI regression edit loop
+
+Run `20261101-164427907-98711` compiled the 265k-line `jcode_tui` test crate in 11.32 s to run 192 picker tests, with 595 fresh units. The suite completed in 0.66 s. The compile averaged 1.9 of 16 cores and waste attributed roughly 10.5 s to oversized-crate rebuilding. A clean source snapshot was necessary to avoid an unrelated concurrent server refactor, not to isolate a branch or create a worktree. Earlier hosted access failed with a connection reset and default execution fell back locally. Consider extracting picker rendering/tests into a smaller leaf crate as separate architecture work. No speedup measured or claimed.
 
 ## 2026-11-02: hosted recovery acceptance and first-sync cost
 
@@ -9510,9 +9755,91 @@ After the fixed-image rollout and hosted maintenance-gate release, check `202611
 
 Private operational acceptance also exercised genuinely fresh fixed-kernel build hosts, exact production dynamic bootstrap, Rust compile/execute, sandbox and credential isolation, stop/start, and the real EC2 console contract. That found and repaired first-boot SSH keys being evicted from the 64KiB console tail by package output. The cloud source now republishes keys with final readiness, with a truncation regression and a second truly fresh acceptance launch. No tenant disk was replaced. Detailed instance/image/deployment receipts remain private.
 
+## 2026-11-02: Jcode session-environment SDK regression loop
+
+Hosted run `20261101-235656342-1520645` passed all 30 Rust SDK client-behavior tests in 11.0 s end-to-end, with no compilation and 137 fresh units. Two existing tests each took 10.00 s: `run_usage_is_latest_call_and_does_not_retain_previous_cache_counters` and `run_collects_framed_final_answer_and_retracts_completed_retry_output`. The report attributed about 10.0 s to suite execution and 1.0 s to CPU contention. Investigate completion/timeout handling in those fixtures separately rather than restructuring the SDK during the session-environment fix. Focused environment tests and the full suite both passed. No speedup is claimed.
+
+## 2026-11-02: concurrent resume-latency validation lock contention
+
+Hosted Jcode check `20261102-151811936-1977531` passed in 27.7 s end-to-end, including 19.12 s waiting for the shared build-directory lock and 7.24 s compilation. Concurrent agents were validating the same checkout; there were no separate worktrees. Earlier picker integration run `20261102-151200627-1936241` rebuilt the 268k-line `jcode_tui` test unit in 8.61 s to run one regression (9.1 s command time). Investigate coordination/coalescing of compatible hosted requests before introducing more per-agent targets or caches. No scheduling change or build speedup is claimed here, and the user's resume-latency task remains scoped to Jcode.
+
+## 2026-11-02: startup routing classifier hosted regression loop
+
+Hosted run `20261102-152756039-2054248` passed 15 startup-pool regressions in 17.68 s command time, including 14.97 s compilation and 1.83 s test execution. The approximately 160k-line `jcode_base` library and test unit took 3.3 s and 11.6 s respectively, compiling a 2,070-test binary for the narrow filter. Concurrent edits in the shared checkout also invalidated this crate. Warm full-provider run `20261102-152907053-2063898` passed 189 tests in 4.6 s end-to-end with no compilation. Clippy run `20261102-152834234-2054244` spent 10.23 of 16.91 s waiting for the build-directory lock. Existing oversized-crate and request-coalescing opportunities remain applicable. No crate restructuring, extra targets, scheduling changes, or speedup claim was made for the routing fix.
+
+## 2026-11-02: issue-triage integrated hosted check
+
+Run `20261102-153335438-2091718` (`check --locked -p jcode --tests`) passed on hosted in 12.3 s end-to-end, with 11.70 s command time, 4.60 s build-directory lock wait, and 6.79 s compilation. A concurrent app-core catalog edit forced a 2.05 s downstream TUI rebuild. The command compiled 26 local units with 596 fresh and ran no tests. These measurements reinforce the existing compatible-request coalescing and shared-crate invalidation findings. No extra target directories, scheduler changes, crate restructuring, or measured speedup claim were introduced during issue triage.
+
+## 2026-11-02: browser definition compaction regression loop
+
+Hosted run `20261102-153958151-2133542` passed 105 browser tests (7 ignored) in 15.0 s end-to-end. Concurrent documentation edits invalidated `jcode-docs-data` and its app-core dependent. The 189k-line app-core test unit rebuilt in 10.65 s, with 3.59 s after compilation. The report identifies the docs build-script input as an upstream invalidation source, estimated at 5.7 s per edit over 43 recorded runs. Consider narrowing those inputs or moving document embedding to a leaf consumer, separately from the user's browser-schema change. No crate restructuring or build speedup is claimed.
+
+## 2026-11-02: swarm completion wake regression loop
+
+Hosted run `20261102-185455889-2817211` passed four targeted worker-report tests with 23.01 s compilation, including 15.42 s rebuilding the 189k-line app-core test unit after an upstream bus change. The report attributed 22.4 s to oversized-crate compilation and estimated 5.8 s per bus edit across eight recorded runs. Follow-up `20261102-185759137-2835499` passed 20 server tests with 9.71 s recompiling app-core after a test-only edit. Existing leaf-crate extraction and narrower upstream dependencies remain the scoped architectural opportunities. No restructuring or speedup claim was introduced in the worker-wake fix.
+
+## 2026-11-03: CI repair hosted validation loop
+
+Hosted websearch run `20261102-202714556-3402097` passed 30 tests in 66.5 s end-to-end, including 8.21 s shared-target lock wait and 55.91 s compilation. The app-core test unit took 27.31 s to compile 1,881 tests for a 30-test filter, and base took 7.86 s. Later provider/e2e run `20261102-203909382-3488592` passed 70 tests in 16.0 s, with 0.30 s lock wait and 11.06 s compilation. Some reports disabled slots because the reflink probe failed, serializing concurrent validation on the shared target. Compatible-request coalescing, investigating the hosted reflink probe, and existing leaf-crate opportunities remain separate follow-ups. These are different workloads, not a measured before/after speedup. No justrust scheduling changes or crate restructuring were made as part of the CI repair.
+
+## 2026-11-05: cloud continuation validation hosted outage
+
+Jcode transfer runner run `20261105-214305842-3204437` explicitly requested hosted execution (`justrust test --remote -p jcode-base --lib mobile_runner::tests`), but the account API returned `404 (not_found): no route for POST /internal/builds/charge`. justrust reported the failure and fell back locally. The 63.6 s local compile then exposed two pre-existing startup usage fixture errors. Earlier check `20261105-214120604-3191810` also ran locally because of the ten-minute remote-failure cooldown: 49.10 s command time, including 10.1 s first-slot seeding and 6.82 s compiling the 161k-line base crate. Hosted billing-route availability must be restored before these runs can validate hosted behavior. No billing bypass, project restructuring, or speedup claim was introduced.
+
+## 2026-11-05: touchscreen preview GPUI validation
+
+Mobile app run `20261105-221201890-3381174` passed all 60 tests in 48.9 s, including 32.29 s compilation and 14.89 s test execution. Switching to local GPUI source overrides rebuilt GPUI (89k lines, 14.94 s), gpui_linux (7.61 s), and the app test binary (6.80 s). Backend-only warm run `20261105-221006841-3370374` passed 20 Wayland regressions in 3.09 s with only gpui_linux rebuilt (2.51 s), before adding one more passing serial regression. Hosted execution remained unavailable due to the previously recorded billing-route 404, so justrust used its documented local cooldown. Keep touch contact tracking and its tests in the Linux leaf crate rather than adding them to GPUI core. No restructuring or speedup claim was made.
+
 ## 2026-11-06: desktop responsive conversation layout verification
 
 Desktop workspace test run `20261106-015237975-640485` took 45.1 s, with 32.42 s compilation and 11.54 s tests. The 125k-line UI test unit alone rebuilt in 27.58 s (107.7 s CPU, 3326 MB peak) for a small layout edit. 1863 tests passed and four unrelated fixture/integration tests failed. Screenshot build `20261106-015030861-616520` took 8.8 s, including 5.69 s recompiling UI and 2.04 s the dependent app. The existing report identifies broad UI source embedding as an invalidation source. Narrowing build-script inputs or extracting embedded data into a leaf crate remains a separate architectural follow-up, not part of the layout change. These runs are not a before/after speedup comparison.
+
+## 2026-11-06: expanded mobile interaction acceptance
+
+Mobile binary/test Clippy run `20261106-020404988-744276` passed in 15.4 s, including 14.82 s compilation. The 89k-line GPUI unit rebuilt in 8.91 s (8.8 s CPU, 981 MB), with gpui_linux at 1.50 s and the app test unit at 2.31 s. The report estimated 6.9 s oversized-crate waste. Retaining backend-specific event logic in leaf crates and narrowing shared GPUI invalidation remain separate architectural opportunities, not an unrequested restructuring of the mobile app. Hosted remained unavailable from the documented billing-route 404, using normal fallback. Core test run `20261106-020432636-748202` passed 55 tests in 8.3 s, dominated by an intentional 8.03 s stalled-inspection timeout regression. Do not shorten that timeout acceptance blindly or claim an unmeasured speedup.
+
+## 2026-11-06: issue-triage fallback build contention
+
+Jcode e2e baseline run `20261106-030807955-1343493` reproduced the five reported stale disconnect assertions in 220.52 s: 163.13 s compiling and 54.93 s after build. The machine concurrently used 14.5 of 16 cores in other processes, with up to 18 other rustc processes and 153.51 s machine-wide CPU stall. Check run `20261106-030753055-1340416` passed in 314.6 s, dominated by 195.04 s waiting for the build-directory lock after all four slots were busy, then 118.14 s compiling. Both explicitly attempted hosted, but the already documented `/internal/builds/charge` HTTP 404 forced normal local fallback. Compatible-request coordination/coalescing and reducing broad crate invalidation remain separate opportunities. No extra target directories, billing bypass, scheduling change, or speedup claim was introduced during issue triage.
+
+## 2026-11-06: concurrent mobile matrix CPU contention
+
+Mobile run `20261106-023530624-1026313` completed in 170.6 s with 132.4 s executing 254 discovered tests (251 passed, two interaction failures, one ignored inventory dump). The machine was concurrently using about 15 of 16 cores for other builds, with 131 s sampled CPU stall and an estimated 81 s contention cost. Binary/test Clippy `20261106-023557165-1033204` passed in 19.1 s, with 3.16 s startup and 18.47 s sampled CPU stall. These observations support coordinating expensive full-suite runs and keeping scheduler stress focused rather than blindly multiplying every test by every seed and configuration. The suite did finish, so elapsed time alone was not evidence of an animation hang. Hosted remained on the documented billing-route outage fallback. No scheduler changes, billing bypass, or speedup claim was introduced.
+
+## 2026-11-06: stable TUI status row check
+
+Hosted run `20261106-044135993-2495239` passed `check -p jcode-tui --tests` in 17.1 s end-to-end, with 15.56 s compilation. The TUI test unit took 5.93 s (27.8 s CPU, 2822 MB), and app-core 4.32 s. The report estimated 15.3 s broad upstream invalidation and 7.1 s oversized-crate waste, overlapping rather than additive. Narrowing shared root dependencies and further TUI leaf extraction remain separate architectural follow-ups. No project restructuring or speedup claim was made for the status-row change.
+
+Final hosted status/observer run `20261106-045711682-2623605` passed 185 tests in 9.6 s, with production Clippy passing separately. Binary run `20261106-045749322-2628767` compiled in 5.1 s but took 12.8 s end-to-end, including 6.56 s transferring a 36.4 MB delta. Plain hosted builds lack mirrored Git metadata, so Jcode correctly rejected activation of the resulting `unknown` commit artifact. Use the existing allowed `JCODE_BUILD_GIT_*`, semver, and changelog environment forwarding with actual local Git values for a safely attributable selfdev artifact. Do not bypass the source-provenance check. Artifact delta transfer time and avoiding redundant metadata rebuilds are follow-up opportunities, not measured speedup claims.
+
+Compact restoration run `20261107-212144487-100590` passed 189 status/observer tests in 49.3 s, including 48.21 s compilation and 0.32 s testing. Broad upstream invalidation rebuilt the TUI test unit in 20.49 s (3819 MB peak), base in 11.06 s, and app-core in 8.72 s. Production Clippy `20261107-212233893-109588` passed in 28.2 s, including 26.79 s compilation. Narrower shared dependency boundaries remain an architectural follow-up, not part of the compact-status restoration. These runs are not a before/after speedup comparison.
+
+## 2026-11-06: prerelease recovery validation
+
+Run `20261106-031459993-1447542` took 106.6 s compiling the binary harness, including 102.17 s compilation and 90.50 s machine-wide CPU stall while other processes used 15 of 16 cores. The filter matched zero tests, which justrust correctly highlighted. Corrected library run `20261106-031759389-1489108` passed 19 SSH transport tests in 23.8 s. Forced hosted execution again returned `404 no route for POST /internal/builds/charge` and used local fallback. This outage is also relevant to Jcode's Linux preview builder, which deliberately requires hosted execution and cannot fall back. Restore the authenticated billing route without bypassing billing or tenant isolation. The different harnesses are not a before/after speedup comparison, and no crate restructuring was introduced.
+
+## 2026-11-07: event-driven mobile sync hosted validation
+
+Remote timing transport validation: hosted run `20261107-223620056-343712` passed 12 transport tests in 13.6 s, including 5.92 s build-directory lock wait, 6.96 s TUI test compilation (2819 MB peak), and 0.53 s execution. Inventory run `20261107-223644874-345057` passed nine tests in 9.6 s with 9.21 s compiling the 3494-test TUI harness and 0.19 s execution. Keep agent validations coordinated and consider targeted leaf-crate extraction separately. No project restructuring, local fallback, or speedup claim was introduced.
+
+Hosted run `20261107-215903194-159217` passed six targeted mobile-sync regressions in 26.7 s end-to-end, including a measured 153 ms persistence-to-HTTP notification. An upstream protocol-root edit rebuilt the base production/test units in 22.6 s (test unit 14.46 s, 4138 MB peak) to run six of 2096 tests. Subsequent hosted persistence run `20261107-220258628-178613` spent 32.04 s waiting for another cargo invocation's build-directory lock. Coordinate compatible agent validations and keep narrow-test crate extraction as an architectural follow-up rather than restructuring Jcode during this feature. These runs confirm hosted execution, not a before/after build speedup. No local fallback or billing/tenant-isolation bypass was used.
+
+Cloud timing validation run `20261107-223558334-340831` passed 22 SSH transport tests remotely in 28.9 s, including 15.43 s build-directory lock wait and 12.02 s compilation for 0.53 s testing. Editing `docs/CLOUD_LATENCY.md` invalidated the docs-data build input and fanned out through 13 local units, including TUI (6.22 s, 2559 MB). Coordinate hosted test submissions to reduce lock contention, and consider narrower docs embedding dependencies separately. No project restructuring or speedup claim was made during timing instrumentation.
+
+## 2026-11-08: mobile live dictation validation
+
+Hosted workspace run `20261108-000827637-628168` passed 422 tests with 13 ignored in 69.2 s end-to-end (58.27 s remote wall). Compilation was 8.55 s, including the downstream mobile test unit at 6.40 s after concurrent cloud_ssh core edits. justrust estimated overlapping 6.4 s upstream invalidation and 1.9 s single-frontend waste. Narrower core boundaries remain an architectural follow-up, not an unrequested mobile restructure. The profile classified 49.43 s as after-build despite libtest reporting 49.37 s of tests, with the 0.06 s doctest alone classified as tests. This is a concrete reporting follow-up for justrust, not evidence that the full suite executed in 0.06 s. No speedup claim or billing/isolation bypass.
+
+## 2026-11-08: cloud correlation regression validation
+
+Hosted run `20261108-000941030-635665` passed eight cloud timing regressions in 19.8 s end-to-end, with 12.78 s compiling the 3500-test TUI harness and tests reporting 0.00 s. The report estimates overlapping 11.9 s oversized-crate and 6.4 s narrow-test harness costs. A preceding explicit hosted check received the service-unavailable response and transparently fell back locally (run `20261108-000915134-632133`, 24.7 s), so only the test run is claimed as hosted. Targeted leaf-crate extraction and narrower dependency invalidation remain separate architectural work, not part of the cloud sync optimization. No build-speed claim or billing/isolation bypass.
+
+## 2026-11-08: mobile transport integration
+
+Hosted run `20261108-005923933-1082337` passed 15 push tests in 17.7s, with 12.38s compilation and 5.04s tests. Editing the cloud latency documentation reran docs-data and invalidated the 191k-line app-core test unit (12.35s, 3327MB peak) to run 15 of 1902 tests. The report estimates overlapping 11.1s oversized-crate and 6.2s narrow-harness costs. The 5s HTTP deadline tests intentionally validate the production deadline and should not be shortened solely to improve build timing. Narrower docs embedding remains a separate architectural follow-up, not an unrequested restructure. The preceding 33 mobile base tests ran hosted with zero compilation in 2.5s (`20261108-005920698-1082534`). No build speedup claim.
+
+Runner pickup follow-up hosted run `20261108-012848792-1298222` passed 22 tests in 12.4s, compiling for 11.64s including the 2128-test base harness (8.43s, 2642MB). Report estimates 4.2s narrow-harness waste. Production check was run first and strict scoped lint subsequently passed in 2.9s. This repeats the leaf-test-boundary opportunity, not a reason to restructure during the mobile queue latency fix or claim a compiler speedup.
 
 ## 2026-11-08: hosted disk 97% again; native GC found nothing eligible
 
