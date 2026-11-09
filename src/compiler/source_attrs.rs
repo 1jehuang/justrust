@@ -1478,6 +1478,9 @@ impl Filter<'_> {
                     self.mask(a.range.clone());
                     continue;
                 }
+                if !fields && !a.inner && self.nested_cfg(&a, i, end)? {
+                    continue;
+                }
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     a.range,
@@ -1486,6 +1489,97 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A lone `#[cfg(pred)]` on a comma-separated element (call/macro
+    /// argument, array/tuple element, struct literal field) or on a `let`
+    /// statement. Active: the attribute is erased. Inactive: the attribute
+    /// and its element (with the separator) are erased. Other shapes stay
+    /// unsupported.
+    fn nested_cfg(&mut self, a: &Attr, i: usize, end: usize) -> Result<bool, AttributeError> {
+        let content = &self.text[a.content.clone()];
+        if !content.trim_start().starts_with("cfg") || !cfg_attribute(content) {
+            return Ok(false);
+        }
+        let meta = parse_meta(content, a.content.start)?;
+        if meta.name != "cfg" {
+            return Ok(false);
+        }
+        let MetaValue::List(args) = &meta.value else {
+            return Ok(false);
+        };
+        if args.len() != 1 {
+            return Ok(false);
+        }
+        let active = evaluate(&args[0], self.cfg)?;
+        // Find the attribute's last token, then the element extent.
+        let mut j = i;
+        while j < end && self.tokens[j].range.end <= a.range.end {
+            j += 1;
+        }
+        if j < end && self.tokens[j].text(self.text) == "#" {
+            return Ok(false); // stacked attributes
+        }
+        let first = j;
+        // Nothing follows inside the group: this is token data of a macro
+        // invocation (`m!(x #[cfg(..)])`), left for the macro matcher.
+        if first < end
+            && matches!(self.tokens[first].text(self.text), ")" | "]" | "}")
+            && self.tokens[first].close.is_none()
+        {
+            self.consumed.push(a.range.start);
+            return Ok(true);
+        }
+        // A block statement: `#[cfg(p)] { ... }`.
+        if first < end && self.tokens[first].text(self.text) == "{" {
+            if let Some(c) = self.tokens[first].close {
+                if active {
+                    self.mask(a.range.clone());
+                } else {
+                    self.mask(a.range.start..self.tokens[c].range.end);
+                }
+                self.consumed.push(a.range.start);
+                return Ok(true);
+            }
+        }
+        let is_let = first < end && self.tokens[first].text(self.text) == "let";
+        let mut stop = None;
+        while j < end {
+            let t = self.tokens[j].text(self.text);
+            if let Some(c) = self.tokens[j].close {
+                j = c + 1;
+                continue;
+            }
+            match t {
+                "," if !is_let => {
+                    stop = Some((self.tokens[j].range.end, true));
+                    break;
+                }
+                ";" if is_let => {
+                    stop = Some((self.tokens[j].range.end, true));
+                    break;
+                }
+                ")" | "]" | "}" if !is_let => {
+                    stop = Some((self.tokens[j].range.start, false));
+                    break;
+                }
+                ")" | "]" | "}" | ";" => return Ok(false),
+                _ => j += 1,
+            }
+        }
+        let Some((stop, _)) = stop else {
+            return Ok(false);
+        };
+        if first >= end || self.tokens[first].range.start >= stop {
+            return Ok(false);
+        }
+        if active {
+            self.mask(a.range.clone());
+        } else {
+            self.mask(a.range.start..stop);
+        }
+        self.consumed.push(a.range.start);
+        Ok(true)
     }
 
     /// Walk only immediate members of one original balanced impl/trait group.
@@ -2850,7 +2944,7 @@ mod tests {
         for s in [
             "struct S { #[cfg(any())] x:i32 }",
             "fn f(#[doc=\"x\"] x:i32) {}",
-            "fn f() { #[cfg(any())] let x=1; }",
+            "fn f() { #[inline] let x=1; }",
             "trait T { #[inline] fn f(); }",
             "fn f(){} #![doc=\"x\"]",
         ] {
@@ -3177,6 +3271,18 @@ mod nested_inert_tests {
         ] {
             assert!(prep(text).is_err(), "{text}");
         }
+    }
+    #[test]
+    fn nested_cfg_on_elements_statements_and_blocks() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let out = prep("fn f(){ g(1, #[cfg(any())] 2, #[cfg(all())] 3); }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){g(1,3);}");
+        let out = prep("fn f(){ #[cfg(any())] let x = 1; #[cfg(any())] { a(); } b(); }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){b();}");
+        let out = prep("fn f(){ #[cfg(all())] { a(); } }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){{a();}}");
+        assert!(prep("fn f(){ #[inline] { a(); } }").is_err());
+        assert!(prep("fn f(){ #[cfg(any())] #[cfg(all())] { a(); } }").is_err());
     }
     #[test]
     fn field_docs_and_tool_attributes_are_inert() {
