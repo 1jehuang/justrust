@@ -727,6 +727,14 @@ fn record(
     let run_dir = paths::runs_dir()?.join(id);
     std::fs::create_dir_all(&run_dir)?;
 
+    // Moving into the systemd scope (busctl plus waiting for the move) and
+    // resolving the slot (cargo metadata) are independent subprocess round
+    // trips: overlap them. Cargo is spawned only after both finish, so it
+    // still starts inside the scope.
+    let scope_thread = {
+        let id = id.to_owned();
+        std::thread::spawn(move || crate::sched::enter(&id))
+    };
     // Agent runs get a private target dir so parallel agents do not block.
     let slot = opts.agent.then(|| slots::acquire(args)).flatten();
     let cargo_args = slot.as_ref().map_or(args, |s| s.args.as_slice());
@@ -775,7 +783,7 @@ fn record(
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
     // Before cargo starts, so it and everything it runs share the scope.
-    let scope = crate::sched::enter(id);
+    let scope = scope_thread.join().ok().flatten();
 
     // The progress bar feeds `live.json` (`justrust status`). When the user
     // would not have seen it, ask for it with `--config` (unlike the env var,
