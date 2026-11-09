@@ -150,8 +150,9 @@ fn release_url() -> String {
 }
 
 fn curl_text(url: &str) -> Result<String> {
-    let out = Command::new("curl")
-        .args([
+    let run = |ipv6: bool| {
+        let mut cmd = Command::new("curl");
+        cmd.args([
             "-fsSL",
             "--proto",
             "=https,http,file",
@@ -159,10 +160,20 @@ fn curl_text(url: &str) -> Result<String> {
             "10",
             "--max-time",
             "30",
-        ])
-        .arg(url)
-        .output()
-        .context("running curl")?;
+        ]);
+        if ipv6 {
+            cmd.arg("-6");
+        }
+        cmd.arg(url).output().context("running curl")
+    };
+    let mut out = run(false)?;
+    // Same SNI-reset workaround as hosted API requests.
+    if crate::remote_hosted::retry_over_ipv6(out.status.code()) {
+        let v6 = run(true)?;
+        if v6.status.success() {
+            out = v6;
+        }
+    }
     if !out.status.success() {
         bail!("GET {url}: {}", String::from_utf8_lossy(&out.stderr).trim());
     }

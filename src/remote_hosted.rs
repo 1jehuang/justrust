@@ -471,7 +471,7 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
 /// 7 (connect failed) and 35 (TLS handshake reset). Such a request never
 /// reached the server, so repeating a POST is safe. 56 (receive failure) is
 /// excluded because it can happen after the server processed the request.
-fn retry_over_ipv6(code: Option<i32>) -> bool {
+pub(crate) fn retry_over_ipv6(code: Option<i32>) -> bool {
     matches!(code, Some(7 | 35))
         && !matches!(
             std::env::var("JUSTRUST_IPV6_RETRY").as_deref(),
