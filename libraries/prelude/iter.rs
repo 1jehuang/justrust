@@ -106,6 +106,60 @@ pub trait Iterator: Sized {
         FilterMap { iterator: self, f }
     }
 
+    fn peekable(self) -> Peekable<Self, Self::Item> {
+        Peekable { iterator: self, peeked: Option::None, exhausted: false }
+    }
+
+    fn chain<U: IntoIterator>(self, other: U) -> Chain<Self, U::IntoIter> {
+        Chain { first: Option::Some(self), second: other.into_iter() }
+    }
+
+    fn take_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> TakeWhile<Self, P> {
+        TakeWhile { iterator: self, predicate, done: false }
+    }
+
+    fn skip_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> SkipWhile<Self, P> {
+        SkipWhile { iterator: self, predicate, started: false }
+    }
+
+    fn inspect<F: FnMut(&Self::Item)>(self, f: F) -> Inspect<Self, F> {
+        Inspect { iterator: self, f }
+    }
+
+    fn find_map<B, F: FnMut(Self::Item) -> Option<B>>(&mut self, mut f: F) -> Option<B> {
+        loop {
+            match self.next() {
+                Option::Some(item) => match f(item) {
+                    Option::Some(value) => return Option::Some(value),
+                    Option::None => {}
+                },
+                Option::None => return Option::None,
+            }
+        }
+    }
+
+    fn for_each<F: FnMut(Self::Item)>(mut self, mut f: F) {
+        loop {
+            match self.next() {
+                Option::Some(item) => f(item),
+                Option::None => return,
+            }
+        }
+    }
+
+    fn reduce<F: FnMut(Self::Item, Self::Item) -> Self::Item>(mut self, mut f: F) -> Option<Self::Item> {
+        let mut acc = match self.next() {
+            Option::Some(first) => first,
+            Option::None => return Option::None,
+        };
+        loop {
+            match self.next() {
+                Option::Some(item) => acc = f(acc, item),
+                Option::None => return Option::Some(acc),
+            }
+        }
+    }
+
     fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U::IntoIter, F> {
         FlatMap { iterator: self, f, front: Option::None }
     }
@@ -292,8 +346,8 @@ pub trait Iterator: Sized {
         mut self,
         mut f: F,
     ) -> (B, B) {
-        let mut left: B = super::default::Default::default();
-        let mut right: B = super::default::Default::default();
+        let mut left: B = <B as super::default::Default>::default();
+        let mut right: B = <B as super::default::Default>::default();
         loop {
             match self.next() {
                 Option::Some(item) => {
@@ -1545,6 +1599,174 @@ impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Itera
 
 impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>> IntoIterator for Flatten<I, J> {
     type Item = B;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct Peekable<I, T> {
+    iterator: I,
+    peeked: Option<T>,
+    // The underlying iterator has been asked and returned None.
+    exhausted: bool,
+}
+
+impl<T, I: Iterator<Item = T>> Peekable<I, T> {
+    fn fill(&mut self) {
+        if !self.exhausted {
+            if let Option::None = self.peeked {
+                match self.iterator.next() {
+                    Option::Some(value) => self.peeked = Option::Some(value),
+                    Option::None => self.exhausted = true,
+                }
+            }
+        }
+    }
+
+    pub fn peek(&mut self) -> Option<&T> {
+        self.fill();
+        match &self.peeked {
+            Option::Some(value) => Option::Some(value),
+            Option::None => Option::None,
+        }
+    }
+
+    pub fn peek_mut(&mut self) -> Option<&mut T> {
+        self.fill();
+        match &mut self.peeked {
+            Option::Some(value) => Option::Some(value),
+            Option::None => Option::None,
+        }
+    }
+
+    pub fn next_if<F: FnOnce(&T) -> bool>(&mut self, f: F) -> Option<T> {
+        self.fill();
+        let matched = match &self.peeked {
+            Option::Some(value) => f(value),
+            Option::None => false,
+        };
+        if matched { self.peeked.take() } else { Option::None }
+    }
+}
+
+impl<T, I: Iterator<Item = T>> Iterator for Peekable<I, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        self.fill();
+        self.peeked.take()
+    }
+}
+
+impl<T, I: Iterator<Item = T>> IntoIterator for Peekable<I, T> {
+    type Item = T;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct Chain<A, B> {
+    first: Option<A>,
+    second: B,
+}
+
+impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Chain<A, B> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        if let Option::Some(first) = &mut self.first {
+            match first.next() {
+                Option::Some(value) => return Option::Some(value),
+                Option::None => self.first = Option::None,
+            }
+        }
+        self.second.next()
+    }
+}
+
+impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> IntoIterator for Chain<A, B> {
+    type Item = T;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct TakeWhile<I, P> {
+    iterator: I,
+    predicate: P,
+    done: bool,
+}
+
+impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for TakeWhile<I, P> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        if self.done {
+            return Option::None;
+        }
+        match self.iterator.next() {
+            Option::Some(value) => {
+                if (self.predicate)(&value) {
+                    Option::Some(value)
+                } else {
+                    self.done = true;
+                    Option::None
+                }
+            }
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for TakeWhile<I, P> {
+    type Item = T;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct SkipWhile<I, P> {
+    iterator: I,
+    predicate: P,
+    started: bool,
+}
+
+impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for SkipWhile<I, P> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        loop {
+            match self.iterator.next() {
+                Option::Some(value) => {
+                    if self.started || !(self.predicate)(&value) {
+                        self.started = true;
+                        return Option::Some(value);
+                    }
+                }
+                Option::None => return Option::None,
+            }
+        }
+    }
+}
+
+impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for SkipWhile<I, P> {
+    type Item = T;
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
+}
+
+pub struct Inspect<I, F> {
+    iterator: I,
+    f: F,
+}
+
+impl<T, I: Iterator<Item = T>, F: FnMut(&T)> Iterator for Inspect<I, F> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        match self.iterator.next() {
+            Option::Some(value) => {
+                (self.f)(&value);
+                Option::Some(value)
+            }
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<T, I: Iterator<Item = T>, F: FnMut(&T)> IntoIterator for Inspect<I, F> {
+    type Item = T;
     type IntoIter = Self;
     fn into_iter(self) -> Self { self }
 }

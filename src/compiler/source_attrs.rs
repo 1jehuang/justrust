@@ -81,6 +81,8 @@ pub struct AttributeOutput {
     pub test_main: Option<Range<usize>>,
     /// Built-in derive expansions: (filtered-text offset just after the item, generated impls).
     pub derives: Vec<(usize, String)>,
+    /// `#[path = "..."]` on `mod name;`: (offset of the `mod` keyword, path).
+    pub module_paths: Vec<(usize, String)>,
     pub attributes: Vec<AttributeRecord>,
     pub inactive_items: Vec<InactiveItem>,
 }
@@ -208,6 +210,8 @@ fn prepare_with_context(
         cap_lints_allow,
         levels: lint_names::Levels::default(),
         associated_naming: true,
+        pending_path: None,
+        module_paths: Vec::new(),
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
@@ -242,6 +246,7 @@ fn prepare_with_context(
         derives: filter.derives,
         tests: filter.tests,
         test_main: filter.test_main,
+        module_paths: filter.module_paths,
     })
 }
 struct Filter<'a> {
@@ -276,6 +281,9 @@ struct Filter<'a> {
     pending: PendingTest,
     tests: Vec<TestItem>,
     test_main: Option<Range<usize>>,
+    /// `#[path]` admitted on the module item being walked.
+    pending_path: Option<String>,
+    module_paths: Vec<(usize, String)>,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -709,7 +717,10 @@ impl Filter<'_> {
             }
             return Ok(false);
         }
-        if owner == Owner::Unsupported && !attrs.is_empty() {
+        // An active `cfg` that left no other attribute behind (for example on
+        // an item macro invocation) is already fully applied: keep the item.
+        let only_active_cfg = effective.is_empty() && attrs.iter().all(|attr| !attr.doc);
+        if owner == Owner::Unsupported && !attrs.is_empty() && !only_active_cfg {
             return Err(error(
                 AttributeErrorKind::Unsupported,
                 attrs[0].range.clone(),
@@ -770,6 +781,7 @@ impl Filter<'_> {
                     | "repr"
                     | "unsafe"
                     | "no_std"
+                    | "path"
                     | "macro_export"
                     | "forbid"
                     | "deny"
@@ -831,13 +843,16 @@ impl Filter<'_> {
                     let valid = match (&*meta.name, &meta.value) {
                         ("repr", MetaValue::List(values)) => {
                             owner == Owner::FreeItem
-                                && values.len() == 1
-                                && ((values[0].name == "C"
-                                    && matches!(values[0].value, MetaValue::Word))
-                                    || (values[0].name == "align"
-                                        && matches!(&values[0].value, MetaValue::List(args)
-                                            if args.len() == 1 && args[0].name.is_empty()
-                                                && matches!(args[0].value, MetaValue::OtherLiteral))))
+                                && matches!(values.len(), 1 | 2)
+                                && values.iter().filter(|v| v.name == "C").count() <= 1
+                                && values.iter().filter(|v| v.name == "align").count() <= 1
+                                && values.iter().all(|value| {
+                                    (value.name == "C" && matches!(value.value, MetaValue::Word))
+                                        || (value.name == "align"
+                                            && matches!(&value.value, MetaValue::List(args)
+                                                if args.len() == 1 && args[0].name.is_empty()
+                                                    && matches!(args[0].value, MetaValue::OtherLiteral)))
+                                })
                         }
                         ("unsafe", MetaValue::List(values)) => {
                             owner == Owner::Function
@@ -940,11 +955,27 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                "path" if owner == Owner::Module => {
+                    let MetaValue::String(path) = &meta.value else {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "expected path = \"file.rs\"",
+                        ));
+                    };
+                    if self.pending_path.replace(path.clone()).is_some() {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "duplicate path attribute",
+                        ));
+                    }
+                }
                 // Codegen hints: `cold` only affects layout, and
                 // `track_caller` only the reported panic location on stderr.
                 "cold" | "track_caller"
                     if matches!(owner, Owner::Function | Owner::AssociatedFunction)
-                        && matches!(meta.value, MetaValue::Word) => {}
+                        && self.text[meta.range.clone()].trim() == meta.name => {}
                 // Tool attributes are inert for compilation.
                 "rustfmt" | "clippy"
                     if self.text[meta.range.clone()]
@@ -1103,6 +1134,7 @@ impl Filter<'_> {
                     cursor += 1;
                 }
             }
+            self.pending_path = None;
             let item_owner = match kind {
                 "fn" => Owner::Function,
                 "mod" => Owner::Module,
@@ -1140,11 +1172,23 @@ impl Filter<'_> {
                 item_owner,
                 Some(self.tokens[item_start].range.start..self.tokens[stop - 1].range.end),
             )? {
+                self.pending_path = None;
                 self.inactive(
                     self.tokens[item_start].range.start..self.tokens[stop - 1].range.end,
                 )?;
                 self.mask(self.tokens[first].range.start..self.tokens[stop - 1].range.end);
             } else {
+                if let Some(path) = self.pending_path.take() {
+                    if body.is_some() {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            self.tokens[keyword].range.clone(),
+                            "path attributes on inline modules are unsupported",
+                        ));
+                    }
+                    self.module_paths
+                        .push((self.tokens[keyword].range.start, path));
+                }
                 // Item calls may introduce exported declarations. Until their
                 // declaration output is admitted, original export inventories
                 // must not claim a complete macro namespace. Function bodies
@@ -1434,6 +1478,9 @@ impl Filter<'_> {
                     self.mask(a.range.clone());
                     continue;
                 }
+                if !fields && !a.inner && self.nested_cfg(&a, i, end)? {
+                    continue;
+                }
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     a.range,
@@ -1442,6 +1489,97 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A lone `#[cfg(pred)]` on a comma-separated element (call/macro
+    /// argument, array/tuple element, struct literal field) or on a `let`
+    /// statement. Active: the attribute is erased. Inactive: the attribute
+    /// and its element (with the separator) are erased. Other shapes stay
+    /// unsupported.
+    fn nested_cfg(&mut self, a: &Attr, i: usize, end: usize) -> Result<bool, AttributeError> {
+        let content = &self.text[a.content.clone()];
+        if !content.trim_start().starts_with("cfg") || !cfg_attribute(content) {
+            return Ok(false);
+        }
+        let meta = parse_meta(content, a.content.start)?;
+        if meta.name != "cfg" {
+            return Ok(false);
+        }
+        let MetaValue::List(args) = &meta.value else {
+            return Ok(false);
+        };
+        if args.len() != 1 {
+            return Ok(false);
+        }
+        let active = evaluate(&args[0], self.cfg)?;
+        // Find the attribute's last token, then the element extent.
+        let mut j = i;
+        while j < end && self.tokens[j].range.end <= a.range.end {
+            j += 1;
+        }
+        if j < end && self.tokens[j].text(self.text) == "#" {
+            return Ok(false); // stacked attributes
+        }
+        let first = j;
+        // Nothing follows inside the group: this is token data of a macro
+        // invocation (`m!(x #[cfg(..)])`), left for the macro matcher.
+        if first < end
+            && matches!(self.tokens[first].text(self.text), ")" | "]" | "}")
+            && self.tokens[first].close.is_none()
+        {
+            self.consumed.push(a.range.start);
+            return Ok(true);
+        }
+        // A block statement: `#[cfg(p)] { ... }`.
+        if first < end && self.tokens[first].text(self.text) == "{" {
+            if let Some(c) = self.tokens[first].close {
+                if active {
+                    self.mask(a.range.clone());
+                } else {
+                    self.mask(a.range.start..self.tokens[c].range.end);
+                }
+                self.consumed.push(a.range.start);
+                return Ok(true);
+            }
+        }
+        let is_let = first < end && self.tokens[first].text(self.text) == "let";
+        let mut stop = None;
+        while j < end {
+            let t = self.tokens[j].text(self.text);
+            if let Some(c) = self.tokens[j].close {
+                j = c + 1;
+                continue;
+            }
+            match t {
+                "," if !is_let => {
+                    stop = Some((self.tokens[j].range.end, true));
+                    break;
+                }
+                ";" if is_let => {
+                    stop = Some((self.tokens[j].range.end, true));
+                    break;
+                }
+                ")" | "]" | "}" if !is_let => {
+                    stop = Some((self.tokens[j].range.start, false));
+                    break;
+                }
+                ")" | "]" | "}" | ";" => return Ok(false),
+                _ => j += 1,
+            }
+        }
+        let Some((stop, _)) = stop else {
+            return Ok(false);
+        };
+        if first >= end || self.tokens[first].range.start >= stop {
+            return Ok(false);
+        }
+        if active {
+            self.mask(a.range.clone());
+        } else {
+            self.mask(a.range.start..stop);
+        }
+        self.consumed.push(a.range.start);
+        Ok(true)
     }
 
     /// Walk only immediate members of one original balanced impl/trait group.
@@ -2251,6 +2389,38 @@ mod tests {
         assert!(capped("#![allow(foo::bar)] fn main(){}").is_err());
     }
 
+    #[test]
+    fn naming_lints_and_unknown_lint_levels() {
+        for source in [
+            "#![deny(foo)] #![forbid(rust_2018_idiots)] fn main(){}",
+            "#![forbid(non_camel_case_types)] struct _X{} struct X_; enum E{A,B} fn main(){}",
+            "#![deny(non_camel_case_types)] #[allow(non_camel_case_types)] struct a; fn main(){}",
+            "#![deny(non_upper_case_globals)] #[allow(nonstandard_style)] static a: i32 = 0; fn main(){}",
+            "#![forbid(non_upper_case_globals)] static ラ: usize = 0; const _: () = (); fn main(){}",
+            "#![deny(non_camel_case_types)] mod m { #![allow(non_camel_case_types)] struct a; } fn main(){}",
+            "#![deny(non_upper_case_globals)] trait T { const X: i32; } impl T for () { const X: i32 = 1; } fn main(){}",
+            "#![deny(not_a_lint)] #![deny(non_camel_case_types)] fn f<'a, T>(_: &'a T){} fn main(){}",
+        ] {
+            assert!(prep(source).is_ok(), "rejected {source}");
+        }
+        for source in [
+            "#![forbid(non_camel_case_types)] struct X__Y{} fn main(){}",
+            "#![forbid(non_camel_case_types)] enum E{a} fn main(){}",
+            "#![deny(non_camel_case_types)] fn f<t>(){} fn main(){}",
+            "#![deny(non_camel_case_types)] trait T { type x; } fn main(){}",
+            "#![deny(nonstandard_style)] fn main(){}",
+            "#![forbid(non_camel_case_types)] #[allow(non_camel_case_types)] struct A; fn main(){}",
+            "#![forbid(non_upper_case_globals)] static τεχ: f32 = 1.0; fn main(){}",
+            "#![deny(non_upper_case_globals)] struct S; impl S { const x: i32 = 1; } fn main(){}",
+            "#![deny(non_upper_case_globals)] fn f<const n: usize>(){} fn main(){}",
+            "mod m { #![deny(non_camel_case_types)] struct a; } fn main(){}",
+        ] {
+            assert!(prep(source).is_err(), "accepted {source}");
+        }
+        let capped = |s| prepare_capped(s, &CfgSet::default(), true);
+        assert!(capped("#![forbid(non_camel_case_types)] struct a; fn main(){}").is_ok());
+    }
+
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {
         prepare(s, &CfgSet::default())
     }
@@ -2327,12 +2497,12 @@ mod tests {
                 .iter()
                 .any(|a| a.name == "path" && !a.effective)
         );
-        assert_eq!(
-            prep("#[cfg_attr(all(),path=\"x\")] mod real;")
-                .unwrap_err()
-                .kind,
-            AttributeErrorKind::Unsupported
-        );
+        let out = prep("#[cfg_attr(all(),path=\"x.rs\")] mod real;").unwrap();
+        assert_eq!(out.module_paths, vec![(31, "x.rs".to_string())]);
+        assert!(prep("#[path=\"x.rs\"] mod inline {}").is_err());
+        assert!(prep("#[path=\"x.rs\"] fn f() {}").is_err());
+        assert!(prep("#[path] mod m;").is_err());
+        assert!(prep("#[path=\"a.rs\"] #[path=\"b.rs\"] mod m;").is_err());
     }
     #[test]
     fn sequential_cfg_short_circuit_and_deferred_unknown_policy() {
@@ -2774,7 +2944,7 @@ mod tests {
         for s in [
             "struct S { #[cfg(any())] x:i32 }",
             "fn f(#[doc=\"x\"] x:i32) {}",
-            "fn f() { #[cfg(any())] let x=1; }",
+            "fn f() { #[inline] let x=1; }",
             "trait T { #[inline] fn f(); }",
             "fn f(){} #![doc=\"x\"]",
         ] {
@@ -3027,17 +3197,25 @@ mod tests {
     #[test]
     fn exported_namespace_completeness_tracks_only_active_item_calls() {
         // Activity tracking does not grant unsupported lint-owner semantics.
-        for source in [
-            "#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}",
-            "#[cfg(all())] make!(); fn main(){}",
-            "#[cfg_attr(all(), cfg(all()))] make!(); fn main(){}",
-            "#[cfg_attr(any(), cfg(any()))] make!(); fn main(){}",
-        ] {
+        for source in ["#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}"] {
             assert_eq!(
                 prep(source).unwrap_err().kind,
                 AttributeErrorKind::Unsupported
             );
         }
+        // A fully evaluated cfg leaves the call active, so it still counts.
+        for source in [
+            "#[cfg(all())] make!(); fn main(){}",
+            "#[cfg_attr(all(), cfg(all()))] make!(); fn main(){}",
+            "#[cfg_attr(any(), cfg(any()))] make!(); fn main(){}",
+        ] {
+            assert!(prep(source).unwrap().has_item_macro_invocations, "{source}");
+        }
+        assert!(
+            !prep("#[cfg(any())] make!(); fn main(){}")
+                .unwrap()
+                .has_item_macro_invocations
+        );
         for source in [
             "make!(); fn main(){}",
             "mod private { maker::make!{} } fn main(){}",
@@ -3079,6 +3257,8 @@ mod nested_inert_tests {
             "#[cold] fn f() {}",
             "#[track_caller] fn f() {}",
             "impl S { #[track_caller] #[inline] fn f() {} #[cold] fn g(&self) {} }",
+            "#[cfg(all())] m! { 1 2 }",
+            "#[cfg(any())] m! { 1 2 }",
         ] {
             assert!(prep(text).is_ok(), "{text}");
         }
@@ -3086,9 +3266,23 @@ mod nested_inert_tests {
             "#[cold] struct S;",
             "#[track_caller(x)] fn f() {}",
             "impl S { #[cold] const C: u8 = 0; }",
+            "#[inline] m! { 1 2 }",
+            "#[cfg_attr(all(), inline)] m! { 1 2 }",
         ] {
             assert!(prep(text).is_err(), "{text}");
         }
+    }
+    #[test]
+    fn nested_cfg_on_elements_statements_and_blocks() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let out = prep("fn f(){ g(1, #[cfg(any())] 2, #[cfg(all())] 3); }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){g(1,3);}");
+        let out = prep("fn f(){ #[cfg(any())] let x = 1; #[cfg(any())] { a(); } b(); }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){b();}");
+        let out = prep("fn f(){ #[cfg(all())] { a(); } }").unwrap();
+        assert_eq!(squash(&out.text), "fnf(){{a();}}");
+        assert!(prep("fn f(){ #[inline] { a(); } }").is_err());
+        assert!(prep("fn f(){ #[cfg(any())] #[cfg(all())] { a(); } }").is_err());
     }
     #[test]
     fn field_docs_and_tool_attributes_are_inert() {

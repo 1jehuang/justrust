@@ -1094,6 +1094,7 @@ fn snapshot_unit<'a>(
     let root = chain.len() <= 1 && depth == 0;
     let mut builder = Loader::new(options, reader, LOCAL_FILE, contents.clone(), root);
     builder.lexical_budget = budget.clone();
+    builder.file_directory = path.parent().map(Path::to_path_buf);
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
         inputs: source_inputs::SourceInputs::untracked(),
@@ -1630,6 +1631,10 @@ struct Loader<'a> {
     has_root_use_items: bool,
     children: Vec<ChildModule>,
     derives: Vec<(usize, String)>,
+    /// `#[path]` overrides for `mod name;` in this file, by `mod` offset.
+    module_paths: Vec<(usize, String)>,
+    /// Directory containing this file, for `#[path]` resolution.
+    file_directory: Option<PathBuf>,
     /// Inline module names enclosing the text being expanded.
     module_stack: Vec<String>,
     no_std: bool,
@@ -1659,6 +1664,8 @@ impl<'a> Loader<'a> {
             has_root_use_items: false,
             children: Vec::new(),
             derives: Vec::new(),
+            module_paths: Vec::new(),
+            file_directory: None,
             module_stack: Vec::new(),
             no_std: false,
             forbid_unsafe_code: false,
@@ -1777,6 +1784,7 @@ impl<'a> Loader<'a> {
             });
         }
         self.derives = filtered.derives;
+        self.module_paths = filtered.module_paths;
         self.tests = filtered.tests;
         let mut text = filtered.text;
         if self.root
@@ -1936,6 +1944,66 @@ impl<'a> Loader<'a> {
                             "external modules are unsupported in text input",
                         )
                     })?;
+                    let override_path = self
+                        .module_paths
+                        .iter()
+                        .find(|(at, _)| *at == base + tokens[head].start)
+                        .map(|(_, path)| path.clone());
+                    if let Some(relative) = override_path {
+                        // Outside inline modules, `#[path]` is relative to the
+                        // declaring file's directory, and the loaded file owns
+                        // its directory like a `mod.rs` file.
+                        if base != 0 {
+                            return Err(Self::error(
+                                SourceErrorKind::Unsupported,
+                                Some(decl),
+                                "path attributes inside inline modules are unsupported",
+                            ));
+                        }
+                        let Some(file_directory) = self.file_directory.clone() else {
+                            return Err(Self::error(
+                                SourceErrorKind::Unsupported,
+                                Some(decl),
+                                "path attributes need a file-backed module",
+                            ));
+                        };
+                        let path = file_directory.join(&relative);
+                        let exists = reader.exists(&path).map_err(|e| {
+                            Self::error(
+                                SourceErrorKind::Io,
+                                Some(decl),
+                                format!("{}: {e}", path.display()),
+                            )
+                        })?;
+                        if !exists {
+                            return Err(Self::error(
+                                SourceErrorKind::Module,
+                                Some(decl),
+                                format!("module {name} not found: expected {}", path.display()),
+                            ));
+                        }
+                        let child_directory = path
+                            .parent()
+                            .map_or_else(|| file_directory.clone(), Path::to_path_buf);
+                        self.copy(text, base, copied..tokens[head + 2].start)?;
+                        self.append("{\n", decl, true)?;
+                        self.children.push(ChildModule {
+                            at: self.text.len(),
+                            decl,
+                            path,
+                            directory: child_directory,
+                            depth: depth + 1,
+                            module: {
+                                let mut module = self.module_stack.clone();
+                                module.push(name.trim_start_matches("r#").to_string());
+                                module
+                            },
+                        });
+                        self.append("\n}", decl, true)?;
+                        copied = tokens[head + 2].end;
+                        i = head + 3;
+                        continue;
+                    }
                     let flat = directory.join(format!("{name}.rs"));
                     let nested = directory.join(name).join("mod.rs");
                     let a = reader.exists(&flat).map_err(|e| {
