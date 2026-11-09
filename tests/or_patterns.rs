@@ -114,6 +114,21 @@ fn main() { println!("{} {}", <Priv as PubTr>::n(), <P as PubTr>::n()); }"#,
                 expect: Expect::Run("7 7\n"),
             },
             Case {
+                name: "impl_anonymous_lifetime_escape",
+                source: r#"struct Bar;
+struct Foo<'s> { bar: &'s mut Bar }
+impl Foo<'_> { fn new(bar: &mut Bar) -> Self { Foo { bar } } }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_valid",
+                source: r#"struct Foo<'s> { bar: &'s u8 }
+impl Foo<'_> { fn get(&self) -> u8 { *self.bar } fn same(&self) -> &u8 { self.bar } }
+fn main() { let x = 4; let f = Foo { bar: &x }; println!("{} {}", f.get(), f.same()); }"#,
+                expect: Expect::Run("4 4\n"),
+            },
+            Case {
                 name: "consistent_ref_binding",
                 source: r#"fn f(x: (i32, i32)) -> i32 { match x { (ref a, 1) | (1, ref a) => *a, _ => 0 } }
 fn main() { println!("{} {}", f((5, 1)), f((2, 2))); }"#,

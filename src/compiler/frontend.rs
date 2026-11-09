@@ -11583,6 +11583,8 @@ struct Parser<'input, 'names> {
     pending_regions: RegionDecls,
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
     impl_regions: RegionDecls,
+    /// While parsing an impl header, `'_` introduces a fresh impl lifetime.
+    impl_header_anonymous: Option<Option<AstIdent>>,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
@@ -11776,6 +11778,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -13291,6 +13294,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -13718,6 +13722,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
@@ -14329,6 +14334,28 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 let region = if self.eat("'static") {
                     RegionName::Static
+                } else if self.is("'_")
+                    && let Some(slot) = self.impl_header_anonymous
+                {
+                    // An impl header's `'_` is a fresh, distinct impl lifetime.
+                    if slot.is_some() {
+                        return Err(self.unsupported(
+                            "multiple anonymous lifetimes in one impl header are unsupported",
+                        ));
+                    }
+                    let site = panic_callsite(self.names.session(), self.token().span)
+                        .map_err(native_adapter::transport_error)?;
+                    let ident = self
+                        .names
+                        .intern_root("__jr_impl_anon", site)
+                        .map_err(native_adapter::name_error)?;
+                    self.cursor.bump();
+                    self.impl_header_anonymous = Some(Some(ident));
+                    let mut params = std::mem::take(&mut self.impl_regions.params);
+                    self.reserve_parser_items(&mut params, 1)?;
+                    params.push(ident);
+                    self.impl_regions.params = params;
+                    RegionName::Named(ident)
                 } else if self.eat("'_") {
                     RegionName::Infer
                 } else {
@@ -15781,17 +15808,30 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
-            let first_ty = self.ty()?;
-            let (trait_path, self_ty) = if self.eat("for") {
-                let path = match first_ty {
-                    Type::Named(name) => self.unapplied_trait_path(&name)?,
-                    Type::Apply(path) => path,
-                    _ => return Err(self.error("expected a trait declaration before for")),
-                };
-                self.check_trait_path(&path)?;
-                (Some(TraitPath::Source(path)), self.ty()?)
-            } else {
-                (None, first_ty)
+            self.impl_header_anonymous = Some(None);
+            let first_ty = self.ty();
+            let (trait_path, self_ty) = match first_ty {
+                Err(error) => {
+                    self.impl_header_anonymous = None;
+                    return Err(error);
+                }
+                Ok(first_ty) if self.eat("for") => {
+                    let path = match first_ty {
+                        Type::Named(name) => self.unapplied_trait_path(&name),
+                        Type::Apply(path) => Ok(path),
+                        _ => Err(self.error("expected a trait declaration before for")),
+                    };
+                    let header = path.and_then(|path| {
+                        self.check_trait_path(&path)?;
+                        Ok((Some(TraitPath::Source(path)), self.ty()?))
+                    });
+                    self.impl_header_anonymous = None;
+                    header?
+                }
+                Ok(first_ty) => {
+                    self.impl_header_anonymous = None;
+                    (None, first_ty)
+                }
             };
             if declaration_unsafety && trait_path.is_none() {
                 return Err(self.error("E0197: inherent impls cannot be unsafe"));
