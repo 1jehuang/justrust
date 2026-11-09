@@ -35,10 +35,15 @@ TIMEOUT = 120
 
 
 def jr_binary():
-    exe = ROOT / "target/debug/jr-rust"
-    if not exe.exists():
+    # JR_RUST overrides. Otherwise use the most recently built binary: hosted
+    # machines only bring back optimized (musl) builds, never target/debug.
+    if os.environ.get("JR_RUST"):
+        return Path(os.environ["JR_RUST"])
+    found = [p for p in (ROOT / "target/debug/jr-rust", ROOT / "target/release/jr-rust",
+                         ROOT / "target/x86_64-unknown-linux-musl/release/jr-rust") if p.exists()]
+    if not found:
         raise SystemExit("build the compiler first: justrust build --bin jr-rust")
-    return exe
+    return max(found, key=lambda p: p.stat().st_mtime)
 
 
 def run(cmd, cwd=None, timeout=TIMEOUT, env=None):
