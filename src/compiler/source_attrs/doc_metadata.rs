@@ -9,6 +9,10 @@ pub(super) fn validate(meta: &Meta, owner: Owner) -> Result<(), AttributeError> 
             for setting in settings {
                 match setting.name.as_str() {
                     "hidden" if matches!(setting.value, MetaValue::Word) => {}
+                    // Rendering hints with no compilation meaning.
+                    "inline" | "no_inline" | "notable_trait" | "fake_variadic"
+                        if matches!(setting.value, MetaValue::Word) => {}
+                    "alias" | "cfg" | "auto_cfg" | "cfg_hide" | "attr" | "keyword" => {}
                     "html_favicon_url"
                     | "html_logo_url"
                     | "html_root_url"

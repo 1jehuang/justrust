@@ -18419,6 +18419,17 @@ impl<'input, 'names> Parser<'input, 'names> {
                     statements: vec![Stmt::Return(value)],
                     tail: None,
                 })
+            } else if source_blocklike {
+                // Like rustc, a block-like arm body ends the arm: `{ .. }`
+                // followed by `(pat) =>` is the next arm, not a call.
+                let previous = self.allow_struct;
+                let previous_purpose = self.condition_purpose;
+                self.allow_struct = true;
+                self.condition_purpose = ConditionPurpose::Ordinary;
+                let result = self.statement_expr();
+                self.allow_struct = previous;
+                self.condition_purpose = previous_purpose;
+                result?
             } else {
                 self.nested_expr()?
             };

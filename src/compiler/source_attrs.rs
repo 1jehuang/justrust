@@ -590,7 +590,9 @@ impl Filter<'_> {
             for attr in attrs {
                 // Lint levels are admitted on every associated owner; their
                 // meaning is decided by `lint_level` like at any other owner.
-                if lint_level_attribute(&self.text[attr.content.clone()]) {
+                if lint_level_attribute(&self.text[attr.content.clone()])
+                    || cfg_attribute(&self.text[attr.content.clone()])
+                {
                     continue;
                 }
                 if attr.path == AttributePath::Other
@@ -881,6 +883,12 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                // Tool attributes are inert for compilation.
+                "rustfmt" | "clippy"
+                    if self.text[meta.range.clone()]
+                        .trim_start()
+                        .split_once("::")
+                        .is_some_and(|(head, _)| head.trim() == meta.name) => {}
                 "test" | "ignore" | "should_panic" if owner == Owner::Function => {
                     self.test_attribute(&meta)?;
                     // Outside `cfg(test)` a test function is configured out.
@@ -1075,7 +1083,8 @@ impl Filter<'_> {
                     } else if matches!(kind, "impl" | "trait") {
                         self.associated_function_attributes(open + 1, close)?;
                     } else if kind != "macro_rules" {
-                        self.reject_nested(open + 1, close)?;
+                        let fields = matches!(kind, "struct" | "enum" | "union");
+                        self.reject_nested_with(open + 1, close, fields)?;
                     }
                 }
             }
@@ -1262,10 +1271,27 @@ impl Filter<'_> {
         self.derives.push((item.end, generated));
         Ok(())
     }
-    fn reject_nested(&self, start: usize, end: usize) -> Result<(), AttributeError> {
+    fn reject_nested(&mut self, start: usize, end: usize) -> Result<(), AttributeError> {
+        self.reject_nested_with(start, end, false)
+    }
+    /// `fields`: the range is a struct/enum/union body, whose field and
+    /// variant documentation and tool attributes are inert.
+    fn reject_nested_with(
+        &mut self,
+        start: usize,
+        end: usize,
+        fields: bool,
+    ) -> Result<(), AttributeError> {
         for i in start..end {
             if let Some((a, _)) = self.attr(i, end)? {
                 if self.consumed.contains(&a.range.start) {
+                    continue;
+                }
+                // Documentation and inert tool attributes (`rustfmt::skip`,
+                // `clippy::...`) have no meaning for compilation. Doc
+                // contents are still validated like any other doc attribute.
+                if fields && !a.inner && inert_nested_attribute(self.text, &a)? {
+                    self.mask(a.range.clone());
                     continue;
                 }
                 return Err(error(
@@ -1405,11 +1431,14 @@ impl Filter<'_> {
                 }
             }
             if !attrs.is_empty() {
-                self.attributes(
-                    &attrs,
-                    owner,
-                    Some(self.tokens[member].range.start..self.tokens[stop - 1].range.end),
-                )?;
+                let item = self.tokens[member].range.start..self.tokens[stop - 1].range.end;
+                if !self.attributes(&attrs, owner, Some(item.clone()))? {
+                    // A configured-out associated item is removed entirely.
+                    // Its syntax was already token-balanced by the walker;
+                    // the free-item inactive validator cannot parse `self`
+                    // receivers, so only mask it here.
+                    self.mask(attrs[0].range.start..self.tokens[stop - 1].range.end);
+                }
             }
             i = stop;
         }
@@ -1445,6 +1474,39 @@ fn lint_level_attribute(content: &str) -> bool {
         .next()
         .unwrap_or("");
     matches!(name, "allow" | "warn" | "expect" | "deny" | "forbid")
+}
+
+/// Nested attributes that never change compilation: documentation and
+/// attributes in the `rustfmt`/`clippy` tool namespaces.
+fn inert_nested_attribute(text: &str, attr: &Attr) -> Result<bool, AttributeError> {
+    if attr.doc {
+        return Ok(true);
+    }
+    let content = text[attr.content.clone()].trim();
+    let path: String = content
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | ' '))
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if path.starts_with("rustfmt::") || path.starts_with("clippy::") {
+        return Ok(true);
+    }
+    if path == "doc" {
+        let rest = content["doc".len()..].trim_start();
+        // Only plain `doc = "..."` strings are inert here.
+        return Ok(rest.starts_with('=') && rest[1..].trim_start().starts_with('"'));
+    }
+    Ok(false)
+}
+
+/// `cfg(...)` or `cfg_attr(...)`, whose activity is decided by expansion.
+fn cfg_attribute(content: &str) -> bool {
+    let name = content
+        .trim_start()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("");
+    matches!(name, "cfg" | "cfg_attr")
 }
 
 fn known_semantic_attribute(name: &str) -> bool {
@@ -2226,8 +2288,6 @@ mod tests {
             assert!(out.attributes.iter().all(|record| record.effective));
         }
         for attr in [
-            "cfg(any())",
-            "cfg_attr(any(),doc=\"hidden\")",
             "derive(Copy)",
             "repr(C)",
             "lang=\"x\"",
@@ -2509,8 +2569,6 @@ mod tests {
             "target_feature(enable=\"sse2\")",
             "deny(unused_attributes)",
             "forbid(unused_attributes)",
-            "cfg(any())",
-            "cfg_attr(any(),inline)",
             "unsafe(no_mangle)",
             "export_name=\"external\"",
             "track_caller",
@@ -2843,5 +2901,36 @@ mod tests {
             ")".repeat(70)
         );
         assert_eq!(prep(&s).unwrap_err().kind, AttributeErrorKind::Limit);
+    }
+}
+
+#[cfg(test)]
+mod nested_inert_tests {
+    use super::*;
+
+    fn prep(text: &str) -> Result<AttributeOutput, AttributeError> {
+        prepare(text, &CfgSet::default())
+    }
+
+    #[test]
+    fn field_docs_and_tool_attributes_are_inert() {
+        for text in [
+            "enum E { /// a\n A, #[doc = \"b\"] B }",
+            "struct S { /// f\n f: u8 }",
+            "#[rustfmt::skip] fn f() {}",
+            "impl S { #[cfg(any())] fn gone(&self) { missing() } fn here(&self) {} }",
+            "impl S { #[cfg_attr(any(), no_panic)] #[inline] fn f() {} }",
+        ] {
+            assert!(prep(text).is_ok(), "{text}");
+        }
+        let out = prep("impl S { #[cfg(any())] fn gone(&self) {} }").unwrap();
+        assert!(!out.text.contains("gone"));
+        for text in [
+            "struct S { #[repr(C)] f: u8 }",
+            "fn f() { #[doc = \"x\"] let x = 1; }",
+            "impl S { #[cfg_attr(all(), no_panic)] fn f() {} }",
+        ] {
+            assert!(prep(text).is_err(), "{text}");
+        }
     }
 }

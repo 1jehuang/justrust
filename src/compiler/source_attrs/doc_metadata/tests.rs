@@ -94,12 +94,7 @@ fn original_associated_type_and_constant_docs_keep_owner_spans() {
 #[test]
 fn associated_declaration_docs_do_not_activate_other_attributes_or_nested_docs() {
     for item in ["type A;", "const N:u8;", "const N:u8={1};"] {
-        for attribute in [
-            "inline",
-            "cfg(any())",
-            "cfg_attr(any(),doc=\"x\")",
-            "derive(Copy)",
-        ] {
+        for attribute in ["inline", "derive(Copy)"] {
             let text = format!("trait T{{#[doc=\"prefix\"]#[{attribute}]{item}}}");
             assert_eq!(
                 prepare(&text, &CfgSet::default()).unwrap_err().kind,
