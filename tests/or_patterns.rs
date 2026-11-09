@@ -114,6 +114,28 @@ fn main() { println!("{} {}", <Priv as PubTr>::n(), <P as PubTr>::n()); }"#,
                 expect: Expect::Run("7 7\n"),
             },
             Case {
+                name: "mut_ref_result_invariant",
+                source: r#"struct S<'b>(&'b i32);
+impl<'b> S<'b> {
+    fn bar<'a>(&'a mut self) -> &'a mut &'a i32 { let ref mut x = self.0; x }
+}
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "mut_ref_result_invariant_fn",
+                source: r#"fn f<'a, 'b>(x: &'a mut &'b i32) -> &'a mut &'a i32 { x }
+fn main() { println!("live"); }"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "mut_ref_result_exact_region",
+                source: r#"struct S<'b>(&'b i32);
+impl<'b> S<'b> { fn bar<'a>(&'a mut self) -> &'a mut &'b i32 { &mut self.0 } }
+fn main() { let v = 3; let mut s = S(&v); println!("{}", **s.bar()); }"#,
+                expect: Expect::Run("3\n"),
+            },
+            Case {
                 name: "impl_anonymous_lifetime_escape",
                 source: r#"struct Bar;
 struct Foo<'s> { bar: &'s mut Bar }

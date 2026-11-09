@@ -494,12 +494,39 @@ impl ValidatedTraitWorld {
                 .carrier_source_eligible(signature, destination, &signature.result, input, None)
                 .map(Some);
         }
-        Ok(Some(self.source_carrier_outlives(
-            source,
-            signature,
-            &incoming.region,
-            &output.region,
-        )?))
+        if !self.source_carrier_outlives(source, signature, &incoming.region, &output.region)? {
+            return Ok(Some(false));
+        }
+        // A carrier stored behind a returned `&mut` is invariant: the caller
+        // may write through it, so the source region must also be outlived.
+        let mut invariant = false;
+        for parent in source.carriers.iter().filter(|row| row.parameter.is_none()) {
+            charged(
+                &self.budget,
+                self.budget.charge_work(parent.location.path.0.len() + 1),
+            )?;
+            if enclosing(&parent.location, destination)
+                && matches!(
+                    charged(
+                        &self.budget,
+                        ir::carrier_at(&signature.result, &parent.location, &self.budget),
+                    )?,
+                    Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        ..
+                    }
+                )
+            {
+                invariant = true;
+                break;
+            }
+        }
+        if invariant
+            && !self.source_carrier_outlives(source, signature, &output.region, &incoming.region)?
+        {
+            return Ok(Some(false));
+        }
+        Ok(Some(true))
     }
     pub(super) fn carrier_contract_refines(
         &self,

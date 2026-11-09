@@ -9141,6 +9141,15 @@ impl Plan {
                 // opaque T behind &T is not read as a reference-valued cell.
                 // Positioned reference origins are checked independently below.
                 if projection.contains(&Projection::Deref) {
+                    if let Some(problem) = self.check_invariant_nested_result(
+                        f,
+                        block,
+                        &row.location,
+                        &row.sources,
+                        budget,
+                    )? {
+                        return Ok(Some(problem));
+                    }
                     continue;
                 }
                 let place = Place {
@@ -9258,6 +9267,73 @@ impl Plan {
             }
             if let Some(problem) = self.check_return_position(f, block, result, facts, budget)? {
                 return Ok(Some(problem));
+            }
+        }
+        Ok(None)
+    }
+    /// A reference stored behind a returned `&mut` is invariant: the caller
+    /// can read it back at the declared region, so its current origins must
+    /// be exactly the declaration-owned sources of that nested carrier.
+    fn check_invariant_nested_result(
+        &self,
+        f: &cfg::Function,
+        block: BlockId,
+        location: &CarrierLocation,
+        sources: &[InputCarrier],
+        budget: &mut Budget,
+    ) -> Result<Option<Problem>, Exhausted> {
+        let CarrierChannel::Fixed(position) = location.channel else {
+            return Ok(None);
+        };
+        // Find whether some enclosing reference on the path is `&mut`.
+        let mut ty = &f.result;
+        let mut behind_mut = false;
+        for step in location.path.0.iter() {
+            budget.spend(1)?;
+            match (step, ty) {
+                (CarrierStep::Referent, Ty::Ref { kind, referent }) => {
+                    behind_mut |= *kind == BorrowKind::Mut;
+                    ty = referent;
+                }
+                _ => return Ok(None),
+            }
+        }
+        for _ in 0..position.depth {
+            budget.spend(1)?;
+            let Ty::Ref { kind, referent } = ty else {
+                return Ok(None);
+            };
+            behind_mut |= *kind == BorrowKind::Mut;
+            ty = referent;
+        }
+        if !behind_mut {
+            return Ok(None);
+        }
+        let place = Place {
+            local: f.return_local,
+            projection: value_projection(location),
+        };
+        let Ok(origins) = self.carrier_origins_at(&place, block, None, Phase::Read, budget)? else {
+            return Ok(None);
+        };
+        for origin in origins.references.0.members() {
+            for target in &self.targets[origin] {
+                budget.spend(sources.len() + 1)?;
+                let CanonicalRoot::ParameterReferent(local, at) = &target.place.root else {
+                    continue;
+                };
+                if !target.place.projection.is_empty() {
+                    continue;
+                }
+                if !sources
+                    .iter()
+                    .any(|input| f.params.get(input.param) == Some(local) && input.location == *at)
+                {
+                    return Ok(Some(Problem::Invalid(
+                        "lifetime may not live long enough: reference behind a returned `&mut` is invariant"
+                            .into(),
+                    )));
+                }
             }
         }
         Ok(None)
