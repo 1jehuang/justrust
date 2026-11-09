@@ -474,7 +474,9 @@ fn notice_once(d: &std::path::Path) {
 }
 
 /// Which coding agent is driving this process, from its environment.
-fn agent_name() -> &'static str {
+/// The coding agent that launched justrust, from the environment it sets
+/// for its shell commands. `"none"` when unknown.
+pub(crate) fn agent_name() -> &'static str {
     let has = |k: &str| std::env::var_os(k).is_some();
     if has("JCODE_SESSION_ID") {
         "jcode"

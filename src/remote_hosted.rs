@@ -715,6 +715,10 @@ pub fn charge_run_labeled(
     if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
         body["session"] = json!(run_label(&s, 96));
     }
+    let agent = crate::telemetry::agent_name();
+    if agent != "none" {
+        body["agent"] = json!(agent);
+    }
     let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
     if r.code == 200 {
         Ok(Builds::from(&r.body["builds"]))
@@ -856,6 +860,10 @@ fn local_run_body(
     }
     if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
         body["session"] = json!(run_label(&s, 96));
+    }
+    let agent = crate::telemetry::agent_name();
+    if agent != "none" {
+        body["agent"] = json!(agent);
     }
     if let Some(e) = exit_code {
         body["exit_code"] = json!(e);
