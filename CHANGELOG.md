@@ -3,6 +3,16 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## Unreleased
+
+- **Hosted machines run the fleet version, not each client's build.** On
+  connect, the machine installs the advertised release (checksum and
+  version verified, 0.9s), so a shared machine and its caches see one
+  justrust. A client newer than the fleet, or a failed install, still
+  installs its own binary. `JUSTRUST_HOSTED_DEV=1` runs your own build on
+  hosted (justrust development; takes effect when the sync daemon starts,
+  `justrust remote down` restarts it).
+
 ## 0.1.0-alpha.21
 
 - **Hosted dependency cache hits again.** Cargo config env vars

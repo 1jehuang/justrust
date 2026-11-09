@@ -373,16 +373,13 @@ fn fetch_release_on_machine(t: &Target) -> bool {
 /// A Mac release cannot upload its Mach-O executable to a Linux build host.
 /// Use the host's asset from the same release, not an unpublished crates.io
 /// package. Source builds still take the existing source-install fallback.
-fn cross_release_install_script(remote_arch: &str, release_build: bool) -> Option<String> {
-    if !release_build {
-        return None;
-    }
+fn cross_release_install_script(remote_arch: &str, version: Option<&str>) -> Option<String> {
+    let version = version?;
     let target = match remote_arch {
         "Linux x86_64" => "x86_64-unknown-linux-musl",
         "Linux aarch64" => "aarch64-unknown-linux-musl",
         _ => return None,
     };
-    let version = env!("CARGO_PKG_VERSION");
     let asset = format!("justrust-{target}.tar.gz");
     let url = format!("https://github.com/1jehuang/justrust/releases/download/v{version}/{asset}");
     Some(format!(
@@ -409,8 +406,61 @@ fn fetch_cross_release_on_machine(t: &Target, remote_arch: &str) -> bool {
     if std::env::var("JUSTRUST_REMOTE_FETCH_RELEASE").as_deref() == Ok("0") {
         return false;
     }
-    let Some(script) = cross_release_install_script(remote_arch, crate::update::release_build())
-    else {
+    let own = crate::update::release_build().then_some(env!("CARGO_PKG_VERSION"));
+    let Some(script) = cross_release_install_script(remote_arch, own) else {
+        return false;
+    };
+    t.command()
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Same linker on both sides: with wild here and not there, the machine
+/// linked the 670 MB Desktop test binary with mold, 1.26 s against 0.25 s
+/// (FINDINGS 33). Best effort: a failure only costs speed.
+fn ensure_wild(t: &Target) {
+    if crate::linker::is_installed() && std::env::var("JUSTRUST_LINKER").as_deref() != Ok("off") {
+        let _ = t
+            .command()
+            .arg("~/.cargo/bin/justrust toolchain wild >/dev/null 2>&1")
+            .stdin(Stdio::null())
+            .status();
+    }
+}
+
+/// The fleet version a hosted machine should run, or `None` to install this
+/// client's own build (other backends, dev mode, no advertised version).
+fn fleet_target_version() -> Option<String> {
+    if !matches!(
+        crate::remote_backend::load(),
+        Some(crate::remote_backend::Backend::Hosted)
+    ) || crate::remote_hosted::dev_mode()
+    {
+        return None;
+    }
+    let v = crate::remote_hosted::fleet_version()?;
+    fleet_usable(&v, env!("CARGO_PKG_VERSION")).then_some(v)
+}
+
+/// The machine's agent serves every protocol up to its own, so the fleet
+/// release must be at least this client's version. A client ahead of the
+/// fleet (pre-release, dev build) installs itself instead.
+fn fleet_usable(fleet: &str, own: &str) -> bool {
+    !crate::update::newer(own, fleet)
+}
+
+/// Install release `version` on the machine for its own architecture,
+/// checksum- and version-verified before replacing the binary.
+fn install_fleet_release(t: &Target, version: &str) -> bool {
+    let Ok(arch) = t.command().arg("uname -sm").stdin(Stdio::null()).output() else {
+        return false;
+    };
+    let arch = String::from_utf8_lossy(&arch.stdout).trim().to_string();
+    let Some(script) = cross_release_install_script(&arch, Some(version)) else {
         return false;
     };
     t.command()
@@ -504,8 +554,34 @@ fn upload_patch(t: &Target) -> bool {
 /// machine, else copy it. Otherwise build it there from crates.io at this
 /// version.
 pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
-    let id = crate::remote_daemon::build_id();
     let stamp = crate::remote::dir()?.join("remote-justrust");
+    // Hosted machines run the fleet version the service advertises, so a
+    // shared machine and its caches see one justrust regardless of which
+    // client connects. The agent serves every older protocol version.
+    let fleet = fleet_target_version();
+    if let Some(v) = &fleet {
+        let want = format!("{} fleet {v}", t.dest);
+        if std::fs::read_to_string(&stamp).ok().as_deref() == Some(want.as_str()) {
+            return Ok(());
+        }
+        let t0 = Instant::now();
+        if install_fleet_release(t, v) {
+            ensure_wild(t);
+            std::fs::write(&stamp, want)?;
+            crate::remote::log_event(&format!(
+                "fleet justrust {v} installed on {} in {:.1}s",
+                t.dest,
+                t0.elapsed().as_secs_f64()
+            ));
+            return Ok(());
+        }
+        // Fail open: push this client's own binary as before.
+        crate::remote::log_event(&format!(
+            "fleet justrust {v} install failed on {}, installing this client's build",
+            t.dest
+        ));
+    }
+    let id = crate::remote_daemon::build_id();
     let want = format!("{} {id}", t.dest);
     if std::fs::read_to_string(&stamp).ok().as_deref() == Some(want.as_str()) {
         return Ok(());
@@ -580,16 +656,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             bail!("installing justrust on the remote machine failed");
         }
     }
-    // Same linker on both sides: with wild here and not there, the
-    // machine linked the 670 MB Desktop test binary with mold, 1.26 s
-    // against 0.25 s (FINDINGS 33). Best effort: a failure only costs speed.
-    if crate::linker::is_installed() && std::env::var("JUSTRUST_LINKER").as_deref() != Ok("off") {
-        let _ = t
-            .command()
-            .arg("~/.cargo/bin/justrust toolchain wild >/dev/null 2>&1")
-            .stdin(Stdio::null())
-            .status();
-    }
+    ensure_wild(t);
     // Our own AWS machine only (never a user's ssh host): /bin/sh as bash,
     // see remote::SH_IS_BASH. Best effort.
     if matches!(
@@ -1769,12 +1836,23 @@ mod tests {
     }
 
     #[test]
+    fn fleet_install_only_when_not_behind_the_client() {
+        assert!(fleet_usable("0.1.0-alpha.21", "0.1.0-alpha.21"));
+        assert!(fleet_usable("0.1.0-alpha.22", "0.1.0-alpha.21"));
+        assert!(!fleet_usable("0.1.0-alpha.20", "0.1.0-alpha.21"));
+        let s = cross_release_install_script("Linux x86_64", Some("0.1.0-alpha.9")).unwrap();
+        assert!(s.contains("/v0.1.0-alpha.9/justrust-x86_64-unknown-linux-musl.tar.gz"));
+        assert!(s.contains("'justrust 0.1.0-alpha.9'") || s.contains("justrust 0.1.0-alpha.9"));
+    }
+
+    #[test]
     fn cross_release_install_uses_host_target_and_verifies_before_replacing() {
         for (arch, target) in [
             ("Linux x86_64", "x86_64-unknown-linux-musl"),
             ("Linux aarch64", "aarch64-unknown-linux-musl"),
         ] {
-            let script = cross_release_install_script(arch, true).unwrap();
+            let script =
+                cross_release_install_script(arch, Some(env!("CARGO_PKG_VERSION"))).unwrap();
             assert!(script.contains(&format!("/v{}/", env!("CARGO_PKG_VERSION"))));
             assert!(script.contains(&format!("justrust-{target}.tar.gz.sha256")));
             let checksum = script.find("sha256sum -c -").unwrap();
@@ -1786,10 +1864,10 @@ mod tests {
                 "justrust {}",
                 env!("CARGO_PKG_VERSION")
             ))));
-            assert!(cross_release_install_script(arch, false).is_none());
+            assert!(cross_release_install_script(arch, None).is_none());
         }
-        assert!(cross_release_install_script("Darwin arm64", true).is_none());
-        assert!(cross_release_install_script("Linux riscv64", true).is_none());
+        assert!(cross_release_install_script("Darwin arm64", Some("1.0.0")).is_none());
+        assert!(cross_release_install_script("Linux riscv64", Some("1.0.0")).is_none());
     }
 
     #[cfg(unix)]
@@ -1854,7 +1932,10 @@ mod tests {
         let run = || {
             Command::new("sh")
                 .arg("-c")
-                .arg(cross_release_install_script("Linux x86_64", true).unwrap())
+                .arg(
+                    cross_release_install_script("Linux x86_64", Some(env!("CARGO_PKG_VERSION")))
+                        .unwrap(),
+                )
                 .env("HOME", &home)
                 .env(
                     "PATH",

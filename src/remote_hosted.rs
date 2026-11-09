@@ -1277,6 +1277,28 @@ pub fn known_hosts(r: &Ready) -> String {
         .collect()
 }
 
+/// The release the hosted fleet runs, as advertised on the last connect.
+/// Hosted machines run this version, not the client's own build, unless
+/// [`dev_mode`]. `None` when the fleet advertised none (kill switch).
+pub fn fleet_version() -> Option<String> {
+    let v = std::fs::read_to_string(dir().ok()?.join("fleet-version")).ok()?;
+    let v = v.trim();
+    (!v.is_empty()
+        && v.len() <= 64
+        && v.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)))
+    .then(|| v.to_owned())
+}
+
+/// `JUSTRUST_HOSTED_DEV=1`: run this client's own binary on the hosted
+/// machine (justrust development), instead of the fleet version.
+pub fn dev_mode() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_HOSTED_DEV").as_deref(),
+        Ok("1" | "true" | "on")
+    )
+}
+
 pub fn dir() -> Result<PathBuf> {
     let d = crate::remote::dir()?.join("hosted");
     std::fs::create_dir_all(&d)?;
@@ -1500,7 +1522,9 @@ pub fn ensure_ready() -> Result<Target> {
         ready_at: now(),
     };
     write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
+    let _ = std::fs::remove_file(d.join("fleet-version"));
     if let Some(v) = &r.fleet_version {
+        let _ = std::fs::write(d.join("fleet-version"), v);
         crate::update::fleet_advertised(v);
     }
     if let Some(b) = &r.builds {
