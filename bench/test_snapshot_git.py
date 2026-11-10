@@ -101,6 +101,21 @@ class SnapshotGitTests(unittest.TestCase):
             self.assertEqual((second / "fixture/hello.txt").read_text(), "other\n")
             self.assertEqual((first / "fixture/hello.txt").read_text(), "world\n")
 
+    def test_portable_math_font_repair_keeps_manifest_and_lockfile_together(self):
+        repair_name = "bench/patches/desktop-portable-math-fonts.patch"
+        self.assertIn(("jcode-desktop", repair_name), suite.SNAPSHOTS["desktop"]["patches"])
+        repair = (suite.ROOT / repair_name).read_text()
+        self.assertIn('features = ["debug-embed"]', repair)
+        self.assertIn('diff --git a/Cargo.lock b/Cargo.lock', repair)
+        self.assertIn('+ "rust-embed"', repair)
+        self.assertNotIn('src/markdown.rs', repair)
+        # Disabling the portability repair must invalidate prepared trees/results.
+        original = suite.snapshot_fingerprint("desktop")
+        spec = dict(suite.SNAPSHOTS["desktop"])
+        spec["patches"] = [entry for entry in spec["patches"] if entry[1] != repair_name]
+        with patch.dict(suite.SNAPSHOTS, {"desktop": spec}):
+            self.assertNotEqual(suite.snapshot_fingerprint("desktop"), original)
+
     def test_fixup_content_also_changes_snapshot_fingerprint(self):
         spec = {"repos": {"fixture": (self.source, self.rev)}, "cwd": "fixture", "fixups": []}
         with patch.object(suite, "SNAPSHOTS", {"fixture": spec}):

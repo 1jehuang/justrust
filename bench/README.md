@@ -58,7 +58,12 @@ an already prepared snapshot. Comparisons reject different repair fingerprints.
 The credited patches currently restore Desktop's visible reload camera position
 (`764e429`, retaining the original viewport assertion) and import Jcode's existing
 description-consent/schema repair (`2474a4f81`, without removing consent text or
-raising the token cap). These repaired workloads cannot be compared with the
+raising the token cap). A separate portable-font repair enables
+`rust-embed/debug-embed` for Desktop's math fonts, including the lockfile edge.
+Without it, debug artifacts read fonts from the original compiler machine's
+registry path instead of carrying their bytes, so shared-cache hits can render
+text instead of glyph paths on another machine. The original SVG assertions
+remain unchanged. These repaired workloads cannot be compared with the
 earlier failing fixtures as a speed claim.
 
 Run `python3 bench/suite.py preflight` on the machine executing the tests before

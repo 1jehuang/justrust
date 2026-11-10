@@ -1,0 +1,23 @@
+diff --git a/crates/jcode-desktop-ui/Cargo.toml b/crates/jcode-desktop-ui/Cargo.toml
+--- a/crates/jcode-desktop-ui/Cargo.toml
++++ b/crates/jcode-desktop-ui/Cargo.toml
+@@ -46,6 +46,8 @@
+ ratex-layout = "0.1.14"
+ ratex-parser = "0.1.14"
+ ratex-svg = { version = "0.1.14", features = ["standalone", "embed-fonts"] }
++# Debug dependency artifacts must carry font bytes across build machines.
++rust-embed = { version = "8.11.0", features = ["debug-embed"] }
+ unicode-segmentation = "1"
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1.0.151"
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4360,6 +4360,7 @@
+  "ratex-parser",
+  "ratex-svg",
+  "reqwest 0.12.28",
++ "rust-embed",
+  "semver",
+  "serde",
+  "serde_json",
