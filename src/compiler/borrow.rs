@@ -3582,16 +3582,16 @@ impl CarrierBuilder<'_, '_> {
         {
             target.precision = TargetPrecision::Subtree;
         }
-        // A shared slice descriptor denotes the complete issued element domain,
-        // not the storage of one returned element. Its original parameter
-        // carrier is authenticated by the same retained template substitution
-        // as every read cover. Widening retains that root and all authority,
-        // and cannot manufacture an element cell or a disjoint target.
+        // A parameter lifetime source proves containment in its issued referent,
+        // not identity with the returned storage. This includes mutable native
+        // sequence elements as well as shared slice elements. Widening keeps
+        // the original object, every loan authority and its complete issued
+        // cell domain. It cannot mint a cell or a disjoint element target.
         if target.precision == TargetPrecision::Exact
             && target.place.projection.is_empty()
             && let CanonicalRoot::ParameterReferent(local, source) = &target.place.root
             && let Ty::Ref {
-                kind: BorrowKind::Shared,
+                kind: result_kind,
                 referent: result_referent,
             } = ir::carrier_at(result, location, &self.ledger).map_err(|_| Exhausted)?
         {
@@ -3627,10 +3627,10 @@ impl CarrierBuilder<'_, '_> {
             }
             let original = ir::carrier_at(root, source, &self.ledger).map_err(|_| Exhausted)?;
             if let Ty::Ref {
-                kind: BorrowKind::Shared,
+                kind: original_kind,
                 referent,
             } = original
-                && let Ty::Slice { .. } = referent.as_ref()
+                && (original_kind == BorrowKind::Mut || result_kind == BorrowKind::Shared)
                 && referent.as_ref() != result_referent.as_ref()
             {
                 target.precision = TargetPrecision::Subtree;
@@ -10604,120 +10604,150 @@ mod parameter_equality_tests {
     }
 
     #[test]
-    fn parameter_slice_result_widening_retains_original_issued_cover() {
-        let snapshot = Arc::new(crate::compiler::Snapshot {
-            input: crate::compiler::Input::Text(
-                "fn inspect(values:&[&i32]){let _=values;}fn main(){}".into(),
+    fn parameter_result_widening_retains_original_issued_cover() {
+        for (source, source_kind) in [
+            (
+                "fn inspect(values:&[&i32]){let _=values;}fn main(){}",
+                BorrowKind::Shared,
             ),
-            source_options: crate::compiler::source::SourceOptions::default(),
-            budget: ir::PlanBudget::default(),
-        });
-        let ledger = snapshot.budget.clone();
-        let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
-        let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
-        let requested = engine.request(key.clone());
-        engine.run(1).unwrap();
-        requested.completion().unwrap();
-        let body = engine
-            .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+            (
+                "fn inspect(values:&mut [&i32]){let _=values;}fn main(){}",
+                BorrowKind::Mut,
+            ),
+            (
+                "fn inspect(values:&Vec<&i32>){let _=values;}fn main(){}",
+                BorrowKind::Shared,
+            ),
+            (
+                "fn inspect(values:&mut Vec<&i32>){let _=values;}fn main(){}",
+                BorrowKind::Mut,
+            ),
+            (
+                "fn inspect(values:&mut [&i32;2]){let _=values;}fn main(){}",
+                BorrowKind::Mut,
+            ),
+            (
+                "fn inspect(values:&mut (&i32,&i32)){let _=values;}fn main(){}",
+                BorrowKind::Mut,
+            ),
+        ] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text(source.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let ledger = snapshot.budget.clone();
+            let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+            let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+            let requested = engine.request(key.clone());
+            engine.run(1).unwrap();
+            requested.completion().unwrap();
+            let body = engine
+                .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+                .unwrap();
+            let publication = body
+                .publication
+                .as_ref()
+                .expect("genuine original slice parameter");
+            let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+            let facts = publication.facts().clone();
+            let mut budget = Budget::new(32_000_000);
+            let mut builder = CarrierBuilder::new(
+                &function,
+                FactsCtx::Validated(&facts),
+                ledger,
+                &mut budget,
+                128 * 1024 * 1024,
+                None,
+            )
             .unwrap();
-        let publication = body
-            .publication
-            .as_ref()
-            .expect("genuine original slice parameter");
-        let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
-        let facts = publication.facts().clone();
-        let mut budget = Budget::new(32_000_000);
-        let mut builder = CarrierBuilder::new(
-            &function,
-            FactsCtx::Validated(&facts),
-            ledger,
-            &mut budget,
-            128 * 1024 * 1024,
-            None,
-        )
-        .unwrap();
-        let location = fixed_location(ReferencePosition { depth: 0 });
-        let (_, origin) = builder
-            .reference_inputs
-            .iter()
-            .find(|(input, _)| input.param == 0 && input.location == location)
-            .unwrap();
-        let target = builder.targets[origin.0][0].clone();
-        let element = Ty::Ref {
-            kind: BorrowKind::Shared,
-            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
-        };
-        let result = Ty::Ref {
-            kind: BorrowKind::Shared,
-            referent: Arc::new(element.clone()),
-        };
-        let widened = builder
-            .structural_result_target(target.clone(), &result, &location)
-            .unwrap();
-        assert_eq!(widened.precision, TargetPrecision::Subtree);
-        assert_eq!(widened.place, target.place);
-        assert_eq!(widened.authority, target.authority);
-        let covers = builder
-            .family_cover_locals
-            .as_deref()
-            .unwrap_or(&builder.original_locals);
-        let complete = read_cell_cover(
-            covers,
-            &builder.cell_index,
-            &widened,
-            &CellChannel::ReferenceValue,
-            &mut Budget::new(1_000_000),
-        )
-        .unwrap();
-        assert!(complete.is_some_and(|cells| !cells.is_empty()));
-        assert!(
-            read_cell_cover(
+            let location = fixed_location(ReferencePosition { depth: 0 });
+            let (_, origin) = builder
+                .reference_inputs
+                .iter()
+                .find(|(input, _)| input.param == 0 && input.location == location)
+                .unwrap();
+            let target = builder.targets[origin.0][0].clone();
+            let element = Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+            };
+            let result = Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(element.clone()),
+            };
+            let widened = builder
+                .structural_result_target(target.clone(), &result, &location)
+                .unwrap();
+            assert_eq!(widened.precision, TargetPrecision::Subtree);
+            assert_eq!(widened.place, target.place);
+            assert_eq!(widened.authority, target.authority);
+            let covers = builder
+                .family_cover_locals
+                .as_deref()
+                .unwrap_or(&builder.original_locals);
+            let complete = read_cell_cover(
                 covers,
-                &HashMap::new(),
+                &builder.cell_index,
                 &widened,
                 &CellChannel::ReferenceValue,
-                &mut Budget::new(1_000_000)
+                &mut Budget::new(1_000_000),
             )
-            .unwrap()
-            .is_none()
-        );
-        let mut foreign = target.clone();
-        foreign.place.root =
-            CanonicalRoot::ParameterReferent(LocalId(usize::MAX), location.clone());
-        assert!(
-            builder
-                .structural_result_target(foreign, &result, &location)
-                .is_err()
-        );
-        let mut forged = target.clone();
-        let mut wrong_location = location.clone();
-        wrong_location.path = CarrierPath(Arc::from([CarrierStep::Field(0)]));
-        forged.place.root = CanonicalRoot::ParameterReferent(function.params[0], wrong_location);
-        assert!(
-            builder
-                .structural_result_target(forged, &result, &location)
-                .is_err()
-        );
-        let same = function.locals[function.params[0].0].ty.clone();
-        assert_eq!(
-            builder
-                .structural_result_target(target.clone(), &same, &location)
+            .unwrap();
+            assert!(complete.is_some_and(|cells| !cells.is_empty()));
+            assert!(
+                read_cell_cover(
+                    covers,
+                    &HashMap::new(),
+                    &widened,
+                    &CellChannel::ReferenceValue,
+                    &mut Budget::new(1_000_000)
+                )
                 .unwrap()
-                .precision,
-            TargetPrecision::Exact
-        );
-        let mutable = Ty::Ref {
-            kind: BorrowKind::Mut,
-            referent: Arc::new(element),
-        };
-        assert_eq!(
-            builder
-                .structural_result_target(target, &mutable, &location)
-                .unwrap()
-                .precision,
-            TargetPrecision::Exact
-        );
+                .is_none()
+            );
+            let mut foreign = target.clone();
+            foreign.place.root =
+                CanonicalRoot::ParameterReferent(LocalId(usize::MAX), location.clone());
+            assert!(
+                builder
+                    .structural_result_target(foreign, &result, &location)
+                    .is_err()
+            );
+            let mut forged = target.clone();
+            let mut wrong_location = location.clone();
+            wrong_location.path = CarrierPath(Arc::from([CarrierStep::Field(0)]));
+            forged.place.root =
+                CanonicalRoot::ParameterReferent(function.params[0], wrong_location);
+            assert!(
+                builder
+                    .structural_result_target(forged, &result, &location)
+                    .is_err()
+            );
+            let same = function.locals[function.params[0].0].ty.clone();
+            assert_eq!(
+                builder
+                    .structural_result_target(target.clone(), &same, &location)
+                    .unwrap()
+                    .precision,
+                TargetPrecision::Exact
+            );
+            let mutable = Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(element),
+            };
+            assert_eq!(
+                builder
+                    .structural_result_target(target, &mutable, &location)
+                    .unwrap()
+                    .precision,
+                if source_kind == BorrowKind::Mut {
+                    TargetPrecision::Subtree
+                } else {
+                    TargetPrecision::Exact
+                }
+            );
+        }
     }
 
     #[test]

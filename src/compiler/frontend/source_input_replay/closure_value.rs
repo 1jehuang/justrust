@@ -211,9 +211,11 @@ mod tests {
             panic!("checked closure binding");
         };
         let actual = &checked.exprs[value.0];
-        assert!(copy_arguments(std::slice::from_ref(source), &budget)
-            .unwrap()
-            .is_some());
+        assert!(
+            copy_arguments(std::slice::from_ref(source), &budget)
+                .unwrap()
+                .is_some()
+        );
         assert!(replay(&original, source, actual, checked, &budget).is_ok());
         assert!(replay(&original, other, actual, checked, &budget).is_err());
         let ir::ExprKind::Tuple(captures) = &actual.kind else {

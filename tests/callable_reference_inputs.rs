@@ -299,3 +299,33 @@ fn reference_callable_inputs_reject_strengthening_aliases_and_escape() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn sequence_reference_callbacks_match_stock() {
+    oracle::stock_native(
+        r#"fn modify<V,F:FnOnce(&mut V)>(values:&mut Vec<V>,f:F) {
+    if let Some(value)=values.get_mut(0) { f(value); }
+}
+fn inspect<V,F:FnOnce(&V)>(values:&Vec<V>,f:F) {
+    if let Some(value)=values.get(0) { f(value); }
+}
+fn fixed<F:FnOnce(&mut &str)>(values:&mut Vec<&str>,f:F) {
+    if let Some(value)=values.get_mut(0) { f(value); }
+}
+fn main() {
+    let mut values=vec!["a"];
+    values.push("untouched");
+    modify(&mut values,|slot|*slot="b");
+    fixed(&mut values,|slot|*slot="c");
+    inspect(&values,|value|println!("{}",value));
+    println!("{:?}",values);
+}"#,
+    );
+    for source in [
+        "fn modify<V,F:FnOnce(&mut V)>(v:&mut Vec<V>,f:F){if let Some(x)=v.get_mut(0){f(x);}}fn unused<'a>(v:&mut Vec<&'a str>){let s=String::from(\"short\");modify(v,|slot|*slot=s.as_str());}fn main(){}",
+        "fn unused(v:&Vec<&str>){if let Some(slot)=v.get(0){*slot=\"changed\";}}fn main(){}",
+        "fn modify<V,F:FnOnce(&mut V)>(v:&mut Vec<V>,f:F){if let Some(x)=v.get_mut(0){f(x);}}fn unused(v:&mut Vec<&str>){let first=v.get_mut(0).unwrap();modify(v,|slot|*slot=\"changed\");println!(\"{}\",first);}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

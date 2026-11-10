@@ -246,7 +246,8 @@ mod canonical_source_replay_tests {
                 0 => Arc::make_mut(&mut signature.ref_contract).results = Arc::from([]),
                 1 => {
                     let contract = Arc::make_mut(&mut signature.ref_contract);
-                    Arc::make_mut(&mut contract.results)[0].returns = ir::ReturnContract::NoReference;
+                    Arc::make_mut(&mut contract.results)[0].returns =
+                        ir::ReturnContract::NoReference;
                 }
                 _ => changed.call_evidence = Arc::from([]),
             }
@@ -26757,10 +26758,7 @@ impl tr::SchemaCx for SchemaAdapter {
         native_box::issue(&self.registry, declaration, &self.budget)
             .map_err(|error| self.error(error))
     }
-    fn crate_origin(
-        &self,
-        module: ModuleId,
-    ) -> Result<Option<tr::CrateOrigin>, tr::FactsError> {
+    fn crate_origin(&self, module: ModuleId) -> Result<Option<tr::CrateOrigin>, tr::FactsError> {
         let program = &self.program;
         let within = |ancestor: ModuleId| {
             self.budget.charge_work(1).map_err(|e| self.error(e))?;
