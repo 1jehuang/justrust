@@ -711,8 +711,9 @@ impl ValidatedTraitWorld {
             // A by-value original T, including an owned physical field,
             // carries this same symbolic family without a source lifetime row.
             // Replay its exact original field path and rigid parameter binder.
-            // A borrow crossing, another parameter or substituted type equality
-            // cannot supply this equation or grant shared storage a write.
+            // Without an independent Copy bound, a borrow crossing cannot
+            // supply this equation. Another parameter or substituted type
+            // equality cannot grant it, nor grant shared storage a write.
             if input
                 .location
                 .path
@@ -729,6 +730,57 @@ impl ValidatedTraitWorld {
                 return self
                     .carrier_writable(&signature.params[destination.param], &destination.location)
                     .map(Some);
+            }
+            // Copying a T out of borrowed storage transports T's stored
+            // origins, not the lifetime of the outer borrow. Keep the exact
+            // rigid family and canonical input occurrence, and require the
+            // declaration's authenticated Copy bound before admitting it.
+            if matches!(input.location.channel,
+                ir::CarrierChannel::ParamTail { parameter: actual, .. }
+                    if actual == parameter)
+                && let Some(original_input) = signature.params.get(input.param)
+                && charged(
+                    &self.budget,
+                    ir::carrier_locations(original_input, &self.budget),
+                )?
+                .contains(&input.location)
+                && charged(
+                    &self.budget,
+                    ir::carrier_at(original_input, &input.location, &self.budget),
+                )? == Ty::Param(parameter)
+            {
+                let mut required = Vec::new();
+                let predicates = if self.info(source.declaration)?.kind == DeclKind::TraitItem {
+                    let item = self.item_header(source.declaration)?;
+                    for predicate in item.schema.predicates.iter() {
+                        self.append_predicate(&mut required, predicate)?;
+                    }
+                    self.append_predicate(
+                        &mut required,
+                        &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
+                    )?;
+                    self.close_predicates(&mut required, &item.schema.env)?;
+                    required.as_slice()
+                } else {
+                    self.declared_callable_context(source.declaration)?
+                        .predicates
+                        .as_ref()
+                };
+                for predicate in predicates {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if matches!(predicate, Predicate::Implements(bound)
+                        if bound.declaration == self.catalog.id(CatalogItem::Copy)
+                            && bound.self_ty == Ty::Param(parameter)
+                            && bound.args.is_empty())
+                    {
+                        return self
+                            .carrier_writable(
+                                &signature.params[destination.param],
+                                &destination.location,
+                            )
+                            .map(Some);
+                    }
+                }
             }
         }
         let Some(incoming) = source
@@ -1301,6 +1353,80 @@ mod tests {
                 .source_write_eligible(&forged_source, &signature, &destination, &value)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn copied_family_write_uses_declared_copy_and_exact_input_occurrence() {
+        for copy in [false, true] {
+            let budget = PlanBudget::default();
+            let text = if copy {
+                "fn store<T:Copy,U>(out:&mut[T],item:&T,other:&U){}fn main(){}"
+            } else {
+                "fn store<T,U>(out:&mut[T],item:&T,other:&U){}fn main(){}"
+            };
+            let program = crate::compiler::frontend::parse(text).unwrap();
+            let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let world = plan.trait_world().unwrap();
+            let declaration = plan.function_decl(0).unwrap();
+            let signature = world
+                .normalized_declaration_schema(declaration)
+                .unwrap()
+                .signature;
+            let source = world
+                .validate_source_regions(declaration, &signature)
+                .unwrap();
+            let output = source
+                .carriers
+                .iter()
+                .find(|row| {
+                    row.parameter == Some(0)
+                        && matches!(row.region, ir::CarrierRegionTerm::Family { .. })
+                })
+                .unwrap();
+            let ir::CarrierRegionTerm::Family { parameter } = output.region else {
+                unreachable!()
+            };
+            let destination = ir::InputCarrier {
+                param: 0,
+                location: output.location.clone(),
+            };
+            let input = ir::InputCarrier {
+                param: 1,
+                location: ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([])),
+                    channel: ir::CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    },
+                },
+            };
+            assert_eq!(
+                world
+                    .source_write_eligible(&source, &signature, &destination, &input)
+                    .unwrap(),
+                Some(copy)
+            );
+            for mode in 0..3 {
+                let mut forged = input.clone();
+                match mode {
+                    0 => forged.param = 2,
+                    1 => {
+                        forged.location.channel = ir::CarrierChannel::ParamTail {
+                            parameter,
+                            prefix: 0,
+                        }
+                    }
+                    _ => {
+                        forged.location.path =
+                            ir::CarrierPath(Arc::from([ir::CarrierStep::Field(0)]))
+                    }
+                }
+                assert!(!matches!(
+                    world.source_write_eligible(&source, &signature, &destination, &forged),
+                    Ok(Some(true))
+                ));
+            }
+        }
     }
 
     #[test]

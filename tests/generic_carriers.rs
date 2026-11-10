@@ -592,3 +592,52 @@ fn frozen_generic_carriers_legal_excluded3() {
         }
     }
 }
+
+#[test]
+fn copied_referent_scalar_storage_matches_stock() {
+    differential::stock_native(
+        "fn append_copy<T:Copy>(out:&mut Vec<T>,item:&T){out.push(*item);}fn main(){let mut out=vec![1i32];let source=2;append_copy(&mut out,&source);println!(\"{:?}\",out);}",
+    );
+}
+
+#[test]
+fn copied_referent_origins_into_generic_storage_match_stock() {
+    differential::stock_native(
+        r#"
+fn append_copy<T: Copy>(out: &mut Vec<T>, item: &T) { out.push(*item); }
+fn store_copy<T: Copy>(out: &mut [T], item: &T) { out[0] = *item; }
+fn store_value_copy<T: Copy>(out: &mut T, item: &T) { *out = *item; }
+struct Source<T> { value: T }
+fn append_field<T: Copy>(out: &mut Vec<T>, item: &Source<T>) { out.push(item.value); }
+#[derive(Clone, Copy)]
+struct Pair<'a> { left: &'a i32, right: &'a i32 }
+fn main() {
+    let mut numbers = vec![1i32];
+    { let temporary = 2; append_copy(&mut numbers, &temporary); }
+    { let temporary = Source { value: 5 }; append_field(&mut numbers, &temporary); }
+    let mut array = [0i32];
+    { let temporary = 3; store_copy(&mut array, &temporary); }
+    let left = 7;
+    let right = 11;
+    let seed = 0;
+    let mut pair = Pair { left: &seed, right: &seed };
+    { let temporary = Pair { left: &left, right: &right }; store_value_copy(&mut pair, &temporary); }
+    let mut reference = &seed;
+    { let temporary = &left; store_value_copy(&mut reference, &temporary); }
+    println!("{:?} {} {} {} {}", numbers, array[0], *pair.left, *pair.right, *reference);
+}
+"#,
+    );
+}
+
+#[test]
+fn copied_referent_storage_rejects_unused_invalid_bodies() {
+    for source in [
+        "fn unused<T>(out:&mut Vec<T>,item:&T){out.push(*item);}fn main(){}",
+        "fn append<T:Copy>(out:&mut Vec<T>,item:&T){out.push(*item);}fn unused<'a>(out:&mut Vec<&'a i32>){let local=1;let reference=&local;append(out,&reference);}fn main(){}",
+        "fn append<T:Copy>(out:&mut Vec<T>,item:&T){out.push(*item);}fn unused(){let mut value=1;let mut out:Vec<&i32> = Vec::new();let reference=&value;append(&mut out,&reference);value=2;println!(\"{}\",*out.pop().unwrap());}fn main(){}",
+        "#[derive(Clone,Copy)]struct Pair<'a>{left:&'a i32,right:&'a i32}fn append<T:Copy>(out:&mut Vec<T>,item:&T){out.push(*item);}fn unused<'a>(out:&mut Vec<Pair<'a>>){let local=1;let pair=Pair{left:&local,right:&local};append(out,&pair);}fn main(){}",
+    ] {
+        differential::stock_and_native_reject(source);
+    }
+}
