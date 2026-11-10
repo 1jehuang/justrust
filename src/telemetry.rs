@@ -191,6 +191,8 @@ pub(crate) struct BuildLifecycle {
     /// (`report_local_run`), like hosted runs do.
     local: Option<std::sync::Arc<LocalRun>>,
     local_worker: Option<std::thread::JoinHandle<()>>,
+    /// Why the run failed, sent with the terminal local run report.
+    failure: Option<crate::failure::Wire>,
 }
 
 pub(crate) struct LocalRun {
@@ -199,13 +201,20 @@ pub(crate) struct LocalRun {
 }
 
 impl LocalRun {
-    fn report(&self, id: &str, state: &str, exit: Option<i32>) {
+    fn report(
+        &self,
+        id: &str,
+        state: &str,
+        exit: Option<i32>,
+        failure: Option<&crate::failure::Wire>,
+    ) {
         crate::remote_hosted::report_local_run(
             &self.labels,
             id,
             state,
             exit,
             Some(self.started.elapsed().as_secs_f64()),
+            failure,
         );
     }
 }
@@ -278,6 +287,7 @@ impl BuildLifecycle {
             logs: Default::default(),
             local: None,
             local_worker: None,
+            failure: None,
         };
         if enabled() && observer.scope.is_some() && valid_run_id(id) {
             emit_lifecycle(
@@ -354,7 +364,7 @@ impl BuildLifecycle {
                         break;
                     }
                     if timeout.timed_out() && state.0 {
-                        local.report(&id, "running", None);
+                        local.report(&id, "running", None, None);
                     }
                 }
             })
@@ -363,10 +373,14 @@ impl BuildLifecycle {
     pub(crate) fn log_availability(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         self.logs.clone()
     }
+    /// The classified cause of a failed run, reported with `done`.
+    pub(crate) fn set_failure(&mut self, failure: Option<crate::failure::Wire>) {
+        self.failure = failure;
+    }
     pub(crate) fn running(&self) {
         self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
         if let Some(l) = &self.local {
-            l.report(&self.id, "running", None);
+            l.report(&self.id, "running", None, None);
         }
         emit_lifecycle(
             &self.id,
@@ -389,7 +403,7 @@ impl BuildLifecycle {
         self.stop();
         self.terminal = true;
         if let Some(l) = self.local.take() {
-            l.report(&self.id, "done", Some(exit));
+            l.report(&self.id, "done", Some(exit), self.failure.as_ref());
         }
         emit_lifecycle(
             &self.id,
@@ -408,7 +422,7 @@ impl Drop for BuildLifecycle {
         if !self.terminal
             && let Some(l) = self.local.take()
         {
-            l.report(&self.id, "abandoned", None);
+            l.report(&self.id, "abandoned", None, None);
         }
         if !self.terminal {
             emit_lifecycle(

@@ -970,7 +970,7 @@ fn fallback_safe(flushed: bool, submitted: bool) -> bool {
     !flushed && !submitted
 }
 
-type RunReporter = Arc<dyn Fn(&str, Option<i32>) + Send + Sync>;
+type RunReporter = Arc<dyn Fn(&str, Option<i32>, Option<&crate::failure::Wire>) + Send + Sync>;
 
 /// Owns hosted admission through completion, including early `?` returns.
 /// Reporting only dispatches detached requests. Joining wakes the worker, not
@@ -992,14 +992,17 @@ impl HostedRun {
     fn new(hosted: bool, run_id: &str, started: Instant) -> Self {
         let run_id = run_id.to_owned();
         Self::with_reporter(hosted.then(|| {
-            Arc::new(move |event: &str, code| {
-                crate::remote_hosted::report_run_event(
-                    &run_id,
-                    event,
-                    code,
-                    Some(started.elapsed().as_secs_f64()),
-                );
-            }) as RunReporter
+            Arc::new(
+                move |event: &str, code, failure: Option<&crate::failure::Wire>| {
+                    crate::remote_hosted::report_run_event(
+                        &run_id,
+                        event,
+                        code,
+                        Some(started.elapsed().as_secs_f64()),
+                        failure,
+                    );
+                },
+            ) as RunReporter
         }))
     }
 
@@ -1018,7 +1021,7 @@ impl HostedRun {
         }
         self.running = true;
         let Some(report) = &self.report else { return };
-        report("running", None);
+        report("running", None, None);
         let report = Arc::clone(report);
         let (stop, rx) = mpsc::channel();
         // Failure to create telemetry machinery must not change the verdict.
@@ -1032,7 +1035,7 @@ impl HostedRun {
                             Err(mpsc::RecvTimeoutError::Timeout)
                         )
                     },
-                    || report("running", None),
+                    || report("running", None, None),
                 );
             })
         {
@@ -1040,7 +1043,7 @@ impl HostedRun {
         }
     }
 
-    fn finish(&mut self, event: &str, code: Option<i32>) {
+    fn finish(&mut self, event: &str, code: Option<i32>, failure: Option<&crate::failure::Wire>) {
         if self.finished {
             return;
         }
@@ -1050,7 +1053,7 @@ impl HostedRun {
             let _ = worker.join();
         }
         if let Some(report) = &self.report {
-            report(event, code);
+            report(event, code, failure);
         }
         // Already dispatched requests can arrive out of order. The server
         // treats terminal states as absorbing, including late heartbeats.
@@ -1059,7 +1062,7 @@ impl HostedRun {
 
 impl Drop for HostedRun {
     fn drop(&mut self) {
-        self.finish("abandoned", None);
+        self.finish("abandoned", None, None);
     }
 }
 
@@ -1158,6 +1161,15 @@ pub fn run_remote(
         lifecycle.done(code, logs);
     }
     if !matches!(&result, Ok(Ok(_))) {
+        // An admitted run that never produced an exit status died on our
+        // side. Say where, instead of leaving a bare "abandoned" row.
+        if let Some(run) = hosted_run.as_mut() {
+            let why = (
+                crate::failure::Class::Infra,
+                format!("hosted attempt failed at {}", diagnostic.stage),
+            );
+            run.finish("abandoned", None, Some(&why));
+        }
         report_remote_failure(sub, &diagnostic, started.elapsed().as_secs_f64());
     }
     result
@@ -1463,7 +1475,12 @@ fn run_remote_inner(
                 diagnostic.may_have_started = true;
                 mark("exit");
                 crate::e2e::mark("exit");
-                hosted_run.finish("done", Some(code));
+                // The machine classified the failure in its summary.
+                let failure = (code != 0)
+                    .then(|| serde_json::from_slice::<crate::summary::Summary>(&summary).ok())
+                    .flatten()
+                    .and_then(|s| s.failure_wire());
+                hosted_run.finish("done", Some(code), failure.as_ref());
                 if compile_only {
                     compile_stdout.finish(&mut so, &mut se, json_output)?;
                     if code == 0 {
@@ -1931,21 +1948,27 @@ mod tests {
     fn hosted_heartbeat_terminal_states_stop_worker_and_preserve_verdict() {
         for code in [0, 101] {
             let (tx, rx) = std::sync::mpsc::channel();
-            let mut run =
-                super::HostedRun::with_reporter(Some(std::sync::Arc::new(move |event, code| {
-                    tx.send((event.to_owned(), code)).unwrap();
-                })));
+            let mut run = super::HostedRun::with_reporter(Some(std::sync::Arc::new(
+                move |event: &str, code, failure: Option<&crate::failure::Wire>| {
+                    tx.send((event.to_owned(), code, failure.cloned())).unwrap();
+                },
+            )));
+            let why =
+                (code != 0).then(|| (crate::failure::Class::UserCode, "2 tests failed".to_owned()));
             run.running();
             run.running();
             assert!(run.heartbeat.is_some());
-            run.finish("done", Some(code));
+            run.finish("done", Some(code), why.as_ref());
             assert!(run.heartbeat.is_none());
             run.running();
-            run.finish("abandoned", None);
+            run.finish("abandoned", None, None);
             drop(run);
             assert_eq!(
                 rx.into_iter().collect::<Vec<_>>(),
-                vec![("running".into(), None), ("done".into(), Some(code)),]
+                vec![
+                    ("running".into(), None, None),
+                    ("done".into(), Some(code), why),
+                ]
             );
         }
     }
@@ -1956,7 +1979,7 @@ mod tests {
             let (tx, rx) = std::sync::mpsc::channel();
             let result: anyhow::Result<()> = (|| {
                 let mut run = super::HostedRun::with_reporter(Some(std::sync::Arc::new(
-                    move |event, code| {
+                    move |event: &str, code, _: Option<&crate::failure::Wire>| {
                         tx.send((event.to_owned(), code)).unwrap();
                     },
                 )));
@@ -1977,7 +2000,7 @@ mod tests {
         let mut run = super::HostedRun::with_reporter(None);
         run.running();
         assert!(run.heartbeat.is_none());
-        run.finish("done", Some(101));
+        run.finish("done", Some(101), None);
     }
 
     #[test]

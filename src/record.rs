@@ -1015,7 +1015,7 @@ fn record(
             hidden.merge(f.lock().unwrap().hidden);
         }
     }
-    if let Err(e) = finish(
+    match finish(
         opts,
         hidden,
         early,
@@ -1031,12 +1031,15 @@ fn record(
         &samples,
         &procs,
     ) {
-        eprintln!("justrust: failed to write run summary: {e:#}");
-        crate::telemetry::record_persistence_failure(
-            id,
-            crate::telemetry::PersistenceFailure::Summary,
-            code,
-        );
+        Ok(failure) => lifecycle.set_failure(failure),
+        Err(e) => {
+            eprintln!("justrust: failed to write run summary: {e:#}");
+            crate::telemetry::record_persistence_failure(
+                id,
+                crate::telemetry::PersistenceFailure::Summary,
+                code,
+            );
+        }
     }
     lifecycle.done(code, logs_complete);
     trace.mark("finish");
@@ -1094,7 +1097,7 @@ fn finish(
     lines: &[OutputLine],
     samples: &[Sample],
     procs: &[ProcRecord],
-) -> Result<()> {
+) -> Result<Option<crate::failure::Wire>> {
     write_jsonl(&run_dir.join("samples.jsonl"), samples)?;
     std::fs::write(
         run_dir.join("processes.json"),
@@ -1146,7 +1149,7 @@ fn finish(
     } else if std::env::var_os("JUSTRUST_QUIET").is_none() {
         eprintln!("justrust: {}", s.one_line());
     }
-    Ok(())
+    Ok(s.failure_wire())
 }
 
 #[cfg(test)]

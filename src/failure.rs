@@ -91,7 +91,14 @@ const TOOLCHAIN: &[(&str, &str)] = &[
     ),
     ("toolchain required:", "pinned toolchain unavailable"),
     ("found invalid metadata files", "corrupt cached artifact"),
-    ("can't find crate for `std`", "sysroot missing std"),
+    (
+        "can't find crate for `std`",
+        "std missing for the target (sysroot)",
+    ),
+    (
+        "can't find crate for `core`",
+        "std missing for the target (sysroot)",
+    ),
     (
         "found crate `std` compiled by an incompatible version",
         "sysroot/toolchain mismatch",
@@ -139,6 +146,61 @@ const USAGE: &[&str] = &[
     "failed to select a version for",
 ];
 
+/// Cargo could not even ask rustc about the target. The cause is on the
+/// indented lines that follow.
+const PROBE: &str = "failed to run `rustc` to learn about target-specific information";
+
+/// rustc refusing the flags it was given (RUSTFLAGS, `--config`, a target
+/// spec): the command or project configuration, not the toolchain.
+const REJECTED_FLAGS: &[&str] = &[
+    "is only accepted on the nightly compiler",
+    "nightly option were parsed",
+    "nightly options were parsed",
+    "the `-Z unstable-options` flag must also be passed",
+    "error: unknown codegen option",
+    "error: unknown debugging option",
+    "error: unknown unstable option",
+    "error: Unrecognized option",
+    "error: incorrect value `",
+    "error: Error loading target specification",
+    "error: could not find specification for target",
+];
+
+/// Class and short reason as reported to run history. The reason is built
+/// from fixed text plus counts and error codes: never output lines, which
+/// can hold source and paths.
+pub type Wire = (Class, String);
+
+/// The reported form of a failure, with the counts a reader wants first.
+pub fn wire(f: &Failure, compile_errors: usize, tests_failed: u64) -> Wire {
+    let reason = match (f.class, f.reason.as_str()) {
+        (Class::UserCode, "tests failed") if tests_failed > 0 => format!(
+            "{tests_failed} test{} failed",
+            if tests_failed == 1 { "" } else { "s" }
+        ),
+        (Class::UserCode, "compile error in the code") => {
+            let code = f.evidence.as_deref().and_then(error_code);
+            let more = match compile_errors {
+                0 | 1 => String::new(),
+                n => format!(" (+{} more)", n - 1),
+            };
+            match code {
+                Some(c) => format!("compile error {c}{more}"),
+                None => format!("compile error{more}"),
+            }
+        }
+        _ => f.reason.clone(),
+    };
+    (f.class, reason)
+}
+
+/// `E0308` from `error[E0308]: ...`.
+fn error_code(line: &str) -> Option<&str> {
+    let rest = &line[line.find("error[E")? + 6..];
+    let code = &rest[..rest.find(']')?];
+    (code.len() == 5 && code[1..].bytes().all(|b| b.is_ascii_digit())).then_some(code)
+}
+
 /// The bracketed attribution appended to the agent verdict.
 pub fn verdict_tag(f: &Failure) -> String {
     match f.class {
@@ -165,12 +227,17 @@ pub fn classify(i: &Input) -> Option<Failure> {
         return None;
     }
     let find = |table: &[(&str, &'static str)]| {
-        i.lines.iter().find_map(|l| {
-            table
-                .iter()
-                .find(|(needle, _)| l.contains(needle))
-                .map(|(_, why)| (*why, l.trim().to_owned()))
-        })
+        // A warning is something cargo recovered from (a retried download),
+        // not the cause of the failure.
+        i.lines
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("warning:"))
+            .find_map(|l| {
+                table
+                    .iter()
+                    .find(|(needle, _)| l.contains(needle))
+                    .map(|(_, why)| (*why, l.trim().to_owned()))
+            })
     };
     let mk = |class, reason: &str, evidence: Option<String>| {
         Some(Failure {
@@ -182,6 +249,27 @@ pub fn classify(i: &Input) -> Option<Failure> {
 
     if let Some((why, line)) = find(TOOLCHAIN) {
         return mk(Class::Toolchain, why, Some(line));
+    }
+    if i.lines.iter().any(|l| l.contains(PROBE)) {
+        return match i
+            .lines
+            .iter()
+            .find(|l| REJECTED_FLAGS.iter().any(|r| l.contains(r)))
+        {
+            Some(l) => mk(
+                Class::UserCode,
+                "rustc rejected the build flags",
+                Some(l.trim().to_owned()),
+            ),
+            None => mk(
+                Class::Toolchain,
+                "rustc could not be queried for the target",
+                i.lines
+                    .iter()
+                    .find(|l| l.trim_start().starts_with("error: ") && !l.contains(PROBE))
+                    .map(|l| l.trim().to_owned()),
+            ),
+        };
     }
     // rustc exits 1 for code errors and 101 when it panics.
     if i.unit_exits.contains(&101) {
@@ -520,5 +608,101 @@ mod tests {
         .unwrap();
         assert_eq!(f.class, Class::Unknown);
         assert!(f.class.is_ours());
+    }
+
+    #[test]
+    fn recovered_network_warning_is_not_the_cause() {
+        // 20261102-193633634: cargo retried a download, then the code failed
+        // to compile. That was reported as an infra fault.
+        let f = classify(&Input {
+            exit: 101,
+            subcommand: "check",
+            lines: &[
+                "warning: spurious network error (3 tries remaining): [16] Error in the HTTP2 framing layer",
+                "error[E0004]: non-exhaustive patterns: `A { .. }` not covered",
+                "error: could not compile `m` (lib) due to 1 previous error",
+            ],
+            compile_failed: true,
+            compile_errors: 1,
+            environment_fault: None,
+            tests_failed: 0,
+            unit_exits: &[1],
+            units_ran: 1,
+        })
+        .unwrap();
+        assert_eq!(f.class, Class::UserCode);
+        assert_eq!(wire(&f, 1, 0).1, "compile error E0004");
+        // A download that really failed is still infra.
+        let f = run(101, "test", &["error: failed to download `cc v1.2.59`"]).unwrap();
+        assert_eq!(f.class, Class::Infra);
+    }
+
+    #[test]
+    fn rustc_probe_failures_from_history() {
+        // 20261029-180437903 and 20261102-200735482 were "no recognized cause".
+        for cause in [
+            "  error: the option `Z` is only accepted on the nightly compiler",
+            "  error: the linker flavor `darwin-lld` is unstable, the `-Z unstable-options` flag must also be passed to use the unstable values",
+        ] {
+            let f = run(
+                101,
+                "build",
+                &[
+                    "error: failed to run `rustc` to learn about target-specific information",
+                    "Caused by:",
+                    "  process didn't exit successfully: `/h/.justrust/bin/shim/a/rustc - --crate-name ___` (exit status: 1)",
+                    "  --- stderr",
+                    cause,
+                ],
+            )
+            .unwrap();
+            assert_eq!(f.class, Class::UserCode, "{cause}");
+            assert_eq!(f.reason, "rustc rejected the build flags");
+        }
+        // rustc failing the probe for no stated flag reason is ours.
+        let f = run(
+            101,
+            "check",
+            &[
+                "error: failed to run `rustc` to learn about target-specific information",
+                "  error: something else broke",
+            ],
+        )
+        .unwrap();
+        assert_eq!(f.class, Class::Toolchain);
+        assert_eq!(f.evidence.as_deref(), Some("error: something else broke"));
+    }
+
+    #[test]
+    fn wire_reasons_are_short_and_carry_no_output() {
+        let f = |class, reason: &str, evidence: Option<&str>| Failure {
+            class,
+            reason: reason.into(),
+            evidence: evidence.map(str::to_owned),
+        };
+        let tests = f(Class::UserCode, "tests failed", None);
+        assert_eq!(wire(&tests, 0, 1).1, "1 test failed");
+        assert_eq!(wire(&tests, 0, 3).1, "3 tests failed");
+        let compile = f(
+            Class::UserCode,
+            "compile error in the code",
+            Some("error[E0308]: mismatched types in /home/me/secret.rs"),
+        );
+        assert_eq!(wire(&compile, 4, 0).1, "compile error E0308 (+3 more)");
+        let plain = f(
+            Class::UserCode,
+            "compile error in the code",
+            Some("error: expected `;`"),
+        );
+        assert_eq!(wire(&plain, 1, 0).1, "compile error");
+        let ice = f(
+            Class::Toolchain,
+            "rustc internal compiler error",
+            Some("error: internal compiler error: /private/path"),
+        );
+        assert_eq!(
+            wire(&ice, 0, 0),
+            (Class::Toolchain, "rustc internal compiler error".into())
+        );
     }
 }

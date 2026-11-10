@@ -750,15 +750,35 @@ fn run_label(s: &str, max: usize) -> String {
 /// `POST {build}/build/runs/<id>/event` (running, done, abandoned) for the
 /// operator dashboard. Fire and forget: a detached curl that never delays
 /// or fails the build, and errors are ignored.
-pub fn report_run_event(run_id: &str, event: &str, exit_code: Option<i32>, wall_s: Option<f64>) {
+pub fn report_run_event(
+    run_id: &str,
+    event: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+    failure: Option<&crate::failure::Wire>,
+) {
     let Ok(c) = creds() else {
         return;
     };
-    let body = run_event_body(event, exit_code, wall_s);
+    let body = run_event_body(event, exit_code, wall_s, failure);
     post_detached(&c, &format!("build/runs/{run_id}/event"), &body);
 }
 
-fn run_event_body(event: &str, exit_code: Option<i32>, wall_s: Option<f64>) -> Value {
+/// Why a failed run failed, for run history: a fixed class and a short
+/// reason made of fixed text, counts and error codes (never output lines).
+fn put_failure(body: &mut Value, failure: Option<&crate::failure::Wire>) {
+    if let Some((class, reason)) = failure {
+        body["failure_class"] = json!(class.as_str());
+        body["failure_reason"] = json!(run_label(reason, 120));
+    }
+}
+
+fn run_event_body(
+    event: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+    failure: Option<&crate::failure::Wire>,
+) -> Value {
     let mut body = json!({ "event": event });
     if event == "running" {
         body["note"] = json!("heartbeat-v1");
@@ -769,6 +789,7 @@ fn run_event_body(event: &str, exit_code: Option<i32>, wall_s: Option<f64>) -> V
     if let Some(w) = wall_s {
         body["wall_s"] = json!((w * 100.0).round() / 100.0);
     }
+    put_failure(&mut body, failure);
     body
 }
 
@@ -850,6 +871,7 @@ fn local_run_body(
     state: &str,
     exit_code: Option<i32>,
     wall_s: Option<f64>,
+    failure: Option<&crate::failure::Wire>,
 ) -> Value {
     let mut body = json!({
         "run_id": run_id,
@@ -880,6 +902,7 @@ fn local_run_body(
     if let Some(w) = wall_s {
         body["wall_s"] = json!((w * 100.0).round() / 100.0);
     }
+    put_failure(&mut body, failure);
     body
 }
 
@@ -892,6 +915,7 @@ pub fn report_local_run(
     state: &str,
     exit_code: Option<i32>,
     wall_s: Option<f64>,
+    failure: Option<&crate::failure::Wire>,
 ) {
     let Ok(c) = creds() else {
         return;
@@ -899,7 +923,7 @@ pub fn report_local_run(
     post_detached(
         &c,
         "build/local/runs",
-        &local_run_body(l, run_id, state, exit_code, wall_s),
+        &local_run_body(l, run_id, state, exit_code, wall_s, failure),
     );
 }
 
@@ -1703,15 +1727,23 @@ mod tests {
 
     #[test]
     fn run_event_heartbeat_marker_only_on_running() {
-        let running = super::run_event_body("running", None, Some(60.123));
+        let running = super::run_event_body("running", None, Some(60.123), None);
         assert_eq!(running["note"], "heartbeat-v1");
         assert_eq!(running["wall_s"], 60.12);
         assert!(running.get("exit_code").is_none());
-        let done = super::run_event_body("done", Some(101), Some(61.0));
+        let done = super::run_event_body("done", Some(101), Some(61.0), None);
         assert_eq!(done["exit_code"], 101);
         assert!(done.get("note").is_none());
+        assert!(done.get("failure_class").is_none());
+        let why = (
+            crate::failure::Class::UserCode,
+            "3 tests\nfailed".to_owned(),
+        );
+        let done = super::run_event_body("done", Some(101), Some(61.0), Some(&why));
+        assert_eq!(done["failure_class"], "user_code");
+        assert_eq!(done["failure_reason"], "3 tests failed");
         assert!(
-            super::run_event_body("abandoned", None, None)
+            super::run_event_body("abandoned", None, None, None)
                 .get("note")
                 .is_none()
         );
@@ -1978,15 +2010,29 @@ mod tests {
             project: Some("proj".into()),
             reason: Some("router: check is faster locally".into()),
         };
-        let b = local_run_body(&l, "20261108-1-2", "done", Some(101), Some(1.234));
+        let why = (
+            crate::failure::Class::Toolchain,
+            "rustc internal compiler error".to_owned(),
+        );
+        let b = local_run_body(
+            &l,
+            "20261108-1-2",
+            "done",
+            Some(101),
+            Some(1.234),
+            Some(&why),
+        );
         assert_eq!(b["state"], "done");
         assert_eq!(b["cmd"], "test -p a");
         assert_eq!(b["project"], "proj");
         assert_eq!(b["reason"], "router: check is faster locally");
         assert_eq!(b["exit_code"], 101);
         assert_eq!(b["wall_s"], 1.23);
-        let b = local_run_body(&l, "x", "running", None, None);
+        assert_eq!(b["failure_class"], "toolchain");
+        assert_eq!(b["failure_reason"], "rustc internal compiler error");
+        let b = local_run_body(&l, "x", "running", None, None, None);
         assert!(b.get("exit_code").is_none());
+        assert!(b.get("failure_class").is_none());
         assert!(
             LocalRunLabels::capture(&[]).is_none(),
             "never reports from tests"

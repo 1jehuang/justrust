@@ -1278,6 +1278,14 @@ impl UnitStats {
 }
 
 impl Summary {
+    /// Class and short reason of a failed run, as reported to run history.
+    pub fn failure_wire(&self) -> Option<crate::failure::Wire> {
+        self.diagnostics
+            .failure
+            .as_ref()
+            .map(|f| crate::failure::wire(f, self.diagnostics.compile_errors, self.tests.failed))
+    }
+
     pub fn index_entry(&self) -> IndexEntry {
         IndexEntry {
             id: self.id.clone(),
