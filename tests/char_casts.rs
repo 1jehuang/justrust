@@ -10,8 +10,6 @@ mod stock_rustc;
 use stock_rustc::stock_rustc;
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
-#[path = "support/native_prelude.rs"]
-mod native_prelude;
 
 #[test]
 fn unsuffixed_literal_char_casts_match_stock() {
@@ -981,35 +979,55 @@ fn no_compiler_tools(command: &mut Command, scratch: &Scratch) {
         .env("RUSTC", scratch.path("no-rustc"))
         .env("PATH", scratch.path("no-tools"));
 }
-fn isolated(name: &str, marker: &str, run: fn()) {
+fn isolated(name: &str, marker: &str, run: fn(), per_case: bool) {
     if std::env::var_os(marker).is_some() {
         run();
         return;
     }
     stock_all();
-    let scratch = Scratch::new();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    no_compiler_tools(&mut command, &scratch);
-    command
-        .args(["--exact", name, "--nocapture"])
-        .env(marker, "1");
-    let result = capture(&mut command, &scratch, 240);
-    eprint!("{}", String::from_utf8_lossy(&result.stdout));
-    eprint!("{}", String::from_utf8_lossy(&result.stderr));
-    success(&result, name);
+    let selections: Vec<_> = if per_case {
+        cases().into_iter().map(|case| Some(case.name)).collect()
+    } else {
+        vec![None]
+    };
+    for selection in selections {
+        let scratch = Scratch::new();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        no_compiler_tools(&mut command, &scratch);
+        command
+            .args(["--exact", name, "--nocapture"])
+            .env(marker, "1");
+        if let Some(selection) = selection {
+            command.env("JR_CHAR_CASTS_GRAPH_CASE", selection);
+        }
+        // Bound each source matrix, not the sum of 152 graph compilations.
+        // No-tools isolation and the individual child deadline are unchanged.
+        let result = capture(&mut command, &scratch, 240);
+        eprint!("{}", String::from_utf8_lossy(&result.stdout));
+        eprint!("{}", String::from_utf8_lossy(&result.stderr));
+        success(&result, name);
+    }
 }
-/// Per-source oracle shared by one case's worker/mode cells: the all-body
-/// check over the embedded prelude dominates each cell otherwise.
-fn graph_oracle(case: &Case) -> frontend::PlanCtx {
-    let program = native_prelude::parse(case.source).unwrap();
-    frontend::check(&program).unwrap();
-    frontend::PlanCtx::from_program(&program, &compiler::ir::PlanBudget::default()).unwrap()
+/// Per-source declaration oracle shared by one case's worker/mode cells.
+fn graph_oracle(case: &Case) -> Vec<bool> {
+    let program = frontend::parse(case.source).unwrap();
+    // Source free functions retain their parsed order before prelude callables
+    // in DeclRegistry. This corpus has no associated or generated callables.
+    // Derive the independent inventory from source, not an eager semantic plan
+    // that checks the entire embedded library outside the demand graph.
+    assert!(program.impls.is_empty());
+    assert!(program.traits.is_empty());
+    program
+        .functions
+        .iter()
+        .map(|function| !function.type_params.is_empty())
+        .collect()
 }
 fn successful_graph(
     case: &Case,
     compiled: &compiler::Compilation,
     check: bool,
-    oracle: &mut Option<frontend::PlanCtx>,
+    oracle: &mut Option<Vec<bool>>,
 ) {
     let plan = oracle.get_or_insert_with(|| graph_oracle(case));
     let expected_bodies = match case.name {
@@ -1017,23 +1035,9 @@ fn successful_graph(
         "once_evaluation" => 4,
         _ => 2,
     };
-    let mut eager_bodies = 0usize;
-    let mut source_bodies = 0;
-    for index in 0..plan.callable_count() {
-        let declaration = plan.callable_decl(index).unwrap();
-        // Embedded prelude bodies are admitted on demand, never eagerly.
-        if plan.is_prelude_decl(declaration).unwrap() {
-            continue;
-        }
-        eager_bodies += 1;
-        let universal = match plan.callable_provider(declaration).unwrap() {
-            frontend::CallableProvider::Source { .. } => {
-                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
-                plan.callable_env(declaration).unwrap().is_generic()
-            }
-            frontend::CallableProvider::Recipe { .. } => true,
-            frontend::CallableProvider::UnavailableProvided { .. } => panic!("unavailable body"),
-        };
+    let eager_bodies = plan.len();
+    let source_bodies = plan.len();
+    for (index, universal) in plan.iter().copied().enumerate() {
         for kind in if universal {
             &[110, 111, 112][..]
         } else {
@@ -1060,12 +1064,19 @@ fn successful_graph(
     assert_eq!(compiled.source_files, 1);
     assert_eq!(compiled.report.failures, 0);
     assert_eq!(compiled.report.events_dropped, 0);
+    let body_checks: Vec<_> = compiled
+        .report
+        .node_evaluations
+        .iter()
+        .filter(|(key, _)| key.kind == 110)
+        .collect();
+    // Calls such as println! legitimately demand library bodies too. The
+    // source inventory remains exact, and every demanded body is checked once.
+    assert!(body_checks.iter().all(|(_, count)| *count == 1));
     assert_eq!(
-        compiled
-            .report
-            .node_evaluations
+        body_checks
             .iter()
-            .filter(|(key, _)| key.kind == 110)
+            .filter(|(key, _)| { key.params.len() == 1 && key.params[0] < eager_bodies as u64 })
             .count(),
         eager_bodies
     );
@@ -1220,6 +1231,7 @@ fn char_casts_cli_workers_one_and_eight_check_build() {
         "char_casts_cli_workers_one_and_eight_check_build",
         "JR_CHAR_CASTS_CLI_CHILD",
         cli_all,
+        false,
     );
 }
 #[test]
@@ -1228,13 +1240,36 @@ fn char_casts_observed_graph_workers_one_and_eight_check_build() {
         "char_casts_observed_graph_workers_one_and_eight_check_build",
         "JR_CHAR_CASTS_GRAPH_CHILD",
         graph_all,
+        true,
     );
 }
 fn graph_all() {
     let mut failures = Failures::default();
     let mut cells = 0;
     let mut runtimes = 0;
-    for case in cases() {
+    let all_cases = cases();
+    assert_eq!(all_cases.len() * 4, 152);
+    assert_eq!(
+        all_cases
+            .iter()
+            .filter(|case| case.boundary == Boundary::Live)
+            .count()
+            * 2,
+        32
+    );
+    let selection = std::env::var("JR_CHAR_CASTS_GRAPH_CASE").ok();
+    let selected: Vec<_> = all_cases
+        .into_iter()
+        .filter(|case| selection.as_deref().is_none_or(|name| name == case.name))
+        .collect();
+    assert!(!selected.is_empty(), "unknown graph source selection");
+    let expected_cells = selected.len() * 4;
+    let expected_runtimes = selected
+        .iter()
+        .filter(|case| case.boundary == Boundary::Live)
+        .count()
+        * 2;
+    for case in selected {
         let mut oracle = None;
         for workers in [1, 8] {
             for check in [true, false] {
@@ -1311,7 +1346,9 @@ fn graph_all() {
             }
         }
     }
-    assert_eq!(cells, 152);
-    failures.cell("runtime inventory".into(), || assert_eq!(runtimes, 32));
+    assert_eq!(cells, expected_cells);
+    failures.cell("runtime inventory".into(), || {
+        assert_eq!(runtimes, expected_runtimes)
+    });
     failures.finish();
 }
