@@ -116,6 +116,23 @@ class SnapshotGitTests(unittest.TestCase):
         with patch.dict(suite.SNAPSHOTS, {"desktop": spec}):
             self.assertNotEqual(suite.snapshot_fingerprint("desktop"), original)
 
+    def test_updater_isolation_repair_is_fingerprinted_without_relaxing_assertions(self):
+        repair_name = "bench/patches/desktop-hint-updater-state.patch"
+        self.assertIn(("jcode-desktop", repair_name), suite.SNAPSHOTS["desktop"]["patches"])
+        repair = (suite.ROOT / repair_name).read_text()
+        self.assertIn("+        let _update_guard = updates::test_lock();", repair)
+        self.assertIn("restart_action_changes_header_width_independently_of_coaching", repair)
+        self.assertIn("+        updates::set(previous);", repair)
+        self.assertIn("+        updates::set_release_status(release);", repair)
+        removed = [line for line in repair.splitlines()
+                   if line.startswith("-") and not line.startswith("---")]
+        self.assertEqual(removed, [], "the repair must not remove existing assertions")
+        original = suite.snapshot_fingerprint("desktop")
+        spec = dict(suite.SNAPSHOTS["desktop"])
+        spec["patches"] = [entry for entry in spec["patches"] if entry[1] != repair_name]
+        with patch.dict(suite.SNAPSHOTS, {"desktop": spec}):
+            self.assertNotEqual(suite.snapshot_fingerprint("desktop"), original)
+
     def test_fixup_content_also_changes_snapshot_fingerprint(self):
         spec = {"repos": {"fixture": (self.source, self.rev)}, "cwd": "fixture", "fixups": []}
         with patch.object(suite, "SNAPSHOTS", {"fixture": spec}):
