@@ -8,8 +8,40 @@
 #[path = "support/stock_rustc.rs"]
 mod stock_rustc;
 use stock_rustc::stock_rustc;
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
+
+#[test]
+fn unsuffixed_literal_char_casts_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "literal-char-casts",
+        &[
+            Case {
+                name: "literal_tokens_and_parentheses",
+                source: r#"fn main(){println!("{} {} {} {}",65 as char,(0x42) as char,0b01000011 as char,0xff as char);}"#,
+                expect: Expect::Run("A B C ÿ\n"),
+            },
+            Case {
+                name: "typed_integer_is_not_reinferred_even_when_unused",
+                source: "fn unused()->char{65i32 as char}fn main(){}",
+                expect: Expect::Invalid("E0604"),
+            },
+            Case {
+                name: "local_integer_is_not_reinferred_even_when_unused",
+                source: "fn unused()->char{let n=65;n as char}fn main(){}",
+                expect: Expect::Invalid("E0604"),
+            },
+            Case {
+                name: "arithmetic_is_not_reinferred_even_when_unused",
+                source: "fn unused()->char{(60+5) as char}fn main(){}",
+                expect: Expect::Invalid("E0604"),
+            },
+        ],
+    );
+}
 
 use justrust_engine::{
     Key,

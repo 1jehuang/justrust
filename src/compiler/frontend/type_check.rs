@@ -10838,10 +10838,16 @@ impl<'a> Checker<'a> {
             }
             return Ok(id);
         }
-        // A char target must not infer an unsuffixed integer operand as u8.
-        // Preserve its independently inferred source type before checking the pair.
+        // A bare unsuffixed literal is a byte when cast to char, as in
+        // `65 as char`. This does not constrain a local or an arithmetic
+        // expression, which retains its independently inferred integer type.
         let value = match target {
             ir::Ty::Int(to) => self.expr_with_expectation(value, Expectation::CastableToInt(to))?,
+            ir::Ty::Char
+                if matches!(value, Expr::Integer(literal) if literal.suffix.is_none()) =>
+            {
+                self.expr_expected(value, Some(&ir::Ty::Int(ir::IntTy::U8)))?
+            }
             ir::Ty::Float(_) | ir::Ty::Char => self.expr(value)?,
             ir::Ty::Bool => {
                 return Err("E0054: cannot cast as `bool`; compare with zero instead".into());
