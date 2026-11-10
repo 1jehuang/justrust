@@ -5979,6 +5979,44 @@ impl FloatValue {
         }
     }
 
+    /// Positive or negative infinity of `ty`.
+    pub fn infinity(ty: FloatTy, negative: bool) -> Self {
+        let magnitude = match ty {
+            FloatTy::F32 => u64::from(f32::INFINITY.to_bits()),
+            FloatTy::F64 => f64::INFINITY.to_bits(),
+        };
+        let sign = if negative { 1u64 << (ty.bits() - 1) } else { 0 };
+        Self {
+            ty,
+            bits: magnitude | sign,
+        }
+    }
+
+    /// Order-preserving ordinal of a non-NaN value, or None for NaN. Both
+    /// zeros share one ordinal, as they compare equal at run time. Ordinals
+    /// below negative infinity and above positive infinity name no value:
+    /// they stand for NaN, which no range pattern matches.
+    pub fn ordinal(self) -> Option<u128> {
+        let sign = 1u128 << (self.ty.bits() - 1);
+        let magnitude = u128::from(self.bits) & (sign - 1);
+        let infinity = u128::from(Self::infinity(self.ty, false).bits);
+        if magnitude > infinity {
+            return None;
+        }
+        Some(if u128::from(self.bits) & sign != 0 {
+            sign - 1 - magnitude
+        } else {
+            sign - 1 + magnitude
+        })
+    }
+
+    /// Largest ordinal of the coverage domain of `ty`: one past positive
+    /// infinity, the cell that stands for NaN.
+    pub fn ordinal_limit(ty: FloatTy) -> u128 {
+        let sign = 1u128 << (ty.bits() - 1);
+        sign + u128::from(Self::infinity(ty, false).bits)
+    }
+
     pub fn f32(value: f32) -> Self {
         Self {
             ty: FloatTy::F32,
@@ -10866,6 +10904,13 @@ pub enum PatternTestKind {
     EnumVariant {
         ty: EnumTy,
         variant: usize,
+    /// `lo <= x` and `x <= hi` (`x < hi` when `exclusive`) by IEEE comparison,
+    /// so NaN never matches. An absent source bound is the matching infinity.
+    FloatRange {
+        lo: FloatValue,
+        hi: FloatValue,
+        exclusive: bool,
+    },
     },
 }
 
@@ -10901,6 +10946,23 @@ impl PatternTestKind {
             Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => return Ok(None),
         };
         Ok(Some(interval))
+            Self::FloatRange { lo, hi, exclusive } => {
+                lo.validate()?;
+                hi.validate()?;
+                let (Some(low), Some(high)) = (lo.ordinal(), hi.ordinal()) else {
+                    return Err("float range pattern bound is NaN".into());
+                };
+                let high = if *exclusive {
+                    high.checked_sub(1)
+                        .ok_or("float range pattern bounds are reversed")?
+                } else {
+                    high
+                };
+                if lo.ty != hi.ty || low > high {
+                    return Err("float range pattern bounds are mistyped or reversed".into());
+                }
+                (low, high)
+            }
     }
     /// Scalar domain type tested by this kind, when scalar.
     pub fn scalar_ty(&self) -> Option<Ty> {
@@ -10910,6 +10972,7 @@ impl PatternTestKind {
             Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => None,
         }
     }
+            Self::FloatRange { lo, .. } => Some(Ty::Float(lo.ty)),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12496,6 +12559,7 @@ impl CheckedFunction {
             | Ty::Char
             | Ty::Unit
             | Ty::Struct(_)
+            | Ty::Float(_)
             | Ty::Enum(_)
             | Ty::Ref { .. } => true,
             Ty::Tuple(fields) => !fields.is_empty(),
@@ -12537,7 +12601,8 @@ impl CheckedFunction {
                 PatternTestKind::Int(_)
                 | PatternTestKind::Char(_)
                 | PatternTestKind::IntRange { .. }
-                | PatternTestKind::CharRange { .. } => {
+                | PatternTestKind::CharRange { .. }
+                | PatternTestKind::FloatRange { .. } => {
                     test.kind.scalar_interval()?;
                     test.kind.scalar_ty().as_ref() == Some(&actual)
                 }

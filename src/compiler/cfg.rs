@@ -4420,7 +4420,8 @@ impl Lowerer<'_> {
                     | ir::PatternTestKind::Int(_)
                     | ir::PatternTestKind::Char(_) => 1,
                     ir::PatternTestKind::IntRange { .. }
-                    | ir::PatternTestKind::CharRange { .. } => 2,
+                    | ir::PatternTestKind::CharRange { .. }
+                    | ir::PatternTestKind::FloatRange { .. } => 2,
                     ir::PatternTestKind::EnumVariant { .. } => 0,
                     ir::PatternTestKind::Str(_) => {
                         // The literal's `&'static str` carrier, then its verdict.
@@ -4461,6 +4462,18 @@ impl Lowerer<'_> {
                     ir::PatternTestKind::CharRange { lo, hi } => [
                         Some((BinaryOp::Ge, Constant::Char(*lo))),
                         Some((BinaryOp::Le, Constant::Char(*hi))),
+                    ],
+                    // IEEE comparisons: both are false for NaN.
+                    ir::PatternTestKind::FloatRange { lo, hi, exclusive } => [
+                        Some((BinaryOp::Ge, Constant::Float(*lo))),
+                        Some((
+                            if *exclusive {
+                                BinaryOp::Lt
+                            } else {
+                                BinaryOp::Le
+                            },
+                            Constant::Float(*hi),
+                        )),
                     ],
                     ir::PatternTestKind::Str(text) => {
                         let literal = self.scopes.last().unwrap()[scalar];

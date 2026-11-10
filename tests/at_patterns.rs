@@ -186,6 +186,88 @@ fn main() {
                 source: r#"fn main() { let v = [1, 2, 3]; if let [a, rest @ ..] = &v[..] { let n: i32 = rest; println!("{a} {n}"); } }"#,
                 expect: Expect::Invalid("E0308"),
             },
+            // Float literal and range patterns: IEEE comparison, NaN never matches.
+            Case {
+                name: "float_range_in_enum_payload",
+                source: r#"enum E { Num(f64), Other }
+fn main() { let m = Some(E::Num(2.0)); if let Some(E::Num(n @ 1.0..=5.0)) = m { println!("in range {n}"); } let _ = E::Other; }"#,
+                expect: Expect::Run("in range 2\n"),
+            },
+            Case {
+                name: "float_ranges_half_open_negative_nan_infinity",
+                source: r#"fn g(x: f64) -> &'static str { match x { ..0.0 => "neg", 0.0 => "zero", 0.0..1.0 => "frac", 1.0..=5.0 => "low", n if n != n => "nan", _ => "high" } }
+fn s(x: f32) -> u8 { match x { -1.5..=-0.5 => 1, -0.5..0.5f32 => 2, 2.5e1.. => 3, _ => 0 } }
+fn main() {
+    let z = 0.0f64; let nan = z / z; let inf = 1.0 / z;
+    for x in [-3.0, -0.0, 0.0, 0.5, 1.0, 5.0, 5.000001, nan, inf, -inf] { print!("{} ", g(x)); }
+    println!();
+    let zf = 0.0f32; let nanf = zf / zf; let inff = 1.0f32 / zf;
+    for x in [-1.5f32, -1.0, -0.5, 0.49, 0.5, 25.0, 24.9, nanf, inff] { print!("{} ", s(x)); }
+    println!();
+    let pair = (1.5, 2);
+    match pair { (0.0..=1.0, _) => println!("a"), (lo @ 1.0..2.0, 2) => println!("b {lo}"), _ => println!("c") }
+    let r = match 3.25f64 { v @ (..=1.0) => v, v @ 3.0..=4.0 => v * 2.0, _ => 0.0 };
+    println!("{r}");
+}"#,
+                expect: Expect::Run(
+                    "neg zero zero frac low low high nan high neg \n1 1 1 2 0 3 0 0 3 \nb 1.5\n6.5\n",
+                ),
+            },
+            Case {
+                name: "float_ranges_overlap_and_signed_zero",
+                source: r#"fn main() { let x = 2.5; match x { 0.0..=1.0 => println!("a"), 1.0..=2.0 => println!("b"), 0.0..=9.0 => println!("c"), _ => println!("d") } let y = -0.0f32; match y { 0.0 => println!("zero"), _ => println!("other") } }"#,
+                expect: Expect::Run("c\nzero\n"),
+            },
+            Case {
+                name: "float_range_inverted",
+                source: r#"fn main() { match 2.0 { 5.0..=1.0 => println!("a"), _ => println!("b") } }"#,
+                expect: Expect::Invalid("E0030"),
+            },
+            Case {
+                name: "float_range_empty_exclusive",
+                source: r#"fn main() { match 2.0 { 1.0..1.0 => println!("a"), _ => println!("b") } }"#,
+                expect: Expect::Invalid("E0579"),
+            },
+            Case {
+                name: "float_range_mixed_integer_bound",
+                source: r#"fn main() { match 2.0 { 1..=5.0 => println!("a"), _ => println!("b") } }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "float_ranges_never_cover_nan",
+                source: r#"fn main() { match 2.0 { ..0.0 => println!("a"), 0.0.. => println!("b") } }"#,
+                expect: Expect::Invalid("E0004"),
+            },
+            Case {
+                name: "float_range_width_mismatch",
+                source: r#"fn main() { let x = 2.0f32; match x { 1.0f64..=5.0 => println!("a"), _ => println!("b") } }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            // Slice exhaustiveness that depends on refutable elements.
+            Case {
+                name: "slice_exhaustive_through_elements",
+                source: r#"fn kind(v: &[bool]) -> u8 { match v { [] => 0, [true, ..] => 1, [false, ..] => 2 } }
+fn opt(v: &[Option<i32>]) -> i32 { match v { [Some(x), ..] => *x, [None, ..] => -1, [] => 0 } }
+fn main() { println!("{} {} {}", kind(&[]), kind(&[true]), kind(&[false, true])); println!("{} {} {}", opt(&[Some(4)]), opt(&[None]), opt(&[])); }"#,
+                expect: Expect::Run("0 1 2\n4 -1 0\n"),
+            },
+            Case {
+                name: "slice_exhaustive_through_both_ends",
+                source: r#"fn ends(v: &[Option<u8>]) -> u8 { match v { [] => 0, [Some(a)] => *a, [None] => 1, [Some(a), .., Some(b)] => a + b, [None, .., _] => 2, [_, .., None] => 3 } }
+fn main() { println!("{} {} {} {} {} {}", ends(&[]), ends(&[Some(9)]), ends(&[None]), ends(&[Some(1), None, Some(2)]), ends(&[None, Some(1)]), ends(&[Some(1), None])); }"#,
+                expect: Expect::Run("0 9 1 3 2 3\n"),
+            },
+            Case {
+                name: "slice_elements_leave_a_length_uncovered",
+                source: r#"fn kind(v: &[bool]) -> u8 { match v { [] => 0, [true, ..] => 1, [false] => 2 } }
+fn main() { println!("{}", kind(&[])); }"#,
+                expect: Expect::Invalid("E0004"),
+            },
+            Case {
+                name: "subslice_ref_modifier_through_reference",
+                source: r#"fn main() { let v = vec![1, 2, 3]; if let [a, ref rest @ ..] = &v[..] { println!("{a} {}", rest.len()); } }"#,
+                expect: Expect::Invalid("cannot explicitly borrow"),
+            },
         ],
     );
 }

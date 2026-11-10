@@ -533,7 +533,8 @@ fn check_decision(
             }
             kind @ (ir::PatternTestKind::Char(_)
             | ir::PatternTestKind::IntRange { .. }
-            | ir::PatternTestKind::CharRange { .. }) => {
+            | ir::PatternTestKind::CharRange { .. }
+            | ir::PatternTestKind::FloatRange { .. }) => {
                 kind.scalar_interval().unwrap().unwrap();
                 assert_eq!(Some(projected), kind.scalar_ty());
             }

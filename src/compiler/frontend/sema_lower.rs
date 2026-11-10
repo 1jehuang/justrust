@@ -773,6 +773,7 @@ impl<'a> Lower<'a> {
                         h::HirLit::Int(literal.magnitude, literal.suffix)
                     }
                     Some(RangeBound::IntLimit { ty, .. }) => h::HirLit::Int(0, Some(*ty)),
+                    Some(RangeBound::Float { literal, .. }) => h::HirLit::Float(literal.suffix),
                     None => return un("empty range pattern"),
                 })
             }

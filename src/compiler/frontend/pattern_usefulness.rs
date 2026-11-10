@@ -316,6 +316,7 @@ impl<'facts> CoverageMatrix<'facts> {
                 | PatternTestKind::IntRange { .. }
                 | PatternTestKind::CharRange { .. }
                     if source.kind.scalar_ty().as_ref() == Some(&actual) =>
+                | PatternTestKind::FloatRange { .. }
                 {
                     source.kind.scalar_interval()?;
                 }
@@ -542,6 +543,9 @@ impl<'facts> CoverageMatrix<'facts> {
                     Ty::Int(ty) => (ty.mask(), None),
                     Ty::Char => (0x10ffff, Some((0xd800u128, 0xdfffu128))),
                     _ => return Err("coverage scalar domain invariant".into()),
+                    // The cells below negative infinity and above positive
+                    // infinity stand for NaN, which no range covers.
+                    Ty::Float(ty) => (ir::FloatValue::ordinal_limit(ty), None),
                 };
                 let mut starts = temporary(&self.expansion)?;
                 push(&mut starts, 0)?;

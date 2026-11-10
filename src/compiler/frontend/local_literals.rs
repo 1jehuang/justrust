@@ -2535,6 +2535,19 @@ impl<'s> Solver<'_, '_, 's> {
             }
             _ => Ok(()),
         }
+            // A float endpoint fixes the matched value to a float type.
+            Pattern::Range { lo, hi, .. } => {
+                for bound in [lo, hi].into_iter().flatten() {
+                    if let super::RangeBound::Float { literal, .. } = bound {
+                        let t = self.node(match literal.suffix {
+                            Some(ty) => Domain::Fixed(ir::Ty::Float(ty)),
+                            None => Domain::Float,
+                        })?;
+                        self.unify(self.peel_refs(term), t)?;
+                    }
+                }
+                Ok(())
+            }
     }
     fn pattern_referent(&self, mut term: Term) -> (Term, Option<ir::BorrowKind>) {
         let mut mode = None;

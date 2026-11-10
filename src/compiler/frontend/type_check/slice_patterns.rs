@@ -419,6 +419,86 @@ impl Checker<'_> {
         result
     }
 
+    /// Exact coverage of the unguarded arms, one length at a time. A slice of
+    /// length `n` is covered like an `n`-tuple of its element references, so
+    /// each length reuses the ordinary coverage matrix. Lengths above the
+    /// widest written prefix plus suffix all behave alike: only `..` arms
+    /// apply, and their front and back elements never meet.
+    /// `None` means the element type has no coverage domain.
+    fn slice_arms_exhaustive(
+        &self,
+        arms: &[BorrowedMatchArm<'_>],
+        shapes: &[Option<ArmShape>],
+        element: &ir::Ty,
+        known_len: Option<usize>,
+    ) -> Result<Option<bool>, String> {
+        let mut front = 0;
+        let mut back = 0;
+        for shape in shapes.iter().flatten() {
+            front = front.max(shape.front);
+            back = back.max(shape.back);
+        }
+        let widest = front + back;
+        if widest > 32 {
+            return Ok(None);
+        }
+        let lengths = match known_len {
+            Some(len) => len..=len,
+            None => 0..=widest + 1,
+        };
+        let field = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(element.clone()),
+        };
+        for len in lengths {
+            self.signatures
+                .plan()?
+                .budget
+                .charge_work((arms.len() + 1) * (len + 1))?;
+            let mut rows = Vec::new();
+            for (arm, shape) in arms.iter().zip(shapes) {
+                if arm.guard.is_some() {
+                    continue;
+                }
+                let mut row = vec![Pattern::Wildcard; len];
+                if let (Some(shape), Some(pattern)) = (shape, arm.pattern) {
+                    let min = shape.front + shape.back;
+                    if (shape.variable && len < min) || (!shape.variable && len != min) {
+                        continue;
+                    }
+                    let (head, tail) = elements(pattern);
+                    row[..head.len()].clone_from_slice(head);
+                    row[len - tail.len()..].clone_from_slice(tail);
+                }
+                rows.push(row);
+            }
+            if len == 0 {
+                if rows.is_empty() {
+                    return Ok(Some(false));
+                }
+                continue;
+            }
+            let domain = ir::Ty::Tuple(vec![field.clone(); len].into());
+            let Some(mut matrix) = super::super::pattern_usefulness::CoverageMatrix::new(
+                domain.clone(),
+                self.facts(),
+                self.signatures.plan()?.budget.clone(),
+                self.names()?.budget().clone(),
+            )?
+            else {
+                return Ok(None);
+            };
+            for row in rows {
+                let plan = self.collect_pattern(&Pattern::Tuple(row), &domain)?;
+                plan.insert_coverage(&mut matrix)?;
+            }
+            if !matrix.exhaustive()? {
+                return Ok(Some(false));
+            }
+        }
+        Ok(Some(true))
+    }
+
     fn lower_slice_match_inner(
         &mut self,
         mut scrutinee: ir::ExprId,
@@ -440,10 +520,11 @@ impl Checker<'_> {
             scrutinee = self.coerce_shared_array_to_slice(scrutinee, &target)?;
             source = self.flow(scrutinee);
         }
-        let (kind, _) = source
+        let (kind, element) = source
             .ty
             .slice_ref_element()
             .ok_or("contract: slice pattern scrutinee")?;
+        let element = element.clone();
         // Matching a `&mut [T]` place inspects it in place: the carrier is
         // reborrowed for the match, never moved out of its local.
         if kind == ir::BorrowKind::Mut
@@ -614,13 +695,34 @@ impl Checker<'_> {
             statements.push(ir::TypedStmt::Expr(statement));
         }
         if !exhausted {
-            // Length coverage is exact. Coverage that depends on element
-            // tests is not analysed, and must not be reported as invalid.
-            return Err(if refutable {
-                "unsupported: slice pattern exhaustiveness through refutable element patterns; add a catch-all arm".into()
+            // Length coverage alone is not enough. Arms with refutable
+            // elements are analysed per length by the coverage matrix.
+            let covered = if refutable {
+                self.slice_arms_exhaustive(arms, &shapes, &element, known_len)?
             } else {
-                format!("E0004: non-exhaustive match on {:?}", source.ty)
-            });
+                Some(false)
+            };
+            match covered {
+                Some(true) => {
+                    // Every value is taken by an arm above, so this is never
+                    // reached. It gives the block its diverging end.
+                    let end = self.slice_wrap(
+                        ir::ExprKind::Panic(Box::new(ir::PanicMessage {
+                            message: "internal error: entered unreachable code".into(),
+                            location: String::new(),
+                        })),
+                        &Flow::never(),
+                    )?;
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                    statements.push(ir::TypedStmt::Expr(end));
+                }
+                Some(false) => {
+                    return Err(format!("E0004: non-exhaustive match on {:?}", source.ty));
+                }
+                None => {
+                    return Err("unsupported: slice pattern exhaustiveness over this element type; add a catch-all arm".into());
+                }
+            }
         }
         let frame = self.loops.pop().ok_or("contract: slice match frame")?;
         Ok((

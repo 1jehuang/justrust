@@ -3321,6 +3321,11 @@ impl<'a> Checker<'a> {
                     return Err(Self::array_pattern_unsupported(
                         "empty array patterns are unsupported",
                     ));
+                if fields.iter().any(super::is_subslice_binding) {
+                    return Err(Self::array_pattern_unsupported(
+                        "subslice bindings in a by-value array pattern are unsupported; match on a reference to the array",
+                    ));
+                }
                 }
                 if fields.len() != *len {
                     return Err("array pattern arity mismatch".into());
@@ -14338,6 +14343,9 @@ fn range_pattern_hint(bound: Option<&super::RangeBound>) -> ir::Ty {
 pub(super) fn range_pattern_test(
     lo: Option<&super::RangeBound>,
     hi: Option<&super::RangeBound>,
+        Some(super::RangeBound::Float { literal, .. }) => {
+            ir::Ty::Float(literal.suffix.unwrap_or(ir::FloatTy::F64))
+        }
     inclusive: bool,
     ty: &ir::Ty,
 ) -> Result<ir::PatternTestKind, String> {
@@ -14361,6 +14369,9 @@ pub(super) fn range_pattern_test(
                         value
                     } else {
                         // Step back over the surrogate gap so the bound stays a scalar.
+                RangeBound::Float { .. } => Err(
+                    "E0308: mismatched types: float range bound in a character pattern".to_string(),
+                ),
                         match value {
                             0 => return Err("lower range bound must be less than upper".into()),
                             0xe000 => 0xd7ff,
@@ -14413,6 +14424,9 @@ pub(super) fn range_pattern_test(
             let low = match lo {
                 Some(bound) => value(bound)?,
                 None => ir::IntValue {
+                RangeBound::Float { .. } => Err(
+                    "E0308: mismatched types: float range bound in an integer pattern".to_string(),
+                ),
                     ty: *int,
                     bits: min,
                 },
@@ -14451,6 +14465,47 @@ pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, Arc<ir
     let ir::Ty::Ref { kind, referent } = ty else {
         return None;
     };
+        ir::Ty::Float(float) => {
+            let value = |bound: &RangeBound| match bound {
+                RangeBound::Float { literal, negative } => {
+                    if literal.suffix.is_some_and(|suffix| suffix != *float) {
+                        return Err("E0308: mismatched types: float range bound type".to_string());
+                    }
+                    literal.value(*float, *negative)
+                }
+                RangeBound::Int { .. } | RangeBound::IntLimit { .. } => Err(
+                    "E0308: mismatched types: integer range bound in a float pattern".to_string(),
+                ),
+                RangeBound::Char(_) => Err(
+                    "E0308: mismatched types: character range bound in a float pattern".to_string(),
+                ),
+            };
+            // An absent bound is the infinity on that side: every value that
+            // is not NaN compares inside it.
+            let low = match lo {
+                Some(bound) => value(bound)?,
+                None => ir::FloatValue::infinity(*float, true),
+            };
+            let high = match hi {
+                Some(bound) => value(bound)?,
+                None => ir::FloatValue::infinity(*float, false),
+            };
+            let exclusive = hi.is_some() && !inclusive;
+            let (Some(low_ordinal), Some(high_ordinal)) = (low.ordinal(), high.ordinal()) else {
+                return Err("contract: float range pattern bound is NaN".into());
+            };
+            if exclusive && low_ordinal >= high_ordinal {
+                return Err("E0579: lower range bound must be less than upper".into());
+            }
+            if low_ordinal > high_ordinal {
+                return Err("E0030: lower range bound must be less than or equal to upper".into());
+            }
+            Ok(ir::PatternTestKind::FloatRange {
+                lo: low,
+                hi: high,
+                exclusive,
+            })
+        }
     let ir::Ty::Dyn(object) = referent.as_ref() else {
         return None;
     };
