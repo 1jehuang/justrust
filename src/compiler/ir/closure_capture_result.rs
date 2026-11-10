@@ -17,6 +17,7 @@ pub(in crate::compiler) struct CaptureResultNode {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(in crate::compiler) enum CaptureResultKind {
     InputValue(ClosureInputValueOrigin),
+    ArgumentBorrow(ClosureArgumentOrigin),
     Call {
         target: Callee,
         arguments: Arc<[ExprId]>,

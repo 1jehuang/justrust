@@ -406,6 +406,44 @@ impl ValidatedTraitWorld {
             })?;
         let mut output = Vec::new();
         let ty = match &node.kind {
+            ir::CaptureResultKind::ArgumentBorrow(origin) => {
+                let ty = charged(
+                    &self.budget,
+                    origin.projected_result(closure.params(), &self.budget),
+                )?;
+                let root = ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([])),
+                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+                };
+                if *location != root || origin.borrow != expression {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "argument borrow result changed exact source channel",
+                    ));
+                }
+                retain::<ir::CarrierStep>(&self.budget, 1)?;
+                let input = ir::InputCarrier {
+                    param: 1,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(Arc::from([ir::CarrierStep::Field(origin.argument)])),
+                        channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                            depth: origin.depth,
+                        }),
+                    },
+                };
+                retain::<Ty>(&self.budget, closure.params().len())?;
+                let tuple_ty = Ty::Tuple(closure.params().into());
+                if !charged(&self.budget, ir::carrier_locations(&tuple_ty, &self.budget))?
+                    .contains(&input.location)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "argument borrow is outside actual input carrier domain",
+                    ));
+                }
+                push(&self.budget, &mut output, input)?;
+                ty
+            }
             ir::CaptureResultKind::InputValue(origin) => {
                 let ty = charged(
                     &self.budget,

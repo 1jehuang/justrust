@@ -298,6 +298,17 @@ impl ClosureResultReceipt {
         let origin = self
             .argument_origin()
             .ok_or("missing projected input origin")?;
+        origin.projected_result(params, budget)
+    }
+}
+
+impl ClosureArgumentOrigin {
+    pub(in crate::compiler) fn projected_result(
+        &self,
+        params: &[Ty],
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        let origin = self;
         let mut ty = params
             .get(origin.argument)
             .ok_or("foreign projected input argument")?
@@ -339,6 +350,9 @@ impl ClosureResultReceipt {
             referent: Arc::new(ty),
         })
     }
+}
+
+impl ClosureResultReceipt {
     pub(in crate::compiler) fn argument_callee(
         &self,
         budget: &PlanBudget,

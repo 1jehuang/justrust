@@ -210,5 +210,6 @@ fn source_storage(
         ir::CaptureResultKind::Call { .. }
         | ir::CaptureResultKind::ArrayToSlice { .. }
         | ir::CaptureResultKind::InputValue(_) => Ok(None),
+        ir::CaptureResultKind::ArgumentBorrow(_) => Ok(None),
     }
 }

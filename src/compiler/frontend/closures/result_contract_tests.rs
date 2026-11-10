@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn aggregate_argument_borrow_authenticates_original_place_for_all_modes() {
+    let (plan, checked, _) = fixture_graph_source(
+        "struct Item{name:String,count:i32}fn inspect(items:Vec<&Item>){let rows:Vec<(&str,&i32)>=items.iter().map(|i|(i.name.as_str(),&i.count)).collect();}fn main(){}",
+    );
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    let borrows: Vec<_> = receipt
+        .capture_witness()
+        .unwrap()
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            if let ir::CaptureResultKind::ArgumentBorrow(origin) = &node.kind {
+                Some((node.expression, origin))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(borrows.len(), 2);
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract().results.len(), 2);
+        for row in view.contract().results.iter() {
+            assert_eq!(row.sources.len(), 1);
+            assert_eq!(row.sources[0].param, 1);
+            assert_eq!(
+                row.sources[0].location.path.0.as_ref(),
+                &[ir::CarrierStep::Field(0)]
+            );
+            assert_eq!(
+                row.sources[0].location.channel,
+                ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+            );
+        }
+        for (expression, _) in &borrows {
+            for mutation in 0..5 {
+                let mut forged = body.as_ref().clone();
+                let ir::ExprKind::Borrow { kind, place, .. } = &mut forged.exprs[expression.0].kind
+                else {
+                    panic!("original shared argument borrow")
+                };
+                match mutation {
+                    0 => *kind = ir::BorrowKind::Mut,
+                    1 => place.local = forged.params[0],
+                    2 => place.projection.clear(),
+                    3 => place.projection.push(ir::Projection::Field(0)),
+                    4 => forged.locals[place.local.0].ty = ir::Ty::Bool,
+                    _ => unreachable!(),
+                }
+                assert!(validate_source(receipt, &forged, &facts).is_err());
+            }
+        }
+    }
+}
+
+#[test]
 fn argument_call_aggregate_recipe_preserves_original_input_and_call() {
     let (plan, checked, _) = fixture_graph_source(
         "fn inspect(){let f=|s:&str|pair(s);}fn pair(s:&str)->(&str,&str){(s,s)}fn main(){}",
@@ -680,7 +747,16 @@ fn shared_argument_result_replays_exact_tuple_channel_for_all_modes() {
     let (plan, checked, _) = fixture_graph_source(ARGUMENT_STR_SOURCE);
     let world = plan.trait_world().unwrap();
     let receipt = checked.ty.result_receipt().unwrap();
-    let input = receipt.argument_origin().unwrap();
+    let input = receipt
+        .capture_witness()
+        .unwrap()
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            ir::CaptureResultKind::ArgumentBorrow(origin) => Some(origin),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(input.argument, 0);
     assert_eq!(
         input.depth, 1,

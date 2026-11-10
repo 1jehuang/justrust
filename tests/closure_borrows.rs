@@ -4,6 +4,34 @@
 mod oracle;
 use oracle::{Case, Expect};
 #[test]
+fn argument_borrow_aggregate_results() {
+    oracle::check(
+        "argument_borrow_aggregate_results",
+        &[
+            Case {
+                name: "noncopy_argument_field_call_and_tuple",
+                source: "struct Item{name:String,count:i32}fn main(){let items=vec![Item{name:String::from(\"apple\"),count:7}];let mut rows=items.iter().map(|i|(i.name.as_str(),&i.count));let row=rows.next().unwrap();assert_eq!(row.0,\"apple\");assert_eq!(*row.1,7);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "nested_shared_argument_borrow_results",
+                source: "struct Item{name:String,count:i32}fn main(){let item=Item{name:String::from(\"pear\"),count:9};let items=vec![&item];let mut rows=items.iter().map(|i|(i.name.as_str(),&i.count));let row=rows.next().unwrap();assert_eq!(row.0,\"pear\");assert_eq!(*row.1,9);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "unused_owned_argument_borrow_escape",
+                source: "struct Item{name:String}fn unused(){let items=vec![Item{name:String::from(\"apple\")}];let mut rows=items.into_iter().map(|i|(i.name.as_str(),i.name.as_str()));let row=rows.next().unwrap();}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_mutation_while_argument_result_live",
+                source: "struct Item{name:String}fn unused(){let mut items=vec![Item{name:String::from(\"apple\")}];let mut rows=items.iter().map(|i|(i.name.as_str(),i.name.as_str()));let row=rows.next().unwrap();items.clear();println!(\"{}\",row.0);}fn main(){}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
+#[test]
 fn borrowed_capture_environments() {
     oracle::check(
         "closure_borrows",

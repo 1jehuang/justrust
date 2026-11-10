@@ -328,16 +328,48 @@ fn trace(
                     return Err("capture result borrow names a foreign source carrier".into());
                 }
                 if argument_local(prefix, place.local) {
-                    result_contract::argument_borrow_origin(
-                        &checker.exprs,
-                        &checker.locals,
-                        prefix,
-                        &[],
+                    let (declaration, borrow, original, argument, depth) =
+                        result_contract::argument_borrow_origin(
+                            &checker.exprs,
+                            &checker.locals,
+                            prefix,
+                            &[],
+                            tuple,
+                            expression,
+                            facts,
+                        )?;
+                    if declaration.is_some() || borrow != expression {
+                        return Err("aggregate argument borrow changed source occurrence".into());
+                    }
+                    let origin = ir::ClosureArgumentOrigin {
+                        argument,
                         tuple,
-                        expression,
-                        facts,
-                    )?;
-                    return Err("unsupported: aggregate closure call result requires an original Copy parameter carrier value".into());
+                        borrow,
+                        local: original.local,
+                        place: original,
+                        depth,
+                    };
+                    let Some(ir::Ty::Tuple(parameters)) =
+                        checker.locals.get(tuple.0).map(|local| &local.ty)
+                    else {
+                        return Err("aggregate argument borrow lost original tuple".into());
+                    };
+                    if checker.locals.get(origin.local.0).map(|local| &local.ty)
+                        != parameters.get(origin.argument)
+                        || origin.projected_result(parameters, budget)? != expr.ty
+                    {
+                        return Err("aggregate argument borrow changed projected type".into());
+                    }
+                    budget.charge_work(nodes.len())?;
+                    if !nodes.iter().any(|node| node.expression == expression) {
+                        budget.retain_bytes(std::mem::size_of::<ir::CaptureResultNode>())?;
+                        nodes.push(ir::CaptureResultNode {
+                            expression,
+                            kind: ir::CaptureResultKind::ArgumentBorrow(origin),
+                        });
+                    }
+                    active.remove(&(expression, location.clone()));
+                    return Ok(());
                 }
                 let capture = projections
                     .iter()
@@ -501,6 +533,34 @@ pub(super) fn validate_source(
             .get(node.expression.0)
             .ok_or("capture result lost original expression occurrence")?;
         match (&node.kind, &expr.kind) {
+            (ir::CaptureResultKind::ArgumentBorrow(origin), _) => {
+                let (declaration, borrow, place, argument, depth) =
+                    result_contract::argument_borrow_origin(
+                        &source.exprs,
+                        &source.locals,
+                        &source.body.statements,
+                        &[],
+                        source.params[1],
+                        node.expression,
+                        facts,
+                    )?;
+                if declaration.is_some()
+                    || borrow != node.expression
+                    || origin.borrow != borrow
+                    || origin.place != place
+                    || origin.local != place.local
+                    || origin.argument != argument
+                    || origin.depth != depth
+                    || origin.tuple != source.params[1]
+                    || source.locals.get(origin.local.0).map(|local| &local.ty)
+                        != closure.params().get(origin.argument)
+                    || origin.projected_result(closure.params(), budget)? != expr.ty
+                {
+                    return Err(
+                        "aggregate result changed its original argument borrow occurrence".into(),
+                    );
+                }
+            }
             (ir::CaptureResultKind::InputValue(origin), _) => {
                 let replayed = input_value_result::value_origin(
                     &source.exprs,
