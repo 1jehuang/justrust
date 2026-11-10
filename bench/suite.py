@@ -1505,6 +1505,11 @@ def cmd_preflight(_args) -> None:
 
 def cmd_run(args) -> None:
     global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES, MINIZ_OPT_LEVEL, WORK
+    if getattr(args, "stop_on_invalid", False):
+        if args.synth is None:
+            sys.exit("bench: --stop-on-invalid requires a synthetic run")
+        if getattr(args, "resume", False):
+            sys.exit("bench: --stop-on-invalid cannot resume invalid or noisy history")
     TOOLCHAIN = args.toolchain
     RUSTC_THREADS = getattr(args, "rustc_threads", None)
     WORKSPACE_THREADS = getattr(args, "workspace_threads", None)
@@ -1626,6 +1631,8 @@ def cmd_run_synth(args, identity=None) -> None:
     info = env_info()
     before_identity = identity.verify_files() if identity is not None else None
     options = {"identity": identity} if identity is not None else {}
+    if getattr(args, "stop_on_invalid", False):
+        options["stop_on_invalid"] = True
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
               "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=synthetic_partial_path(args, identity), resume=args.resume, **options)}
     if identity is not None:
@@ -1643,6 +1650,10 @@ def cmd_run_synth(args, identity=None) -> None:
     print(synth_run.table(result["synth"]))
     print(f"\nsaved {out}")
     upload_result(out)
+
+    if getattr(args, "stop_on_invalid", False) and result["synth"].get("stopped_early"):
+        print(f"bench: synthetic gate stopped: {result['synth']['stopped_early']}", file=sys.stderr)
+        sys.exit(2)
 
 
 def cmd_show(args) -> None:
@@ -1842,6 +1853,8 @@ def main() -> None:
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
     r.add_argument("--resume", action="store_true",
                    help="synthetic: keep the points of an interrupted run of the same seed")
+    r.add_argument("--stop-on-invalid", action="store_true",
+                   help="synthetic: save evidence and exit nonzero after the first failed or noisy point; no resume")
     r.add_argument("--toolchain-identity", type=Path, metavar="PRIVATE_JSON",
                    help="require declared prefix hashes and actual local synthetic invocation identity")
     r.add_argument("--toolchain", default="system", metavar="SPEC",

@@ -79,6 +79,13 @@ original hint assertions and default test threading preserved.
 For automation, synthetic `compare --require-valid` exits nonzero for incomplete,
 noisy, failed, or mismatched results. Ordinary `compare` retains its human-report
 exit behavior, so a printed blocked comparison alone is not an acceptance gate.
+For bounded automation, use `run --synth 1 -n 1 --stop-on-invalid`: after the
+first completed point with measurement errors or noisy samples, the runner
+restores sources, saves and uploads the original evidence, and exits nonzero.
+The requested point count remains intact, so a partial run cannot pass strict
+comparison. This opt-in mode cannot resume historical points and does not
+retry, discard samples, or relax noise thresholds. Default runs continue collecting
+diagnostic coverage. A completed run still needs `compare --require-valid`.
 These repaired workloads cannot be compared with the
 earlier failing fixtures as a speed claim.
 
