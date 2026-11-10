@@ -351,6 +351,20 @@ impl Checker<'_> {
                 body_substitution: None,
                 body,
             };
+            let checked = if child.parent_local_nominals.borrow().is_empty() {
+                checked
+            } else {
+                super::nominal_remint::body(
+                    &child,
+                    plan,
+                    child
+                        .facts()
+                        .validated()
+                        .ok_or("closure source remint lacks provider facts")?,
+                    &facts,
+                    &checked,
+                )?
+            };
             modes.push(CheckedClosureBody {
                 mode,
                 body: Arc::new(checked),

@@ -152,7 +152,9 @@ impl Encoder<'_> {
             let owner_info = self.context.declaration(owner)?;
             if !matches!(
                 path.kind(),
-                ir::DeclKind::TraitItem | ir::DeclKind::AssociatedFunction
+                ir::DeclKind::TraitItem
+                    | ir::DeclKind::AssociatedFunction
+                    | ir::DeclKind::AssociatedType
             ) || owner_info.kind != ir::DeclKind::Trait
                 || owner_info.owner.is_some()
             {
@@ -1052,6 +1054,30 @@ pub(super) fn direct_demands(
     direct_demands_in(target, source, None, context, budget, engine)
 }
 
+pub(super) fn closure_direct_demands(
+    target: &ir::CallTarget,
+    source: &Arc<ir::CheckedFunction>,
+    closure: &frontend::closures::check::CheckedClosure,
+    mode: ir::ClosureKind,
+    context: &mut frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+    engine: Option<crate::engine::EngineAuthority>,
+) -> Result<DirectDemands, String> {
+    if target.declaration != closure.ty.provider() || !Arc::ptr_eq(source, &closure.body_for(mode)?)
+    {
+        return Err("closure demands changed exact provider or mode body occurrence".into());
+    }
+    let facts = context
+        .trait_world()?
+        .closure_callable_facts_for(closure.ty.clone(), mode)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    facts
+        .validate_closure_body_source(&closure.ty, mode, source)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    ir::validate_call_evidence(source, &facts, budget)?;
+    direct_demands_in(target, source, Some(&facts), context, budget, engine)
+}
+
 fn direct_demands_in(
     target: &ir::CallTarget,
     source: &ir::CheckedFunction,
@@ -1913,6 +1939,45 @@ mod tests {
         );
         let reordered = keys(
             "fn unrelated(){}trait B:Sized{fn item(self)->i32{2}}trait A:Sized{fn item(self)->i32{1}}fn main(){}",
+        );
+        assert_eq!(first, reordered);
+    }
+
+    #[test]
+    fn object_binding_keys_retain_associated_type_owner() {
+        fn keys(source: &str) -> Vec<Vec<u8>> {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = (0..context.callable_count())
+                .map(|index| context.callable_decl(index).unwrap())
+                .find(|declaration| named(&context, *declaration, "types"))
+                .unwrap();
+            context
+                .signature(declaration)
+                .unwrap()
+                .signature
+                .params
+                .iter()
+                .map(|ty| {
+                    let mut encoder = Encoder {
+                        bytes: Vec::new(),
+                        reservations: Vec::new(),
+                        budget: &budget,
+                        context: &context,
+                    };
+                    encoder.ty(ty, 0).unwrap();
+                    encoder.bytes
+                })
+                .collect()
+        }
+        let first = keys(
+            "trait A{type Out;}trait B{type Out;}fn types(a:&dyn A<Out=i32>,b:&dyn B<Out=i32>,c:&dyn A<Out=bool>){}fn main(){}",
+        );
+        assert_ne!(first[0], first[1]);
+        assert_ne!(first[0], first[2]);
+        let reordered = keys(
+            "fn unrelated(){}trait B{type Out;}trait A{type Out;}fn types(a:&dyn A<Out=i32>,b:&dyn B<Out=i32>,c:&dyn A<Out=bool>){}fn main(){}",
         );
         assert_eq!(first, reordered);
     }

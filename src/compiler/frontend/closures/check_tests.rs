@@ -104,6 +104,41 @@ fn closure_lowering_requires_exact_parent_body_and_mode() {
         .closure_callable_facts_for(original.ty.clone(), ir::ClosureKind::Fn)
         .unwrap();
     let source = original.body_for(ir::ClosureKind::Fn).unwrap();
+    let target = ir::CallTarget {
+        declaration: provider,
+        type_args: Arc::from([]),
+    };
+    // Instance discovery must retain the same original mode body capability,
+    // not just equal checked payloads or the provider's declaration number.
+    for (body, target, mode) in [
+        (
+            Arc::new(source.as_ref().clone()),
+            target.clone(),
+            ir::ClosureKind::Fn,
+        ),
+        (source.clone(), target.clone(), ir::ClosureKind::FnOnce),
+        (
+            source.clone(),
+            ir::CallTarget {
+                declaration: owner,
+                ..target
+            },
+            ir::ClosureKind::Fn,
+        ),
+    ] {
+        assert!(
+            crate::compiler::instances::closure_direct_demands(
+                &target,
+                &body,
+                original,
+                mode,
+                &mut plan.clone(),
+                &budget,
+                None,
+            )
+            .is_err()
+        );
+    }
     let lowered = crate::compiler::cfg::lower_closure_template(
         source.clone(),
         facts.clone(),

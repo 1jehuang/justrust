@@ -528,6 +528,25 @@ struct ParentLocalRemint<'a> {
 }
 
 impl ir::SubstitutionCx for ReadSubstitution<'_> {
+    fn substitute_closure_owner_actual(
+        &mut self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        arguments: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<ir::Ty, String> {
+        // Reuse this exact source/current/engine adapter's metadata producer.
+        // Only physical nominal realization is suspended for the canonical
+        // declaration coordinates. Graph retain and receipt replay stay live.
+        let executable = self.executable.take();
+        let mapped = ir::substitute_closure_owner_actual_with_depth(
+            ty, env, arguments, caller, self, budget, depth,
+        );
+        self.executable = executable;
+        mapped
+    }
     fn realizes_executable_nominals(&self) -> bool {
         self.executable.is_some()
     }
@@ -569,97 +588,128 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
-        let Some(remint) = &mut self.remint else {
-            return ir::SubstitutionCx::substitute_parent_local_nominal(
-                self.context,
-                source,
-                arguments,
-                caller,
-                budget,
-            );
-        };
-        let current = caller
-            .validated()
-            .ok_or("source closing substitution requires validated destination facts")?;
-        if !std::ptr::eq(current, remint.destination) {
-            return Err("source closing substitution changed destination facts".into());
-        }
-        let receipt = match source {
-            ir::Ty::Struct(value) => value.parent_local_receipt(),
-            ir::Ty::Enum(value) => value.parent_local_receipt(),
-            _ => return Err("source closing substitution requires nominal receipt".into()),
-        }
-        .ok_or("source closing substitution omitted canonical receipt")?;
-        // Both authorities remain live and authenticated even on a memo hit.
-        let owning_facts = if receipt.matches_owning_context(current)? {
-            current
-        } else {
-            remint.source
-        };
-        let owning_scratch = if std::ptr::eq(owning_facts, current) {
-            &mut remint.destination_scratch
-        } else {
-            &mut remint.source_scratch
-        };
-        owning_facts
-            .validate_ty_metadata_scratch(source, budget, owning_scratch)
-            .map_err(|error| error.into_legacy_diagnostic(budget))?;
-        for argument in arguments {
-            current
-                .validate_ty_metadata_scratch(argument, budget, &mut remint.destination_scratch)
-                .map_err(|error| error.into_legacy_diagnostic(budget))?;
-        }
-        for (original, retained_arguments, output) in &remint.rows {
-            budget.charge_work(1)?;
-            let same_source = match (original, source) {
-                (ir::Ty::Struct(left), ir::Ty::Struct(right)) => {
-                    std::ptr::eq(left.def(), right.def())
-                        && matches!((left.parent_local_receipt(), right.parent_local_receipt()), (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a,b))
-                }
-                (ir::Ty::Enum(left), ir::Ty::Enum(right)) => {
-                    std::ptr::eq(left.def(), right.def())
-                        && matches!((left.parent_local_receipt(), right.parent_local_receipt()), (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a,b))
-                }
-                _ => false,
+        let logical = (|| {
+            let Some(remint) = &mut self.remint else {
+                return ir::SubstitutionCx::substitute_parent_local_nominal(
+                    self.context,
+                    source,
+                    arguments,
+                    caller,
+                    budget,
+                );
             };
-            if !same_source || retained_arguments.len() != arguments.len() {
-                continue;
+            let current = caller
+                .validated()
+                .ok_or("source closing substitution requires validated destination facts")?;
+            if !std::ptr::eq(current, remint.destination) {
+                return Err("source closing substitution changed destination facts".into());
             }
-            let same = crate::compiler::traits::schema_instantiation::same_inputs(
-                retained_arguments,
-                arguments,
-                budget,
-                0,
-            )
-            .map_err(|error| error.into_legacy_diagnostic(budget))?;
-            if same {
+            let receipt = match source {
+                ir::Ty::Struct(value) => value.parent_local_receipt(),
+                ir::Ty::Enum(value) => value.parent_local_receipt(),
+                _ => return Err("source closing substitution requires nominal receipt".into()),
+            }
+            .ok_or("source closing substitution omitted canonical receipt")?;
+            // Both authorities remain live and authenticated even on a memo hit.
+            let owning_facts = if receipt.matches_owning_context(current)? {
                 current
-                    .validate_ty_metadata_scratch(output, budget, &mut remint.destination_scratch)
+            } else {
+                remint.source
+            };
+            let owning_scratch = if std::ptr::eq(owning_facts, current) {
+                &mut remint.destination_scratch
+            } else {
+                &mut remint.source_scratch
+            };
+            owning_facts
+                .validate_ty_metadata_scratch(source, budget, owning_scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            for argument in arguments {
+                current
+                    .validate_ty_metadata_scratch(argument, budget, &mut remint.destination_scratch)
                     .map_err(|error| error.into_legacy_diagnostic(budget))?;
-                return Ok(output.clone());
             }
+            for (original, retained_arguments, output) in &remint.rows {
+                budget.charge_work(1)?;
+                let same_source = match (original, source) {
+                    (ir::Ty::Struct(left), ir::Ty::Struct(right)) => {
+                        std::ptr::eq(left.def(), right.def())
+                            && matches!((left.parent_local_receipt(), right.parent_local_receipt()), (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a,b))
+                    }
+                    (ir::Ty::Enum(left), ir::Ty::Enum(right)) => {
+                        std::ptr::eq(left.def(), right.def())
+                            && matches!((left.parent_local_receipt(), right.parent_local_receipt()), (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a,b))
+                    }
+                    _ => false,
+                };
+                if !same_source || retained_arguments.len() != arguments.len() {
+                    continue;
+                }
+                let same = crate::compiler::traits::schema_instantiation::same_inputs(
+                    retained_arguments,
+                    arguments,
+                    budget,
+                    0,
+                )
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                if same {
+                    current
+                        .validate_ty_metadata_scratch(
+                            output,
+                            budget,
+                            &mut remint.destination_scratch,
+                        )
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                    return Ok(output.clone());
+                }
+            }
+            let source_facts = remint.source;
+            let environment = remint.environment;
+            let parent_arguments = remint.parent_arguments;
+            let output = if receipt.matches_owning_context(current)? {
+                receipt.remint_for_source_substitution(
+                    source,
+                    source_facts,
+                    current,
+                    environment,
+                    parent_arguments,
+                    arguments,
+                    budget,
+                )?
+            } else {
+                receipt.remint_from_mapped_source(
+                    source,
+                    source_facts,
+                    current,
+                    environment,
+                    parent_arguments,
+                    arguments,
+                    self,
+                    budget,
+                )?
+            };
+            let remint = self
+                .remint
+                .as_mut()
+                .ok_or("source closing substitution lost exact remint context")?;
+            budget.retain_bytes(
+                std::mem::size_of::<(ir::Ty, std::sync::Arc<[ir::Ty]>, ir::Ty)>()
+                    + std::mem::size_of_val(arguments),
+            )?;
+            remint
+                .rows
+                .try_reserve_exact(1)
+                .map_err(|_| "closed source receipt replay allocation failed")?;
+            remint
+                .rows
+                .push((source.clone(), arguments.into(), output.clone()));
+            Ok(output)
+        })()?;
+        if self.executable.is_some() {
+            ir::realize_parent_local_substitution(&logical, caller, self, budget)
+        } else {
+            Ok(logical)
         }
-        let output = receipt.remint_for_source_substitution(
-            source,
-            remint.source,
-            current,
-            remint.environment,
-            remint.parent_arguments,
-            arguments,
-            budget,
-        )?;
-        budget.retain_bytes(
-            std::mem::size_of::<(ir::Ty, std::sync::Arc<[ir::Ty]>, ir::Ty)>()
-                + std::mem::size_of_val(arguments),
-        )?;
-        remint
-            .rows
-            .try_reserve_exact(1)
-            .map_err(|_| "closed source receipt replay allocation failed")?;
-        remint
-            .rows
-            .push((source.clone(), arguments.into(), output.clone()));
-        Ok(output)
     }
     fn current_engine(&self) -> Option<EngineAuthority> {
         self.engine

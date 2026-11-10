@@ -2319,6 +2319,18 @@ impl Provider for CompilerProvider {
                             &this.0.budget,
                             Some(cx.authority()),
                         )
+                    } else if let Some(closure) = &template.closure {
+                        instances::closure_direct_demands(
+                            &target,
+                            &source,
+                            closure,
+                            template.closure_mode.ok_or_else(|| {
+                                Error::new("closure instance demands omitted exact receiver mode")
+                            })?,
+                            &mut context,
+                            &this.0.budget,
+                            Some(cx.authority()),
+                        )
                     } else {
                         instances::direct_demands(
                             &target,

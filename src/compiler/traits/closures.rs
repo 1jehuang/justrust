@@ -3,6 +3,53 @@
 use super::*;
 
 impl ValidatedFacts {
+    /// Only the original provider facts may issue receipts for a finalized
+    /// closure body. Finalized receiver modes are not sources for this step.
+    pub(in crate::compiler) fn validate_parent_local_closure_source(
+        &self,
+        source: &ValidatedFacts,
+    ) -> Result<()> {
+        self.world.check_facts(self, true)?;
+        self.world.check_facts(source, true)?;
+        let closure = self.closure.as_ref().ok_or_else(|| {
+            FactsError::invalid(
+                self.budget(),
+                "parent-local destination is not a closure body",
+            )
+        })?;
+        let mode = self.closure_mode.ok_or_else(|| {
+            FactsError::invalid(
+                self.budget(),
+                "parent-local closure destination lacks receiver mode",
+            )
+        })?;
+        if !Arc::ptr_eq(&self.world, &source.world)
+            || !self.budget().same_authority(source.budget())
+            || source.closure.is_some()
+            || source.closure_mode.is_some()
+            || source.declaration() != closure.provider()
+            || self.declaration() != closure.provider()
+        {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "parent-local closure transition changed source provider or world",
+            ));
+        }
+        let original = self.world.callable_facts(closure.provider())?;
+        let finalized = self
+            .world
+            .closure_callable_facts_for(closure.clone(), mode)?;
+        if !source.parent_local_context()?.matches(&original)?
+            || !self.parent_local_context()?.matches(&finalized)?
+        {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "parent-local closure transition changed canonical source or finalized mode facts",
+            ));
+        }
+        Ok(())
+    }
+
     pub(in crate::compiler) fn closure_lowering_identity(
         &self,
     ) -> Option<(Arc<ir::ClosureTy>, ir::ClosureKind)> {

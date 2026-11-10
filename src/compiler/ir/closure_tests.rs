@@ -74,6 +74,80 @@ fn callable_capabilities_are_not_interchangeable() {
 }
 
 #[test]
+fn substitution_separates_ordered_owner_actuals_from_storage_children() {
+    struct Roles {
+        owners: Vec<Ty>,
+    }
+    impl SubstitutionCx for Roles {
+        fn nominal_application(&self, _: NominalAppId) -> Result<NominalAppInfo, String> {
+            Err("unexpected nominal identity lookup".into())
+        }
+        fn intern_nominal(
+            &mut self,
+            _: DeclId,
+            _: &[Ty],
+            _: FactsCtx<'_>,
+            _: &PlanBudget,
+        ) -> Result<Ty, String> {
+            Err("unexpected nominal issuer".into())
+        }
+        fn instantiate_signature(
+            &mut self,
+            _: &CallTarget,
+            _: FactsCtx<'_>,
+            _: &PlanBudget,
+        ) -> Result<Signature, String> {
+            Err("unexpected callable issuer".into())
+        }
+        fn substitute_closure_owner_actual(
+            &mut self,
+            ty: &Ty,
+            env: &GenericEnv,
+            args: &[Ty],
+            caller: FactsCtx<'_>,
+            budget: &PlanBudget,
+            depth: usize,
+        ) -> Result<Ty, String> {
+            self.owners.push(ty.clone());
+            substitute_closure_owner_actual_with_depth(ty, env, args, caller, self, budget, depth)
+        }
+    }
+    let budget = PlanBudget::default();
+    let env = GenericEnv::new(&[], &budget).unwrap();
+    let mut original = closure(vec![Ty::Char]);
+    original.params = Arc::from([Ty::Int(IntTy::U8)]);
+    let mut cx = Roles { owners: Vec::new() };
+    let mapped = substitute_ty_walk(
+        &Ty::Closure(Arc::new(original.clone())),
+        &env,
+        &[],
+        FactsCtx::Concrete,
+        &mut cx,
+        &budget,
+        0,
+    )
+    .unwrap();
+    assert_eq!(cx.owners, original.owner_args());
+    assert_eq!(mapped, Ty::Closure(Arc::new(original)));
+    assert!(
+        realize_parent_local_substitution(&Ty::Bool, FactsCtx::Concrete, &mut cx, &budget,)
+            .is_err()
+    );
+    assert!(
+        substitute_closure_owner_actual_with_depth(
+            &Ty::Bool,
+            &env,
+            &[],
+            FactsCtx::Concrete,
+            &mut cx,
+            &budget,
+            budget.limits().depth + 1,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn only_capture_fields_are_runtime_carriers() {
     let shared = Ty::Ref {
         kind: BorrowKind::Shared,

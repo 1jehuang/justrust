@@ -45,6 +45,9 @@ pub use runtime_sites::{RuntimeLocation, RuntimeSites};
 mod call_value_types;
 #[path = "ir/closure.rs"]
 mod closure;
+#[path = "ir/closure_mode_remint.rs"]
+mod closure_mode_remint;
+pub(in crate::compiler) use closure_mode_remint::remint_closure_mode_body;
 mod closure_result;
 pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, ClosureTy};
 pub use closure_result::ClosureResultReceipt;
@@ -3685,6 +3688,24 @@ pub struct CallRealizationSignatures<'a> {
 }
 
 pub trait SubstitutionCx {
+    /// Canonical ordered owner actuals are declaration coordinates, not
+    /// physical closure fields. Executable adapters retain metadata identity
+    /// here while still authenticating every original typed graph read.
+    #[allow(clippy::too_many_arguments)]
+    fn substitute_closure_owner_actual(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+        depth: usize,
+    ) -> Result<Ty, String>
+    where
+        Self: Sized,
+    {
+        substitute_closure_owner_actual_with_depth(ty, env, args, caller, self, budget, depth)
+    }
     #[track_caller]
     fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String>;
     /// A graph-issued definition may be retained only through a consumer that
@@ -3811,6 +3832,59 @@ impl NominalSubstitutionRequest<'_> {
     pub fn arguments(&self) -> &[Ty] {
         self.arguments
     }
+}
+
+/// A source-authenticated parent-local application becomes executable storage
+/// only through the same canonical nominal graph producer as ordinary source
+/// applications. The complete owning receipt is replayed before requesting it.
+pub(in crate::compiler) fn realize_parent_local_substitution(
+    source: &Ty,
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<Ty, String> {
+    if caller.validated().is_none()
+        || !cx.realizes_executable_nominals()
+        || cx.current_engine().is_none()
+    {
+        return Err(
+            "parent-local storage producer requires owning facts and current engine".into(),
+        );
+    }
+    caller.validate_ty_metadata_with_budget(source, budget)?;
+    let (original, source_decl, arguments, has_receipt) = match source {
+        Ty::Struct(value) => (
+            value.id(),
+            value.def().source_decl,
+            value.def().type_args.as_ref(),
+            value.parent_local_receipt().is_some(),
+        ),
+        Ty::Enum(value) => (
+            value.id(),
+            value.def().source_decl,
+            value.def().type_args.as_ref(),
+            value.parent_local_receipt().is_some(),
+        ),
+        _ => return Err("parent-local storage producer requires a nominal receipt".into()),
+    };
+    if !has_receipt || !matches!(original.index, NominalIndex::ParentLocal { .. }) {
+        return Err("parent-local storage producer changed source receipt identity".into());
+    }
+    let output = cx.intern_substituted_nominal(
+        &NominalSubstitutionRequest {
+            original,
+            source_decl,
+            arguments,
+        },
+        caller,
+        budget,
+    )?;
+    if !matches!(&output, Ty::Struct(value) if value.id().index.is_graph())
+        && !matches!(&output, Ty::Enum(value) if value.id().index.is_graph())
+    {
+        return Err("parent-local storage producer omitted typed graph realization".into());
+    }
+    cx.retain_realized_nominal(&output, caller, budget)
 }
 
 /// Shape admission only, never an executable family capability. Source and
@@ -4050,6 +4124,21 @@ pub(super) fn substitute_schema_ty(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(in crate::compiler) fn substitute_closure_owner_actual_with_depth(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<Ty, String> {
+    let mapped = substitute_ty_walk(ty, env, args, caller, cx, budget, depth)?;
+    caller.validate_ty_metadata_with_budget(&mapped, budget)?;
+    Ok(mapped)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn substitute_ty_walk(
     ty: &Ty,
     env: &GenericEnv,
@@ -4111,8 +4200,16 @@ fn substitute_ty_walk(
                 std::mem::size_of::<ClosureTy>()
                     + closure.types().count() * std::mem::size_of::<Ty>(),
             )?;
-            let mapped = closure
-                .try_map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))?;
+            let mut child = 0usize;
+            let mapped = closure.try_map(|ty| {
+                let owner_actual = child < closure.owner_args().len();
+                child += 1;
+                if owner_actual {
+                    cx.substitute_closure_owner_actual(ty, env, args, caller, budget, depth + 1)
+                } else {
+                    substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
+                }
+            })?;
             let mut unchanged = true;
             for (before, after) in closure.types().zip(mapped.types()) {
                 if !identical_type(before, after, budget)? {
@@ -4322,13 +4419,8 @@ fn substitute_ty_walk(
                 return cx.retain_realized_nominal(ty, caller, budget);
             }
             if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
-                // Parent-local closure applications are closed in their own
-                // parent; a generic parent would need re-minting, not reuse.
-                if !value.def().type_args.iter().all(Ty::is_closed_shallow) {
-                    return Err(
-                        "unsupported: generic parent-local closure nominal substitution".into(),
-                    );
-                }
+                // The source-authenticated adapter must replay or remint the
+                // receipt, including when actuals retain their source binders.
                 budget.retain_bytes(std::mem::size_of_val(value.def().type_args.as_ref()))?;
                 let mut arguments = Vec::new();
                 arguments
@@ -4396,13 +4488,8 @@ fn substitute_ty_walk(
                 return cx.retain_realized_nominal(ty, caller, budget);
             }
             if matches!(value.def().id.index, NominalIndex::ParentLocal { .. }) {
-                // Parent-local closure applications are closed in their own
-                // parent; a generic parent would need re-minting, not reuse.
-                if !value.def().type_args.iter().all(Ty::is_closed_shallow) {
-                    return Err(
-                        "unsupported: generic parent-local closure nominal substitution".into(),
-                    );
-                }
+                // The source-authenticated adapter must replay or remint the
+                // receipt, including when actuals retain their source binders.
                 budget.retain_bytes(std::mem::size_of_val(value.def().type_args.as_ref()))?;
                 let mut arguments = Vec::new();
                 arguments
@@ -4890,6 +4977,18 @@ fn body_nominal_substitution_remains_single_valued() {
 }
 
 impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
+    fn substitute_closure_owner_actual(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+        depth: usize,
+    ) -> Result<Ty, String> {
+        self.inner
+            .substitute_closure_owner_actual(ty, env, args, caller, budget, depth)
+    }
     fn substitute_parent_local_nominal(
         &mut self,
         source: &Ty,

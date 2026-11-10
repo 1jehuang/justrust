@@ -139,7 +139,15 @@ pub(super) async fn needs_symbolic(
     branches.push(source_cycle(cx, source, root, Vec::new(), b));
     for source in sources {
         let mut path = topology::storage(1, b)?;
-        path.push(root);
+        // An actual may contain a finite application of this same declaration,
+        // including a closure's canonical owner metadata. Merely reaching that
+        // source is not a back edge to the root application. Inspect its fields
+        // first, exactly as for the root source itself. All nested declarations
+        // were separately probed above, so indirect source cycles still route
+        // through the independent branches seeded with the root.
+        if source.declaration() != root {
+            path.push(root);
+        }
         branches.push(source_cycle(cx, source, root, path, b));
     }
     Ok(all(branches).await?.into_iter().any(|cycle| cycle))

@@ -20,7 +20,9 @@
 //! never part of a published fact or reachable from another node.
 use super::*;
 
+mod closure_mode;
 mod replay;
+mod source_remint;
 pub(in crate::compiler::frontend) use replay::ParentLocalReplayMemo;
 
 /// Whether any ordered actual structurally holds a closure type.
@@ -178,7 +180,7 @@ impl ParentLocalReceipt {
         mapped_actuals: &[ir::Ty],
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
-        let ir::NominalIndex::ParentLocal { owner, .. } = self.id.index else {
+        let ir::NominalIndex::ParentLocal { .. } = self.id.index else {
             return Err("source closing substitution requires a parent-local application".into());
         };
         if self.actuals.len() != mapped_actuals.len()
@@ -191,6 +193,31 @@ impl ParentLocalReceipt {
                     .into(),
             );
         }
+        self.remint_source_actuals(
+            definition,
+            source_facts,
+            current_facts,
+            env,
+            parent_arguments,
+            mapped_actuals,
+            budget,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn remint_source_actuals(
+        &self,
+        definition: &ir::Ty,
+        source_facts: &tr::ValidatedFacts,
+        current_facts: &tr::ValidatedFacts,
+        env: &ir::GenericEnv,
+        parent_arguments: &[ir::Ty],
+        mapped_actuals: &[ir::Ty],
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        let ir::NominalIndex::ParentLocal { owner, .. } = self.id.index else {
+            return Err("source closing substitution requires a parent-local application".into());
+        };
         let mut scratch = tr::TraitScratch::default();
         for actual in mapped_actuals {
             current_facts
@@ -662,6 +689,220 @@ fn mentions_param(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closure_mode_parent_local_remint_replays_exact_producer() {
+        let program =
+            parse("struct Slot<T>{value:T}fn main(){let f=|x:i32|x+1;let g=|x:i32|x+2;}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let (_, bodies) =
+            type_check::type_callable_source_and_closures(&program, owner, &plan, &budget, None)
+                .unwrap();
+        let closure = bodies.first().unwrap().ty.clone();
+        let provider = closure.provider();
+        let signatures = plan.environment(Some(provider)).unwrap();
+        let function = plan.callable_body(&plan.program, provider).unwrap();
+        let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        checker.declaration = Some(provider);
+        let original = checker
+            .mint_parent_local_nominal(
+                plan.nominal_declaration(0).unwrap(),
+                &[ir::Ty::Int(ir::IntTy::I32)],
+            )
+            .unwrap();
+        let source = checker.facts().validated().unwrap();
+        let world = plan.trait_world().unwrap();
+        let current = world
+            .closure_callable_facts_for(closure.clone(), ir::ClosureKind::Fn)
+            .unwrap();
+        let ir::Ty::Struct(value) = &original else {
+            unreachable!()
+        };
+        let receipt = value.parent_local_receipt().unwrap();
+        // Source handles must still fail ordinary admission under final facts.
+        assert!(current.validate_ty_metadata(&original).is_err());
+        let reminted = receipt
+            .remint_for_closure_mode(&original, source, &current, &value.def().type_args, &budget)
+            .unwrap();
+        current.validate_ty_metadata(&reminted).unwrap();
+        assert!(source.validate_ty_metadata(&reminted).is_err());
+        assert_eq!(original, reminted);
+        assert!(
+            receipt
+                .remint_for_closure_mode(&original, source, &current, &[ir::Ty::Bool], &budget,)
+                .is_err()
+        );
+        let mut forged = value.def().clone();
+        let ir::NominalIndex::ParentLocal { owner, ordinal } = forged.id.index else {
+            unreachable!()
+        };
+        forged.id.index = ir::NominalIndex::ParentLocal {
+            owner,
+            ordinal: ordinal + 1,
+        };
+        let forged = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(forged).with_parent_local_receipt(receipt.clone()),
+        );
+        assert!(receipt.remint_for_closure_mode(
+            &forged, source, &current, &value.def().type_args, &budget,
+        ).is_err());
+        let other = bodies
+            .iter()
+            .find(|body| body.ty.provider() != provider)
+            .unwrap();
+        let wrong_site = world
+            .closure_callable_facts_for(other.ty.clone(), ir::ClosureKind::Fn)
+            .unwrap();
+        assert!(
+            receipt
+                .remint_for_closure_mode(
+                    &original,
+                    source,
+                    &wrong_site,
+                    &value.def().type_args,
+                    &budget,
+                )
+                .is_err()
+        );
+        let mutable = world
+            .closure_callable_facts_for(closure, ir::ClosureKind::FnMut)
+            .unwrap();
+        let ir::Ty::Struct(reminted_value) = &reminted else {
+            unreachable!()
+        };
+        assert!(
+            reminted_value
+                .parent_local_receipt()
+                .unwrap()
+                .remint_for_closure_mode(
+                    &reminted,
+                    &current,
+                    &mutable,
+                    &value.def().type_args,
+                    &budget,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mapped_source_receipts_require_exact_expected_actuals_and_instance() {
+        let program =
+            parse("struct Slot<T>{value:T}fn generic<U>(){}fn other<U>(){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let signatures = plan.environment(Some(owner)).unwrap();
+        let function = plan.callable_body(&plan.program, owner).unwrap();
+        let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        checker.declaration = Some(owner);
+        let source = checker.facts().validated().unwrap();
+        let parameter = ir::Ty::Param(source.env().ordered_params().next().unwrap());
+        let original = checker
+            .mint_parent_local_nominal(plan.nominal_declaration(0).unwrap(), &[parameter])
+            .unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+        };
+        let current = plan.instance_facts(&target).unwrap();
+        let ir::Ty::Struct(value) = &original else {
+            unreachable!()
+        };
+        let receipt = value.parent_local_receipt().unwrap();
+        let mapped = receipt
+            .remint_from_mapped_source(
+                &original,
+                source,
+                &current,
+                source.env(),
+                &target.type_args,
+                &target.type_args,
+                &mut plan,
+                &budget,
+            )
+            .unwrap();
+        current.validate_ty_metadata(&mapped).unwrap();
+        assert!(current.validate_ty_metadata(&original).is_err());
+        assert!(
+            receipt
+                .remint_from_mapped_source(
+                    &original,
+                    source,
+                    &current,
+                    source.env(),
+                    &target.type_args,
+                    &[ir::Ty::Bool],
+                    &mut plan,
+                    &budget,
+                )
+                .is_err()
+        );
+        assert!(
+            receipt
+                .remint_from_mapped_source(
+                    &original,
+                    source,
+                    &current,
+                    source.env(),
+                    &[ir::Ty::Bool],
+                    &target.type_args,
+                    &mut plan,
+                    &budget,
+                )
+                .is_err()
+        );
+        assert!(
+            receipt
+                .remint_from_mapped_source(
+                    &original,
+                    source,
+                    &current,
+                    source.env(),
+                    &target.type_args,
+                    &[],
+                    &mut plan,
+                    &budget,
+                )
+                .is_err()
+        );
+        let wrong_target = ir::CallTarget {
+            declaration: plan.function_decl(1).unwrap(),
+            type_args: target.type_args.clone(),
+        };
+        let wrong_instance = plan.instance_facts(&wrong_target).unwrap();
+        assert!(
+            receipt
+                .remint_from_mapped_source(
+                    &original,
+                    source,
+                    &wrong_instance,
+                    source.env(),
+                    &target.type_args,
+                    &target.type_args,
+                    &mut plan,
+                    &budget,
+                )
+                .is_err()
+        );
+        let wrong_source = plan.callable_facts(wrong_target.declaration).unwrap();
+        assert!(
+            receipt
+                .remint_from_mapped_source(
+                    &original,
+                    &wrong_source,
+                    &current,
+                    wrong_source.env(),
+                    &target.type_args,
+                    &target.type_args,
+                    &mut plan,
+                    &budget,
+                )
+                .is_err()
+        );
+    }
 
     #[test]
     fn projected_parent_local_receipt_dispatch_replays_explicit_inputs() {

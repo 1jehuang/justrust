@@ -7,6 +7,7 @@ mod capture_use;
 pub(in crate::compiler) mod check;
 pub(in crate::compiler) mod constant_inputs;
 mod fn_sugar;
+mod nominal_remint;
 mod owner_source;
 #[cfg(test)]
 mod parameter_authority;

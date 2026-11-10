@@ -8,6 +8,46 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn closure_modes_reject_unused_invalids() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "closure-mode-unused-invalids",
+        &[
+            Case {
+                name: "unused_mapped_box_cannot_erase_capture_lifetime",
+                source: r#"fn bad()->Vec<Box<dyn Fn()->usize>>{let text=String::from("local");(0..1).map(|_|Box::new(||text.len()) as Box<dyn Fn()->usize>).collect()}fn main(){}"#,
+                expect: Expect::Invalid("E0373"),
+            },
+            Case {
+                name: "unused_mutable_closure_is_not_shared_callable",
+                source: r#"fn bad()->Vec<Box<dyn Fn()->i32>>{(0..1).map(|mut n|Box::new(move||{n+=1;n}) as Box<dyn Fn()->i32>).collect()}fn main(){}"#,
+                expect: Expect::Invalid("E0525"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn closure_mode_provider_transport_matches_stock() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "closure-mode-provider-transport",
+        &[
+            Case {
+                name: "shared_provider_boxes_nested_capture",
+                source: r#"fn apply<F:Fn(i32)->Box<dyn Fn(i32)->i32>>(f:F)->Box<dyn Fn(i32)->i32>{f(2)}fn main(){let f=apply(|n|Box::new(move|x|x+n) as Box<dyn Fn(i32)->i32>);let call:&dyn Fn(i32)->i32=&*f;println!("{}",call(10));}"#,
+                expect: Expect::Run("12\n"),
+            },
+            Case {
+                name: "mutable_provider_retains_capture_effect",
+                source: r#"fn apply<F:FnMut(i32)->Box<dyn Fn(i32)->i32>>(mut f:F)->Box<dyn Fn(i32)->i32>{f(4)}fn main(){let mut total=3;let f=apply(|n|{total+=n;Box::new(move|x|x+n) as Box<dyn Fn(i32)->i32>});let call:&dyn Fn(i32)->i32=&*f;println!("{}",call(10));println!("{total}");}"#,
+                expect: Expect::Run("14\n7\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn static_literal_closure_results_match_stock() {
     use output_oracle::{Case, Expect};
     output_oracle::check(

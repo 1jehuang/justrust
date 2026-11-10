@@ -3,7 +3,10 @@
 //! never allocation-order-dependent application IDs or diagnostic names.
 use super::*;
 
-const VERSION: u64 = 0x4a52_494e_5354_0001;
+#[path = "graph_key/rich_object.rs"]
+mod rich_object;
+
+const VERSION: u64 = 0x4a52_494e_5354_0002;
 const INTS: [ir::IntTy; 12] = [
     ir::IntTy::I8,
     ir::IntTy::I16,
@@ -146,13 +149,7 @@ fn ty(
             14
         }
         ir::Ty::Dyn(value) => {
-            if !value.args.is_empty() || !value.associated_types.is_empty() {
-                return Err(
-                    "unsupported: rich dyn instance graph key requires complete principal metadata"
-                        .into(),
-                );
-            }
-            declaration(words, value.principal);
+            rich_object::encode(words, value, budget, depth + 1)?;
             15
         }
         ir::Ty::Opaque(value) => {
@@ -542,6 +539,7 @@ impl Reader<'_> {
                 self.skip_declaration()?;
                 self.child_list(depth + 1, &mut children)?;
             }
+            15 => rich_object::children(self, depth + 1, &mut children)?,
             20..=22 => {
                 self.skip_declaration()?;
                 self.child_frame(depth + 1, &mut children)?;
@@ -668,11 +666,7 @@ impl Reader<'_> {
                 }
                 ty
             }
-            15 => ir::Ty::Dyn(Arc::new(ir::DynTy {
-                principal: self.declaration()?,
-                args: Arc::from([]),
-                associated_types: Arc::from([]),
-            })),
+            15 => ir::Ty::Dyn(rich_object::decode(self, facts, depth + 1)?),
             16 => {
                 let owner = self.declaration()?;
                 let site = u32::try_from(self.word()?).map_err(|_| "opaque site key overflow")?;
@@ -790,6 +784,66 @@ impl Reader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closure_object_graph_keys_preserve_nested_actuals_and_binding_owners() {
+        let program = frontend::parse(
+            "trait Invoke<A>{type Out;type Extra;}fn item<T>(x:T)->T{x}
+             fn first(x:&dyn Invoke<(u8,bool),Out=i32,Extra=u16>){}
+             fn reordered(x:&dyn Invoke<(u8,bool),Extra=u16,Out=i32>){}
+             fn changed(x:&dyn Invoke<(u16,bool),Out=i32,Extra=u16>){}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let target = |index| ir::CallTarget {
+            declaration: context.function_decl(0).unwrap(),
+            type_args: Arc::from([context
+                .signature(context.function_decl(index).unwrap())
+                .unwrap()
+                .signature
+                .params[0]
+                .clone()]),
+        };
+        let original = target(1);
+        let words = encode(&original, &budget).unwrap();
+        assert_eq!(decode(&words, &context, &budget).unwrap(), original);
+        assert_eq!(encode(&target(2), &budget).unwrap(), words);
+        assert_ne!(encode(&target(3), &budget).unwrap(), words);
+        for end in 0..words.len() {
+            assert!(decode(&words[..end], &context, &budget).is_err());
+        }
+        let ir::Ty::Ref { kind, referent } = &original.type_args[0] else {
+            unreachable!()
+        };
+        let ir::Ty::Dyn(object) = referent.as_ref() else {
+            unreachable!()
+        };
+        let forged_key = |object: ir::DynTy| {
+            encode(
+                &ir::CallTarget {
+                    declaration: original.declaration,
+                    type_args: Arc::from([ir::Ty::Ref {
+                        kind: *kind,
+                        referent: Arc::new(ir::Ty::Dyn(Arc::new(object))),
+                    }]),
+                },
+                &budget,
+            )
+            .unwrap()
+        };
+        let mut forged = object.as_ref().clone();
+        let mut bindings = forged.associated_types.to_vec();
+        bindings[0].0 = original.declaration;
+        forged.associated_types = bindings.into();
+        assert!(decode(&forged_key(forged), &context, &budget).is_err());
+        let mut forged = object.as_ref().clone();
+        forged.principal = original.declaration;
+        assert!(decode(&forged_key(forged), &context, &budget).is_err());
+        let mut trailing = words.clone();
+        trailing.push(0);
+        assert!(decode(&trailing, &context, &budget).is_err());
+    }
     fn target(args: Vec<ir::Ty>) -> ir::CallTarget {
         ir::CallTarget {
             declaration: ir::DeclId {
