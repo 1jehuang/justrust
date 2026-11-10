@@ -497,10 +497,16 @@ impl super::hash::Hash for String {
 /// `str::chars`: UTF-8 decoding iterator over `char`s. Exposed through a
 /// prelude trait (like `StrToString`) because `str` has no inherent impl here.
 pub trait StrChars {
+    fn bytes(&self) -> Bytes<'_>;
     fn chars(&self) -> Chars<'_, ()>;
     fn char_indices(&self) -> CharIndices<'_, ()>;
 }
 impl StrChars for str {
+    fn bytes(&self) -> Bytes<'_> {
+        let (ptr, len): (usize, usize) = str_parts(self);
+        Bytes { text: self, ptr, front: 0usize, back: len }
+    }
+
     fn chars(&self) -> Chars<'_, ()> {
         let (ptr, len): (usize, usize) = str_parts(self);
         Chars { text: self, unit: (), ptr, front: 0usize, back: len }
@@ -508,6 +514,35 @@ impl StrChars for str {
 
     fn char_indices(&self) -> CharIndices<'_, ()> {
         CharIndices { chars: self.chars() }
+    }
+}
+
+pub struct Bytes<'a> {
+    text: &'a str,
+    ptr: usize,
+    front: usize,
+    back: usize,
+}
+
+impl<'a> super::iter::Iterator for Bytes<'a> {
+    type Item = u8;
+    fn next(&mut self) -> Option<u8> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        let byte = read_u8(self.ptr + self.front);
+        self.front += 1usize;
+        Option::Some(byte)
+    }
+}
+
+impl<'a> super::iter::DoubleEndedIterator for Bytes<'a> {
+    fn next_back(&mut self) -> Option<u8> {
+        if self.front >= self.back {
+            return Option::None;
+        }
+        self.back -= 1usize;
+        Option::Some(read_u8(self.ptr + self.back))
     }
 }
 

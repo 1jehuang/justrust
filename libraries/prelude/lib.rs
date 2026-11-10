@@ -72,7 +72,7 @@ pub mod fmt;
 pub mod primitive;
 pub mod str {
     pub use super::primitive::{FromStr, ParseBoolError};
-    pub use super::string::Utf8Error;
+    pub use super::string::{Bytes, Utf8Error};
     pub fn from_utf8(v: &[u8]) -> Result<&str, Utf8Error> {
         super::string::str_from_utf8(v)
     }

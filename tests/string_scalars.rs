@@ -478,3 +478,186 @@ fn str_chars_decodes_utf8_like_stock() {
         ],
     );
 }
+
+#[test]
+fn str_bytes_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes",
+        &[Case {
+            name: "raw_utf8_and_interleaved_ends",
+            source: r#"fn main(){let owned=String::from("aé🦀z");let mut it=owned.as_str().bytes();println!("{:?} {:?} {:?}",it.next(),it.next_back(),it.next());println!("{:?}",it.collect::<Vec<u8>>());let mut e="".bytes();println!("{:?} {:?}",e.next(),e.next_back());println!("{:?}","é日🦀".bytes().collect::<Vec<u8>>());let mut one="x".bytes();println!("{:?} {:?} {:?}",one.next_back(),one.next(),one.next_back());}"#,
+            expect: Expect::Run(
+                "Some(97) Some(122) Some(195)\n[169, 240, 159, 166, 128]\nNone None\n[195, 169, 230, 151, 165, 240, 159, 166, 128]\nSome(120) None None\n",
+            ),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_named_lifetime() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-named",
+        &[Case {
+            name: "named_borrowed_bytes",
+            source: r#"use std::str::Bytes;fn bytes<'a>(s:&'a str)->Bytes<'a>{s.bytes()}fn main(){let owned=String::from("é");let mut it:Bytes<'_>=bytes(owned.as_str());println!("{:?} {:?} {:?}",it.next(),it.next_back(),it.next());}"#,
+            expect: Expect::Run("Some(195) Some(169) None\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_rev_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-rev_inline",
+        &[Case {
+            name: "rev_inline",
+            source: r#"fn main(){println!("{:?}","aé".bytes().rev().collect::<Vec<u8>>());}"#,
+            expect: Expect::Run("[169, 195, 97]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_rev_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-rev_local",
+        &[Case {
+            name: "rev_local",
+            source: r#"fn main(){let text="aé";let it=text.bytes();println!("{:?}",it.rev().collect::<Vec<u8>>());}"#,
+            expect: Expect::Run("[169, 195, 97]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_chain_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-chain_inline",
+        &[Case {
+            name: "chain_inline",
+            source: r#"fn main(){println!("{:?}","a".bytes().chain("é".bytes()).collect::<Vec<u8>>());}"#,
+            expect: Expect::Run("[97, 195, 169]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_chain_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-chain_local",
+        &[Case {
+            name: "chain_local",
+            source: r#"fn main(){let a="a";let b="é";let left=a.bytes();let right=b.bytes();println!("{:?}",left.chain(right).collect::<Vec<u8>>());}"#,
+            expect: Expect::Run("[97, 195, 169]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_map_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-map_inline",
+        &[Case {
+            name: "map_inline",
+            source: r#"fn main(){println!("{:?}","é".bytes().map(|b|b as u32).collect::<Vec<u32>>());}"#,
+            expect: Expect::Run("[195, 169]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_map_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-map_local",
+        &[Case {
+            name: "map_local",
+            source: r#"fn main(){let text="é";let it=text.bytes();println!("{:?}",it.map(|b|b as u32).collect::<Vec<u32>>());}"#,
+            expect: Expect::Run("[195, 169]\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_for_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-for_inline",
+        &[Case {
+            name: "for_inline",
+            source: r#"fn main(){let mut n=0u32;for b in "ab".bytes(){n+=b as u32;}println!("{}",n);}"#,
+            expect: Expect::Run("195\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_for_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-for_local",
+        &[Case {
+            name: "for_local",
+            source: r#"fn main(){let text="ab";let it=text.bytes();let mut n=0u32;for b in it{n+=b as u32;}println!("{}",n);}"#,
+            expect: Expect::Run("195\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_count_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-count_inline",
+        &[Case {
+            name: "count_inline",
+            source: r#"fn main(){println!("{}","".bytes().count());}"#,
+            expect: Expect::Run("0\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_count_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-count_local",
+        &[Case {
+            name: "count_local",
+            source: r#"fn main(){let text="";let it=text.bytes();println!("{}",it.count());}"#,
+            expect: Expect::Run("0\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_unused_invalids() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-invalid",
+        &[
+            Case {
+                name: "unused_wrong_byte_item",
+                source: "fn bad(s:&str)->char{s.bytes().next().unwrap()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_bytes_owner_escape",
+                source: "fn bad(){let mut it;{let s=String::from(\"é\");it=s.as_str().bytes();}let _=it.next();}fn main(){}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unused_bytes_owner_mutation",
+                source: "fn bad(){let mut s=String::from(\"é\");let mut it=s.as_str().bytes();s.push('x');let _=it.next();}fn main(){}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
