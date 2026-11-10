@@ -98,6 +98,75 @@ impl Checker<'_> {
         ) {
             return Ok(InherentMethodInference::Applicable(None));
         }
+        // A known argument can determine another method parameter through a
+        // bound such as R: RangeBounds<Q>. Enumerate canonical applications of
+        // the resolved R, not display names or a preferred implementation.
+        // Ambiguous or incomplete frontiers supply no equations. Selection
+        // below must still prove the complete instantiated method obligations.
+        if let ir::FactsCtx::Validated(facts) = self.facts() {
+            for _ in 0..info.param_env.arity() {
+                let mut progress = false;
+                for predicate in schema.predicates.predicates() {
+                    plan.budget.charge_work(1)?;
+                    let ir::Predicate::Implements(application) = predicate else {
+                        continue;
+                    };
+                    if application.args.is_empty() {
+                        continue;
+                    }
+                    let mut unresolved = false;
+                    for argument in application.args.iter() {
+                        let argument = self.method_owner_term(
+                            &solver.schema(argument, 0)?,
+                            &owner_bindings,
+                            0,
+                        )?;
+                        unresolved |= solver
+                            .resolve_projection_input(&argument, 0, false)?
+                            .is_none();
+                    }
+                    if !unresolved {
+                        continue;
+                    }
+                    let owner = self.method_owner_term(
+                        &solver.schema(&application.self_ty, 0)?,
+                        &owner_bindings,
+                        0,
+                    )?;
+                    let Some(owner) = solver.resolve_projection_input(&owner, 0, false)? else {
+                        continue;
+                    };
+                    let (applications, deferred) = plan.inferred_trait_applications(
+                        &owner,
+                        application.declaration,
+                        facts,
+                        &plan.budget,
+                    )?;
+                    let [candidate] = applications.as_slice() else {
+                        continue;
+                    };
+                    if deferred || candidate.args.len() != application.args.len() {
+                        continue;
+                    }
+                    for (formal, actual) in application.args.iter().zip(candidate.args.iter()) {
+                        let formal =
+                            self.method_owner_term(&solver.schema(formal, 0)?, &owner_bindings, 0)?;
+                        if solver
+                            .resolve_projection_input(&formal, 0, false)?
+                            .is_some()
+                        {
+                            continue;
+                        }
+                        let actual = self.infer_type_term(actual, None, 0)?;
+                        solver.constrain(&formal, &actual, 0)?;
+                        progress = true;
+                    }
+                }
+                if !progress {
+                    break;
+                }
+            }
+        }
         // The closure argument can determine a method parameter that occurs
         // only in its callable Output equality, e.g. Result::map_err's G.
         // As for trait methods, normalize the original predicate after binding

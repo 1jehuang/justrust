@@ -12,6 +12,32 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod coherence_oracle;
 
 #[test]
+fn inherent_method_arguments_follow_unique_trait_applications() {
+    coherence_oracle::stock_native(
+        r#"
+trait Pick<T> { fn pick(self) -> T; }
+struct Wrapped<T> { value: T }
+impl<T> Pick<T> for Wrapped<T> { fn pick(self) -> T { self.value } }
+struct Hub;
+impl Hub {
+    fn take<Q, R: Pick<Q>>(&self, value: R) -> Q { value.pick() }
+}
+fn main() {
+    let hub = Hub;
+    println!("{} {}", hub.take(Wrapped { value: 7i32 }), hub.take(Wrapped { value: true }));
+}
+"#,
+    );
+    for source in [
+        r#"trait Pick<T>{fn pick(self)->T;} struct Hub; impl Hub{fn take<Q,R:Pick<Q>>(&self,r:R)->Q{r.pick()}} struct Missing; fn unused(){let hub=Hub; let _:i32=hub.take(Missing);} fn main(){}"#,
+        r#"trait Pick<T>{fn pick(self)->T;} struct Wrapped<T>{value:T} impl<T>Pick<T> for Wrapped<T>{fn pick(self)->T{self.value}} struct Hub; impl Hub{fn take<Q,R:Pick<Q>>(&self,r:R)->Q{r.pick()}} fn unused(){let hub=Hub; let _:bool=hub.take(Wrapped{value:7i32});} fn main(){}"#,
+        r#"trait Pick<T>{fn pick(self)->T;} struct Dual; impl Pick<i32>for Dual{fn pick(self)->i32{7}} impl Pick<bool>for Dual{fn pick(self)->bool{true}} struct Hub; impl Hub{fn take<Q,R:Pick<Q>>(&self,r:R)->Q{r.pick()}} fn unused(){let hub=Hub; let value=hub.take(Dual);} fn main(){}"#,
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn generic_parameter_projection_membership_can_follow_a_blanket_impl() {
     let protocol = r#"
 trait MyInto {

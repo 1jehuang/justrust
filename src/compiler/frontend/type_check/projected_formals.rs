@@ -209,7 +209,7 @@ impl Inference<'_, '_> {
         self.checker.infer_node(kind).map(Some)
     }
 
-    fn resolve_projection_input(
+    pub(super) fn resolve_projection_input(
         &self,
         term: &InferTerm,
         depth: usize,
