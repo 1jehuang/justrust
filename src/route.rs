@@ -208,7 +208,22 @@ fn routable_build(args: &[String]) -> bool {
         }
     }
     let os: Vec<OsString> = args.iter().map(OsString::from).collect();
+    // Debug binaries come back larger than they are worth on AC power, but
+    // on battery a local compile costs far more than the download.
     crate::slots::profile_dir(&os).file_name() != Some(std::ffi::OsStr::new("debug"))
+        || crate::sys::battery_discharging()
+}
+
+const ON_BATTERY: &str = "on battery: hosted regardless of history or recent failures";
+
+/// On battery a local compile drains the laptop: skip the router, the
+/// failure backoff, and the local fallback whenever hosted is usable.
+/// An explicit `--auto` (JUSTRUST_REMOTE=auto) still gets the router.
+fn on_battery_hosted(m: Mode, backend: &Backend) -> bool {
+    m == Mode::Default
+        && *backend == Backend::Hosted
+        && crate::remote_hosted::signed_in()
+        && crate::sys::battery_discharging()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -598,9 +613,21 @@ pub fn maybe_remote(full: &[OsString]) {
     // The remote agent runs this same binary: never route from there. Older
     // agents only set the run id override, and so does a benchmark that
     // pins run ids; that one routes only when it forces remote explicitly.
-    if std::env::var_os(ON_AGENT).is_some()
-        || (std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() && m != Mode::Force)
-    {
+    if std::env::var_os(ON_AGENT).is_some() {
+        return;
+    }
+    // A benchmark pins run ids and measures local builds on purpose. On
+    // battery those runs drain the laptop (30 CPU-hours in two days), so
+    // refuse them instead of compiling; JUSTRUST_BENCH_ON_BATTERY=1 allows.
+    if std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() && m != Mode::Force {
+        if crate::sys::battery_discharging()
+            && std::env::var_os("JUSTRUST_BENCH_ON_BATTERY").is_none()
+        {
+            eprintln!(
+                "justrust: on battery, refusing a local benchmark build; plug in or set JUSTRUST_BENCH_ON_BATTERY=1"
+            );
+            std::process::exit(75);
+        }
         return;
     }
     if let Some(a) = full
@@ -700,6 +727,8 @@ pub fn maybe_remote(full: &[OsString]) {
         && !build;
     let reason = if m == Mode::Force {
         "JUSTRUST_REMOTE=force".to_string()
+    } else if on_battery_hosted(m, &backend) {
+        ON_BATTERY.to_string()
     } else if remote_default {
         if recently_failed(now) {
             return say_local(&backoff_reason());
@@ -783,7 +812,7 @@ pub fn maybe_remote(full: &[OsString]) {
             std::process::exit(o.code)
         }
         Ok(Err(Infra(msg))) => {
-            if remote_required() {
+            if remote_required() || reason == ON_BATTERY {
                 eprintln!("justrust: remote required, refusing local fallback: {msg}");
                 std::process::exit(1);
             }
