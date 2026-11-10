@@ -3868,7 +3868,8 @@ fn integer_patterns_preserve_exact_bits_and_bounded_exhaustiveness() {
     ] {
         assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
     }
-    assert!(parse("fn main(){match 1i8{\"1\"=>(),_=>()};}").is_err());
+    // A string literal pattern parses; an integer scrutinee is a type error.
+    assert!(check(&parse("fn main(){match 1i8{\"1\"=>(),_=>()};}").unwrap()).is_err());
     let p = parse("fn main(){match 1u8{1=>(),0x01u8=>(),_=>()};}").unwrap();
     check(&p).unwrap();
 }
