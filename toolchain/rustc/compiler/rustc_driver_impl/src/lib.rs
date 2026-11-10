@@ -1731,6 +1731,7 @@ pub unsafe fn main() -> ExitCode {
         )
     };
     let start_time = Instant::now();
+    rustc_data_structures::profiling::jr_phases_begin(start_time);
     let start_rss = get_resident_set_size();
 
     let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());

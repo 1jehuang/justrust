@@ -592,8 +592,9 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     unit.rmeta_secs = rmeta_at.lock().ok().and_then(|g| *g).map(|t| t - start);
     unit.passes = std::mem::take(&mut *passes.lock().unwrap());
     if let Some(path) = &ledger {
-        // Written when the compiler exits. After an early reply it is still
-        // running, so that unit has no split.
+        // Written when the compiler exits, or just before an early reply
+        // (jr-rustc `jr_phases_write_now`): its total is then the time the
+        // caller waited, without the background incremental persist.
         if let Ok(text) = std::fs::read_to_string(path) {
             unit.passes = parse_phase_ledger(&text);
             let _ = std::fs::remove_file(path);

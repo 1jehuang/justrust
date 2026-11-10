@@ -876,7 +876,20 @@ impl<'a> VerboseTimingGuard<'a> {
 /// are summed over threads, so their total can exceed wall time.
 struct JrPhaseLedger {
     path: std::path::PathBuf,
+    /// When this compiler session started (`jr_phases_begin`).
+    start: Instant,
+    /// Set once the file is written: an early reply writes it before the
+    /// process ends, and the reader may already have consumed it by then.
+    written: std::sync::atomic::AtomicBool,
     phases: parking_lot::Mutex<FxHashMap<&'static str, (Duration, u64)>>,
+}
+
+static JR_PHASES_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Tell the phase ledger when the compiler session started, so a ledger
+/// written before the end (`jr_phases_write_now`) has the right total.
+pub fn jr_phases_begin(start: Instant) {
+    let _ = JR_PHASES_START.set(start);
 }
 
 fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
@@ -886,6 +899,8 @@ fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
             let path = std::env::var_os("JUSTRUST_RUSTC_PHASES_FILE")?;
             (!path.is_empty()).then(|| JrPhaseLedger {
                 path: path.into(),
+                start: *JR_PHASES_START.get_or_init(Instant::now),
+                written: std::sync::atomic::AtomicBool::new(false),
                 phases: parking_lot::Mutex::new(FxHashMap::default()),
             })
         })
@@ -922,10 +937,14 @@ pub fn jr_phase_add(label: &'static str, dur: Duration) {
 }
 
 /// Write the phase ledger, with `total` as the whole compiler session.
-/// Best effort: profiling never fails a compilation.
+/// Best effort: profiling never fails a compilation. Does nothing when the
+/// ledger was already written (`jr_phases_write_now`).
 pub fn jr_phases_write(total: Duration) {
     use std::fmt::Write;
     let Some(ledger) = jr_phase_ledger() else { return };
+    if ledger.written.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let mut out = String::new();
     {
         let phases = ledger.phases.lock();
@@ -941,6 +960,24 @@ pub fn jr_phases_write(total: Duration) {
     let tmp = ledger.path.with_extension("tmp");
     if fs::write(&tmp, out).is_ok() {
         let _ = fs::rename(&tmp, &ledger.path);
+    }
+}
+
+/// Write the phase ledger now, with the time since the session started as
+/// its total. For the early reply: the caller stops waiting here and reads
+/// the file at once, so this is the time it waited for. Work after this
+/// point (the background incremental persist) is deliberately left out, and
+/// the file is not written again at exit.
+pub fn jr_phases_write_now() {
+    if let Some(ledger) = jr_phase_ledger() {
+        jr_phases_write(ledger.start.elapsed());
+    }
+}
+
+/// Undo `jr_phases_write_now`: the ledger is written again at exit.
+pub fn jr_phases_rearm() {
+    if let Some(ledger) = jr_phase_ledger() {
+        ledger.written.store(false, Ordering::Relaxed);
     }
 }
 

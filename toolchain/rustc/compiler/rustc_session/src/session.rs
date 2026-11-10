@@ -715,8 +715,16 @@ impl Session {
                 libc::dup2(devnull, 1);
                 libc::dup2(devnull, 2);
                 libc::close(devnull);
+                // The caller reads the phase ledger as soon as it has the
+                // reply, so it must be complete before the byte is sent.
+                rustc_data_structures::profiling::jr_phases_write_now();
                 let ok = libc::write(fd, [1u8].as_ptr().cast(), 1) == 1;
                 libc::close(fd);
+                if !ok {
+                    // The caller waits for the exit after all: write the
+                    // ledger again then, with the full total.
+                    rustc_data_structures::profiling::jr_phases_rearm();
+                }
                 ok
             }
         }
