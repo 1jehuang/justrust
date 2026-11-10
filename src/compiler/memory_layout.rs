@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn rigid_slice_reference_stride_does_not_authorize_element_layout() {
-        let program = super::super::frontend::parse("fn f<T>(value:T){}").unwrap();
+        let program = super::super::frontend::parse("fn f<T>(value:T){} fn main(){}").unwrap();
         let budget = ir::PlanBudget::default();
         let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
         let declaration = plan.callable_decl(0).unwrap();
