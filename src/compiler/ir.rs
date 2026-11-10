@@ -10901,9 +10901,6 @@ pub enum PatternTestKind {
         lo: CharValue,
         hi: CharValue,
     },
-    EnumVariant {
-        ty: EnumTy,
-        variant: usize,
     /// `lo <= x` and `x <= hi` (`x < hi` when `exclusive`) by IEEE comparison,
     /// so NaN never matches. An absent source bound is the matching infinity.
     FloatRange {
@@ -10911,6 +10908,9 @@ pub enum PatternTestKind {
         hi: FloatValue,
         exclusive: bool,
     },
+    EnumVariant {
+        ty: EnumTy,
+        variant: usize,
     },
 }
 
@@ -10943,9 +10943,6 @@ impl PatternTestKind {
                 }
                 (u128::from(lo.value), u128::from(hi.value))
             }
-            Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => return Ok(None),
-        };
-        Ok(Some(interval))
             Self::FloatRange { lo, hi, exclusive } => {
                 lo.validate()?;
                 hi.validate()?;
@@ -10963,16 +10960,19 @@ impl PatternTestKind {
                 }
                 (low, high)
             }
+            Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => return Ok(None),
+        };
+        Ok(Some(interval))
     }
     /// Scalar domain type tested by this kind, when scalar.
     pub fn scalar_ty(&self) -> Option<Ty> {
         match self {
             Self::Int(value) | Self::IntRange { lo: value, .. } => Some(Ty::Int(value.ty)),
             Self::Char(_) | Self::CharRange { .. } => Some(Ty::Char),
+            Self::FloatRange { lo, .. } => Some(Ty::Float(lo.ty)),
             Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => None,
         }
     }
-            Self::FloatRange { lo, .. } => Some(Ty::Float(lo.ty)),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12556,10 +12556,10 @@ impl CheckedFunction {
         let admitted = match domain {
             Ty::Bool
             | Ty::Int(_)
+            | Ty::Float(_)
             | Ty::Char
             | Ty::Unit
             | Ty::Struct(_)
-            | Ty::Float(_)
             | Ty::Enum(_)
             | Ty::Ref { .. } => true,
             Ty::Tuple(fields) => !fields.is_empty(),

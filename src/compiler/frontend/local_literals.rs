@@ -2533,8 +2533,6 @@ impl<'s> Solver<'_, '_, 's> {
                 let t = self.integer(literal)?;
                 self.unify(self.peel_refs(term), t)
             }
-            _ => Ok(()),
-        }
             // A float endpoint fixes the matched value to a float type.
             Pattern::Range { lo, hi, .. } => {
                 for bound in [lo, hi].into_iter().flatten() {
@@ -2548,6 +2546,8 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Ok(())
             }
+            _ => Ok(()),
+        }
     }
     fn pattern_referent(&self, mut term: Term) -> (Term, Option<ir::BorrowKind>) {
         let mut mode = None;

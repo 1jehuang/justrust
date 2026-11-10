@@ -3317,15 +3317,15 @@ impl<'a> Checker<'a> {
         self.accessible(ty)?;
         let count = match pattern {
             Pattern::Array(fields) => {
-                if fields.is_empty() {
-                    return Err(Self::array_pattern_unsupported(
-                        "empty array patterns are unsupported",
-                    ));
                 if fields.iter().any(super::is_subslice_binding) {
                     return Err(Self::array_pattern_unsupported(
                         "subslice bindings in a by-value array pattern are unsupported; match on a reference to the array",
                     ));
                 }
+                if fields.is_empty() {
+                    return Err(Self::array_pattern_unsupported(
+                        "empty array patterns are unsupported",
+                    ));
                 }
                 if fields.len() != *len {
                     return Err("array pattern arity mismatch".into());
@@ -14334,6 +14334,9 @@ fn range_pattern_hint(bound: Option<&super::RangeBound>) -> ir::Ty {
         Some(super::RangeBound::Int { literal, .. }) => {
             ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32))
         }
+        Some(super::RangeBound::Float { literal, .. }) => {
+            ir::Ty::Float(literal.suffix.unwrap_or(ir::FloatTy::F64))
+        }
         None => ir::Ty::Int(ir::IntTy::I32),
     }
 }
@@ -14343,9 +14346,6 @@ fn range_pattern_hint(bound: Option<&super::RangeBound>) -> ir::Ty {
 pub(super) fn range_pattern_test(
     lo: Option<&super::RangeBound>,
     hi: Option<&super::RangeBound>,
-        Some(super::RangeBound::Float { literal, .. }) => {
-            ir::Ty::Float(literal.suffix.unwrap_or(ir::FloatTy::F64))
-        }
     inclusive: bool,
     ty: &ir::Ty,
 ) -> Result<ir::PatternTestKind, String> {
@@ -14360,6 +14360,9 @@ pub(super) fn range_pattern_test(
                 RangeBound::Int { .. } | RangeBound::IntLimit { .. } => {
                     Err("mismatched types: integer range bound in a character pattern".to_string())
                 }
+                RangeBound::Float { .. } => Err(
+                    "E0308: mismatched types: float range bound in a character pattern".to_string(),
+                ),
             };
             let low = lo.map(scalar).transpose()?.unwrap_or(0);
             let high = match hi {
@@ -14369,9 +14372,6 @@ pub(super) fn range_pattern_test(
                         value
                     } else {
                         // Step back over the surrogate gap so the bound stays a scalar.
-                RangeBound::Float { .. } => Err(
-                    "E0308: mismatched types: float range bound in a character pattern".to_string(),
-                ),
                         match value {
                             0 => return Err("lower range bound must be less than upper".into()),
                             0xe000 => 0xd7ff,
@@ -14415,6 +14415,9 @@ pub(super) fn range_pattern_test(
                 RangeBound::Char(_) => {
                     Err("mismatched types: character range bound in an integer pattern".to_string())
                 }
+                RangeBound::Float { .. } => Err(
+                    "E0308: mismatched types: float range bound in an integer pattern".to_string(),
+                ),
             };
             let min = if int.is_signed() {
                 1u128 << (int.bits() - 1)
@@ -14424,9 +14427,6 @@ pub(super) fn range_pattern_test(
             let low = match lo {
                 Some(bound) => value(bound)?,
                 None => ir::IntValue {
-                RangeBound::Float { .. } => Err(
-                    "E0308: mismatched types: float range bound in an integer pattern".to_string(),
-                ),
                     ty: *int,
                     bits: min,
                 },
@@ -14456,15 +14456,6 @@ pub(super) fn range_pattern_test(
             }
             Ok(ir::PatternTestKind::IntRange { lo: low, hi: high })
         }
-        _ => Err(format!("range pattern does not match {ty:?}")),
-    }
-}
-
-/// `&dyn P` / `&mut dyn P` coercion target: (reference kind, principal).
-pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, Arc<ir::DynTy>)> {
-    let ir::Ty::Ref { kind, referent } = ty else {
-        return None;
-    };
         ir::Ty::Float(float) => {
             let value = |bound: &RangeBound| match bound {
                 RangeBound::Float { literal, negative } => {
@@ -14506,6 +14497,15 @@ pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, Arc<ir
                 exclusive,
             })
         }
+        _ => Err(format!("range pattern does not match {ty:?}")),
+    }
+}
+
+/// `&dyn P` / `&mut dyn P` coercion target: (reference kind, principal).
+pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, Arc<ir::DynTy>)> {
+    let ir::Ty::Ref { kind, referent } = ty else {
+        return None;
+    };
     let ir::Ty::Dyn(object) = referent.as_ref() else {
         return None;
     };

@@ -10012,12 +10012,12 @@ pub enum RangeBound {
         ty: ir::IntTy,
         max: bool,
     },
-}
     /// Float literal endpoint, rounded once to the matched type's width.
     Float {
         literal: FloatLiteral,
         negative: bool,
     },
+}
 /// Only patterns actually written around one positional `..` occurrence.
 /// Omitted fields have no syntax nodes, identifiers, or lexical bindings.
 #[derive(Clone, Debug)]
@@ -17031,11 +17031,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().string || !self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
             return Err(self.error("expected an integer literal after minus"));
         }
-        let literal = parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
         if let Some(literal) = parse_float_literal(self.token().text).map_err(|e| self.error(&e))? {
             self.cursor.bump();
             return Ok(RangeBound::Float { literal, negative });
         }
+        let literal = parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
         self.cursor.bump();
         Ok(RangeBound::Int { literal, negative })
     }
@@ -17092,7 +17092,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                     hi: Some(RangeBound::IntLimit { ty, max }),
                     inclusive: true,
                 }),
-            };
                 // A float literal pattern is the one-value range `x..=x`:
                 // run-time equality, so `0.0` also matches `-0.0`.
                 RangeBound::Float { literal, negative } => Ok(Pattern::Range {
@@ -17103,6 +17102,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     hi: Some(RangeBound::Float { literal, negative }),
                     inclusive: true,
                 }),
+            };
         }
         Err(self.error("expected a literal or range pattern"))
     }
