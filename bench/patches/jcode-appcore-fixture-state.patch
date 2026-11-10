@@ -1,0 +1,68 @@
+# Pinned appcore fixture repairs, no production policy or assertion changes.
+# Wake environment guard credited to production commit b82768c61.
+# Test the empty skill registry outside project overlays, exercise Confirm outside
+# the intentional system-temp glob allowance, and invalidate throttled config
+# when a test sets/restores hook configuration.
+diff --git a/crates/jcode-app-core/src/server/tests.rs b/crates/jcode-app-core/src/server/tests.rs
+--- a/crates/jcode-app-core/src/server/tests.rs
++++ b/crates/jcode-app-core/src/server/tests.rs
+@@ -327,6 +327,9 @@
+ 
+ #[tokio::test]
+ async fn background_task_wake_runs_live_session_immediately_when_idle() {
++    // Match production test isolation from b82768c61: the neighboring external
++    // wake test temporarily changes process-global JCODE_WAKE_MODE.
++    let _env_lock = crate::storage::lock_test_env();
+     let provider = Arc::new(StreamingMockProvider::default());
+     provider.queue_response(vec![
+         StreamEvent::TextDelta("Build result processed.".to_string()),
+diff --git a/crates/jcode-app-core/src/tool/bash_tests.rs b/crates/jcode-app-core/src/tool/bash_tests.rs
+--- a/crates/jcode-app-core/src/tool/bash_tests.rs
++++ b/crates/jcode-app-core/src/tool/bash_tests.rs
+@@ -1013,7 +1013,10 @@
+ 
+ #[tokio::test]
+ async fn bash_holds_a_risky_delete_until_justified_then_runs_it() {
+-    let temp = tempfile::tempdir().expect("temp dir");
++    // Bounded globs under system temp directories are deliberately low risk.
++    // Exercise Confirm outside that allowance, but still only in an owned
++    // automatically cleaned fixture outside the command's working directory.
++    let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("temp dir");
+     let workdir = temp.path().join("work");
+     let target = temp.path().join("outside");
+     std::fs::create_dir_all(&workdir).expect("workdir");
+diff --git a/crates/jcode-app-core/src/tool/skill.rs b/crates/jcode-app-core/src/tool/skill.rs
+--- a/crates/jcode-app-core/src/tool/skill.rs
++++ b/crates/jcode-app-core/src/tool/skill.rs
+@@ -435,7 +435,11 @@
+     #[tokio::test]
+     async fn test_list_empty() {
+         let tool = create_test_tool();
+-        let ctx = create_test_context();
++        // An empty global registry must be tested without the repository's
++        // intentional project-local skill overlay.
++        let project = tempfile::tempdir().expect("empty project");
++        let mut ctx = create_test_context();
++        ctx.working_dir = Some(project.path().to_path_buf());
+         let input = json!({"action": "list"});
+ 
+         let result = tool.execute(input, ctx).await.unwrap();
+diff --git a/crates/jcode-app-core/src/tool/tests.rs b/crates/jcode-app-core/src/tool/tests.rs
+--- a/crates/jcode-app-core/src/tool/tests.rs
++++ b/crates/jcode-app-core/src/tool/tests.rs
+@@ -1917,6 +1917,7 @@
+     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+     let previous = std::env::var_os("JCODE_HOOK_POST_TOOL_FEEDBACK");
+     crate::env::set_var("JCODE_HOOK_POST_TOOL_FEEDBACK", &script);
++    crate::config::invalidate_config_cache();
+ 
+     let registry = Registry::new(Arc::new(MockProvider) as Arc<dyn Provider>).await;
+     let mut ctx = mcp_test_context(dir.path());
+@@ -1929,6 +1930,7 @@
+         Some(value) => crate::env::set_var("JCODE_HOOK_POST_TOOL_FEEDBACK", value),
+         None => crate::env::remove_var("JCODE_HOOK_POST_TOOL_FEEDBACK"),
+     }
++    crate::config::invalidate_config_cache();
+     let output = result.expect("read should succeed").output;
+     assert!(output.contains("hello"), "{output}");
+     assert!(output.contains("[post_tool_feedback]"), "{output}");
