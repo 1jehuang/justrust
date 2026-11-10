@@ -4,9 +4,9 @@
 //! See [`engine`] for the snapshot, cancellation, and execution contract.
 
 pub mod compiler;
-pub mod engine;
+pub use justrust_graph as engine;
 pub mod fixtures;
-pub mod persistent_cache;
+pub use justrust_cache as persistent_cache;
 pub mod project;
 
 pub use engine::{

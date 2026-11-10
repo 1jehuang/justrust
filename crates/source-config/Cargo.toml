@@ -1,0 +1,10 @@
+[package]
+name = "justrust-source-config"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+path = "../../src/compiler/source_cfg.rs"
+

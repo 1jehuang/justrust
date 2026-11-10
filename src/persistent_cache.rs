@@ -492,7 +492,7 @@ mod tests {
             let mut child = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "persistent_cache::tests::nonregular_cache_entries_are_nonblocking_misses",
+                    "tests::nonregular_cache_entries_are_nonblocking_misses",
                     "--nocapture",
                     "--test-threads=1",
                 ])

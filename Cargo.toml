@@ -5,10 +5,21 @@ edition = "2024"
 license-file = "LICENSE"
 publish = false
 
+[workspace]
+members = ["crates/graph", "crates/cache", "crates/source-config"]
+default-members = [".", "crates/graph", "crates/cache", "crates/source-config"]
+resolver = "3"
+
 [dependencies]
+justrust-graph = { path = "crates/graph" }
+justrust-cache = { path = "crates/cache" }
+justrust-source-config = { path = "crates/source-config" }
 blake3 = { version = "=1.8.7", default-features = false }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 unicode-ident = "=1.0.24"
+
+[dev-dependencies]
+justrust-graph = { path = "crates/graph", features = ["test-support"] }
 
 [features]
 allocation-profile = []
@@ -32,6 +43,17 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# These modules retain the compiler profile after extraction, rather than
+# inheriting the optimized third-party dependency override.
+[profile.dev.package.justrust-graph]
+opt-level = 1
+
+[profile.dev.package.justrust-cache]
+opt-level = 1
+
+[profile.dev.package.justrust-source-config]
+opt-level = 1
 
 # Keep optimized test execution, but skip cross-codegen-unit ThinLTO in the
 # edit/test loop. Full debug info, assertions, and release builds are unchanged.

@@ -166,20 +166,20 @@ impl CfgSet {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Meta {
+pub struct Meta {
     pub name: String,
     pub value: MetaValue,
     pub range: Range<usize>,
 }
 #[derive(Clone, Debug)]
-pub(crate) enum MetaValue {
+pub enum MetaValue {
     Word,
     String(String),
     OtherLiteral,
     List(Vec<Meta>),
 }
 #[derive(Clone, Debug)]
-pub(crate) struct MetaError {
+pub struct MetaError {
     pub range: Range<usize>,
     pub message: String,
     pub limit: bool,
@@ -187,7 +187,7 @@ pub(crate) struct MetaError {
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 4096;
 
-pub(crate) fn parse_meta(text: &str, base: usize) -> Result<Meta, MetaError> {
+pub fn parse_meta(text: &str, base: usize) -> Result<Meta, MetaError> {
     let mut p = Parser {
         text,
         base,
@@ -202,7 +202,7 @@ pub(crate) fn parse_meta(text: &str, base: usize) -> Result<Meta, MetaError> {
     Ok(meta)
 }
 
-pub(crate) fn validate_string_literal(text: &str, base: usize) -> Result<(), MetaError> {
+pub fn validate_string_literal(text: &str, base: usize) -> Result<(), MetaError> {
     let mut parser = Parser {
         text,
         base,
@@ -216,7 +216,7 @@ pub(crate) fn validate_string_literal(text: &str, base: usize) -> Result<(), Met
     Ok(())
 }
 
-pub(crate) fn evaluate(meta: &Meta, cfg: &CfgSet) -> Result<bool, MetaError> {
+pub fn evaluate(meta: &Meta, cfg: &CfgSet) -> Result<bool, MetaError> {
     let invalid = || MetaError {
         range: meta.range.clone(),
         message: "invalid cfg predicate or combinator arity".into(),

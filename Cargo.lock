@@ -84,13 +84,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "justrust-cache"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+]
+
+[[package]]
 name = "justrust-engine"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "flate2",
+ "justrust-cache",
+ "justrust-graph",
+ "justrust-source-config",
  "unicode-ident",
 ]
+
+[[package]]
+name = "justrust-graph"
+version = "0.1.0"
+
+[[package]]
+name = "justrust-source-config"
+version = "0.1.0"
 
 [[package]]
 name = "libc"

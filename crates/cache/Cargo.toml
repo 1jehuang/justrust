@@ -1,0 +1,12 @@
+[package]
+name = "justrust-cache"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+path = "../../src/persistent_cache.rs"
+
+[dependencies]
+blake3 = { version = "=1.8.7", default-features = false }

@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[path = "source_attrs.rs"]
 pub mod source_attrs;
-#[path = "source_cfg.rs"]
-pub mod source_cfg;
+pub use justrust_source_config as source_cfg;
 #[path = "source_derive.rs"]
 mod source_derive;
 #[path = "source_inputs.rs"]

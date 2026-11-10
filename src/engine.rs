@@ -30,7 +30,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::task::{Context as PollContext, Poll, Wake, Waker};
 use std::time::Instant;
 
+#[path = "engine/cycle.rs"]
 mod cycle;
+#[path = "engine/locality.rs"]
 mod locality;
 pub use cycle::{DependencyCycle, DependencyCycleEdge};
 
@@ -68,10 +70,12 @@ pub struct Meter {
     pub ledgers: Ledgers,
 }
 impl Meter {
-    pub(crate) fn mark_ledger_failure(&self) {
+    #[doc(hidden)]
+    pub fn mark_ledger_failure(&self) {
         self.ledger_failure.store(true, Ordering::Release);
     }
-    pub(crate) fn has_ledger_failure(&self) -> bool {
+    #[doc(hidden)]
+    pub fn has_ledger_failure(&self) -> bool {
         self.ledger_failure.load(Ordering::Acquire)
     }
     /// Effective per-task work limit: the fixed default or the allowance this
@@ -337,7 +341,8 @@ impl fmt::Debug for MeterHandle {
 
 /// The poll owning the current thread, for diagnostic attribution only.
 /// Identity never grants graph access and is absent outside provider polling.
-pub(crate) fn current_task_identity() -> Option<(u64, u64)> {
+#[doc(hidden)]
+pub fn current_task_identity() -> Option<(u64, u64)> {
     CURRENT_TASK.with(Cell::get)
 }
 
@@ -609,13 +614,15 @@ pub struct OwnerTag(NonZeroU64);
 
 /// Test-only provenance: which engine authority minted each tag, so route
 /// tests can prove a graph tag came from its producer, not a standalone root.
-#[cfg(test)]
-pub(crate) static TAG_PROVENANCE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub static TAG_PROVENANCE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Tags minted on this thread, for race-free admission tests.
-    pub(crate) static THREAD_MINTS: Cell<usize> = const { Cell::new(0) };
+    #[doc(hidden)]
+    pub static THREAD_MINTS: Cell<usize> = const { Cell::new(0) };
 }
 impl OwnerTag {
     /// Raw bits for equality checks inside existing 8-byte handle owners.
@@ -641,7 +648,7 @@ impl TagMint {
         let tag = allocate_graph_id(&NEXT_OWNER_TAG)
             .map(OwnerTag)
             .ok_or_else(|| Error::new("owner tag space exhausted"))?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             TAG_PROVENANCE
                 .lock()
@@ -660,8 +667,9 @@ impl TagMint {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn mint_from_counter_for_test(counter: &AtomicU64) -> Option<OwnerTag> {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn mint_from_counter_for_test(counter: &AtomicU64) -> Option<OwnerTag> {
     allocate_graph_id(counter).map(OwnerTag)
 }
 impl OwnerRoot {
@@ -694,8 +702,9 @@ impl OwnerRoot {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn allocate_graph_id_for_test(counter: &AtomicU64) -> Option<NonZeroU64> {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn allocate_graph_id_for_test(counter: &AtomicU64) -> Option<NonZeroU64> {
     allocate_graph_id(counter)
 }
 
