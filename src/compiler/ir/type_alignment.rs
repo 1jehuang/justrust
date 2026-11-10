@@ -3,6 +3,8 @@ use super::{DeclId, FactsCtx, ParamId, PlanBudget, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeQueryKind {
+    /// Opaque runtime token for an exact closed canonical type, not a hash.
+    TypeIdentity,
     Alignment,
     /// Public Rust target size, never private carrier storage.
     SemanticSize,
@@ -65,6 +67,9 @@ impl TypeAlignmentQuery {
                 "alignment query must retain its exact canonical rigid type parameter".into(),
             );
         }
+        if kind == TypeQueryKind::TypeIdentity && !facts.env().outlives_static(parameter) {
+            return Err("type identity query requires its canonical static-bound parameter".into());
+        }
         Ok(Self {
             kind,
             owner: facts.declaration(),
@@ -98,6 +103,10 @@ impl TypeAlignmentQuery {
 
     pub fn is_semantic_size(&self) -> bool {
         self.kind == TypeQueryKind::SemanticSize
+    }
+
+    pub fn is_type_identity(&self) -> bool {
+        self.kind == TypeQueryKind::TypeIdentity
     }
 
     pub fn is_private_element_stride(&self) -> bool {
@@ -377,6 +386,7 @@ mod tests {
             );
             for kind in [
                 TypeQueryKind::Alignment,
+                TypeQueryKind::TypeIdentity,
                 TypeQueryKind::SemanticSize,
                 TypeQueryKind::PrivateStorageStride,
                 TypeQueryKind::PrivateStorageAlignment,
@@ -602,6 +612,77 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn type_identity_query_preserves_static_owner_and_closed_actual() {
+        let program = frontend::parse(
+            "fn identity<T:'static>()->usize{0usize} fn unbounded<T>()->usize{0usize} fn main(){}",
+        )
+        .unwrap();
+        let budget = PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        let query = TypeAlignmentQuery::issue_kind(
+            Ty::Param(parameter),
+            &facts,
+            TypeQueryKind::TypeIdentity,
+        )
+        .unwrap();
+        assert!(query.is_type_identity());
+        query
+            .validate(FactsCtx::Validated(&facts), &budget)
+            .unwrap();
+        let other = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
+        let unbounded = other.env().ordered_params().next().unwrap();
+        assert!(
+            TypeAlignmentQuery::issue_kind(
+                Ty::Param(unbounded),
+                &other,
+                TypeQueryKind::TypeIdentity,
+            )
+            .is_err()
+        );
+        assert!(
+            query
+                .validate(FactsCtx::Validated(&other), &budget)
+                .is_err()
+        );
+        let target = ir::CallTarget {
+            declaration,
+            type_args: Arc::from([Ty::Int(ir::IntTy::U8)]),
+        };
+        let closed = facts.world().instance_facts(&target).unwrap();
+        let mut instantiated = query.clone();
+        instantiated.substitute(Ty::Int(ir::IntTy::U8));
+        instantiated
+            .validate(FactsCtx::Validated(&closed), &budget)
+            .unwrap();
+        assert_eq!(
+            crate::compiler::memory_layout::query_value(
+                &instantiated,
+                FactsCtx::Validated(&closed),
+                &budget,
+            )
+            .unwrap(),
+            None
+        );
+        instantiated.queried = Ty::Int(ir::IntTy::U16);
+        assert!(
+            instantiated
+                .validate(FactsCtx::Validated(&closed), &budget)
+                .is_err()
+        );
+        let mut foreign = query.clone();
+        foreign.owner = other.declaration();
+        assert!(
+            foreign
+                .validate(FactsCtx::Validated(&facts), &budget)
+                .is_err()
+        );
+        assert!(!query.same_query(&foreign, &budget).unwrap());
     }
 
     #[test]

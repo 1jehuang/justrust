@@ -12596,6 +12596,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
         }
         if self.builtin_macro_ahead("__justrust_align_of")?
+            || self.builtin_macro_ahead("__justrust_type_id")?
             || self.builtin_macro_ahead("__justrust_storage_stride")?
             || self.builtin_macro_ahead("__justrust_size_of")?
             || self.builtin_macro_ahead("__justrust_element_stride")?
@@ -15891,9 +15892,19 @@ impl<'input, 'names> Parser<'input, 'names> {
                     if supertraits.len() >= 256 {
                         return Err(self.limit("supertrait limit exceeded"));
                     }
-                    let path = self.trait_path()?;
-                    self.reserve_parser_items(&mut supertraits, 1)?;
-                    supertraits.push(path);
+                    if self.static_type_bound()? {
+                        self.reserve_parser_items(&mut bounds, 1)?;
+                        bounds.push(TypeBound {
+                            subject: Type::SelfType,
+                            traits: Vec::new(),
+                            maybe_unsized: false,
+                            outlives_static: true,
+                        });
+                    } else {
+                        let path = self.trait_path()?;
+                        self.reserve_parser_items(&mut supertraits, 1)?;
+                        supertraits.push(path);
+                    }
                     if !self.eat("+") {
                         break;
                     }
@@ -24237,6 +24248,10 @@ impl PlanCtx {
             let mut outlives_static = 0u32;
             for bound in bounds.iter().filter(|bound| bound.outlives_static) {
                 budget.charge_work(params.len())?;
+                if kind == ir::DeclKind::Trait && matches!(bound.subject, Type::SelfType) {
+                    outlives_static |= 1;
+                    continue;
+                }
                 let Type::Param(subject) = &bound.subject else {
                     continue;
                 };
@@ -24264,6 +24279,7 @@ impl PlanCtx {
                     kind,
                     ir::DeclKind::Function
                         | ir::DeclKind::AssociatedFunction
+                        | ir::DeclKind::Trait
                         | ir::DeclKind::TraitImpl
                         | ir::DeclKind::Impl
                 )
@@ -24271,6 +24287,9 @@ impl PlanCtx {
                 return Err(
                     "unsupported: type outlives bounds on non-callable declarations".into(),
                 );
+            }
+            if kind == ir::DeclKind::Trait && outlives_static & !1 != 0 {
+                return Err("unsupported: static bounds on trait arguments require argument well-formedness transport".into());
             }
             let param_env = Arc::new(ir::ParamEnv::with_bounds(
                 ir::BinderId { declaration: id },
@@ -24932,6 +24951,7 @@ impl PlanCtx {
             let nominal = match &self_ty {
                 ir::Ty::Struct(t) => t.def().source_decl,
                 ir::Ty::Enum(t) => t.def().source_decl,
+                ir::Ty::Dyn(object) if block.trait_path.is_none() => object.principal,
                 // Trait impls on structural/primitive types: the impl itself is
                 // the owning identity. Selection goes through trait headers.
                 _ if block.trait_path.is_some() => impl_id,

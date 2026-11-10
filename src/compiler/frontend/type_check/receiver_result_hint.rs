@@ -49,8 +49,12 @@ impl Checker<'_> {
         filter: Option<ReceiverKind>,
     ) -> Result<InherentMethodCandidate, String> {
         let plan = self.signatures.plan()?;
-        let Some((nominal, _)) = nominal_parts(receiver) else {
-            return Ok(InherentMethodCandidate::Missing);
+        let nominal = match receiver {
+            ir::Ty::Dyn(object) => object.principal,
+            _ => match nominal_parts(receiver) {
+                Some((nominal, _)) => nominal,
+                None => return Ok(InherentMethodCandidate::Missing),
+            },
         };
         let mut candidate = None;
         for id in &plan.registry.function_ids {

@@ -16,6 +16,10 @@ pub(super) const PRELUDE_ROOT: &str = "<prelude>/root.rs";
 /// Virtual path (relative to [`PRELUDE_DIR`]) to embedded file text.
 const PRELUDE_FILES: &[(&str, &str)] = &[
     (
+        "__justrust_std/any.rs",
+        include_str!("../../libraries/prelude/any.rs"),
+    ),
+    (
         "__justrust_std/iter.rs",
         include_str!("../../libraries/prelude/iter.rs"),
     ),

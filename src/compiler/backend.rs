@@ -611,6 +611,9 @@ pub struct Object {
     /// Absolute u64 immediate fields that receive the address of a linked
     /// read-only trait object vtable.
     pub vtables: Vec<(usize, Vtable)>,
+    /// Absolute relocations to tokens interned by full canonical type bytes.
+    /// Kept separate from literals, whose addresses are not type identities.
+    pub type_ids: Vec<(usize, Vec<u8>)>,
     /// Immutable evidence that this object's storage was paid, set by the
     /// SSA backend (OPTIMIZATION.md 13). The stack emitter accounts through
     /// its own retained-byte path and leaves this `None`. Holds no ledger.
@@ -3216,6 +3219,7 @@ impl<'a> Emitter<'a> {
                     code: Vec::new(),
                     calls: Vec::new(),
                     strings: Vec::new(),
+                    type_ids: Vec::new(),
                     vtables: Vec::new(),
                     exports: Vec::new(),
                     receipt: None,
@@ -3539,8 +3543,26 @@ impl Emitter<'_> {
                     }
                 }
             }
-            cfg::Rvalue::TypeAlignment(_) => {
-                return Err("unresolved target alignment reached native code generation".into());
+            cfg::Rvalue::TypeAlignment(query) => {
+                if !query.is_type_identity() {
+                    return Err("unresolved target alignment reached native code generation".into());
+                }
+                let facts = self.concrete.facts();
+                query.validate(ir::FactsCtx::Validated(facts), facts.budget())?;
+                let identity = super::instances::graph_key::type_identity(
+                    query.queried_type(),
+                    facts.budget(),
+                )?;
+                let budget = facts.budget().clone();
+                budget.retain_bytes(std::mem::size_of::<(usize, Vec<u8>)>())?;
+                self.object
+                    .type_ids
+                    .try_reserve_exact(1)
+                    .map_err(|_| "type identity relocation allocation failed")?;
+                self.bytes(&[0x48, 0xb8]); // mov rax, imm64
+                let at = self.position();
+                self.bytes(&[0; 8]);
+                self.object.type_ids.push((at, identity));
             }
             cfg::Rvalue::RawSlice { kind, args } => {
                 if args.len() != 2 {
@@ -3646,11 +3668,19 @@ impl Emitter<'_> {
                 self.operand(value)?;
             }
             cfg::Rvalue::PtrCast { value, to } => {
-                if !ir::ptr_cast_valid(&self.function().operand_ty(value)?, to) {
-                    return Err("pointer cast requires a supported pointer pair".into());
-                }
+                let source = self.function().operand_ty(value)?;
+                ir::validate_pointer_cast(
+                    &source,
+                    to,
+                    ir::FactsCtx::Validated(self.concrete.facts()),
+                )?;
                 // References, raw pointers and usize share one address word.
                 self.operand(value)?;
+                if ir::object_data_pointer_cast(&source, to) {
+                    // A fat pointer value is carried by address. Extract only
+                    // its data word, never the address of that descriptor.
+                    self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
+                }
             }
             cfg::Rvalue::IntCast { value, to } => {
                 // Exact CFG validation established an integer source. Extend
@@ -4769,6 +4799,7 @@ fn emit_native_cfg(
             code: Vec::new(),
             calls: Vec::new(),
             strings: Vec::new(),
+            type_ids: Vec::new(),
             vtables: Vec::new(),
             exports: Vec::new(),
             receipt: None,
@@ -5017,6 +5048,31 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
                 .ok_or("ELF address overflow")?;
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
             data.extend_from_slice(literal);
+        }
+    }
+    // Canonical type tokens are interned independently of ordinary literals.
+    // Complete injective keys participate in equality, not hash-only IDs.
+    let mut type_addresses: HashMap<&[u8], u64> = HashMap::new();
+    for (name, object) in functions {
+        let start = symbols[name.as_str()];
+        for (at, identity) in &object.type_ids {
+            if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
+                return Err("invalid type identity relocation".into());
+            }
+            let address = if let Some(address) = type_addresses.get(identity.as_slice()) {
+                *address
+            } else {
+                let address = BASE
+                    .checked_add(data_offset as u64)
+                    .and_then(|value| value.checked_add(data.len() as u64))
+                    .ok_or("ELF type identity address overflow")?;
+                // The token is an opaque nonempty allocation. Its contents
+                // are not exposed by TypeId, only its canonical identity.
+                data.push(0);
+                type_addresses.insert(identity.as_slice(), address);
+                address
+            };
+            code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
         }
     }
     // Trait object vtables: eight-byte aligned, deduplicated, absolute.
@@ -5818,6 +5874,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -5893,6 +5950,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -5952,6 +6010,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6211,6 +6270,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6654,6 +6714,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -7078,6 +7139,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -9439,6 +9501,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                type_ids: Vec::new(),
                 vtables: vec![],
                 exports: Vec::new(),
                 receipt: None,
@@ -9718,6 +9781,7 @@ mod tests {
                     code: vec![],
                     calls: vec![],
                     strings: vec![],
+                    type_ids: Vec::new(),
                     vtables: vec![],
                     exports: Vec::new(),
                     receipt: None,
@@ -9822,6 +9886,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                type_ids: Vec::new(),
                 vtables: vec![],
                 exports: Vec::new(),
                 receipt: None,
@@ -10425,6 +10490,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, b)| (i * 8, b.clone()))
                 .collect(),
+            type_ids: Vec::new(),
             vtables: vec![],
             receipt: None,
         };

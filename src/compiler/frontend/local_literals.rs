@@ -1937,7 +1937,13 @@ impl<'s> Solver<'_, '_, 's> {
                         progress = true;
                         continue;
                     }
-                    if method.actuals.is_empty() {
+                    self.checker.infer_storage(method.actuals.len())?;
+                    let resolved_actuals = method
+                        .actuals
+                        .iter()
+                        .map(|actual| self.resolve(*actual, 0))
+                        .collect::<Result<Option<Vec<_>>, _>>()?;
+                    if let Some(resolved_actuals) = resolved_actuals {
                         // Stock probing starts at the receiver as written:
                         // `s.shout()` with `s: &str` selects `impl Tr for &str`
                         // before peeling to `str`. Use the written type when it
@@ -1949,7 +1955,7 @@ impl<'s> Solver<'_, '_, 's> {
                         match plan.select_method(
                             &written,
                             &method.name,
-                            &[],
+                            &resolved_actuals,
                             self.checker.facts(),
                             &self.checker.module,
                             &plan.budget,
@@ -1983,7 +1989,7 @@ impl<'s> Solver<'_, '_, 's> {
                                     plan.select_method(
                                         &carrier,
                                         &method.name,
-                                        &[],
+                                        &resolved_actuals,
                                         self.checker.facts(),
                                         &self.checker.module,
                                         &plan.budget,

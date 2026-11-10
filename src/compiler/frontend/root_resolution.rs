@@ -5481,6 +5481,28 @@ fn resolve_impl_block(
         resolver.self_nominal = match &block.self_ty {
             Type::Named(path) => Some(path.clone()),
             Type::Apply(path) => Some(path.path(resolver.names())?),
+            Type::Dyn(principal) if block.trait_path.is_none() => {
+                let TraitPath::Source(principal) = principal.as_ref() else {
+                    return Err("E0116: inherent dyn implementations require a source-owned principal trait".into());
+                };
+                if principal.resolved_use.is_none() {
+                    return Err("inherent dyn principal lost its resolved source authority".into());
+                }
+                let path = principal.path(resolver.names())?;
+                let index = resolver.trait_decl_index(&path)?
+                    .ok_or("inherent dyn principal is not a retained source declaration")?;
+                let declaration = resolver.program.traits.get(index)
+                    .ok_or("inherent dyn owner lost its retained trait declaration")?;
+                let owner = declaration.module;
+                if resolver.prelude_root_of(owner)? != resolver.prelude_root_of(block.module)?
+                    || resolver.extern_root_of(owner)? != resolver.extern_root_of(block.module)?
+                {
+                    return Err("E0116: cannot define inherent impl for a dyn trait defined outside this crate".into());
+                }
+                // Self still denotes the complete dyn application. The trait
+                // declaration supplies ownership, not a nominal type namespace.
+                None
+            }
             // Trait impls may target any type (primitives, references,
             // tuples, slices); `Self` then has no nominal namespace.
             _ if block.trait_path.is_some() => None,

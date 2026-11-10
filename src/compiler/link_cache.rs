@@ -43,9 +43,10 @@ fn identity(
             calls,
             strings,
             vtables,
+            type_ids,
             receipt: _, // Paid storage is not an ELF semantic input.
         } = object;
-        if !vtables.is_empty() {
+        if !vtables.is_empty() || !type_ids.is_empty() {
             return None;
         }
         code = code.checked_add(object_code.len())?;
@@ -174,6 +175,7 @@ mod tests {
             exports: vec![],
             calls: vec![],
             strings: vec![],
+            type_ids: Vec::new(),
             vtables: vec![],
             receipt: None,
         }

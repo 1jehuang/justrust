@@ -739,7 +739,10 @@ impl PlanCtx {
             .names
             .key(*name, LookupClass::Member)
             .map_err(native_adapter::name_diagnostic)?;
-        let nominal = nominal_parts(owner).map(|(id, _)| id);
+        let nominal = match owner {
+            ir::Ty::Dyn(object) => Some(object.principal),
+            _ => nominal_parts(owner).map(|(id, _)| id),
+        };
         let mut selected: Option<(ir::Callee, ir::Signature, ReceiverKind)> = None;
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;

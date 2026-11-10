@@ -56,29 +56,28 @@ impl type_check::Checker<'_> {
         let DeclItemName::Source(item) = declaration.path.item else {
             return Err("target alignment requires a source declaration".into());
         };
-        let kind = match plan
-            .program
-            .names
-            .spelling(item)
-            .map_err(native_adapter::name_diagnostic)?
-        {
-            "align_of" => ir::TypeQueryKind::Alignment,
-            "size_of" => ir::TypeQueryKind::SemanticSize,
-            "element_stride" => ir::TypeQueryKind::PrivateElementStride,
-            "pointer_stride" => ir::TypeQueryKind::SupportedPointerStride,
-            "storage_stride" => ir::TypeQueryKind::PrivateStorageStride,
-            "storage_alignment" => ir::TypeQueryKind::PrivateStorageAlignment,
-            "packed_reserve" => ir::TypeQueryKind::PackedByteReserveUnit,
-            _ => return Err("private type query outside its canonical source body".into()),
-        };
-        if plan
+        let module = plan
             .program
             .names
             .spelling(module)
-            .map_err(native_adapter::name_diagnostic)?
-            != "mem"
-            || declaration.owner.is_some()
-        {
+            .map_err(native_adapter::name_diagnostic)?;
+        let item = plan
+            .program
+            .names
+            .spelling(item)
+            .map_err(native_adapter::name_diagnostic)?;
+        let kind = match (module, item) {
+            ("any", "type_id") => ir::TypeQueryKind::TypeIdentity,
+            ("mem", "align_of") => ir::TypeQueryKind::Alignment,
+            ("mem", "size_of") => ir::TypeQueryKind::SemanticSize,
+            ("mem", "element_stride") => ir::TypeQueryKind::PrivateElementStride,
+            ("mem", "pointer_stride") => ir::TypeQueryKind::SupportedPointerStride,
+            ("mem", "storage_stride") => ir::TypeQueryKind::PrivateStorageStride,
+            ("mem", "storage_alignment") => ir::TypeQueryKind::PrivateStorageAlignment,
+            ("mem", "packed_reserve") => ir::TypeQueryKind::PackedByteReserveUnit,
+            _ => return Err("private type query outside its canonical source body".into()),
+        };
+        if declaration.owner.is_some() {
             return Err(
                 "private target alignment operation outside its canonical source body".into(),
             );

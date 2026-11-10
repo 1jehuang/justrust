@@ -635,7 +635,11 @@ fn normalize_query(
     out: &mut Requirement,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    if query.is_supported_pointer_stride() {
+    if query.is_type_identity() {
+        // The authenticated identity query observes canonical type metadata only.
+        // It grants no size, alignment, or pointer-stride capability.
+        Ok(())
+    } else if query.is_supported_pointer_stride() {
         normalize_pointer_stride(ty, parameters, out, budget, 0)?;
         if super::pointer::extent(ty, Some(facts), budget, 0)?.is_none() && parameters.is_empty() {
             out.deferred_dispatch = true;
@@ -2031,6 +2035,39 @@ mod tests {
         }
         locals
     }
+    #[test]
+    fn type_identity_domain_does_not_grant_function_item_alignment() {
+        let program =
+            frontend::parse("fn identity<T:'static>()->usize{0usize} fn item(){} fn main(){}")
+                .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        let identity = ir::TypeAlignmentQuery::issue_kind(
+            ir::Ty::Param(parameter),
+            &facts,
+            ir::TypeQueryKind::TypeIdentity,
+        )
+        .unwrap();
+        identity
+            .validate(ir::FactsCtx::Validated(&facts), &budget)
+            .unwrap();
+        let alignment = ir::TypeAlignmentQuery::issue(ir::Ty::Param(parameter), &facts).unwrap();
+        assert!(!identity.same_query(&alignment, &budget).unwrap());
+        let item = ir::Ty::FnItem(Arc::new(ir::CallTarget {
+            declaration: plan.function_decl(1).unwrap(),
+            type_args: Arc::from([]),
+        }));
+        let mut required = Requirement::empty(0, &budget).unwrap();
+        normalize_query(&identity, &item, &facts, &[], &mut required, &budget).unwrap();
+        required.admit().unwrap();
+        assert!(!required.deferred_dispatch);
+        let mut physical = Requirement::empty(0, &budget).unwrap();
+        normalize_query(&alignment, &item, &facts, &[], &mut physical, &budget).unwrap();
+        assert!(physical.admit().is_err());
+    }
+
     #[test]
     fn alignment_domain_original_query_kind_bits_and_call_arguments_are_sealed() {
         let (locals, root, budget) = fixture(

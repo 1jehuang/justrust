@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const STOCK: &str = include_str!("fixtures/trait_objects/stock.tsv");
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/iterator_oracle.rs"]
+mod any_oracle;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -77,6 +79,136 @@ fn native(source: &Path, output: Option<&Path>, workers: usize) -> Output {
         None => command.arg("--check"),
     };
     command.output().expect("spawn jr-rust")
+}
+
+fn any_type_identity_case(source: &'static str, expected: Option<&'static str>) {
+    if let Some(expected) = expected {
+        use any_oracle::closure_oracle::{Case, Expect};
+        any_oracle::closure_oracle::check(
+            "canonical-any-type-identity",
+            &[Case {
+                name: "source",
+                source,
+                expect: Expect::Run(expected),
+            }],
+        );
+    } else {
+        any_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn any_type_identity_uses_canonical_declarations_and_ordered_actuals() {
+    any_type_identity_case(
+        r#"use std::any::{Any, TypeId};
+mod one { pub struct Same; }
+mod two { pub struct Same; }
+struct Pair<T, U> { left: T, right: U }
+type Alias = Pair<i32, bool>;
+fn identity<T: Any>(value: T) -> TypeId { value.type_id() }
+fn first() {}
+fn second() {}
+fn main() {
+    println!("{} {} {} {}", TypeId::of::<Alias>() == TypeId::of::<Pair<i32, bool>>(), TypeId::of::<Pair<i32, bool>>() != TypeId::of::<Pair<bool, i32>>(), TypeId::of::<one::Same>() != TypeId::of::<two::Same>(), TypeId::of::<[i32; 2]>() != TypeId::of::<[i32; 3]>());
+    println!("{} {}", identity(first) == identity(first), identity(first) != identity(second));
+}
+"#,
+        Some("true true true true\ntrue true\n"),
+    );
+}
+
+#[test]
+fn any_type_identity_dispatches_and_downcasts_shared_and_mutable_objects() {
+    any_type_identity_case(
+        r#"use std::any::{Any, TypeId};
+mod one { pub struct Same(pub i32); }
+mod two { pub struct Same(pub i32); }
+fn main() {
+    let value = one::Same(7);
+    let object: &dyn Any = &value;
+    println!("{} {} {}", object.type_id() == TypeId::of::<one::Same>(), object.is::<two::Same>(), object.downcast_ref::<two::Same>().is_none());
+    println!("{}", object.downcast_ref::<one::Same>().unwrap().0);
+    let mut number = 4i32;
+    let mutable: &mut dyn Any = &mut number;
+    println!("{}", mutable.downcast_mut::<bool>().is_none());
+    *mutable.downcast_mut::<i32>().unwrap() += 3;
+    println!("{}", number);
+    let boxed: Box<dyn Any> = Box::new(11i32);
+    println!("{} {}", boxed.type_id() == TypeId::of::<Box<dyn Any>>(), boxed.as_ref().type_id() == TypeId::of::<i32>());
+}
+"#,
+        Some("true false true\n7\ntrue\n7\ntrue true\n"),
+    );
+}
+
+#[test]
+fn any_type_identity_downcasts_through_a_static_supertrait() {
+    any_type_identity_case(
+        r#"use std::any::Any;
+trait Event: Any { fn as_any(&self) -> &dyn Any; }
+struct Click { x: i32, y: i32 }
+struct Key(char);
+impl Event for Click { fn as_any(&self) -> &dyn Any { self } }
+impl Event for Key { fn as_any(&self) -> &dyn Any { self } }
+impl dyn Event { fn is_click(&self) -> bool { self.as_any().is::<Click>() } }
+fn click_total<E: Event>(event: &dyn Event) -> bool { event.as_any().is::<E>() }
+fn main() {
+    let click = Click { x: 3, y: -4 };
+    let event: &dyn Event = &click;
+    assert!(event.is_click());
+    let point = event.as_any().downcast_ref::<Click>().unwrap();
+    println!("{} {} {}", point.x + point.y, click_total::<Click>(event), click_total::<Key>(event));
+    let key = Key('q');
+    let other: &dyn Event = &key;
+    assert!(!other.is_click());
+    println!("{}", other.as_any().downcast_ref::<Key>().unwrap().0);
+}
+"#,
+        Some("-1 true false\nq\n"),
+    );
+}
+
+#[test]
+fn any_type_identity_rejects_nonstatic_types_and_escaping_downcast_borrows() {
+    // A broken embedded declaration must not make every rejection look valid.
+    any_type_identity_case("use std::any::Any; fn main() {}", Some(""));
+    for source in [
+        r#"use std::any::Any;
+impl dyn Any { fn invalid_extension(&self) {} }
+fn main() {}
+"#,
+        r#"use std::any::TypeId;
+fn invalid<'a>() { let _ = TypeId::of::<&'a i32>(); }
+fn main() {}
+"#,
+        r#"use std::any::Any;
+fn invalid(value: dyn Any) {}
+fn main() {}
+"#,
+        r#"use std::any::Any;
+fn invalid<T: ?Sized>(value: *const dyn Any) -> *const T { value as *const T }
+fn main() {}
+"#,
+        r#"use std::any::Any;
+struct Borrowed<'a>(&'a i32);
+fn invalid<'a>(value: &'a i32) { let payload = Borrowed(value); let _: &dyn Any = &payload; }
+fn main() {}
+"#,
+        r#"use std::any::Any;
+fn main() { let escaped; { let value = 7i32; let object: &dyn Any = &value; escaped = object.downcast_ref::<i32>().unwrap(); } println!("{}", escaped); }
+"#,
+        r#"use std::any::Any;
+fn invalid(object: &mut dyn Any) { let first = object.downcast_mut::<i32>().unwrap(); let second = object.downcast_mut::<i32>().unwrap(); *first += *second; }
+fn main() {}
+"#,
+        r#"trait Static: 'static {}
+struct Borrowed<'a>(&'a i32);
+impl<'a> Static for Borrowed<'a> {}
+fn main() {}
+"#,
+    ] {
+        any_type_identity_case(source, None);
+    }
 }
 
 #[test]

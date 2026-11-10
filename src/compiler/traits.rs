@@ -7345,6 +7345,7 @@ impl ValidatedTraitWorld {
         }
         self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
         self.validate_predicates(&h.predicates, &h.schema_env, None)?;
+        self.require_trait_static_self(&h.trait_ref, &h.schema_env, &h.predicates)?;
         self.validate_impl_parameter_constraints(h)?;
         if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sync) {
             let arguments = match &h.trait_ref.self_ty {

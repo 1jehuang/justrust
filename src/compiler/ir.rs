@@ -7894,6 +7894,7 @@ pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
                     _ => false,
                 };
         }
+        (Some(_), None) if object_data_pointer_cast(from, to) => return true,
         _ => return false,
     }
     match (from, to) {
@@ -7964,6 +7965,33 @@ pub fn pointer_words(pointee: &Ty) -> usize {
         Ty::Slice { .. } | Ty::Dyn(_) => 2,
         _ => 1,
     }
+}
+
+/// A raw trait-object pointer may discard its metadata when cast to a thin
+/// raw pointer. This is not a reference unsizing or a trait upcast.
+pub fn object_data_pointer_cast(from: &Ty, to: &Ty) -> bool {
+    matches!((from, to),
+        (Ty::RawPtr { pointee: source, .. }, Ty::RawPtr { pointee: target, .. })
+            if matches!(source.as_ref(), Ty::Dyn(_))
+                && !matches!(target.as_ref(), Ty::Dyn(_) | Ty::Slice { .. } | Ty::Str))
+}
+
+pub fn validate_pointer_cast(from: &Ty, to: &Ty, facts: FactsCtx<'_>) -> Result<(), String> {
+    if !ptr_cast_valid(from, to) {
+        return Err("pointer cast requires a supported pointer pair".into());
+    }
+    if object_data_pointer_cast(from, to) {
+        let Ty::RawPtr { pointee, .. } = to else {
+            unreachable!()
+        };
+        let facts = facts
+            .validated()
+            .ok_or("trait object data-pointer cast requires canonical Sized target facts")?;
+        facts
+            .require_sized(pointee)
+            .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?;
+    }
+    Ok(())
 }
 
 /// Structural residual guard only. This does not establish declaration ownership,
@@ -13392,9 +13420,7 @@ impl CheckedFunction {
                 ExprKind::PtrCast { value: source } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];
-                    if !ptr_cast_valid(&source.ty, &value.ty) {
-                        return Err("pointer cast requires a supported pointer pair".into());
-                    }
+                    validate_pointer_cast(&source.ty, &value.ty, facts)?;
                     if value.completion != source.completion {
                         return Err("pointer cast completion mismatch".into());
                     }

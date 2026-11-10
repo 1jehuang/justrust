@@ -24,7 +24,7 @@ pub fn encode(
     object: &backend::Object,
     meter: &Meter<'_>,
 ) -> Result<Option<Owned<Vec<u8>>>, String> {
-    if !object.vtables.is_empty() || object.code.len() > LIMIT {
+    if !object.vtables.is_empty() || !object.type_ids.is_empty() || object.code.len() > LIMIT {
         return Ok(None);
     }
     let mut len = MAGIC.len() + 32;
@@ -215,6 +215,7 @@ pub fn decode(bytes: &[u8], meter: &Meter<'_>) -> Result<Option<Owned<backend::O
         exports,
         calls: Vec::new(),
         strings: Vec::new(),
+        type_ids: Vec::new(),
         vtables: Vec::new(),
         receipt: None,
     })?;
@@ -247,6 +248,7 @@ mod tests {
             exports: vec![(0, "entry_λ".into())],
             calls: vec![(12, "callee".into())],
             strings: vec![(8, vec![0, 255, 1])],
+            type_ids: Vec::new(),
             vtables: Vec::new(),
             receipt: None,
         }

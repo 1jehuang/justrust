@@ -3351,9 +3351,11 @@ impl Function {
                 Ok(Ty::Char)
             }
             Rvalue::PtrCast { value, to } => {
-                if !ir::ptr_cast_valid(&self.operand_ty_with_facts(value, facts, scratch)?, to) {
-                    return Err("CFG pointer cast requires a supported pointer pair".into());
-                }
+                ir::validate_pointer_cast(
+                    &self.operand_ty_with_facts(value, facts, scratch)?,
+                    to,
+                    facts,
+                )?;
                 Ok(to.clone())
             }
             Rvalue::LeadingZeros { value } => {

@@ -179,7 +179,11 @@ impl type_check::Checker<'_> {
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
         if let Expr::Deref { value } = value
-            && type_check::genuine_call(value)
+            && (type_check::genuine_call(value)
+                || matches!(
+                    self.method_receiver_hint(value)?,
+                    Some(ir::Ty::RawPtr { .. } | ir::Ty::Ref { .. })
+                ))
         {
             return self.borrow_call_referent(kind, value).map(Some);
         }

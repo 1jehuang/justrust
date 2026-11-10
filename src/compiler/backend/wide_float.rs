@@ -236,6 +236,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                type_ids: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,

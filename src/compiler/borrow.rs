@@ -2385,7 +2385,9 @@ impl CarrierBuilder<'_, '_> {
                     self.budget.spend(1)?;
                     if let Some(family) = location.channel.family() {
                         let permitted = match family {
-                            ir::CarrierFamily::Parameter(own) => facts.env().outlives_static(own),
+                            ir::CarrierFamily::Parameter(own) => facts
+                                .parameter_outlives_static(own)
+                                .map_err(|_| Exhausted)?,
                             _ => false,
                         };
                         if !permitted {
@@ -2767,20 +2769,20 @@ impl CarrierBuilder<'_, '_> {
                         .body
                         .as_ref()
                         .map_or(0, |body| body.ref_contract().static_regions);
-                    let own_env = self.body.as_ref().map(|body| body.original_env().clone());
                     self.budget.spend(sources.len() + 1)?;
-                    let escapes = sources
-                        .iter()
-                        .any(|region| match &self.regions.keys[region.0] {
+                    let mut escapes = false;
+                    for region in &sources {
+                        escapes |= match &self.regions.keys[region.0] {
                             RegionKey::Fixed(id) => own_static & (1u64 << id.0) == 0,
                             RegionKey::Family {
                                 family: ir::CarrierFamily::Parameter(own),
                                 ..
-                            } => !own_env
-                                .as_ref()
-                                .is_some_and(|env| env.outlives_static(*own)),
+                            } => !facts
+                                .parameter_outlives_static(*own)
+                                .map_err(|_| Exhausted)?,
                             _ => true,
-                        });
+                        };
+                    }
                     if escapes {
                         self.problem(
                             block,

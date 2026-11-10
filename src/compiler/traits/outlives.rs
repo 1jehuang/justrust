@@ -1,7 +1,39 @@
-//! Declaration-owned static requirements for implementation selection.
+//! Declaration-owned static obligations used by trait implementation selection.
+//! Erased reference lifetimes are never inferred from their runtime payload.
 use super::*;
 
+impl ValidatedFacts {
+    pub(in crate::compiler) fn parameter_outlives_static(
+        &self,
+        parameter: ParamId,
+    ) -> Result<bool> {
+        self.world.type_outlives_static(
+            &Ty::Param(parameter),
+            self.env(),
+            self.predicates().predicates(),
+            0,
+        )
+    }
+}
+
 impl ValidatedTraitWorld {
+    fn trait_has_static_self(&self, declaration: DeclId, depth: usize) -> Result<bool> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        let header = self.trait_header(declaration)?;
+        if header.env.outlives_static(header.self_param) {
+            return Ok(true);
+        }
+        for parent in header.supertraits.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if matches!(&parent.self_ty, Ty::Param(parameter) if *parameter == header.self_param)
+                && self.trait_has_static_self(parent.declaration, depth + 1)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn type_outlives_static(
         &self,
         ty: &Ty,
@@ -14,6 +46,18 @@ impl ValidatedTraitWorld {
         if let Ty::Param(parameter) = ty {
             if env.outlives_static(*parameter) {
                 return Ok(true);
+            }
+            // A declared superbound entails static for the exact subject.
+            // Callers checking an impl pass only its written predicates, never
+            // the impl's own membership, which would justify itself circularly.
+            for predicate in predicates {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if let Predicate::Implements(goal) = predicate
+                    && self.eq_ty(ty, &goal.self_ty, 0)?
+                    && self.trait_has_static_self(goal.declaration, depth + 1)?
+                {
+                    return Ok(true);
+                }
             }
             return Ok(false);
         }
@@ -153,5 +197,22 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(true)
+    }
+
+    pub(super) fn require_trait_static_self(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        predicates: &[Predicate],
+    ) -> Result<()> {
+        if self.trait_has_static_self(goal.declaration, 0)?
+            && !self.type_outlives_static(&goal.self_ty, env, predicates, 0)?
+        {
+            return Err(FactsError::unproved(
+                &self.budget,
+                "trait requires a static Self type, but its source lifetime obligation is not proved",
+            ));
+        }
+        Ok(())
     }
 }

@@ -73,6 +73,7 @@ pub fn object_with_panic(
             .calls
             .len()
             .checked_add(o.strings.len())
+            .and_then(|n| n.checked_add(o.type_ids.len()))
             .and_then(|n| {
                 n.checked_add(
                     o.vtables
@@ -189,6 +190,7 @@ pub fn object_with_panic(
     }
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
+    let mut type_offsets: BTreeMap<&[u8], usize> = BTreeMap::new();
     if entry {
         let at = if unwind { 24 } else { 21 };
         relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
@@ -206,6 +208,17 @@ pub fn object_with_panic(
             }
             relocation(&mut rel_text, start + at, 1, 1, data.len() as i64);
             data.extend_from_slice(bytes);
+        }
+        for (at, identity) in &o.type_ids {
+            if at.checked_add(8).is_none_or(|end| end > o.code.len()) {
+                return Err("invalid type identity relocation".into());
+            }
+            let offset = *type_offsets.entry(identity.as_slice()).or_insert_with(|| {
+                let offset = data.len();
+                data.push(0);
+                offset
+            });
+            relocation(&mut rel_text, start + at, 1, 1, offset as i64);
         }
         for (at, vtable) in &o.vtables {
             if at.checked_add(8).is_none_or(|end| end > o.code.len()) {
@@ -427,6 +440,7 @@ finish:
                 ],
                 calls: vec![],
                 strings: vec![],
+                type_ids: Vec::new(),
                 vtables: vec![],
                 exports: vec![],
                 receipt: None,

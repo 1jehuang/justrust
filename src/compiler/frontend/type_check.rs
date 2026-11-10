@@ -10935,6 +10935,7 @@ impl<'a> Checker<'a> {
                     .into(),
             );
         }
+        ir::validate_pointer_cast(&source.ty, &target, self.facts())?;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {

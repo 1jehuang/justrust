@@ -39,6 +39,32 @@ pub(in crate::compiler) fn encode(
 fn declaration(words: &mut Vec<u64>, id: ir::DeclId) {
     words.extend([id.snapshot.graph_word(), id.index]);
 }
+
+/// Injective type coordinates for immutable runtime TypeId tokens. The linker
+/// interns the complete byte sequence, never a hash or a diagnostic spelling.
+/// Type aliases normalize before this boundary. Nominals retain declaration
+/// identities and ordered actuals instead of their allocation addresses.
+pub(in crate::compiler) fn type_identity(
+    value: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u8>, String> {
+    let mut words = vec![VERSION];
+    ty(&mut words, value, budget, 0)?;
+    let bytes = words
+        .len()
+        .checked_mul(8)
+        .ok_or("type identity size overflow")?;
+    budget.charge_work(words.len())?;
+    budget.retain_bytes(bytes.checked_mul(2).ok_or("type identity size overflow")?)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(bytes)
+        .map_err(|_| "type identity allocation failed")?;
+    for word in words {
+        result.extend_from_slice(&word.to_le_bytes());
+    }
+    Ok(result)
+}
 fn types(
     words: &mut Vec<u64>,
     values: &[ir::Ty],

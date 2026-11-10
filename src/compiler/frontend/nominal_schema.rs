@@ -1186,9 +1186,15 @@ impl PlanState {
                     transport,
                 )?),
             },
+            // An inherent impl head needs the unsized Self identity as
+            // metadata. Value-position callable types retain the existing
+            // explicit rejection, rather than treating dyn as a sized value.
+            Type::Dyn(path) if depth == 0 && !allow_ref => {
+                self.source_dynamic_type(registry, path, bindings, caller, budget)?
+            }
             Type::Dyn(_) => {
                 return Err(
-                    "unsupported: trait object types are only admitted directly behind a reference"
+                    "E0277: a trait object value does not have a statically known size; use a reference or pointer"
                         .into(),
                 );
             }
