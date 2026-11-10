@@ -4067,9 +4067,11 @@ name = "rustc_expand_queries"
 version = "0.0.0"
 dependencies = [
  "rustc_ast",
+ "rustc_data_structures",
  "rustc_expand",
  "rustc_middle",
  "rustc_proc_macro",
+ "rustc_session",
  "rustc_span",
  "scoped-tls",
 ]

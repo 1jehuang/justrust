@@ -64,6 +64,12 @@ pub(crate) fn attr_macro_expansion<'tcx>(
     // Invalidate when the crate defining the proc macro changes.
     let _ = tcx.crate_hash(invoc_id.expn_data().macro_def_id.unwrap().krate);
 
+    // justrust: depend on the validated external inputs (environment
+    // variables, files) of the previous session's expansions, and record the
+    // inputs this expansion reads.
+    let _ = tcx.jr_proc_macro_inputs(());
+    let _recording = crate::InputRecording::begin(tcx);
+
     QueryAttrExpandCtx::with(|ecx, client| {
         let span = invoc_id.expn_data().call_site;
         rustc_expand::proc_macro::expand_attr_macro(

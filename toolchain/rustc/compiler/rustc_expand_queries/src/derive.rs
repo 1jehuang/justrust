@@ -75,6 +75,12 @@ pub(crate) fn derive_macro_expansion<'tcx>(
     // Make sure that we invalidate the query when the crate defining the proc macro changes
     let _ = tcx.crate_hash(invoc_id.expn_data().macro_def_id.unwrap().krate);
 
+    // justrust: depend on the validated external inputs (environment
+    // variables, files) of the previous session's expansions, and record the
+    // inputs this expansion reads.
+    let _ = tcx.jr_proc_macro_inputs(());
+    let _recording = crate::InputRecording::begin(tcx);
+
     QueryDeriveExpandCtx::with(|ecx, client| {
         rustc_expand::proc_macro::expand_derive_macro(invoc_id, input.clone(), ecx, client)
             .map(|ts| &*tcx.arena.alloc(ts))

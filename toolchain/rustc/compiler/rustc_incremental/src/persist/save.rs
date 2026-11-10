@@ -39,6 +39,16 @@ pub(crate) fn save_dep_graph(tcx: TyCtxt<'_>) {
         let dep_graph_path = dep_graph_path(incr_comp_session);
         let staging_dep_graph_path = staging_dep_graph_path(incr_comp_session);
 
+        // justrust: inputs of cached proc-macro expansions, validated by the
+        // next session's `jr_proc_macro_inputs`.
+        #[cfg(unix)]
+        if sess.opts.unstable_opts.cache_proc_macros {
+            rustc_data_structures::jr_macro_inputs::save(&in_incr_comp_dir_sess(
+                incr_comp_session,
+                rustc_data_structures::jr_macro_inputs::SIDECAR,
+            ));
+        }
+
         sess.time("assert_dep_graph", || assert_dep_graph(tcx));
         sess.time("check_clean", || clean::check_clean_annotations(tcx));
 

@@ -203,6 +203,22 @@ rustc_queries! {
     /// NOTE: This currently does not work with dependency info in the
     /// analysis, codegen and linking passes, place extra code at the top of
     /// `rustc_interface::passes::write_dep_info` to make that work.
+    /// justrust: validates the environment variables and files read by
+    /// cached proc-macro expansions in the previous session. Cached
+    /// expansions depend on it, so any changed input re-runs them.
+    query jr_proc_macro_inputs(_: ()) -> rustc_data_structures::svh::Svh {
+        eval_always
+        desc { "validating proc-macro environment and file inputs" }
+    }
+
+    /// justrust: a fresh value every session. Cached proc-macro expansions
+    /// that did something the input recorder cannot model read it, so they
+    /// are never reused.
+    query jr_proc_macro_impure(_: ()) -> rustc_data_structures::svh::Svh {
+        eval_always
+        desc { "marking an impure proc-macro expansion" }
+    }
+
     query env_var_os(key: &'tcx OsStr) -> Option<&'tcx OsStr> {
         // Environment variables are global state
         eval_always
