@@ -7,6 +7,30 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn entry_and_modify_matches_stock() {
+    closure_oracle::check(
+        "entry-and-modify",
+        &[
+            Case {
+                name: "occupied_only_and_consuming_capture",
+                source: r#"use std::collections::{HashMap,BTreeMap};fn main(){let mut h:HashMap<&str,i32>=HashMap::new();let mut calls=0;h.entry("a").and_modify(|v|{calls+=1;*v+=100;}).or_insert(7);h.entry("a").and_modify(|v|{calls+=1;*v+=2;}).or_insert(99);println!("{} {}",h["a"],calls);let mut b:BTreeMap<i32,String>=BTreeMap::new();b.insert(1,"left".to_string());let suffix=String::from("!");b.entry(1).and_modify(move|v|v.push_str(&suffix)).or_insert("bad".to_string());let mut missed=0;b.entry(2).and_modify(|v|{missed+=1;v.push_str("bad");}).or_insert("right".to_string());println!("{} {} {}",b[&1],b[&2],missed);}"#,
+                expect: Expect::Run("9 1\nleft! right 0\n"),
+            },
+            Case {
+                name: "wrong_value_parameter_in_unused_fn",
+                source: r#"use std::collections::HashMap;fn unused(){let mut m:HashMap<i32,i32>=HashMap::new();m.entry(1).and_modify(|v:&mut String|v.clear());}fn main(){}"#,
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "non_unit_callback_in_unused_fn",
+                source: r#"use std::collections::BTreeMap;fn unused(){let mut m:BTreeMap<i32,i32>=BTreeMap::new();m.entry(1).and_modify(|v|{*v+=1;7});}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn entry_default_only_evaluates_when_vacant() {
     closure_oracle::check(
         "entry-default-vacant-only",

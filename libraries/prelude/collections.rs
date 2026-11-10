@@ -226,6 +226,20 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> Entry<'a, K, V, S> {
             Option::None => panic!("entry slot missing"),
         }
     }
+
+    /// Runs `f` on the value when the key is present, then hands the entry
+    /// back so an `or_insert` family call can follow.
+    pub fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> Entry<'a, K, V, S> {
+        let map = self.map;
+        match map.find_key(&self.key) {
+            Option::Some(i) => match map.values.get_mut(i) {
+                Option::Some(v) => f(v),
+                Option::None => panic!("entry slot missing"),
+            },
+            Option::None => {}
+        }
+        Entry { map, key: self.key }
+    }
 }
 
 impl<'a, K: Hash + Eq, V: super::default::Default, S: BuildHasher> Entry<'a, K, V, S> {
@@ -435,6 +449,20 @@ impl<'a, K: super::cmp::Ord, V> BTreeEntry<'a, K, V> {
             Option::Some(v) => v,
             Option::None => panic!("entry slot missing"),
         }
+    }
+
+    /// Runs `f` on the value when the key is present, then hands the entry
+    /// back so an `or_insert` family call can follow.
+    pub fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> BTreeEntry<'a, K, V> {
+        let map = self.map;
+        match map.search(&self.key) {
+            super::result::Result::Ok(i) => match map.values.get_mut(i) {
+                Option::Some(v) => f(v),
+                Option::None => panic!("entry slot missing"),
+            },
+            super::result::Result::Err(_) => {}
+        }
+        BTreeEntry { map, key: self.key }
     }
 }
 
