@@ -7,7 +7,7 @@
 #            bench/on-remote.sh start -- bench/versus.py run --synth 1
 #   bench/on-remote.sh status [NAME]     is it running, last progress lines
 #   bench/on-remote.sh fetch [NAME]      copy new bench/results/*.json back here
-#   bench/on-remote.sh attach [NAME]     the tmux session (detach: C-b d)
+#   bench/on-remote.sh attach [NAME]     follow the log (C-c to stop following)
 #
 # Works with the hosted backend (Jcode build fleet) and the legacy aws one:
 # `justrust remote env` gives the ssh destination and options of whichever
@@ -23,7 +23,7 @@
 #     calling git (JUSTRUST_BENCH_SRC);
 #  3. aws: lowers kernel.perf_event_paranoid to 1 for the instruction
 #     counters (hosted machines are set up that way at boot);
-#  4. runs the command in tmux session NAME with output in ~/bench-NAME.log,
+#  4. runs the command detached (setsid, pidfile ~/bench-NAME.pid) with output in ~/bench-NAME.log,
 #     marking the machine active every minute so its idle stop waits.
 #
 # Results land in ~/bench-justrust/bench/results on the machine; `fetch`
@@ -60,18 +60,20 @@ MARK_ACTIVE='if [ -d /var/lib/justrust ]; then date +%s | sudo -n tee /var/lib/j
 cmd=${1:-}; shift || true
 if [[ ${1:-} == --name ]]; then NAME=$2; shift 2; fi
 if [[ $cmd != start && -n ${1:-} ]]; then NAME=$1; fi
+# Names become remote paths and shell words.
+[[ $NAME =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo 'on-remote: invalid session name' >&2; exit 2; }
 
 case "$cmd" in
 start)
   [[ ${1:-} == -- ]] && shift
   (( $# )) || { echo "usage: $0 start [--name N] -- <bench command>" >&2; exit 2; }
   resolve
-  for _ in $(seq 60); do ssh_n 'test -f /var/lib/justrust/ready -o -f /opt/jcode-build/ready' 2>/dev/null && break; sleep 3; done
+  ssh_n 'test -x ~/.cargo/bin/justrust'
   # The idle stop ignores uploads and quiet benchmark phases. Mark the
   # machine active now, and from the run script every minute while the
   # benchmark runs.
   ssh_t "$MARK_ACTIVE"
-  if ssh_t "tmux has-session -t $NAME 2>/dev/null"; then
+  if ssh_t "kill -0 \$(cat ~/bench-$NAME.pid 2>/dev/null) 2>/dev/null"; then
     echo "on-remote: session $NAME is already running (status/attach, or --name)" >&2; exit 1
   fi
   echo "on-remote: syncing justrust binary and repo" >&2
@@ -85,7 +87,7 @@ start)
   ssh_t 'chmod +x ~/bench-bin/.justrust.upload && mv -f ~/bench-bin/.justrust.upload ~/bench-bin/justrust'
   # Results include raw profiles and nested evidence, not only top-level
   # JSON. Never delete a completed host experiment while syncing sources.
-  rsync_t --delete --exclude target/ --exclude .git/ --exclude 'bench/results/' ./ R:bench-justrust/
+  rsync_t --delete --exclude target/ --exclude .git/ --exclude '/toolchain/' --exclude 'bench/results/' ./ R:bench-justrust/
   ssh_t 'mkdir -p bench-justrust/bench/results bench-src'
   # Pinned snapshot trees, as `git archive` tarballs (only what is missing).
   python3 - <<'PY' >"${TMPDIR:-/tmp}/on-remote-pins.$$"
@@ -114,7 +116,7 @@ PY
     echo '#!/bin/bash'
     echo 'cd ~/bench-justrust'
     printf '( while sleep 60; do %s; done ) &\n' "$MARK_ACTIVE"
-    echo 'trap "kill $! 2>/dev/null" EXIT'
+    printf 'trap '\''kill $! 2>/dev/null; rm -f "$HOME/bench-%s.pid"'\'' EXIT\n' "$NAME"
     echo 'export PATH=$HOME/bench-bin:$HOME/.cargo/bin:$PATH JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON="benchmark on the build machine itself"'
     # The machine has rustup's stable, not a distro cargo: that is "stock" there.
     echo '[ -x /usr/bin/cargo ] || export VERSUS_STOCK_CARGO=$HOME/.cargo/bin/cargo'
@@ -130,21 +132,24 @@ PY
     echo 'date'
     echo 'exit "$status"'
   } | ssh_t "cat >~/bench-$NAME.sh && chmod +x ~/bench-$NAME.sh"
-  ssh_t "tmux new-session -d -s $NAME 'bash ~/bench-$NAME.sh >~/bench-$NAME.log 2>&1'"
-  echo "on-remote: started in tmux session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"
+  # setsid, not tmux: hosted machines do not ship tmux. The pidfile is the
+  # session handle for status and the keepalive.
+  # This marker is written by the detached shell itself, before the payload.
+  ssh_t "setsid nohup bash -c 'echo \$\$ >~/bench-$NAME.pid; exec bash ~/bench-$NAME.sh' >~/bench-$NAME.log 2>&1 </dev/null &"
+  echo "on-remote: started session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"
   echo "  $0 status $NAME    $0 fetch $NAME"
   if [[ $KIND == hosted ]]; then
     # Hosted machines are stopped by the control plane's cron after
     # BUILD_IDLE_STOP_MINUTES with no connect, charge or run event; the
     # in-machine marker above does not count. Keep connecting from here
     # (an authenticated connect is activity) while the session runs.
-    nohup bash -c 'while '"${SSH[*]@Q}"' '"$DEST"' "tmux has-session -t '"$NAME"' 2>/dev/null"; do '"$JR"' remote env >/dev/null 2>&1; sleep 240; done' \
+    nohup bash -c 'while '"${SSH[*]@Q}"' '"$DEST"' "kill -0 \$(cat ~/bench-'"$NAME"'.pid 2>/dev/null) 2>/dev/null"; do '"$JR"' remote env >/dev/null 2>&1; sleep 240; done' \
       >"${TMPDIR:-/tmp}/on-remote-keepalive-$NAME.log" 2>&1 &
     echo "on-remote: hosted keepalive pid $! (connects every 4 min until the session ends)"
   fi
   ;;
 status)
-  if ssh_t "tmux has-session -t $NAME 2>/dev/null"; then echo "running"; else echo "finished (or not started)"; fi
+  if ssh_t "kill -0 \$(cat ~/bench-$NAME.pid 2>/dev/null) 2>/dev/null"; then echo "running"; else echo "finished (or not started)"; fi
   ssh_t "grep -v '^JCODE_PROGRESS' ~/bench-$NAME.log 2>/dev/null | tail -15; grep '^JCODE_PROGRESS' ~/bench-$NAME.log 2>/dev/null | tail -1"
   ;;
 fetch)
@@ -165,7 +170,7 @@ fetch)
   ;;
 attach)
   resolve
-  exec "${SSH[@]}" -t "$DEST" "tmux attach -t $NAME"
+  exec "${SSH[@]}" -t "$DEST" "tail -f ~/bench-$NAME.log"
   ;;
 *)
   sed -n '2,30p' "$0"; exit 2 ;;

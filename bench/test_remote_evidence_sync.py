@@ -24,6 +24,10 @@ class EvidenceSyncTests(unittest.TestCase):
             source.mkdir()
             dest.mkdir()
             (source / "bench").mkdir()
+            (source / "toolchain/rustc/build").mkdir(parents=True)
+            (source / "toolchain/rustc/build/large-artifact").write_text("do not upload")
+            (dest / "toolchain").mkdir()
+            (dest / "toolchain/host-only").write_text("preserve")
             (source / "source.rs").write_text("new source with changed size")
             (dest / "source.rs").write_text("old source")
             (dest / "removed-source.rs").write_text("stale")
@@ -36,6 +40,8 @@ class EvidenceSyncTests(unittest.TestCase):
             subprocess.run([*base_command, *options, str(source) + "/", str(dest) + "/"], check=True)
             self.assertEqual((dest / "source.rs").read_text(), "new source with changed size")
             self.assertFalse((dest / "removed-source.rs").exists())
+            self.assertFalse((dest / "toolchain/rustc/build/large-artifact").exists())
+            self.assertEqual((dest / "toolchain/host-only").read_text(), "preserve")
             for name in evidence:
                 self.assertEqual((dest / name).read_bytes(), b"host-only evidence\x00\x01")
 
