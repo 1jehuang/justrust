@@ -1250,7 +1250,14 @@ impl ValidatedTraitWorld {
             context.metadata_facts(),
             context.executable_storage,
         )?;
-        self.require_equality_rhs_sized(rhs, context, active)
+        // Equality normalization must preserve the associated declaration's
+        // implicit bound. `Deref::Target: ?Sized = S` does not prove S: Sized,
+        // nor require it. Explicit bounds are still checked when membership
+        // and the selected assignment are validated.
+        if !self.associated_header(projection.item)?.relaxed_sized {
+            self.require_equality_rhs_sized(rhs, context, active)?;
+        }
+        Ok(())
     }
 
     fn require_equality_rhs_sized(
@@ -1278,6 +1285,9 @@ impl ValidatedTraitWorld {
                 continue;
             };
             self.validate_equality_domain(projection, ty, env)?;
+            if self.associated_header(projection.item)?.relaxed_sized {
+                continue;
+            }
             if !self.raw_associated_ty_is_closed(ty, 0)? {
                 if !self.declared_rhs_proves_sized(ty, rows, env, 0)? {
                     return Err(FactsError::unproved(
@@ -2184,6 +2194,65 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn relaxed_associated_equality_does_not_require_or_prove_rhs_sized() {
+        let source = frontend::parse(
+            "trait Has{type Out:?Sized;}fn probe<T:?Sized,S:Has<Out=T>>(x:&T,s:&S){}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let facts = world
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap();
+        let (projection, rhs) = facts
+            .predicates
+            .predicates
+            .iter()
+            .find_map(|row| match row {
+                Predicate::ProjectionEq { projection, ty } => Some((projection, ty)),
+                _ => None,
+            })
+            .unwrap();
+        let context = ProofContext::from_facts(&facts);
+        let mut active = ProofScratch::default();
+        world
+            .validate_equality_domain_in(projection, rhs, context, &mut active)
+            .unwrap();
+        world
+            .require_in(
+                &Predicate::ProjectionEq {
+                    projection: projection.clone(),
+                    ty: rhs.clone(),
+                },
+                context,
+                &mut active,
+            )
+            .unwrap();
+        assert!(matches!(
+            world
+                .prove_in(
+                    &Predicate::Implements(TraitRef {
+                        declaration: world.catalog.id(CatalogItem::Sized),
+                        self_ty: rhs.clone(),
+                        args: Arc::from([]),
+                    }),
+                    context,
+                    &mut active,
+                )
+                .unwrap(),
+            ProofOutcome::NotProven
+        ));
+        // A separate associated declaration's default Sized bound still
+        // needs real caller evidence, not a relaxed equality from elsewhere.
+        let invalid = frontend::parse(
+            "trait Has{type Out;}struct Wrap<T:?Sized>{p:*const T}impl<T:?Sized> Has for Wrap<T>{type Out=T;}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&invalid, &PlanBudget::default()).unwrap();
+        assert!(plan.trait_world().is_err());
+    }
 
     // Genuine source-owned caller, projection, RHS parameter and opaque return.
     struct ActiveEqualityCase {

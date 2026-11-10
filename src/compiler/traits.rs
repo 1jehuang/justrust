@@ -10700,6 +10700,10 @@ impl ValidatedTraitWorld {
         )?;
         result.signature.ref_contract =
             self.realize_ref_contract(schema, args, &result.signature, declaration)?;
+        // Projection normalization changes types, not the declaration's
+        // lifetime topology. Rebuild only deferred return candidates after
+        // realizing that exact topology, before stored-contract validation.
+        self.complete_projected_contract(&mut result.signature)?;
         if result.predicates.len() != schema.predicates.len() {
             return Err(FactsError::invalid(
                 &self.budget,

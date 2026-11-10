@@ -1237,6 +1237,11 @@ fn direct_demands_in(
                 )?
             };
             let next = match resolved {
+                // A generic required call can become virtual only after its
+                // receiver is closed to a trait object. Substitution already
+                // authenticated that dispatch. As for an originally virtual
+                // call above, its targets belong to the unsizing frontier.
+                ir::Callee::Virtual(_) => continue,
                 ir::Callee::TraitItem(call)
                     if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) =>
                 {

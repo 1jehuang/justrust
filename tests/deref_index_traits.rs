@@ -39,6 +39,51 @@ fn main() { let w = W { v: 5 }; let x = *w.get() + 1; println!(\"{}\", x); }",
 }
 
 #[test]
+fn boxed_generic_trait_receiver_preserves_relaxed_target() {
+    let source = r#"
+trait Shape { fn area(&self) -> f64; }
+struct Square(f64);
+impl Shape for Square { fn area(&self) -> f64 { self.0 * self.0 } }
+fn one<S: Shape + ?Sized>(s: &Box<S>) -> f64 { s.area() }
+fn sized<S: Shape>(s: &Box<S>) -> f64 { s.area() }
+fn target<S: ?Sized>(s: &Box<S>) -> &S { &**s }
+fn through_ref<S: Shape + ?Sized>(s: &S) -> f64 { s.area() }
+fn main() {
+    let a = Box::new(Square(2.0));
+    let b: Box<dyn Shape> = Box::new(Square(3.0));
+    println!("{} {} {} {}", one(&a), sized(&a), one(&b), through_ref(target(&b)));
+}
+"#;
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+    }
+    run(source, "4 4 9 9\n");
+}
+
+#[test]
+fn relaxed_deref_target_does_not_grant_missing_traits_or_sizing() {
+    for source in [
+        // Even unused bodies must prove Shape for their exact receiver.
+        "trait Shape { fn area(&self) -> f64; } fn unused<S: ?Sized>(s: &Box<S>) -> f64 { s.area() } fn main() {}",
+        // A dynamic receiver never grants a missing concrete vtable.
+        "trait Shape { fn area(&self) -> f64; } fn unused() { let _: Box<dyn Shape> = Box::new(0i32); } fn main() {}",
+        // A relaxed target bound does not make an unrelated associated type
+        // implicitly ?Sized, nor prove an explicit Sized obligation.
+        "trait Has { type Out; } struct Wrap<T: ?Sized>{ p: *const T } impl<T: ?Sized> Has for Wrap<T> { type Out = T; } fn main() {}",
+        "trait Has { type Out: ?Sized + Copy; } struct Wrap<T: ?Sized>{ p: *const T } impl<T: ?Sized> Has for Wrap<T> { type Out = T; } fn main() {}",
+        "fn needs_sized<T>(s: &T) {} fn unused<S: ?Sized>(s: &Box<S>) { needs_sized(&**s); } fn main() {}",
+    ] {
+        for workers in [1, 8] {
+            assert!(
+                compiler::compile(source.into(), workers, true).is_err(),
+                "workers={workers}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn overloaded_deref_and_index() {
     run(
         "use std::ops::{Deref, Index};

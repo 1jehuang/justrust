@@ -143,6 +143,130 @@ pub(super) enum NominalCallablePublication {
 mod canonical_source_replay_tests {
     use super::*;
     #[test]
+    fn virtual_source_replay_keeps_callee_and_vtable_authority() {
+        let text = "trait Get{fn get(&self)->i32;}fn f(x:&dyn Get)->i32{x.get()}fn main(){}";
+        let (_, _, budget, publication) = published(text, 0);
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        let call = publication
+            .source()
+            .exprs
+            .iter()
+            .position(|expr| {
+                matches!(
+                    &expr.kind,
+                    ir::ExprKind::Call {
+                        target: ir::Callee::Virtual(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let ir::ExprKind::Call {
+            target: ir::Callee::Virtual(virtual_call),
+            ..
+        } = &publication.source().exprs[call].kind
+        else {
+            unreachable!()
+        };
+        let ir::Ty::Dyn(object) = &virtual_call.call.trait_ref.self_ty else {
+            unreachable!()
+        };
+        assert!(
+            publication
+                .facts()
+                .object_vtable_targets(&ir::Ty::Int(ir::IntTy::I32), object)
+                .is_err()
+        );
+        let (_, _, _, foreign) = published(text, 0);
+        let foreign_target = foreign
+            .source()
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::Call {
+                    target: target @ ir::Callee::Virtual(_),
+                    ..
+                } => Some(target.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let mut changed = publication.source().as_ref().clone();
+        let ir::ExprKind::Call { target, .. } = &mut changed.exprs[call].kind else {
+            unreachable!()
+        };
+        *target = foreign_target;
+        assert_eq!(
+            kind_error(publication.validate_source(
+                &Arc::new(changed),
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+    #[test]
+    fn required_envelope_replay_keeps_exact_signature_and_source_authority() {
+        let text = "trait Get{type Out;fn get(&self)->&Self::Out;}fn f<T:Get<Out=i32>>(x:&T)->&i32{x.get()}fn main(){}";
+        let (_, _, budget, publication) = published(text, 0);
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        let call = publication
+            .source()
+            .exprs
+            .iter()
+            .position(|expr| {
+                matches!(
+                    &expr.kind,
+                    ir::ExprKind::Call {
+                        target: ir::Callee::TraitItem(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let ir::ExprKind::Call { signature, .. } = &publication.source().exprs[call].kind else {
+            unreachable!()
+        };
+        assert!(
+            signature
+                .ref_contract
+                .results
+                .iter()
+                .any(|row| matches!(row.returns, ir::ReturnContract::SharedInputEnvelopes(_)))
+        );
+        for mutation in 0..3 {
+            let mut changed = publication.source().as_ref().clone();
+            let ir::ExprKind::Call { signature, .. } = &mut changed.exprs[call].kind else {
+                unreachable!()
+            };
+            match mutation {
+                0 => Arc::make_mut(&mut signature.ref_contract).results = Arc::from([]),
+                1 => {
+                    let contract = Arc::make_mut(&mut signature.ref_contract);
+                    Arc::make_mut(&mut contract.results)[0].returns = ir::ReturnContract::NoReference;
+                }
+                _ => changed.call_evidence = Arc::from([]),
+            }
+            assert_eq!(
+                kind_error(publication.validate_source(
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "forged envelope authority {mutation}"
+            );
+        }
+        let (_, _, _, foreign) = published(text, 0);
+        assert_eq!(
+            kind_error(publication.validate_source(foreign.source(), publication.facts(), &budget)),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+    #[test]
     fn source_ref_inventory_finishes_recursive_equations_without_hiding_other_payloads() {
         let prepared = crate::compiler::source::prepare_text_with_prelude(
             "source-ref-inventory.rs",
@@ -7859,20 +7983,24 @@ pub(super) fn replay_source_body_with_scratch(
                     equal &= replay_type_equal(required, actual, budget)?;
                 }
                 equal &= replay_type_equal(&required.result, &signature.result, budget)?;
-                sr::work(
+                // Both signatures already carry exact canonical authority:
+                // the emitted callee was replayed above and the original view
+                // was authenticated in this caller. The fixture-only structural
+                // completeness helper rejects valid universal envelopes.
+                ir::validate_stored_ref_contract(
+                    &required.params,
+                    &required.result,
+                    &required.ref_contract,
                     budget,
-                    required
-                        .ref_contract
-                        .validation_work(&required.params, &required.result)
-                        .map_err(|error| source_error(budget, &error))?,
-                )?;
-                sr::work(
+                )
+                .map_err(|error| source_error(budget, &error))?;
+                ir::validate_stored_ref_contract(
+                    &signature.params,
+                    &signature.result,
+                    &signature.ref_contract,
                     budget,
-                    signature
-                        .ref_contract
-                        .validation_work(&signature.params, &signature.result)
-                        .map_err(|error| source_error(budget, &error))?,
-                )?;
+                )
+                .map_err(|error| source_error(budget, &error))?;
                 equal &= required.ref_contract == signature.ref_contract;
                 if !equal {
                     return Err(FactsError::invalid(
