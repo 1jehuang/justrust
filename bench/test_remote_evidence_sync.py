@@ -1,5 +1,6 @@
 """Exercise the actual on-remote rsync options against nested host evidence."""
 from pathlib import Path
+import os
 import shlex
 import shutil
 import subprocess
@@ -44,6 +45,23 @@ class EvidenceSyncTests(unittest.TestCase):
             self.assertEqual((dest / "toolchain/host-only").read_text(), "preserve")
             for name in evidence:
                 self.assertEqual((dest / name).read_bytes(), b"host-only evidence\x00\x01")
+
+    def test_remote_runs_pin_distinct_client_binaries(self):
+        script = (Path(__file__).parent / "on-remote.sh").read_text()
+        line = next(line.strip() for line in script.splitlines()
+                    if line.strip().startswith("printf 'export PATH="))
+        self.assertIn('"R:bench-bin/$NAME/.justrust.upload"', script)
+        with tempfile.TemporaryDirectory() as home:
+            for name in ("baseline", "candidate"):
+                generated = subprocess.run(
+                    ["bash", "-c", 'NAME="$1"\n' + line, "generate", name],
+                    text=True, capture_output=True, check=True).stdout
+                observed = subprocess.run(
+                    ["bash", "-c", generated + '\nprintf "%s\\n" "$JUSTRUST_BIN" "$JUSTRUST_NO_UPDATE" "${PATH%%:*}"'],
+                    env={"HOME": home, "PATH": os.environ["PATH"]},
+                    text=True, capture_output=True, check=True).stdout.splitlines()
+                self.assertEqual(observed, [f"{home}/bench-bin/{name}/justrust", "1",
+                                            f"{home}/bench-bin/{name}"])
 
     def test_capture_default_and_shell_syntax(self):
         script = Path(__file__).parent / "critpath-capture.sh"

@@ -15,7 +15,8 @@
 #
 # What `start` does:
 #  1. starts the machine if needed, copies this justrust binary to
-#     ~/bench-bin there (same arch, never the agent's own binary) and syncs this repo's working tree to ~/bench-justrust (not the
+#     ~/bench-bin/NAME/justrust there (same arch, isolated from other runs and
+#     the agent's own binary) and syncs this repo's working tree to ~/bench-justrust (not the
 #     build mirror at /home/jeremy/justrust, which the sync daemon owns);
 #  2. makes the pinned snapshot trees exist there: for every repo in
 #     bench/suite.py SNAPSHOTS, `git archive` of the pinned commit goes to
@@ -82,9 +83,9 @@ start)
   # Its own directory: ~/.cargo/bin/justrust belongs to the remote build
   # agent, and replacing it under the running agent broke every remote
   # build until the agent restarted.
-  ssh_t 'mkdir -p ~/bench-bin'
-  rsync_t "$(readlink -f "$(command -v "$JR")")" R:bench-bin/.justrust.upload
-  ssh_t 'chmod +x ~/bench-bin/.justrust.upload && mv -f ~/bench-bin/.justrust.upload ~/bench-bin/justrust'
+  ssh_t "mkdir -p ~/bench-bin/$NAME"
+  rsync_t "$(readlink -f "$(command -v "$JR")")" "R:bench-bin/$NAME/.justrust.upload"
+  ssh_t "chmod +x ~/bench-bin/$NAME/.justrust.upload && mv -f ~/bench-bin/$NAME/.justrust.upload ~/bench-bin/$NAME/justrust"
   # Results include raw profiles and nested evidence, not only top-level
   # JSON. Never delete a completed host experiment while syncing sources.
   rsync_t --delete --exclude target/ --exclude .git/ --exclude '/toolchain/' --exclude 'bench/results/' ./ R:bench-justrust/
@@ -117,7 +118,7 @@ PY
     echo 'cd ~/bench-justrust'
     printf '( while sleep 60; do %s; done ) &\n' "$MARK_ACTIVE"
     printf 'trap '\''kill $! 2>/dev/null; rm -f "$HOME/bench-%s.pid"'\'' EXIT\n' "$NAME"
-    echo 'export PATH=$HOME/bench-bin:$HOME/.cargo/bin:$PATH JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON="benchmark on the build machine itself"'
+    printf 'export PATH="$HOME/bench-bin/%s:$HOME/.cargo/bin:$PATH" JUSTRUST_BIN="$HOME/bench-bin/%s/justrust" JUSTRUST_NO_UPDATE=1 JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON="benchmark on the build machine itself"\n' "$NAME" "$NAME"
     # The machine has rustup's stable, not a distro cargo: that is "stock" there.
     echo '[ -x /usr/bin/cargo ] || export VERSUS_STOCK_CARGO=$HOME/.cargo/bin/cargo'
     # The executable copied above may be older than this source checkout.
