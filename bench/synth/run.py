@@ -132,11 +132,15 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
         partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
-        identity=None) -> dict:
+        identity=None, stop_on_invalid: bool = False) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
-    generator and stacks (a spot interruption killed the run), run the rest."""
+    generator and stacks (a spot interruption killed the run), run the rest.
+    `stop_on_invalid`: finish and persist the first erroneous or noisy point,
+    then stop before the next point. Cannot be combined with resume."""
+    if stop_on_invalid and resume:
+        raise ValueError("bench: stop_on_invalid cannot be combined with resume")
     if identity is not None and resume:
         raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
     gen._locked()
@@ -158,6 +162,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
             print("  synth: partial result is from another run, starting over", file=sys.stderr)
     done = {p["i"] for p in res_points}
     t_start = time.monotonic()
+    stopped = {}
     for k, plan in enumerate(plans):
         if plan.point.i in done:
             continue
@@ -186,15 +191,25 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
               file=sys.stderr)
         res_points.append({**plan.to_json(), "samples": samples, "errors": errors,
                            "stats": {s: versus.stats(v) for s, v in samples.items() if v}})
+        if stop_on_invalid:
+            reasons = []
+            if errors:
+                reasons.append("measurement errors")
+            if any(x.get("noisy") is not False for values in samples.values() for x in values):
+                reasons.append("noisy samples")
+            if reasons:
+                stopped = {"stopped_early": f"point {plan.point.i}: " + ", ".join(reasons)}
         if partial:
             partial.parent.mkdir(parents=True, exist_ok=True)
             partial.write_text(json.dumps({"seed": seed, "points": points, "reps": reps, "partial": True,
                                            "generator": gen.fingerprint(), "sample_info": info,
-                                           "stack_names": [s.name for s in stacks], "results": res_points}))
+                                           "stack_names": [s.name for s in stacks], "results": res_points, **stopped}))
+        if stopped:
+            break
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
     return {"seed": seed, "points": points, "reps": reps, "generator": gen.fingerprint(), "sample_info": info,
-            "stack_names": [s.name for s in stacks], "results": res_points}
+            "stack_names": [s.name for s in stacks], "results": res_points, **stopped}
 
 
 # --- reporting --------------------------------------------------------------
