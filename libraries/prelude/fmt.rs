@@ -792,12 +792,405 @@ impl Debug for String {
 }
 
 // ---- floats ----
+// Float printing works on exact decimal expansions. A finite float is
+// `m * 2^e`. For `e < 0` that equals `m * 5^-e / 10^-e`, so the decimal
+// digits of one big integer plus a decimal point position describe the value
+// exactly. Fixed and exponent precision round that expansion half-to-even,
+// and the shortest form searches the digit prefixes of the value between the
+// exact midpoints to the neighbouring floats of the same width.
+// Everything lives in fixed stack buffers: the longest f64 expansion
+// (`(4m + 2) * 5^1076`) has 770 digits and 80 limbs.
 
-fn push_u64(s: &mut String, mut n: u64) {
-    let mut digits = [0u8; 20];
+/// Decimal digits (most significant first, values 0-9) with `point` digits
+/// before the decimal point (`point <= 0` means leading fractional zeros).
+struct Decimal {
+    digits: [u8; 800],
+    len: usize,
+    point: i64,
+}
+
+fn big_mul_small(b: &mut [u32], len: usize, m: u32) -> usize {
+    let mut carry = 0u64;
     let mut i = 0usize;
+    while i < len {
+        let v = (b[i] as u64) * (m as u64) + carry;
+        b[i] = v as u32;
+        carry = v >> 32u32;
+        i += 1usize;
+    }
+    if carry != 0u64 {
+        b[len] = carry as u32;
+        return len + 1usize;
+    }
+    len
+}
+
+/// Writes the decimal digits of `x * 2^e` for `e >= 0`, or of `x * 5^-e`
+/// for `e < 0` (the value scaled by `10^-e`), most significant first.
+/// Returns the digit count, zero for a zero value.
+fn scaled_digits(x: u64, e: i32, out: &mut [u8]) -> usize {
+    let mut b = [0u32; 84];
+    let mut len = 0usize;
+    if e >= 0i32 {
+        let words = (e / 32i32) as usize;
+        let bits = (e % 32i32) as u32;
+        // x < 2^64 shifted by under 32 bits spans three limbs.
+        let wide = (x as u128) << bits;
+        b[words] = wide as u32;
+        b[words + 1usize] = (wide >> 32u32) as u32;
+        b[words + 2usize] = (wide >> 64u32) as u32;
+        len = words + 3usize;
+    } else {
+        b[0usize] = x as u32;
+        b[1usize] = (x >> 32u32) as u32;
+        len = 2usize;
+        let mut n = (0i32 - e) as usize;
+        while n >= 13usize {
+            len = big_mul_small(&mut b, len, 1220703125u32);
+            n -= 13usize;
+        }
+        let mut small = 1u32;
+        while n > 0usize {
+            small = small * 5u32;
+            n -= 1usize;
+        }
+        len = big_mul_small(&mut b, len, small);
+    }
+    while len > 0usize && b[len - 1usize] == 0u32 {
+        len -= 1usize;
+    }
+    // Nine decimal digits per division, least significant first.
+    let mut count = 0usize;
+    while len > 0usize {
+        let mut rem = 0u64;
+        let mut i = len;
+        while i > 0usize {
+            i -= 1usize;
+            let v = (rem << 32u32) | (b[i] as u64);
+            b[i] = (v / 1000000000u64) as u32;
+            rem = v % 1000000000u64;
+        }
+        while len > 0usize && b[len - 1usize] == 0u32 {
+            len -= 1usize;
+        }
+        let mut chunk = rem as u32;
+        let mut j = 0usize;
+        while j < 9usize {
+            out[count] = (chunk % 10u32) as u8;
+            count += 1usize;
+            chunk = chunk / 10u32;
+            j += 1usize;
+        }
+    }
+    while count > 0usize && out[count - 1usize] == 0u8 {
+        count -= 1usize;
+    }
+    let mut lo = 0usize;
+    let mut hi = count;
+    while lo + 1usize < hi {
+        hi -= 1usize;
+        let t = out[lo];
+        out[lo] = out[hi];
+        out[hi] = t;
+        lo += 1usize;
+    }
+    count
+}
+
+/// Right-aligns `len` digits to `width` digits with leading zeros.
+fn align_right(d: &mut [u8], len: usize, width: usize) {
+    let shift = width - len;
+    if shift == 0usize {
+        return;
+    }
+    let mut i = len;
+    while i > 0usize {
+        i -= 1usize;
+        d[i + shift] = d[i];
+    }
+    let mut j = 0usize;
+    while j < shift {
+        d[j] = 0u8;
+        j += 1usize;
+    }
+}
+
+/// Compares the first `n` digits: 0 less, 1 equal, 2 greater.
+fn cmp_prefix(a: &[u8], b: &[u8], n: usize) -> u8 {
+    let mut i = 0usize;
+    while i < n {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { 0u8 } else { 2u8 };
+        }
+        i += 1usize;
+    }
+    1u8
+}
+
+fn rest_is_zero(d: &[u8], from: usize, len: usize) -> bool {
+    let mut i = from;
+    while i < len {
+        if d[i] != 0u8 {
+            return false;
+        }
+        i += 1usize;
+    }
+    true
+}
+
+fn zero_decimal() -> Decimal {
+    Decimal { digits: [0u8; 800], len: 1usize, point: 1i64 }
+}
+
+/// Exact decimal expansion of `m * 2^e`.
+fn exact_decimal(m: u64, e: i32) -> Decimal {
+    let mut d = zero_decimal();
+    if m == 0u64 {
+        return d;
+    }
+    d.len = scaled_digits(m, e, &mut d.digits);
+    let k: i64 = if e < 0i32 { 0i64 - (e as i64) } else { 0i64 };
+    d.point = (d.len as i64) - k;
+    d
+}
+
+/// Shortest decimal that reads back as `m * 2^e` in a float format whose
+/// neighbours are one unit of `m` away (half a unit below when
+/// `lower_closer`), choosing the candidate closest to the exact value.
+fn shortest_decimal(m: u64, e: i32, lower_closer: bool) -> Decimal {
+    let mut out = zero_decimal();
+    if m == 0u64 {
+        return out;
+    }
+    // Interval bounds are inclusive when the mantissa is even, because
+    // reading a midpoint rounds to the even neighbour.
+    let even = m % 2u64 == 0u64;
+    let e2 = e - 2i32;
+    let k: i64 = if e2 < 0i32 { 0i64 - (e2 as i64) } else { 0i64 };
+    let below = if lower_closer { 1u64 } else { 2u64 };
+    let mut high = [0u8; 800];
+    let mut value = [0u8; 800];
+    let mut low = [0u8; 800];
+    let high_len = scaled_digits(m * 4u64 + 2u64, e2, &mut high);
+    let width = high_len + 1usize;
+    align_right(&mut high, high_len, width);
+    let value_len = scaled_digits(m * 4u64, e2, &mut value);
+    align_right(&mut value, value_len, width);
+    let low_len = scaled_digits(m * 4u64 - below, e2, &mut low);
+    align_right(&mut low, low_len, width);
+    let mut up = [0u8; 800];
+    let mut n = 1usize;
     loop {
-        digits[i] = (n % 10u64) as u8;
+        let c = cmp_prefix(&value, &low, n);
+        let down_ok = c == 2u8 || (c == 1u8 && even && rest_is_zero(&low, n, width));
+        // `up` is the n digit prefix of the value plus one in its last place.
+        let mut i = 0usize;
+        while i < n {
+            up[i] = value[i];
+            i += 1usize;
+        }
+        let mut j = n;
+        while j > 0usize {
+            j -= 1usize;
+            if up[j] == 9u8 {
+                up[j] = 0u8;
+            } else {
+                up[j] += 1u8;
+                break;
+            }
+        }
+        let c = cmp_prefix(&up, &high, n);
+        let up_ok = c == 0u8 || (c == 1u8 && (even || !rest_is_zero(&high, n, width)));
+        if down_ok || up_ok {
+            let take_up = !down_ok || (up_ok && n < width && value[n] >= 5u8);
+            let mut start = 0usize;
+            let mut len = 0usize;
+            let mut i = 0usize;
+            while i < n {
+                let d = if take_up { up[i] } else { value[i] };
+                if d != 0u8 && len == 0usize {
+                    start = i;
+                }
+                if d != 0u8 || len > 0usize {
+                    out.digits[len] = d;
+                    len += 1usize;
+                }
+                i += 1usize;
+            }
+            while len > 1usize && out.digits[len - 1usize] == 0u8 {
+                len -= 1usize;
+            }
+            out.len = len;
+            out.point = (width as i64) - (start as i64) - k;
+            return out;
+        }
+        n += 1usize;
+    }
+}
+
+/// Rounds `len` digits to their first `cut >= 1` digits (`cut < len`),
+/// half-to-even on the dropped tail. Returns true when the carry ran off
+/// the top (the kept digits are then all zero and stand for a one followed
+/// by `cut` zeros).
+fn round_digits(d: &mut [u8], len: usize, cut: usize) -> bool {
+    let first = d[cut];
+    let up = first > 5u8
+        || (first == 5u8 && (!rest_is_zero(d, cut + 1usize, len) || d[cut - 1usize] % 2u8 == 1u8));
+    if !up {
+        return false;
+    }
+    let mut j = cut;
+    while j > 0usize {
+        j -= 1usize;
+        if d[j] == 9u8 {
+            d[j] = 0u8;
+        } else {
+            d[j] += 1u8;
+            return false;
+        }
+    }
+    true
+}
+
+fn push_zeros(s: &mut String, n: usize) {
+    let mut i = 0usize;
+    while i < n {
+        s.push_byte(48u8);
+        i += 1usize;
+    }
+}
+
+fn push_digit_range(s: &mut String, d: &[u8], from: usize, to: usize) {
+    let mut i = from;
+    while i < to {
+        s.push_byte(48u8 + d[i]);
+        i += 1usize;
+    }
+}
+
+/// `{:.N}`: exactly `precision` fractional digits.
+fn push_fixed(s: &mut String, mut value: Decimal, precision: usize) {
+    // Index of the first digit that does not fit.
+    let cut = value.point + (precision as i64);
+    if cut <= 0i64 {
+        // Every digit is dropped. Only a value above half of the last place
+        // rounds up (a tie rounds to the even zero).
+        let up = cut == 0i64
+            && (value.digits[0usize] > 5u8
+                || (value.digits[0usize] == 5u8
+                    && !rest_is_zero(&value.digits, 1usize, value.len)));
+        value.digits[0usize] = if up { 1u8 } else { 0u8 };
+        value.len = 1usize;
+        value.point = if up { 1i64 - (precision as i64) } else { 1i64 };
+    } else if (cut as usize) < value.len {
+        let cut = cut as usize;
+        if round_digits(&mut value.digits, value.len, cut) {
+            value.digits[0usize] = 1u8;
+            value.point += 1i64;
+        }
+        value.len = cut;
+    }
+    let len = value.len;
+    if value.point <= 0i64 {
+        s.push_byte(48u8);
+    } else {
+        let whole = value.point as usize;
+        if len <= whole {
+            push_digit_range(s, &value.digits, 0usize, len);
+            push_zeros(s, whole - len);
+        } else {
+            push_digit_range(s, &value.digits, 0usize, whole);
+        }
+    }
+    if precision == 0usize {
+        return;
+    }
+    s.push('.');
+    let mut written = 0usize;
+    if value.point < 0i64 {
+        let mut zeros = (0i64 - value.point) as usize;
+        if zeros > precision {
+            zeros = precision;
+        }
+        push_zeros(s, zeros);
+        written = zeros;
+    }
+    let from = if value.point > 0i64 { value.point as usize } else { 0usize };
+    if from < len && written < precision {
+        let mut to = from + (precision - written);
+        if to > len {
+            to = len;
+        }
+        push_digit_range(s, &value.digits, from, to);
+        written += to - from;
+    }
+    push_zeros(s, precision - written);
+}
+
+/// Positional form of every digit, `.0` appended to integers for Debug.
+fn push_positional(s: &mut String, value: Decimal, debug: bool) {
+    let len = value.len;
+    if value.point <= 0i64 {
+        s.push_str("0.");
+        push_zeros(s, (0i64 - value.point) as usize);
+        push_digit_range(s, &value.digits, 0usize, len);
+        return;
+    }
+    let whole = value.point as usize;
+    if len <= whole {
+        push_digit_range(s, &value.digits, 0usize, len);
+        push_zeros(s, whole - len);
+        if debug {
+            s.push_str(".0");
+        }
+        return;
+    }
+    push_digit_range(s, &value.digits, 0usize, whole);
+    s.push('.');
+    push_digit_range(s, &value.digits, whole, len);
+}
+
+/// `d.ddde±x`. With a precision the digits are rounded or zero-extended to
+/// `precision + 1` places. `value` has no leading zero unless it is zero.
+fn push_exponent(s: &mut String, mut value: Decimal, precision: Option<usize>, upper: bool) {
+    let mut exp = value.point - 1i64;
+    let mut len = value.len;
+    match precision {
+        Option::Some(p) => {
+            if p + 1usize < len {
+                if round_digits(&mut value.digits, len, p + 1usize) {
+                    value.digits[0usize] = 1u8;
+                    exp += 1i64;
+                }
+                len = p + 1usize;
+            }
+        }
+        Option::None => {
+            while len > 1usize && value.digits[len - 1usize] == 0u8 {
+                len -= 1usize;
+            }
+        }
+    }
+    s.push_byte(48u8 + value.digits[0usize]);
+    let places = match precision {
+        Option::Some(p) => p,
+        Option::None => len - 1usize,
+    };
+    if places > 0usize {
+        s.push('.');
+        push_digit_range(s, &value.digits, 1usize, len);
+        push_zeros(s, places - (len - 1usize));
+    }
+    s.push_byte(if upper { 69u8 } else { 101u8 });
+    if exp < 0i64 {
+        s.push('-');
+        exp = 0i64 - exp;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = 0usize;
+    let mut n = exp as u64;
+    loop {
+        buf[i] = (n % 10u64) as u8;
         i += 1usize;
         n = n / 10u64;
         if n == 0u64 {
@@ -806,204 +1199,54 @@ fn push_u64(s: &mut String, mut n: u64) {
     }
     while i > 0usize {
         i -= 1usize;
-        s.push_byte(48u8 + digits[i]);
+        s.push_byte(48u8 + buf[i]);
     }
 }
 
-fn pow10(n: usize) -> f64 {
-    let mut r = 1.0f64;
-    let mut i = 0usize;
-    while i < n {
-        r = r * 10.0f64;
-        i += 1usize;
+/// Formats the finite float `m * 2^e` (or an infinity or NaN).
+/// `class`: 0 finite, 1 infinite, 2 NaN. `mode`: 0 Display, 1 Debug,
+/// 2 LowerExp, 3 UpperExp.
+fn fmt_float_parts(
+    f: &mut Formatter,
+    negative: bool,
+    class: u8,
+    m: u64,
+    e: i32,
+    lower_closer: bool,
+    mode: u8,
+) -> Result {
+    if class == 2u8 {
+        // NaN never shows a sign, but still honors width and zero padding.
+        let plus = f.plus;
+        f.plus = false;
+        let r = f.pad_integral(true, "", "NaN");
+        f.plus = plus;
+        return r;
     }
-    r
-}
-
-/// Fixed-precision decimal of `x < 1e16`, rounded half-to-even on the exact
-/// binary value (as std does): `2.55` is below the tie, so `{:.1}` is `2.5`.
-/// The fraction is `m / 2^k` exactly. Its digits come from repeated
-/// multiplication by ten in base-2^32 limbs. The first pass finds the
-/// rounding direction and the second writes the digits.
-fn push_fixed(s: &mut String, x: f64, precision: usize) {
-    let base = 4294967296u64;
-    let mut whole = x as u64;
-    let mut fraction = x - (whole as f64);
-    let mut k = 0usize;
-    while fraction != ((fraction as u64) as f64) {
-        fraction = fraction * 2.0f64;
-        k += 1usize;
+    if class == 1u8 {
+        return f.pad_integral(!negative, "", "inf");
     }
-    let m = fraction as u64;
-    let limb = k / 32usize;
-    let limbs = limb + 2usize;
-    let mut unit = 1u64;
-    let mut b = 0usize;
-    while b < k % 32usize {
-        unit = unit * 2u64;
-        b += 1usize;
-    }
-    let mut up = false;
-    let mut has_non9 = false;
-    let mut last_non9 = 0usize;
-    let mut pass = 0usize;
-    while pass < 2usize {
-        let mut r = [0u32; 36];
-        r[0] = (m % base) as u32;
-        r[1] = (m / base) as u32;
-        if pass == 1usize {
-            if up && !has_non9 {
-                whole += 1u64;
-            }
-            push_u64(s, whole);
-            if precision > 0usize {
-                s.push('.');
-            }
-        }
-        let mut last_digit = (whole % 10u64) as u8;
-        let mut i = 0usize;
-        while i < precision {
-            let mut carry = 0u64;
-            let mut j = 0usize;
-            while j < limbs {
-                let v = (r[j] as u64) * 10u64 + carry;
-                r[j] = (v % base) as u32;
-                carry = v / base;
-                j += 1usize;
-            }
-            let top = (r[limb] as u64) + (r[limb + 1usize] as u64) * base;
-            let digit = (top / unit) as u8;
-            r[limb] = (top % unit) as u32;
-            r[limb + 1usize] = 0u32;
-            if pass == 0usize {
-                if digit != 9u8 {
-                    has_non9 = true;
-                    last_non9 = i;
-                }
-                last_digit = digit;
-            } else {
-                let out = if !up || (has_non9 && i < last_non9) {
-                    digit
-                } else if has_non9 && i == last_non9 {
-                    digit + 1u8
-                } else {
-                    0u8
-                };
-                s.push_byte(48u8 + out);
-            }
-            i += 1usize;
-        }
-        if pass == 0usize && k > 0usize {
-            // Compare the remainder with one half, 2^(k-1).
-            let half_limb = (k - 1usize) / 32usize;
-            let mut half = 1u64;
-            let mut b = 0usize;
-            while b < (k - 1usize) % 32usize {
-                half = half * 2u64;
-                b += 1usize;
-            }
-            if ((r[half_limb] as u64) / half) % 2u64 == 1u64 {
-                let mut above = false;
-                let mut j = 0usize;
-                while j < limbs {
-                    let mut v = r[j] as u64;
-                    if j == half_limb {
-                        v -= half;
-                    }
-                    if v != 0u64 {
-                        above = true;
-                    }
-                    j += 1usize;
-                }
-                up = above || (last_digit % 2u8) == 1u8;
-            }
-        }
-        pass += 1usize;
-    }
-}
-
-/// Shortest decimal that round-trips through f64 (Rust's `{}` for floats),
-/// limited to 17 significant digits.
-fn push_shortest(s: &mut String, x: f64) {
-    if x == 0.0f64 {
-        s.push('0');
-        return;
-    }
-    let mut precision = 0usize;
-    while precision < 17usize {
-        let scale = pow10(precision);
-        let scaled = x * scale;
-        let rounded = round_half_even(scaled);
-        if rounded / scale == x {
-            break;
-        }
-        precision += 1usize;
-    }
-    push_fixed(s, x, precision);
-}
-
-fn round_half_even(x: f64) -> f64 {
-    let whole = x as u64;
-    let frac = x - (whole as f64);
-    let mut r = whole;
-    if frac > 0.5f64 || (frac == 0.5f64 && (whole % 2u64) == 1u64) {
-        r += 1u64;
-    }
-    r as f64
-}
-
-pub fn fmt_float(f: &mut Formatter, x: f64, debug: bool) -> Result {
-    if x != x {
-        return f.pad("NaN");
-    }
-    let negative = x < 0.0f64 || (x == 0.0f64 && 1.0f64 / x < 0.0f64);
-    let magnitude = if negative { -x } else { x };
     let mut s = String::new();
-    if magnitude == 1.0f64 / 0.0f64 {
-        s.push_str("inf");
-    } else if magnitude >= 1e16f64 {
-        // Large values: integer digits through u128.
-        let mut digits = String::new();
-        let mut n = magnitude as u128;
-        let mut buf = [0u8; 40];
-        let mut i = 0usize;
-        loop {
-            buf[i] = (n % 10u128) as u8;
-            i += 1usize;
-            n = n / 10u128;
-            if n == 0u128 {
-                break;
-            }
-        }
-        while i > 0usize {
-            i -= 1usize;
-            digits.push_byte(48u8 + buf[i]);
-        }
-        s.push_str(digits.as_str());
-        match f.precision {
-            Option::Some(p) => {
-                if p > 0usize {
-                    s.push('.');
-                    let mut k = 0usize;
-                    while k < p {
-                        s.push('0');
-                        k += 1usize;
-                    }
-                }
-            }
-            Option::None => {
-                if debug {
-                    s.push_str(".0");
-                }
-            }
-        }
+    let precision = f.precision;
+    if mode >= 2u8 {
+        let value = match precision {
+            Option::Some(_) => exact_decimal(m, e),
+            Option::None => shortest_decimal(m, e, lower_closer),
+        };
+        push_exponent(&mut s, value, precision, mode == 3u8);
     } else {
-        match f.precision {
-            Option::Some(p) => push_fixed(&mut s, magnitude, p),
+        match precision {
+            Option::Some(p) => {
+                push_fixed(&mut s, exact_decimal(m, e), p);
+            }
             Option::None => {
-                push_shortest(&mut s, magnitude);
-                if debug && magnitude == ((magnitude as u64) as f64) {
-                    s.push_str(".0");
+                let value = shortest_decimal(m, e, lower_closer);
+                // Debug switches to exponent form outside [1e-4, 1e16).
+                let exp = value.point - 1i64;
+                if mode == 1u8 && m != 0u64 && (exp < -4i64 || exp >= 16i64) {
+                    push_exponent(&mut s, value, Option::None, false);
+                } else {
+                    push_positional(&mut s, value, mode == 1u8);
                 }
             }
         }
@@ -1011,24 +1254,252 @@ pub fn fmt_float(f: &mut Formatter, x: f64, debug: bool) -> Result {
     f.pad_integral(!negative, "", s.as_str())
 }
 
+fn fmt_f64(f: &mut Formatter, x: f64, mode: u8) -> Result {
+    let p = &x as *const f64 as *const u64;
+    let bits = unsafe { *p };
+    let negative = (bits >> 63u32) != 0u64;
+    let field = ((bits >> 52u32) & 2047u64) as i32;
+    let fraction = bits & 4503599627370495u64;
+    if field == 2047i32 {
+        let class = if fraction == 0u64 { 1u8 } else { 2u8 };
+        return fmt_float_parts(f, negative, class, 0u64, 0i32, false, mode);
+    }
+    if field == 0i32 {
+        return fmt_float_parts(f, negative, 0u8, fraction, -1074i32, false, mode);
+    }
+    let m = fraction | 4503599627370496u64;
+    fmt_float_parts(f, negative, 0u8, m, field - 1075i32, fraction == 0u64 && field > 1i32, mode)
+}
+
+fn fmt_f32(f: &mut Formatter, x: f32, mode: u8) -> Result {
+    let p = &x as *const f32 as *const u32;
+    let bits = unsafe { *p };
+    let negative = (bits >> 31u32) != 0u32;
+    let field = ((bits >> 23u32) & 255u32) as i32;
+    let fraction = (bits & 8388607u32) as u64;
+    if field == 255i32 {
+        let class = if fraction == 0u64 { 1u8 } else { 2u8 };
+        return fmt_float_parts(f, negative, class, 0u64, 0i32, false, mode);
+    }
+    if field == 0i32 {
+        return fmt_float_parts(f, negative, 0u8, fraction, -149i32, false, mode);
+    }
+    let m = fraction | 8388608u64;
+    fmt_float_parts(f, negative, 0u8, m, field - 150i32, fraction == 0u64 && field > 1i32, mode)
+}
+
+/// `{:e}` / `{:E}` of an integer magnitude: every digit is significant,
+/// trailing zeros are dropped unless a precision asks for them.
+fn fmt_int_exp(f: &mut Formatter, nonneg: bool, mut n: u128, upper: bool) -> Result {
+    let mut buf = [0u8; 40];
+    let mut i = 0usize;
+    loop {
+        buf[i] = (n % 10u128) as u8;
+        i += 1usize;
+        n = n / 10u128;
+        if n == 0u128 {
+            break;
+        }
+    }
+    let mut value = zero_decimal();
+    value.len = i;
+    value.point = i as i64;
+    let mut k = 0usize;
+    while i > 0usize {
+        i -= 1usize;
+        value.digits[k] = buf[i];
+        k += 1usize;
+    }
+    let mut s = String::new();
+    let precision = f.precision;
+    push_exponent(&mut s, value, precision, upper);
+    f.pad_integral(nonneg, "", s.as_str())
+}
+
+fn fmt_signed_exp(f: &mut Formatter, n: i128, upper: bool) -> Result {
+    if n < 0i128 {
+        fmt_int_exp(f, false, ((-(n + 1i128)) as u128) + 1u128, upper)
+    } else {
+        fmt_int_exp(f, true, n as u128, upper)
+    }
+}
+
+pub trait LowerExp {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+
+pub trait UpperExp {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+
 impl Display for f64 {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        fmt_float(f, *self, false)
+        fmt_f64(f, *self, 0u8)
     }
 }
 impl Debug for f64 {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        fmt_float(f, *self, true)
+        fmt_f64(f, *self, 1u8)
+    }
+}
+impl LowerExp for f64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_f64(f, *self, 2u8)
+    }
+}
+impl UpperExp for f64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_f64(f, *self, 3u8)
     }
 }
 impl Display for f32 {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        fmt_float(f, *self as f64, false)
+        fmt_f32(f, *self, 0u8)
     }
 }
 impl Debug for f32 {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        fmt_float(f, *self as f64, true)
+        fmt_f32(f, *self, 1u8)
+    }
+}
+impl LowerExp for f32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_f32(f, *self, 2u8)
+    }
+}
+impl UpperExp for f32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_f32(f, *self, 3u8)
+    }
+}
+impl LowerExp for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, false)
+    }
+}
+impl UpperExp for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_int_exp(f, true, *self as u128, true)
+    }
+}
+impl LowerExp for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl LowerExp for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl LowerExp for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl LowerExp for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl LowerExp for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl LowerExp for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, false)
+    }
+}
+impl UpperExp for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_signed_exp(f, *self as i128, true)
+    }
+}
+impl<T: LowerExp + ?Sized> LowerExp for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        LowerExp::fmt(&**self, f)
+    }
+}
+impl<T: UpperExp + ?Sized> UpperExp for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        UpperExp::fmt(&**self, f)
     }
 }
 
@@ -1324,5 +1795,55 @@ impl Write for String {
     fn write_str(&mut self, s: &str) -> Result {
         self.push_str(s);
         Result::Ok(())
+    }
+}
+
+// ---- `{:e}` / `{:E}` entry points (same spec encoding as *Arg / *Into) ----
+
+pub trait LowerExpArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: LowerExp + ?Sized> LowerExpArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        print_formatter(f, fd);
+    }
+}
+
+pub trait UpperExpArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: UpperExp + ?Sized> UpperExpArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        print_formatter(f, fd);
+    }
+}
+
+pub trait LowerExpInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: LowerExp + ?Sized> LowerExpInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
+    }
+}
+
+pub trait UpperExpInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: UpperExp + ?Sized> UpperExpInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
     }
 }

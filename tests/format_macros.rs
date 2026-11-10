@@ -91,6 +91,25 @@ fn format_and_write_match_stock() {
     }
 }
 
+/// f32/f64 shortest, fixed, Debug and `{:e}` output (text recorded from
+/// stock rustc into the `.stdout` file).
+#[test]
+fn float_formatting_matches_stock() {
+    for workers in [1, 8] {
+        let (stdout, _) = run_with_workers(
+            &format!("floats-{workers}"),
+            include_str!("fixtures/format_macros_floats.rs"),
+            workers,
+        )
+        .unwrap();
+        assert_eq!(
+            stdout,
+            include_str!("fixtures/format_macros_floats.stdout"),
+            "workers={workers}"
+        );
+    }
+}
+
 #[test]
 fn vec_macro_forms_match_stock() {
     let (stdout, _) = run(
@@ -114,6 +133,14 @@ fn invalid_format_macros_are_rejected() {
             "fn main() { let _s = format!(\"{} {}\", 1); }\n",
         ),
         ("no_string", "fn main() { let _s = format!(); }\n"),
+        (
+            "missing_lower_exp",
+            "fn unused() { println!(\"{:e}\", \"text\"); }\nfn main() {}\n",
+        ),
+        (
+            "missing_upper_exp",
+            "struct N;\nfn main() { let _s = format!(\"{:E}\", N); }\n",
+        ),
         (
             "width_not_usize",
             "fn main() { let w = 3i32; let _s = format!(\"{:w$}\", 1); }\n",

@@ -371,10 +371,11 @@ impl Checker<'_> {
                 &self.trait_scratch,
             )?
             else {
-                let wanted = if source.specs[index].format == FormatTrait::Debug {
-                    "Debug"
-                } else {
-                    "Display"
+                let wanted = match source.specs[index].format {
+                    FormatTrait::Debug => "Debug",
+                    FormatTrait::LowerExp => "LowerExp",
+                    FormatTrait::UpperExp => "UpperExp",
+                    _ => "Display",
                 };
                 return Err(format!(
                     "E0277: `{referent:?}` doesn't implement `std::fmt::{wanted}`"
@@ -448,6 +449,14 @@ pub(super) fn into_trait(
         (FormatTrait::Debug, false) => ("DebugInto", "__jr_fmt_into"),
         (FormatTrait::Display, true) => ("StrDisplayInto", "__jr_fmt_into_str"),
         (FormatTrait::Debug, true) => ("StrDebugInto", "__jr_fmt_into_str"),
+        (FormatTrait::LowerExp, false) => ("LowerExpInto", "__jr_fmt_into"),
+        (FormatTrait::UpperExp, false) => ("UpperExpInto", "__jr_fmt_into"),
+        (FormatTrait::LowerExp, true) => {
+            return Err("E0277: `str` doesn't implement `std::fmt::LowerExp`".into());
+        }
+        (FormatTrait::UpperExp, true) => {
+            return Err("E0277: `str` doesn't implement `std::fmt::UpperExp`".into());
+        }
         (other, _) => return Err(format!("unsupported: {other:?} format trait placeholders")),
     })
 }

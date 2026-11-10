@@ -75,6 +75,14 @@ impl Checker<'_> {
             (FormatTrait::Debug, false) => ("DebugArg", "__jr_fmt"),
             (FormatTrait::Display, true) => ("StrDisplayArg", "__jr_fmt_str"),
             (FormatTrait::Debug, true) => ("StrDebugArg", "__jr_fmt_str"),
+            (FormatTrait::LowerExp, false) => ("LowerExpArg", "__jr_fmt"),
+            (FormatTrait::UpperExp, false) => ("UpperExpArg", "__jr_fmt"),
+            (FormatTrait::LowerExp, true) => {
+                return Err("E0277: `str` doesn't implement `std::fmt::LowerExp`".into());
+            }
+            (FormatTrait::UpperExp, true) => {
+                return Err("E0277: `str` doesn't implement `std::fmt::UpperExp`".into());
+            }
             other => {
                 return Err(format!("unsupported: {other:?} format trait placeholders"));
             }
@@ -100,10 +108,11 @@ impl Checker<'_> {
             &self.trait_scratch,
         )?
         else {
-            let wanted = if spec.format == FormatTrait::Display {
-                "Display"
-            } else {
-                "Debug"
+            let wanted = match spec.format {
+                FormatTrait::Display => "Display",
+                FormatTrait::LowerExp => "LowerExp",
+                FormatTrait::UpperExp => "UpperExp",
+                _ => "Debug",
             };
             return Err(format!(
                 "E0277: `{}` doesn't implement `std::fmt::{wanted}`",
