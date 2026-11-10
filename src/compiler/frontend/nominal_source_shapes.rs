@@ -431,6 +431,13 @@ fn reject_default_recipe_carriers(
             Shape::ManuallyDrop(_, argument) | Shape::Cell(_, argument) => {
                 visit(argument, budget, depth + 1, owning)?
             }
+            Shape::FnItem(_, arguments) => {
+                // Function items store no actual values. Type actuals remain
+                // bounded metadata traversals, not owning carrier occurrences.
+                for argument in arguments.iter() {
+                    visit(argument, budget, depth + 1, false)?;
+                }
+            }
             Shape::FnPointer(inputs, output) => {
                 // Signature types are metadata, not stored values owned by the
                 // pointer. Still visit every occurrence for bounded traversal.

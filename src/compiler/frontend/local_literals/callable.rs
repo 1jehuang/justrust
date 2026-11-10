@@ -354,8 +354,26 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             }
             let term = self.schema(&trait_ref.self_ty, params, 0)?;
             let peeled = self.peel_refs(term);
-            let callable = match self.domain(peeled) {
-                Domain::Callable(callable) => callable,
+            let (parameters, result) = match self.domain(peeled) {
+                Domain::Callable(callable) => (callable.params, callable.result),
+                Domain::Fixed(ir::Ty::FnItem(item)) => {
+                    let signature =
+                        plan.source_inference_signature(&item, self.checker.facts(), &plan.budget)?;
+                    let mut parameters = Vec::new();
+                    for parameter in signature.params.iter() {
+                        self.checker.infer_storage(1)?;
+                        parameters.push(self.fixed(parameter.clone())?);
+                    }
+                    (parameters, self.fixed(signature.result.clone())?)
+                }
+                Domain::Fixed(ir::Ty::Closure(closure)) => {
+                    let mut parameters = Vec::new();
+                    for parameter in closure.params() {
+                        self.checker.infer_storage(1)?;
+                        parameters.push(self.fixed(parameter.clone())?);
+                    }
+                    (parameters, self.fixed(closure.result().clone())?)
+                }
                 Domain::Opaque(_, _) | Domain::Fixed(ir::Ty::Opaque(_)) => {
                     let Some(ir::Ty::Opaque(opaque)) = self.resolve(peeled, 0)? else {
                         continue;
@@ -399,12 +417,12 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             };
             if let Some(arguments) = trait_ref.args.first() {
                 let arguments = self.schema(arguments, params, 0)?;
-                let tuple = self.node(Domain::Tuple(callable.params.clone()))?;
+                let tuple = self.node(Domain::Tuple(parameters))?;
                 self.unify(arguments, tuple)?;
             }
             if let ir::Predicate::ProjectionEq { ty, .. } = predicate {
                 let output = self.schema(ty, params, 0)?;
-                self.coerce(callable.result, output)?;
+                self.coerce(result, output)?;
             }
         }
         Ok(())

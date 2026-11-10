@@ -19,6 +19,8 @@ pub(in crate::compiler) enum Shape {
     /// Restricted to primitive types and exact canonical parameter identities.
     Leaf(ir::Ty),
     Nominal(ir::DeclId, Arc<[Shape]>),
+    /// Exact function declaration and ordered type actual recipes, not a call proof.
+    FnItem(ir::DeclId, Arc<[Shape]>),
     Tuple(Arc<[Shape]>),
     FnPointer(Arc<[Shape]>, Arc<Shape>),
     PhantomData(ir::DeclId, Arc<Shape>),
@@ -53,7 +55,8 @@ impl Shape {
                 }
                 left == right
             }
-            (Shape::Nominal(a, left), Shape::Nominal(b, right)) => {
+            (Shape::Nominal(a, left), Shape::Nominal(b, right))
+            | (Shape::FnItem(a, left), Shape::FnItem(b, right)) => {
                 a == b && same_children(left, right, depth + 1, meter)?
             }
             (Shape::PhantomData(a, left), Shape::PhantomData(b, right))
@@ -760,6 +763,20 @@ impl<'s> Solver<'_, '_, 's> {
                 ir::Ty::FnItem(item) if item.type_args.is_empty() => Domain::Fixed(ty.clone()),
                 _ => return Err("invalid metadata: non-leaf source recipe".into()),
             },
+            Shape::FnItem(declaration, arguments) => {
+                let terms = self.manifest_terms(arguments, params, depth + 1)?;
+                let mut actuals = Vec::new();
+                self.checker.infer_storage(terms.len())?;
+                for term in terms {
+                    let actual = self.resolve(term, depth + 1)?;
+                    actuals
+                        .push(actual.ok_or("unsupported: unresolved function item actual recipe")?);
+                }
+                Domain::Fixed(ir::Ty::FnItem(Arc::new(ir::CallTarget {
+                    declaration: *declaration,
+                    type_args: actuals.into(),
+                })))
+            }
             Shape::Nominal(declaration, arguments) => Domain::Nominal(
                 *declaration,
                 self.manifest_terms(arguments, params, depth + 1)?,
@@ -1020,9 +1037,7 @@ impl<'s> Solver<'_, '_, 's> {
                 // Closed nongeneric object principal: a rigid leaf with no
                 // inference-bearing children (nominal_source_shapes).
                 ir::Ty::Dyn(ref object) if object.is_closed_leaf() => Shape::Leaf(ty),
-                // A nongeneric function item is a zero-sized rigid identity:
-                // its exact declaration, with no inference-bearing children.
-                ir::Ty::FnItem(ref item) if item.type_args.is_empty() => Shape::Leaf(ty),
+                ir::Ty::FnItem(_) => self.checker.nominal_recipe_shape(&ty, depth + 1)?,
                 _ => {
                     return Err(
                         "unsupported: compound fixed type needs an explicit manifest recipe".into(),

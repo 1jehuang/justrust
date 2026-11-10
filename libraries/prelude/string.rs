@@ -607,6 +607,7 @@ impl StrPattern for &str {
 }
 
 pub trait StrMethods {
+    fn len(&self) -> usize;
     fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err>;
     fn as_bytes<'a>(&'a self) -> &'a [u8];
     fn is_empty(&self) -> bool;
@@ -627,6 +628,11 @@ pub trait StrMethods {
 }
 
 impl StrMethods for str {
+    fn len(&self) -> usize {
+        let (_, len) = str_parts(self);
+        len
+    }
+
     fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err> {
         F::from_str(self)
     }

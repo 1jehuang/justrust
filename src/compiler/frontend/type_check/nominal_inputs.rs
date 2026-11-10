@@ -131,6 +131,14 @@ mod fn_pointer_shape_tests {
 pub(in crate::compiler::frontend) mod parent_local;
 
 impl Checker<'_> {
+    pub(in crate::compiler::frontend) fn nominal_recipe_shape(
+        &self,
+        ty: &ir::Ty,
+        depth: usize,
+    ) -> Result<NominalShape, String> {
+        type_shape(self, ty, depth)
+    }
+
     /// Representation tokens authenticate graph reads and source slots separately.
     /// Only after replaying both may a source consumer compare semantic types.
     pub(super) fn nominal_input_types_equal(
@@ -426,6 +434,9 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
     Ok(match ty {
         ir::Ty::Struct(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
+        ir::Ty::FnItem(item) => {
+            NominalShape::FnItem(item.declaration, children(&item.type_args)?)
+        }
         ir::Ty::Tuple(fields) => NominalShape::Tuple(children(fields)?),
         ir::Ty::PhantomData(marker) => {
             let budget = &checker.signatures.plan()?.budget;
@@ -572,6 +583,24 @@ fn recipe_type(
                 .facts()
                 .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
             ty
+        }
+        NominalShape::FnItem(declaration, arguments) => {
+            checker.infer_storage(arguments.len())?;
+            let mut actuals = Vec::new();
+            let mut ready = true;
+            for argument in arguments.iter() {
+                match recipe_type(checker, inputs, argument, missing, depth + 1)? {
+                    Some(ty) => actuals.push(ty),
+                    None => ready = false,
+                }
+            }
+            if !ready {
+                return Ok(None);
+            }
+            ir::Ty::FnItem(Arc::new(ir::CallTarget {
+                declaration: *declaration,
+                type_args: actuals.into(),
+            }))
         }
         NominalShape::FnPointer(signature_inputs, output) => {
             let budget = &checker.signatures.plan()?.budget;

@@ -60,6 +60,14 @@ fn local_callable_signatures_match_stock() {
             "fn_item_explicit_arguments",
             "fn id<T>(x:T)->T{x} fn main(){let f=id::<u8>;let g=Vec::<i32>::new;let w=g();println!(\"{} {:?}\",f(3),w);}",
         ),
+        (
+            "str_length_fn_item",
+            "fn main(){let n:Vec<usize>=vec![\"ab\",\"é\",\"\"].into_iter().map(str::len).collect();let f=str::len;println!(\"{:?} {}\",n,f(\"éé\"));}",
+        ),
+        (
+            "fn_item_generic_parse_adapter",
+            "fn main(){let a:Vec<Result<i32,std::num::ParseIntError>>=vec![\"1\",\"2\"].into_iter().map(str::parse::<i32>).collect();let b:Result<Vec<i32>,std::num::ParseIntError>=\"3 4\".split_whitespace().map(str::parse::<i32>).collect();println!(\"{:?} {:?}\",a,b);}",
+        ),
         // Generic items whose arguments are inferred from the callable bound.
         (
             "fn_item_inferred_arguments",
@@ -77,7 +85,7 @@ fn local_callable_signatures_match_stock() {
         std::fs::write(&source, text).unwrap();
         let stock = out.join(format!("{name}-stock"));
         let output = Command::new("rustc")
-            .args(["--edition=2024", "-Awarnings"])
+            .args(["--edition=2024", "-Awarnings", "-C", "panic=abort"])
             .arg(&source)
             .arg("-o")
             .arg(&stock)
@@ -136,6 +144,26 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
             "E0107",
         ),
         (
+            "fn_item_wrong_arity",
+            "fn inc(x:i32)->i32{x+1} fn ap<F:Fn(i32,i32)->i32>(f:F)->i32{f(1,2)} fn unused(){ap(inc);} fn main(){}",
+            "E0593",
+        ),
+        (
+            "fn_item_wrong_argument",
+            "fn inc(x:i32)->i32{x+1} fn ap<F:Fn(bool)->i32>(f:F)->i32{f(true)} fn unused(){ap(inc);} fn main(){}",
+            "E0631",
+        ),
+        (
+            "non_function_generic_arguments",
+            "const K:i32=1; fn unused(){let f=K::<u8>;} fn main(){}",
+            "E0107",
+        ),
+        (
+            "non_generic_function_arguments",
+            "fn inc(x:i32)->i32{x+1} fn unused(){let f=inc::<u8>;} fn main(){}",
+            "E0107",
+        ),
+        (
             "conflict",
             "fn main(){let f=|x|x;f(1i32);f(true);}",
             "E0308",
@@ -149,7 +177,7 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
         let source = dir.join(format!("{name}.rs"));
         std::fs::write(&source, text).unwrap();
         let stock = Command::new("rustc")
-            .args(["--edition=2024", "--emit=metadata"])
+            .args(["--edition=2024", "--emit=metadata", "-C", "panic=abort"])
             .arg(&source)
             .arg("-o")
             .arg(dir.join(format!("{name}.rmeta")))
@@ -172,6 +200,12 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
                 {
                     let message = String::from_utf8_lossy(&native.stderr);
                     message.contains(diagnostic)
+                        || (matches!(name, "fn_item_wrong_arity" | "fn_item_wrong_argument")
+                            && (message.contains(
+                                "associated projection has no applicable implementation",
+                            ) || message.contains("E0308: mismatched types")))
+                        || (name == "non_function_generic_arguments"
+                            && message.contains("unsupported generic application expression"))
                         || (diagnostic == "E0382"
                             && message.contains("initialization/move analysis")
                             && message.contains("ReadNotDefinitelyInitialized"))

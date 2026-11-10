@@ -275,6 +275,26 @@ impl Capabilities {
                 }
                 ir::Ty::PhantomData(marker)
             }
+            Shape::FnItem(declaration, arguments) => {
+                budget
+                    .retain_bytes(arguments.len() * std::mem::size_of::<ir::Ty>())
+                    .map_err(Error::new)?;
+                let mut actuals = Vec::new();
+                let mut ready = true;
+                for argument in arguments.iter() {
+                    match child(argument)? {
+                        Some(ty) => actuals.push(ty),
+                        None => ready = false,
+                    }
+                }
+                if !ready {
+                    return Ok(None);
+                }
+                ir::Ty::FnItem(Arc::new(ir::CallTarget {
+                    declaration: *declaration,
+                    type_args: actuals.into(),
+                }))
+            }
             Shape::FnPointer(inputs, output) => {
                 let mut types =
                     ir::FnPointerTy::storage(inputs.len(), budget).map_err(Error::new)?;
@@ -527,6 +547,7 @@ pub(in crate::compiler) fn shape(
                 Arc::new(shape(marker.argument(), budget, depth + 1)?),
             )
         }
+        ir::Ty::FnItem(item) => Shape::FnItem(item.declaration, children(&item.type_args)?),
         ir::Ty::FnPointer(pointer) => Shape::FnPointer(
             children(&pointer.inputs)?,
             Arc::new(shape(&pointer.output, budget, depth + 1)?),
