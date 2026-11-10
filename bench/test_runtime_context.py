@@ -55,6 +55,40 @@ class RuntimeContextTests(unittest.TestCase):
                 self.assertNotEqual(next_child["HOME"], str(home))
                 self.assertFalse((Path(next_child["HOME"]) / "created-state").exists())
 
+    def test_implicit_compiler_homes_survive_repeated_isolated_commands(self):
+        env = {"HOME": self.env["HOME"], "PATH": os.environ["PATH"]}
+        original = dict(env)
+        compiler_home = Path(env["HOME"]) / ".justrust"
+        compiler_home.mkdir(parents=True)
+        (compiler_home / "owned-compiler").write_text("already installed")
+        homes = []
+        with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):
+            for _ in range(2):
+                with runtime.runtime_context(env, self.cwd) as child:
+                    homes.append(child["HOME"])
+                    self.assertEqual(child["JUSTRUST_HOME"], str(compiler_home))
+                    self.assertEqual(child["CARGO_HOME"], env["HOME"] + "/.cargo")
+                    self.assertEqual(child["RUSTUP_HOME"], env["HOME"] + "/.rustup")
+                    actual = subprocess.check_output([
+                        sys.executable, "-c",
+                        "import os,pathlib; print((pathlib.Path(os.environ['JUSTRUST_HOME']) / 'owned-compiler').read_text())"
+                    ], env=child, text=True)
+                    self.assertEqual(actual.strip(), "already installed")
+        self.assertNotEqual(homes[0], homes[1])
+        self.assertEqual(env, original)
+        self.assertTrue(compiler_home.exists())
+
+    def test_v1_history_is_readable_but_not_comparable_or_selectable_as_v2(self):
+        old = {"env": {"runtime_context": {"policy": "jcode-isolated-v1"}}}
+        new = {"env": {"runtime_context": {"policy": runtime.POLICY}}}
+        runtime.require_matching_context(old, old)
+        with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
+            runtime.require_matching_context(old, new)
+        with patch.dict(os.environ, {runtime.SELECTOR: "jcode-isolated-v1"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                with runtime.runtime_context(self.env, self.cwd):
+                    self.fail("obsolete runtime policy executed")
+
     def test_existing_git_metadata_untouched_even_after_failure(self):
         marker = self.cwd / ".git"
         marker.mkdir()

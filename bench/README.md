@@ -71,7 +71,15 @@ starting a broad run. Pinned tests require the `sqlite3` executable, not merely
 the SQLite shared library. Supply it explicitly on `PATH`, optionally from a
 verified private package extraction. The harness never installs packages or
 changes shared configuration. Synthetic runs check this before toolchain
-installation or compilation. Results retain the executable's version and SHA256
+installation or compilation. For application test isolation, select
+`JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v2`. Each command gets fresh
+application HOME/XDG state, while explicit or implicit `JUSTRUST_HOME`,
+`CARGO_HOME`, and `RUSTUP_HOME` stay fixed outside that temporary home.
+This preserves installed owned toolchains, registry and dependency caches,
+and recording state across commands. Version 1 failed to preserve an implicit
+`JUSTRUST_HOME`, triggering repeated compiler installation and racing temporary
+home cleanup. New runs reject that obsolete selector, and comparisons reject
+mixing version 1 with version 2. Results retain the executable's version and SHA256
 (not its private path), and comparisons reject changed prerequisite provenance.
 Build/test children run with umask `0022`, without changing the parent shell's
 umask or relaxing the project's directory-permission checks. For client-side

@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 
 SELECTOR = "JUSTRUST_BENCH_RUNTIME_CONTEXT"
-POLICY = "jcode-isolated-v1"
+POLICY = "jcode-isolated-v2"
+LEGACY_POLICIES = ("jcode-isolated-v1",)
 PREFIXES = ("JCODE_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "CLAUDE_", "CODEX_", "GEMINI_", "GOOGLE_API_", "GIT_")
 
 
@@ -40,7 +41,7 @@ def require_matching_context(a, b):
             return {"policy": "inherited"}
         context = env["runtime_context"]
         if (not isinstance(context, dict)
-                or context.get("policy") not in ("inherited", POLICY)):
+                or context.get("policy") not in ("inherited", POLICY, *LEGACY_POLICIES)):
             raise ValueError("malformed or unsupported benchmark runtime context provenance")
         return context
 
@@ -52,7 +53,7 @@ def require_matching_context(a, b):
 def runtime_context(env, cwd):
     """Yield isolated child env. No source content, command, or cache identity changes.
 
-    Keep Cargo/rustup homes explicit before replacing HOME, so selecting this
+    Keep justrust/Cargo/rustup homes explicit before replacing HOME, so selecting this
     runtime policy cannot silently select a different compiler or registry.
     A real Git marker is needed by application filesystem-based discovery.
     The marker is ours only while this command runs, never a checkout/worktree.
@@ -68,6 +69,7 @@ def runtime_context(env, cwd):
         home.mkdir(mode=0o700)
         child = {key: value for key, value in env.items() if not key.startswith(PREFIXES)}
         old_home = Path(env.get("HOME", str(Path.home())))
+        child.setdefault("JUSTRUST_HOME", str(old_home / ".justrust"))
         child.setdefault("CARGO_HOME", str(old_home / ".cargo"))
         child.setdefault("RUSTUP_HOME", str(old_home / ".rustup"))
         child.update(HOME=str(home), JCODE_HOME=str(home / ".jcode"),
