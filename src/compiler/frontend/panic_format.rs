@@ -89,7 +89,13 @@ impl Parser<'_, '_> {
         self.cursor.bump();
         let (mut pieces, holders) =
             format_spec::parse_format(&text).map_err(|message| self.error(&message))?;
-        let (mut arguments, mut modes, mut specs) = self.format_arguments(close, &holders)?;
+        let (mut arguments, mut modes, mut specs, counts) =
+            self.format_arguments(close, &holders)?;
+        if counts.iter().any(|(w, p)| w.is_some() || p.is_some()) {
+            return Err(self.unsupported(
+                "width and precision arguments (`$`, `.*`) in panic messages are unsupported",
+            ));
+        }
         if holders.is_empty() && !arguments.is_empty() {
             return Err(self.error("argument never used"));
         }

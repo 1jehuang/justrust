@@ -75,6 +75,20 @@ fn format_and_write_match_stock() {
     assert_eq!(stderr, "err 34\n");
     let (stdout, _) = run("display", include_str!("fixtures/format_macros_display.rs")).unwrap();
     assert_eq!(stdout, "(1, -2)\n[(1, -2)]\nlen=2\nend\n(1, -2)\n");
+    // Run-time width and precision operands: `width$`, `N$`, `.name$`, `.*`.
+    for workers in [1, 8] {
+        let (stdout, stderr) = run_with_workers(
+            &format!("counts-{workers}"),
+            include_str!("fixtures/format_macros_counts.rs"),
+            workers,
+        )
+        .unwrap();
+        assert_eq!(
+            stdout,
+            "    r|1.23|(\n    1,\n    \"a\",\n)\n[     42] [42     ] [  42   ]\n[   3.14] [   3.14] [3.1416]\n[0000005] [+3.142] [**ab***]\n   a|4      |x\n0009-2.5|   true\n"
+        );
+        assert_eq!(stderr, "[      e]\n");
+    }
 }
 
 #[test]
@@ -100,6 +114,18 @@ fn invalid_format_macros_are_rejected() {
             "fn main() { let _s = format!(\"{} {}\", 1); }\n",
         ),
         ("no_string", "fn main() { let _s = format!(); }\n"),
+        (
+            "width_not_usize",
+            "fn main() { let w = 3i32; let _s = format!(\"{:w$}\", 1); }\n",
+        ),
+        (
+            "star_precision_missing_value",
+            "fn main() { let _s = format!(\"{:.*}\", 2); }\n",
+        ),
+        (
+            "width_out_of_range",
+            "fn main() { let _s = format!(\"{:3$}\", 1, 2); }\n",
+        ),
         (
             "write_no_comma",
             "use std::fmt::Write;\nfn main() { let mut s = String::new(); let _ = write!(s); }\n",

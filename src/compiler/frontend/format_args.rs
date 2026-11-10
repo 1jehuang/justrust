@@ -7,7 +7,15 @@
 use super::format_spec::{ArgRef, FormatSpec, Placeholder};
 use super::*;
 
-type FormatArguments = (Vec<Expr>, Vec<ir::FormatMode>, Vec<FormatSpec>);
+type FormatArguments = (
+    Vec<Expr>,
+    Vec<ir::FormatMode>,
+    Vec<FormatSpec>,
+    Vec<FormatCounts>,
+);
+
+/// Run-time `width$` and `precision$`/`.*` operands of one placeholder.
+pub(super) type FormatCounts = (Option<Expr>, Option<Expr>);
 
 impl Parser<'_, '_> {
     pub(super) fn format_arguments(
@@ -44,7 +52,44 @@ impl Parser<'_, '_> {
         let mut next = 0usize;
         let mut slots: Vec<Option<usize>> = Vec::with_capacity(holders.len());
         let mut captures: Vec<Option<String>> = Vec::with_capacity(holders.len());
+        // Count operands (`width$`, `precision$`, `.*`) reference arguments
+        // too. `.*` takes the next positional argument before the value.
+        let mut count_used = vec![false; total];
+        let mut count_slots: Vec<[Option<Result<usize, String>>; 2]> =
+            Vec::with_capacity(holders.len());
         for holder in holders {
+            let mut counts = [None, None];
+            for (at, reference) in [&holder.width_arg, &holder.precision_arg]
+                .into_iter()
+                .enumerate()
+            {
+                let Some(reference) = reference else {
+                    continue;
+                };
+                let slot = match reference {
+                    ArgRef::Next => {
+                        let index = next;
+                        next += 1;
+                        Ok(index)
+                    }
+                    ArgRef::Index(index) => Ok(*index),
+                    ArgRef::Name(name) => match named.iter().position(|(n, _)| n == name) {
+                        Some(at) => Ok(positional.len() + at),
+                        None => Err(name.clone()),
+                    },
+                };
+                if let Ok(slot) = slot {
+                    if slot >= total {
+                        return Err(self.error(&format!(
+                            "invalid reference to positional argument {slot} ({} arguments were given)",
+                            positional.len()
+                        )));
+                    }
+                    count_used[slot] = true;
+                }
+                counts[at] = Some(slot);
+            }
+            count_slots.push(counts);
             let (slot, capture) = match &holder.arg {
                 ArgRef::Next => {
                     let index = next;
@@ -69,7 +114,11 @@ impl Parser<'_, '_> {
             slots.push(slot);
             captures.push(capture);
         }
-        if let Some(unused) = used.iter().position(|count| *count == 0) {
+        if let Some(unused) = used
+            .iter()
+            .zip(&count_used)
+            .position(|(count, counted)| *count == 0 && !*counted)
+        {
             return Err(if unused < positional.len() {
                 self.error("argument never used")
             } else {
@@ -81,6 +130,33 @@ impl Parser<'_, '_> {
             .chain(named.into_iter().map(|(_, value)| value))
             .map(Some)
             .collect();
+        // A count operand is read where its placeholder is formatted, so it
+        // must be free of effects: an integer literal or a plain local.
+        let mut counts = Vec::with_capacity(holders.len());
+        for row in count_slots {
+            let mut out = [None, None];
+            for (at, slot) in row.into_iter().enumerate() {
+                out[at] = match slot {
+                    None => None,
+                    Some(Err(name)) => Some(self.inline_capture(&name, site)?),
+                    Some(Ok(slot)) => {
+                        let value = values[slot]
+                            .as_ref()
+                            .ok_or_else(|| self.error("format argument consumed twice"))?;
+                        if !matches!(value, Expr::Integer(_))
+                            && !matches!(value, Expr::Var(path) if path.single().is_some())
+                        {
+                            return Err(self.unsupported(
+                                "format width and precision arguments must be integer literals or plain local variables",
+                            ));
+                        }
+                        Some(value.clone())
+                    }
+                };
+            }
+            let [width, precision] = out;
+            counts.push((width, precision));
+        }
         let mut arguments = Vec::with_capacity(holders.len());
         let mut modes = Vec::with_capacity(holders.len());
         let mut specs = Vec::with_capacity(holders.len());
@@ -93,9 +169,15 @@ impl Parser<'_, '_> {
                     let value = values[*slot]
                         .as_ref()
                         .ok_or_else(|| self.error("format argument consumed twice"))?;
-                    if !matches!(value, Expr::Var(path) if path.single().is_some()) {
+                    // A literal has no effects, so repeating it is exact.
+                    if !matches!(value, Expr::Var(path) if path.single().is_some())
+                        && !matches!(
+                            value,
+                            Expr::Integer(_) | Expr::Float(_) | Expr::Char(_) | Expr::Str(_)
+                        )
+                    {
                         return Err(self.unsupported(
-                            "format arguments referenced by several placeholders must be plain local variables",
+                            "format arguments referenced by several placeholders must be literals or plain local variables",
                         ));
                     }
                     value.clone()
@@ -107,7 +189,7 @@ impl Parser<'_, '_> {
             modes.push(holder.spec.native_mode().unwrap_or(ir::FormatMode::Display));
             specs.push(holder.spec);
         }
-        Ok((arguments, modes, specs))
+        Ok((arguments, modes, specs, counts))
     }
 
     /// `{name}` with no explicit `name = ...` argument reads local `name`.

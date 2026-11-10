@@ -820,32 +820,105 @@ fn pow10(n: usize) -> f64 {
     r
 }
 
-/// Fixed-precision decimal with round-half-to-even on the scaled value.
+/// Fixed-precision decimal of `x < 1e16`, rounded half-to-even on the exact
+/// binary value (as std does): `2.55` is below the tie, so `{:.1}` is `2.5`.
+/// The fraction is `m / 2^k` exactly. Its digits come from repeated
+/// multiplication by ten in base-2^32 limbs. The first pass finds the
+/// rounding direction and the second writes the digits.
 fn push_fixed(s: &mut String, x: f64, precision: usize) {
-    let scale = pow10(precision);
-    let scaled = x * scale;
-    let mut whole = scaled as u64;
-    let frac = scaled - (whole as f64);
-    if frac > 0.5f64 || (frac == 0.5f64 && (whole % 2u64) == 1u64) {
-        whole += 1u64;
+    let base = 4294967296u64;
+    let mut whole = x as u64;
+    let mut fraction = x - (whole as f64);
+    let mut k = 0usize;
+    while fraction != ((fraction as u64) as f64) {
+        fraction = fraction * 2.0f64;
+        k += 1usize;
     }
-    let unit = scale as u64;
-    let int_part = whole / unit;
-    push_u64(s, int_part);
-    if precision > 0usize {
-        s.push('.');
-        let mut rest = whole % unit;
-        let mut digits = [0u8; 20];
+    let m = fraction as u64;
+    let limb = k / 32usize;
+    let limbs = limb + 2usize;
+    let mut unit = 1u64;
+    let mut b = 0usize;
+    while b < k % 32usize {
+        unit = unit * 2u64;
+        b += 1usize;
+    }
+    let mut up = false;
+    let mut has_non9 = false;
+    let mut last_non9 = 0usize;
+    let mut pass = 0usize;
+    while pass < 2usize {
+        let mut r = [0u32; 36];
+        r[0] = (m % base) as u32;
+        r[1] = (m / base) as u32;
+        if pass == 1usize {
+            if up && !has_non9 {
+                whole += 1u64;
+            }
+            push_u64(s, whole);
+            if precision > 0usize {
+                s.push('.');
+            }
+        }
+        let mut last_digit = (whole % 10u64) as u8;
         let mut i = 0usize;
         while i < precision {
-            digits[i] = (rest % 10u64) as u8;
-            rest = rest / 10u64;
+            let mut carry = 0u64;
+            let mut j = 0usize;
+            while j < limbs {
+                let v = (r[j] as u64) * 10u64 + carry;
+                r[j] = (v % base) as u32;
+                carry = v / base;
+                j += 1usize;
+            }
+            let top = (r[limb] as u64) + (r[limb + 1usize] as u64) * base;
+            let digit = (top / unit) as u8;
+            r[limb] = (top % unit) as u32;
+            r[limb + 1usize] = 0u32;
+            if pass == 0usize {
+                if digit != 9u8 {
+                    has_non9 = true;
+                    last_non9 = i;
+                }
+                last_digit = digit;
+            } else {
+                let out = if !up || (has_non9 && i < last_non9) {
+                    digit
+                } else if has_non9 && i == last_non9 {
+                    digit + 1u8
+                } else {
+                    0u8
+                };
+                s.push_byte(48u8 + out);
+            }
             i += 1usize;
         }
-        while i > 0usize {
-            i -= 1usize;
-            s.push_byte(48u8 + digits[i]);
+        if pass == 0usize && k > 0usize {
+            // Compare the remainder with one half, 2^(k-1).
+            let half_limb = (k - 1usize) / 32usize;
+            let mut half = 1u64;
+            let mut b = 0usize;
+            while b < (k - 1usize) % 32usize {
+                half = half * 2u64;
+                b += 1usize;
+            }
+            if ((r[half_limb] as u64) / half) % 2u64 == 1u64 {
+                let mut above = false;
+                let mut j = 0usize;
+                while j < limbs {
+                    let mut v = r[j] as u64;
+                    if j == half_limb {
+                        v -= half;
+                    }
+                    if v != 0u64 {
+                        above = true;
+                    }
+                    j += 1usize;
+                }
+                up = above || (last_digit % 2u8) == 1u8;
+            }
         }
+        pass += 1usize;
     }
 }
 

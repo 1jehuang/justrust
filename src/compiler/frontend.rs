@@ -12658,16 +12658,32 @@ impl<'input, 'names> Parser<'input, 'names> {
             );
         }
         let text = self.string_literal_value(token.text)?;
+        let literal_site = self.token().span;
         self.cursor.bump();
         let (mut pieces, holders) =
             format_spec::parse_format(&text).map_err(|message| self.error(&message))?;
-        let (arguments, modes, specs) = self.format_arguments(close, &holders)?;
+        let (arguments, modes, specs, counts) = self.format_arguments(close, &holders)?;
         let stream = if matches!(spelling, "print" | "println") {
             ir::OutputStream::Stdout
         } else {
             ir::OutputStream::Stderr
         };
         let newline = matches!(spelling, "println" | "eprintln");
+        // Run-time width or precision operands (`width$`, `.*`): format the
+        // whole message through the buffered path, then print that string.
+        if counts.iter().any(|(w, p)| w.is_some() || p.is_some()) {
+            let built = panic_callsite(self.names.session(), literal_site)
+                .map_err(native_adapter::transport_error)?;
+            let message = self.format_into_built(built, pieces, arguments, specs, counts, None)?;
+            return Ok(Expr::Format {
+                pieces: vec![String::new(), String::new()],
+                arguments: vec![message],
+                modes: vec![ir::FormatMode::Display],
+                specs: vec![format_spec::FormatSpec::PLAIN],
+                stream,
+                newline,
+            });
+        }
         if arguments.is_empty() {
             let text = pieces.pop().unwrap();
             return if let Some(site) = site {
@@ -20836,6 +20852,10 @@ mod generic_trait_source_tests {
         for source in [
             "trait Source{type Out;}trait Child:Source<Out=i32>{}fn main(){}",
             "trait Source{type Out;}trait Child<T:Source<Out=i32>>{}fn main(){}",
+        ] {
+            parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
             "trait Source{type Out;}struct S;impl Source<Out=i32> for S{type Out=i32;}fn main(){}",
             "struct S<T>{value:T}fn f(x:S<Out=i32>){}fn main(){}",
             "trait Source{type Out;fn get(self)->Self::Out;}struct S;fn f(x:S)->i32{<S as Source<Out=i32>>::get(x)}fn main(){}",

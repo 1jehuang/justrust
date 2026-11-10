@@ -98,12 +98,12 @@ impl Parser<'_, '_> {
         } else {
             Some(self.nested_expr()?)
         };
-        let (mut pieces, arguments, specs) = if destination.is_some() && !self.eat(",") {
+        let (mut pieces, arguments, specs, counts) = if destination.is_some() && !self.eat(",") {
             if spelling != "writeln" {
                 return Err(self.error("expected `,` after the write! destination"));
             }
             self.expect(close)?;
-            (vec![String::new()], Vec::new(), Vec::new())
+            (vec![String::new()], Vec::new(), Vec::new(), Vec::new())
         } else {
             if self.is(close) {
                 return Err(self.error("requires at least a format string argument"));
@@ -124,16 +124,35 @@ impl Parser<'_, '_> {
             self.cursor.bump();
             let (pieces, holders) =
                 format_spec::parse_format(&text).map_err(|message| self.error(&message))?;
-            let (arguments, _modes, specs) = self.format_arguments(close, &holders)?;
+            let (arguments, _modes, specs, counts) = self.format_arguments(close, &holders)?;
             if holders.is_empty() && !arguments.is_empty() {
                 return Err(self.error("argument never used"));
             }
-            (pieces, arguments, specs)
+            (pieces, arguments, specs, counts)
         };
         if spelling == "writeln"
             && let Some(last) = pieces.last_mut()
         {
             last.push('\n');
+        }
+        self.format_into_built(site, pieces, arguments, specs, counts, destination)
+    }
+
+    /// The buffered formatting expression for already resolved placeholders:
+    /// a `String` value without a destination, else the `write!` call.
+    /// `counts[i]` are the run-time width and precision operands of
+    /// placeholder `i` (`width$`, `precision$`, `.*`).
+    pub(super) fn format_into_built(
+        &mut self,
+        site: super::super::expansion_span::SpanId,
+        mut pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        specs: Vec<FormatSpec>,
+        counts: Vec<super::format_args::FormatCounts>,
+        destination: Option<Expr>,
+    ) -> Result<Expr, ParseError> {
+        if counts.len() != specs.len() {
+            return Err(self.error("format argument count mismatch"));
         }
         self.names
             .retain_parser_text(
@@ -184,13 +203,23 @@ impl Parser<'_, '_> {
                     }];
                     self.bind_lexical(out)?;
                     let mut rest = Vec::new();
-                    for (prefix, spec) in pieces.iter().zip(&specs) {
+                    for ((prefix, spec), (width, precision)) in
+                        pieces.iter().zip(&specs).zip(&counts)
+                    {
                         let mut row = vec![
                             self.fmt_var(out)?,
                             Expr::Str(prefix.clone()),
                             Expr::Str(String::new()),
                         ];
-                        row.extend(spec_arguments(spec));
+                        let [fill, align, fixed_width, fixed_precision, flags] =
+                            spec_arguments(spec);
+                        row.extend([
+                            fill,
+                            align,
+                            width.clone().unwrap_or(fixed_width),
+                            precision.clone().unwrap_or(fixed_precision),
+                            flags,
+                        ]);
                         rest.push(row);
                     }
                     inner.push(Stmt::Expr(Expr::FormatInto(

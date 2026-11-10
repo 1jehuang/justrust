@@ -5,7 +5,8 @@
 //! references (positional index, named, implicit next) are resolved against
 //! the macro's explicit argument list by the parser; inline captures
 //! (`{name}` with no such named argument) become a local variable read.
-//! `width$`/`precision$`/`.*` argument counts are rejected explicitly.
+//! `width$`/`precision$`/`.*` counts are returned as argument references of
+//! their own (`width_arg`/`precision_arg`, `.*` being [`ArgRef::Next`]).
 use super::super::ir;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +67,10 @@ pub enum ArgRef {
 pub struct Placeholder {
     pub arg: ArgRef,
     pub spec: FormatSpec,
+    /// `width$`: a `usize` argument supplying the width at run time.
+    pub width_arg: Option<ArgRef>,
+    /// `precision$`, or `.*` as `Next` (consumed before the value itself).
+    pub precision_arg: Option<ArgRef>,
 }
 
 /// `pieces.len() == placeholders.len() + 1`.
@@ -133,14 +138,21 @@ fn placeholder(inner: &str) -> Result<Placeholder, String> {
             "invalid format string: invalid argument name `{arg}`"
         ));
     };
-    let spec = match spec {
+    let (spec, width_arg, precision_arg) = match spec {
         Some(spec) => parse_spec(spec)?,
-        None => FormatSpec::PLAIN,
+        None => (FormatSpec::PLAIN, None, None),
     };
-    Ok(Placeholder { arg, spec })
+    Ok(Placeholder {
+        arg,
+        spec,
+        width_arg,
+        precision_arg,
+    })
 }
 
-fn parse_spec(spec: &str) -> Result<FormatSpec, String> {
+fn parse_spec(spec: &str) -> Result<(FormatSpec, Option<ArgRef>, Option<ArgRef>), String> {
+    let mut width_arg = None;
+    let mut precision_arg = None;
     let chars: Vec<char> = spec.chars().collect();
     let mut out = FormatSpec::PLAIN;
     let mut i = 0;
@@ -181,31 +193,52 @@ fn parse_spec(spec: &str) -> Result<FormatSpec, String> {
         }
         (start != *i).then(|| chars[start..*i].iter().collect::<String>().parse().ok())?
     };
+    // `name$`: an identifier directly followed by `$`. Without the `$` the
+    // identifier is the format trait (`x`, `e`, ...) and is left in place.
+    let named = |i: &mut usize| -> Option<String> {
+        let start = *i;
+        if !chars
+            .get(start)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            return None;
+        }
+        let mut end = start;
+        while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_') {
+            end += 1;
+        }
+        if chars.get(end) != Some(&'$') {
+            return None;
+        }
+        *i = end + 1;
+        Some(chars[start..end].iter().collect())
+    };
     if let Some(w) = digits(&mut i) {
         if chars.get(i) == Some(&'$') {
-            return Err("unsupported: width arguments (`N$`) in format specs".into());
+            i += 1;
+            width_arg = Some(ArgRef::Index(w));
+        } else {
+            out.width = Some(w);
         }
-        out.width = Some(w);
-    } else if chars
-        .get(i)
-        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
-        && chars[i..].contains(&'$')
-    {
-        return Err("unsupported: named width arguments (`name$`) in format specs".into());
+    } else if let Some(name) = named(&mut i) {
+        width_arg = Some(ArgRef::Name(name));
     }
     if chars.get(i) == Some(&'.') {
         i += 1;
         if chars.get(i) == Some(&'*') {
-            return Err("unsupported: `.*` precision arguments in format specs".into());
-        }
-        match digits(&mut i) {
-            Some(p) => {
-                if chars.get(i) == Some(&'$') {
-                    return Err("unsupported: precision arguments (`N$`) in format specs".into());
-                }
+            i += 1;
+            precision_arg = Some(ArgRef::Next);
+        } else if let Some(p) = digits(&mut i) {
+            if chars.get(i) == Some(&'$') {
+                i += 1;
+                precision_arg = Some(ArgRef::Index(p));
+            } else {
                 out.precision = Some(p);
             }
-            None => return Err("invalid format string: expected precision after `.`".into()),
+        } else if let Some(name) = named(&mut i) {
+            precision_arg = Some(ArgRef::Name(name));
+        } else {
+            return Err("invalid format string: expected precision after `.`".into());
         }
     }
     let rest: String = chars[i..].iter().collect();
@@ -225,7 +258,7 @@ fn parse_spec(spec: &str) -> Result<FormatSpec, String> {
             ));
         }
     };
-    Ok(out)
+    Ok((out, width_arg, precision_arg))
 }
 
 #[cfg(test)]
@@ -240,7 +273,9 @@ mod tests {
             h[0],
             Placeholder {
                 arg: ArgRef::Next,
-                spec: FormatSpec::PLAIN
+                spec: FormatSpec::PLAIN,
+                width_arg: None,
+                precision_arg: None,
             }
         );
         assert_eq!(h[1].spec.format, FormatTrait::Debug);
@@ -262,8 +297,25 @@ mod tests {
         assert_eq!((h[2].spec.flags, h[2].spec.width), (4, Some(2)));
         assert!(parse_format("{").is_err());
         assert!(parse_format("}").is_err());
-        assert!(parse_format("{:1$}").is_err());
-        assert!(parse_format("{:.*}").is_err());
         assert!(parse_format("{:q}").is_err());
+        assert!(parse_format("{:.}").is_err());
+        let (_, h) = parse_format("{:1$}{:>w$.p$?}{:.*}{:08.2$e}{:x}{:0$x}").unwrap();
+        assert_eq!(h[0].width_arg, Some(ArgRef::Index(1)));
+        assert_eq!(h[1].width_arg, Some(ArgRef::Name("w".into())));
+        assert_eq!(h[1].precision_arg, Some(ArgRef::Name("p".into())));
+        assert_eq!((h[1].spec.align, h[1].spec.format), (2, FormatTrait::Debug));
+        assert_eq!(h[2].precision_arg, Some(ArgRef::Next));
+        assert_eq!((h[3].spec.flags, h[3].spec.width), (4, Some(8)));
+        assert_eq!(h[3].precision_arg, Some(ArgRef::Index(2)));
+        assert_eq!(h[3].spec.format, FormatTrait::LowerExp);
+        assert_eq!(
+            (h[4].width_arg.clone(), h[4].spec.format),
+            (None, FormatTrait::LowerHex)
+        );
+        assert_eq!(h[5].width_arg, Some(ArgRef::Index(0)));
+        assert_eq!(
+            (h[5].spec.flags, h[5].spec.format),
+            (0, FormatTrait::LowerHex)
+        );
     }
 }
