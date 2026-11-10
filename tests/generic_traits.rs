@@ -67,6 +67,51 @@ fn main() { println!("{} {}", identity(7i32), identity(true)); }
 }
 
 #[test]
+fn blanket_projection_normalization_composes_caller_equalities() {
+    let protocol = r#"
+trait MyInto {
+    type Item;
+    type IntoIter: Iterator<Item = Self::Item>;
+    fn into_it(self) -> Self::IntoIter;
+}
+impl<I: Iterator> MyInto for I {
+    type Item = I::Item;
+    type IntoIter = I;
+    fn into_it(self) -> I { self }
+}
+trait BorrowItem { type Item; }
+impl<I: Iterator> BorrowItem for &mut I {
+    type Item = I::Item;
+}
+"#;
+    coherence_oracle::stock_native(&format!(
+        r#"{protocol}
+fn first<I: Iterator<Item = i32>>(it: I) -> i32 {{
+    let mut j = it.into_it();
+    let x: <I as MyInto>::Item = j.next().unwrap();
+    let v: i32 = x;
+    v
+}}
+fn borrowed<I: Iterator<Item = i32>>(it: &mut I) -> i32 {{
+    let x: <&mut I as BorrowItem>::Item = it.next().unwrap();
+    let v: i32 = x;
+    v
+}}
+fn main() {{
+    let mut it = vec![4, 5].into_iter();
+    println!("{{}} {{}}", first(vec![1, 2].into_iter()), borrowed(&mut it));
+}}
+"#
+    ));
+    for body in [
+        "fn unused<I: Iterator<Item = u8>>(it: I) -> i32 { let mut j = it.into_it(); let x: <I as MyInto>::Item = j.next().unwrap(); x }",
+        "fn unused<I>(it: I) -> i32 { let mut j = it.into_it(); let x: <I as MyInto>::Item = j.next().unwrap(); x }",
+    ] {
+        coherence_oracle::stock_and_native_reject(&format!("{protocol}\n{body}\nfn main() {{}}"));
+    }
+}
+
+#[test]
 fn conditional_blanket_impls_use_orphan_aware_disjointness() {
     for source in [
         r#"

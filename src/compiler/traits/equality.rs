@@ -1420,6 +1420,7 @@ impl ValidatedTraitWorld {
                 scratch,
             )?
             || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+            || self.universal_projection_has_implementation(projection, facts, scratch)?
         {
             Ok(ProjectionReduction::Implementation(
                 self.normalize_associated_type_with_scratch(projection, facts, scratch)?,
@@ -2154,7 +2155,38 @@ impl ValidatedTraitWorld {
     pub(super) fn normalize_equality_type(&self, ty: &Ty, facts: &ValidatedFacts) -> Result<Ty> {
         self.check_facts(facts, false)?;
         self.validate_ty_metadata_in(ty, facts.env(), 0)?;
-        self.map_universal_projection_type(ty, facts.env(), 0, &mut |projection| {
+        self.normalize_equality_type_at_depth(ty, facts, 0)
+    }
+
+    fn universal_projection_has_implementation(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut ProofScratch,
+    ) -> Result<bool> {
+        Ok(facts.phase() == FactsPhase::Universal
+            && associated_types::implementation_application_self(&projection.trait_ref.self_ty)
+            && self
+                .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
+                .is_none()
+            && matches!(
+                self.prove_implementation_in(
+                    &Predicate::Implements(projection.trait_ref.clone()),
+                    ProofContext::from_facts(facts),
+                    scratch,
+                )?,
+                ProofOutcome::Proved(_)
+            ))
+    }
+
+    fn normalize_equality_type_at_depth(
+        &self,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+        depth: usize,
+    ) -> Result<Ty> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        self.map_universal_projection_type(ty, facts.env(), depth, &mut |projection| {
             if let FactsSubject::UniversalCallable(declaration) = facts.subject
                 && let Some(normal) =
                     self.normalize_exact_owner_projection(declaration, projection)?
@@ -2167,6 +2199,11 @@ impl ValidatedTraitWorld {
                 && self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_none()
+                && !self.universal_projection_has_implementation(
+                    projection,
+                    facts,
+                    &mut ProofScratch::default(),
+                )?
             {
                 if facts.phase() != FactsPhase::Universal {
                     return Err(FactsError::invalid(
@@ -2182,10 +2219,25 @@ impl ValidatedTraitWorld {
                 )?;
                 return Ok(Ty::AssociatedType(Arc::new(projection.clone())));
             }
-            Ok(self
+            let normal = self
                 .normalize_projection_for_facts(projection, facts)?
                 .ty()
-                .clone())
+                .clone();
+            // An implementation assignment may expose a different rigid
+            // family whose exact equality belongs to this caller. Validate
+            // each reduction through its existing evidence path, then compose
+            // them with the same bounded recursion as structural traversal.
+            if self.type_contains_projection(&normal, depth + 1)?
+                && !self.eq_ty(
+                    &normal,
+                    &Ty::AssociatedType(Arc::new(projection.clone())),
+                    0,
+                )?
+            {
+                self.normalize_equality_type_at_depth(&normal, facts, depth + 1)
+            } else {
+                Ok(normal)
+            }
         })
     }
 }
