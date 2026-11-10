@@ -10838,14 +10838,27 @@ impl<'a> Checker<'a> {
             }
             return Ok(id);
         }
-        // A bare unsuffixed literal is a byte when cast to char, as in
-        // `65 as char`. This does not constrain a local or an arithmetic
-        // expression, which retains its independently inferred integer type.
+        // An unsuffixed literal, including a transparent block tail, is a byte
+        // when cast to char. Locals and arithmetic retain their independently
+        // inferred integer types, as do if/match joins and loop breaks.
+        let byte_literal = if matches!(&target, ir::Ty::Char) {
+            let mut tail = value;
+            while let Expr::Block(block) = tail {
+                if let Some(plan) = &self.signatures.plan {
+                    plan.budget.charge_work(1)?;
+                }
+                let Some(next) = block.tail.as_deref() else {
+                    break;
+                };
+                tail = next;
+            }
+            matches!(tail, Expr::Integer(literal) if literal.suffix.is_none())
+        } else {
+            false
+        };
         let value = match target {
             ir::Ty::Int(to) => self.expr_with_expectation(value, Expectation::CastableToInt(to))?,
-            ir::Ty::Char
-                if matches!(value, Expr::Integer(literal) if literal.suffix.is_none()) =>
-            {
+            ir::Ty::Char if byte_literal => {
                 self.expr_expected(value, Some(&ir::Ty::Int(ir::IntTy::U8)))?
             }
             ir::Ty::Float(_) | ir::Ty::Char => self.expr(value)?,

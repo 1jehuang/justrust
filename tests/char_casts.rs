@@ -21,8 +21,8 @@ fn unsuffixed_literal_char_casts_match_stock() {
         &[
             Case {
                 name: "literal_tokens_and_parentheses",
-                source: r#"fn main(){println!("{} {} {} {}",65 as char,(0x42) as char,0b01000011 as char,0xff as char);}"#,
-                expect: Expect::Run("A B C ÿ\n"),
+                source: r#"fn main(){println!("{} {} {} {} {} {}",65 as char,(0x42) as char,0b01000011 as char,0xff as char,{68} as char,{let _=();{69}} as char);}"#,
+                expect: Expect::Run("A B C ÿ D E\n"),
             },
             Case {
                 name: "typed_integer_is_not_reinferred_even_when_unused",
@@ -37,6 +37,11 @@ fn unsuffixed_literal_char_casts_match_stock() {
             Case {
                 name: "arithmetic_is_not_reinferred_even_when_unused",
                 source: "fn unused()->char{(60+5) as char}fn main(){}",
+                expect: Expect::Invalid("E0604"),
+            },
+            Case {
+                name: "branch_result_is_not_reinferred_even_when_unused",
+                source: "fn unused(b:bool)->char{(if b{65}else{66}) as char}fn main(){}",
                 expect: Expect::Invalid("E0604"),
             },
         ],
