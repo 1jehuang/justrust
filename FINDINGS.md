@@ -9881,17 +9881,39 @@ the shim measured. Re-running with the ledger off and on again: 0 compiled,
 12 fresh both times, so it does not touch cargo fingerprints. It is an
 environment variable and not a flag, so no compiler or depcache key sees it.
 
-Cost: not measurable. Same dev compiler, interleaved off/ledger, median wall:
-`justrust` lib 16.53s vs 16.21s (7 rounds), `syn` 2.83s vs 2.82s (25 rounds),
-`regex_automata` ledger 0.6% below off (25 rounds). The machine was shared, with
-run-to-run spread of several percent, so read this as "below noise", not as a
-speedup.
+Cost: below noise. Same dev compiler (`jr-d9a5aea08737`), interleaved
+off/ledger/`-Ztime-passes`, median wall (scratch `ab2.py`, load average 7-11
+from other sessions):
+
+| unit | rounds | off | ledger | `-Ztime-passes` |
+|---|---:|---:|---:|---:|
+| `syn` | 25 | 3.302s | 3.304s (+0.1%) | 3.428s (+3.8%) |
+| `regex_automata` | 25 | 2.020s | 2.002s (-0.9%) | 2.130s (+5.5%) |
+| `justrust` lib | 7 | 20.08s | 19.17s (-4.5%) | 19.68s (-2.0%) |
+
+The `justrust` row is noise at 7 rounds on a shared machine (the ledger cannot
+make a compile faster, and `-Ztime-passes` also came out below off there). Read
+the two 25-round rows as the result: no cost visible for the ledger, 4-5% for
+`-Ztime-passes`. An earlier version of this entry quoted different medians
+that were never read from saved output. These replace them.
 
 Also fixed: the frontend total added `coherence_checking` on top of
 `type_check_crate`, and `lint_checking` and `privacy_checking_modules` on top
 of `misc_checking_3`, which contain them. serde_core showed 2.72s of frontend
 in a 2.47s compile.
 
-Not covered yet: units answered early by the shim (compiler still running when
-the shim replies), hosted runs until the build hosts get a compiler and client
-with the ledger, and the shipped PGO/BOLT compiler, which predates this.
+Early reply (`JUSTRUST_RUSTC_EARLY_REPLY=1`, FINDINGS 60): the compiler is
+still persisting when the shim reads the ledger, so jr-rustc now writes it just
+before sending the reply byte, with the time since driver start as the total,
+and not again at exit. If the byte cannot be sent, it is written at exit as
+usual. Through the shim on the staged `pgo-use` build `jr-60c5ee8a11aa`, demo
+project, one-line edit, `-Zthreads=8` (the early reply needs the parallel
+frontend): run 20261109-174555187-3319183 has 70 passes for the replied unit,
+total 0.051s of 0.062s wall, and no `incr_comp_finalize_session_directory`,
+which runs after the reply. The same edit without `-Zthreads` (run
+20261109-174446586-3310110) did not reply early and has that pass. A replied
+unit's ledger therefore leaves out the background persist tail by design.
+
+Not covered yet: hosted runs until the build hosts get a compiler and client
+with the ledger, and the shipped default compiler `jr-ac20de5e7921`, which
+predates this.
