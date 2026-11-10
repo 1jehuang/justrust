@@ -3,6 +3,8 @@
 //! fabricated: ordinary method selection still discharges the final application.
 use super::super::method_argument_selection::MethodArguments;
 use super::*;
+#[path = "nominal_impl_match.rs"]
+mod nominal_match;
 
 impl Solver<'_, '_, '_> {
     /// Infer arguments only from a unique unspecialized nominal implementation.
@@ -134,10 +136,9 @@ impl Solver<'_, '_, '_> {
     }
 
     /// An unmaterialized nominal can still contribute equations through a
-    /// unique unspecialized nominal or blanket implementation. These equations
-    /// do not select an implementation: checked lowering must prove it later.
-    /// Competing or specialized heads leave inference pending rather than bind
-    /// an unknown actual merely to make one implementation applicable.
+    /// unique structurally compatible nominal or blanket implementation.
+    /// These equations do not select an implementation: checked lowering must
+    /// prove it later. Competing heads keep every unknown actual pending.
     pub(super) fn structural_impl(
         &self,
         receiver: Term,
@@ -169,12 +170,16 @@ impl Solver<'_, '_, '_> {
             if owner != declaration {
                 continue;
             }
-            if patterns.len() != actuals.len()
-                || patterns
-                    .iter()
-                    .any(|ty| !matches!(ty, ir::Ty::Param(p) if header.schema_env.contains(*p)))
-            {
+            if patterns.len() != actuals.len() {
                 return Ok(None);
+            }
+            let mut compatible = true;
+            for (actual, pattern) in actuals.iter().zip(patterns) {
+                compatible &=
+                    self.impl_pattern_compatible(*actual, pattern, &header.schema_env, 0)?;
+            }
+            if !compatible {
+                continue;
             }
             self.checker.infer_storage(1)?;
             if selected.replace(header.clone()).is_some() {

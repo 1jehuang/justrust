@@ -37,7 +37,31 @@ pub(in crate::compiler::frontend) fn matches_partial(
 ) -> Result<(), String> {
     let mismatch = || Err("E0308: mismatched types: annotation does not match initializer".into());
     if !has_nested_infer(ty) {
-        return if checked_local_ty(ty, env)? == *got {
+        let expected = checked_local_ty(ty, env)?;
+        if expected == *got {
+            return Ok(());
+        }
+        // Source slots and closed graph recipes have distinct realization
+        // tokens. Replay both types before comparing their semantic identity,
+        // rather than requiring a concrete child such as Vec<i32> to share
+        // the initializer's representation token. This is equality, not a
+        // coercion, so nested concrete arguments remain exact.
+        let plan = env.plan()?;
+        let facts = env.facts.as_deref().map_or_else(
+            || {
+                env.param_env
+                    .as_deref()
+                    .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal)
+            },
+            ir::FactsCtx::Validated,
+        );
+        facts.validate_ty_metadata_with_budget(&expected, &plan.budget)?;
+        facts.validate_ty_metadata_with_budget(got, &plan.budget)?;
+        return if plan
+            .trait_world()?
+            .types_equal(std::slice::from_ref(&expected), std::slice::from_ref(got))
+            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+        {
             Ok(())
         } else {
             mismatch()

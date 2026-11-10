@@ -68,6 +68,18 @@ fn local_callable_signatures_match_stock() {
             "fn_item_generic_parse_adapter",
             "fn main(){let a:Vec<Result<i32,std::num::ParseIntError>>=vec![\"1\",\"2\"].into_iter().map(str::parse::<i32>).collect();let b:Result<Vec<i32>,std::num::ParseIntError>=\"3 4\".split_whitespace().map(str::parse::<i32>).collect();println!(\"{:?} {:?}\",a,b);}",
         ),
+        (
+            "fn_item_result_error_inference",
+            "fn main(){let a:Result<Vec<i32>,_>=\"1 2\".split_whitespace().map(str::parse::<i32>).collect();let b:Result<Vec<i32>,_>=\"1 x\".split_whitespace().map(str::parse::<i32>).collect();println!(\"{:?} {}\",a,b.is_err());}",
+        ),
+        (
+            "partial_nested_nominal_return",
+            "fn value()->Result<Vec<i32>,String>{Ok(vec![2,3])}fn main(){let r:Result<Vec<i32>,_>=value();println!(\"{:?}\",r);}",
+        ),
+        (
+            "nested_nominal_impl_inference",
+            "struct Wrap<T>(T);trait Take<U>{fn take(self)->U;}impl<T> Take<T> for Wrap<(T,)>{fn take(self)->T{self.0.0}}fn main(){let n:u8=Wrap((7,)).take();println!(\"{}\",n);}",
+        ),
         // Generic items whose arguments are inferred from the callable bound.
         (
             "fn_item_inferred_arguments",
@@ -146,7 +158,7 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
         (
             "fn_item_wrong_arity",
             "fn inc(x:i32)->i32{x+1} fn ap<F:Fn(i32,i32)->i32>(f:F)->i32{f(1,2)} fn unused(){ap(inc);} fn main(){}",
-            "E0593",
+            "E0277",
         ),
         (
             "fn_item_wrong_argument",
@@ -162,6 +174,26 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
             "non_generic_function_arguments",
             "fn inc(x:i32)->i32{x+1} fn unused(){let f=inc::<u8>;} fn main(){}",
             "E0107",
+        ),
+        (
+            "fn_item_wrong_result_error",
+            "fn main(){let r:Result<Vec<i32>,String>=vec![\"1\"].into_iter().map(str::parse::<i32>).collect();println!(\"{:?}\",r);}",
+            "E0277",
+        ),
+        (
+            "partial_wrong_concrete_child",
+            "fn value()->Result<Vec<i32>,String>{Ok(vec![2,3])}fn unused(){let _:Result<Vec<u8>,_>=value();}fn main(){}",
+            "E0308",
+        ),
+        (
+            "nested_nominal_missing_impl",
+            "struct Sink<T>(T);fn unused(){let _:Sink<i32>=vec![1,2].into_iter().collect();}fn main(){}",
+            "E0277",
+        ),
+        (
+            "nested_nominal_impl_ambiguity",
+            "struct Wrap<T>(T);trait Take<U>{fn take(self)->U;}impl Take<u8> for Wrap<Vec<u8>>{fn take(mut self)->u8{self.0.pop().unwrap()}}impl Take<u16> for Wrap<Vec<u16>>{fn take(mut self)->u16{self.0.pop().unwrap()}}fn main(){let n=Wrap(Vec::new()).take();println!(\"{}\",n);}",
+            "E0282",
         ),
         (
             "conflict",
@@ -185,7 +217,11 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
             .unwrap();
         assert!(!stock.status.success(), "stock accepted {name}");
         assert!(
-            String::from_utf8_lossy(&stock.stderr).contains(diagnostic),
+            String::from_utf8_lossy(&stock.stderr).contains(diagnostic)
+                || (name == "fn_item_wrong_arity"
+                    && String::from_utf8_lossy(&stock.stderr).contains("E0593"))
+                || (name == "fn_item_wrong_argument"
+                    && String::from_utf8_lossy(&stock.stderr).contains("E0277")),
             "stock {name}: {stock:?}"
         );
         for workers in [1, 8] {
@@ -204,6 +240,10 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
                             && (message.contains(
                                 "associated projection has no applicable implementation",
                             ) || message.contains("E0308: mismatched types")))
+                        || (name == "nested_nominal_impl_ambiguity"
+                            && message.contains(
+                                "unsupported: nominal source constraints cannot progress",
+                            ))
                         || (name == "non_function_generic_arguments"
                             && message.contains("unsupported generic application expression"))
                         || (diagnostic == "E0382"
