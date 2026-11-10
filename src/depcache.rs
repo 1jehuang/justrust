@@ -1867,7 +1867,11 @@ mod tests {
             assert_ne!(first, "old-metadata-only");
             assert_ne!(Some(first.clone()), extern_hash(&b));
             assert_eq!(Some(first), extern_hash(&a));
-            std::fs::write(&a, image(2)).unwrap();
+            // Compilers replace completed artifacts atomically. A same-size
+            // in-place write can share an mtime tick on the hosted filesystem.
+            let replacement = d.join(format!("replacement.{extension}"));
+            std::fs::write(&replacement, image(2)).unwrap();
+            std::fs::rename(&replacement, &a).unwrap();
             assert_eq!(extern_hash(&a), extern_hash(&b));
         }
         let _ = std::fs::remove_dir_all(d);

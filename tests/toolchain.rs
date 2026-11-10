@@ -146,6 +146,8 @@ fn justrust(home: &Path, server: &str, cwd: &Path) -> Command {
         .env("JUSTRUST_NO_TELEMETRY", "1")
         .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_DIST_SERVER", server)
+        // Exercise the fake official distribution, never the public shared bundle.
+        .env("JUSTRUST_TOOLCHAIN_DIST", "off")
         .env("JUSTRUST_REMOTE", "0")
         .env(
             "JUSTRUST_LOCAL_REASON",
