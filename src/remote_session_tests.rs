@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn hosted_transport_defaults_on_with_strict_explicit_rollback_policy() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    assert!(enabled_value(None));
+    assert!(enabled_value(Some(OsStr::new("1"))));
+    for value in ["0", "", "true", "false", "01", " 1", "1 ", "unexpected"] {
+        assert!(!enabled_value(Some(OsStr::new(value))), "{value:?}");
+    }
+    assert!(!enabled_value(Some(OsStr::from_bytes(&[0xff]))));
+}
+
+#[test]
 fn binary_hello_is_flushed_before_waiting_for_more_transport_input() {
     let hello = encode(&Msg::Hello { version: 1 }, &[]).unwrap();
     assert!(!hello.contains(&b'\n'));

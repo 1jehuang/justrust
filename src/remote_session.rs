@@ -1118,8 +1118,15 @@ fn bridge(target: Target, prefix: String) -> Result<()> {
     }
 }
 
+// Hosted callers use durable transport by default. Only the exact value "1"
+// opts in explicitly. "0" or any unexpected/non-Unicode value selects the
+// legacy direct transport, providing a strict rollback policy without guessing.
+fn enabled_value(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none_or(|value| value == "1")
+}
+
 pub fn enabled() -> bool {
-    std::env::var("JUSTRUST_HOSTED_SESSION").as_deref() == Ok("1")
+    enabled_value(std::env::var_os("JUSTRUST_HOSTED_SESSION").as_deref())
 }
 
 pub fn command(target: &Target, prefix: &str) -> Result<Command> {
