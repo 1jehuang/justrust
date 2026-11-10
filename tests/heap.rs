@@ -393,6 +393,89 @@ fn main() {
 }
 
 #[test]
+fn owning_box_projection_reinitializes_whole_and_nested_pointees() {
+    heap_case(
+        "box_projection_reinitialize",
+        r#"
+struct Witness { count: *mut u64, digit: u64 }
+impl Drop for Witness {
+    fn drop(&mut self) {
+        unsafe { *self.count = *self.count * 10u64 + self.digit; }
+    }
+}
+struct Pair { first: Witness, second: Witness }
+fn main() {
+    let mut count = 0u64;
+    let pointer = &mut count as *mut u64;
+    {
+        let mut owner = Box::new(Pair {
+            first: Witness { count: pointer, digit: 1u64 },
+            second: Witness { count: pointer, digit: 2u64 },
+        });
+        { let moved = *owner; }
+        assert!(count == 12u64);
+        *owner = Pair {
+            first: Witness { count: pointer, digit: 3u64 },
+            second: Witness { count: pointer, digit: 4u64 },
+        };
+        owner.first.digit += 4u64;
+    }
+    assert!(count == 1274u64);
+    count = 0u64;
+    {
+        let mut owner = Box::<Box<Pair>>::new(Box::new(Pair {
+            first: Witness { count: pointer, digit: 5u64 },
+            second: Witness { count: pointer, digit: 6u64 },
+        }));
+        { let moved = owner.first; }
+        assert!(count == 5u64);
+        owner.first = Witness { count: pointer, digit: 7u64 };
+        owner.first.digit += 1u64;
+    }
+    assert!(count == 586u64);
+    println!("ok");
+}
+"#,
+    );
+}
+
+#[test]
+fn owning_box_projection_reinitialization_preserves_semantic_errors() {
+    for (name, source, native, stock) in [
+        (
+            "box_immutable_field_assignment",
+            "struct Value { n: i32 } fn main() { let owner = Box::new(Value { n: 1 }); owner.n = 2; }",
+            "ImmutableReassignment",
+            "E0594",
+        ),
+        (
+            "box_other_field_assignment_does_not_reinitialize_move",
+            "struct Value { n: i32 } struct Pair { first: Value, second: Value } fn unused() { let mut owner = Box::new(Pair { first: Value { n: 1 }, second: Value { n: 2 } }); let moved = owner.first; owner.second = Value { n: 3 }; let again = owner.first; } fn main() {}",
+            "ReadNotDefinitelyInitialized",
+            "E0382",
+        ),
+    ] {
+        rejects_source(name, source, native);
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let result = capture(
+            Command::new("rustc")
+                .args(["--edition=2024", "-Cpanic=abort"])
+                .arg(input)
+                .arg("-o")
+                .arg(scratch.path("invalid-box-reinitialize")),
+            &scratch,
+            60,
+        );
+        assert!(!result.status.success(), "{name}: {result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(stock),
+            "{name}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn owning_box_projection_composes_alias_depth() {
     heap_case(
         "box_alias_depth",

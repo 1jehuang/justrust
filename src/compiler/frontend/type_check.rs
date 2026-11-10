@@ -7114,6 +7114,14 @@ impl<'a> Checker<'a> {
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         let local = self.lookup(place.local)?;
         let owner = self.locals[local.0].ty.clone();
+        // Native Box dereferences are owned places, including when only some
+        // pointee fields remain initialized. An overloaded DerefMut call would
+        // first borrow the whole Box and wrongly require all those fields.
+        // Keep explicit dereferences and implicit field autodereferences on
+        // checked_place's canonical path, with ordinary move/drop/write checks.
+        if owner.owned_box_pointee().is_some() {
+            return Ok(None);
+        }
         if !matches!(owner, ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
             return Ok(None);
         }
