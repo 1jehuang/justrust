@@ -289,6 +289,7 @@ fn resolve<'a>(
             Term::Bool => ir::Ty::Bool,
             Term::Unit => ir::Ty::Unit,
             Term::Never => ir::Ty::Never,
+            Term::Const(value) => ir::Ty::Const(value),
             Term::Char => ir::Ty::Char,
             Term::Str => ir::Ty::Str,
             Term::Ref(kind, t) => ir::Ty::Ref {

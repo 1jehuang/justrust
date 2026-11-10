@@ -836,6 +836,7 @@ fn collect(
         | ir::Ty::Bool
         | ir::Ty::Unit
         | ir::Ty::Never
+        | ir::Ty::Const(_)
         | ir::Ty::Char
         | ir::Ty::Str => {}
     }

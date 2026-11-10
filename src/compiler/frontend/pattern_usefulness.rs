@@ -211,6 +211,7 @@ impl<'facts> CoverageMatrix<'facts> {
                 | Ty::FnPointer(_)
                 | Ty::FnItem(_)
                 | Ty::Never
+                | Ty::Const(_)
                 | Ty::Slice { .. }
                 | Ty::Str
                 | Ty::Dyn(_)

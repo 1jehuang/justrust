@@ -111,7 +111,9 @@ impl TyMap<'_> {
             ty::error()
         };
         match t {
-            ir::Ty::DependentArray { .. } => un("unsupported: const-dependent inference types"),
+            ir::Ty::DependentArray { .. } | ir::Ty::Const(_) => {
+                un("unsupported: const-dependent inference types")
+            }
             ir::Ty::Bool => ty::bool_ty(),
             ir::Ty::Char => ty::mk(TyKind::Char),
             ir::Ty::Str => ty::mk(TyKind::Str),

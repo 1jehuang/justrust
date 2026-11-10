@@ -192,6 +192,10 @@ fn ty(
             types(words, &value.type_args, budget, depth + 1)?;
             18
         }
+        ir::Ty::Const(value) => {
+            words.extend(value.closed_key()?);
+            23
+        }
         ir::Ty::DependentArray { .. } | ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
             return Err("instance graph key requires closed actuals".into());
         }
@@ -596,6 +600,12 @@ impl Reader<'_> {
             5 => ir::Ty::Never,
             6 => ir::Ty::Char,
             7 => ir::Ty::Str,
+            23 => ir::Ty::Const(ir::ConstArgument::from_closed_key([
+                self.word()?,
+                self.word()?,
+                self.word()?,
+                self.word()?,
+            ])?),
             8 => ir::Ty::Ref {
                 kind: self.kind()?,
                 referent: Arc::new(self.ty(facts, depth + 1)?),
@@ -1128,6 +1138,32 @@ mod tests {
         let first = encode(&original, &budget).unwrap();
         original.type_args = Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]);
         assert_ne!(first, encode(&original, &budget).unwrap());
+        // Const arguments are keyed by scalar type and value, so equal values
+        // of different types, and different values, are distinct arguments.
+        let constant = |ty, bits| ir::Ty::Const(ir::ConstArgument::Integer { ty, bits });
+        let mut keys = Vec::new();
+        for argument in [
+            constant(ir::IntTy::Usize, 3),
+            constant(ir::IntTy::U8, 3),
+            constant(ir::IntTy::Usize, 4),
+            ir::Ty::Const(ir::ConstArgument::Bool(true)),
+            ir::Ty::Const(ir::ConstArgument::Char('\u{3}')),
+        ] {
+            let ir::Ty::Const(value) = &argument else {
+                unreachable!()
+            };
+            assert_eq!(
+                ir::ConstArgument::from_closed_key(value.closed_key().unwrap()).unwrap(),
+                *value
+            );
+            original.type_args = Arc::from([argument]);
+            let key = encode(&original, &budget).unwrap();
+            assert!(!keys.contains(&key));
+            keys.push(key);
+        }
+        original.type_args = Arc::from([constant(ir::IntTy::U8, 256)]);
+        assert!(encode(&original, &budget).is_err());
+        assert!(ir::ConstArgument::from_closed_key([2, 6, 256, 0]).is_err());
         original.type_args = Arc::from([ir::Ty::Tuple(Arc::from([
             ir::Ty::Int(ir::IntTy::I32),
             ir::Ty::Bool,

@@ -411,6 +411,7 @@ impl Encoder<'_> {
                 Ok(())
             }
             ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
+            ir::Ty::Const(_) => self.ty(ty, depth),
             ir::Ty::AssociatedType(_) => {
                 Err("associated instance pattern contains unresolved associated type".into())
             }
@@ -490,6 +491,13 @@ impl Encoder<'_> {
             ir::Ty::Str => self.append(b"z"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Never => self.append(b"n"),
+            ir::Ty::Const(value) => {
+                self.append(b"k")?;
+                for word in value.closed_key()? {
+                    self.append(&word.to_le_bytes())?;
+                }
+                Ok(())
+            }
             ir::Ty::Tuple(fields) => {
                 self.append(b"t")?;
                 self.count(fields.len())?;
@@ -692,6 +700,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Str
             | ir::Ty::Bool
             | ir::Ty::Unit
+            | ir::Ty::Const(_)
             | ir::Ty::Never => {}
             ir::Ty::Ref { referent, .. }
             | ir::Ty::RawPtr {

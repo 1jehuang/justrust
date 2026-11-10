@@ -980,6 +980,7 @@ pub(super) fn source_carrier_inventory(
             | Ty::Bool
             | Ty::Unit
             | Ty::Dyn(_)
+            | Ty::Const(_)
             | Ty::Never => {}
         }
         memo.insert(key, (has, height), budget)?;
@@ -1167,6 +1168,7 @@ pub(super) fn source_carrier_inventory(
                     | Ty::Unit
                     | Ty::Dyn(_)
                     | Ty::Never
+                    | Ty::Const(_)
                     | Ty::RawPtr { .. } => {}
                     Ty::Ref { .. } | Ty::Param(_) | Ty::DependentArray { .. } => unreachable!(),
                 }
@@ -4403,6 +4405,7 @@ fn substitute_ty_walk(
         Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
             ty.clone()
         }
+        Ty::Const(_) => ty.clone(),
     })
 }
 
@@ -5568,6 +5571,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     }
                 }
             }
+            Ty::Const(_) => {}
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)
@@ -7080,6 +7084,9 @@ pub enum Ty {
     Dyn(Arc<DynTy>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
+    /// A closed const generic argument. Legal only as an ordered generic
+    /// argument of a declaration, never as the type of a value.
+    Const(ConstArgument),
 }
 
 /// Sealed source-construction authority, issued only by a private catalog builder.
@@ -7252,6 +7259,7 @@ impl PhantomDataTy {
             }
             Ty::DependentArray { element, .. } | Ty::Array { element, .. } => child(element)?,
             Ty::RawPtr { pointee, .. } => child(pointee)?,
+            Ty::Const(_) => {}
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)
@@ -8019,6 +8027,7 @@ fn type_metadata_walk(
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
                 return Ok((false, 0));
             }
+            Ty::Const(_) => return Ok((false, 0)),
         };
         for (candidate, result) in &memo.entries {
             charge(budget, work)?;
@@ -8133,6 +8142,7 @@ fn type_metadata_walk(
                     child(value)?;
                 }
             }
+            Ty::Const(_) => {}
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)
@@ -8532,6 +8542,7 @@ impl Ty {
                 | Self::PhantomData(_)
                 | Self::FnPointer(_)
                 | Self::FnItem(_)
+                | Self::Const(_)
                 | Self::Param(_)
                 | Self::Int(_)
                 | Self::Float(_)
@@ -8601,6 +8612,7 @@ impl Ty {
             | Self::Struct(_)
             | Self::Enum(_)
             | Self::Param(_)
+            | Self::Const(_)
             | Self::Str
             | Self::Dyn(_)
             | Self::Slice { .. } => false,
@@ -9945,6 +9957,7 @@ pub(in crate::compiler) fn reference_type_summary(
                     }
                 }
             }
+            Ty::Const(_) => {}
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)

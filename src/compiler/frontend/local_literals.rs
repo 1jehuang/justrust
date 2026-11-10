@@ -3679,6 +3679,19 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
         ir::Ty::Bool => "bool".into(),
         ir::Ty::Unit => "()".into(),
         ir::Ty::Never => "!".into(),
+        ir::Ty::Const(value) => match value {
+            ir::ConstArgument::Bool(value) => value.to_string(),
+            ir::ConstArgument::Char(value) => format!("{value:?}"),
+            ir::ConstArgument::Integer { ty, bits } if ty.is_signed() => {
+                let shift = 128 - ty.bits();
+                (((*bits << shift) as i128) >> shift).to_string()
+            }
+            ir::ConstArgument::Integer { bits, .. } => bits.to_string(),
+            ir::ConstArgument::Parameter(parameter) => format!(
+                "const@{}:{}",
+                parameter.owner.declaration.index, parameter.index
+            ),
+        },
         ir::Ty::Ref { kind, referent } => format!(
             "&{}{}",
             if *kind == ir::BorrowKind::Mut {

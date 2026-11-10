@@ -40,6 +40,8 @@ pub(super) enum Term {
     Closure(ir::DeclId, Vec<Term>),
     /// Closed trait object: principal, ordered actuals, ordered assignments.
     Dyn(ir::DeclId, Vec<Term>, Vec<(ir::DeclId, Term)>),
+    /// Closed const generic argument of a nominal application.
+    Const(ir::ConstArgument),
 }
 impl Term {
     pub(super) fn from_ty(ty: &ir::Ty, b: &ir::PlanBudget, depth: usize) -> Result<Self, Error> {
@@ -51,6 +53,10 @@ impl Term {
             ir::Ty::Bool => Self::Bool,
             ir::Ty::Unit => Self::Unit,
             ir::Ty::Never => Self::Never,
+            ir::Ty::Const(value) => {
+                value.closed_key().map_err(Error::new)?;
+                Self::Const(value.clone())
+            }
             ir::Ty::Char => Self::Char,
             ir::Ty::Str => Self::Str,
             ir::Ty::Ref { kind, referent } => {
@@ -188,6 +194,10 @@ impl Term {
             Self::Bool => out.push(3),
             Self::Unit => out.push(4),
             Self::Never => out.push(5),
+            Self::Const(value) => {
+                out.push(21);
+                out.extend(value.closed_key().map_err(Error::new)?);
+            }
             Self::Char => out.push(6),
             Self::Str => out.push(7),
             Self::Ref(k, t) | Self::RawPtr(k, t) => {
@@ -330,6 +340,15 @@ impl Reader<'_> {
             3 => Term::Bool,
             4 => Term::Unit,
             5 => Term::Never,
+            21 => Term::Const(
+                ir::ConstArgument::from_closed_key([
+                    self.word()?,
+                    self.word()?,
+                    self.word()?,
+                    self.word()?,
+                ])
+                .map_err(Error::new)?,
+            ),
             6 => Term::Char,
             7 => Term::Str,
             tag @ (8 | 9) => {

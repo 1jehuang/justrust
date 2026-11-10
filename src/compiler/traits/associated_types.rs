@@ -607,6 +607,10 @@ impl ValidatedTraitWorld {
                     })?;
                 }
                 for argument in value.def().type_args.iter() {
+                    if let Ty::Const(value) = argument {
+                        charged(&self.budget, value.closed_key().map(|_| ()))?;
+                        continue;
+                    }
                     child(argument, replays)?;
                 }
                 for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
@@ -629,6 +633,10 @@ impl ValidatedTraitWorld {
                     })?;
                 }
                 for argument in value.def().type_args.iter() {
+                    if let Ty::Const(value) = argument {
+                        charged(&self.budget, value.closed_key().map(|_| ()))?;
+                        continue;
+                    }
                     child(argument, replays)?;
                 }
                 for variant in value.def().variants.iter() {
@@ -638,6 +646,14 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Const(value) => {
+                if depth != 0 || value.closed_key().is_err() {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "const generic argument used as a type",
+                    ));
+                }
+            }
         }
         if let Some(key) = key {
             walk.insert(key, height, ty, &self.budget)?;

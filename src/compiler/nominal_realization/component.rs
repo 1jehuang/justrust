@@ -669,6 +669,7 @@ impl SliceInventory<'_> {
             | Term::Bool
             | Term::Unit
             | Term::Never
+            | Term::Const(_)
             | Term::Char => {}
         }
         Ok(height)
@@ -839,6 +840,7 @@ impl ReferenceInventory<'_> {
             | Term::Bool
             | Term::Unit
             | Term::Never
+            | Term::Const(_)
             | Term::Char => {}
         }
         Ok(height)
@@ -1054,6 +1056,7 @@ impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresence
             | Term::Bool
             | Term::Unit
             | Term::Never
+            | Term::Const(_)
             | Term::Char => {}
         }
         Ok(())
@@ -1213,6 +1216,7 @@ impl<F: FnMut(usize, Option<(&ir::Ty, usize)>) -> Result<(), Error>> OwnershipIn
             | Term::Bool
             | Term::Unit
             | Term::Never
+            | Term::Const(_)
             | Term::Char => {}
         }
         Ok(())

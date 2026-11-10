@@ -2274,6 +2274,8 @@ impl<'a> MoveShape<'a> {
                 Self::OpaqueParam
             }
             Ty::Never => Self::Never,
+            // A const argument is never the type of a value.
+            Ty::Const(_) => return Err(Exhausted),
             Ty::Closure(closure) => Self::Product {
                 ty,
                 fields: closure.captures().len(),

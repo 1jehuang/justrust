@@ -5657,6 +5657,7 @@ pub(super) fn replay_nominal_source_id(
             | ir::Ty::Float(_)
             | ir::Ty::Bool
             | ir::Ty::Unit
+            | ir::Ty::Const(_)
             | ir::Ty::Never => {}
         }
         Ok(())

@@ -184,6 +184,7 @@ fn walk_size_authorized(
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) | ir::Ty::Never => {
             Err("unsupported: target size requires an implemented Sized type".into())
         }
+        ir::Ty::Const(_) => Err("const generic argument has no target size".into()),
         ir::Ty::Ref { .. } | ir::Ty::RawPtr { .. } => unreachable!(),
     }
 }
@@ -272,6 +273,7 @@ fn walk_alignment(
         ir::Ty::Enum(_) | ir::Ty::FnItem(_) | ir::Ty::Closure(_) | ir::Ty::Never => {
             Err("unsupported: target alignment for this type is not implemented".into())
         }
+        ir::Ty::Const(_) => Err("const generic argument has no target alignment".into()),
     }
 }
 

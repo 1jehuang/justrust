@@ -197,6 +197,7 @@ impl ReadComponent {
             Term::Bool => ir::Ty::Bool,
             Term::Unit => ir::Ty::Unit,
             Term::Never => ir::Ty::Never,
+            Term::Const(value) => ir::Ty::Const(value.clone()),
             Term::Char => ir::Ty::Char,
             Term::Ref(kind, t) => ir::Ty::Ref {
                 kind: *kind,

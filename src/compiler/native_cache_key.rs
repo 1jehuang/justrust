@@ -126,6 +126,7 @@ impl Encoder<'_, '_> {
             | Param(_)
             | Struct(_)
             | Enum(_)
+            | Const(_)
             | Dyn(_) => Err(Failure::Unsupported),
         }
     }

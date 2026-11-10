@@ -5659,6 +5659,10 @@ impl ValidatedTraitWorld {
             }
             Ty::Struct(t) => {
                 for t in t.def().type_args.iter() {
+                    if let Ty::Const(value) = t {
+                        charged(&self.budget, value.closed_key().map(|_| ()))?;
+                        continue;
+                    }
                     child(
                         t,
                         if usage == TypeUse::Actual {
@@ -5676,6 +5680,10 @@ impl ValidatedTraitWorld {
             }
             Ty::Enum(t) => {
                 for t in t.def().type_args.iter() {
+                    if let Ty::Const(value) = t {
+                        charged(&self.budget, value.closed_key().map(|_| ()))?;
+                        continue;
+                    }
                     child(
                         t,
                         if usage == TypeUse::Actual {
@@ -5733,6 +5741,16 @@ impl ValidatedTraitWorld {
                 }
             }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
+            // Only an ordered generic argument may be a const, never a value
+            // type or a structural component of one.
+            Ty::Const(value) => {
+                if usage != TypeUse::Actual || depth != 0 || value.closed_key().is_err() {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "const generic argument used as a type",
+                    ));
+                }
+            }
         }
         if let Some(key) = key {
             walk.insert(key, height, ty, &self.budget)?;
@@ -6297,6 +6315,7 @@ impl ValidatedTraitWorld {
                     }
                 }
                 Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
+                Ty::Const(_) => {}
             }
         }
         Ok(true)
@@ -12278,6 +12297,8 @@ impl ValidatedTraitWorld {
             Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
             Ty::RawPtr { .. } => item != CatalogItem::Sync,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
+            // A const argument is not a type and implements no trait.
+            Ty::Const(_) => false,
             Ty::AssociatedType(projection) => {
                 self.validate_universal_projection(projection, context.env())?;
                 item == CatalogItem::Sized
@@ -18546,6 +18567,35 @@ mod tests {
                 })
                 .is_err()
         );
+        // A const generic argument is never the type of a value, nor a
+        // structural component of one, under either validator.
+        let constant = Ty::Const(ir::ConstArgument::Integer {
+            ty: ir::IntTy::Usize,
+            bits: 3,
+        });
+        let in_value_position = [
+            constant.clone(),
+            reference(constant.clone()),
+            Ty::Array {
+                element: Arc::new(constant.clone()),
+                len: 1,
+            },
+            Ty::Tuple(Arc::from([Ty::Bool, constant.clone()])),
+        ];
+        for ty in &in_value_position {
+            assert!(universal.validate_ty(ty).is_err());
+        }
+        for ty in &in_value_position[1..] {
+            assert!(universal.validate_ty_metadata(ty).is_err());
+        }
+        let symbolic = Ty::Const(ir::ConstArgument::Parameter(ir::ConstParamId {
+            owner: BinderId {
+                declaration: default,
+            },
+            index: 0,
+        }));
+        assert!(universal.validate_ty(&symbolic).is_err());
+        assert!(universal.validate_ty_metadata(&symbolic).is_err());
     }
 
     #[test]

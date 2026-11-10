@@ -258,6 +258,7 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
             Err("unsupported: dependent array has no native ABI before const instantiation".into())
         }
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
+        ir::Ty::Const(_) => Err("const generic argument has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
         ir::Ty::Dyn(_) => Err("unsized trait object value has no native ABI".into()),

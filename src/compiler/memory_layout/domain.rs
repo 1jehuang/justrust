@@ -177,6 +177,9 @@ fn normalize(
         ir::Ty::Enum(_) | ir::Ty::FnItem(_) | ir::Ty::Closure(_) | ir::Ty::Never => {
             out.unsupported = Some("unsupported: target alignment for this type is not implemented")
         }
+        ir::Ty::Const(_) => {
+            return Err("const generic argument has no target alignment".into());
+        }
         ir::Ty::Unit | ir::Ty::Bool | ir::Ty::Int(_) | ir::Ty::Float(_) => {
             return Err("target scalar alignment authority is missing".into());
         }
