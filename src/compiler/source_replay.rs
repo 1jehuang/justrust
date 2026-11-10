@@ -5,7 +5,18 @@ use super::{
 };
 use std::sync::Arc;
 
+mod function_pointers;
 mod projected_inputs;
+
+pub(super) fn function_pointer_input_equation(
+    parameter: &ir::Ty,
+    input: &ir::Ty,
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Option<ir::Ty>, FactsError> {
+    function_pointers::input_equation(parameter, input, facts, budget, depth)
+}
 
 pub(super) type InferTerm = Arc<InferKind>;
 #[derive(Clone, Debug)]
@@ -2287,10 +2298,11 @@ pub(super) fn infer_call_input_trace_with_partial_context(
         ));
     }
     let predicates = view.inference_predicates(facts)?;
-    infer_input_schema_trace_with_partial_context(
+    infer_input_schema_trace_with_facts(
         Some((predicates, &mut |ty| {
             facts.normalize_substituted_projection_type(ty, budget)
         })),
+        Some(facts),
         scopes.first().cloned(),
         (&view.signature().params, &view.signature().result),
         inputs,
@@ -2412,6 +2424,28 @@ fn infer_original_equalities(
 fn infer_input_schema_trace_with_partial_context(
     equalities: Option<OriginalEqualities<'_>>,
     env: Option<Arc<ir::ParamEnv>>,
+    signature: (&[ir::Ty], &ir::Ty),
+    inputs: &[ir::Ty],
+    expected: Option<&InferTerm>,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    infer_input_schema_trace_with_facts(
+        equalities,
+        None,
+        env,
+        signature,
+        inputs,
+        expected,
+        budget,
+        materialize,
+    )
+}
+
+fn infer_input_schema_trace_with_facts(
+    equalities: Option<OriginalEqualities<'_>>,
+    facts: Option<&tr::ValidatedFacts>,
+    env: Option<Arc<ir::ParamEnv>>,
     (parameters, result): (&[ir::Ty], &ir::Ty),
     inputs: &[ir::Ty],
     expected: Option<&InferTerm>,
@@ -2445,7 +2479,15 @@ fn infer_input_schema_trace_with_partial_context(
     for (parameter, input) in parameters.iter().zip(inputs) {
         let schema = state.type_term(parameter, binder, 0)?;
         let actual = state.type_term(input, None, 0)?;
-        for pending in state.constrain_input_frontier(parameter, input)? {
+        // Only the authored outer parameter is a coercion site. The original
+        // FnItem remains in evidence below, including its declaration/actuals.
+        let reified = facts
+            .map(|facts| function_pointers::input_equation(parameter, input, facts, budget, 0))
+            .transpose()?
+            .flatten();
+        for pending in
+            state.constrain_input_frontier(parameter, reified.as_ref().unwrap_or(input))?
+        {
             push(&mut pending_inputs, pending, budget)?;
         }
         schemas.push(schema);

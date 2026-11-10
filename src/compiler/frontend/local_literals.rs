@@ -15,6 +15,8 @@ mod iteration;
 
 #[path = "local_literals/callable.rs"]
 mod callable;
+#[path = "local_literals/function_pointers.rs"]
+mod function_pointers;
 
 #[path = "local_literals/trait_methods.rs"]
 mod trait_methods;
@@ -791,7 +793,9 @@ impl<'s> Solver<'_, '_, 's> {
                 Domain::FnPointer(..)
             )
         ) {
-            return Err("unsupported: function item and closure coercions to function pointers are not implemented".into());
+            return Err(
+                "E0308: callable item equality is not a function pointer coercion site".into(),
+            );
         }
         let domain = match (&x, &y) {
             (Domain::Unknown, _) => {
@@ -1259,6 +1263,20 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(());
         }
         match (self.domain(actual), self.domain(expected)) {
+            (_, Domain::FnPointer(inputs, output)) => {
+                if self.coerce_function_pointer(actual, &inputs, output)? {
+                    return Ok(());
+                }
+                self.unify(actual, expected)
+            }
+            (Domain::Tuple(actuals), Domain::Tuple(expecteds))
+                if actuals.len() == expecteds.len() =>
+            {
+                for (actual, expected) in actuals.into_iter().zip(expecteds) {
+                    self.coerce(actual, expected)?;
+                }
+                Ok(())
+            }
             (Domain::Ref(from, a), Domain::RawPtr(to, b))
                 if to == ir::BorrowKind::Shared || from == ir::BorrowKind::Mut =>
             {
@@ -1351,6 +1369,17 @@ impl<'s> Solver<'_, '_, 's> {
     }
     fn join_branches(&mut self, left: Term, right: Term) -> Result<Term, String> {
         match (self.domain(left), self.domain(right)) {
+            (Domain::Fixed(ir::Ty::FnItem(a)), Domain::Fixed(ir::Ty::FnItem(b))) if a != b => {
+                let plan = self.checker.signatures.plan()?;
+                let signature =
+                    plan.source_inference_signature(&a, self.checker.facts(), &plan.budget)?;
+                let pointer =
+                    ir::FnPointerTy::new(signature.params, signature.result, &plan.budget)?;
+                let result = self.fixed(ir::Ty::FnPointer(pointer))?;
+                self.coerce(left, result)?;
+                self.coerce(right, result)?;
+                Ok(result)
+            }
             (Domain::Fixed(ir::Ty::Never), _) => Ok(right),
             (_, Domain::Fixed(ir::Ty::Never)) => Ok(left),
             (Domain::Ref(ir::BorrowKind::Shared, inner), Domain::Ref(ir::BorrowKind::Mut, _))
@@ -3245,7 +3274,9 @@ impl<'s> Solver<'_, '_, 's> {
                 for target in targets.into_iter().rev() {
                     let target = self.source_ty(target)?;
                     // `value as Box<dyn Trait>` is an unsizing coercion site.
-                    if self.dyn_pointer_cast(source, target) {
+                    if self.dyn_pointer_cast(source, target)
+                        || matches!(self.domain(target), Domain::FnPointer(..))
+                    {
                         self.coerce(source, target)?;
                     }
                     source = target;
@@ -3501,14 +3532,11 @@ impl<'s> Solver<'_, '_, 's> {
                 let item = self.fresh()?;
                 for e in elements {
                     let t = self.expr(e, depth + 1)?;
-                    // Elements are coercion sites (e.g. `[&a, &b]` to `[&dyn P; 2]`).
-                    if matches!(self.domain(t), Domain::Ref(..))
-                        && matches!(self.domain(item), Domain::Ref(..))
-                    {
-                        self.coerce(t, item)?;
-                    } else {
-                        self.unify(item, t)?;
-                    }
+                    // Preserve each producer until the enclosing annotation,
+                    // argument or return has constrained the element target.
+                    // Distinct function items are never equality constraints.
+                    self.checker.infer_storage(1)?;
+                    self.coercions.push((t, item));
                 }
                 self.node(Domain::Array(item, elements.len()))
             }

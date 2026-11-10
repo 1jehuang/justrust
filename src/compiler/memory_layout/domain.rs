@@ -1237,6 +1237,7 @@ pub(in crate::compiler) enum ContractStep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectedSite {
     Call(ir::ExprId),
+    Reification(ir::ExprId),
     Vtable(ir::ExprId),
     CleanupLocal(usize),
     CleanupExpression(ir::ExprId),
@@ -1418,6 +1419,27 @@ impl Local {
             budget.charge_work(1)?;
             let occurrence = ir::ExprId(index);
             match &expression.kind {
+                ir::ExprKind::PtrCast { value }
+                    if matches!(expression.ty, ir::Ty::FnPointer(_)) =>
+                {
+                    let item_ty =
+                        substitution.ty(&self.source.exprs[value.0].ty, source_scratch, scratch)?;
+                    let pointer_ty = substitution.ty(&expression.ty, source_scratch, scratch)?;
+                    ir::validate_pointer_cast(
+                        &item_ty,
+                        &pointer_ty,
+                        ir::FactsCtx::Validated(&facts),
+                    )?;
+                    let ir::Ty::FnItem(item) = item_ty else {
+                        return Err("function pointer alignment demand lost exact item".into());
+                    };
+                    retain(
+                        SelectedSite::Reification(occurrence),
+                        (*item).clone(),
+                        &[],
+                        scratch,
+                    )?;
+                }
                 ir::ExprKind::TypeAlignment(query)
                     if !query.is_private_storage_stride()
                         && !query.is_private_storage_alignment()
@@ -1468,6 +1490,14 @@ impl Local {
                     match resolved {
                         ir::Callee::Direct(next) => {
                             retain(SelectedSite::Call(occurrence), next, &nominals, scratch)?
+                        }
+                        ir::Callee::Untupled(call)
+                            if matches!(call.trait_ref.self_ty, ir::Ty::FnPointer(_)) =>
+                        {
+                            facts
+                                .service()
+                                .validate_untupled(&call, &facts)
+                                .map_err(|e| e.into_legacy_diagnostic(budget))?;
                         }
                         ir::Callee::Untupled(call) => {
                             let next = facts

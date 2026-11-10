@@ -231,7 +231,9 @@ fn body(value: &Block, depth: usize, emit: &mut Emit<'_>) -> Result<(), String> 
                 expression(value, depth + 1, emit)?;
             }
             _ => {
-                return Err("unsupported: primitive inherent method source statement syntax".into());
+                return Err(
+                    "unsupported: primitive inherent method source statement syntax".into(),
+                );
             }
         }
     }

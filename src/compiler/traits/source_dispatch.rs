@@ -227,7 +227,7 @@ impl ValidatedFacts {
                     ));
                 }
                 if matches!(callee, Callee::Untupled(_))
-                    && (!matches!(call.trait_ref.self_ty, Ty::FnItem(_))
+                    && (!matches!(call.trait_ref.self_ty, Ty::FnItem(_) | Ty::FnPointer(_))
                         || self
                             .world
                             .schema
@@ -274,6 +274,33 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "source trait entry changed item owner or method argument arity",
             ));
+        }
+        if matches!(call.trait_ref.self_ty, Ty::FnPointer(_))
+            && self
+                .schema
+                .closure_trait_kind(call.trait_ref.declaration)?
+                .is_some()
+        {
+            if !call.method_args.is_empty() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function pointer callable has method arguments",
+                ));
+            }
+            let signature = self.builtin_callable_signature(&call.trait_ref.self_ty, caller)?;
+            if call.trait_ref.args.len() != 1
+                || !self.eq_ty(
+                    &call.trait_ref.args[0],
+                    &self.fn_item_arguments(&signature)?,
+                    0,
+                )?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function pointer callable tuple differs from exact signature",
+                ));
+            }
+            return Ok(Callee::Untupled(call.clone()));
         }
         if let Ty::FnItem(target) = &call.trait_ref.self_ty
             && self

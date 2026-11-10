@@ -2032,7 +2032,18 @@ impl ValidatedTraitWorld {
         )?;
         let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
         let implementation_application = implementation_application_self(&selected_goal.self_ty);
-        if !closed_goal && !builtin_closure && !opaque_reference && !implementation_application {
+        let builtin_pointer = matches!(selected_goal.self_ty, Ty::FnPointer(_))
+            && self
+                .schema
+                .closure_trait_kind(selected_goal.declaration)?
+                .is_some()
+            && self.associated_header(projection.item)?.trait_decl == selected_goal.declaration;
+        if !closed_goal
+            && !builtin_closure
+            && !builtin_pointer
+            && !opaque_reference
+            && !implementation_application
+        {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: nonclosed associated projection application",
@@ -2079,10 +2090,10 @@ impl ValidatedTraitWorld {
             &Predicate::Implements(selected_goal.clone()),
             selection_context,
         )? {
-            let Ty::FnItem(item) = &selected_goal.self_ty else {
-                unreachable!()
-            };
-            let raw_rhs = self.fn_item_signature(item, selection_context)?.result;
+            let (declaration, arguments) = self.builtin_callable_origin(&selected_goal)?;
+            let raw_rhs = self
+                .builtin_callable_signature(&selected_goal.self_ty, selection_context)?
+                .result;
             let normal =
                 self.normalize_type_in(&raw_rhs, context, stack, &mut child_dependencies, 0)?;
             retain::<NormalizationEvidence>(&self.budget, 1)?;
@@ -2091,8 +2102,8 @@ impl ValidatedTraitWorld {
                 key,
                 membership,
                 selected_goal: selected_goal.clone(),
-                implementation: NormalizationOrigin::Implementation(item.declaration),
-                arguments: item.type_args.clone(),
+                implementation: NormalizationOrigin::Implementation(declaration),
+                arguments,
                 raw_rhs,
                 normal,
                 dependencies: child_dependencies.into(),
@@ -2775,19 +2786,16 @@ impl ValidatedTraitWorld {
             ));
         }
         if let ProofOrigin::FnItem { kind } = &evidence.membership.0.origin {
-            let Ty::FnItem(item) = &evidence.selected_goal.self_ty else {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "function item normalization lost its item type",
-                ));
-            };
-            let result = self.fn_item_signature(item, context.proof)?.result;
+            let (declaration, arguments) = self.builtin_callable_origin(&evidence.selected_goal)?;
+            let result = self
+                .builtin_callable_signature(&evidence.selected_goal.self_ty, context.proof)?
+                .result;
             if self
                 .schema
                 .closure_trait_kind(evidence.selected_goal.declaration)?
                 != Some(*kind)
-                || !matches!(&evidence.implementation, NormalizationOrigin::Implementation(declaration) if *declaration == item.declaration)
-                || !self.eq_types(&evidence.arguments, &item.type_args, 0)?
+                || !matches!(&evidence.implementation, NormalizationOrigin::Implementation(actual) if *actual == declaration)
+                || !self.eq_types(&evidence.arguments, &arguments, 0)?
                 || !self.eq_ty(&evidence.raw_rhs, &result, 0)?
                 || self
                     .associated_header(evidence.key.projection.item)?

@@ -66,6 +66,7 @@ impl ValidatedTraitWorld {
                 a.declaration == b.declaration && a.type_args.len() == b.type_args.len()
             }
             (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+            | (ir::Callee::Untupled(a), ir::Callee::Untupled(b))
             | (
                 ir::Callee::Virtual(ir::VirtualCall { call: a }),
                 ir::Callee::Virtual(ir::VirtualCall { call: b }),

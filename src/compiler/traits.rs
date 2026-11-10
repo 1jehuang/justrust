@@ -739,6 +739,13 @@ pub trait NominalValidationSession: Send {
 }
 
 pub trait SchemaCx {
+    /// Only the original source adapter can authorize safe Rust ABI reification.
+    fn validate_fn_pointer_item(&self, _declaration: DeclId) -> Result<()> {
+        Err(FactsError::unsupported(
+            self.budget(),
+            "unsupported: canonical safe Rust function pointer source authority unavailable",
+        ))
+    }
     /// Lookup of a frozen parser/source-schema proof, never a body callback.
     fn declaration_direct_return(
         &self,
@@ -7780,7 +7787,7 @@ impl ValidatedTraitWorld {
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
         {
             if !self.trait_call_is_closed(call, facts)?
-                && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+                && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_) | Ty::FnPointer(_))
             {
                 return self.universal_required_carrier_contract(call, facts);
             }
@@ -12685,14 +12692,6 @@ impl ValidatedTraitWorld {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
         };
-        if matches!(goal.self_ty, Ty::FnPointer(_))
-            && self.closure_trait_kind(goal.declaration)?.is_some()
-        {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: function pointer callable traits require a native indirect Rust ABI implementation",
-            ));
-        }
         if let Some(proof) = self.prove_closure(predicate, context, active)? {
             return Ok(Some(proof));
         }
@@ -12861,7 +12860,7 @@ impl ValidatedTraitWorld {
         if facts.phase() == FactsPhase::Universal
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.trait_call_is_closed(call, facts)?
-            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_) | Ty::FnPointer(_))
             && !matches!(&call.trait_ref.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)))
         {
             return Ok(self
@@ -14000,6 +13999,9 @@ impl TraitCx for ValidatedTraitWorld {
     }
     fn validate_untupled(&self, call: &TraitCall, facts: &ValidatedFacts) -> Result<Signature> {
         self.check_facts(facts, true)?;
+        if matches!(call.trait_ref.self_ty, Ty::FnPointer(_)) {
+            return self.validated_pointer_untupled(call, facts);
+        }
         self.validated_untupled(call, facts)
             .map(|(signature, _)| signature)
     }
@@ -14190,14 +14192,14 @@ impl TraitCx for ValidatedTraitWorld {
             transport,
             ..ProofContext::from_facts(facts)
         };
-        if matches!(&call.trait_ref.self_ty, Ty::FnItem(_))
+        if matches!(&call.trait_ref.self_ty, Ty::FnItem(_) | Ty::FnPointer(_))
             && self
                 .schema
                 .closure_trait_kind(call.trait_ref.declaration)?
                 .is_some()
         {
             // Builtin function item dispatch: no implementation selection.
-            let (signature, _) = self.validated_untupled(call, facts)?;
+            let signature = self.validate_untupled(call, facts)?;
             let evidence = self.require_in(
                 &Predicate::Implements(call.trait_ref.clone()),
                 caller,

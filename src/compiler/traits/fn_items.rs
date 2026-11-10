@@ -1,9 +1,137 @@
-//! Builtin callable evidence for zero-sized function items. The item's exact
+//! Builtin callable evidence for function items and safe function pointers. The item's exact
 //! declaration and ordered actuals select its instantiated signature; the
 //! callable tuple is the ordered parameter list and `Output` is the result.
 use super::*;
 
+impl ValidatedFacts {
+    pub(in crate::compiler) fn function_pointer_item_type(&self, item: &CallTarget) -> Result<Ty> {
+        self.world.check_facts(self, true)?;
+        self.world
+            .schema
+            .validate_fn_pointer_item(item.declaration)?;
+        let signature =
+            self.source_direct_call_signature_with_scratch(item, &mut TraitScratch::default())?;
+        let pointer = charged(
+            self.budget(),
+            ir::FnPointerTy::new(signature.params, signature.result, self.budget()),
+        )?;
+        self.validate_fn_pointer_reification(item, &pointer)?;
+        Ok(Ty::FnPointer(pointer))
+    }
+
+    pub(in crate::compiler) fn validate_fn_pointer_reification(
+        &self,
+        item: &CallTarget,
+        pointer: &ir::FnPointerTy,
+    ) -> Result<()> {
+        self.world.check_facts(self, true)?;
+        self.world
+            .schema
+            .validate_fn_pointer_item(item.declaration)?;
+        charged(self.budget(), pointer.validate(self.budget()))?;
+        for ty in pointer.types() {
+            self.validate_ty(ty)?;
+        }
+        let signature =
+            self.source_direct_call_signature_with_scratch(item, &mut TraitScratch::default())?;
+        if !self.world.eq_types(&signature.params, &pointer.inputs, 0)?
+            || !self.world.eq_ty(&signature.result, &pointer.output, 0)?
+        {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "E0308: function item does not have the exact function pointer signature",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ValidatedTraitWorld {
+    pub(super) fn builtin_callable_signature(
+        &self,
+        ty: &Ty,
+        context: ProofContext<'_>,
+    ) -> Result<Signature> {
+        match ty {
+            Ty::FnItem(item) => self.fn_item_signature(item, context),
+            Ty::FnPointer(pointer) => {
+                self.validate_ty(ty, context.env(), None, true, 0)?;
+                retain::<Ty>(&self.budget, pointer.inputs.len())?;
+                Ok(Signature {
+                    params: pointer.inputs.to_vec(),
+                    result: pointer.output.clone(),
+                    ref_contract: charged(
+                        &self.budget,
+                        ir::normalize_ref_contract(&ir::RefContract::default(), &self.budget),
+                    )?,
+                })
+            }
+            _ => Err(FactsError::invalid(
+                &self.budget,
+                "builtin callable lost exact item or pointer type",
+            )),
+        }
+    }
+
+    pub(super) fn builtin_callable_origin(&self, goal: &TraitRef) -> Result<(DeclId, Arc<[Ty]>)> {
+        match &goal.self_ty {
+            Ty::FnItem(item) => Ok((item.declaration, item.type_args.clone())),
+            Ty::FnPointer(_) => {
+                retain::<Ty>(&self.budget, 1)?;
+                Ok((goal.declaration, Arc::from([goal.self_ty.clone()])))
+            }
+            _ => Err(FactsError::invalid(
+                &self.budget,
+                "builtin callable origin lost exact item or pointer",
+            )),
+        }
+    }
+
+    pub(super) fn validated_pointer_untupled(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+    ) -> Result<Signature> {
+        if !matches!(call.trait_ref.self_ty, Ty::FnPointer(_))
+            || !call.method_args.is_empty()
+            || self
+                .schema
+                .closure_trait_kind(call.trait_ref.declaration)?
+                .is_none()
+            || self.item_header(call.item)?.trait_decl != call.trait_ref.declaration
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "indirect untupled call lost canonical callable trait item",
+            ));
+        }
+        let context = ProofContext::from_facts(facts);
+        match self.prove_fn_item(&Predicate::Implements(call.trait_ref.clone()), context)? {
+            Some(ProofOutcome::Proved(_)) => {}
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function pointer call has no exact signature proof",
+                ));
+            }
+        }
+        let direct = self.builtin_callable_signature(&call.trait_ref.self_ty, context)?;
+        let signature = self.instantiate_trait_signature(call, facts)?;
+        // Universal callable signatures retain their Output projection. Compare
+        // its proved normal form, but retain the original typed call evidence.
+        let result = self.normalize_ty(&signature.result, facts)?;
+        if signature.params.len() != 2
+            || !self.eq_ty(&signature.params[1], &self.fn_item_arguments(&direct)?, 0)?
+            || !self.eq_ty(&result, &direct.result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function pointer call changed exact indirect signature",
+            ));
+        }
+        Ok(signature)
+    }
+
     /// The instantiated signature of a function item, with its reference
     /// contract. Reference-bearing parameters are admitted; a result that
     /// borrows from an input is still rejected downstream with an explicit
@@ -34,13 +162,13 @@ impl ValidatedTraitWorld {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
         };
-        let Ty::FnItem(item) = &goal.self_ty else {
+        if !matches!(goal.self_ty, Ty::FnItem(_) | Ty::FnPointer(_)) {
             return Ok(None);
-        };
+        }
         let Some(kind) = self.schema.closure_trait_kind(goal.declaration)? else {
             return Ok(None);
         };
-        let signature = self.fn_item_signature(item, context)?;
+        let signature = self.builtin_callable_signature(&goal.self_ty, context)?;
         if goal.args.len() != 1
             || !self.eq_ty(&goal.args[0], &self.fn_item_arguments(&signature)?, 0)?
         {
@@ -123,13 +251,7 @@ impl ValidatedTraitWorld {
         index: usize,
         context: ProofContext<'_>,
     ) -> Result<bool> {
-        let Ty::FnItem(item) = &goal.self_ty else {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "function item tuple proof lost its item type",
-            ));
-        };
-        let direct = self.fn_item_signature(item, context)?;
+        let direct = self.builtin_callable_signature(&goal.self_ty, context)?;
         let tuple = self.fn_item_arguments(&direct)?;
         if goal.args.len() != 1
             || signature.params.get(index).is_none()

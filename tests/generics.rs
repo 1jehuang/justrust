@@ -245,6 +245,10 @@ fn generic_drop_owner_predicates_native_check_build_run_workers_1_8() {
 
 const SYNC_VALID: &[(&str, &str)] = &[
     (
+        "scopeguard_original_impl_shape",
+        r#"trait Strategy{}struct Always;impl Strategy for Always{}struct ScopeGuard<T,F:FnOnce(T),S:Strategy>{value:T,dropfn:F,strategy:core::marker::PhantomData<S>}unsafe impl<T,F,S> Sync for ScopeGuard<T,F,S> where T:Sync,F:FnOnce(T),S:Strategy{}fn drop_value(x:i32){}fn need<T:Sync>(){}fn main(){need::<ScopeGuard<i32,fn(i32),Always>>();println!("7");}"#,
+    ),
+    (
         "projection_auto_sync",
         r#"trait Family{type Item;}struct W<T:Family>{x:T::Item}fn need<T:Sync>(){}fn forward<T:Family>() where T::Item:Sync{need::<W<T>>();}fn main(){println!("7");}"#,
     ),
@@ -330,10 +334,6 @@ const SYNC_INVALID: &[(&str, &str)] = &[
 
 const SYNC_UNSUPPORTED: &[(&str, &str)] = &[
     (
-        "scopeguard_original_impl_shape",
-        r#"trait Strategy{}struct Always;impl Strategy for Always{}struct ScopeGuard<T,F:FnOnce(T),S:Strategy>{value:T,dropfn:F,strategy:core::marker::PhantomData<S>}unsafe impl<T,F,S> Sync for ScopeGuard<T,F,S> where T:Sync,F:FnOnce(T),S:Strategy{}fn drop_value(x:i32){}fn need<T:Sync>(){}fn main(){need::<ScopeGuard<i32,fn(i32),Always>>();println!("7");}"#,
-    ),
-    (
         "recursive_auto_sync",
         r#"struct R<'a>{next:&'a R<'a>}fn need<T:Sync>(){}fn forward<'a>(){need::<R<'a>>();}fn main(){println!("7");}"#,
     ),
@@ -405,12 +405,6 @@ fn sync_native_check_build_run_workers_1_8() {
                 assert_eq!(result.status.code(), Some(1), "{label}: {result:?}");
                 let diagnostic = String::from_utf8_lossy(&result.stderr);
                 assert!(diagnostic.contains("unsupported"), "{label}: {diagnostic}");
-                if *label == "scopeguard_original_impl_shape" {
-                    assert!(
-                        diagnostic.contains("function pointer callable traits require a native indirect Rust ABI implementation"),
-                        "{label}: {diagnostic}"
-                    );
-                }
                 assert!(!diagnostic.contains("panicked at"), "{label}: {diagnostic}");
                 assert!(!output.exists(), "{label}: unsupported output");
             }

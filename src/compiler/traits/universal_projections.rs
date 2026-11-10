@@ -177,7 +177,10 @@ impl ValidatedTraitWorld {
             // Parameters and references may obtain membership through blanket
             // impls. The prover must prove every impl bound from this caller.
             if associated_types::implementation_application_self(&projection.trait_ref.self_ty)
-                || matches!(&projection.trait_ref.self_ty, Ty::Closure(_))
+                || matches!(
+                    &projection.trait_ref.self_ty,
+                    Ty::Closure(_) | Ty::FnPointer(_)
+                )
             {
                 let caller = self.predicate_env(declaration)?;
                 if matches!(

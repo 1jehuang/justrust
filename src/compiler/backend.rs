@@ -233,8 +233,9 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
     match ty {
         ir::Ty::Cell(wrapper) => indirect(wrapper.argument(), budget),
         ir::Ty::ManuallyDrop(wrapper) => indirect(wrapper.argument(), budget),
-        ir::Ty::FnPointer(_) => {
-            Err("unsupported: function pointer native value ABI is not implemented".into())
+        ir::Ty::FnPointer(pointer) => {
+            pointer.validate(budget)?;
+            Ok(false)
         }
         ir::Ty::Closure(_)
         | ir::Ty::FnItem(_)
@@ -273,8 +274,9 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
     if let ir::Ty::ManuallyDrop(wrapper) = ty {
         return value_size(wrapper.argument(), budget);
     }
-    if matches!(ty, ir::Ty::FnPointer(_)) {
-        return Err("unsupported: function pointer native value ABI is not implemented".into());
+    if let ir::Ty::FnPointer(pointer) = ty {
+        pointer.validate(budget)?;
+        return Ok(8);
     }
     ir::reject_associated_types(ty, Some(budget))?;
     if wide_integer(ty) {
@@ -417,7 +419,7 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
 }
 
 /// Metadata-only extent below an array known to contain no elements. This
-/// cannot admit a function pointer value, slice carrier, coercion or call ABI.
+/// cannot independently admit a value, slice carrier, coercion or call ABI.
 fn zero_array_element_extent(
     ty: &ir::Ty,
     budget: &ir::PlanBudget,
@@ -599,8 +601,9 @@ fn allocate_value(frame: &mut i32, ty: &ir::Ty, budget: &ir::PlanBudget) -> Resu
     Ok(-*frame)
 }
 
-/// Relocations refer to byte offsets within `code`: calls address a signed
-/// rel32 displacement field, strings address an absolute u64 immediate field.
+/// Relocations refer to byte offsets within `code`: function references
+/// (CALL or RIP-relative LEA) address signed rel32 displacement fields, while
+/// strings address an absolute u64 immediate field.
 #[derive(Clone, Debug)]
 pub struct Object {
     pub code: Vec<u8>,
@@ -3674,12 +3677,16 @@ impl Emitter<'_> {
                     to,
                     ir::FactsCtx::Validated(self.concrete.facts()),
                 )?;
-                // References, raw pointers and usize share one address word.
-                self.operand(value)?;
-                if ir::object_data_pointer_cast(&source, to) {
-                    // A fat pointer value is carried by address. Extract only
-                    // its data word, never the address of that descriptor.
-                    self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
+                if let (ir::Ty::FnItem(item), ir::Ty::FnPointer(_)) = (&source, to) {
+                    let at = self.jump(&[0x48, 0x8d, 0x05]);
+                    self.object.calls.push((at, (self.resolve)(item)?));
+                } else {
+                    self.operand(value)?;
+                    if ir::object_data_pointer_cast(&source, to) {
+                        // A fat pointer value is carried by address. Extract only
+                        // its data word, never the address of that descriptor.
+                        self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
+                    }
                 }
             }
             cfg::Rvalue::IntCast { value, to } => {
@@ -4269,44 +4276,69 @@ impl Emitter<'_> {
                 next,
                 ..
             } => {
-                // Builtin function item dispatch (ir::Callee::Untupled): the
-                // checked trait signature is `(receiver, (A..)) -> R`. The
-                // receiver is a zero-sized item (or a reference to one) with
-                // no observable effect, so the exact validated item is called
-                // directly with the argument tuple's fields.
+                // Untupled dispatch retains the checked trait signature
+                // `(receiver, (A..)) -> R`. Reuse its exact item target or
+                // evaluated pointer, transporting the tuple fields under the
+                // executed function signature rather than the trait wrapper.
                 let untupled;
+                let mut indirect_receiver = None;
                 let (target, signature, args) = if let ir::Callee::Untupled(call) = target {
                     let facts = self.concrete.facts();
-                    let view = facts
-                        .service()
-                        .untupled_target(call, facts)
-                        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                    let (executed_target, executed_signature) = if let ir::Ty::FnPointer(pointer) =
+                        &call.trait_ref.self_ty
+                    {
+                        facts
+                            .service()
+                            .validate_untupled(call, facts)
+                            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                        let receiver = args.first().ok_or("indirect call lost pointer receiver")?;
+                        indirect_receiver = Some((
+                            receiver.clone(),
+                            matches!(signature.params.first(), Some(ir::Ty::Ref { .. })),
+                        ));
+                        (
+                            target.clone(),
+                            ir::Signature {
+                                params: pointer.inputs.to_vec(),
+                                result: pointer.output.clone(),
+                                ref_contract: ir::normalize_ref_contract(
+                                    &ir::RefContract::default(),
+                                    facts.budget(),
+                                )?,
+                            },
+                        )
+                    } else {
+                        let view = facts
+                            .service()
+                            .untupled_target(call, facts)
+                            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                        (ir::Callee::Direct(view.target), view.signature)
+                    };
                     let [_, tuple] = args.as_slice() else {
                         return Err("untupled call requires receiver and argument tuple".into());
                     };
                     let fields = match tuple {
                         cfg::Operand::Constant(cfg::Constant::Unit) => Vec::new(),
-                        cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
-                            (0..view.signature.params.len())
-                                .map(|index| {
-                                    let mut field = place.clone();
-                                    field.projection.push(ir::Projection::Field(index));
-                                    if facts
-                                        .must_copy(&view.signature.params[index])
-                                        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
-                                    {
-                                        Ok(cfg::Operand::Copy(field))
-                                    } else {
-                                        Ok(cfg::Operand::Move(field))
-                                    }
-                                })
-                                .collect::<Result<Vec<_>, String>>()?
-                        }
+                        cfg::Operand::Copy(place) | cfg::Operand::Move(place) => (0
+                            ..executed_signature.params.len())
+                            .map(|index| {
+                                let mut field = place.clone();
+                                field.projection.push(ir::Projection::Field(index));
+                                if facts
+                                    .must_copy(&executed_signature.params[index])
+                                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+                                {
+                                    Ok(cfg::Operand::Copy(field))
+                                } else {
+                                    Ok(cfg::Operand::Move(field))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, String>>()?,
                         cfg::Operand::Constant(_) => {
                             return Err("untupled argument tuple is not a place".into());
                         }
                     };
-                    untupled = (ir::Callee::Direct(view.target), view.signature, fields);
+                    untupled = (executed_target, executed_signature, fields);
                     (&untupled.0, &untupled.1, &untupled.2)
                 } else {
                     (target, signature, args)
@@ -4344,7 +4376,12 @@ impl Emitter<'_> {
                         return Err("unresolved trait dispatch has no native ABI".into());
                     }
                     ir::Callee::Untupled(_) => {
-                        return Err("untupled dispatch was not lowered to its item".into());
+                        if indirect_receiver.is_none() {
+                            return Err(
+                                "untupled dispatch was not lowered to its item or pointer".into()
+                            );
+                        }
+                        None
                     }
                 };
                 if args.len() > MAX_ARGS {
@@ -4360,6 +4397,14 @@ impl Emitter<'_> {
                 }
                 let aggregate = result_indirect(&signature.result, self.concrete.facts().budget())?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
+                if let Some((receiver, borrowed)) = &indirect_receiver {
+                    self.operand(receiver)?;
+                    if *borrowed {
+                        self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
+                    }
+                    self.bytes(&[0x48, 0x89, 0x85]); // save exact pointer across arguments
+                    self.i32(self.vtable_scratch);
+                }
                 // Left-to-right evaluation. A two-word shared slice
                 // operand leaves its carrier address in rax; both words are
                 // pushed (data, then len), never the carrier pointer itself.
@@ -4418,6 +4463,10 @@ impl Emitter<'_> {
                     self.bytes(&[0x50]);
                 }
                 match (target, virtual_slot) {
+                    (ir::Callee::Untupled(_), None) if indirect_receiver.is_some() => {
+                        self.bytes(&[0xff, 0x95]); // call [rbp+pointer scratch]
+                        self.i32(self.vtable_scratch);
+                    }
                     (ir::Callee::Direct(target), None) => {
                         let at = self.jump(&[0xe8]);
                         self.object.calls.push((at, (self.resolve)(target)?));
@@ -4660,12 +4709,29 @@ fn emit_native_cfg(
                 needs_wide |= wide_integer(&function.place_ty(destination)?);
             }
         }
-        if let cfg::Terminator::Call { signature, .. } = &block.terminator.value {
-            let count = signature
-                .params
-                .iter()
-                .filter(|ty| wide_integer(ty))
-                .count();
+        if let cfg::Terminator::Call {
+            target, signature, ..
+        } = &block.terminator.value
+        {
+            // Untupled callable evidence keeps (receiver, argument_tuple) in
+            // the CFG. Physical call scratch belongs to the executed ABI.
+            let direct;
+            let params: &[ir::Ty] = if let ir::Callee::Untupled(call) = target {
+                if let ir::Ty::FnPointer(pointer) = &call.trait_ref.self_ty {
+                    &pointer.inputs
+                } else {
+                    direct = concrete
+                        .facts()
+                        .service()
+                        .untupled_target(call, concrete.facts())
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                    &direct.signature.params
+                }
+            } else {
+                &signature.params
+            };
+            let count = params.iter().filter(|ty| wide_integer(ty)).count();
+            needs_wide |= count != 0 || wide_integer(&signature.result);
             max_wide_arguments = max_wide_arguments
                 .max(i32::try_from(count).map_err(|_| "wide argument scratch count overflow")?);
         }
@@ -6869,15 +6935,16 @@ mod tests {
             assert_eq!(array_element_stride(ty, &budget), Ok(0));
             assert_eq!(copied_value_bytes(ty, &budget), Ok(0));
         }
-        assert!(
-            value_size(&pointer, &budget)
-                .unwrap_err()
-                .contains("function pointer native value ABI")
+        assert_eq!(value_size(&pointer, &budget), Ok(8));
+        assert_eq!(indirect(&pointer, &budget), Ok(false));
+        assert_eq!(array_element_stride(&pointer, &budget), Ok(8));
+        assert_eq!(
+            shared_slice_layout(&pointer, &budget)
+                .unwrap()
+                .element_stride,
+            8
         );
-        assert!(indirect(&pointer, &budget).is_err());
-        assert!(array_element_stride(&pointer, &budget).is_err());
-        assert!(shared_slice_layout(&pointer, &budget).is_err());
-        assert!(value_size(&array(pointer.clone(), 1), &budget).is_err());
+        assert_eq!(value_size(&array(pointer.clone(), 1), &budget), Ok(8));
         let invalid = ir::Ty::FnPointer(
             ir::FnPointerTy::new(vec![ir::Ty::Bool; 33], ir::Ty::Unit, &budget).unwrap(),
         );

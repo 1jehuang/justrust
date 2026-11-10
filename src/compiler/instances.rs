@@ -1180,6 +1180,43 @@ fn direct_demands_in(
     }
     for (expression_index, expression) in source.exprs.iter().enumerate() {
         budget.charge_work(1)?;
+        if let ir::ExprKind::PtrCast { value } = &expression.kind
+            && matches!(expression.ty, ir::Ty::FnPointer(_))
+        {
+            let item_ty = close_demand_ty(
+                &source.exprs[value.0].ty,
+                source_facts.map(AsRef::as_ref),
+                &env,
+                &target.type_args,
+                &closed_facts,
+                context,
+                budget,
+                engine,
+                &mut source_scratch,
+                &mut scratch,
+            )?;
+            let pointer_ty = close_demand_ty(
+                &expression.ty,
+                source_facts.map(AsRef::as_ref),
+                &env,
+                &target.type_args,
+                &closed_facts,
+                context,
+                budget,
+                engine,
+                &mut source_scratch,
+                &mut scratch,
+            )?;
+            ir::validate_pointer_cast(
+                &item_ty,
+                &pointer_ty,
+                ir::FactsCtx::Validated(&closed_facts),
+            )?;
+            let ir::Ty::FnItem(item) = item_ty else {
+                return Err("function pointer reification demand lost its exact item".into());
+            };
+            demands.call((*item).clone(), budget)?;
+        }
         // --- trait objects (snail): each unsizing site demands every
         // vtable slot implementation for its exact substituted referent.
         if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
@@ -1311,6 +1348,15 @@ fn direct_demands_in(
                 }
                 ir::Callee::Direct(next) => next,
                 // Builtin function item dispatch executes the item itself.
+                ir::Callee::Untupled(call)
+                    if matches!(call.trait_ref.self_ty, ir::Ty::FnPointer(_)) =>
+                {
+                    closed_facts
+                        .service()
+                        .validate_untupled(&call, &closed_facts)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                    continue;
+                }
                 ir::Callee::Untupled(call) => {
                     closed_facts
                         .service()

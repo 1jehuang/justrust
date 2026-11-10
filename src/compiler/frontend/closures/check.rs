@@ -191,18 +191,10 @@ impl PlanCtx {
         caller: ir::FactsCtx<'_>,
     ) -> Result<Option<MethodSelection>, String> {
         let (kind, params) = match receiver {
-            ir::Ty::FnPointer(_) => {
-                if self
-                    .program
-                    .names
-                    .spelling(*name)
-                    .map_err(native_adapter::name_diagnostic)?
-                    != "call"
-                {
-                    return Ok(None);
-                }
-                return Err("unsupported: function pointer indirect calls require a native Rust ABI implementation".into());
-            }
+            // Builtin pointer invocation copies the callee before evaluating
+            // arguments. Borrowing it as Fn would incorrectly prohibit an
+            // argument from assigning a new value to the original binding.
+            ir::Ty::FnPointer(pointer) => (ir::ClosureKind::FnOnce, pointer.inputs.to_vec()),
             ir::Ty::Closure(closure) => (closure.kind(), closure.params().to_vec()),
             // `f(x)` on a function item value selects builtin `Fn` dispatch
             // through a shared autoref; it resolves to `Callee::Untupled`.

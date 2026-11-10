@@ -515,10 +515,10 @@ pub enum Callee {
     /// `&dyn`/`&mut dyn` receiver carrier; `slot` indexes the principal
     /// trait's method entries (declaration order, supertraits first).
     Virtual(VirtualCall),
-    /// Builtin Fn/FnMut/FnOnce dispatch on a zero-sized function item
-    /// (`call.trait_ref.self_ty` is `Ty::FnItem`). Checking and validation use
-    /// the trait item's signature `(receiver, (A..)) -> R`; native code ignores
-    /// the zero-sized receiver and calls the item with the tuple's fields.
+    /// Builtin Fn/FnMut/FnOnce dispatch on an exact function item or safe
+    /// function pointer. Checking uses `(receiver, (A..)) -> R`. Native code
+    /// untuples the arguments and either calls the item directly or uses the
+    /// evaluated pointer receiver with its exact signature.
     Untupled(TraitCall),
 }
 /// `call.trait_ref.self_ty` is the exact `Ty::Dyn` receiver object type and
@@ -8076,6 +8076,14 @@ pub fn object_data_pointer_cast(from: &Ty, to: &Ty) -> bool {
 }
 
 pub fn validate_pointer_cast(from: &Ty, to: &Ty, facts: FactsCtx<'_>) -> Result<(), String> {
+    if let (Ty::FnItem(item), Ty::FnPointer(pointer)) = (from, to) {
+        let facts = facts
+            .validated()
+            .ok_or("function pointer reification requires canonical caller facts")?;
+        return facts
+            .validate_fn_pointer_reification(item, pointer)
+            .map_err(|error| error.into_legacy_diagnostic(facts.budget()));
+    }
     if !ptr_cast_valid(from, to) {
         return Err("pointer cast requires a supported pointer pair".into());
     }
@@ -11641,9 +11649,9 @@ pub enum ExprKind {
     U8ToChar {
         value: ExprId,
     },
-    /// Pointer-representation `as` cast: reference to raw pointer, raw pointer
-    /// to raw pointer, raw pointer to usize, or usize to raw pointer. The
-    /// result type is the expression type; `ptr_cast_valid` is authoritative.
+    /// Pointer conversion, including exact safe function item reification.
+    /// Reification requires canonical source/signature facts. Representation
+    /// casts use the structural pointer-pair rules, never function signatures.
     PtrCast {
         value: ExprId,
     },

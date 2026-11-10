@@ -20,6 +20,8 @@ mod constructor_expectations;
 mod fn_item_values;
 #[path = "format_lowering.rs"]
 mod format_lowering;
+#[path = "type_check/function_pointers.rs"]
+mod function_pointers;
 #[path = "type_check/generic_placeholders.rs"]
 mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
@@ -1781,6 +1783,7 @@ impl<'s> Checker<'s> {
         }
         for (formal, expr) in schema.signature.params.iter().zip(args) {
             let evidence = self.inference_evidence(expr, 0)?;
+            let evidence = self.function_pointer_inference_equation(formal, &evidence, 0)?;
             if let ir::Ty::RawPtr { kind, pointee } = formal
                 && let InferKind::Ref(actual_kind, referent) = evidence.as_ref()
                 && (*kind == ir::BorrowKind::Shared || *actual_kind == ir::BorrowKind::Mut)
@@ -8743,6 +8746,9 @@ impl<'a> Checker<'a> {
         self.record_runtime_site(e, result)?;
         let result = self.record_original_call(e, result)?;
         match expectation.coercion() {
+            Some(expected @ ir::Ty::FnPointer(_)) => {
+                self.coerce_function_pointer_value(result, expected)
+            }
             Some(expected)
                 if expected.slice_ref_element().is_some_and(|(kind, _)| {
                     self.exprs[result.0]
@@ -10955,12 +10961,12 @@ impl<'a> Checker<'a> {
         target: &Type,
     ) -> Result<ir::ExprId, String> {
         let target = self.source_local_ty(target)?;
-        if matches!(target, ir::Ty::FnPointer(_))
-            || matches!(self.scalar_hint(value)?, Some(ir::Ty::FnPointer(_)))
-        {
-            return Err(
-                "unsupported: function pointer casts and coercions are not implemented".into(),
-            );
+        if matches!(target, ir::Ty::FnPointer(_)) {
+            let value = self.expr_with_expectation(value, Expectation::HasType(&target))?;
+            return self.coerce_function_pointer_value(value, &target);
+        }
+        if matches!(self.scalar_hint(value)?, Some(ir::Ty::FnPointer(_))) {
+            return Err("unsupported: function pointer to non-function-pointer cast".into());
         }
         if matches!(target, ir::Ty::RawPtr { .. })
             || matches!(self.scalar_hint(value)?, Some(ir::Ty::RawPtr { .. }))

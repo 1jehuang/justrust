@@ -1513,6 +1513,8 @@ impl ValidatedTraitWorld {
         }
         let opaque_reference = matches!(&goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
         let closed = self.goal_is_closed_in(goal, context)?;
+        let builtin_pointer = matches!(goal.self_ty, Ty::FnPointer(_))
+            && self.schema.closure_trait_kind(goal.declaration)?.is_some();
         // A rigid nominal reference (`&'a Vec<K>`) selects its implementation by
         // head constructor; its generic actuals are proved in the caller env.
         let nominal_reference = !closed
@@ -1521,6 +1523,7 @@ impl ValidatedTraitWorld {
             && !matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
             && !opaque_reference
             && !nominal_reference
+            && !builtin_pointer
         {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -1538,6 +1541,7 @@ impl ValidatedTraitWorld {
             if matches!(&goal.self_ty, Ty::Dyn(_) | Ty::Opaque(_))
                 || opaque_reference
                 || nominal_reference
+                || builtin_pointer
                 || same_closed_context
             {
                 context
@@ -2330,22 +2334,24 @@ impl ValidatedTraitWorld {
         evidence: &ProjectedMethodEvidence,
         facts: &ValidatedFacts,
     ) -> Result<ProjectedCarrierBase> {
+        let builtin_pointer = matches!(evidence.goal.self_ty, Ty::FnPointer(_))
+            && matches!(&evidence.selection.0.origin, ProofOrigin::FnItem { kind }
+                if self.schema.closure_trait_kind(evidence.goal.declaration)? == Some(*kind));
+        let caller_owned = builtin_pointer
+            || matches!(
+                &evidence.selection.0.origin,
+                ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
+            );
         if evidence.selection.0.world != self.id
             || !evidence.selection.0.executable_storage
             || evidence.selection.0.environment
-                != if matches!(
-                    &evidence.selection.0.origin,
-                    ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
-                ) {
+                != if caller_owned {
                     facts.predicates.index
                 } else {
                     self.empty.index
                 }
             || evidence.selection.0.phase
-                != if matches!(
-                    &evidence.selection.0.origin,
-                    ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
-                ) {
+                != if caller_owned {
                     facts.phase()
                 } else {
                     FactsPhase::Closed
@@ -2453,10 +2459,7 @@ impl ValidatedTraitWorld {
                 | ProofOrigin::TraitObject
                 | ProofOrigin::OpaqueDeclared
         ) {
-            let env = if matches!(
-                &evidence.selection.0.origin,
-                ProofOrigin::TraitObject | ProofOrigin::OpaqueDeclared
-            ) {
+            let env = if caller_owned {
                 facts.env().clone()
             } else {
                 self.empty.env.clone()

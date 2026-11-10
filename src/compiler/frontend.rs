@@ -7749,7 +7749,15 @@ fn replay_shared_local_inputs(
             hint.as_ref(),
             depth + 1,
         )?;
-        if !sr::replay_types_equal(&input, &signature.params[index], budget)? {
+        let pointer_equation = sr::function_pointer_input_equation(
+            &view.signature().params[index],
+            &input,
+            facts,
+            budget,
+            depth + 1,
+        )?;
+        let equation = pointer_equation.as_ref().unwrap_or(&input);
+        if !sr::replay_types_equal(equation, &signature.params[index], budget)? {
             return Err(FactsError::invalid(
                 budget,
                 "source input differs from canonical parameter",
@@ -7763,7 +7771,7 @@ fn replay_shared_local_inputs(
             // This state provides context only. The complete original input
             // trace below validates every deferred projection after source
             // arguments, rather than retained checked actuals, fix its owner.
-            let _ = context.constrain_input_frontier(&view.signature().params[index], &input)?;
+            let _ = context.constrain_input_frontier(&view.signature().params[index], equation)?;
         }
         sr::push(&mut input_types, input, budget)?;
     }
@@ -27185,6 +27193,42 @@ impl SchemaAdapter {
 }
 
 impl tr::SchemaCx for SchemaAdapter {
+    fn validate_fn_pointer_item(&self, id: ir::DeclId) -> Result<(), tr::FactsError> {
+        self.budget.charge_work(1).map_err(|e| self.error(e))?;
+        let function = self.registry.source_callable(id).ok_or_else(|| {
+            self.error("unsupported: function pointer item lacks canonical source body".into())
+        })?;
+        if function.unsafety {
+            return Err(self.error(
+                "unsupported: unsafe function item cannot reify to a safe function pointer".into(),
+            ));
+        }
+        if function.target_feature.is_some() {
+            return Err(
+                self.error("unsupported: target-feature function pointer reification".into())
+            );
+        }
+        if let Some(name) = function.name.segments().last() {
+            let key = self
+                .registry
+                .program
+                .names
+                .key(*name, LookupClass::Item(Namespace::Value))
+                .map_err(|e| self.error(native_adapter::name_diagnostic(e)))?;
+            if self
+                .registry
+                .program
+                .c_abi
+                .functions
+                .contains_key(&(function.module, key))
+            {
+                return Err(
+                    self.error("unsupported: non-Rust ABI function pointer reification".into())
+                );
+            }
+        }
+        Ok(())
+    }
     fn trait_region_count(&self, id: ir::DeclId) -> Result<u16, tr::FactsError> {
         if self.catalog.declaration(id).is_some() {
             return Ok(0);

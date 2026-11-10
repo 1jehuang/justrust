@@ -520,6 +520,30 @@ impl ValidatedTraitWorld {
                 active,
             )?;
         }
+        if let parameter_equality::EqualityResultSubject::Required(call) = subject
+            && matches!(call.trait_ref.self_ty, Ty::FnPointer(_))
+            && self
+                .schema
+                .closure_trait_kind(call.trait_ref.declaration)?
+                .is_some()
+        {
+            // The canonical builtin signature normalizes Output even when its
+            // pointer inputs are rigid caller parameters. Replay that same
+            // proved application here, not a structurally relaxed signature.
+            for ty in &mut application.signature.params {
+                *ty = self
+                    .normalize_closed_projected_type_with(ty, context, false, active)?
+                    .0;
+            }
+            application.signature.result = self
+                .normalize_closed_projected_type_with(
+                    &application.signature.result,
+                    context,
+                    false,
+                    active,
+                )?
+                .0;
+        }
         Ok((declaration, arguments, application))
     }
 }

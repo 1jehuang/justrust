@@ -729,6 +729,11 @@ impl ValidatedTraitWorld {
                 active,
             )?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+            && !(matches!(&call.trait_ref.self_ty, Ty::FnPointer(_))
+                && self
+                    .schema
+                    .closure_trait_kind(call.trait_ref.declaration)?
+                    .is_some())
         {
             let (application, authority) =
                 self.instantiate_universal_required_item_with(call, facts, active)?;
