@@ -5,8 +5,9 @@
 //! form `<I as Trait>::Item`, which the resolver and checker already handle.
 //! Selection here is syntactic: when exactly one written bound of `I` is in
 //! scope, it is the trait. Zero or several written bounds are rejected
-//! explicitly (rustc additionally consults supertraits and declared item
-//! names, which this desugaring does not).
+//! explicitly. The source spelling remains attached so canonical resolution
+//! may search supertraits for shorthand without accepting an invalid explicit
+//! qualifier naming a trait that does not declare the member.
 use super::*;
 
 impl Parser<'_, '_> {
@@ -75,6 +76,7 @@ impl Parser<'_, '_> {
             self_ty: Type::Param(name),
             trait_path,
             item,
+            syntax: ProjectionSyntax::ParameterShorthand,
         })
     }
 
@@ -147,6 +149,49 @@ mod tests {
             Type::Int(ir::IntTy::U8)
         ));
         assert!(projected.associated_types.is_empty());
+    }
+
+    #[test]
+    fn projection_syntax_is_retained_by_exact_source_authority() {
+        let program = parse(
+            "trait Has{type Item;}fn id<I:Has>(x:I::Item)->I::Item{x}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let context = plan.registry.source_type_context(declaration).unwrap();
+        let Type::Projection(original) = &program.functions[0].params[0].1 else {
+            panic!("missing shorthand projection")
+        };
+        let SourceProjection::Qualified { syntax, .. } = original.as_ref() else {
+            panic!("missing parameter qualifier")
+        };
+        assert_eq!(*syntax, ProjectionSyntax::ParameterShorthand);
+        plan.registry
+            .validate_source_projection(context, original, &plan.budget)
+            .unwrap();
+        let mut forged = original.clone();
+        let SourceProjection::Qualified { syntax, .. } = forged.as_mut() else {
+            unreachable!()
+        };
+        *syntax = ProjectionSyntax::Explicit;
+        assert!(
+            plan.registry
+                .validate_source_projection(context, &forged, &plan.budget)
+                .is_err()
+        );
+
+        let explicit = parse_syntax_unprepared(
+            "trait Has{type Item;}fn id<I:Has>(x:<I as Has>::Item){}fn main(){}",
+        )
+        .unwrap();
+        assert!(matches!(
+            &explicit.program.functions[0].params[0].1,
+            Type::Projection(projection)
+                if matches!(projection.as_ref(), SourceProjection::Qualified {
+                    syntax: ProjectionSyntax::Explicit, ..
+                })
+        ));
     }
 
     #[test]

@@ -1072,6 +1072,7 @@ impl<'a> Validator<'a> {
                         self_ty,
                         trait_path,
                         item,
+                        ..
                     } => {
                         self.push(Visit::Type(self_ty))?;
                         self.push(Visit::TraitPath(trait_path))?;
@@ -1767,6 +1768,7 @@ mod tests {
                         self_ty,
                         trait_path,
                         item,
+                        ..
                     } = projection.as_mut()
                     else {
                         panic!("expected qualified projection");

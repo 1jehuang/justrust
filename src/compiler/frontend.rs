@@ -3236,6 +3236,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
                     self_ty,
                     trait_path,
                     item,
+                    syntax,
                 } => SourceProjection::Qualified {
                     self_ty: copy_source_type(self_ty, budget, at + 1)?,
                     trait_path: match trait_path {
@@ -3245,6 +3246,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
                         TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
                     },
                     item: *item,
+                    syntax: *syntax,
                 },
                 SourceProjection::SelfItem { item } => SourceProjection::SelfItem { item: *item },
             };
@@ -10077,6 +10079,13 @@ pub struct SourceConstParameter {
     pub name: AstIdent,
     pub ty: ir::ConstType,
 }
+/// Source spelling determines whether supertrait associated lookup is legal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectionSyntax {
+    Explicit,
+    ParameterShorthand,
+}
+
 /// Boxed as a whole by `Type`, keeping ordinary expression stack frames small.
 #[derive(Clone, Debug)]
 pub enum SourceProjection {
@@ -10084,6 +10093,7 @@ pub enum SourceProjection {
         self_ty: Type,
         trait_path: TraitPath,
         item: AstIdent,
+        syntax: ProjectionSyntax,
     },
     /// The exact owning trait comes from the retained declaration context.
     /// No source trait path is fabricated for this syntax.
@@ -14577,6 +14587,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self_ty,
             trait_path,
             item,
+            syntax: ProjectionSyntax::Explicit,
         })
     }
     /// Split closing angle tokens only while parsing types, never expressions.
@@ -22190,14 +22201,17 @@ fn exact_source_projection(
                 self_ty: a,
                 trait_path: at,
                 item: ai,
+                syntax: asyntax,
             },
             SourceProjection::Qualified {
                 self_ty: b,
                 trait_path: bt,
                 item: bi,
+                syntax: bsyntax,
             },
         ) => {
-            let mut equal = exact_source_ident(names, *ai, *bi)?;
+            let mut equal = asyntax == bsyntax;
+            equal &= exact_source_ident(names, *ai, *bi)?;
             equal &= exact_source_type(names, a, b, budget, depth + 1)?;
             equal &= match (at, bt) {
                 (TraitPath::Source(a), TraitPath::Source(b)) => {
@@ -26340,7 +26354,7 @@ impl PlanState {
     // Metadata-only pass. Capability checks must not hide malformed later
     // children behind an earlier unsupported reference or equality position.
     fn validate_source_type_metadata(
-        &self,
+        &mut self,
         registry: &DeclRegistry,
         ty: &Type,
         bindings: &HashMap<GenericBindingKey, ir::Ty>,
@@ -26392,11 +26406,29 @@ impl PlanState {
                             budget,
                         )?;
                         if let SourceProjection::Qualified {
-                            trait_path, item, ..
+                            trait_path,
+                            item,
+                            syntax,
+                            ..
                         } = projection.as_ref()
                         {
-                            let owner = registry.resolve_trait_path(trait_path)?;
-                            registry.associated_type_item(owner, *item, budget)?;
+                            match syntax {
+                                ProjectionSyntax::Explicit => {
+                                    let owner = registry.resolve_trait_path(trait_path)?;
+                                    registry.associated_type_item(owner, *item, budget)?;
+                                }
+                                ProjectionSyntax::ParameterShorthand => {
+                                    self.source_ty(
+                                        registry,
+                                        ty,
+                                        bindings,
+                                        caller,
+                                        budget,
+                                        depth + 1,
+                                        false,
+                                    )?;
+                                }
+                            }
                         }
                     }
                     _ => {}

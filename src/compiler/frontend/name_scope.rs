@@ -110,6 +110,7 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                         self_ty,
                         trait_path,
                         item,
+                        ..
                     } => {
                         work(names, 1)?;
                         pending.push(self_ty).map_err(transport)?;
@@ -276,13 +277,16 @@ impl Type {
                             self_ty: a,
                             trait_path: at,
                             item: ai,
+                            syntax: asyntax,
                         },
                         SourceProjection::Qualified {
                             self_ty: b,
                             trait_path: bt,
                             item: bi,
+                            syntax: bsyntax,
                         },
                     ) => {
+                        equal &= asyntax == bsyntax;
                         equal &= ident_eq(names, *ai, *bi, LookupClass::Member)?;
                         work(names, 1)?;
                         pending.push((a, b)).map_err(transport)?;
@@ -548,6 +552,7 @@ mod tests {
         let (names, ids) = names("Trait Trait Out Out T U", &budget);
         let projection = |trait_name, item, argument| {
             Type::Projection(Box::new(SourceProjection::Qualified {
+                syntax: ProjectionSyntax::Explicit,
                 self_ty: Type::Bool,
                 trait_path: TraitPath::Source(GenericPath {
                     anchor: PathAnchor::Relative,

@@ -731,6 +731,7 @@ impl PlanState {
                         self_ty,
                         trait_path,
                         item,
+                        ..
                     } => {
                         registry
                             .names
@@ -818,8 +819,17 @@ impl PlanState {
                         (trait_ref, *item)
                     }
                 };
-                let (trait_ref, item) = self
-                    .inherited_associated_owner(
+                let (trait_ref, item) = if matches!(
+                    projection.as_ref(),
+                    SourceProjection::Qualified {
+                        syntax: ProjectionSyntax::Explicit,
+                        ..
+                    }
+                ) {
+                    let item = registry.associated_type_item(trait_ref.declaration, item, budget)?;
+                    (trait_ref, item)
+                } else {
+                    self.inherited_associated_owner(
                         registry,
                         trait_ref,
                         item,
@@ -827,7 +837,8 @@ impl PlanState {
                         budget,
                         &mut Vec::new(),
                     )?
-                    .ok_or("no associated type in trait or its supertraits")?;
+                    .ok_or("no associated type in trait or its supertraits")?
+                };
                 budget.retain_bytes(
                     std::mem::size_of::<ir::AssociatedTypeProjection>()
                         + 2 * std::mem::size_of::<usize>(),

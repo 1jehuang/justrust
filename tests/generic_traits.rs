@@ -112,6 +112,61 @@ fn main() {{
 }
 
 #[test]
+fn qualified_associated_types_require_direct_trait_ownership() {
+    for source in [
+        r#"
+mod model {
+    pub trait Parent<A> { type Item; }
+    pub trait Child<A>: Parent<A> {}
+}
+use model::Child as Bound;
+struct Value { n: i32 }
+impl model::Parent<i32> for Value { type Item = i32; }
+impl model::Child<i32> for Value {}
+fn identity<I: Bound<i32>>(x: I::Item) -> I::Item { x }
+fn main() { println!("{}", identity::<Value>(7)); }
+"#,
+        r#"
+trait Parent { type Item; }
+trait Child: Parent { type Item; }
+struct Value { n: i32 }
+impl Parent for Value { type Item = i32; }
+impl Child for Value { type Item = bool; }
+fn identity<I: Child>(x: <I as Child>::Item) -> <I as Child>::Item { x }
+fn main() { println!("{}", identity::<Value>(true)); }
+"#,
+        r#"
+trait Parent { type Item; fn next(&mut self) -> Option<Self::Item>; }
+trait Child: Parent { fn back(&mut self) -> Option<Self::Item>; }
+impl<I: Parent> Parent for &mut I {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<I::Item> { (**self).next() }
+}
+impl<I: Child> Child for &mut I {
+    fn back(&mut self) -> Option<I::Item> { (**self).back() }
+}
+struct Value { n: i32 }
+impl Parent for Value {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> { Some(self.n) }
+}
+impl Child for Value { fn back(&mut self) -> Option<i32> { Some(self.n) } }
+fn main() { let mut value = Value { n: 9 }; let mut it = &mut value; println!("{}", it.back().unwrap()); }
+"#,
+    ] {
+        coherence_oracle::stock_native(source);
+    }
+    for source in [
+        "trait Parent{type Item;}trait Child:Parent{}fn unused<I:Child>(x:<I as Child>::Item){}fn main(){}",
+        "trait Parent{type Item;}trait Child:Parent{}struct Unused<I:Child>{value:<I as Child>::Item}fn main(){}",
+        "mod m{pub trait Parent{type Item;}pub trait Child:Parent{}}use m::Child as Bound;fn unused<I:Bound>(x:<I as Bound>::Item){}fn main(){}",
+        "trait Parent{type Item;}trait Child:Parent{type Item;}fn unused<I:Child>(x:I::Item){}fn main(){}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn conditional_blanket_impls_use_orphan_aware_disjointness() {
     for source in [
         r#"

@@ -17,14 +17,14 @@ impl PlanState {
         if active.contains(&goal.declaration) {
             return Err("cyclic supertrait associated lookup".into());
         }
-        match registry.associated_type_item(goal.declaration, item, budget) {
-            Ok(id) => return Ok(Some((goal, id))),
-            Err(error) if error == "extra or unknown associated type item" => {}
+        let mut found = match registry.associated_type_item(goal.declaration, item, budget) {
+            Ok(id) => Some((goal.clone(), id)),
+            Err(error) if error == "extra or unknown associated type item" => None,
             Err(error) => return Err(error),
-        }
+        };
         let info = registry.declaration(goal.declaration)?;
         if info.kind != ir::DeclKind::Trait {
-            return Ok(None);
+            return Ok(found);
         }
         let declaration = registry.source_trait(goal.declaration)?;
         let parents = declaration.supertraits.clone();
@@ -35,7 +35,6 @@ impl PlanState {
             bindings.insert(registry.parameter_key(*parameter)?, actual.clone());
         }
         active.push(goal.declaration);
-        let mut found = None;
         for parent in parents {
             if matches!(parent, TraitPath::Builtin(_)) {
                 continue;

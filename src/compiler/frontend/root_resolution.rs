@@ -182,17 +182,35 @@ impl Resolver<'_> {
 
     #[inline(never)]
     fn source_trait_index(&mut self, path: &TraitPath, module: ModuleId) -> Result<usize, String> {
+        self.associated_trait_index(path, module)?
+            .ok_or_else(|| "builtin trait has no associated type declaration".into())
+    }
+
+    fn associated_trait_index(
+        &mut self,
+        path: &TraitPath,
+        module: ModuleId,
+    ) -> Result<Option<usize>, String> {
         let TraitPath::Source(path) = path else {
-            return Err("builtin trait has no associated type declaration".into());
+            return Ok(None);
         };
         let original = path.path(self.names())?;
-        let target = self
-            .path(&original, module, true, false)?
-            .ok_or("unresolved projection trait")?;
+        let Some(target) = self.path(&original, module, true, false)? else {
+            if let Some(ident) = original.single()
+                && self.builtin_trait(ident)?.is_some()
+            {
+                return Ok(None);
+            }
+            return Err("unresolved projection trait".into());
+        };
         if target.kind != ResolvedKind::Trait {
             return Err("associated projection target is not a trait".into());
         }
+        if matches!(&target.path, ResolvedPath::Builtin(_)) {
+            return Ok(None);
+        }
         self.trait_decl_index(target.source()?)?
+            .map(Some)
             .ok_or_else(|| "projection trait is not a retained source declaration".into())
     }
 
@@ -222,21 +240,23 @@ impl Resolver<'_> {
             .traits
             .get(trait_index)
             .ok_or("foreign source trait owner")?;
+        let mut found = None;
         for associated in &declaration.associated_types {
             self.alias_budget.charge_work(1)?;
             if self.ident_key(associated.name, LookupClass::Member)? == key {
-                return Ok(Some(trait_index));
+                found = Some(trait_index);
             }
         }
         let module = declaration.module;
         let parents = declaration.supertraits.clone();
         active.push(trait_index);
-        let mut found = None;
         for parent in parents {
             if matches!(parent, TraitPath::Builtin(_)) {
                 continue;
             }
-            let index = self.source_trait_index(&parent, module)?;
+            let Some(index) = self.associated_trait_index(&parent, module)? else {
+                continue;
+            };
             if let Some(owner) = self.check_inherited_associated_member(index, item, active)? {
                 if found.is_some_and(|previous| previous != owner) {
                     return Err("ambiguous associated type in supertraits".into());
@@ -254,12 +274,20 @@ impl Resolver<'_> {
         projection: &mut SourceProjection,
         module: ModuleId,
     ) -> Result<(), String> {
+        let explicit = matches!(
+            projection,
+            SourceProjection::Qualified {
+                syntax: ProjectionSyntax::Explicit,
+                ..
+            }
+        );
         let mut boundary = None;
         let (trait_index, item) = match projection {
             SourceProjection::Qualified {
                 self_ty,
                 trait_path,
                 item,
+                ..
             } => {
                 self.ty(self_ty, module)?;
                 // Resolve the owning trait from the written path before
@@ -297,7 +325,27 @@ impl Resolver<'_> {
                 (index, *item)
             }
         };
-        self.check_associated_member(trait_index, item)?;
+        if explicit {
+            let key = self.ident_key(item, LookupClass::Member)?;
+            let declaration = self
+                .program
+                .traits
+                .get(trait_index)
+                .ok_or("foreign source trait owner")?;
+            let mut declared = false;
+            for associated in &declaration.associated_types {
+                self.alias_budget.charge_work(1)?;
+                declared |= self.ident_key(associated.name, LookupClass::Member)? == key;
+            }
+            if !declared {
+                return Err(
+                    "E0576: associated type is not declared in the explicitly qualified trait"
+                        .into(),
+                );
+            }
+        } else {
+            self.check_associated_member(trait_index, item)?;
+        }
         if let Some(error) = boundary {
             return Err(error);
         }
