@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn argument_call_aggregate_recipe_preserves_original_input_and_call() {
+    let (plan, checked, _) = fixture_graph_source(
+        "fn inspect(){let f=|s:&str|pair(s);}fn pair(s:&str)->(&str,&str){(s,s)}fn main(){}",
+    );
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    let witness = receipt.capture_witness().unwrap();
+    let input = witness
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            ir::CaptureResultKind::InputValue(origin) => Some(origin),
+            _ => None,
+        })
+        .unwrap();
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract().results.len(), 2);
+        for row in view.contract().results.iter() {
+            assert_eq!(row.sources.len(), 1);
+            assert_eq!(row.sources[0].param, 1);
+            assert_eq!(
+                row.sources[0].location.path.0.as_ref(),
+                &[ir::CarrierStep::Field(0)]
+            );
+        }
+        for mutation in 0..4 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => forged.call_evidence = Arc::from([]),
+                1 => forged.exprs[input.value.0].kind = ir::ExprKind::Local(forged.params[0]),
+                2 => {
+                    let ir::ExprKind::Call { args, .. } = &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("original call")
+                    };
+                    args.clear();
+                }
+                3 => forged.exprs[receipt.tail().0].ty = ir::Ty::Bool,
+                _ => unreachable!(),
+            }
+            assert!(validate_source(receipt, &forged, &facts).is_err());
+        }
+    }
+}
+
+#[test]
 fn generic_input_call_result_replays_original_tuple_and_equality_sources() {
     let (plan, checked, _) = fixture_graph_source(
         "use std::ops::Add;fn apply<T:Add<Output=T>+Copy>(){let f=|a:T,&b:&T|a+b;}fn main(){}",

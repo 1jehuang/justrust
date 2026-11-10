@@ -16,9 +16,11 @@ pub(in crate::compiler) struct CaptureResultNode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(in crate::compiler) enum CaptureResultKind {
+    InputValue(ClosureInputValueOrigin),
     Call {
         target: Callee,
         arguments: Arc<[ExprId]>,
+        source_ty: Ty,
     },
     ArrayToSlice {
         reference: ExprId,

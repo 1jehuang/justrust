@@ -1042,6 +1042,7 @@ mod tests {
                                 node.kind = ir::CaptureResultKind::Call {
                                     target: direct_callee.clone(),
                                     arguments: Arc::from([]),
+                                    source_ty: Ty::Unit,
                                 };
                             }
                             _ => {

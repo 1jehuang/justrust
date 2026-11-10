@@ -38,13 +38,13 @@ pub(in crate::compiler) use local_literals::nominal_manifest::{
 };
 #[path = "type_check/method_argument_hint.rs"]
 mod method_argument_hint;
-mod owning_object_context;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
 mod nominal_calls;
 pub(in crate::compiler::frontend) mod nominal_inputs;
 #[path = "type_check/opaque_returns.rs"]
 mod opaque_returns;
+mod owning_object_context;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
 mod primitive_actuals;

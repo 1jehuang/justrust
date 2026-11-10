@@ -13,13 +13,15 @@ impl Checker<'_> {
         result: &ir::Ty,
         projections: &[CaptureProjection],
         sources: &[ir::CaptureSource],
+        prefix: &[ir::TypedStmt],
+        tuple: ir::LocalId,
     ) -> Result<Option<Arc<ir::ClosureResultReceipt>>, String> {
         let plan = self.signatures.plan()?;
         let locations = ir::carrier_locations(result, &plan.budget)?;
         // A rigid symbolic result keeps its existing required-call witness.
         // An incidental captured callable receiver is not capture provenance
         // for that unrelated equality-dependent result family.
-        if locations.is_empty() || projections.is_empty() || matches!(result, ir::Ty::Param(_)) {
+        if locations.is_empty() || matches!(result, ir::Ty::Param(_)) {
             return Ok(None);
         }
         let Some(tail) = body.tail else {
@@ -27,6 +29,10 @@ impl Checker<'_> {
         };
         // This probe chooses the issuer, not its authority. Every result channel
         // is subsequently traced through checked canonical return contracts.
+        let argument_flow = matches!(
+            self.exprs.get(tail.0).map(|expr| &expr.kind),
+            Some(ir::ExprKind::Call { .. } | ir::ExprKind::Tuple(_))
+        );
         let mut pending = vec![tail];
         let mut seen = std::collections::HashSet::new();
         let mut captured = false;
@@ -35,6 +41,17 @@ impl Checker<'_> {
             if !seen.insert(id) {
                 continue;
             }
+            if argument_flow {
+                captured |= input_value_result::value_origin(
+                    &self.exprs,
+                    &self.locals,
+                    prefix,
+                    tuple,
+                    id,
+                    &plan.budget,
+                )?
+                .is_some();
+            }
             match &self
                 .exprs
                 .get(id.0)
@@ -42,6 +59,9 @@ impl Checker<'_> {
                 .kind
             {
                 ir::ExprKind::Borrow { place, .. } => {
+                    // Issuer selection only. The returned canonical call row
+                    // must actually reach this borrow before it is validated.
+                    captured |= argument_flow && argument_local(prefix, place.local);
                     captured |= projections.iter().any(|capture| {
                         capture.local == place.local
                             && place.projection.starts_with(&capture.prefix)
@@ -87,6 +107,8 @@ impl Checker<'_> {
                 facts,
                 &mut nodes,
                 &mut active,
+                prefix,
+                tuple,
                 0,
             )?;
         }
@@ -120,6 +142,8 @@ fn trace(
     facts: &tr::ValidatedFacts,
     nodes: &mut Vec<ir::CaptureResultNode>,
     active: &mut std::collections::HashSet<(ir::ExprId, ir::CarrierLocation)>,
+    prefix: &[ir::TypedStmt],
+    tuple: ir::LocalId,
     depth: usize,
 ) -> Result<(), String> {
     let budget = facts.budget();
@@ -132,214 +156,266 @@ fn trace(
         .exprs
         .get(expression.0)
         .ok_or("invalid captured closure result expression")?;
-    let kind = match &expr.kind {
-        ir::ExprKind::ArrayToSlice { reference } => {
-            if !location.path.0.is_empty()
-                || location.channel != ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
-            {
-                return Err(
-                    "unsupported: captured array-to-slice result contains nested carriers".into(),
-                );
-            }
-            let source = checker
-                .exprs
-                .get(reference.0)
-                .ok_or("captured array-to-slice lost original reference")?;
-            let Some((ir::BorrowKind::Shared, from, _)) = source.ty.array_ref_element_len() else {
-                return Err(
-                    "capture result unsizing requires original shared array reference".into(),
-                );
-            };
-            let Some((ir::BorrowKind::Shared, to)) = expr.ty.slice_ref_element() else {
-                return Err("capture result unsizing changed shared slice result".into());
-            };
-            if from != to {
-                return Err("capture result unsizing changed canonical array element".into());
-            }
-            ir::validate_shared_slice_element(from, ir::FactsCtx::Validated(facts), budget)?;
-            trace(
-                checker,
-                *reference,
-                location,
-                projections,
-                sources,
-                facts,
-                nodes,
-                active,
-                depth + 1,
-            )?;
-            ir::CaptureResultKind::ArrayToSlice {
-                reference: *reference,
-            }
+    let input = input_value_result::value_origin(
+        &checker.exprs,
+        &checker.locals,
+        prefix,
+        tuple,
+        expression,
+        budget,
+    )?;
+    let kind = if let Some(origin) = input {
+        if !facts
+            .must_copy(&expr.ty)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?
+        {
+            return Err(
+                "unsupported: closure result call input requires an original Copy carrier value"
+                    .into(),
+            );
         }
-        ir::ExprKind::Call {
-            target,
-            args,
-            signature,
-            ..
-        } => {
-            if !checker
-                .call_evidence
-                .iter()
-                .any(|evidence| evidence.call == expression)
-            {
-                return Err(
-                    "captured closure result lacks original call occurrence evidence".into(),
-                );
-            }
-            facts
-                .validate_signature(ir::SignatureSubject::Call(target), signature)
-                .map_err(|e| {
-                    format!(
-                        "captured result original call signature: {}",
-                        e.into_legacy_diagnostic(budget)
-                    )
-                })?;
-            let view = facts
-                .carrier_contract(ir::SignatureSubject::Call(target))
-                .map_err(|e| {
-                    format!(
-                        "captured result original call carriers: {}",
-                        e.into_legacy_diagnostic(budget)
-                    )
-                })?;
-            view.validate_for(facts)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?;
-            let returned = view
-                .contract()
-                .results
-                .iter()
-                .find(|returned| returned.location == *location)
-                .ok_or("captured closure result has no exact canonical return channel")?;
-            if returned.sources.is_empty() {
-                return Err("captured closure result has no checked input loan provenance".into());
-            }
-            for source in returned.sources.iter() {
-                let argument = *args
-                    .get(source.param)
-                    .ok_or("capture result return contract names foreign argument")?;
+        let Some(ir::Ty::Tuple(parameters)) = checker.locals.get(tuple.0).map(|local| &local.ty)
+        else {
+            return Err("closure result input lost its canonical argument tuple".into());
+        };
+        if !origin
+            .value_carriers(parameters, budget)?
+            .iter()
+            .any(|row| row.location == *location)
+        {
+            return Err("closure result input names a foreign argument carrier".into());
+        }
+        ir::CaptureResultKind::InputValue(origin)
+    } else {
+        match &expr.kind {
+            ir::ExprKind::ArrayToSlice { reference } => {
+                if !location.path.0.is_empty()
+                    || location.channel
+                        != ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+                {
+                    return Err(
+                        "unsupported: captured array-to-slice result contains nested carriers"
+                            .into(),
+                    );
+                }
+                let source = checker
+                    .exprs
+                    .get(reference.0)
+                    .ok_or("captured array-to-slice lost original reference")?;
+                let Some((ir::BorrowKind::Shared, from, _)) = source.ty.array_ref_element_len()
+                else {
+                    return Err(
+                        "capture result unsizing requires original shared array reference".into(),
+                    );
+                };
+                let Some((ir::BorrowKind::Shared, to)) = expr.ty.slice_ref_element() else {
+                    return Err("capture result unsizing changed shared slice result".into());
+                };
+                if from != to {
+                    return Err("capture result unsizing changed canonical array element".into());
+                }
+                ir::validate_shared_slice_element(from, ir::FactsCtx::Validated(facts), budget)?;
                 trace(
                     checker,
-                    argument,
-                    &source.location,
+                    *reference,
+                    location,
                     projections,
                     sources,
                     facts,
                     nodes,
                     active,
+                    prefix,
+                    tuple,
                     depth + 1,
                 )?;
+                ir::CaptureResultKind::ArrayToSlice {
+                    reference: *reference,
+                }
             }
-            budget.retain_bytes(args.len() * std::mem::size_of::<ir::ExprId>())?;
-            ir::CaptureResultKind::Call {
-                target: target.clone(),
-                arguments: args.clone().into(),
-            }
-        }
-        ir::ExprKind::Tuple(fields) => {
-            let Some((ir::CarrierStep::Field(field), rest)) = location.path.0.split_first() else {
-                return Err("capture result tuple has foreign carrier path".into());
-            };
-            let value = *fields
-                .get(*field)
-                .ok_or("capture result tuple field is invalid")?;
-            let inner = ir::CarrierLocation {
-                path: ir::CarrierPath(rest.into()),
-                channel: location.channel.clone(),
-            };
-            trace(
-                checker,
-                value,
-                &inner,
-                projections,
-                sources,
-                facts,
-                nodes,
-                active,
-                depth + 1,
-            )?;
-            budget.retain_bytes(fields.len() * std::mem::size_of::<ir::ExprId>())?;
-            ir::CaptureResultKind::Tuple {
-                fields: fields.clone().into(),
-                source_ty: expr.ty.clone(),
-            }
-        }
-        ir::ExprKind::Borrow {
-            kind: ir::BorrowKind::Shared,
-            place,
-            timing: ir::BorrowTiming::Immediate,
-        } => {
-            if !ir::carrier_locations(&expr.ty, budget)?.contains(location) {
-                return Err("capture result borrow names a foreign source carrier".into());
-            }
-            let capture = projections
-                .iter()
-                .find(|capture| {
-                    capture.local == place.local && place.projection.starts_with(&capture.prefix)
-                })
-                .ok_or("closure result borrows local-owned or foreign storage")?;
-            let source = sources
-                .get(capture.field)
-                .ok_or("capture result names a foreign environment slot")?;
-            if source.kind == ir::CaptureKind::Value
-                && !place.projection[capture.prefix.len()..]
+            ir::ExprKind::Call {
+                target,
+                args,
+                signature,
+                ..
+            } => {
+                if !checker
+                    .call_evidence
                     .iter()
-                    .any(|step| matches!(step, ir::Projection::Deref))
-            {
-                return Err("closure reference result borrows local-owned captured storage".into());
+                    .any(|evidence| evidence.call == expression)
+                {
+                    return Err(
+                        "captured closure result lacks original call occurrence evidence".into(),
+                    );
+                }
+                facts
+                    .validate_signature(ir::SignatureSubject::Call(target), signature)
+                    .map_err(|e| {
+                        format!(
+                            "captured result original call signature: {}",
+                            e.into_legacy_diagnostic(budget)
+                        )
+                    })?;
+                let returned = facts
+                    .capture_call_result_sources(target, &expr.ty, location)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                if returned.is_empty() {
+                    return Err(
+                        "captured closure result has no checked input loan provenance".into(),
+                    );
+                }
+                for source in returned.iter() {
+                    let argument = *args
+                        .get(source.param)
+                        .ok_or("capture result return contract names foreign argument")?;
+                    trace(
+                        checker,
+                        argument,
+                        &source.location,
+                        projections,
+                        sources,
+                        facts,
+                        nodes,
+                        active,
+                        prefix,
+                        tuple,
+                        depth + 1,
+                    )?;
+                }
+                budget.retain_bytes(args.len() * std::mem::size_of::<ir::ExprId>())?;
+                ir::CaptureResultKind::Call {
+                    target: target.clone(),
+                    arguments: args.clone().into(),
+                    source_ty: expr.ty.clone(),
+                }
             }
-            if !capture.indirect || source.kind != ir::CaptureKind::Shared {
-                return Err(
-                    "unsupported: closure result requires an original shared capture loan".into(),
-                );
+            ir::ExprKind::Tuple(fields) => {
+                let Some((ir::CarrierStep::Field(field), rest)) = location.path.0.split_first()
+                else {
+                    return Err("capture result tuple has foreign carrier path".into());
+                };
+                let value = *fields
+                    .get(*field)
+                    .ok_or("capture result tuple field is invalid")?;
+                let inner = ir::CarrierLocation {
+                    path: ir::CarrierPath(rest.into()),
+                    channel: location.channel.clone(),
+                };
+                trace(
+                    checker,
+                    value,
+                    &inner,
+                    projections,
+                    sources,
+                    facts,
+                    nodes,
+                    active,
+                    prefix,
+                    tuple,
+                    depth + 1,
+                )?;
+                budget.retain_bytes(fields.len() * std::mem::size_of::<ir::ExprId>())?;
+                ir::CaptureResultKind::Tuple {
+                    fields: fields.clone().into(),
+                    source_ty: expr.ty.clone(),
+                }
             }
-            budget.retain_bytes(
-                (place.projection.len() + capture.prefix.len() + source.place.projection.len())
-                    * std::mem::size_of::<ir::Projection>(),
-            )?;
-            ir::CaptureResultKind::Borrow {
-                field: capture.field,
-                source: source.clone(),
-                original: place.clone(),
-                prefix: capture.prefix.clone().into(),
+            ir::ExprKind::Borrow {
+                kind: ir::BorrowKind::Shared,
+                place,
+                timing: ir::BorrowTiming::Immediate,
+            } => {
+                if !ir::carrier_locations(&expr.ty, budget)?.contains(location) {
+                    return Err("capture result borrow names a foreign source carrier".into());
+                }
+                if argument_local(prefix, place.local) {
+                    result_contract::argument_borrow_origin(
+                        &checker.exprs,
+                        &checker.locals,
+                        prefix,
+                        &[],
+                        tuple,
+                        expression,
+                        facts,
+                    )?;
+                    return Err("unsupported: aggregate closure call result requires an original Copy parameter carrier value".into());
+                }
+                let capture = projections
+                    .iter()
+                    .find(|capture| {
+                        capture.local == place.local
+                            && place.projection.starts_with(&capture.prefix)
+                    })
+                    .ok_or("closure result borrows local-owned or foreign storage")?;
+                let source = sources
+                    .get(capture.field)
+                    .ok_or("capture result names a foreign environment slot")?;
+                if source.kind == ir::CaptureKind::Value
+                    && !place.projection[capture.prefix.len()..]
+                        .iter()
+                        .any(|step| matches!(step, ir::Projection::Deref))
+                {
+                    return Err(
+                        "closure reference result borrows local-owned captured storage".into(),
+                    );
+                }
+                if !capture.indirect || source.kind != ir::CaptureKind::Shared {
+                    return Err(
+                        "unsupported: closure result requires an original shared capture loan"
+                            .into(),
+                    );
+                }
+                budget.retain_bytes(
+                    (place.projection.len() + capture.prefix.len() + source.place.projection.len())
+                        * std::mem::size_of::<ir::Projection>(),
+                )?;
+                ir::CaptureResultKind::Borrow {
+                    field: capture.field,
+                    source: source.clone(),
+                    original: place.clone(),
+                    prefix: capture.prefix.clone().into(),
+                }
             }
-        }
-        _ => {
-            let place = super::super::capture_use::expression_place(&checker.exprs, expression)?
-                .ok_or("unsupported: captured closure result has no original source place")?;
-            let capture = projections
-                .iter()
-                .find(|capture| {
-                    capture.local == place.local && place.projection.starts_with(&capture.prefix)
-                })
-                .ok_or("closure result reads local-owned or foreign storage")?;
-            let source = sources
-                .get(capture.field)
-                .ok_or("capture read names foreign environment field")?;
-            if !capture.indirect || source.kind != ir::CaptureKind::Shared {
-                return Err(
+            _ => {
+                let place =
+                    super::super::capture_use::expression_place(&checker.exprs, expression)?
+                        .ok_or(
+                            "unsupported: captured closure result has no original source place",
+                        )?;
+                let capture = projections
+                    .iter()
+                    .find(|capture| {
+                        capture.local == place.local
+                            && place.projection.starts_with(&capture.prefix)
+                    })
+                    .ok_or("closure result reads local-owned or foreign storage")?;
+                let source = sources
+                    .get(capture.field)
+                    .ok_or("capture read names foreign environment field")?;
+                if !capture.indirect || source.kind != ir::CaptureKind::Shared {
+                    return Err(
                     "unsupported: closure reference results require checked capture carrier contracts: result read requires original shared capture capability"
                         .into(),
                 );
-            }
-            if !facts
-                .must_copy(&expr.ty)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?
-                || !ir::carrier_locations(&expr.ty, budget)?.contains(location)
-            {
-                return Err(
-                    "closure result cannot copy a moved or mutable captured carrier".into(),
-                );
-            }
-            budget.retain_bytes(
-                (place.projection.len() + capture.prefix.len() + source.place.projection.len())
-                    * std::mem::size_of::<ir::Projection>(),
-            )?;
-            ir::CaptureResultKind::Read {
-                field: capture.field,
-                source: source.clone(),
-                original: place,
-                prefix: capture.prefix.clone().into(),
+                }
+                if !facts
+                    .must_copy(&expr.ty)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+                    || !ir::carrier_locations(&expr.ty, budget)?.contains(location)
+                {
+                    return Err(
+                        "closure result cannot copy a moved or mutable captured carrier".into(),
+                    );
+                }
+                budget.retain_bytes(
+                    (place.projection.len() + capture.prefix.len() + source.place.projection.len())
+                        * std::mem::size_of::<ir::Projection>(),
+                )?;
+                ir::CaptureResultKind::Read {
+                    field: capture.field,
+                    source: source.clone(),
+                    original: place,
+                    prefix: capture.prefix.clone().into(),
+                }
             }
         }
     };
@@ -350,6 +426,16 @@ fn trace(
     }
     active.remove(&(expression, location.clone()));
     Ok(())
+}
+
+fn argument_local(prefix: &[ir::TypedStmt], local: ir::LocalId) -> bool {
+    prefix.iter().any(|statement| match statement {
+        ir::TypedStmt::Let { local: bound, .. } => *bound == local,
+        ir::TypedStmt::LetPattern { bindings, .. } => {
+            bindings.iter().any(|binding| binding.local == local)
+        }
+        _ => false,
+    })
 }
 
 pub(super) fn validate_source(
@@ -415,6 +501,27 @@ pub(super) fn validate_source(
             .get(node.expression.0)
             .ok_or("capture result lost original expression occurrence")?;
         match (&node.kind, &expr.kind) {
+            (ir::CaptureResultKind::InputValue(origin), _) => {
+                let replayed = input_value_result::value_origin(
+                    &source.exprs,
+                    &source.locals,
+                    &source.body.statements,
+                    source.params[1],
+                    node.expression,
+                    budget,
+                )?;
+                if source.params[1] != origin.tuple
+                    || replayed.as_ref() != Some(origin)
+                    || origin.projected_type(closure.params(), budget)? != expr.ty
+                    || !facts
+                        .must_copy(&expr.ty)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    return Err(
+                        "closure result call changed its original Copy input occurrence".into(),
+                    );
+                }
+            }
             (
                 ir::CaptureResultKind::ArrayToSlice { reference },
                 ir::ExprKind::ArrayToSlice { reference: actual },
@@ -431,7 +538,10 @@ pub(super) fn validate_source(
                 let expected = facts
                     .capture_result_call(receipt, node.expression)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?;
-                if target != &expected
+                if !facts
+                    .capture_result_call_type_matches(receipt, node.expression, &expr.ty)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                    || target != &expected
                     || args.as_slice() != arguments.as_ref()
                     || !source
                         .call_evidence

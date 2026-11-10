@@ -258,6 +258,8 @@ impl Checker<'_> {
             &result,
             &projections,
             &sources,
+            &result_prefix,
+            arguments,
         )? {
             Some(receipt) => Some(receipt),
             None => child.restricted_closure_result(

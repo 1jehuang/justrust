@@ -5,6 +5,35 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn closure_argument_call_aggregate_results() {
+    oracle::check(
+        "closure_argument_call_aggregate_results",
+        &[
+            Case {
+                name: "split_once_filter_map",
+                source: "fn main(){let v=\"a=1;b=2;;c=3\".split(';').filter(|p|!p.is_empty()).filter_map(|p|p.split_once('=')).collect::<Vec<_>>();println!(\"{:?}\",v);}",
+                expect: Expect::Run("[(\"a\", \"1\"), (\"b\", \"2\"), (\"c\", \"3\")]\n"),
+            },
+            Case {
+                name: "tuple_call_argument_sources",
+                source: "fn pair(s:&str)->(&str,&str){(s,s)}fn main(){let v=\"a b\".split(' ').map(|s|pair(s)).collect::<Vec<_>>();println!(\"{:?}\",v);}",
+                expect: Expect::Run("[(\"a\", \"a\"), (\"b\", \"b\")]\n"),
+            },
+            Case {
+                name: "unused_owned_argument_escape",
+                source: "fn unused(){let _f=|s:String|s.split_once('=');}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_argument_result_type",
+                source: "fn unused(){let _f=|s:&str|->Option<(bool,bool)>{s.split_once('=')};}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn generic_iterator_closure_projection() {
     oracle::check(
         "generic_iterator_closure_projection",

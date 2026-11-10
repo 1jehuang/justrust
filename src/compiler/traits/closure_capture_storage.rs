@@ -207,6 +207,8 @@ fn source_storage(
         }
         // A canonical call carrier contract proves lifetime containment, not
         // identical returned storage. No Call or coercion can mint this proof.
-        ir::CaptureResultKind::Call { .. } | ir::CaptureResultKind::ArrayToSlice { .. } => Ok(None),
+        ir::CaptureResultKind::Call { .. }
+        | ir::CaptureResultKind::ArrayToSlice { .. }
+        | ir::CaptureResultKind::InputValue(_) => Ok(None),
     }
 }

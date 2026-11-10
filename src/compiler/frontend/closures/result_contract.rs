@@ -523,7 +523,7 @@ pub(in crate::compiler) fn validate_source(
 /// reached exclusively through a real shared input parameter.
 /// No captured storage, local-owned temporary, static or inferred type match
 /// can provide this origin.
-fn argument_borrow_origin(
+pub(super) fn argument_borrow_origin(
     exprs: &[ir::TypedExpr],
     locals: &[ir::LocalDecl],
     prefix: &[ir::TypedStmt],

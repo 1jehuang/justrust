@@ -100,6 +100,39 @@ pub(super) fn captured_input(
 }
 
 impl ValidatedFacts {
+    /// Match a checked result occurrence to the canonical call contract. Nominal
+    /// applications may be source-slot or graph realizations of the same exact
+    /// declaration and ordered actuals. Their variant IDs are not interchangeable
+    /// until both full types validate and canonical equality has been proved.
+    pub(in crate::compiler) fn capture_call_result_sources(
+        &self,
+        callee: &Callee,
+        actual: &Ty,
+        location: &ir::CarrierLocation,
+    ) -> Result<Arc<[ir::InputCarrier]>> {
+        let view = self.carrier_contract(SignatureSubject::Call(callee))?;
+        view.validate_for(self)?;
+        self.validate_ty_metadata(actual)?;
+        if !self.world.eq_ty(actual, &view.result_signature.result, 0)? {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "capture call result changed its canonical type",
+            ));
+        }
+        let canonical =
+            self.world
+                .rebase_source_location(location, actual, &view.result_signature.result)?;
+        for row in view.contract.results.iter() {
+            if self.world.same_location(&row.location, &canonical)? {
+                return Ok(row.sources.clone());
+            }
+        }
+        Err(FactsError::invalid(
+            self.budget(),
+            "capture call result has no exact canonical return channel",
+        ))
+    }
+
     pub(in crate::compiler) fn capture_result_call(
         &self,
         receipt: &ir::ClosureResultReceipt,
@@ -126,6 +159,31 @@ impl ValidatedFacts {
             ));
         };
         self.world.specialize_capture_target(closure, target, self)
+    }
+
+    pub(in crate::compiler) fn capture_result_call_type_matches(
+        &self,
+        receipt: &ir::ClosureResultReceipt,
+        expression: ir::ExprId,
+        actual: &Ty,
+    ) -> Result<bool> {
+        // This authenticates the exact original occurrence and current owner
+        // before replaying its type recipe, just as it does its callee recipe.
+        self.capture_result_call(receipt, expression)?;
+        let closure = self.closure.as_ref().expect("validated closure context");
+        let node = receipt
+            .capture_witness()
+            .and_then(|w| w.nodes.iter().find(|node| node.expression == expression))
+            .expect("validated source occurrence");
+        let ir::CaptureResultKind::Call { source_ty, .. } = &node.kind else {
+            unreachable!("validated call occurrence")
+        };
+        let mut types =
+            self.world
+                .specialize_capture_types(closure, vec![source_ty.clone()], self)?;
+        self.validate_ty_metadata(actual)?;
+        self.world
+            .eq_ty(&types.pop().expect("one type recipe"), actual, 0)
     }
 }
 
@@ -344,6 +402,35 @@ impl ValidatedTraitWorld {
             })?;
         let mut output = Vec::new();
         let ty = match &node.kind {
+            ir::CaptureResultKind::InputValue(origin) => {
+                let ty = charged(
+                    &self.budget,
+                    origin.projected_type(closure.params(), &self.budget),
+                )?;
+                if !facts.must_copy(&ty)? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure result call cannot copy a moved argument carrier",
+                    ));
+                }
+                let rows = charged(
+                    &self.budget,
+                    origin.value_carriers(closure.params(), &self.budget),
+                )?;
+                let row = rows
+                    .iter()
+                    .find(|row| row.location == *location)
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "closure result call lost its exact argument channel",
+                        )
+                    })?;
+                for source in row.sources.iter() {
+                    push(&self.budget, &mut output, source.clone())?;
+                }
+                ty
+            }
             ir::CaptureResultKind::ArrayToSlice { reference } => {
                 if !location.path.0.is_empty()
                     || location.channel
@@ -387,29 +474,29 @@ impl ValidatedTraitWorld {
                     }),
                 }
             }
-            ir::CaptureResultKind::Call { target, arguments } => {
+            ir::CaptureResultKind::Call {
+                target,
+                arguments,
+                source_ty,
+            } => {
                 let target = self.specialize_capture_target(closure, target, facts)?;
                 let signature = self.capture_call_signature(&target, facts)?;
-                let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
-                view.validate_for(facts)?;
-                let returned = view
-                    .contract()
-                    .results
-                    .iter()
-                    .find(|returned| returned.location == *location)
-                    .ok_or_else(|| {
-                        FactsError::invalid(
-                            &self.budget,
-                            "capture result lost exact canonical return channel",
-                        )
-                    })?;
-                if returned.sources.is_empty() || arguments.len() != signature.params.len() {
+                let mut types =
+                    self.specialize_capture_types(closure, vec![source_ty.clone()], facts)?;
+                let actual = types.pop().ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "capture call lost its original result type recipe",
+                    )
+                })?;
+                let returned = facts.capture_call_result_sources(&target, &actual, location)?;
+                if returned.is_empty() || arguments.len() != signature.params.len() {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "capture result call changed argument or loan domain",
                     ));
                 }
-                for source in returned.sources.iter() {
+                for source in returned.iter() {
                     let argument = *arguments.get(source.param).ok_or_else(|| {
                         FactsError::invalid(&self.budget, "capture result names foreign call input")
                     })?;
@@ -434,7 +521,7 @@ impl ValidatedTraitWorld {
                         }
                     }
                 }
-                signature.result
+                actual
             }
             ir::CaptureResultKind::Borrow {
                 field,

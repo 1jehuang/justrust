@@ -848,7 +848,7 @@ impl ValidatedTraitWorld {
         }
         Ok(rows.into())
     }
-    fn rebase_source_location(
+    pub(super) fn rebase_source_location(
         &self,
         location: &ir::CarrierLocation,
         original: &Ty,
