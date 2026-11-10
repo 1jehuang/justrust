@@ -44,6 +44,8 @@ pub struct Active {
     pub sampled_at: Option<f64>,
     /// "local", "remote" (own machine) or "hosted".
     pub place: String,
+    /// Why the router kept this build local (`meta.route`), when it said.
+    pub reason: Option<String>,
     pub elapsed: f64,
     pub live: LiveState,
     pub units_finished: usize,
@@ -73,6 +75,8 @@ pub struct Finished {
     pub ok: bool,
     pub ago: f64,
     pub place: String,
+    /// Why the router kept this build local (`meta.route`), when it said.
+    pub reason: Option<String>,
     pub cwd: String,
     pub args: Vec<String>,
     pub agent_session: Option<String>,
@@ -133,6 +137,34 @@ fn place_of(meta: Option<&Meta>, remote: bool) -> String {
         None if remote => crate::remote_build::place_name().into(),
         None => "local".into(),
     }
+}
+
+/// The recorded reason a build stayed local, `None` for remote runs and for
+/// runs where routing was not consulted.
+fn reason_of(meta: Option<&Meta>, place: &str) -> Option<String> {
+    if place != "local" {
+        return None;
+    }
+    let why = meta?.route.as_deref()?.trim();
+    (!why.is_empty()).then(|| why.to_string())
+}
+
+/// Longest local reason shown in the bar. The tooltip has it in full.
+const BAR_REASON_CHARS: usize = 48;
+
+/// `[local: why]` for the bar, `[hosted]` when there is nothing to explain.
+fn place_tag(place: &str, reason: Option<&str>) -> String {
+    let Some(why) = reason else {
+        return format!("[{place}]");
+    };
+    // The reason given with `--local=` is stored behind how it was asked.
+    let why = why.strip_prefix("JUSTRUST_REMOTE=off: ").unwrap_or(why);
+    let why: String = why.split_whitespace().collect::<Vec<_>>().join(" ");
+    if why.chars().count() <= BAR_REASON_CHARS {
+        return format!("[{place}: {why}]");
+    }
+    let cut: String = why.chars().take(BAR_REASON_CHARS - 1).collect();
+    format!("[{place}: {}\u{2026}]", cut.trim_end())
 }
 
 fn read_meta(dir: &Path) -> Option<Meta> {
@@ -488,6 +520,7 @@ pub fn collect() -> Result<Status> {
             ncpu,
             cpu_cores,
             sampled_at,
+            reason: reason_of(Some(&meta), &place_of(Some(&meta), false)),
             place: place_of(Some(&meta), false),
             elapsed: now - meta.start,
             units_finished: done_units.len(),
@@ -508,6 +541,8 @@ pub fn collect() -> Result<Status> {
         if let Some(r) = last.as_ref() {
             let ago = now - (r.start + r.wall);
             if ago < SHOW_DONE_SECS && r.units_compiled > 0 {
+                let meta = read_meta(&runs.join(&r.id));
+                let place = place_of(meta.as_ref(), r.remote.is_some());
                 status.recent = Some(Finished {
                     id: r.id.clone(),
                     label: label(&r.cwd, &r.args),
@@ -520,7 +555,8 @@ pub fn collect() -> Result<Status> {
                         .map_or(r.wall, |ri| ri.client_wall.max(r.wall)),
                     ok: r.exit == 0,
                     ago,
-                    place: place_of(read_meta(&runs.join(&r.id)).as_ref(), r.remote.is_some()),
+                    reason: reason_of(meta.as_ref(), &place),
+                    place,
                     cwd: r.cwd.clone(),
                     args: r.args.clone(),
                     agent_session: r.agent_session.clone(),
@@ -621,16 +657,25 @@ pub fn render_waybar(s: &Status) -> String {
                 } else {
                     ("\u{f00d}", "failed")
                 };
-                let text = format!("{icon} {} [{}] {}", r.label, r.place, dur(r.wall));
+                let text = format!(
+                    "{icon} {} {} {}",
+                    r.label,
+                    place_tag(&r.place, r.reason.as_deref()),
+                    dur(r.wall)
+                );
+                let mut tip = format!(
+                    "{} {} ({})",
+                    r.id,
+                    if r.ok { "ok" } else { "failed" },
+                    r.place
+                );
+                if let Some(why) = &r.reason {
+                    let _ = write!(tip, "\n  local because: {why}");
+                }
                 format!(
                     "{{\"text\": {}, \"tooltip\": {}, \"class\": [\"{class}\", \"{}\"]}}",
                     json_escape(&text),
-                    json_escape(&format!(
-                        "{} {} ({})",
-                        r.id,
-                        if r.ok { "ok" } else { "failed" },
-                        r.place
-                    )),
+                    json_escape(&tip),
                     r.place
                 )
             }
@@ -640,9 +685,9 @@ pub fn render_waybar(s: &Status) -> String {
     // Bar shows time taken so far, then progress. The time-left estimate
     // stays in the tooltip.
     let mut text = format!(
-        "\u{e7a8} {} [{}] {} {}",
+        "\u{e7a8} {} {} {} {}",
         a.label,
-        a.place,
+        place_tag(&a.place, a.reason.as_deref()),
         dur(a.elapsed),
         phase_word(a)
     );
@@ -663,6 +708,9 @@ pub fn render_waybar(s: &Status) -> String {
     for a in &s.active {
         let _ = writeln!(tip, "{}  ({}, {})", a.label, a.place, a.cwd);
         let _ = writeln!(tip, "  cargo {}", a.args.join(" "));
+        if let Some(why) = &a.reason {
+            let _ = writeln!(tip, "  local because: {why}");
+        }
         let _ = writeln!(tip, "  elapsed {}, {}", dur(a.elapsed), phase_word(a));
         if let Some(e) = &a.estimate {
             let _ = writeln!(
@@ -937,6 +985,7 @@ mod tests {
             cpu_cores: None,
             sampled_at: None,
             place: "hosted".into(),
+            reason: None,
             elapsed: 4.0,
             live: LiveState {
                 phase: "syncing".into(),
@@ -971,6 +1020,7 @@ mod tests {
                 ok: true,
                 ago: 1.0,
                 place: "local".into(),
+                reason: None,
                 cwd: "/w".into(),
                 args: s(&["test"]),
                 agent_session: None,
@@ -979,6 +1029,22 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&render_waybar(&done)).unwrap();
         assert!(v["text"].as_str().unwrap().contains("[local]"));
         assert_eq!(v["class"], serde_json::json!(["done", "local"]));
+        // A local run says why, cut short in the bar and whole in the tooltip.
+        let mut why = done;
+        let long = "JUSTRUST_REMOTE=off: need local debug binary for the macOS VM end-to-end test";
+        why.recent.as_mut().unwrap().reason = Some(long.into());
+        let v: serde_json::Value = serde_json::from_str(&render_waybar(&why)).unwrap();
+        let text = v["text"].as_str().unwrap();
+        assert!(
+            text.contains("[local: need local debug binary for the macOS VM end-to\u{2026}]"),
+            "{text}"
+        );
+        assert!(v["tooltip"].as_str().unwrap().contains(long));
+        assert_eq!(
+            place_tag("local", Some("`-q` always runs locally")),
+            "[local: `-q` always runs locally]"
+        );
+        assert_eq!(place_tag("hosted", None), "[hosted]");
         // Old runs without a place: local unless the index says remote.
         assert_eq!(place_of(None, false), "local");
     }
