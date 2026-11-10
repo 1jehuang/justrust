@@ -34,6 +34,7 @@ import stat
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -131,6 +132,7 @@ NOISY_CORES = float(os.environ.get("BENCH_NOISY_CORES", "4"))
 
 # Pinned sources. Bump deliberately (and say so in FINDINGS.md): results from
 # different pins are not comparable, and `compare` refuses to mix them.
+SNAPSHOT_FORMAT = 2  # Exact shallow Git metadata, not archive-only trees.
 SNAPSHOTS = {
     "desktop": {
         # Jcode Desktop needs the Jcode repo as a sibling (path dependencies
@@ -458,7 +460,7 @@ def sh(cmd: list[str], cwd: Path | None = None) -> str:
 def snapshot_dir(name: str) -> Path:
     spec = SNAPSHOTS[name]
     key = "-".join(f"{r}@{rev}" for r, (_, rev) in sorted(spec["repos"].items()))
-    return WORK / name / key
+    return WORK / name / f"v{SNAPSHOT_FORMAT}-{key}"
 
 
 _BENCH_LOCK = None
@@ -514,6 +516,38 @@ def bench_lock() -> None:
     os.environ["BENCH_LOCK_HELD"] = "1"
 
 
+def prepare_snapshot_git(dst: Path, src: Path, rev: str, src_dir: str | None) -> None:
+    """Import only the pinned commit and tree, never source config or credentials.
+
+    Git-aware tests need a real repository. A synthetic commit would misreport
+    the source revision, and sharing the live checkout's .git would let tests
+    mutate it. An independent shallow repository preserves the exact commit
+    without copying its history, remotes, hooks or user configuration.
+    """
+    subprocess.run(["git", "init", "--quiet", "--template=", "--initial-branch=bench-snapshot",
+                    str(dst)], check=True)
+    subprocess.run(["git", "-C", str(dst), "config", "core.hooksPath", "/dev/null"], check=True)
+    with tempfile.TemporaryFile() as pack:
+        if src_dir:
+            source_pack = Path(src_dir) / f"{dst.name}@{rev}.git-pack"
+            if not source_pack.is_file():
+                sys.exit(f"bench: missing pinned Git metadata {source_pack}; resync with bench/on-remote.sh")
+            with source_pack.open("rb") as source:
+                shutil.copyfileobj(source, pack)
+        else:
+            objects = subprocess.check_output(["git", "-C", str(src), "rev-list", "--objects",
+                                               "--no-walk", rev])
+            subprocess.run(["git", "-C", str(src), "pack-objects", "--stdout"],
+                           input=objects, stdout=pack, check=True)
+        pack.seek(0)
+        subprocess.run(["git", "-C", str(dst), "index-pack", "--stdin"], stdin=pack,
+                       stdout=subprocess.DEVNULL, check=True)
+    commit = sh(["git", "-C", str(dst), "rev-parse", "--verify", f"{rev}^{{commit}}"])
+    (dst / ".git/shallow").write_text(commit + "\n")
+    subprocess.run(["git", "-C", str(dst), "update-ref", "HEAD", commit], check=True)
+    subprocess.run(["git", "-C", str(dst), "read-tree", "HEAD"], check=True)
+
+
 def prepare(name: str) -> Path:
     """Extract the pinned snapshot once. Source files are restored per run."""
     bench_lock()
@@ -539,6 +573,7 @@ def prepare(name: str) -> Path:
             subprocess.run(["tar", "-x", "-C", str(dst)], stdin=archive.stdout, check=True)
             if archive.wait() != 0:
                 sys.exit(f"bench: git archive {src}@{rev} failed")
+        prepare_snapshot_git(dst, src, rev, src_dir)
         for rel, old, new, count in SNAPSHOTS[name].get("fixups", []):
             if not rel.startswith(repo + "/"):
                 continue
@@ -1392,6 +1427,7 @@ def env_info() -> dict:
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
         "snapshots": {k: {r: rev for r, (_, rev) in v["repos"].items()} for k, v in SNAPSHOTS.items()},
+        "snapshot_format": SNAPSHOT_FORMAT,
     }
 
 
@@ -1626,7 +1662,7 @@ def cmd_compare(args) -> None:
             if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
                 reasons.append(f"{label}: malformed execution environment provenance")
         if isinstance(ea, dict) and isinstance(eb, dict):
-            for key in ("snapshots", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
+            for key in ("snapshots", "snapshot_format", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
                 if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
@@ -1648,6 +1684,8 @@ def cmd_compare(args) -> None:
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
+    if a["env"].get("snapshot_format") != b["env"].get("snapshot_format"):
+        sys.exit("bench: different snapshot formats, numbers are not comparable")
     for label, result in (("A", a), ("B", b)):
         issues = named_test_failure_issues(result)
         if issues:

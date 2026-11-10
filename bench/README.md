@@ -44,6 +44,15 @@ execution mode fixed. Inspect command/change breakdowns for regressions as
 well as the aggregate. Do not refresh weights between baseline and candidate.
 Repeat measurements when noise or sampling makes a conclusion uncertain.
 
+Snapshot format 2 retains the exact pinned Git commit in an independent shallow
+repository beside each extracted tree. Git-aware tests can inspect the worktree
+without sharing the live checkout's configuration, remotes, hooks, credentials,
+or history. `on-remote.sh` transfers a commit-and-tree object pack alongside each
+archive. Missing packs fail before the snapshot is stamped ready. Format 2 uses
+new work directories and records `snapshot_format` in result provenance, so
+`suite.py compare` rejects mixing it with older archive-only results. Source
+fixups remain visible as worktree changes against the real pinned commit.
+
 Focus experiments with a named suite scenario (`bench/suite.py list`), a
 component factor (`bench/factors.py list`), or an additional candidate
 `--stack NAME:K=V,...` in versus. Such results support scoped claims only,

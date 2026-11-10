@@ -107,10 +107,19 @@ for snap in suite.SNAPSHOTS.values():
 PY
   while read -r repo src rev; do
     tar="$repo@$rev.tar"
-    if ssh_n "test -s bench-src/$tar"; then continue; fi
-    ssh_n "$MARK_ACTIVE"
-    echo "on-remote: pushing $repo@$rev" >&2
-    git -C "$src" archive "$rev" | ssh_t "cat >bench-src/$tar.part && mv bench-src/$tar.part bench-src/$tar"
+    if ! ssh_n "test -s bench-src/$tar"; then
+      ssh_n "$MARK_ACTIVE"
+      echo "on-remote: pushing $repo@$rev" >&2
+      git -C "$src" archive "$rev" | ssh_t "cat >bench-src/$tar.part && mv bench-src/$tar.part bench-src/$tar"
+    fi
+    pack="$repo@$rev.git-pack"
+    if ! ssh_n "test -s bench-src/$pack"; then
+      ssh_n "$MARK_ACTIVE"
+      echo "on-remote: pushing shallow Git objects for $repo@$rev" >&2
+      git -C "$src" rev-list --objects --no-walk "$rev" |
+        git -C "$src" pack-objects --stdout |
+        ssh_t "cat >bench-src/$pack.part && mv bench-src/$pack.part bench-src/$pack"
+    fi
   done <"${TMPDIR:-/tmp}/on-remote-pins.$$"
   rm -f "${TMPDIR:-/tmp}/on-remote-pins.$$"
   if [[ $KIND == aws ]]; then ssh_t 'sudo sysctl -q kernel.perf_event_paranoid=1'; fi
