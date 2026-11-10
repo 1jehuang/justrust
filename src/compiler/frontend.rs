@@ -103,6 +103,7 @@ mod opaque;
 mod operators;
 pub use opaque::SourceOpaqueType;
 mod panic_format;
+mod param_patterns;
 mod param_projection;
 mod runtime_sites;
 mod trait_selection;
@@ -11511,6 +11512,8 @@ impl<T> ParserState<'_, T> {
 #[derive(Default)]
 struct ParserLexicalState {
     pending_receiver: Option<AstIdent>,
+    /// Destructured parameters of the head just parsed, consumed by its body.
+    pending_param_patterns: Vec<param_patterns::Prelude>,
     scopes: Option<super::semantic_scope::ScopeArenaBuilder>,
     function: Option<FunctionMacroState>,
     item_macros: Option<super::source_item_macro::SourceItemMacroDriver>,
@@ -13593,6 +13596,17 @@ impl<'input, 'names> Parser<'input, 'names> {
         params: &[(BindingName, Type)],
         patterns: Option<&[(Pattern, Type)]>,
     ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
+        let destructured = std::mem::take(&mut self.lexical.pending_param_patterns);
+        self.distinct_param_bindings(params, &destructured)?;
+        let (body, scope) = self.function_body_destructured(params, patterns, &destructured)?;
+        Ok((param_patterns::prepend(self, body, destructured)?, scope))
+    }
+    fn function_body_destructured(
+        &mut self,
+        params: &[(BindingName, Type)],
+        patterns: Option<&[(Pattern, Type)]>,
+        destructured: &[param_patterns::Prelude],
+    ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
         let receiver = self.lexical.pending_receiver.take();
         if self.purpose == ParserPurpose::InactiveSyntax {
             return Ok((self.block()?, None));
@@ -13689,7 +13703,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.bind_pattern_lexical(pattern)?;
             }
         }
-        let body = self.block();
+        let bound = self.bind_param_patterns(destructured);
+        let body = bound.and_then(|()| self.block());
         self.lexical.function = previous;
         Ok((body?, Some(owner)))
     }
@@ -15566,6 +15581,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                         body,
                     })
                 } else {
+                    let owed = std::mem::take(&mut self.lexical.pending_param_patterns);
+                    if owed.iter().any(param_patterns::Prelude::is_pattern) {
+                        return Err(
+                            self.error("E0642: patterns aren't allowed in methods without bodies")
+                        );
+                    }
                     self.expect(";")?;
                     None
                 };
@@ -16307,6 +16328,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let result = (|| {
             let (body, lexical_scope) = if self.foreign_c {
+                let owed = std::mem::take(&mut self.lexical.pending_param_patterns);
+                if owed.iter().any(param_patterns::Prelude::is_pattern) {
+                    return Err(self
+                        .error("E0130: patterns aren't allowed in foreign function declarations"));
+                }
                 self.expect(";")?;
                 // Foreign declarations have no Rust body. The uninhabited
                 // source carrier traverses normal signature/CFG authority,
@@ -16500,6 +16526,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         // Associated `const fn`s are ordinary methods here: their qualifier
         // only matters inside constant initializers, which are inlined.
         self.lexical.pending_receiver = None;
+        self.lexical.pending_param_patterns.clear();
         let (constness, unsafety) = self.function_qualifiers(associated)?;
         self.expect("fn")?;
         let name = self.ident()?;
@@ -16584,28 +16611,34 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if (self.foreign_c || self.pending_c_abi) && (self.is("...") || self.is("..")) {
                     return Err(self.unsupported("C variadic functions are unsupported"));
                 }
-                if self.is("[") {
-                    return Err(self.unsupported("array parameter patterns are unsupported"));
-                }
-                let mutable = self.eat("mut");
-                if mutable && self.is("mut") {
-                    return Err(self.error("`mut` must be followed by a binding name"));
-                }
-                if mutable && (self.is("(") || self.is("[") || self.is("_")) {
-                    return Err(self.unsupported("`mut` parameter patterns are unsupported"));
-                }
-                let n = self.binding()?;
-                if self.names.edition() == super::token::Edition::E2015
-                    && !self.is(":")
-                    && (self.is(",") || self.is(")") || self.is("<") || self.is("::"))
-                {
-                    return Err(self.unsupported(
-                        "anonymous trait method parameters (edition 2015) are unsupported; name the parameter (`_: T`)",
-                    ));
-                }
-                if self.is("(") || self.is("{") || self.is("::") {
-                    return Err(self.unsupported("constructor parameter patterns are unsupported"));
-                }
+                let pattern = self.destructured_parameter()?;
+                let destructured = pattern.is_some();
+                let (n, mutable) = if destructured {
+                    (BindingName::Wildcard, false)
+                } else {
+                    let mutable = self.eat("mut");
+                    if mutable && self.is("mut") {
+                        return Err(self.error("`mut` must be followed by a binding name"));
+                    }
+                    if mutable && (self.is("(") || self.is("[") || self.is("_")) {
+                        return Err(self.unsupported("`mut` parameter patterns are unsupported"));
+                    }
+                    let n = self.binding()?;
+                    if self.names.edition() == super::token::Edition::E2015
+                        && !self.is(":")
+                        && (self.is(",") || self.is(")") || self.is("<") || self.is("::"))
+                    {
+                        return Err(self.unsupported(
+                            "anonymous trait method parameters (edition 2015) are unsupported; name the parameter (`_: T`)",
+                        ));
+                    }
+                    if self.is("(") || self.is("{") || self.is("::") {
+                        return Err(
+                            self.unsupported("constructor parameter patterns are unsupported")
+                        );
+                    }
+                    (n, mutable)
+                };
                 self.expect(":")?;
                 let ty = self.ty();
                 let ty = match ty {
@@ -16616,6 +16649,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         return Err(error);
                     }
                 };
+                let n = self.parameter_prelude(n, mutable, pattern, &ty, params.len())?;
                 params.push((n, ty));
                 param_mut.push(mutable);
                 if !self.eat(",") || self.is(")") {

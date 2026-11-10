@@ -589,6 +589,29 @@ impl NameStoreBuilder {
         })
     }
 
+    /// Whole-argument local behind a destructured parameter pattern. Source
+    /// cannot spell it, so it never shadows or captures a written binding.
+    pub(crate) fn anonymous_parameter(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let spelling = self
+            .store
+            .session
+            .intern_symbol(&format!("$param${ordinal}"))?;
+        self.append(NameData {
+            atom: NameAtomId::new(&self.store.session, spelling)?,
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
     /// A source cannot name the anonymous generic introduced by argument
     /// `impl Trait`, even when it declares an ordinary parameter `impl_0`.
     pub(crate) fn anonymous_impl_parameter(

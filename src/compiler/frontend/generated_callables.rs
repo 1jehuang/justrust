@@ -13,6 +13,8 @@ impl Parser<'_, '_> {
             return self.function_body(params);
         };
         let receiver = self.lexical.pending_receiver.take();
+        let destructured = std::mem::take(&mut self.lexical.pending_param_patterns);
+        self.distinct_param_bindings(params, &destructured)?;
         let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
             native_adapter::transport_error(super::super::token_session::TokenError::InvalidHandle)
         })?;
@@ -37,10 +39,14 @@ impl Parser<'_, '_> {
                     self.bind_lexical(*name)?;
                 }
             }
+            self.bind_param_patterns(&destructured)?;
             self.block()
         })();
         self.lexical.function = previous;
-        Ok((result?, Some(owner)))
+        Ok((
+            param_patterns::prepend(self, result?, destructured)?,
+            Some(owner),
+        ))
     }
 
     pub(super) fn seal_emitted_callables(
