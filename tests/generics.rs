@@ -1422,6 +1422,36 @@ fn main(){run();}"#,
 }
 
 #[test]
+fn rejects_uninferred_const_parameters_even_in_unused_calls() {
+    for source in [
+        "fn ping<const N:usize>(){}fn main(){ping();}",
+        "fn ping<const N:usize>(){}fn unused(){ping();}fn main(){}",
+        "fn ping<const B:bool>(){}fn main(){let f=ping;f();}",
+    ] {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let result = capture(
+            Command::new(defaults_stock::stock_rustc())
+                .arg(&input)
+                .args(["--edition=2024", "-Cpanic=abort", "--emit=metadata"])
+                .arg("-o")
+                .arg(scratch.path("invalid.rmeta")),
+            &scratch,
+            20,
+        );
+        assert!(!result.status.success(), "stock accepted {source}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("E0284"),
+            "{result:?}"
+        );
+        rejects(
+            "uninferred const call must not erase its const binder",
+            source,
+        );
+    }
+}
+
+#[test]
 fn runs_copy_bound_trait_dependency() {
     runs(
         r#"fn dup<T:Copy>(x:T)->(T,T){(x,x)}fn run()->i32{let p=dup::<i32>(7);p.0}

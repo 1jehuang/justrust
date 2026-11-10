@@ -10582,6 +10582,14 @@ impl ValidatedTraitWorld {
         caller: Option<&ValidatedFacts>,
         executable_storage: bool,
     ) -> Result<InstantiatedSchema> {
+        // Legacy const binders have no entries in args. Letting them pass
+        // would silently erase unconstrained const parameters from a call.
+        if !schema.env.const_binders().is_empty() {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: const generic calls require const instance realization",
+            ));
+        }
         // Source-only receipts do not turn the empty proof environment into a caller.
         let caller = caller.or(facts.source_metadata.map(|source| source.facts));
         for argument in args {
