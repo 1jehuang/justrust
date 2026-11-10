@@ -498,11 +498,56 @@ impl super::hash::Hash for String {
 /// prelude trait (like `StrToString`) because `str` has no inherent impl here.
 pub trait StrChars {
     fn chars(&self) -> Chars<'_, ()>;
+    fn char_indices(&self) -> CharIndices<'_, ()>;
 }
 impl StrChars for str {
     fn chars(&self) -> Chars<'_, ()> {
         let (ptr, len): (usize, usize) = str_parts(self);
         Chars { text: self, unit: (), ptr, front: 0usize, back: len }
+    }
+
+    fn char_indices(&self) -> CharIndices<'_, ()> {
+        CharIndices { chars: self.chars() }
+    }
+}
+
+/// Byte offsets remain relative to the original borrowed string, including
+/// when forward and backward iteration are interleaved.
+pub struct CharIndices<'a, U> {
+    chars: Chars<'a, U>,
+}
+
+impl<'a, U> CharIndices<'a, U> {
+    pub fn count(self) -> usize {
+        self.chars.count()
+    }
+}
+
+impl<'a, U> super::iter::Iterator for CharIndices<'a, U> {
+    type Item = (usize, char);
+    fn next(&mut self) -> Option<(usize, char)> {
+        let at = self.chars.front;
+        match self.chars.next() {
+            Option::Some(c) => Option::Some((at, c)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<'a, U> super::iter::DoubleEndedIterator for CharIndices<'a, U> {
+    fn next_back(&mut self) -> Option<(usize, char)> {
+        match self.chars.next_back() {
+            Option::Some(c) => Option::Some((self.chars.back, c)),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<'a, U> super::iter::IntoIterator for CharIndices<'a, U> {
+    type Item = (usize, char);
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
     }
 }
 

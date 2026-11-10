@@ -454,6 +454,23 @@ fn str_chars_decodes_utf8_like_stock() {
                 ),
             },
             Case {
+                name: "char_indices_byte_offsets_and_mixed_ends",
+                source: r#"fn main(){let s="aé日🦀z";let mut it=s.char_indices();println!("{:?} {:?}",it.next_back(),it.next());println!("{:?} {:?} {:?}",it.next_back(),it.next(),it.next_back());println!("{:?} {:?}",it.next(),it.next_back());println!("{:?}",s.char_indices().filter(|(_,c)|!c.is_ascii()).collect::<Vec<_>>());println!("{} {}","".char_indices().count(),"é日🦀".char_indices().count());}"#,
+                expect: Expect::Run(
+                    "Some((10, 'z')) Some((0, 'a'))\nSome((6, '🦀')) Some((1, 'é')) Some((3, '日'))\nNone None\n[(1, 'é'), (3, '日'), (6, '🦀')]\n0 3\n",
+                ),
+            },
+            Case {
+                name: "unused_char_indices_wrong_item",
+                source: "fn bad(s:&str)->char{let mut it=s.char_indices();it.next().unwrap()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_char_indices_owner_escape",
+                source: r#"fn bad(){let mut it;{let s=String::from("é");it=s.as_str().char_indices();}let _=it.next();}fn main(){}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
                 name: "unused_chars_wrong_item",
                 source: "fn unused(s: &str) -> u8 { let mut it = s.chars(); match it.next() { Some(c) => c, None => 0 } }\nfn main() {}",
                 expect: Expect::Invalid("E0308"),
