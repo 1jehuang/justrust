@@ -1964,6 +1964,7 @@ mod tests {
                 subject: Type::Param(parameter),
                 traits: vec![bound],
                 maybe_unsized: false,
+                outlives_static: false,
             }],
             supertraits: vec![parent],
             name,

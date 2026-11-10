@@ -2,8 +2,11 @@
 //! rewritten. Every changed call and defining pack is replayed before cloning.
 use super::*;
 
+#[path = "opaque_physical/carrier_mapping.rs"]
+mod carrier_mapping;
 #[path = "opaque_physical/carriers.rs"]
 mod carriers;
+pub(super) use carrier_mapping::require_type as require_receiver_carriers;
 pub(super) use carriers::require_preserved_boundary;
 pub(super) use carriers::{PhysicalCarrierFlow, PhysicalCarrierIdentity};
 
@@ -335,20 +338,6 @@ impl<'a> PhysicalValidation<'a> {
     }
 }
 
-// Shape preflight only. The caller must first replay the original pack and
-// obtain this actual family through authenticated instance substitution.
-fn require_empty_physical_capture(actual: &ir::Ty, budget: &ir::PlanBudget) -> Result<(), Error> {
-    if !ir::carrier_locations(actual, budget)
-        .map_err(Error::new)?
-        .is_empty()
-    {
-        return Err(Error::new(
-            "unsupported: physical captured family requires an explicit reference contract",
-        ));
-    }
-    Ok(())
-}
-
 fn specialize_marker_constants(
     function: &mut cfg::Function,
     specialization: &mut opaque_specialization::Specialization<'_>,
@@ -591,37 +580,45 @@ pub(super) fn normalize(
                         ));
                     };
                     let record = representations.get(&opaque, budget)?;
-                    for source in proof.captured_sources() {
-                        let source_family = match &source.channel {
-                            ir::CarrierChannel::ParamTail {
-                                parameter,
-                                prefix: 0,
-                            } => ir::Ty::Param(*parameter),
-                            ir::CarrierChannel::OpaqueTail { opaque, prefix: 0 }
-                                if source.path == ir::CarrierPath::default()
-                                    && proof.hidden() == &ir::Ty::Opaque(opaque.clone()) =>
-                            {
-                                ir::Ty::Opaque(opaque.clone())
-                            }
-                            _ => {
-                                return Err(Error::new(
-                                    "physical pack has an unsupported original capture channel",
-                                ));
-                            }
-                        };
-                        let actual_family = specialization.ty(&source_family)?;
-                        let physical_family = representations.normalize(&actual_family, budget)?;
-                        require_empty_physical_capture(&physical_family, budget)?;
-                    }
-                    let physical_hidden = representations.normalize(record.hidden(), budget)?;
-                    if !ir::carrier_locations(&physical_hidden, budget)
-                        .map_err(Error::new)?
-                        .is_empty()
-                    {
+                    // The occurrence replay authenticates every original capture,
+                    // including nested fixed references. Specialization may expand
+                    // a parameter into several carriers, but cannot choose another
+                    // owner, hidden type, or ordering of actual arguments.
+                    let captured =
+                        ir::carrier_locations(proof.hidden(), budget).map_err(Error::new)?;
+                    if captured.as_ref() != proof.captured_sources() {
                         return Err(Error::new(
-                            "unsupported: physical pack has hidden reference carriers",
+                            "physical pack changed its complete original capture inventory",
                         ));
                     }
+                    let specialized_hidden = specialization.ty(proof.hidden())?;
+                    let world = context.trait_world().map_err(Error::new)?;
+                    if !world
+                        .types_equal(
+                            std::slice::from_ref(&specialized_hidden),
+                            std::slice::from_ref(record.hidden()),
+                        )
+                        .map_err(|error| Error::new(error.into_legacy_diagnostic(budget)))?
+                    {
+                        return Err(Error::new(
+                            "physical pack changed its graph-authenticated hidden type",
+                        ));
+                    }
+                    let physical_hidden = representations.normalize(record.hidden(), budget)?;
+                    carrier_mapping::require_type(
+                        &specialized_hidden,
+                        &physical_hidden,
+                        representations,
+                        budget,
+                    )
+                    .map_err(Error::new)?;
+                    carrier_mapping::require_type(
+                        &ir::Ty::Opaque(opaque.clone()),
+                        &physical_hidden,
+                        representations,
+                        budget,
+                    )
+                    .map_err(Error::new)?;
                     let actual = original
                         .operand_ty_with_facts(
                             operand,
@@ -888,25 +885,5 @@ mod captured_family_tests {
                 .is_err()
         );
         assert!(denied.first_resource_failure().is_some());
-    }
-
-    #[test]
-    fn closed_capture_family_refuses_fixed_and_nested_reference_carriers() {
-        let budget = ir::PlanBudget::default();
-        require_empty_physical_capture(&ir::Ty::Int(ir::IntTy::I32), &budget).unwrap();
-        let reference = ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
-        };
-        for actual in [
-            reference.clone(),
-            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, reference.clone()])),
-            ir::Ty::Array {
-                element: Arc::new(reference),
-                len: 2,
-            },
-        ] {
-            assert!(require_empty_physical_capture(&actual, &budget).is_err());
-        }
     }
 }

@@ -374,3 +374,222 @@ fn main() { if run() == 7 { println!("elision oracle ok"); } }
         "elision oracle ok\n",
     );
 }
+
+#[test]
+fn accepts_static_type_and_callable_bounds() {
+    runs(
+        r#"trait Show { fn show(&self) -> i32; }
+impl Show for i32 { fn show(&self) -> i32 { *self } }
+fn bounded<T: Show + 'static>(value: T) -> i32 { value.show() }
+fn via_where<T>(value: T) -> i32 where T: Show + 'static { bounded(value) }
+fn invoke(f: impl Fn(i32) -> i32 + 'static) -> i32 { f(2) }
+fn accept<T: 'static>(value: T) {}
+fn forward(value: &'static str) { accept(value); }
+fn main() { let value = 5; forward("hello"); println!("{} {}", via_where(7), invoke(move |x| x + value)); }
+"#,
+        "7 7\n",
+    );
+}
+
+#[test]
+fn accepts_opaque_outlives_bounds() {
+    runs(
+        r#"fn named<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { move || *value }
+fn inferred(value: &i32) -> impl Fn() -> i32 + '_ { move || *value }
+fn owned(value: i32) -> impl Fn() -> i32 + 'static { move || value }
+fn main() { let value = 7; let a = named(&value); let b = inferred(&value); let c = owned(7); println!("{} {} {}", a(), b(), c()); }
+"#,
+        "7 7 7\n",
+    );
+    runs(
+        r#"fn pair<'a>(values: (&'a i32, &'a i32)) -> impl Fn() -> i32 + 'a {
+    move || *values.0 + *values.1
+}
+fn main() { let a = 3; let b = 4; let f = pair((&a, &b)); println!("{}", f()); }
+"#,
+        "7\n",
+    );
+}
+
+#[test]
+fn rejects_static_type_bound_on_borrowed_actual() {
+    rejects(
+        "static generic actual",
+        r#"fn bounded<T: 'static>(value: T) {}
+fn main() { let value = 7; bounded(&value); }
+"#,
+    );
+    rejects(
+        "static generic forwarding checked even when unused",
+        r#"fn bounded<T: 'static>(value: T) {}
+fn invalid<T>(value: T) { bounded(value); }
+fn main() {}
+"#,
+    );
+    rejects(
+        "static where bound",
+        r#"fn bounded<T>(value: T) where T: 'static {}
+fn main() { let value = 7; bounded(&value); }
+"#,
+    );
+    rejects(
+        "static obligation without a runtime argument",
+        r#"fn bounded<T: 'static>() {}
+fn invalid<T>() { bounded::<T>(); }
+fn main() {}
+"#,
+    );
+    rejects(
+        "phantom lifetime must not be mistaken for static",
+        r#"use std::marker::PhantomData;
+fn bounded<T: 'static>(value: T) {}
+fn invalid<'a>(value: PhantomData<&'a i32>) { bounded(value); }
+fn main() {}
+"#,
+    );
+    rejects(
+        "raw pointee lifetime must not be mistaken for static",
+        r#"fn bounded<T: 'static>(value: T) {}
+fn invalid<'a>(value: *const &'a i32) { bounded(value); }
+fn main() {}
+"#,
+    );
+    rejects(
+        "function item type actual lifetime must not be mistaken for static",
+        r#"fn bounded<T: 'static>(value: T) {}
+fn id<T>(value: T) -> T { value }
+fn invalid<'a>() { bounded(id::<&'a i32>); }
+fn main() {}
+"#,
+    );
+    rejects(
+        "trait implementation may not add a static requirement",
+        r#"trait Consume { fn consume<T>(value: T); }
+struct Owner;
+impl Consume for Owner { fn consume<T: 'static>(value: T) {} }
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn rejects_static_callable_bound_on_borrowed_capture() {
+    rejects(
+        "static closure with borrowed capture",
+        r#"fn invoke(f: impl Fn() -> i32 + 'static) -> i32 { f() }
+fn main() { let value = 7; let reference = &value; println!("{}", invoke(move || *reference)); }
+"#,
+    );
+}
+
+#[test]
+fn rejects_opaque_outlives_violation_even_when_unused() {
+    rejects(
+        "opaque named capture cannot escape at its caller",
+        r#"fn capture<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { move || *value }
+fn main() { let f; { let value = 7; f = capture(&value); } println!("{}", f()); }
+"#,
+    );
+    rejects(
+        "opaque inferred lifetime remains ambiguous with repeated named inputs",
+        r#"fn invalid<'a>(a: &'a i32, b: &'a i32) -> impl Fn() -> i32 + '_ { move || *a + *b }
+fn main() {}
+"#,
+    );
+    rejects(
+        "opaque static capture",
+        r#"fn invalid(value: &i32) -> impl Fn() -> i32 + 'static { move || *value }
+fn main() {}
+"#,
+    );
+    rejects(
+        "opaque wrong named lifetime",
+        r#"fn invalid<'a, 'b>(a: &'a i32, b: &'b i32) -> impl Fn() -> i32 + 'a { move || *b }
+fn main() {}
+"#,
+    );
+    rejects(
+        "opaque phantom static lifetime",
+        r#"use std::marker::PhantomData;
+fn invalid<'a>(value: PhantomData<&'a i32>) -> impl Sized + 'static { value }
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn accepts_static_owned_trait_object() {
+    runs(
+        r#"trait Show { fn show(&self) -> i32; }
+impl Show for i32 { fn show(&self) -> i32 { *self } }
+fn main() { let value: Box<dyn Show + 'static> = Box::new(7); println!("{}", value.show()); }
+"#,
+        "7\n",
+    );
+}
+
+#[test]
+fn accepts_physical_borrowed_opaque_transport() {
+    runs(
+        r#"fn capture<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { move || *value }
+fn forward<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { capture(value) }
+fn main() { let value = 7; let f = forward(&value); println!("{} {}", f(), f()); }
+"#,
+        "7 7\n",
+    );
+    runs(
+        r#"fn capture<'a>(value: &'a mut i32) -> impl FnMut() -> i32 + 'a {
+    move || { *value += 1; *value }
+}
+fn main() { let mut value = 5; { let mut f = capture(&mut value); println!("{} {}", f(), f()); } println!("{}", value); }
+"#,
+        "6 7\n7\n",
+    );
+    runs(
+        r#"fn capture<'a>(value: &'a &'a i32) -> impl Fn() -> i32 + 'a { move || **value }
+fn main() { let value = 7; let reference = &value; let f = capture(&reference); println!("{}", f()); }
+"#,
+        "7\n",
+    );
+}
+
+#[test]
+fn rejects_physical_opaque_alias_and_nested_escape() {
+    rejects(
+        "physical nested reference retains its inner borrow",
+        r#"fn capture<'a>(value: &'a &'a i32) -> impl Fn() -> i32 + 'a { move || **value }
+fn main() { let reference; let f; { let value = 7; reference = &value; f = capture(&reference); } println!("{}", f()); }
+"#,
+    );
+    rejects(
+        "physical mutable capture retains exclusive borrow",
+        r#"fn capture<'a>(value: &'a mut i32) -> impl FnMut() -> i32 + 'a { move || { *value += 1; *value } }
+fn main() { let mut value = 5; let mut f = capture(&mut value); value = 9; println!("{}", f()); }
+"#,
+    );
+    rejects(
+        "physical nested capture retains all input origins",
+        r#"fn capture<'a>(values: (&'a i32, &'a i32)) -> impl Fn() -> i32 + 'a { move || *values.0 + *values.1 }
+fn main() { let value = 3; let f; { let short = 4; f = capture((&value, &short)); } println!("{}", f()); }
+"#,
+    );
+    rejects(
+        "physical forwarded opaque retains defining lifetime",
+        r#"fn capture<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { move || *value }
+fn forward<'a>(value: &'a i32) -> impl Fn() -> i32 + 'a { capture(value) }
+fn main() { let f; { let value = 7; f = forward(&value); } println!("{}", f()); }
+"#,
+    );
+}
+
+#[test]
+fn rejects_erased_object_borrow_escaping_its_storage() {
+    rejects(
+        "owning static object must not erase borrowed payload",
+        r#"trait Show { fn show(&self) -> i32; }
+struct Borrowed<'a>(&'a i32);
+impl<'a> Show for Borrowed<'a> { fn show(&self) -> i32 { *self.0 } }
+fn main() { let object: Box<dyn Show + 'static>; { let value = 7; object = Box::new(Borrowed(&value)); } println!("{}", object.show()); }
+"#,
+    );
+}

@@ -288,6 +288,40 @@ fn pack_capture_sources(
                 .saturating_add(opaque.owner_args().len())
                 .saturating_add(1),
         )?;
+        // Concrete captured references retain their complete typed coordinates.
+        // The defining publication authenticates each value capture, and the
+        // borrow transfer checks every ordered row before merging its origins
+        // into the public opaque family. No fixed reference becomes static.
+        if matches!(location.channel, CarrierChannel::Fixed(_)) {
+            let Some((CarrierStep::Field(field), tail)) = location.path.0.split_first() else {
+                return Err("opaque fixed capture lacks its defining closure field".into());
+            };
+            let captured = closure
+                .captures()
+                .get(*field)
+                .ok_or("opaque fixed capture changed its defining closure field")?;
+            if !closure
+                .sources()
+                .get(*field)
+                .is_some_and(|source| source.kind == CaptureKind::Value)
+            {
+                return Err(
+                    "unsupported: opaque fixed reference requires an authenticated value capture"
+                        .into(),
+                );
+            }
+            let captured_locations = carrier_locations(captured, budget)?;
+            budget.charge_work(captured_locations.len())?;
+            if !captured_locations
+                .iter()
+                .any(|source| source.path.0.as_ref() == tail && source.channel == location.channel)
+            {
+                return Err(
+                    "opaque fixed capture changed its exact typed carrier coordinate".into(),
+                );
+            }
+            continue;
+        }
         let [CarrierStep::Field(field)] = location.path.0.as_ref() else {
             return Err("unsupported: opaque pack requires explicit captured carrier mapping for nested capture channels".into());
         };

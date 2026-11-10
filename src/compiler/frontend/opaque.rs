@@ -414,9 +414,13 @@ impl PlanState {
         if !source.exact(original, registry.names.as_ref(), budget, depth + 1)? {
             return Err("opaque return changed its original bounds or source occurrence".into());
         }
-        if !source.regions.is_empty() {
+        if !source.regions.is_empty()
+            && !matches!(&registry.source_callable(context.declaration)
+                .ok_or("opaque owner has no retained callable")?.result,
+                Type::Opaque(root) if root.site == source.site)
+        {
             return Err(
-                "unsupported: opaque outlives bounds require declared carrier transport".into(),
+                "unsupported: outlives bounds on nested opaque returns require declared carrier transport".into(),
             );
         }
         let info = registry.declaration(context.declaration)?;
@@ -559,7 +563,13 @@ impl Parser<'_, '_> {
                 return Err(self.limit("predicate limit exceeded"));
             }
             if self.token().is_lifetime() {
-                let region = self.lifetime()?;
+                let region = if self.eat("'static") {
+                    RegionName::Static
+                } else if self.eat("'_") {
+                    RegionName::Infer
+                } else {
+                    self.lifetime()?
+                };
                 self.reserve_parser_items(&mut regions, 1)?;
                 regions.push(region);
             } else {

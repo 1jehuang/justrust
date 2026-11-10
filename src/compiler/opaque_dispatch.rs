@@ -30,18 +30,12 @@ fn physical_receiver(
     representations: &opaque_instances::Representations,
     budget: &ir::PlanBudget,
 ) -> Result<ir::Ty, Error> {
-    let opaque = opaque_receiver(receiver, budget)?
+    opaque_receiver(receiver, budget)?
         .ok_or_else(|| Error::new("opaque dispatch lost its exact receiver"))?;
-    let family = representations.normalize(&ir::Ty::Opaque(opaque.clone()), budget)?;
-    if !ir::carrier_locations(&family, budget)
-        .map_err(Error::new)?
-        .is_empty()
-    {
-        return Err(Error::new(
-            "unsupported: opaque physical dispatch requires proven carrier-empty hidden type",
-        ));
-    }
-    representations.normalize(receiver, budget)
+    let physical = representations.normalize(receiver, budget)?;
+    opaque_physical::require_receiver_carriers(receiver, &physical, representations, budget)
+        .map_err(Error::new)?;
+    Ok(physical)
 }
 
 /// A physical target is usable only together with this original occurrence.

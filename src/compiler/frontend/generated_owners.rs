@@ -336,7 +336,9 @@ fn bounds(
 ) -> Result<bool, String> {
     let mut equal = a.len() == b.len();
     for (a, b) in a.iter().zip(b) {
-        equal &= a.maybe_unsized == b.maybe_unsized && a.traits.len() == b.traits.len();
+        equal &= a.maybe_unsized == b.maybe_unsized
+            && a.outlives_static == b.outlives_static
+            && a.traits.len() == b.traits.len();
         equal &= exact_source_type(names, &a.subject, &b.subject, budget, 0)?;
         for (a, b) in a.traits.iter().zip(&b.traits) {
             equal &= paths(names, a, b, budget)?;

@@ -52,9 +52,12 @@ mod runtime_query;
 pub use runtime_query::{RuntimeQuery, RuntimeQueryKind};
 #[path = "ir/opaque.rs"]
 mod opaque;
+#[path = "ir/outlives.rs"]
+mod outlives;
 pub use opaque::{
     OpaqueBound, OpaqueBoundArg, OpaqueDefinitionProof, OpaqueHiddenType, OpaquePackProof, OpaqueTy,
 };
+pub(in crate::compiler) use outlives::check_static_bound_metadata;
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
 #[cfg(test)]
@@ -215,6 +218,9 @@ pub struct ParamEnv {
     /// Parameters declared `?Sized` at this binder (bit per index). Immutable
     /// declaration metadata: the implicit `Sized` row is omitted only here.
     relaxed_sized: u32,
+    /// Parameters declared `T: 'static` at this binder (bit per index).
+    /// Callers must supply actuals whose every borrow outlives `'static`.
+    outlives_static: u32,
 }
 impl ParamEnv {
     pub(super) fn new(binder: BinderId, arity: usize) -> Result<Self, String> {
@@ -225,17 +231,36 @@ impl ParamEnv {
         arity: usize,
         relaxed_sized: u32,
     ) -> Result<Self, String> {
+        Self::with_bounds(binder, arity, relaxed_sized, 0)
+    }
+    pub(super) fn with_bounds(
+        binder: BinderId,
+        arity: usize,
+        relaxed_sized: u32,
+        outlives_static: u32,
+    ) -> Result<Self, String> {
         if arity > 32 {
             return Err("generic parameter limit exceeded".into());
         }
         if arity < 32 && relaxed_sized >> arity != 0 {
             return Err("relaxed Sized parameter outside its binder".into());
         }
+        if arity < 32 && outlives_static >> arity != 0 {
+            return Err("`'static` bounded parameter outside its binder".into());
+        }
         Ok(Self {
             binder,
             arity,
             relaxed_sized,
+            outlives_static,
         })
+    }
+    /// Whether `param` was declared `T: 'static` by this binder.
+    pub fn outlives_static(&self, param: ParamId) -> bool {
+        self.contains(param) && self.outlives_static & (1u32 << param.index) != 0
+    }
+    pub(in crate::compiler) fn same_outlives_bounds(&self, other: &Self) -> bool {
+        self.outlives_static == other.outlives_static
     }
     /// Whether `param` was declared `?Sized` by this binder.
     pub fn relaxed_sized(&self, param: ParamId) -> bool {
@@ -338,6 +363,10 @@ impl GenericEnv {
     /// Whether `param` is declared `?Sized` by its owning binder in this env.
     pub fn relaxed_sized(&self, param: ParamId) -> bool {
         self.scopes.iter().any(|scope| scope.relaxed_sized(param))
+    }
+    /// Whether `param` is declared `T: 'static` by its owning binder in this env.
+    pub fn outlives_static(&self, param: ParamId) -> bool {
+        self.scopes.iter().any(|scope| scope.outlives_static(param))
     }
     pub fn contains(&self, param: ParamId) -> bool {
         self.scopes.iter().any(|scope| scope.contains(param))

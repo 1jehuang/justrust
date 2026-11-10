@@ -357,21 +357,23 @@ impl PhysicalCarrierBoundary<'_> {
 
     pub(in crate::compiler) fn realize(&self) -> Result<Arc<traits::CarrierContractView>, String> {
         self.validate()?;
-        if (self.original.source_region_env().region_count != 0
-            || !self.original.region_schema().constraints.is_empty())
-            && !identity_region_transport(
-                &self.original,
-                &self.signature,
-                &self.contract,
-                self.facts,
-                self.validation.representations,
-            )?
-        {
-            return Err(
-                "unsupported: physical carrier realization has declared lifetime constraints"
-                    .into(),
-            );
-        }
+        let mapping = carrier_mapping::Mapping::new(
+            self.original.physical_source_signature(),
+            &self.signature,
+            self.validation.representations,
+            self.validation.budget,
+        )?;
+        let source_regions = mapping.source_regions(
+            &self.original,
+            self.facts,
+            self.validation.representations,
+            self.validation.budget,
+        )?;
+        let components = mapping.components(
+            self.original.component_mappings(),
+            self.validation.representations,
+            self.validation.budget,
+        )?;
         let identity = PhysicalCarrierIdentity {
             publication: self.validation.publication.identity().clone(),
             owner: self.validation.proof.target.clone(),
@@ -385,6 +387,8 @@ impl PhysicalCarrierBoundary<'_> {
                 identity,
                 self.signature.clone(),
                 self.contract.clone(),
+                source_regions,
+                components,
             ),
         ))
     }
@@ -436,97 +440,9 @@ impl PhysicalCarrierBoundary<'_> {
     }
 }
 
-/// Transport named regions only across an identical boundary. For synthesized
-/// (unnamed) regions, fixed rows are unchanged and a family-to-fixed obligation
-/// may additionally survive when the exact instantiated family is proven empty.
-/// Such an obligation has no reference inhabitants and grants no new origin.
-fn identity_region_transport(
-    original: &traits::CarrierContractView,
-    signature: &ir::Signature,
-    contract: &ir::CarrierContract,
-    facts: &traits::ValidatedFacts,
-    representations: &opaque_instances::Representations,
-) -> Result<bool, String> {
-    facts.budget().charge_work(
-        contract
-            .inputs
-            .len()
-            .saturating_add(contract.results.len())
-            .saturating_add(contract.writes.len())
-            .saturating_add(1),
-    )?;
-    if signature.ref_contract != *original.ref_contract() {
-        return Ok(false);
-    }
-    if contract == original.contract()
-        && facts
-            .world()
-            .signatures_equal(signature, original.physical_source_signature())
-            .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?
-    {
-        return Ok(true);
-    }
-    let source = original.source_region_env();
-    if source.region_count != 0 || !source.outlives.is_empty() || !source.normalized.is_empty() {
-        return Ok(false);
-    }
-    for row in source.carriers.iter() {
-        facts
-            .budget()
-            .charge_work(row.location.path.0.len().saturating_add(1))?;
-        if !matches!(row.region, ir::CarrierRegionTerm::Fixed(_)) {
-            return Ok(false);
-        }
-        let ty = match row.parameter {
-            Some(index) => signature.params.get(index),
-            None => Some(&signature.result),
-        };
-        let Some(ty) = ty else { return Ok(false) };
-        if !contains_location(
-            &ir::carrier_locations(ty, facts.budget())?,
-            &row.location,
-            facts.budget(),
-        )? {
-            return Ok(false);
-        }
-    }
-    for constraint in original.region_schema().constraints.iter() {
-        facts.budget().charge_work(1)?;
-        let ir::CarrierRegionTerm::Fixed(shorter) = constraint.shorter else {
-            return Ok(false);
-        };
-        match constraint.longer {
-            ir::CarrierRegionTerm::Fixed(longer) => {
-                facts
-                    .budget()
-                    .charge_work(signature.ref_contract.outlives.len())?;
-                if !signature.ref_contract.outlives.contains(&(longer, shorter)) {
-                    return Ok(false);
-                }
-            }
-            ir::CarrierRegionTerm::Family { parameter } => {
-                let Some((_, actual)) = original
-                    .parameter_actual(parameter)
-                    .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?
-                else {
-                    return Ok(false);
-                };
-                let normalized = representations
-                    .normalize(actual, facts.budget())
-                    .map_err(|error| error.to_string())?;
-                if !ir::carrier_locations(&normalized, facts.budget())?.is_empty() {
-                    return Ok(false);
-                }
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
-}
-
-/// Preserve every concrete location in declaration order. The sole erasure is
-/// an opaque family independently proven empty by its graph-read representation.
-/// In particular an outer reference to an empty family is never erased.
+/// Preserve every concrete location in declaration order. Opaque families
+/// expand only through their exact graph-read representations. The complete
+/// input, result and write maps retain all original origin obligations.
 pub(in crate::compiler) fn require_preserved_boundary(
     public: &ir::Signature,
     physical: &ir::Signature,
@@ -571,30 +487,8 @@ pub(in crate::compiler) fn require_preserved_boundary(
         {
             return Err("physical boundary differs from authenticated normalization".into());
         }
-        let physical_locations = ir::carrier_locations(after, budget)?;
-        let mut next = 0;
-        for location in ir::carrier_locations(before, budget)?.iter() {
-            budget.charge_work(1)?;
-            if let ir::CarrierChannel::OpaqueTail { opaque, .. } = &location.channel {
-                let hidden = representations
-                    .normalize(&ir::Ty::Opaque(opaque.clone()), budget)
-                    .map_err(|e| e.to_string())?;
-                if ir::carrier_locations(&hidden, budget)?.is_empty() {
-                    continue;
-                }
-            }
-            budget.charge_work(location.path.0.len().saturating_add(1))?;
-            if physical_locations.get(next) != Some(location) {
-                return Err(
-                    "unsupported: physical boundary changed reference carrier topology".into(),
-                );
-            }
-            next += 1;
-        }
-        if next != physical_locations.len() {
-            return Err("unsupported: physical boundary changed reference carrier topology".into());
-        }
     }
+    carrier_mapping::Mapping::new(public, physical, representations, budget)?;
     ir::validate_stored_ref_contract(
         &physical.params,
         &physical.result,
@@ -617,12 +511,19 @@ fn preserved_contract(
         representations,
         budget,
     )?;
-    transport_contract(original.contract(), signature, budget)
+    carrier_mapping::Mapping::new(
+        original.physical_source_signature(),
+        signature,
+        representations,
+        budget,
+    )?
+    .contract(original.contract(), budget)
 }
 
 /// Remove only rows for erased families. A surviving row must retain *all* of
 /// its original sources, in their original order. Empty family erasure cannot
 /// become permission to invent or discard a concrete reference origin.
+#[cfg(test)]
 fn transport_contract(
     original: &ir::CarrierContract,
     signature: &ir::Signature,
@@ -676,6 +577,7 @@ fn transport_contract(
     })
 }
 
+#[cfg(test)]
 fn carrier_buffer<T>(count: usize, budget: &ir::PlanBudget) -> Result<Vec<T>, String> {
     budget.charge_work(count)?;
     // Include the temporary Vec and its final Arc slice, including Arc header.
@@ -691,6 +593,7 @@ fn carrier_buffer<T>(count: usize, budget: &ir::PlanBudget) -> Result<Vec<T>, St
     Ok(rows)
 }
 
+#[cfg(test)]
 fn contains_location(
     locations: &[ir::CarrierLocation],
     expected: &ir::CarrierLocation,
@@ -954,7 +857,7 @@ mod tests {
                     return self.0.start(cx, key);
                 }
                 let provider = self.0.clone();
-                let expect_realization = key.params[0] == 1;
+                let expect_inputs = key.params[0] == 1;
                 Box::pin(async move {
                     let facts = Facts { cx: &cx };
                     let types = facts.types().await?;
@@ -1014,25 +917,29 @@ mod tests {
                         &boundary.signature.ref_contract,
                         boundary.original.ref_contract()
                     );
-                    if !expect_realization {
+                    if !expect_inputs {
                         assert_ne!(boundary.original.source_region_env().region_count, 0);
-                        assert!(
-                            boundary.realize().is_err(),
-                            "declared lifetime transport was invented"
+                        let view = boundary.realize().map_err(Error::new)?;
+                        assert_eq!(
+                            view.source_region_env().as_ref(),
+                            boundary.original.source_region_env().as_ref(),
+                            "unused declared lifetimes must keep their original identities",
                         );
                         return cx.publish_fact(0, ());
                     }
                     assert!(!boundary.contract.inputs.is_empty());
                     assert_eq!(boundary.contract, *boundary.original.contract());
-                    assert!(
-                        identity_region_transport(
-                            &boundary.original,
-                            &boundary.signature,
-                            &boundary.contract,
-                            &closed,
-                            &representations,
-                        )
-                        .map_err(Error::new)?
+                    let map = carrier_mapping::Mapping::new(
+                        boundary.original.physical_source_signature(),
+                        &boundary.signature,
+                        &representations,
+                        budget,
+                    )
+                    .map_err(Error::new)?;
+                    assert_eq!(
+                        map.contract(boundary.original.contract(), budget)
+                            .map_err(Error::new)?,
+                        boundary.contract,
                     );
                     let view = boundary.realize().map_err(Error::new)?;
                     validation
@@ -1220,7 +1127,7 @@ mod tests {
                 })
             }
         }
-        for (source, workers, expect_realization) in [
+        for (source, workers, expect_inputs) in [
             ("fn sink<T>(x:&i32,y:T)->i32{*x} fn main(){}", 1, true),
             ("fn sink<T>(x:&i32,y:T)->i32{*x} fn main(){}", 8, true),
             ("fn relay<T>(x:&i32,y:T)->&i32{x} fn main(){}", 1, true),
@@ -1246,7 +1153,7 @@ mod tests {
             let engine = Engine::new(Probe(CompilerProvider(snapshot)));
             let probe = engine.request(crate::compiler::keys::test_key(
                 9017,
-                vec![u64::from(expect_realization)],
+                vec![u64::from(expect_inputs)],
             ));
             engine.run(workers).unwrap();
             probe.completion().unwrap();

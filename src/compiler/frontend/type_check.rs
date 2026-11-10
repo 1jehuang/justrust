@@ -2398,7 +2398,7 @@ pub(super) fn source_region_mode(
         && regions.params.is_empty()
         && regions.outlives.is_empty()
         && regions.receiver.is_none()
-        && !matches!(result, Type::Ref { .. })
+        && !matches!(result, Type::Ref { .. } | Type::Opaque(_))
         && params.iter().all(|(_, ty)| match ty {
             Type::Ref {
                 region, referent, ..
@@ -8716,6 +8716,29 @@ impl<'a> Checker<'a> {
         if matches!(source.ty, ir::Ty::Never) {
             return Ok(value);
         }
+        // Erasure must not discard a borrow carried by the concrete payload.
+        // Until object families transport these origins, only borrow-free
+        // payloads and declaration-proven `'static` type families are admitted.
+        if expected.owned_pointer_object().is_some() {
+            let facts = self
+                .signatures
+                .facts
+                .as_ref()
+                .ok_or("owning object outlives check requires callable facts")?;
+            ir::check_static_bound_metadata(&referent, facts.env(), facts.budget())?;
+        }
+        if expected.owned_pointer_object().is_some()
+            && ir::carrier_locations(&referent, &self.signatures.plan()?.budget)?
+                .iter()
+                .any(|location| {
+                    !matches!(location.channel,
+                ir::CarrierChannel::ParamTail { parameter, .. }
+                    if self.signatures.facts.as_ref()
+                        .is_some_and(|facts| facts.env().outlives_static(parameter)))
+                })
+        {
+            return Err("unsupported: trait object payload with borrowed captures requires object lifetime transport".into());
+        }
         if matches!(
             referent.as_ref(),
             ir::Ty::Slice { .. } | ir::Ty::Never | ir::Ty::AssociatedType(_)
@@ -13900,6 +13923,8 @@ fn signature_source_equal(
     }
     for (a, b) in left.bounds.iter().zip(right.bounds) {
         plan.budget.charge_work(a.traits.len().saturating_add(1))?;
+        equal &= a.outlives_static == b.outlives_static;
+        equal &= a.maybe_unsized == b.maybe_unsized;
         equal &= a.subject.semantic_eq(&b.subject, names)?;
         equal &= a.traits.len() == b.traits.len();
         for (a, b) in a.traits.iter().zip(&b.traits) {

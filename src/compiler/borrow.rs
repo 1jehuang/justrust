@@ -2295,6 +2295,67 @@ impl CarrierBuilder<'_, '_> {
             )?;
             return Ok(None);
         }
+        // Type arguments can be present without any value carrying that
+        // parameter (`probe::<T>()`). Such calls still owe the declared
+        // outlives bounds, even in an otherwise unused generic function.
+        if self.diagnosing && function.body_substitution.is_none() {
+            let offset = match target {
+                ir::Callee::Direct(_) => 0,
+                ir::Callee::TraitItem(call)
+                | ir::Callee::Virtual(ir::VirtualCall { call })
+                | ir::Callee::Untupled(call) => 1 + call.trait_ref.args.len(),
+            };
+            for (index, parameter) in view.original_env().ordered_params().enumerate() {
+                if !view.original_env().outlives_static(parameter) {
+                    continue;
+                }
+                let actual = view.arguments().get(index).ok_or(Exhausted)?;
+                if let Err(message) =
+                    ir::check_static_bound_metadata(actual, facts.env(), &self.ledger)
+                {
+                    if self.ledger.has_resource_failure() {
+                        return Err(Exhausted);
+                    }
+                    self.problem(block, None, Problem::Invalid(message))?;
+                }
+                let locations =
+                    ir::carrier_locations(actual, &self.ledger).map_err(|_| Exhausted)?;
+                for location in locations.iter() {
+                    self.budget.spend(1)?;
+                    if let Some(family) = location.channel.family() {
+                        let permitted = match family {
+                            ir::CarrierFamily::Parameter(own) => facts.env().outlives_static(own),
+                            _ => false,
+                        };
+                        if !permitted {
+                            self.problem(
+                                block,
+                                None,
+                                Problem::Invalid(
+                                    "type argument does not satisfy its declared `'static` bound"
+                                        .into(),
+                                ),
+                            )?;
+                        }
+                    }
+                }
+                if let Some(source_index) = index.checked_sub(offset) {
+                    for row in evidence
+                        .trace()
+                        .type_actual_regions
+                        .iter()
+                        .filter(|row| row.argument == source_index)
+                    {
+                        self.budget.spend(1)?;
+                        if matches!(row.source, ir::ActualRegion::Named(_)) {
+                            self.problem(block, None, Problem::Invalid(
+                                "lifetime may not live long enough: type argument must outlive `'static`".into(),
+                            ))?;
+                        }
+                    }
+                }
+            }
+        }
         let mut entry = Vec::new();
         for input in view.contract().inputs.iter() {
             let origins = self.input_value(state, args, input)?;
@@ -2631,6 +2692,44 @@ impl CarrierBuilder<'_, '_> {
                     },
                 )?;
                 let sources = self.origin_regions(&actual)?;
+                // `T: 'static` on the callee admits only actuals free of
+                // borrowed storage: static program data, the caller's own
+                // `'static` inputs, or the caller's own `'static` parameters.
+                // An instantiated template body was already checked in its
+                // universal form, so it is not diagnosed a second time.
+                if self.diagnosing
+                    && function.body_substitution.is_none()
+                    && let ir::CarrierFamily::Parameter(parameter) = &family
+                    && view.original_env().outlives_static(*parameter)
+                {
+                    let own_static = self
+                        .body
+                        .as_ref()
+                        .map_or(0, |body| body.ref_contract().static_regions);
+                    let own_env = self.body.as_ref().map(|body| body.original_env().clone());
+                    self.budget.spend(sources.len() + 1)?;
+                    let escapes = sources
+                        .iter()
+                        .any(|region| match &self.regions.keys[region.0] {
+                            RegionKey::Fixed(id) => own_static & (1u64 << id.0) == 0,
+                            RegionKey::Family {
+                                family: ir::CarrierFamily::Parameter(own),
+                                ..
+                            } => !own_env
+                                .as_ref()
+                                .is_some_and(|env| env.outlives_static(*own)),
+                            _ => true,
+                        });
+                    if escapes {
+                        self.problem(
+                            block,
+                            None,
+                            Problem::Invalid(
+                                "borrowed value does not live long enough: type argument must outlive `'static`".into(),
+                            ),
+                        )?;
+                    }
+                }
                 // Bind the caller rigid nodes into this occurrence by key, not
                 // by accidentally reusing a callee-local numeric region ID.
                 self.retain(mul(sources.len(), size_of::<RegionKey>())?, sources.len())?;
@@ -2719,6 +2818,21 @@ impl CarrierBuilder<'_, '_> {
                             row.argument == source_index && row.location == mapping.substituted
                         }) {
                             if let ir::ActualRegion::Named(named) = row.source {
+                                // A caller lifetime parameter is never
+                                // `'static`, so it cannot instantiate a
+                                // `T: 'static` parameter.
+                                if self.diagnosing
+                                    && function.body_substitution.is_none()
+                                    && view.original_env().outlives_static(*parameter)
+                                {
+                                    self.problem(
+                                        block,
+                                        None,
+                                        Problem::Invalid(
+                                            "lifetime may not live long enough: type argument must outlive `'static`".into(),
+                                        ),
+                                    )?;
+                                }
                                 let source_env = if let Some(body) =
                                     self.body.as_ref().filter(|body| {
                                         body.source_region_env().declaration == named.declaration
@@ -4796,18 +4910,16 @@ impl CarrierBuilder<'_, '_> {
                 )])
             }
             Rvalue::OpaquePack { value, proof } => {
-                // The CFG gate has replayed the exact original publication and
-                // wrapper. Read the actual operand once, then require complete
-                // ordered correspondence before merging any of its origins.
-                let carriers = self.operand_value(state, value)?;
+                // The CFG gate replays the exact publication and operand type.
+                // A normal value read copies owned cells only. Packing also
+                // retains lifetimes reached through a captured reference, so
+                // validate the complete typed inventory before reading each
+                // exact source through the existing provenance lens.
                 let sources = proof.captured_sources();
-                self.budget.spend(carriers.len() + sources.len() + 1)?;
-                if carriers.len() != sources.len()
-                    || carriers
-                        .iter()
-                        .zip(sources)
-                        .any(|((actual, _), expected)| actual != expected)
-                {
+                let locations =
+                    ir::carrier_locations(proof.hidden(), &self.ledger).map_err(|_| Exhausted)?;
+                self.budget.spend(locations.len() + sources.len() + 1)?;
+                if locations.as_ref() != sources {
                     self.problem(
                         block,
                         Some(statement),
@@ -4821,7 +4933,12 @@ impl CarrierBuilder<'_, '_> {
                     return Ok(Vec::new());
                 }
                 let mut merged = self.empty_origins()?;
-                for (_, origins) in carriers {
+                for source in sources {
+                    let input = InputCarrier {
+                        param: 0,
+                        location: source.clone(),
+                    };
+                    let origins = self.input_value(state, std::slice::from_ref(value), &input)?;
                     merged.union(&origins, self.budget)?;
                 }
                 Ok(vec![(proof.captured_destination(), merged)])

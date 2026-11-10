@@ -35,19 +35,23 @@ impl CarrierContractView {
         identity: super::super::opaque_physical::PhysicalCarrierIdentity,
         signature: Signature,
         contract: ir::CarrierContract,
+        source_regions: Arc<ir::SourceRegionEnv>,
+        components: Arc<[ir::CarrierComponentMapping]>,
     ) -> Self {
         let mut view = original.clone();
         view.physical = Some(identity);
         view.contract = contract;
+        view.source_regions = source_regions;
+        view.components = components;
         view.fixed = signature.ref_contract.clone();
         view.result_signature = signature;
         // The borrowed physical boundary replays the original view before
         // constructing this one. Its source-signature equality result cannot
         // authorize the different physical signature and is not retained.
         view.equality_results = None;
-        // Declared lifetime rows survive only proven identity transport.
-        // Synthesized fixed rows may also retain proven empty-family bounds.
-        // Keep original source identities and mappings, never invent rows.
+        // The borrowed boundary expands only graph-authenticated opaque
+        // coordinates. Named IDs, outlives edges, and region constraints are
+        // unchanged, while each family component retains its exact identity.
         view
     }
 

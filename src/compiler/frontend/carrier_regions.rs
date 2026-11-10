@@ -61,7 +61,91 @@ pub(super) fn attach(
             0,
         )?;
     }
+    let env = &registry.declaration(original.declaration)?.env;
+    budget.charge_work(env.total_arity())?;
+    if env
+        .ordered_params()
+        .any(|parameter| env.outlives_static(parameter))
+    {
+        for (parameter, ty) in signature.params.iter().enumerate() {
+            for location in ir::carrier_locations(ty, budget)?.iter() {
+                budget.charge_work(collector.rows.len() + 1)?;
+                if let ir::CarrierChannel::ParamTail {
+                    parameter: generic, ..
+                } = location.channel
+                    && env.outlives_static(generic)
+                    && !collector
+                        .rows
+                        .iter()
+                        .any(|row| row.parameter == Some(parameter) && row.location == *location)
+                {
+                    budget.retain_bytes(std::mem::size_of::<ir::SourceCarrierRegion>())?;
+                    collector.rows.push(ir::SourceCarrierRegion {
+                        parameter: Some(parameter),
+                        location: location.clone(),
+                        region: ir::CarrierRegionTerm::Static,
+                    });
+                }
+            }
+        }
+    }
     collector.walk(result, &signature.result, None, &mut Vec::new(), 0, 0)?;
+    if let (Type::Opaque(source), ir::Ty::Opaque(opaque)) = (result, &signature.result) {
+        // Each source-written outlives bound constrains the whole retained
+        // capture family. The contract builder uses this row to select only
+        // input occurrences which outlive the required result lifetime.
+        // Multiple bounds require intersection rather than choosing one row.
+        if source.regions.len() > 1 {
+            return Err(
+                "unsupported: multiple opaque outlives bounds require a region intersection".into(),
+            );
+        }
+        if let Some(region) = source.regions.first() {
+            let term = if matches!(region, RegionName::Infer) {
+                // Apply ordinary output elision: a borrowed receiver wins,
+                // otherwise exactly one input lifetime must be available.
+                let candidate = if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+                    signature
+                        .ref_contract
+                        .input_regions
+                        .iter()
+                        .find(|row| row.input.param == 0 && row.input.position.depth == 0)
+                        .map(|row| row.region)
+                } else {
+                    let mut candidates = signature
+                        .ref_contract
+                        .input_regions
+                        .iter()
+                        .map(|row| row.region);
+                    let first = candidates.next();
+                    if candidates.next().is_some() {
+                        None
+                    } else {
+                        first
+                    }
+                };
+                ir::CarrierRegionTerm::Fixed(candidate.ok_or(
+                    "E0106: opaque inferred lifetime requires one input lifetime or a borrowed receiver",
+                )?)
+            } else {
+                collector
+                    .term(Some(*region), None, &[], 0)?
+                    .ok_or("opaque outlives bound has no source region")?
+            };
+            budget.retain_bytes(std::mem::size_of::<ir::SourceCarrierRegion>())?;
+            collector.rows.push(ir::SourceCarrierRegion {
+                parameter: None,
+                location: ir::CarrierLocation {
+                    path: ir::CarrierPath(Arc::from([])),
+                    channel: ir::CarrierChannel::OpaqueTail {
+                        opaque: opaque.clone(),
+                        prefix: 0,
+                    },
+                },
+                region: term,
+            });
+        }
+    }
     budget.retain_bytes(
         std::mem::size_of::<ir::SourceRegionEnv>()
             + usize::from(collector.next_region) * std::mem::size_of::<Option<ir::RegionParamId>>(),

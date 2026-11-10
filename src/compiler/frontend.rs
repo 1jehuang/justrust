@@ -9736,6 +9736,8 @@ pub struct TypeBound {
     pub traits: Vec<TraitPath>,
     /// Written `?Sized`: the parameter has no implicit `Sized` predicate.
     pub maybe_unsized: bool,
+    /// Written `+ 'static`: every actual must be free of non-`'static` borrows.
+    pub outlives_static: bool,
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
@@ -14132,12 +14134,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.ty_at_position(true)
     }
     fn ty_at_position(&mut self, direct_return: bool) -> Result<Type, ParseError> {
+        self.ty_at_object_position(direct_return, true)
+    }
+    fn ty_at_object_position(
+        &mut self,
+        direct_return: bool,
+        static_object: bool,
+    ) -> Result<Type, ParseError> {
         if self.nesting >= 128 {
             return Err(self.limit("type nesting exceeds limit 128"));
         }
         let start = self.token();
         self.nesting += 1;
-        let result = self.ty_inner();
+        let result = self.ty_inner(static_object);
         self.nesting -= 1;
         let result = result?;
         // Stable Rust permits a directly written return type `!`, but not a
@@ -14238,7 +14247,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(result)
     }
-    fn ty_inner(&mut self) -> Result<Type, ParseError> {
+    fn ty_inner(&mut self, static_object: bool) -> Result<Type, ParseError> {
         if self.is("unsafe") || self.is("extern") || self.is("for") {
             return Err(self.unsupported(
                 "unsafe, extern and higher-ranked function pointer types are unsupported",
@@ -14299,7 +14308,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Type::Ref {
                 kind: ir::BorrowKind::Shared,
                 region: None,
-                referent: Box::new(self.ty()?),
+                referent: Box::new(
+                    self.ty_at_object_position(self.opaque_return_sites.is_some(), false)?,
+                ),
             });
         }
         if self.alias_target && self.is("_") {
@@ -14328,7 +14339,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Type::Ref {
                 kind,
                 region,
-                referent: Box::new(self.ty()?),
+                referent: Box::new(
+                    self.ty_at_object_position(self.opaque_return_sites.is_some(), false)?,
+                ),
             });
         }
         if !self.token().string && self.is("*") {
@@ -14360,9 +14373,28 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.unsupported("unsupported trait object bound syntax"));
             }
             let path = self.trait_path()?;
+            // Object coercion admits only borrow-free hidden payloads until
+            // erased payloads can retain their own source carrier family.
+            // A shorter object lifetime is rejected instead of being dropped.
+            if self.is("+") && self.cursor.peek(1).is_some_and(|t| t.is_lifetime()) {
+                if !static_object || self.alias_target {
+                    return Err(self.unsupported("explicit borrowed or aliased object lifetime bounds require object lifetime transport"));
+                }
+                self.cursor.bump();
+                if !self.eat("'static") {
+                    return Err(self.unsupported(
+                        "trait object lifetime bounds other than `'static` are unsupported",
+                    ));
+                }
+            }
+            if self.is("+") && self.cursor.peek(1).is_some_and(|t| t.is_lifetime()) {
+                return Err(
+                    self.error("E0226: only one explicit object lifetime bound is permitted")
+                );
+            }
             if self.is("+") {
                 return Err(self.unsupported(
-                    "trait objects with auto-trait or lifetime bounds (`dyn A + B`) are unsupported",
+                    "trait objects with additional trait bounds (`dyn A + B`) are unsupported",
                 ));
             }
             return Ok(Type::Dyn(Box::new(path)));
@@ -14424,7 +14456,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.eat(")") {
                 return Ok(Type::Unit);
             }
-            let first = self.ty()?;
+            let first =
+                self.ty_at_object_position(self.opaque_return_sites.is_some(), static_object)?;
             if !self.eat(",") {
                 self.expect(")")?;
                 return Ok(first);
@@ -14478,20 +14511,25 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::name_error)?;
         self.cursor.bump();
         let mut traits = Vec::new();
+        let mut outlives_static = false;
         let parsed = (|| {
             loop {
                 if traits.len() >= 256 {
                     return Err(self.limit("predicate limit exceeded"));
                 }
-                if self.token().is_lifetime() {
-                    return Err(self.unsupported("lifetime bounds on `impl Trait` are unsupported"));
+                if self.static_type_bound()? {
+                    outlives_static = true;
+                } else {
+                    let path = self.trait_path()?;
+                    self.reserve_parser_items(&mut traits, 1)?;
+                    traits.push(path);
                 }
-                let path = self.trait_path()?;
-                self.reserve_parser_items(&mut traits, 1)?;
-                traits.push(path);
                 if !self.eat("+") {
                     break;
                 }
+            }
+            if traits.is_empty() {
+                return Err(self.error("E0224: at least one trait must be specified"));
             }
             Ok(())
         })();
@@ -14508,6 +14546,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             subject: Type::Param(name),
             traits,
             maybe_unsized: false,
+            outlives_static,
         });
         self.pending_bounds = bounds;
         Ok(Type::Param(name))
@@ -14795,9 +14834,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.eat(":") {
                 let mut traits = Vec::new();
                 let mut maybe_unsized = false;
+                let mut outlives_static = false;
                 loop {
                     if self.relaxed_sized()? {
                         maybe_unsized = true;
+                    } else if self.static_type_bound()? {
+                        outlives_static = true;
                     } else {
                         let path = self.trait_path()?;
                         self.reserve_parser_items(&mut traits, 1)?;
@@ -14816,6 +14858,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     subject: Type::Param(name),
                     traits,
                     maybe_unsized,
+                    outlives_static,
                 });
                 self.pending_bounds = bounds;
             }
@@ -16407,6 +16450,20 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.cursor.bump();
         Ok(RegionName::Named(ident))
     }
+    /// One lifetime in a type bound list (`T: Trait + 'static`). Only
+    /// `'static` has a checked meaning for a type subject today: any other
+    /// lifetime is an explicit unsupported diagnostic, never a dropped bound.
+    fn static_type_bound(&mut self) -> Result<bool, ParseError> {
+        if !self.token().is_lifetime() || self.token().string {
+            return Ok(false);
+        }
+        if !self.eat("'static") {
+            return Err(
+                self.unsupported("type outlives bounds other than `'static` are unsupported")
+            );
+        }
+        Ok(true)
+    }
     fn region_bounds(
         &mut self,
         long: RegionName,
@@ -16456,6 +16513,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(":")?;
         let mut traits = Vec::new();
         let mut maybe_unsized = false;
+        let mut outlives_static = false;
         while !(self.is(",") || self.is("{") || self.is(";")) {
             if self.relaxed_sized()? {
                 maybe_unsized = true;
@@ -16464,8 +16522,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 continue;
             }
-            if self.token().is_lifetime() {
-                return Err(self.unsupported("type outlives bounds are unsupported"));
+            if self.static_type_bound()? {
+                outlives_static = true;
+                if !self.eat("+") {
+                    break;
+                }
+                continue;
             }
             if traits.len() >= 256 {
                 return Err(self.limit("predicate limit exceeded"));
@@ -16480,6 +16542,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         if maybe_unsized && !matches!(subject, Type::Param(_)) {
             return Err(self.error("this relaxed bound is not permitted here"));
         }
+        if outlives_static && !matches!(subject, Type::Param(_)) {
+            return Err(self.unsupported(
+                "`'static` bounds on a subject other than a type parameter are unsupported",
+            ));
+        }
         if bounds.len() >= 4096 {
             return Err(self.limit("predicate limit exceeded"));
         }
@@ -16488,6 +16555,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             subject,
             traits,
             maybe_unsized,
+            outlives_static,
         });
         Ok(())
     }
@@ -16677,12 +16745,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.eat(":") {
                     let mut traits = Vec::new();
                     let mut maybe_unsized = false;
+                    let mut outlives_static = false;
                     loop {
                         if traits.len() >= 256 {
                             return Err(self.limit("predicate limit exceeded"));
                         }
                         if self.relaxed_sized()? {
                             maybe_unsized = true;
+                        } else if self.static_type_bound()? {
+                            outlives_static = true;
                         } else {
                             let path = self.trait_path()?;
                             self.reserve_parser_items(&mut traits, 1)?;
@@ -16698,6 +16769,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         subject: Type::Param(name),
                         traits,
                         maybe_unsized,
+                        outlives_static,
                     });
                     self.pending_bounds = bounds;
                 }
@@ -23939,10 +24011,47 @@ impl PlanCtx {
                     }
                 }
             }
-            let param_env = Arc::new(ir::ParamEnv::with_relaxed_sized(
+            // `T: 'static` is a caller obligation recorded on the binder.
+            let mut outlives_static = 0u32;
+            for bound in bounds.iter().filter(|bound| bound.outlives_static) {
+                budget.charge_work(params.len())?;
+                let Type::Param(subject) = &bound.subject else {
+                    continue;
+                };
+                let mut found = false;
+                let subject = program
+                    .names
+                    .key(*subject, LookupClass::TypeParameter)
+                    .map_err(native_adapter::name_diagnostic)?;
+                for (index, parameter) in params.iter().enumerate() {
+                    let key = program
+                        .names
+                        .key(*parameter, LookupClass::TypeParameter)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    if key == subject {
+                        found = true;
+                        outlives_static |= 1u32 << (index + first);
+                    }
+                }
+                if !found {
+                    return Err("unsupported: method outlives bounds on an enclosing binder require a separate caller obligation".into());
+                }
+            }
+            if outlives_static != 0
+                && !matches!(
+                    kind,
+                    ir::DeclKind::Function | ir::DeclKind::AssociatedFunction
+                )
+            {
+                return Err(
+                    "unsupported: type outlives bounds on non-callable declarations".into(),
+                );
+            }
+            let param_env = Arc::new(ir::ParamEnv::with_bounds(
                 ir::BinderId { declaration: id },
                 arity,
                 relaxed,
+                outlives_static,
             )?);
             if matches!(
                 kind,
@@ -24215,6 +24324,15 @@ impl PlanCtx {
             registry.impl_ids.push(impl_id);
             let mut ids = Vec::new();
             for (item, method) in block.items.iter().enumerate() {
+                if block.trait_path.is_some()
+                    && method
+                        .function
+                        .bounds
+                        .iter()
+                        .any(|bound| bound.outlives_static)
+                {
+                    return Err("unsupported: trait implementation method outlives bounds require trait obligation refinement".into());
+                }
                 let name = method
                     .function
                     .name

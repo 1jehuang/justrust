@@ -72,6 +72,16 @@ impl Checker<'_> {
             .facts
             .as_deref()
             .ok_or("opaque return checking requires canonical callable facts")?;
+        let plan = self.signatures.plan()?;
+        let source =
+            plan.registry
+                .source_opaque_return(opaque.owner(), opaque.site(), facts.budget())?;
+        if !source.regions.is_empty() {
+            // An outlives bound cannot be established merely by absence of
+            // runtime carriers: PhantomData and raw pointer pointee metadata
+            // may still retain an untracked reference lifetime.
+            ir::check_static_bound_metadata(&hidden, facts.env(), facts.budget())?;
+        }
         let world = self.signatures.plan()?.trait_world()?;
         if let Some(previous) = self
             .opaque_hidden

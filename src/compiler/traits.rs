@@ -4456,11 +4456,9 @@ impl ValidatedTraitWorld {
         )?;
         Ok(left.const_binders() == right.const_binders()
             && left.scopes().len() == right.scopes().len()
-            && left
-                .scopes()
-                .iter()
-                .zip(right.scopes())
-                .all(|(a, b)| a.binder() == b.binder() && a.arity() == b.arity()))
+            && left.scopes().iter().zip(right.scopes()).all(|(a, b)| {
+                a.binder() == b.binder() && a.arity() == b.arity() && a.same_outlives_bounds(b)
+            }))
     }
     fn same_parameters(&self, left: &GenericEnv, right: &GenericEnv) -> Result<bool> {
         charged(
@@ -8357,6 +8355,25 @@ impl ValidatedTraitWorld {
                 actuals,
             )? {
                 let matches = match (component, expanded.component.as_ref()) {
+                    (
+                        Some(ir::CarrierLocation {
+                            path,
+                            channel: ir::CarrierChannel::OpaqueTail { prefix: 0, .. },
+                        }),
+                        None,
+                    ) if path.0.is_empty()
+                        && matches!(
+                            destination,
+                            ir::CarrierChannel::OpaqueTail { prefix: 0, .. }
+                        )
+                        && matches!(source.location.channel, ir::CarrierChannel::Fixed(_)) =>
+                    {
+                        // This exact input edge already passed the declaration's
+                        // source-region outlives check. Fixed references have no
+                        // substituted family component to compare with the
+                        // abstract opaque component, but retain all their origins.
+                        true
+                    }
                     (
                         Some(ir::CarrierLocation {
                             path: destination_path,
