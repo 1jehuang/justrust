@@ -77,14 +77,20 @@ impl Checker<'_> {
             (FormatTrait::Debug, true) => ("StrDebugArg", "__jr_fmt_str"),
             (FormatTrait::LowerExp, false) => ("LowerExpArg", "__jr_fmt"),
             (FormatTrait::UpperExp, false) => ("UpperExpArg", "__jr_fmt"),
+            (FormatTrait::LowerHex, false) => ("LowerHexArg", "__jr_fmt"),
+            (FormatTrait::UpperHex, false) => ("UpperHexArg", "__jr_fmt"),
+            (FormatTrait::Binary, false) => ("BinaryArg", "__jr_fmt"),
+            (FormatTrait::Octal, false) => ("OctalArg", "__jr_fmt"),
             (FormatTrait::LowerExp, true) => {
                 return Err("E0277: `str` doesn't implement `std::fmt::LowerExp`".into());
             }
             (FormatTrait::UpperExp, true) => {
                 return Err("E0277: `str` doesn't implement `std::fmt::UpperExp`".into());
             }
-            other => {
-                return Err(format!("unsupported: {other:?} format trait placeholders"));
+            (format, true) => {
+                return Err(format!(
+                    "E0277: `str` doesn't implement `std::fmt::{format:?}`"
+                ));
             }
         };
         let plan = self
@@ -112,7 +118,11 @@ impl Checker<'_> {
                 FormatTrait::Display => "Display",
                 FormatTrait::LowerExp => "LowerExp",
                 FormatTrait::UpperExp => "UpperExp",
-                _ => "Debug",
+                FormatTrait::Debug => "Debug",
+                FormatTrait::LowerHex => "LowerHex",
+                FormatTrait::UpperHex => "UpperHex",
+                FormatTrait::Binary => "Binary",
+                FormatTrait::Octal => "Octal",
             };
             return Err(format!(
                 "E0277: `{}` doesn't implement `std::fmt::{wanted}`",

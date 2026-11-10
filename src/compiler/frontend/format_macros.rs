@@ -451,12 +451,20 @@ pub(super) fn into_trait(
         (FormatTrait::Debug, true) => ("StrDebugInto", "__jr_fmt_into_str"),
         (FormatTrait::LowerExp, false) => ("LowerExpInto", "__jr_fmt_into"),
         (FormatTrait::UpperExp, false) => ("UpperExpInto", "__jr_fmt_into"),
+        (FormatTrait::LowerHex, false) => ("LowerHexInto", "__jr_fmt_into"),
+        (FormatTrait::UpperHex, false) => ("UpperHexInto", "__jr_fmt_into"),
+        (FormatTrait::Binary, false) => ("BinaryInto", "__jr_fmt_into"),
+        (FormatTrait::Octal, false) => ("OctalInto", "__jr_fmt_into"),
         (FormatTrait::LowerExp, true) => {
             return Err("E0277: `str` doesn't implement `std::fmt::LowerExp`".into());
         }
         (FormatTrait::UpperExp, true) => {
             return Err("E0277: `str` doesn't implement `std::fmt::UpperExp`".into());
         }
-        (other, _) => return Err(format!("unsupported: {other:?} format trait placeholders")),
+        (format, true) => {
+            return Err(format!(
+                "E0277: `str` doesn't implement `std::fmt::{format:?}`"
+            ));
+        }
     })
 }

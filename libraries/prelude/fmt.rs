@@ -1847,3 +1847,385 @@ impl<T: UpperExp + ?Sized> UpperExpInto for T {
         buf.push_str(suffix);
     }
 }
+// ---- radix formatting traits ----
+
+pub trait LowerHex {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+impl LowerHex for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128)
+    }
+}
+impl LowerHex for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u8 as u128)
+    }
+}
+impl LowerHex for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u16 as u128)
+    }
+}
+impl LowerHex for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u32 as u128)
+    }
+}
+impl LowerHex for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u64 as u128)
+    }
+}
+impl LowerHex for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as u128 as u128)
+    }
+}
+impl LowerHex for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_lower_hex(f, *self as usize as u128)
+    }
+}
+impl<T: LowerHex + ?Sized> LowerHex for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        LowerHex::fmt(&**self, f)
+    }
+}
+impl<T: LowerHex + ?Sized> LowerHex for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        LowerHex::fmt(&**self, f)
+    }
+}
+pub trait LowerHexArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: LowerHex + ?Sized> LowerHexArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = LowerHex::fmt(self, &mut f);
+        print_formatter(f, fd);
+    }
+}
+pub trait LowerHexInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: LowerHex + ?Sized> LowerHexInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = LowerHex::fmt(self, &mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
+    }
+}
+pub trait UpperHex {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+impl UpperHex for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128)
+    }
+}
+impl UpperHex for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u8 as u128)
+    }
+}
+impl UpperHex for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u16 as u128)
+    }
+}
+impl UpperHex for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u32 as u128)
+    }
+}
+impl UpperHex for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u64 as u128)
+    }
+}
+impl UpperHex for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as u128 as u128)
+    }
+}
+impl UpperHex for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_upper_hex(f, *self as usize as u128)
+    }
+}
+impl<T: UpperHex + ?Sized> UpperHex for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        UpperHex::fmt(&**self, f)
+    }
+}
+impl<T: UpperHex + ?Sized> UpperHex for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        UpperHex::fmt(&**self, f)
+    }
+}
+pub trait UpperHexArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: UpperHex + ?Sized> UpperHexArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = UpperHex::fmt(self, &mut f);
+        print_formatter(f, fd);
+    }
+}
+pub trait UpperHexInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: UpperHex + ?Sized> UpperHexInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = UpperHex::fmt(self, &mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
+    }
+}
+pub trait Binary {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+impl Binary for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128)
+    }
+}
+impl Binary for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u8 as u128)
+    }
+}
+impl Binary for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u16 as u128)
+    }
+}
+impl Binary for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u32 as u128)
+    }
+}
+impl Binary for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u64 as u128)
+    }
+}
+impl Binary for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as u128 as u128)
+    }
+}
+impl Binary for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_binary(f, *self as usize as u128)
+    }
+}
+impl<T: Binary + ?Sized> Binary for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Binary::fmt(&**self, f)
+    }
+}
+impl<T: Binary + ?Sized> Binary for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Binary::fmt(&**self, f)
+    }
+}
+pub trait BinaryArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Binary + ?Sized> BinaryArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = Binary::fmt(self, &mut f);
+        print_formatter(f, fd);
+    }
+}
+pub trait BinaryInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Binary + ?Sized> BinaryInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = Binary::fmt(self, &mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
+    }
+}
+pub trait Octal {
+    fn fmt(&self, f: &mut Formatter) -> Result;
+}
+impl Octal for u8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for u16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for u32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for u64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for u128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for usize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128)
+    }
+}
+impl Octal for i8 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u8 as u128)
+    }
+}
+impl Octal for i16 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u16 as u128)
+    }
+}
+impl Octal for i32 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u32 as u128)
+    }
+}
+impl Octal for i64 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u64 as u128)
+    }
+}
+impl Octal for i128 {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as u128 as u128)
+    }
+}
+impl Octal for isize {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        fmt_octal(f, *self as usize as u128)
+    }
+}
+impl<T: Octal + ?Sized> Octal for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Octal::fmt(&**self, f)
+    }
+}
+impl<T: Octal + ?Sized> Octal for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Octal::fmt(&**self, f)
+    }
+}
+pub trait OctalArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Octal + ?Sized> OctalArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = Octal::fmt(self, &mut f);
+        print_formatter(f, fd);
+    }
+}
+pub trait OctalInto {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Octal + ?Sized> OctalInto for T {
+    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = Octal::fmt(self, &mut f);
+        buf.push_str(prefix);
+        buf.push_str(f.as_str());
+        buf.push_str(suffix);
+    }
+}

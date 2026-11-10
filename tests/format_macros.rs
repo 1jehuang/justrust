@@ -2,6 +2,48 @@
 //! run must match stock rustc output (expected text recorded from stock).
 use std::process::Command;
 
+#[path = "support/closure_oracle.rs"]
+mod radix_oracle;
+
+#[test]
+fn radix_formatting_matches_stock() {
+    use radix_oracle::{Case, Expect};
+    radix_oracle::check(
+        "radix-formatting",
+        &[
+            Case {
+                name: "radix_integer_widths_and_padding",
+                source: r#"fn main(){println!("{:x}|{:X}|{:b}|{:o}",255u8,255u16,5u32,64u64);println!("{:#010x}|{:+#010X}|{:*>10x}|{:#010o}",42u16,42u16,42u16,42u16);println!("{:x}|{:x}|{:x}|{:x}|{:x}|{:x}",-1i8,-1i16,-1i32,-1i64,-1i128,-1isize);println!("{:b}|{:o}|{:#x}|{:#X}",-1i8,-1i16,0u128,u128::MAX);println!("{:x}|{:x}|{:x}|{:x}|{:x}|{:x}",u8::MAX,u16::MAX,u32::MAX,u64::MAX,u128::MAX,usize::MAX);}"#,
+                expect: Expect::Run(
+                    "ff|FF|101|100\n0x0000002a|+0x000002A|********2a|0o00000052\nff|ffff|ffffffff|ffffffffffffffff|ffffffffffffffffffffffffffffffff|ffffffffffffffff\n11111111|177777|0x0|0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\nff|ffff|ffffffff|ffffffffffffffff|ffffffffffffffffffffffffffffffff|ffffffffffffffff\n",
+                ),
+            },
+            Case {
+                name: "radix_custom_traits_format_write_and_references",
+                source: r#"use std::fmt;use std::fmt::Write;struct N;impl fmt::LowerHex for N{fn fmt(&self,f:&mut fmt::Formatter)->fmt::Result{f.pad_integral(true,"0x","2a")}}fn emit<T:fmt::LowerHex>(x:&T)->String{format!("{:#08x}",x)}fn main(){println!("{}",emit(&N));println!("{:x}|{:X}|{:b}|{:o}",&42u8,&42u8,&42u8,&42u8);let mut s=String::new();write!(s,"[{:#06x}|{:^8X}|{:08b}|{:#o}]",42u8,42u8,5u8,64u8).unwrap();println!("{}",s);println!("{}",format!("{:x}/{:X}/{:b}/{:o}",u128::MAX,255u8,5u8,64u8));}"#,
+                expect: Expect::Run(
+                    "0x00002a\n2a|2A|101010|52\n[0x002a|   2A   |00000101|0o100]\nffffffffffffffffffffffffffffffff/FF/101/100\n",
+                ),
+            },
+            Case {
+                name: "unused_radix_float",
+                source: r#"fn unused(){let _=format!("{:x}",1.0f64);}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_radix_str",
+                source: r#"fn unused(){println!("{:b}","text");}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_radix_missing_custom_impl",
+                source: r#"struct N;fn unused(){let _=format!("{:o}",N);}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
 fn run(name: &str, source: &str) -> Result<(String, String), String> {
     run_with_workers(name, source, 1)
 }
