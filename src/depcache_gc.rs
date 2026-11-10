@@ -373,6 +373,9 @@ pub fn misses(days: f64) {
     // category -> (units, secs), (package, reason) -> (units, secs)
     let mut by_why: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
     let mut by_pkg: std::collections::HashMap<(String, String), (usize, f64)> = Default::default();
+    // (workspace, command, toolchain) -> (runs, units, secs)
+    let mut by_cmd: std::collections::HashMap<(String, String, String), (usize, usize, f64)> =
+        Default::default();
     let (mut hits, mut total, mut secs) = (0usize, 0usize, 0.0);
     for e in crate::runs::load_index() {
         if e.start < cutoff {
@@ -381,6 +384,7 @@ pub fn misses(days: f64) {
         let Ok(text) = std::fs::read_to_string(runs.join(&e.id).join("units.jsonl")) else {
             continue;
         };
+        let (mut run_misses, mut run_secs) = (0usize, 0.0);
         for u in text
             .lines()
             .filter(|l| l.contains("\"depcache\""))
@@ -391,6 +395,8 @@ pub fn misses(days: f64) {
                 "miss" => {
                     total += 1;
                     secs += u.wall;
+                    run_misses += 1;
+                    run_secs += u.wall;
                     let c = crate::depcache_why::category(&u.depcache_why).to_owned();
                     let w = by_why.entry(c).or_default();
                     w.0 += 1;
@@ -407,6 +413,14 @@ pub fn misses(days: f64) {
                 }
                 _ => {}
             }
+        }
+        if run_misses > 0
+            && let Some(key) = run_command(&runs.join(&e.id))
+        {
+            let c = by_cmd.entry(key).or_default();
+            c.0 += 1;
+            c.1 += run_misses;
+            c.2 += run_secs;
         }
     }
     if total == 0 {
@@ -439,6 +453,42 @@ pub fn misses(days: f64) {
     for ((p, r), (n, s)) in pkg.iter().take(25) {
         println!("{p:<34} {n:>4} {s:>7.1}s  {r}");
     }
+    // What the prebuild fleet would have to build to turn these into store
+    // hits: the store only matches the exact lockfile, features, profile and
+    // toolchain, so candidates are whole commands, not crate names.
+    let mut cmd: Vec<_> = by_cmd.into_iter().collect();
+    cmd.sort_by(|a, b| b.1.2.total_cmp(&a.1.2));
+    println!("\ncommands that missed most (runs, units, rustc, toolchain, workspace: command)");
+    for ((ws, args, tc), (n, units, s)) in cmd.iter().take(20) {
+        println!("{n:>4} {units:>6} {s:>8.0}s  {tc:<20} {ws}: {args}");
+    }
+    println!(
+        "\nA public workspace becomes store hits as a `<git url> <dir> <command>` line in \
+         justrust-cloud prebuild/workspaces.txt, built with a toolchain in the fleet matrix"
+    );
+}
+
+/// (workspace, command, toolchain) of a recorded run, from its summary.
+/// Test filters and anything after `--` are dropped: they do not move keys.
+fn run_command(dir: &Path) -> Option<(String, String, String)> {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("summary.json")).ok()?).ok()?;
+    let args: Vec<&str> = v
+        .get("args")?
+        .as_array()?
+        .iter()
+        .filter_map(|a| a.as_str())
+        .take_while(|a| *a != "--")
+        .collect();
+    let ws = v
+        .pointer("/git/root")
+        .and_then(|r| r.as_str())
+        .or_else(|| v.get("cwd").and_then(|c| c.as_str()))?;
+    let tc = v
+        .get("toolchain")
+        .and_then(|t| t.as_str())
+        .unwrap_or("system");
+    Some((ws.to_owned(), args.join(" "), tc.to_owned()))
 }
 
 /// `justrust cache [--prune] [--clear]`.
