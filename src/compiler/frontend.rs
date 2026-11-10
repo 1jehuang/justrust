@@ -26629,6 +26629,35 @@ impl tr::SchemaCx for SchemaAdapter {
         native_box::issue(&self.registry, declaration, &self.budget)
             .map_err(|error| self.error(error))
     }
+    fn crate_origin(
+        &self,
+        module: ModuleId,
+    ) -> Result<Option<tr::CrateOrigin>, tr::FactsError> {
+        let program = &self.program;
+        let within = |ancestor: ModuleId| {
+            self.budget.charge_work(1).map_err(|e| self.error(e))?;
+            program
+                .modules
+                .is_descendant(module, ancestor)
+                .map_err(|e| self.error(format!("crate origin module authority: {e:?}")))
+        };
+        if within(program.modules.core_root())? {
+            return Ok(Some(tr::CrateOrigin::Library));
+        }
+        // Without the embedded library every source declaration is one crate.
+        let Some(library) = program.prelude_module else {
+            return Ok(None);
+        };
+        if within(library)? {
+            return Ok(Some(tr::CrateOrigin::Library));
+        }
+        for &mount in &program.extern_mounts {
+            if within(mount)? {
+                return Ok(Some(tr::CrateOrigin::Extern(mount)));
+            }
+        }
+        Ok(Some(tr::CrateOrigin::User))
+    }
     fn nominal_validation_session(
         &self,
     ) -> Result<Option<Box<dyn tr::NominalValidationSession>>, tr::FactsError> {

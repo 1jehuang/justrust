@@ -8,6 +8,52 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[path = "support/iterator_oracle.rs"]
+mod coherence_oracle;
+
+#[test]
+fn conditional_blanket_impls_use_orphan_aware_disjointness() {
+    for source in [
+        r#"
+trait Mark {}
+trait Tag { fn tag(self) -> usize; }
+struct A { n: usize }
+impl Mark for A {}
+impl<T: Mark> Tag for T { fn tag(self) -> usize { 7 } }
+impl<T> Tag for Vec<T> { fn tag(self) -> usize { self.len() } }
+fn main() { println!("{} {}", A { n: 1 }.tag(), vec![1, 2, 3].tag()); }
+"#,
+        r#"
+trait Tag { fn tag(self) -> i32; }
+struct A { n: i32 }
+impl<T: std::fmt::Display> Tag for T { fn tag(self) -> i32 { 7 } }
+impl Tag for A { fn tag(self) -> i32 { self.n } }
+fn main() { println!("{} {}", A { n: 42 }.tag(), 1i32.tag()); }
+"#,
+        r#"
+struct A { n: u8 }
+trait Tag { fn tag(self) -> i32; }
+impl<T: From<A>> Tag for T { fn tag(self) -> i32 { 7 } }
+impl Tag for u8 { fn tag(self) -> i32 { 42 } }
+fn main() { println!("{} {}", 1u8.tag(), A { n: 1 }.tag()); }
+"#,
+    ] {
+        coherence_oracle::stock_native(source);
+    }
+    for source in [
+        // Upstream may add Display for Vec. Absence now proves nothing.
+        "trait Foo {} impl<T: std::fmt::Display> Foo for T {} impl Foo for Vec<u8> {} fn main() {}",
+        "trait Foo {} impl<T: From<u16>> Foo for T {} impl Foo for u8 {} fn main() {}",
+        // The bound really is satisfied, including when both impls are unused.
+        "struct A { n: i32 } trait Mark {} impl Mark for A {} trait Foo {} impl<T: Mark> Foo for T {} impl Foo for A {} fn main() {}",
+        // Downstream can implement Mark for a reference to its own type.
+        "trait Mark {} trait Foo {} impl<T: Mark> Foo for T {} impl<U> Foo for &U {} fn main() {}",
+        "trait A {} trait B {} trait Foo {} impl<T: A> Foo for T {} impl<T: B> Foo for T {} fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
 // Final28 stock JSON SHA256 e62a91d49ac9adf66a9d2186f7d999d52ca4b574a0c03ec86a860f3726858c09
 // Original11 measured baseline source bytes/order retained unchanged.

@@ -34,6 +34,8 @@ mod equality;
 mod fn_items;
 mod generic_methods;
 mod impl_constraints;
+mod impl_disjoint;
+pub use impl_disjoint::CrateOrigin;
 mod inherent_constants;
 mod nominal_declarations;
 mod nominal_realization;
@@ -726,6 +728,13 @@ pub trait SchemaCx {
         declaration: DeclId,
     ) -> Result<Option<Arc<super::frontend::NativeElementSource>>> {
         let _ = declaration;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
+    /// Crate that declares `module`, for coherence. `None` means the adapter
+    /// has no crate metadata and the world is one closed crate.
+    fn crate_origin(&self, module: ModuleId) -> Result<Option<CrateOrigin>> {
+        let _ = module;
         charged(self.budget(), self.budget().charge_work(1))?;
         Ok(None)
     }
@@ -6944,7 +6953,7 @@ impl ValidatedTraitWorld {
                 0,
             )?;
         }
-        if overlaps {
+        if overlaps && !self.heads_disjoint_by_bounds(a, b, &mut bindings)? {
             return Err(FactsError::ambiguous(
                 &self.budget,
                 "overlapping trait impl heads (predicate absence cannot establish disjointness)",
