@@ -914,7 +914,82 @@ pub fn run_remote(
     let mut diagnostic = RemoteDiagnostic::default();
     let run_id = crate::record::new_run_id();
     let mut lifecycle = crate::telemetry::BuildLifecycle::start(&run_id, sub, "remote");
-    let result = run_remote_inner(sub, args, start, &mut diagnostic, &run_id, &mut lifecycle);
+    if matches!(
+        remote_backend::load(),
+        Some(remote_backend::Backend::Hosted)
+    ) && let Ok(Some(update)) = crate::remote_hosted::current_update()
+        && matches!(update.state.as_str(), "announced" | "restarting")
+    {
+        eprintln!(
+            "justrust remote: planned hosted update {}: {}; waiting before starting work (no local fallback)",
+            update.id,
+            update.label()
+        );
+        wait_for_hosted_update(update)?;
+    }
+    let mut hosted_run = None;
+    let mut recovered = BTreeSet::new();
+    let result = loop {
+        let attempt_started = crate::paths::now() as u64;
+        let result = run_remote_inner(
+            sub,
+            args,
+            start,
+            &mut diagnostic,
+            &run_id,
+            &mut lifecycle,
+            &mut hosted_run,
+        );
+        let disconnected = matches!(&result, Err(e) if e.is::<RemoteConnectionLost>())
+            || matches!(&result, Ok(Err(Infra(msg))) if matches!(msg.as_str(),
+                "sync daemon closed the connection" | "connection to the remote machine was lost"));
+        if !disconnected
+            || !matches!(
+                remote_backend::load(),
+                Some(remote_backend::Backend::Hosted)
+            )
+        {
+            break result;
+        }
+        let disconnected_at = crate::paths::now() as u64;
+        let update = match crate::remote_hosted::current_update() {
+            Ok(Some(update)) if update.overlaps(attempt_started, disconnected_at) => update,
+            _ => break result,
+        };
+        if recovered.len() >= 2 || !recovered.insert(update.id.clone()) {
+            break Err(anyhow::anyhow!(
+                "hosted update {} ({}): automatic recovery limit reached, no local fallback",
+                update.id,
+                update.label()
+            ));
+        }
+        eprintln!(
+            "justrust remote: interrupted by planned hosted update {}: {}; waiting for recovery (no local fallback)",
+            update.id,
+            update.label()
+        );
+        if let Err(e) = wait_for_hosted_update(update) {
+            break Err(e);
+        }
+        eprintln!(
+            "justrust remote: update complete, restarting the interrupted hosted command using retained Cargo artifacts; earlier output belongs to the interrupted attempt"
+        );
+        crate::telemetry::record(
+            "hosted_update_recovery",
+            serde_json::json!({
+                "run_id": run_id, "updates": recovered.len(), "action": "restart_hosted"
+            }),
+        );
+        diagnostic = RemoteDiagnostic::default();
+        // Keep the admission and heartbeat alive across attempts. The same run
+        // is charged once and gets one final result, not an abandoned result.
+    };
+    let result = match result {
+        Ok(Err(Infra(msg))) if !recovered.is_empty() => Err(anyhow::anyhow!(
+            "hosted update recovery could not reconnect: {msg}; no local fallback"
+        )),
+        other => other,
+    };
     if let Some(code) = diagnostic.exit {
         let logs = crate::paths::runs_dir()
             .ok()
@@ -925,6 +1000,48 @@ pub fn run_remote(
         report_remote_failure(sub, &diagnostic, started.elapsed().as_secs_f64());
     }
     result
+}
+
+#[derive(Debug)]
+struct RemoteConnectionLost;
+
+impl std::fmt::Display for RemoteConnectionLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("connection to the remote machine was lost")
+    }
+}
+
+impl std::error::Error for RemoteConnectionLost {}
+
+fn wait_for_hosted_update(mut update: crate::remote_hosted::HostedUpdate) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(360);
+    loop {
+        if update.ready_to_retry() {
+            return Ok(());
+        }
+        if update.state == "failed" || Instant::now() >= deadline {
+            bail!(
+                "hosted update {} ({}): recovery {}; work was not restarted locally",
+                update.id,
+                update.label(),
+                if update.state == "failed" {
+                    "failed"
+                } else {
+                    "timed out"
+                }
+            );
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        if let Ok(Some(next)) = crate::remote_hosted::current_update() {
+            if next.id != update.id {
+                bail!(
+                    "hosted update {} was superseded, refusing to duplicate interrupted work",
+                    update.id
+                );
+            }
+            update = next;
+        }
+    }
 }
 
 struct RemoteDiagnostic {
@@ -965,6 +1082,7 @@ fn run_remote_inner(
     diagnostic: &mut RemoteDiagnostic,
     run_id: &str,
     lifecycle: &mut crate::telemetry::BuildLifecycle,
+    admitted: &mut Option<HostedRun>,
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
     let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
@@ -1001,11 +1119,14 @@ fn run_remote_inner(
     mark("roots");
     crate::e2e::mark("remote_roots");
     diagnostic.stage = "remote_admission";
-    let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref()) {
-        Ok(h) => h,
-        Err(m) => return infra(m),
-    };
-    let mut hosted_run = HostedRun::new(hosted, run_id, total);
+    if admitted.is_none() {
+        let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref()) {
+            Ok(h) => h,
+            Err(m) => return infra(m),
+        };
+        *admitted = Some(HostedRun::new(hosted, run_id, total));
+    }
+    let hosted_run = admitted.as_mut().expect("run admitted above");
     mark("charged");
     crate::e2e::mark("admitted");
     // Visible to `justrust status` (and the status bar) while it runs.
@@ -1087,7 +1208,7 @@ fn run_remote_inner(
             }
             Ok(None) | Err(_) => {
                 // Output already started: a local rerun would duplicate it.
-                bail!("lost the remote build mid-run (see ~/.justrust/remote/daemon.log)");
+                return Err(RemoteConnectionLost.into());
             }
         };
         match frame {
@@ -1265,6 +1386,9 @@ fn run_remote_inner(
                 return infra(msg);
             }
             (Msg::Error { msg, .. }, _) => {
+                if msg == "connection to the remote machine was lost" {
+                    return Err(RemoteConnectionLost.into());
+                }
                 bail!("remote build failed mid-run: {msg}")
             }
             _ => {}

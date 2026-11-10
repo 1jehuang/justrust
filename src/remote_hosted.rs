@@ -1148,6 +1148,55 @@ pub fn status() -> HostedStatus {
     s
 }
 
+/// Operator-authenticated maintenance evidence, returned only for this account.
+/// An ordinary disconnect is not evidence that an update happened.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HostedUpdate {
+    pub id: String,
+    pub reason: String,
+    pub state: String,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    #[serde(default)]
+    pub interrupted_work_stopped: bool,
+}
+
+impl HostedUpdate {
+    pub fn overlaps(&self, run_started: u64, disconnected_at: u64) -> bool {
+        !self.id.is_empty()
+            && self.id.len() <= 96
+            && self
+                .id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            && self.started_at <= disconnected_at
+            && self.completed_at.is_none_or(|end| end >= run_started)
+            && matches!(
+                self.state.as_str(),
+                "announced" | "restarting" | "completed" | "failed"
+            )
+    }
+
+    pub fn ready_to_retry(&self) -> bool {
+        self.state == "completed"
+            && self.interrupted_work_stopped
+            && self.completed_at.is_some_and(|end| end >= self.started_at)
+    }
+
+    pub fn label(&self) -> String {
+        run_label(&self.reason, 240)
+    }
+}
+
+pub fn current_update() -> Result<Option<HostedUpdate>> {
+    let c = creds()?;
+    let h = ok(request(&c, "GET", "build/host", None)?)?;
+    match h.get("update").filter(|v| !v.is_null()) {
+        Some(update) => Ok(Some(serde_json::from_value(update.clone())?)),
+        None => Ok(None),
+    }
+}
+
 // ------------------------------------------------------------------- connect
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1608,6 +1657,32 @@ pub fn check_use() -> Result<Me> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hosted_update_recovery_requires_correlated_completed_stopped_attempt() {
+        let mut update = super::HostedUpdate {
+            id: "update-123".into(),
+            reason: "Security update\nreboot".into(),
+            state: "announced".into(),
+            started_at: 120,
+            completed_at: None,
+            interrupted_work_stopped: false,
+        };
+        assert!(update.overlaps(100, 130));
+        assert!(!update.overlaps(100, 119));
+        assert!(!update.ready_to_retry());
+        update.state = "completed".into();
+        update.completed_at = Some(140);
+        assert!(!update.ready_to_retry());
+        update.interrupted_work_stopped = true;
+        assert!(update.ready_to_retry());
+        assert!(!update.overlaps(141, 150));
+        assert_eq!(update.label(), "Security update reboot");
+        update.state = "failed".into();
+        assert!(!update.ready_to_retry());
+        update.state = "unexpected".into();
+        assert!(!update.overlaps(100, 150));
+    }
+
     #[test]
     fn run_event_heartbeat_marker_only_on_running() {
         let running = super::run_event_body("running", None, Some(60.123));
