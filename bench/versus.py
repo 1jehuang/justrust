@@ -160,9 +160,66 @@ def run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> d
     return result
 
 
+def read_cpu_ticks() -> tuple[int, ...] | None:
+    """Linux aggregate counters. Guest ticks already belong to user/nice."""
+    try:
+        fields = Path("/proc/stat").read_text().splitlines()[0].split()
+        if fields[0] != "cpu" or len(fields) < 9:
+            return None
+        values = tuple(int(x) for x in fields[1:])
+        if any(x < 0 for x in values):
+            return None
+        return values[:8]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def measured_other_cpu(before, after, wall: float, tree_cpu: float, hz: float) -> dict:
+    """Per-invocation busy cores outside wait4's reaped process tree.
+
+    Steal is contention, never own CPU. Clamp only tick-quantization residuals
+    after subtracting the tree, not malformed counters. Detached/unreaped work
+    remains external, conservatively. iowait is not CPU consumption.
+    """
+    result = {"avg_other_cores": None, "system_busy_cores": None,
+              "tree_cores": None, "steal_cores": None,
+              "cpu_noise_valid": False, "cpu_noise_scope": "invocation-host",
+              "cpu_noise_wall_seconds": wall if isinstance(wall, (int, float)) and math.isfinite(wall) else None,
+              "cpu_noise_clock_ticks_per_second": hz if isinstance(hz, (int, float)) and math.isfinite(hz) else None}
+    try:
+        if any(not math.isfinite(x) for x in (wall, tree_cpu, hz)) or wall <= 0 or hz <= 0 or tree_cpu < 0:
+            raise ValueError("invalid CPU duration or clock rate")
+        if before is None or after is None or len(before) != 8 or len(after) != 8:
+            raise ValueError("missing CPU counters")
+        if any(type(x) is not int or x < 0 for x in (*before, *after)):
+            raise ValueError("malformed CPU counters")
+        delta = [b - a for a, b in zip(before, after)]
+        if any(x < 0 for x in delta) or sum(delta) <= 0:
+            raise ValueError("nonmonotonic or empty CPU interval")
+        busy = sum(delta[i] for i in (0, 1, 2, 5, 6, 7)) / hz / wall
+        steal = delta[7] / hz / wall
+        tree = tree_cpu / wall
+        other = max(0.0, busy - steal - tree) + steal
+        if any(not math.isfinite(x) for x in (busy, steal, tree, other)):
+            raise ValueError("nonfinite CPU measurement")
+        result.update(avg_other_cores=other, system_busy_cores=busy,
+                      tree_cores=tree, steal_cores=steal, cpu_noise_valid=True)
+    except (ValueError, TypeError, OverflowError) as exc:
+        result["cpu_noise_error"] = str(exc)
+    return result
+
+
+def sample_noisy(sample: dict, foreign_rustc: int) -> bool:
+    other = sample.get("avg_other_cores")
+    return (foreign_rustc > 0 or sample.get("cpu_noise_valid") is not True
+            or not isinstance(other, (int, float)) or not math.isfinite(other)
+            or other < 0 or other > suite.NOISY_CORES)
+
+
 def _run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> dict:
     """Run argv; wall, tree CPU, peak RSS and user instructions of the tree."""
     r, w = os.pipe()
+    before = read_cpu_ticks()
     t0 = time.monotonic()
     pid = os.fork()
     if pid == 0:  # child: wait until the counters are attached, then exec
@@ -193,7 +250,13 @@ def _run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> 
     os.close(w)
     _, status, ru = os.wait4(pid, 0)
     wall = time.monotonic() - t0
+    after = read_cpu_ticks()
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError):
+        hz = float("nan")
     return {
+        **measured_other_cpu(before, after, wall, ru.ru_utime + ru.ru_stime, hz),
         "wall": round(wall, 3),
         "exit": os.waitstatus_to_exitcode(status),
         "cpu": round(ru.ru_utime + ru.ru_stime, 2),
@@ -272,7 +335,7 @@ def run_one(st: Stack, s: suite.Scenario, root: Path, cold_tag: str | None, extr
         passed = json.loads(summ.read_text()).get("tests", {}).get("passed", 0)
     log.unlink()  # keep only failures; justrust runs stay in `justrust log <id>`
     _mark_remote(st, r, out)
-    return {**r, "id": rid if st.justrust else None, "tests_passed": passed, "noisy": rustc > 0 or load > suite.NOISY_CORES,
+    return {**r, "id": rid if st.justrust else None, "tests_passed": passed, "noisy": sample_noisy(r, rustc),
             "load_before": load, "foreign_rustc_before": rustc}
 
 
@@ -285,6 +348,9 @@ def _mark_remote(st: Stack, r: dict, out: str) -> None:
     m = re.search(r"justrust remote: (?:ok|failed) on (.+?) in ([\d.]+)s \(sync (\d+) ms", out)
     r["remote"] = {"machine": m.group(1), "sync_ms": int(m.group(3))} if m else None
     r["instructions"] = None
+    r["cpu_noise_scope"] = "client-host-only"
+    r["cpu_noise_valid"] = False
+    r["cpu_noise_error"] = "remote build host CPU not measured by client wait4"
 
 
 def run_workload(w: Workload, stacks: list[Stack], n: int, warmup: int, quiet_wait: float) -> dict:
@@ -631,7 +697,7 @@ def cmd_compare(args) -> None:
     from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
     require_matching_context(a, b)
-    for key in ("snapshot_format", "snapshot_fingerprints", "runtime_prerequisites"):
+    for key in ("snapshot_format", "snapshot_fingerprints", "runtime_prerequisites", "noise_policy"):
         if a.get("env", {}).get(key) != b.get("env", {}).get(key):
             sys.exit(f"versus: different {key}, numbers are not comparable")
     if "synth" in a or "synth" in b:
