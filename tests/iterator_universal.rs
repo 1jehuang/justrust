@@ -4,6 +4,34 @@
 mod oracle;
 
 #[test]
+fn borrowed_copy_vec_extension_and_partition_match_stock() {
+    oracle::stock_native(
+        r#"
+use std::iter::Extend;
+#[derive(Clone, Copy, Debug)]
+struct Pair { left: i32, right: i32 }
+fn main() {
+    let values = vec![1i64, 2, 3, 4];
+    let (small, big): (Vec<i64>, Vec<i64>) = values.iter().partition(|&&x| x < 3);
+    println!("{:?} {:?}", small, big);
+    let pairs = [Pair { left: 3, right: 7 }, Pair { left: 5, right: 11 }];
+    let mut out: Vec<Pair> = vec![Pair { left: 1, right: 2 }];
+    <Vec<Pair> as Extend<&Pair>>::extend(&mut out, pairs.iter());
+    let empty: [Pair; 0] = [];
+    <Vec<Pair> as Extend<&Pair>>::extend(&mut out, empty.iter());
+    println!("{:?} {} {}", out, pairs[0].left, pairs[1].right);
+}
+"#,
+    );
+    oracle::stock_and_native_reject(
+        r#"use std::iter::Extend; fn unused() { let source = vec![String::from("a")]; let mut target: Vec<String> = Vec::new(); <Vec<String> as Extend<&String>>::extend(&mut target, source.iter()); } fn main() {}"#,
+    );
+    oracle::stock_and_native_reject(
+        r#"use std::iter::Extend; fn unused() { let source = vec![1u32]; let mut target: Vec<i32> = Vec::new(); <Vec<i32> as Extend<&u32>>::extend(&mut target, source.iter()); } fn main() {}"#,
+    );
+}
+
+#[test]
 fn blanket_into_iterator_for_user_generic_and_borrowed_iterators() {
     oracle::stock_native(
         r#"

@@ -610,6 +610,21 @@ impl<T> super::ops::DerefMut for Vec<T> {
     }
 }
 
+impl<'a, T: Copy> super::iter::Extend<&'a T> for Vec<T> {
+    fn extend<I: super::iter::IntoIterator<Item = &'a T>>(&mut self, iter: I) {
+        let mut iterator = iter.into_iter();
+        loop {
+            match iterator.next() {
+                Option::Some(value) => self.push(*value),
+                Option::None => return,
+            }
+        }
+    }
+    fn extend_one(&mut self, item: &'a T) {
+        self.push(*item);
+    }
+}
+
 impl<T> super::iter::Extend<T> for Vec<T> {
     fn extend<I: super::iter::IntoIterator<Item = T>>(&mut self, iter: I) {
         let mut iterator = iter.into_iter();
