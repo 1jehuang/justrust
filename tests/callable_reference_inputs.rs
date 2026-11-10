@@ -356,6 +356,25 @@ fn main() {
 }
 
 #[test]
+fn source_annotations_require_original_producer_admission() {
+    oracle::stock_native(
+        r#"fn consume<T>(values:&mut Vec<T>){let _=values;}
+fn main(){
+    let data:Vec<i32>=(0..3).map(|x|x+1).collect();
+    let mut copy=data.clone();
+    consume(&mut copy);
+    println!("{:?}",copy);
+}"#,
+    );
+    for source in [
+        r#"fn consume<T>(values:&Vec<T>){let _=values;}fn unused(){let values:Vec<i32>=(0..3).map(|_|"wrong").collect();consume(&values);}fn main(){}"#,
+        r#"fn consume<T>(values:&Vec<T>){let _=values;}fn unused(){let escaped:Vec<&i32>;{let local=1i32;escaped=(0..2).map(|_|&local).collect();}consume(&escaped);}fn main(){}"#,
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn variadic_reference_vec_callbacks_replay_lexical_sources() {
     oracle::stock_native(
         r#"fn modify<V,F:FnOnce(&mut V)>(values:&mut Vec<V>,f:F) {

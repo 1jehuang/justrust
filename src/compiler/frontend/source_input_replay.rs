@@ -1573,15 +1573,28 @@ impl Replay<'_> {
                 checked_local_ty(ty, self.signatures).map_err(|e| source_error(self.budget, &e))
             })
             .transpose()?;
+        let node = site.node.child(3, 0, self.budget)?;
         // A written annotation is the binding's authoritative type: the
         // checker already required the initializer to conform to it, so the
         // root contributes the annotation without replaying the initializer.
         // Only reference-free annotations qualify: no loan can flow through.
+        // Retained syntax alone does not establish a replay producer, notably
+        // for trait-default methods without a nominal owner. Use the same
+        // original-source admission proof as recursive argument selection.
         if let Some(annotation) = annotation.as_ref()
-            && !syntax(source, self.budget, depth)?
             && ir::carrier_locations(annotation, self.budget)
                 .map_err(|e| source_error(self.budget, &e))?
                 .is_empty()
+            && !supported(
+                source,
+                &node,
+                &self.original.plan,
+                function,
+                self.inventory,
+                Some(self.original),
+                self.budget,
+                depth + 1,
+            )?
         {
             if !self.equal(annotation, &declaration.ty)? {
                 return Err(FactsError::invalid(
@@ -1591,7 +1604,6 @@ impl Replay<'_> {
             }
             return Ok((local, annotation.clone()));
         }
-        let node = site.node.child(3, 0, self.budget)?;
         let ty = match self.array_borrow_initializer(
             index,
             source,
@@ -3421,6 +3433,51 @@ impl Replay<'_> {
 #[cfg(test)]
 mod literal_context_tests {
     use super::*;
+
+    #[test]
+    fn annotation_admission_rejects_changed_type_and_source() {
+        let program = parse("trait Source:Sized{fn value(self)->i32{7}}struct Maker;impl Source for Maker{}fn consume<T>(value:&T){}fn main(){let value:i32=Maker.value();consume(&value);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        assert!(
+            !replay_source_body(&original, checked, publication.facts(), &budget)
+                .unwrap()
+                .is_empty()
+        );
+        let ir::TypedStmt::Let { local, value } = checked.body.statements[0] else {
+            panic!("expected source annotation");
+        };
+        let mut changed_type = checked.as_ref().clone();
+        changed_type.locals[local.0].ty = ir::Ty::Bool;
+        changed_type.exprs[value.0].ty = ir::Ty::Bool;
+        assert!(
+            replay_source_body(
+                &original,
+                &Arc::new(changed_type),
+                publication.facts(),
+                &budget
+            )
+            .is_err()
+        );
+        let mut changed_source = original.clone();
+        let binding = changed_source
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.annotation.is_some())
+            .unwrap();
+        binding.annotation = Some(Type::Bool);
+        assert!(
+            replay_source_body(&changed_source, checked, publication.facts(), &budget).is_err()
+        );
+    }
 
     #[test]
     fn lexical_block_producers_reject_changed_effects_and_scope() {
