@@ -10,6 +10,16 @@ mod lexical_block;
 mod projected_borrow;
 mod shared_deref;
 
+pub(super) fn lexical_result_context(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    target: &sr::SourceNode,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<Option<ir::Ty>, FactsError> {
+    lexical_block::result_context(original, inventory, target, signatures, budget)
+}
+
 // This bounded arithmetic slice obtains its width only from authored suffixes,
 // never from checked expression types or a caller's inferred actuals.
 fn authored_float_width(
@@ -3433,6 +3443,96 @@ impl Replay<'_> {
 #[cfg(test)]
 mod literal_context_tests {
     use super::*;
+
+    #[test]
+    fn lexical_integer_context_comes_from_authored_result_binding() {
+        for body in [
+            "let bag:Bag<u8>={let mut inside=seed(7);inside.set(2);inside};consume(&bag);",
+            "let bag:Bag<u8>={let inside=seed(7);{let inside=inside;inside}};consume(&bag);",
+        ] {
+            let source = format!(
+                "struct Bag<T>{{value:T}}impl<T> Bag<T>{{fn set(&mut self,value:T){{self.value=value;}}}}fn seed<T>(value:T)->Bag<T>{{Bag{{value}}}}fn consume<T>(value:&T){{}}fn main(){{{body}}}"
+            );
+            let program = parse(&source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected lexical integer source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty(),
+                "numeric authority fixture must select borrowed-input replay"
+            );
+            let function = plan.callable_body(&plan.program, declaration).unwrap();
+            let Stmt::Let {
+                value: Expr::Block(source_block),
+                ..
+            } = &function.body.statements[0]
+            else {
+                panic!("expected authored result block")
+            };
+            let Stmt::Let {
+                value: Expr::Call {
+                    args: source_args, ..
+                },
+                ..
+            } = &source_block.statements[0]
+            else {
+                panic!("expected authored seed initializer")
+            };
+            assert!(
+                matches!(&source_args[0], Expr::Integer(literal) if literal.magnitude == 7 && literal.suffix.is_none())
+            );
+            let ir::TypedStmt::Let { value: block, .. } = checked.body.statements[0] else {
+                panic!("expected checked result block")
+            };
+            let ir::ExprKind::Block(block) = &checked.exprs[block.0].kind else {
+                panic!("expected checked lexical block")
+            };
+            let ir::TypedStmt::Let { value: seed, .. } = block.statements[0] else {
+                panic!("expected checked seed initializer")
+            };
+            let ir::ExprKind::Call { args, .. } = &checked.exprs[seed.0].kind else {
+                panic!("expected checked seed call")
+            };
+            let integer = args[0].0;
+            assert!(
+                matches!(&checked.exprs[integer].kind, ir::ExprKind::Int(value) if value.ty == ir::IntTy::U8 && value.bits == 7)
+            );
+            for mutation in 0..2 {
+                let mut forged = checked.as_ref().clone();
+                let ir::ExprKind::Int(value) = &mut forged.exprs[integer].kind else {
+                    unreachable!()
+                };
+                if mutation == 0 {
+                    value.ty = ir::IntTy::I32;
+                    forged.exprs[integer].ty = ir::Ty::Int(ir::IntTy::I32);
+                } else {
+                    *value = resolve_integer(
+                        &IntegerLiteral {
+                            magnitude: 9,
+                            suffix: Some(ir::IntTy::U8),
+                        },
+                        false,
+                        None,
+                    )
+                    .unwrap();
+                }
+                assert!(
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .is_err(),
+                    "forged lexical integer mutation {mutation} passed"
+                );
+            }
+        }
+    }
 
     #[test]
     fn annotation_admission_rejects_changed_type_and_source() {

@@ -1,6 +1,115 @@
 //! Lexical source blocks retain every initializer and effect, not just the tail.
 use super::*;
 
+// Follow only source result-preserving edges. In particular, an annotated
+// block's tail can name a local whose initializer needs that same context.
+// Lexical occurrence identities, not local spelling or checked types, select
+// the binding. Other statements remain authenticated by ordinary block replay.
+fn reaches_result(
+    source: &Expr,
+    node: &sr::SourceNode,
+    target: &sr::SourceNode,
+    function: &Function,
+    inventory: &SourceInventory,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    if source_node_equal(node, target, budget)? {
+        return Ok(true);
+    }
+    match source {
+        Expr::Block(block) => match block.tail.as_deref() {
+            Some(tail) => reaches_result(
+                tail,
+                &node.child(19, 0, budget)?.child(6, 0, budget)?,
+                target,
+                function,
+                inventory,
+                budget,
+                depth + 1,
+            ),
+            None => Ok(false),
+        },
+        Expr::Apply { value, .. } => reaches_result(
+            value,
+            &node.child(7, 0, budget)?,
+            target,
+            function,
+            inventory,
+            budget,
+            depth + 1,
+        ),
+        Expr::Var(path) if is_local_shaped_path(path) => {
+            sr::work(budget, node.path.len())?;
+            let Some(binding) = inventory.operand_nodes.get(&node.path) else {
+                return Ok(false);
+            };
+            if !precedes(binding, node) {
+                return Ok(false);
+            }
+            let Some(Stmt::Let { value, .. }) =
+                source_statement(function, inventory, binding, budget)?
+            else {
+                return Ok(false);
+            };
+            reaches_result(
+                value,
+                &binding.child(3, 0, budget)?,
+                target,
+                function,
+                inventory,
+                budget,
+                depth + 1,
+            )
+        }
+        _ => Ok(false),
+    }
+}
+
+pub(super) fn result_context(
+    original: &OriginalSource,
+    inventory: &SourceInventory,
+    target: &sr::SourceNode,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<Option<ir::Ty>, FactsError> {
+    validate_original_occurrence(original, target, budget)?;
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    for binding in &inventory.bindings {
+        sr::work(budget, 1)?;
+        let Some(annotation) = binding.annotation.as_ref() else {
+            continue;
+        };
+        let Some(Stmt::Let { value, .. }) =
+            source_statement(function, inventory, &binding.node, budget)?
+        else {
+            continue;
+        };
+        if reaches_result(
+            value,
+            &binding.node.child(3, 0, budget)?,
+            target,
+            function,
+            inventory,
+            budget,
+            0,
+        )? {
+            let ty =
+                checked_local_ty(annotation, signatures).map_err(|e| source_error(budget, &e))?;
+            original
+                .facts
+                .validate_ty_metadata_with_budget(&ty, budget)?;
+            return Ok(Some(ty));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn syntax(
     block: &Block,
     budget: &ir::PlanBudget,

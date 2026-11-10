@@ -7557,7 +7557,31 @@ fn replay_shared_local_inputs(
     {
         return Err(FactsError::invalid(budget, "source input arity changed"));
     }
-    let expected = source_result_context(original, site, call_id, checked, signatures, budget)?;
+    let mut expected = source_result_context(original, site, call_id, checked, signatures, budget)?;
+    if expected.is_none()
+        && let Some(context) = source_input_replay::lexical_result_context(
+            original, inventory, &site.node, signatures, budget,
+        )?
+    {
+        let state = sr::CallInferenceState::new(None, budget)?;
+        expected = Some(state.type_term(&context, None, depth + 1)?);
+    }
+    // Resolve parameter hints from the original result schema and authored
+    // context before replaying numeric leaves. Checked actuals and instantiated
+    // signatures remain comparison targets, never context providers.
+    let scopes = view.generic_env().scopes();
+    if scopes.len() > 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires an authenticated own binder",
+        ));
+    }
+    let mut context = sr::CallInferenceState::new(scopes.first().cloned(), budget)?;
+    let binder = scopes.first().map(|env| env.binder());
+    if let Some(expected) = expected.as_ref() {
+        let result = context.type_term(&view.signature().result, binder, depth + 1)?;
+        context.constrain(&result, expected, depth + 1)?;
+    }
     let replay = source_input_replay::Replay {
         original,
         inventory,
@@ -7567,6 +7591,13 @@ fn replay_shared_local_inputs(
     };
     let mut input_types = Vec::new();
     for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
+        let parameter = context.type_term(&view.signature().params[index], binder, depth + 1)?;
+        let hint = context.resolve_bound_schema(&parameter, depth + 1, &mut |decl, args| {
+            original
+                .plan
+                .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
+                .map_err(|e| source_error(budget, &e))
+        })?;
         let expectation = match &view.signature().params[index] {
             ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
             _ => ir::CallExpectation::NoFirmReference,
@@ -7578,7 +7609,7 @@ fn replay_shared_local_inputs(
             call_id,
             index,
             expectation,
-            None,
+            hint.as_ref(),
             depth + 1,
         )?;
         if !sr::replay_types_equal(&input, &signature.params[index], budget)? {

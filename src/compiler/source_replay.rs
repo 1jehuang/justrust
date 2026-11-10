@@ -492,6 +492,24 @@ impl CallInferenceState {
             .ok_or_else(|| FactsError::invalid(&self.budget, "inference schema has no binder"))?;
         self.type_term(ty, Some(env.binder()), depth)
     }
+    /// Resolve a schema using only constraints already established in this
+    /// inference state. Unbound slots remain unknown, with no numeric fallback.
+    pub(super) fn resolve_bound_schema(
+        &self,
+        schema: &InferTerm,
+        depth: usize,
+        materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+    ) -> Result<Option<ir::Ty>, FactsError> {
+        let bindings = self.collect_terms(
+            self.slots.len(),
+            self.slots.iter().map(|slot| match slot {
+                Some(term) => Ok(term.clone()),
+                None => self.node(InferKind::Unknown(false)),
+            }),
+        )?;
+        let bound = self.bind_schema(schema, &bindings, depth)?;
+        self.resolve(&bound, false, depth, materialize)
+    }
     /// Instantiate only explicit own-slot markers. Rigid caller parameters
     /// are leaves and must never be rebound by index or display spelling.
     fn bind_schema(

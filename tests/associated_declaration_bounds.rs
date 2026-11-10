@@ -144,6 +144,28 @@ fn main() { count(&W); }
 }
 
 #[test]
+fn composite_equality_keeps_lexical_integer_result_context() {
+    oracle::stock_native(
+        r#"
+trait Container { type Item; fn get(&self) -> Self::Item; }
+struct W<T>(Vec<T>);
+impl<T: Clone> Container for W<T> { type Item = Vec<T>; fn get(&self) -> Vec<T> { self.0.clone() } }
+fn count<T, C: Container<Item = Vec<T>>>(c: &C) -> usize { c.get().len() }
+fn main() {
+    let v: Vec<u8> = { let v = vec![7, 2]; { let v = v; v } };
+    println!("{}", count(&W(v)));
+}
+"#,
+    );
+    for source in [
+        "fn unused(){let v:Vec<u8>={let v=vec![256,2];v};}fn main(){}",
+        "fn unused(){let v:Vec<u8>={let v=vec![7u16,2];v};}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn associated_copy_equality_does_not_grant_rhs_parameter_copy() {
     oracle::stock_and_native_reject(
         r#"
