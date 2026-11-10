@@ -11845,7 +11845,7 @@ struct Parser<'input, 'names> {
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
     impl_regions: RegionDecls,
     /// While parsing an impl header, `'_` introduces a fresh impl lifetime.
-    impl_header_anonymous: Option<Option<AstIdent>>,
+    impl_header_anonymous: Option<()>,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
@@ -14369,6 +14369,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             let region = if self.token().is_lifetime() && self.token().text == "'static" {
                 self.cursor.bump();
                 Some(RegionName::Static)
+            } else if self.is("'_") && self.impl_header_anonymous.is_some() {
+                Some(self.anonymous_impl_lifetime()?)
             } else if self.token().is_lifetime() {
                 Some(self.lifetime()?)
             } else {
@@ -14661,24 +14663,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 let region = if self.eat("'static") {
                     RegionName::Static
-                } else if self.is("'_")
-                    && let Some(slot) = self.impl_header_anonymous
-                {
-                    // An impl header's `'_` is a fresh, distinct impl lifetime.
-                    if slot.is_some() {
-                        return Err(self.unsupported(
-                            "multiple anonymous lifetimes in one impl header are unsupported",
-                        ));
-                    }
-                    let ident = self.input.mint_name(&self.token(), self.names)?;
-                    self.cursor.bump();
-                    self.impl_header_anonymous = Some(Some(ident));
-                    let mut params = std::mem::take(&mut self.impl_regions.params);
-                    let reserved = self.reserve_parser_items(&mut params, 1);
-                    self.impl_regions.params = params;
-                    reserved?;
-                    self.impl_regions.params.push(ident);
-                    RegionName::Named(ident)
+                } else if self.is("'_") && self.impl_header_anonymous.is_some() {
+                    self.anonymous_impl_lifetime()?
                 } else if self.eat("'_") {
                     RegionName::Infer
                 } else {
@@ -16148,7 +16134,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
-            self.impl_header_anonymous = Some(None);
+            self.impl_header_anonymous = Some(());
             let first_ty = self.ty();
             let (trait_path, self_ty) = match first_ty {
                 Err(error) => {
@@ -16466,6 +16452,25 @@ impl<'input, 'names> Parser<'input, 'names> {
         });
         Ok(())
     }
+    fn anonymous_impl_lifetime(&mut self) -> Result<RegionName, ParseError> {
+        if self.impl_regions.params.len() >= ir::MAX_REGION_PARAMS {
+            return Err(self.limit("impl lifetime parameter resource limit exceeded"));
+        }
+        let site = panic_callsite(self.names.session(), self.token().span)
+            .map_err(native_adapter::transport_error)?;
+        let ident = self
+            .names
+            .anonymous_impl_lifetime(site, self.impl_regions.params.len())
+            .map_err(native_adapter::name_error)?;
+        let mut params = std::mem::take(&mut self.impl_regions.params);
+        let reserved = self.reserve_parser_items(&mut params, 1);
+        self.impl_regions.params = params;
+        reserved?;
+        self.impl_regions.params.push(ident);
+        self.cursor.bump();
+        Ok(RegionName::Named(ident))
+    }
+
     fn lifetime(&mut self) -> Result<RegionName, ParseError> {
         if self.token().string {
             return Err(self.error("expected named lifetime, not a string"));

@@ -635,6 +635,29 @@ impl NameStoreBuilder {
         })
     }
 
+    /// A fresh impl-header lifetime, anchored at its actual `'_` occurrence.
+    /// Its private spelling cannot capture a source-written lifetime binder.
+    pub(crate) fn anonymous_impl_lifetime(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let spelling = self
+            .store
+            .session
+            .intern_symbol(&format!("$impl_lifetime${ordinal}"))?;
+        self.append(NameData {
+            atom: NameAtomId::new(&self.store.session, spelling)?,
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
     fn check_ascii(text: &str, budget: &ExpansionBudget) -> Result<(), NameError> {
         let work = (text.len() as u64)
             .checked_mul(2)

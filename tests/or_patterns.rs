@@ -151,6 +151,49 @@ fn main() { let x = 4; let f = Foo { bar: &x }; println!("{} {}", f.get(), f.sam
                 expect: Expect::Run("4 4\n"),
             },
             Case {
+                name: "impl_anonymous_lifetimes_distinct",
+                source: r#"struct Pair<'a, 'b> { left: &'a u8, right: &'b u8 }
+impl Pair<'_, '_> { fn sum(&self) -> u8 { *self.left + *self.right } }
+fn main() { let x = 4; let y = 7; let p = Pair { left: &x, right: &y }; println!("{}", p.sum()); }"#,
+                expect: Expect::Run("11\n"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_with_named",
+                source: r#"struct Pair<'a, 'b> { left: &'a u8, right: &'b u8 }
+impl<'a> Pair<'a, '_> { fn left(&self) -> &'a u8 { self.left } }
+fn main() { let x = 4; let y = 7; let p = Pair { left: &x, right: &y }; println!("{}", p.left()); }"#,
+                expect: Expect::Run("4\n"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_trait_owner",
+                source: r#"struct Foo<'a> { value: &'a u8 }
+trait Read<'a> { fn read(&self) -> u8; }
+impl Read<'_> for Foo<'_> { fn read(&self) -> u8 { *self.value } }
+fn main() { let x = 9; let f = Foo { value: &x }; println!("{}", f.read()); }"#,
+                expect: Expect::Run("9\n"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_undeclared_scope",
+                source: r#"struct Foo<'a> { value: &'a u8 }
+impl Foo<'_> { fn bad(&self) -> &'a u8 { self.value } }
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_not_named_alias",
+                source: r#"struct Pair<'a, 'b> { left: &'a u8, right: &'b u8 }
+impl<'a> Pair<'a, '_> { fn bad(&self) -> &'a u8 { self.right } }
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "impl_anonymous_lifetime_excess_arity",
+                source: r#"struct Foo<'a> { value: &'a u8 }
+impl Foo<'_, '_> { fn read(&self) -> u8 { *self.value } }
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
                 name: "consistent_ref_binding",
                 source: r#"fn f(x: (i32, i32)) -> i32 { match x { (ref a, 1) | (1, ref a) => *a, _ => 0 } }
 fn main() { println!("{} {}", f((5, 1)), f((2, 2))); }"#,
