@@ -19702,19 +19702,9 @@ mod inactive_item_syntax_tests {
                     .starts_with("duplicate positional rest pattern")
             );
         }
-        let source = "fn f([a,b]:[i32;2]){}fn main(){}";
-        let error = parse_syntax_unprepared(source).unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
-        );
-        let at = source.find('[').unwrap();
-        assert_eq!(error.bytes, at..at + 1);
-        assert!(
-            error
-                .message
-                .starts_with("array parameter patterns are unsupported")
-        );
+        // Array parameter patterns destructure like any other parameter pattern.
+        parse_syntax_unprepared("fn f([a,b]:[i32;2]){}fn main(){}")
+            .expect("array parameter patterns parse");
     }
 
     #[test]
