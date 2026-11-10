@@ -291,6 +291,25 @@ reuse ledger (compiled, fresh, depcache hits and saved rustc seconds,
 build-script hits, slot-refreshed units). Add a factor whenever a new
 optimization lands: give it an off switch and a workload.
 
+## Hosted benchmark lifetime
+
+`bench/on-remote.sh start --name NAME -- COMMAND ...` runs the payload under a bounded
+Linux session guardian. `JUSTRUST_BENCH_TIMEOUT` selects a limit from 1 to 86400
+seconds (default 21600). Authenticated hosted lease renewal remains enabled.
+Use `bench/on-remote.sh status NAME` and `bench/on-remote.sh stop NAME`, rather
+than signalling the numeric pidfile or only the initial process group. Nested
+`timeout`/Cargo groups can outlive that group.
+
+The private ownership record binds the guest boot, guardian PID, process start
+time, and session ID before the payload starts. Stop asks that guardian to
+terminate all live members of its session using revalidated pidfds, including
+nested process groups, and verifies cleanup before reporting success. Malformed,
+changed, stale-boot, or reused-PID ownership fails closed. Legacy runs without
+this record require explicit manual ownership verification, not a pidfile
+fallback. Payloads must not escape the owned session with `setsid()`.
+Original logs/results remain available after stop, and a cancelled or incomplete
+run is not a valid comparison baseline.
+
 ## The suite: `bench/suite.py`
 
 Use this for any speed claim. It runs the agent edit loop on **pinned source
