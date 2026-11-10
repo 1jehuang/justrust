@@ -1635,6 +1635,10 @@ const CELL_VALID: &[(&str, &str)] = &[
         "local_shadow",
         r#"struct Cell{value:i32}impl Cell{fn new(value:i32)->Self{Self{value}}fn get(&self)->i32{self.value}}fn main(){let x=Cell::new(7);if x.get()==7{println!("7");}}"#,
     ),
+    (
+        "parent_local_concrete_cell_canonical_actual",
+        r#"struct G<F:FnOnce()>{value:core::cell::Cell<i32>,dropfn:F}fn make<F:FnOnce()>(value:i32,dropfn:F)->G<F>{G{value:core::cell::Cell::new(value),dropfn}}fn main(){let guard=make(7i32,||{});println!("{}",guard.value.get());}"#,
+    ),
 ];
 const CELL_INVALID: &[(&str, &str)] = &[
     (
@@ -1663,10 +1667,6 @@ const CELL_INVALID: &[(&str, &str)] = &[
         "fn unused(x:core::cell::Cell){}fn main(){}",
     ),
 ];
-const CELL_BUILD_UNSUPPORTED: &[(&str, &str)] = &[(
-    "parent_local_concrete_cell_canonical_actual",
-    r#"struct G<F:FnOnce()>{value:core::cell::Cell<i32>,dropfn:F}fn make<F:FnOnce()>(value:i32,dropfn:F)->G<F>{G{value:core::cell::Cell::new(value),dropfn}}fn main(){let guard=make(7i32,||{});println!("{}",guard.value.get());}"#,
-)];
 const CELL_UNSUPPORTED: &[(&str, &str)] = &[
     (
         "parent_local_generic_cell_canonical_actual",
@@ -1708,11 +1708,7 @@ const CELL_UNSUPPORTED: &[(&str, &str)] = &[
 #[test]
 fn cell_exact_stock_baseline() {
     let rustc = defaults_stock::stock_rustc();
-    for (label, source) in CELL_VALID
-        .iter()
-        .chain(CELL_UNSUPPORTED)
-        .chain(CELL_BUILD_UNSUPPORTED)
-    {
+    for (label, source) in CELL_VALID.iter().chain(CELL_UNSUPPORTED) {
         let scratch = Scratch::new();
         let input = scratch.source(source);
         for check in [true, false] {
@@ -1768,30 +1764,6 @@ fn cell_native_check_build_run_workers_1_8() {
     for (label, source) in CELL_VALID {
         eprintln!("Cell valid: {label}");
         runs(source, "7\n");
-    }
-    for (label, source) in CELL_BUILD_UNSUPPORTED {
-        for workers in [1, 8] {
-            let scratch = Scratch::new();
-            let input = scratch.source(source);
-            let output = scratch.path("unsupported-build-output");
-            let checked = capture(&mut compiler(&input, &output, workers, true), &scratch, 20);
-            assert!(checked.status.success(), "{label}: CHECK {checked:?}");
-            assert!(!output.exists(), "{label}: CHECK emitted executable");
-            let built = capture(&mut compiler(&input, &output, workers, false), &scratch, 20);
-            assert_eq!(built.status.code(), Some(1), "{label}: BUILD {built:?}");
-            let diagnostic = String::from_utf8_lossy(&built.stderr);
-            assert!(
-                diagnostic.contains(
-                    "unsupported: Cell generated operation lacks verified closure origin"
-                ),
-                "{label}: {diagnostic}"
-            );
-            assert!(!diagnostic.contains("panicked at"), "{label}: {diagnostic}");
-            assert!(
-                !output.exists(),
-                "{label}: unsupported BUILD emitted executable"
-            );
-        }
     }
     for (label, source) in CELL_INVALID {
         rejects(label, source);
