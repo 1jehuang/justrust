@@ -412,6 +412,7 @@ pub(super) fn inventory_validated(
             | Pattern::Str(_)
             | Pattern::Range { .. }
             | Pattern::Wildcard
+            | Pattern::Rest
             | Pattern::Binding { .. } => {}
         }
         Ok(())

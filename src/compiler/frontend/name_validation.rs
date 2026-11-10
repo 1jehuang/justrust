@@ -1569,6 +1569,7 @@ impl<'a> Validator<'a> {
                 | Pattern::Char(_)
                 | Pattern::Str(_)
                 | Pattern::Range { .. }
+                | Pattern::Rest
                 | Pattern::Wildcard => (),
             },
             Visit::Place(place) => {

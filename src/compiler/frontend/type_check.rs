@@ -49,6 +49,7 @@ mod primitive_actuals;
 mod projected_formals;
 #[path = "type_check/shared_or_arms.rs"]
 mod shared_or_arms;
+mod slice_patterns;
 #[path = "type_check/trait_method_hint.rs"]
 mod trait_method_hint;
 #[path = "try_operator.rs"]
@@ -63,6 +64,8 @@ enum MatchBody<'a> {
     Block(&'a Block),
     ImplicitUnit,
     LoopExit(ir::LoopId),
+    /// Remaining element tests of one slice pattern arm, then its body.
+    Slice(&'a slice_patterns::SliceChain<'a>),
 }
 #[derive(Clone, Copy)]
 struct BorrowedMatchArm<'a> {
@@ -251,6 +254,8 @@ pub(super) struct LoopFrame {
     pub(super) expected_is_inferred: bool,
     pub(super) expected_source_schema: Option<InferTerm>,
     pub(super) can_exit: bool,
+    /// Checker-made block target that source `break`/`continue` never sees.
+    pub(super) synthetic: bool,
 }
 pub(super) struct PatternLocal {
     pub(super) name: AstIdent,
@@ -3378,6 +3383,12 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            Pattern::Rest => {
+                return Err(
+                    "unsupported: subslice bindings require a slice or array reference scrutinee"
+                        .into(),
+                );
+            }
             Pattern::Wildcard => Ok(()),
             Pattern::Binding { .. } => {
                 self.infer_storage(depth + 1)?;
@@ -3651,6 +3662,12 @@ impl<'a> Checker<'a> {
                     &mut pending.work,
                 )?;
                 self.collect_decision(inner, ty, path, pending, depth + 1)?;
+            }
+            Pattern::Rest => {
+                return Err(
+                    "unsupported: subslice bindings require a slice or array reference scrutinee"
+                        .into(),
+                );
             }
             Pattern::Wildcard => {}
             Pattern::Binding { .. } => self.pattern_locals(
@@ -4563,6 +4580,7 @@ impl<'a> Checker<'a> {
             expected_is_inferred: false,
             expected_source_schema: None,
             can_exit: false,
+            synthetic: false,
         });
         id
     }
@@ -4596,8 +4614,8 @@ impl<'a> Checker<'a> {
                 .ok_or_else(|| format!("undeclared label '{text}"))?
         } else {
             self.loops
-                .len()
-                .checked_sub(1)
+                .iter()
+                .rposition(|f| !f.synthetic)
                 .ok_or_else(|| format!("{operation} outside a loop"))?
         };
         let frame = &self.loops[index];
@@ -6261,6 +6279,12 @@ impl<'a> Checker<'a> {
             | Pattern::Range { .. } => {
                 Err("refutable literal pattern in let binding".into())
             }
+            Pattern::Rest => {
+                return Err(
+                    "unsupported: subslice bindings require a slice or array reference scrutinee"
+                        .into(),
+                );
+            }
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
                 ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
@@ -6336,6 +6360,12 @@ impl<'a> Checker<'a> {
                     names,
                     pending,
                     work,
+                );
+            }
+            Pattern::Rest => {
+                return Err(
+                    "unsupported: subslice bindings require a slice or array reference scrutinee"
+                        .into(),
                 );
             }
             Pattern::Wildcard => {}
@@ -11608,6 +11638,7 @@ impl<'a> Checker<'a> {
                 }),
                 Flow::value(ir::Ty::Unit),
             ),
+            MatchBody::Slice(chain) => return self.slice_chain_body(chain, reachable),
             MatchBody::LoopExit(target) => {
                 let frame = self
                     .loops
@@ -11769,6 +11800,10 @@ impl<'a> Checker<'a> {
             return Err("match arm count exceeds limit 4096".into());
         }
         let source = self.flow(scrutinee);
+        if slice_patterns::applies(&source.ty, arms.clone().filter_map(|arm| arm.pattern)) {
+            let arms: Vec<_> = arms.collect();
+            return self.lower_slice_match(scrutinee, &arms, expectation);
+        }
         // Or-patterns outside the binder-free scalar row domain are checked as
         // one arm per alternative sharing the source body (and guard).
         let budget = self.signatures.plan()?.budget.clone();

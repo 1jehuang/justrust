@@ -91,6 +91,101 @@ fn inferred_at_bindings_match_stock_at_workers_1_and_8() {
                 source: r#"fn main() { let y = 1u8; let _ = if true { y } else { 300 }; }"#,
                 expect: Expect::Invalid("literal out of range"),
             },
+            // Subslice bindings `name @ ..` in slice patterns.
+            Case {
+                name: "subslice_recursive_sum",
+                source: r#"fn sum(v: &[i32]) -> i32 {
+    match v {
+        [] => 0,
+        [first, rest @ ..] => *first + sum(rest),
+    }
+}
+fn main() { println!("{}", sum(&[1, 2, 3])); }"#,
+                expect: Expect::Run("6\n"),
+            },
+            Case {
+                name: "subslice_middle_and_lengths",
+                source: r#"fn describe(v: &[i32]) {
+    match v {
+        [] => println!("empty"),
+        [one] => println!("one {one}"),
+        [a, b] => println!("two {a} {b}"),
+        [first, mid @ .., last] => println!("{first} {mid:?} {last}"),
+    }
+}
+fn main() { let v = [1, 2, 3, 4, 5]; for n in 0..6 { describe(&v[..n]); } }"#,
+                expect: Expect::Run("empty\none 1\ntwo 1 2\n1 [2] 3\n1 [2, 3] 4\n1 [2, 3, 4] 5\n"),
+            },
+            Case {
+                name: "subslice_guards_and_literals",
+                source: r#"fn ends(v: &[u8]) -> u8 {
+    match v {
+        [0, ..] => 100,
+        [.., 9] => 9,
+        [head @ .., tail] if head.len() > 2 => *tail + head.len() as u8,
+        [x, _, ..] if *x > 5 => 50,
+        other => other.len() as u8,
+    }
+}
+fn main() { println!("{} {} {} {} {}", ends(&[0, 1]), ends(&[1, 9]), ends(&[1, 2, 3, 4]), ends(&[7, 1]), ends(&[1])); }"#,
+                expect: Expect::Run("100 9 7 50 1\n"),
+            },
+            Case {
+                name: "subslice_through_mut_slice",
+                source: r#"fn bump(v: &mut [i32]) {
+    if let [first, ..] = v { *first += 10; }
+    if let [.., last] = v { *last += 100; }
+    if let [_, rest @ ..] = v { if let [x, ..] = rest { *x *= 2; } }
+    match v { [0, ..] => println!("zero"), [_, mid, ..] => *mid += 1, _ => {} }
+}
+fn main() { let mut m = [1, 2, 3]; bump(&mut m); println!("{m:?}"); let mut e: [i32; 0] = []; bump(&mut e); }"#,
+                expect: Expect::Run("[11, 5, 103]\n"),
+            },
+            Case {
+                name: "subslice_loops_arrays_and_returns",
+                source: r#"fn first_word(words: &[String]) -> &str { match words { [w, ..] => w.as_str(), [] => "" } }
+fn tail<'a>(v: &'a [i32]) -> &'a [i32] { match v { [_, rest @ ..] => rest, [] => v } }
+fn main() {
+    let v = vec![1, 2, 3, 4, 5];
+    let words = vec![String::from("a"), String::from("bb"), String::from("ccc")];
+    if let [w, others @ ..] = words.as_slice() { println!("{w} {}", others.len()); }
+    println!("{} {:?}", first_word(&words), tail(&v));
+    let mut it = 0;
+    while let [_, rest @ ..] = &v[it..] { it += 1; if rest.is_empty() { break; } }
+    println!("{it}");
+    let r = match &v[..] { [x, ..] if *x > 3 => "big", [_, _, ..] => "pair", _ => "small" };
+    println!("{r}");
+    let nested: &[(i32, bool)] = &[(1, true), (2, false)];
+    match nested { [(n, true), ..] => println!("t {n}"), [(n, false), ..] => println!("f {n}"), _ => println!("none") }
+    let mut total = 0;
+    for chunk in [&v[..2], &v[2..], &v[5..]] {
+        total += match chunk { [a, b] => a * b, [a, .., c] => a + c, [a] => *a, [] => -1 };
+    }
+    println!("{total}");
+    'outer: for i in 0..3 {
+        match &v[i..] { [x, ..] if *x == 2 => continue 'outer, [x, ..] => { if *x == 3 { break; } println!("x {x}"); } [] => {} }
+    }
+    let arr = [7u8, 8, 9];
+    let [a, .., c] = arr;
+    if let [h, t @ ..] = &arr { println!("{a} {c} {h} {}", t.len()); }
+}"#,
+                expect: Expect::Run("a 2\na [2, 3, 4, 5]\n5\npair\nt 1\n9\nx 1\n7 9 7 2\n"),
+            },
+            Case {
+                name: "subslice_non_exhaustive_lengths",
+                source: r#"fn main() { let v = [1, 2, 3]; match &v[..] { [a] => println!("{a}"), [a, b] => println!("{a}{b}") } }"#,
+                expect: Expect::Invalid("E0004"),
+            },
+            Case {
+                name: "subslice_two_rests",
+                source: r#"fn main() { let v = [1, 2, 3]; if let [a @ .., b @ ..] = &v[..] { println!("{}", a.len() + b.len()); } }"#,
+                expect: Expect::Invalid("can only be used once per slice pattern"),
+            },
+            Case {
+                name: "subslice_binding_is_a_slice",
+                source: r#"fn main() { let v = [1, 2, 3]; if let [a, rest @ ..] = &v[..] { let n: i32 = rest; println!("{a} {n}"); } }"#,
+                expect: Expect::Invalid("E0308"),
+            },
         ],
     );
 }

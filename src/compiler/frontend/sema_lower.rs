@@ -776,7 +776,9 @@ impl<'a> Lower<'a> {
                     None => return un("empty range pattern"),
                 })
             }
-            Pattern::Array(_) | Pattern::ArrayRest(_) => return un("array pattern"),
+            Pattern::Array(_) | Pattern::ArrayRest(_) | Pattern::Rest => {
+                return un("array pattern");
+            }
             Pattern::TupleRest(_) | Pattern::VariantRest { .. } => return un("rest pattern"),
             Pattern::Apply { .. } => return un("generic pattern path"),
         })

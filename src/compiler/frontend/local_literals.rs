@@ -2496,6 +2496,16 @@ impl<'s> Solver<'_, '_, 's> {
                     _ => unreachable!(),
                 };
                 for field in fields {
+                    // `rest @ ..` names a subslice of the same elements.
+                    if let Pattern::At { name, pattern, .. } = field
+                        && matches!(pattern.as_ref(), Pattern::Rest)
+                    {
+                        let slice = self.node(Domain::Slice(element))?;
+                        let kind = mode.unwrap_or(ir::BorrowKind::Shared);
+                        let bound = self.node(Domain::Ref(kind, slice))?;
+                        self.bind(name, bound)?;
+                        continue;
+                    }
                     let binding = match mode {
                         Some(kind) => self.node(Domain::Ref(kind, element))?,
                         None => element,

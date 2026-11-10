@@ -3380,6 +3380,7 @@ impl Resolver<'_> {
                 }
             }
             Pattern::Wildcard
+            | Pattern::Rest
             | Pattern::Bool(_)
             | Pattern::Int { .. }
             | Pattern::Char(_)

@@ -4796,6 +4796,11 @@ pub(super) struct BuiltinIntrinsicOccurrence {
 }
 
 /// Stock E0658: `X..` directly inside a slice or array pattern is feature-gated.
+/// `name @ ..` written as a slice pattern element.
+pub(super) fn is_subslice_binding(pattern: &Pattern) -> bool {
+    matches!(pattern, Pattern::At { pattern, .. } if matches!(pattern.as_ref(), Pattern::Rest))
+}
+
 fn reject_slice_half_open(pattern: &Pattern) -> Result<(), &'static str> {
     if let Pattern::Range {
         lo: Some(_),
@@ -6630,7 +6635,22 @@ fn replay_builtin_lens(
     }
     sr::work(budget, checked.exprs.len())?;
     for (index, expr) in checked.exprs.iter().enumerate() {
-        if matches!(expr.kind, ir::ExprKind::SliceLen { .. }) && !seen[index] {
+        if let ir::ExprKind::SliceLen { slice } = &expr.kind
+            && !seen[index]
+        {
+            // A slice pattern reads the length of its own checker-made
+            // scrutinee local, which no source call occurrence names.
+            let local = match checked.exprs.get(slice.0).map(|receiver| &receiver.kind) {
+                Some(ir::ExprKind::Local(local)) => Some(*local),
+                Some(ir::ExprKind::Borrow { place, .. }) => Some(place.local),
+                _ => None,
+            };
+            if local
+                .and_then(|local| checked.locals.get(local.0))
+                .is_some_and(|local| local.name == ir::SLICE_PATTERN_SCRUTINEE)
+            {
+                continue;
+            }
             return Err(FactsError::invalid(
                 budget,
                 "orphan checked builtin length lacks original occurrence",
@@ -9966,6 +9986,9 @@ pub enum Pattern {
     TupleRest(PositionalRest),
     Array(Vec<Pattern>),
     ArrayRest(PositionalRest),
+    /// The `..` of a subslice binding `name @ ..`. Only valid as the inner
+    /// pattern of an `At` written directly as a slice pattern element.
+    Rest,
     VariantRest {
         name: AstPath,
         fields: PositionalRest,
@@ -16911,6 +16934,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         while !self.is("]") {
             if self.eat("..") {
                 let suffix = self.positional_rest_suffix("]")?;
+                if prefix.iter().chain(&suffix).any(is_subslice_binding) {
+                    return Err(self.error("`..` can only be used once per slice pattern"));
+                }
                 return Ok(Pattern::ArrayRest(PositionalRest { prefix, suffix }));
             }
             self.names
@@ -16927,6 +16953,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             if !self.eat(",") {
                 break;
             }
+        }
+        if prefix.iter().filter(|p| is_subslice_binding(p)).count() > 1 {
+            return Err(self.error("`..` can only be used once per slice pattern"));
         }
         self.expect("]")?;
         Ok(Pattern::Array(prefix))
@@ -17109,7 +17138,25 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.error("left-hand side of `@` must be a binding"));
         };
         if self.cursor.peek(1).is_some_and(|token| token.matches("..")) {
-            return Err(self.unsupported("@ rest (subslice) bindings are unsupported"));
+            if !self
+                .cursor
+                .peek(2)
+                .is_some_and(|token| token.matches(",") || token.matches("]"))
+            {
+                return Err(self.error("`..` patterns are not allowed here"));
+            }
+            self.cursor.bump();
+            self.cursor.bump();
+            let pattern = self
+                .names
+                .try_parser_box(Pattern::Rest)
+                .map_err(native_adapter::name_error)?;
+            return Ok(Pattern::At {
+                name,
+                mutable,
+                by_ref,
+                pattern,
+            });
         }
         self.cursor.bump();
         let inner = self.pattern_no_alternatives()?;
@@ -17316,7 +17363,10 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn plain_assignment_statement(&mut self, target: Expr) -> Result<Stmt, ParseError> {
         let value = self.expr(0)?;
-        self.expect(";")?;
+        // An assignment has type `()`, so it may end a block without `;`.
+        if !self.is("}") {
+            self.expect(";")?;
+        }
         let (target, value) = match call_rooted_target(target, None, value) {
             Ok(statement) => return Ok(statement),
             Err(unchanged) => *unchanged,
@@ -17377,7 +17427,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, ParseError> {
         let value = self.expr(0)?;
-        self.expect(";")?;
+        if !self.is("}") {
+            self.expect(";")?;
+        }
         let (target, value) = match call_rooted_target(target, Some(op), value) {
             Ok(statement) => return Ok(statement),
             Err(unchanged) => *unchanged,
@@ -17481,6 +17533,54 @@ impl<'input, 'names> Parser<'input, 'names> {
         let (visibility, explicit) = self.visibility(module)?;
         self.nonmodule_item(module, &path, &mut scratch, visibility, explicit, start)
     }
+    /// At `while` or `'label: while`.
+    fn at_while(&self) -> bool {
+        self.is("while")
+            || (self.token().is_lifetime()
+                && self.cursor.peek(1).is_some_and(|t| t.text == ":")
+                && self.cursor.peek(2).is_some_and(|t| t.text == "while"))
+    }
+    #[inline(never)]
+    fn while_statement(&mut self) -> Result<Stmt, ParseError> {
+        let label = if self.is("while") {
+            None
+        } else {
+            let label = self.input.mint_name(&self.token(), self.names)?;
+            self.cursor.bump();
+            self.expect(":")?;
+            Some(label)
+        };
+        self.expect("while")?;
+        if self.eat("let") {
+            return self.while_let_statement(label);
+        }
+        let condition = self.condition_with(0, ConditionPurpose::Conditional)?;
+        if self.at_chain_let() {
+            let first = let_chains::ChainCond::Bool(condition);
+            return self.while_chain_statement(label, first);
+        }
+        let body = self.block()?;
+        Ok(Stmt::While {
+            label,
+            condition,
+            body,
+        })
+    }
+    /// A `while`/`for` loop written as a match arm body: a unit block
+    /// holding that one loop statement.
+    #[inline(never)]
+    fn loop_arm_body(&mut self) -> Result<Option<Expr>, ParseError> {
+        let mut statements = Vec::new();
+        if self.at_while() {
+            statements.push(self.while_statement()?);
+        } else if !self.try_for_statement(&mut statements)? {
+            return Ok(None);
+        }
+        Ok(Some(Expr::Block(Block {
+            statements,
+            tail: None,
+        })))
+    }
     fn block_inner(&mut self) -> Result<Block, ParseError> {
         self.expect("{")?;
         let mut statements = Vec::new();
@@ -17534,36 +17634,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.error("expected semicolon or block end after return"));
                 }
                 statements.push(Stmt::Return(value));
-            } else if self.is("while")
-                || (self.token().is_lifetime()
-                    && self.cursor.peek(1).is_some_and(|t| t.text == ":")
-                    && self.cursor.peek(2).is_some_and(|t| t.text == "while"))
-            {
-                let label = if self.is("while") {
-                    None
-                } else {
-                    let label = self.input.mint_name(&self.token(), self.names)?;
-                    self.cursor.bump();
-                    self.expect(":")?;
-                    Some(label)
-                };
-                self.expect("while")?;
-                if self.eat("let") {
-                    statements.push(self.while_let_statement(label)?);
-                    continue;
-                }
-                let condition = self.condition_with(0, ConditionPurpose::Conditional)?;
-                if self.at_chain_let() {
-                    let first = let_chains::ChainCond::Bool(condition);
-                    statements.push(self.while_chain_statement(label, first)?);
-                    continue;
-                }
-                let body = self.block()?;
-                statements.push(Stmt::While {
-                    label,
-                    condition,
-                    body,
-                });
+            } else if self.at_while() {
+                statements.push(self.while_statement()?);
             } else {
                 // Statement eligibility comes from written syntax, not a
                 // lowered macro's AST shape (assert! lowers to Expr::If).
@@ -18513,7 +18585,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             let brace_macro = self.is_identifier()
                 && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
                 && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
-            let body = if direct_return {
+            let loop_body = if direct_return {
+                None
+            } else {
+                self.loop_arm_body()?
+            };
+            let source_blocklike = source_blocklike || loop_body.is_some();
+            let body = if let Some(body) = loop_body {
+                body
+            } else if direct_return {
                 let value = if self.is(",") || self.is("}") {
                     None
                 } else {

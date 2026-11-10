@@ -10525,6 +10525,9 @@ pub struct Place {
 }
 
 pub const MAX_PATTERN_BINDINGS: usize = 65_536;
+/// Checker-made local holding a slice pattern match's scrutinee. `$` cannot
+/// begin a source identifier.
+pub const SLICE_PATTERN_SCRUTINEE: &str = "$slice_pattern_scrutinee";
 pub const MAX_PATTERN_PROJECTION_DEPTH: usize = 128;
 pub const MAX_PATTERN_PROJECTION_WORK: usize = 1_000_000;
 
