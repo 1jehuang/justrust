@@ -186,6 +186,152 @@ pub struct RangeToInclusive<Idx> {
     pub end: Idx,
 }
 
+/// One endpoint of a range of keys.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Bound<T> {
+    Included(T),
+    Excluded(T),
+    Unbounded,
+}
+
+/// Implemented by every range expression type and by a pair of bounds, so a
+/// method such as `BTreeMap::range` can take any of them.
+pub trait RangeBounds<T: ?Sized> {
+    fn start_bound(&self) -> Bound<&T>;
+    fn end_bound(&self) -> Bound<&T>;
+}
+impl<T> RangeBounds<T> for Range<T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Included(&self.start)
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Excluded(&self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeFrom<T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Included(&self.start)
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+}
+impl<T> RangeBounds<T> for RangeTo<T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Excluded(&self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeInclusive<T> {
+    fn start_bound(&self) -> Bound<&T> {
+        if self.exhausted {
+            Bound::Excluded(&self.start)
+        } else {
+            Bound::Included(&self.start)
+        }
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Included(&self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeToInclusive<T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Included(&self.end)
+    }
+}
+impl<T: ?Sized> RangeBounds<T> for RangeFull {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+}
+impl<T> RangeBounds<T> for (Bound<T>, Bound<T>) {
+    fn start_bound(&self) -> Bound<&T> {
+        match &self.0 {
+            Bound::Included(start) => Bound::Included(start),
+            Bound::Excluded(start) => Bound::Excluded(start),
+            Bound::Unbounded => Bound::Unbounded,
+        }
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        match &self.1 {
+            Bound::Included(end) => Bound::Included(end),
+            Bound::Excluded(end) => Bound::Excluded(end),
+            Bound::Unbounded => Bound::Unbounded,
+        }
+    }
+}
+
+// Reference endpoints preserve the queried key type. Tuple bounds additionally
+// support unsized keys, such as `str` when the owned map keys are `String`.
+impl<T> RangeBounds<T> for Range<&T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Included(self.start)
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Excluded(self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeFrom<&T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Included(self.start)
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+}
+impl<T> RangeBounds<T> for RangeTo<&T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Excluded(self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeInclusive<&T> {
+    fn start_bound(&self) -> Bound<&T> {
+        if self.exhausted {
+            Bound::Excluded(self.start)
+        } else {
+            Bound::Included(self.start)
+        }
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Included(self.end)
+    }
+}
+impl<T> RangeBounds<T> for RangeToInclusive<&T> {
+    fn start_bound(&self) -> Bound<&T> {
+        Bound::Unbounded
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        Bound::Included(self.end)
+    }
+}
+impl<T: ?Sized> RangeBounds<T> for (Bound<&T>, Bound<&T>) {
+    fn start_bound(&self) -> Bound<&T> {
+        match &self.0 {
+            Bound::Included(start) => Bound::Included(*start),
+            Bound::Excluded(start) => Bound::Excluded(*start),
+            Bound::Unbounded => Bound::Unbounded,
+        }
+    }
+    fn end_bound(&self) -> Bound<&T> {
+        match &self.1 {
+            Bound::Included(end) => Bound::Included(*end),
+            Bound::Excluded(end) => Bound::Excluded(*end),
+            Bound::Unbounded => Bound::Unbounded,
+        }
+    }
+}
+
 // Inclusive iterators stop at the last item before attempting a successor.
 impl super::iter::Iterator for RangeInclusive<i8> {
     type Item = i8;

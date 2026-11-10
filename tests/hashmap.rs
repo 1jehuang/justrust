@@ -7,6 +7,109 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn btree_ranges_match_stock() {
+    closure_oracle::check(
+        "btree-ranges",
+        &[
+            Case {
+                name: "btree_range_and_entry_and_modify",
+                source: r#"use std::collections::{BTreeMap,HashMap};
+use std::ops::Bound;
+fn main() {
+    let mut bt: BTreeMap<char, Vec<usize>> = BTreeMap::new();
+    for (i, c) in "mississippi".chars().enumerate() { bt.entry(c).or_insert_with(Vec::new).push(i); }
+    println!("{:?}", bt.range('j'..'q').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range('m'..='s').map(|(k, v)| (*k, v.len())).collect::<Vec<_>>());
+    println!("{:?}", bt.range('n'..).map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..'p').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..='p').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..).count());
+    println!("{:?}", bt.range('a'..'b').count());
+    println!("{:?}", bt.range('i'..'i').count());
+    println!("{:?}", bt.range((Bound::Excluded('i'), Bound::Included('p'))).map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range('i'..='s').rev().map(|(k, _)| *k).collect::<Vec<_>>());
+    let mut r = bt.range('i'..='s');
+    println!("{:?} {:?}", r.next().map(|(k, _)| *k), r.next_back().map(|(k, _)| *k));
+    let mut n: BTreeMap<i32, &str> = BTreeMap::new();
+    n.insert(3, "c"); n.insert(1, "a"); n.insert(2, "b"); n.insert(9, "z");
+    for (k, v) in n.range(2..9) { println!("{k} {v}"); }
+    let lo = 2; let hi = 3;
+    let mut names: Vec<&str> = Vec::new();
+    for (_, v) in n.range(lo..=hi) { names.push(*v); }
+    println!("{}", names.join(","));
+    let mut h: HashMap<&str, i32> = HashMap::new();
+    h.entry("a").and_modify(|v| *v += 1).or_insert(10);
+    h.entry("a").and_modify(|v| *v += 1).or_insert(10);
+    println!("{}", h["a"]);
+    n.entry(1).and_modify(|v| *v = "A").or_insert("new");
+    n.entry(5).and_modify(|v| *v = "E").or_insert("new");
+    println!("{:?}", n);
+}"#,
+                expect: Expect::Run(
+                    "['m', 'p']\n[('m', 1), ('p', 2), ('s', 4)]\n['p', 's']\n['i', 'm']\n['i', 'm', 'p']\n4\n0\n0\n['m', 'p']\n['s', 'p', 'm', 'i']\nSome('i') Some('s')\n2 b\n3 c\nb,c\n11\n{1: \"A\", 2: \"b\", 3: \"c\", 5: \"new\", 9: \"z\"}\n",
+                ),
+            },
+            Case {
+                name: "btree_borrowed_key_range_and_owned_string_bounds",
+                source: r#"use std::collections::BTreeMap;use std::ops::{Bound,RangeBounds};struct Names;impl RangeBounds<str> for Names{fn start_bound(&self)->Bound<&str>{Bound::Included("fig")}fn end_bound(&self)->Bound<&str>{Bound::Excluded("pear")}}fn main(){let mut m:BTreeMap<String,i32>=BTreeMap::new();m.insert("apple".to_string(),1);m.insert("fig".to_string(),2);m.insert("kiwi".to_string(),3);m.insert("pear".to_string(),4);for(k,v)in m.range::<str,_>(Names){println!("{k} {v}");}let lo="fig".to_string();let hi="pear".to_string();for(k,v)in m.range(lo..hi).rev(){println!("{k} {v}");}}"#,
+                expect: Expect::Run("fig 2\nkiwi 3\nkiwi 3\nfig 2\n"),
+            },
+            Case {
+                name: "btree_reference_endpoints_and_unsized_tuple_bounds",
+                source: r#"use std::collections::BTreeMap;use std::ops::Bound;fn main(){let mut m:BTreeMap<i32,i32>=BTreeMap::new();for x in 1..5{m.insert(x,x);}let lo=2;let hi=4;println!("{} {} {} {} {}",m.range::<i32,_>(&lo..&hi).count(),m.range::<i32,_>(&lo..).count(),m.range::<i32,_>(..&hi).count(),m.range::<i32,_>(&lo..=&hi).count(),m.range::<i32,_>(..=&hi).count());let mut s:BTreeMap<String,i32>=BTreeMap::new();s.insert("fig".to_string(),2);s.insert("kiwi".to_string(),3);s.insert("pear".to_string(),4);println!("{}",s.range::<str,_>((Bound::Included("fig"),Bound::Excluded("pear"))).count());}"#,
+                expect: Expect::Run("2 3 3 3 4\n2\n"),
+            },
+            Case {
+                name: "btree_bound_methods_run_once_in_order",
+                source: r#"use std::collections::BTreeMap;
+use std::ops::{Bound, RangeBounds};
+struct Bounds { lo: i32, hi: i32 }
+impl RangeBounds<i32> for Bounds {
+    fn start_bound(&self) -> Bound<&i32> { println!("start"); Bound::Included(&self.lo) }
+    fn end_bound(&self) -> Bound<&i32> { println!("end"); Bound::Excluded(&self.hi) }
+}
+fn main() {
+    let mut m: BTreeMap<i32, i32> = BTreeMap::new();
+    for x in 0..5 { m.insert(x, x); }
+    for (k, v) in m.range(Bounds { lo: 1, hi: 4 }) { println!("{k} {v}"); }
+    println!("empty");
+    let empty: BTreeMap<i32, i32> = BTreeMap::new();
+    println!("{}", empty.range(Bounds { lo: 1, hi: 4 }).count());
+    let mut removed: BTreeMap<i32, i32> = BTreeMap::new();
+    removed.insert(1, 1); removed.remove(&1);
+    println!("removed");
+    println!("{}", removed.range(Bounds { lo: 1, hi: 4 }).count());
+}
+"#,
+                expect: Expect::Run(
+                    "start\nend\n1 1\n2 2\n3 3\nempty\n0\nremoved\nstart\nend\n0\n",
+                ),
+            },
+            Case {
+                name: "btree_unsized_reference_range_requires_sized_key_in_unused_fn",
+                source: r#"use std::collections::BTreeMap;fn unused(m:&BTreeMap<String,i32>)->usize{m.range::<str,_>("a".."z").count()}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "btree_range_wrong_key_type_in_unused_fn",
+                source: r#"use std::collections::BTreeMap;fn unused(m:&BTreeMap<i32,i32>)->usize{m.range("a".."b").count()}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "btree_range_non_range_argument_in_unused_fn",
+                source: r#"use std::collections::BTreeMap;fn unused(m:&BTreeMap<i32,i32>)->usize{m.range(5).count()}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "btree_range_item_cannot_escape_local_map",
+                source: r#"use std::collections::BTreeMap;fn unused()->&'static i32{let mut m:BTreeMap<i32,i32>=BTreeMap::new();m.insert(1,2);for(_,v)in m.range(0..5){return v;}panic!("empty")}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn map_debug_matches_stock() {
     closure_oracle::check(
         "map-debug",

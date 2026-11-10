@@ -421,6 +421,98 @@ impl<K: super::cmp::Ord, V> BTreeMap<K, V> {
         BTreeIter { map: self, index: 0usize }
     }
 
+    /// Entries whose keys fall inside `range`, in ascending key order.
+    /// Panics as std does when the range starts after it ends, or when both
+    /// ends exclude the same key.
+    pub fn range<'a, Q: ?Sized + super::cmp::Ord, R: super::ops::RangeBounds<Q>>(
+        &'a self,
+        range: R,
+    ) -> BTreeRange<'a, K, V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        // An untouched empty map has no search domain or endpoint evaluation.
+        if self.keys.capacity() == 0usize {
+            return BTreeRange { map: self, front: 0usize, back: 0usize };
+        }
+        // Evaluate user-defined bounds exactly once, in start/end order.
+        let start_bound = range.start_bound();
+        let end_bound = range.end_bound();
+        match start_bound {
+            super::ops::Bound::Included(start) => match end_bound {
+                super::ops::Bound::Included(end) | super::ops::Bound::Excluded(end) => {
+                    match start.cmp(end) {
+                        super::cmp::Ordering::Greater => {
+                            panic!("range start is greater than range end in BTreeMap")
+                        }
+                        _ => {}
+                    }
+                }
+                super::ops::Bound::Unbounded => {}
+            },
+            super::ops::Bound::Excluded(start) => match end_bound {
+                super::ops::Bound::Included(end) => match start.cmp(end) {
+                    super::cmp::Ordering::Greater => {
+                        panic!("range start is greater than range end in BTreeMap")
+                    }
+                    _ => {}
+                },
+                super::ops::Bound::Excluded(end) => match start.cmp(end) {
+                    super::cmp::Ordering::Greater => {
+                        panic!("range start is greater than range end in BTreeMap")
+                    }
+                    super::cmp::Ordering::Equal => {
+                        panic!("range start and end are equal and excluded in BTreeMap")
+                    }
+                    super::cmp::Ordering::Less => {}
+                },
+                super::ops::Bound::Unbounded => {}
+            },
+            super::ops::Bound::Unbounded => {}
+        }
+        // First index at or after the start bound.
+        let mut front = 0usize;
+        while front < self.keys.len() {
+            let key: &Q = self.keys.get_ref(front).borrow();
+            let inside = match start_bound {
+                super::ops::Bound::Included(start) => match key.cmp(start) {
+                    super::cmp::Ordering::Less => false,
+                    _ => true,
+                },
+                super::ops::Bound::Excluded(start) => match key.cmp(start) {
+                    super::cmp::Ordering::Greater => true,
+                    _ => false,
+                },
+                super::ops::Bound::Unbounded => true,
+            };
+            if inside {
+                break;
+            }
+            front += 1usize;
+        }
+        // One past the last index at or before the end bound.
+        let mut back = self.keys.len();
+        while back > front {
+            let key: &Q = self.keys.get_ref(back - 1usize).borrow();
+            let inside = match end_bound {
+                super::ops::Bound::Included(end) => match key.cmp(end) {
+                    super::cmp::Ordering::Greater => false,
+                    _ => true,
+                },
+                super::ops::Bound::Excluded(end) => match key.cmp(end) {
+                    super::cmp::Ordering::Less => true,
+                    _ => false,
+                },
+                super::ops::Bound::Unbounded => true,
+            };
+            if inside {
+                break;
+            }
+            back -= 1usize;
+        }
+        BTreeRange { map: self, front, back }
+    }
+
     pub fn keys<'a>(&'a self) -> super::slice::Iter<'a, K> {
         self.keys.iter()
     }
@@ -552,6 +644,45 @@ impl<'a, K: super::cmp::Ord, V> super::iter::IntoIterator for &'a BTreeMap<K, V>
     fn into_iter(self) -> BTreeIter<'a, K, V> {
         self.iter()
     }
+}
+
+/// The entries of a `BTreeMap` between two key bounds: indices
+/// `front..back` of the map's sorted key vector.
+pub struct BTreeRange<'a, K, V> {
+    map: &'a BTreeMap<K, V>,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, K, V> super::iter::Iterator for BTreeRange<'a, K, V> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<(&'a K, &'a V)> {
+        if self.front < self.back {
+            let i = self.front;
+            self.front += 1usize;
+            Option::Some((self.map.keys.get_ref(i), self.map.values.get_ref(i)))
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl<'a, K, V> super::iter::DoubleEndedIterator for BTreeRange<'a, K, V> {
+    fn next_back(&mut self) -> Option<(&'a K, &'a V)> {
+        if self.front < self.back {
+            self.back -= 1usize;
+            let i = self.back;
+            Option::Some((self.map.keys.get_ref(i), self.map.values.get_ref(i)))
+        } else {
+            Option::None
+        }
+    }
+}
+
+impl<'a, K, V> super::iter::IntoIterator for BTreeRange<'a, K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
 }
 
 /// Owning HashMap iteration. Order is unspecified, as in std.
