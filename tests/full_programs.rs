@@ -679,6 +679,18 @@ fn unchanged_hashmap_word_count_pinned_stock_workers1_8() {
 }
 
 #[test]
+fn unchanged_btreemap_vec_borrowed_values_pinned_stock_workers1_8() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_btreemap_vec_borrowed_values_pinned_stock_workers1_8",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "btreemap_vec_borrowed_values",
+            source: r#"use std::collections::BTreeMap;fn main(){let owner=String::from("value");let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();map.entry(0).or_default().push(owner.as_str());println!("{}",map.get(&0).unwrap().len());}"#,
+            expect: unchanged_programs_closure_oracle::Expect::Run("1\n"),
+        }],
+    );
+}
+
+#[test]
 fn unchanged_inventory_system_pinned_stock_workers1_8() {
     unchanged_programs_closure_oracle::check(
         "unchanged_inventory_system_pinned_stock_workers1_8",
