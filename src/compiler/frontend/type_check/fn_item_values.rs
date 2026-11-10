@@ -37,6 +37,30 @@ impl Checker<'_> {
 }
 
 impl Checker<'_> {
+    /// True for `Vec::new` as a value: the owner was written without its
+    /// generic arguments, which the body solver infers.
+    pub(super) fn fn_item_owner_inferred(&self, value: &AssociatedConstUse) -> bool {
+        value.trait_path.is_none()
+            && matches!(value.owner, Type::Apply(_))
+            && partial_annotation::has_nested_infer(&value.owner)
+    }
+
+    /// The function item type when it is already determined. None while an
+    /// inferred owner has no solved hint yet.
+    pub(super) fn associated_fn_item_hint(
+        &self,
+        value: &AssociatedConstUse,
+    ) -> Result<Option<ir::Ty>, String> {
+        if self.fn_item_owner_inferred(value)
+            && !self
+                .associated_owner_hints
+                .contains_key(&(&value.owner as *const Type as usize))
+        {
+            return Ok(None);
+        }
+        self.associated_fn_item(value).map(Some)
+    }
+
     /// `Owner::name` as a value: the exact associated function selected for the
     /// checked owner type, as a zero-sized function item. Method generics are
     /// never inferred here.
@@ -45,7 +69,16 @@ impl Checker<'_> {
             return Err("unsupported: trait-qualified associated function values".into());
         }
         let plan = self.signatures.plan()?;
-        let owner = checked_local_ty(&value.owner, self.signatures)?;
+        let owner = if self.fn_item_owner_inferred(value) {
+            self.associated_owner_hints
+                .get(&(&value.owner as *const Type as usize))
+                .cloned()
+                .ok_or(
+                    "E0282: type annotations needed: cannot infer the owner type of this function value",
+                )?
+        } else {
+            checked_local_ty(&value.owner, self.signatures)?
+        };
         let (callee, _, _) = plan.select_associated_with_scratch(
             &owner,
             &value.name,

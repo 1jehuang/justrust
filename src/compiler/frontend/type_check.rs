@@ -1271,10 +1271,10 @@ impl<'s> Checker<'s> {
                     .constant_type(expr)?;
                 self.infer_node(InferKind::Rigid(ty))?
             }
-            Expr::AssociatedFn(value) => {
-                let ty = self.associated_fn_item(value)?;
-                self.infer_type_term(&ty, None, depth + 1)?
-            }
+            Expr::AssociatedFn(value) => match self.associated_fn_item_hint(value)? {
+                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                None => self.infer_node(InferKind::Unknown(false))?,
+            },
             Expr::Var(name) => match self.callable_value_hint(name)? {
                 Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -5331,7 +5331,7 @@ impl<'a> Checker<'a> {
             ),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self.callable_value_hint(name)?,
-            Expr::AssociatedFn(value) => Some(self.associated_fn_item(value)?),
+            Expr::AssociatedFn(value) => self.associated_fn_item_hint(value)?,
             Expr::Call { name, args } => {
                 let key = self.path_key(name, Namespace::Value)?;
                 let plan = self

@@ -40,6 +40,11 @@ fn local_callable_signatures_match_stock() {
             "shadowed",
             "fn main(){let x=100;let f=|x|{let x=x+2;x};println!(\"{} {}\",x,f(5));}",
         ),
+        // Associated function values whose owner arguments are inferred.
+        (
+            "owner_inferred_fn_item",
+            "use std::collections::BTreeMap;fn main(){let mut m=BTreeMap::new();m.entry(7u8).or_insert_with(Vec::new).push(3usize);m.entry(7u8).or_insert_with(Vec::new).push(4usize);let f=String::new;let s:String=f();let v:Vec<Vec<i32>>=(0..3).map(|_|Vec::new()).collect();println!(\"{} {:?} {:?} {:?}\",m.len(),m.get(&7u8),s,v);}",
+        ),
     ];
     for (name, text) in programs {
         // The native compiler captures its source directory; keep each
@@ -98,6 +103,7 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
     std::fs::create_dir_all(&dir).unwrap();
     for (name, text, diagnostic) in [
         ("unresolved", "fn main(){let f=|x|x;}", "E0282"),
+        ("unresolved_owner", "fn main(){let f=Vec::new;}", "E0282"),
         ("arity", "fn main(){let f=|x|x+1;f();}", "E0057"),
         (
             "conflict",

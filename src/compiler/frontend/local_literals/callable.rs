@@ -1,14 +1,66 @@
 //! Parent-body callable constraints are hints, never checked closure authority.
 use super::*;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CallableKey {
+    /// A stored closure, by its adapter path.
+    Closure(PathKey),
+    /// An associated function value whose owner arguments are inferred
+    /// (`Vec::new`), by the address of its written owner type.
+    FnItem(usize),
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct CallableTerm {
-    pub key: PathKey,
+    pub key: CallableKey,
     pub params: Vec<Term>,
     pub result: Term,
 }
 
 impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
+    /// `Vec::new` as a value: the unique inherent candidate's signature with
+    /// fresh owner arguments, so a callable bound or call can solve them. The
+    /// solved owner is published as an associated owner hint. The checker
+    /// still performs ordinary selection for the concrete owner.
+    pub(super) fn inferred_owner_fn_item(
+        &mut self,
+        value: &'s AssociatedConstUse,
+    ) -> Result<Option<Term>, String> {
+        let site = &value.owner as *const Type as usize;
+        let owner = self.source_ty(&value.owner)?;
+        self.checker.infer_storage(1)?;
+        self.associated_owner_sites.push((site, owner));
+        let Some(declaration) = self.candidate_for_receiver(owner, value.name)? else {
+            return Ok(None);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let info = plan.declaration(declaration)?;
+        if info.param_env.arity() > 0 {
+            return Ok(None);
+        }
+        let associated = info
+            .path
+            .associated
+            .as_ref()
+            .ok_or("associated function value without owner")?;
+        let schema = plan.function_schema(declaration)?;
+        let params = self.parameters(&schema.env)?;
+        let formal = self.schema(&associated.self_pattern, &params, 0)?;
+        self.unify(owner, formal)?;
+        let mut inputs = Vec::new();
+        for input in schema.signature.params.iter() {
+            self.checker.infer_storage(1)?;
+            inputs.push(self.schema(input, &params, 0)?);
+        }
+        let result = self.schema(&schema.signature.result, &params, 0)?;
+        self.node(Domain::Callable(CallableTerm {
+            key: CallableKey::FnItem(site),
+            params: inputs,
+            result,
+        }))
+        .map(Some)
+    }
+
     pub(super) fn stored_callable(
         &mut self,
         path: &AstPath,
@@ -34,7 +86,7 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             .collect::<Result<Vec<_>, _>>()?;
         let result = self.source_ty(&syntax.result)?;
         let term = self.node(Domain::Callable(CallableTerm {
-            key: key.clone(),
+            key: CallableKey::Closure(key.clone()),
             params: params.clone(),
             result,
         }))?;

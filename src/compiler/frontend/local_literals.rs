@@ -2867,6 +2867,12 @@ impl<'s> Solver<'_, '_, 's> {
                 self.fixed(const_inputs::scalar_ir_type(value.ty()))
             }
             Expr::AssociatedFn(value) => {
+                if self.checker.fn_item_owner_inferred(value) {
+                    return match self.inferred_owner_fn_item(value)? {
+                        Some(term) => Ok(term),
+                        None => self.fresh(),
+                    };
+                }
                 let ty = self.checker.associated_fn_item(value)?;
                 self.fixed(ty)
             }
