@@ -701,7 +701,16 @@ impl Checker<'_> {
         }
         self.facts()
             .validate_ty_metadata_with_budget(&ir::Ty::Cell(descriptor.clone()), &plan.budget)?;
-        let receiver = if let Ok(mut place) = static_source_place(receiver) {
+        let receiver_ty = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Cell(descriptor.clone())),
+        };
+        let receiver = if references == 0 {
+            // Use the ordinary place-borrow protocol, including canonical
+            // overloaded Deref field projections. A syntactic local-rooted
+            // place such as `rc.cell` need not be a builtin checked_place.
+            self.borrow_value(ir::BorrowKind::Shared, receiver, Some(&receiver_ty))?
+        } else if let Ok(mut place) = static_source_place(receiver) {
             plan.budget.retain_bytes(
                 references
                     .checked_mul(std::mem::size_of::<FieldSelector>())
@@ -719,14 +728,13 @@ impl Checker<'_> {
                 return Err("invalid metadata: Cell receiver place type changed".into());
             }
             self.borrow_expression(ir::BorrowKind::Shared, place)?
-        } else if references == 0 {
-            self.borrow_value(ir::BorrowKind::Shared, receiver, None)?
         } else {
             return Err(
                 "unsupported: Cell reference receiver requires canonical local-root provenance"
                     .into(),
             );
         };
+        self.require(&self.flow(receiver), &receiver_ty)?;
         let mut completes = self.flow(receiver).completes;
         let value = if operation == CellOperation::Set {
             let value = self.expr_expected(&args[0], Some(descriptor.argument()))?;

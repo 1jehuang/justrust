@@ -13,6 +13,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 mod aggregate_reborrow;
+mod cell_access;
 mod correlation;
 mod native_exchange;
 mod native_storage;
@@ -10033,48 +10034,10 @@ impl Plan {
             statement,
             phase,
         } = point;
-        if matches!(access, Access::CellRead | Access::CellWrite) {
-            let Some(authority) = self.authority.as_ref() else {
-                return Ok(Some(Problem::Invalid(
-                    "Cell interior access lacks validated storage authority".into(),
-                )));
-            };
-            let base = match &target.place.root {
-                CanonicalRoot::Owned(local) => f.locals.get(local.0).map(|local| local.ty.clone()),
-                CanonicalRoot::ParameterReferent(local, position) => {
-                    let Some(local) = f.locals.get(local.0) else {
-                        return Ok(Some(Problem::Invalid(
-                            "Cell storage root is missing".into(),
-                        )));
-                    };
-                    match ir::carrier_at(&local.ty, position, authority.budget()) {
-                        Ok(Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
-                        _ => None,
-                    }
-                }
-            };
-            let Some(base) = base else {
-                return Ok(Some(Problem::Invalid(
-                    "Cell storage root lacks an exact reference carrier".into(),
-                )));
-            };
-            let actual = match authority.projected_ty(&base, &target.place.projection) {
-                Ok(actual) => actual,
-                Err(error) if error.is_resource() => return Err(Exhausted),
-                Err(error) => return Ok(Some(Problem::Invalid(error.to_string()))),
-            };
-            if !matches!(&actual,Ty::Cell(cell) if cell.is_concrete()) {
-                return Ok(Some(Problem::Invalid(
-                    "Cell interior access requires canonical primitive Cell storage".into(),
-                )));
-            }
-            if let Err(error) = authority.validate_ty(&actual) {
-                return if error.is_resource() {
-                    Err(Exhausted)
-                } else {
-                    Ok(Some(Problem::Invalid(error.to_string())))
-                };
-            }
+        if matches!(access, Access::CellRead | Access::CellWrite)
+            && let Some(problem) = self.cell_storage_problem(f, target, access, point, budget)?
+        {
+            return Ok(Some(problem));
         }
         let point = self.point_data(block, statement, phase);
         let active = self.active(&point.origins, &point.live, budget)?;
@@ -11460,6 +11423,129 @@ mod parameter_equality_tests {
             Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap()),
             publication.facts().clone(),
         )
+    }
+
+    #[test]
+    fn cell_subtree_access_requires_original_operation_and_complete_issued_target() {
+        let source = "use std::cell::Cell;use std::rc::Rc;struct S{cell:Cell<u32>}fn update(s:&Rc<S>){s.cell.set(s.cell.get()+1u32);}fn main(){}";
+        let (function, facts) = shared_aggregate_body_fixture(source);
+        let plan = Plan::build_validated(
+            &function,
+            &facts,
+            None,
+            &mut Budget::new(32_000_000),
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+        let mut checked = 0;
+        for (block, body) in function.blocks.iter().enumerate() {
+            for (statement, value) in body.statements.iter().enumerate() {
+                let Statement::Assign {
+                    value: Rvalue::CellGet { reference, .. },
+                    ..
+                } = &value.value
+                else {
+                    continue;
+                };
+                let point = AccessPoint {
+                    block: BlockId(block),
+                    statement: Some(statement),
+                    phase: Phase::Read,
+                };
+                let mut storage = reference.clone();
+                storage.projection.push(Projection::Deref);
+                let mut budget = Budget::new(32_000_000);
+                let targets = plan
+                    .resolve(
+                        &storage,
+                        point.block,
+                        point.statement,
+                        point.phase,
+                        &mut budget,
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert!(!targets.is_empty());
+                for target in &targets {
+                    assert_eq!(target.precision, TargetPrecision::Subtree);
+                    assert!(!target.authority.is_empty());
+                    assert_eq!(
+                        plan.cell_storage_problem(
+                            &function,
+                            target,
+                            Access::CellRead,
+                            point,
+                            &mut budget
+                        )
+                        .unwrap(),
+                        None
+                    );
+                    assert!(
+                        plan.cell_storage_problem(
+                            &function,
+                            target,
+                            Access::CellWrite,
+                            point,
+                            &mut budget
+                        )
+                        .unwrap()
+                        .is_some()
+                    );
+                    let mut foreign = target.clone();
+                    foreign.authority.clear();
+                    assert!(
+                        plan.cell_storage_problem(
+                            &function,
+                            &foreign,
+                            Access::CellRead,
+                            point,
+                            &mut budget
+                        )
+                        .unwrap()
+                        .is_some()
+                    );
+                    foreign = target.clone();
+                    foreign.place.root = CanonicalRoot::Owned(LocalId(0));
+                    assert!(
+                        plan.cell_storage_problem(
+                            &function,
+                            &foreign,
+                            Access::CellRead,
+                            point,
+                            &mut budget
+                        )
+                        .unwrap()
+                        .is_some()
+                    );
+                    let mut forged = (*function).clone();
+                    let Statement::Assign {
+                        value: Rvalue::CellGet { reference, .. },
+                        ..
+                    } = &mut forged.blocks[block].statements[statement].value
+                    else {
+                        unreachable!()
+                    };
+                    *reference = Place {
+                        local: LocalId(0),
+                        projection: Vec::new(),
+                    };
+                    assert!(
+                        plan.cell_storage_problem(
+                            &forged,
+                            target,
+                            Access::CellRead,
+                            point,
+                            &mut budget
+                        )
+                        .unwrap()
+                        .is_some()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0);
     }
 
     #[test]

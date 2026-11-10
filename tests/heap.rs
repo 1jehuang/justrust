@@ -1265,6 +1265,44 @@ fn main() {
 }
 
 #[test]
+fn scalar_cell_receiver_fields_borrow_the_deref_target() {
+    heap_case(
+        "rc_cell_receiver_fields",
+        r#"
+use std::cell::Cell;
+use std::rc::Rc;
+struct State { count: Cell<u32>, marked: Cell<bool> }
+fn update(state: &Rc<State>) {
+    state.count.set(state.count.get() + 1);
+    state.marked.set(true);
+}
+fn main() {
+    let state = Rc::new(State { count: Cell::new(3u32), marked: Cell::new(false) });
+    let alias = Rc::clone(&state);
+    update(&state);
+    assert!(alias.count.get() == 4u32);
+    assert!(alias.marked.get());
+    let direct = State { count: Cell::new(7u32), marked: Cell::new(false) };
+    direct.count.set(8u32);
+    let borrowed = &direct.count;
+    assert!(borrowed.get() == 8u32);
+    println!("ok");
+}
+"#,
+    );
+    rejects_source(
+        "rc_cell_field_does_not_copy",
+        "use std::cell::Cell;use std::rc::Rc;struct S{c:Cell<u32>}fn unused(s:Rc<S>){let moved=s.c;}fn main(){}",
+        "non-Copy",
+    );
+    rejects_source(
+        "rc_cell_receiver_after_move",
+        "use std::cell::Cell;use std::rc::Rc;struct S{c:Cell<u32>}fn main(){let s=Rc::new(S{c:Cell::new(1u32)});drop(s);s.c.set(2u32);}",
+        "initialization/move analysis",
+    );
+}
+
+#[test]
 fn rc_weak_observes_without_owning_and_frees_counts_last() {
     runs("rc_weak");
     for (name, source, needle) in [
