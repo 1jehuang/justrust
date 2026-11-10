@@ -3383,12 +3383,10 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            Pattern::Rest => {
-                return Err(
-                    "unsupported: subslice bindings require a slice or array reference scrutinee"
-                        .into(),
-                );
-            }
+            Pattern::Rest => Err(
+                "unsupported: subslice bindings require a slice or array reference scrutinee"
+                    .into(),
+            ),
             Pattern::Wildcard => Ok(()),
             Pattern::Binding { .. } => {
                 self.infer_storage(depth + 1)?;
@@ -6279,12 +6277,10 @@ impl<'a> Checker<'a> {
             | Pattern::Range { .. } => {
                 Err("refutable literal pattern in let binding".into())
             }
-            Pattern::Rest => {
-                return Err(
-                    "unsupported: subslice bindings require a slice or array reference scrutinee"
-                        .into(),
-                );
-            }
+            Pattern::Rest => Err(
+                "unsupported: subslice bindings require a slice or array reference scrutinee"
+                    .into(),
+            ),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
                 ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
