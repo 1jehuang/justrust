@@ -9,6 +9,78 @@ mod iterator_oracle;
 use iterator_oracle::closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn retain_preserves_order_and_predicate_calls_match_stock() {
+    iterator_oracle::stock_native(
+        r#"
+fn retain_generic<T, F: FnMut(&T) -> bool>(values: &mut Vec<T>, predicate: F) {
+    values.retain(predicate);
+}
+fn main() {
+    let mut values = vec![4, 1, 4, 2, 8, 2, 2];
+    retain_generic(&mut values, |value| { println!("visit {}", value); *value != 8 && *value != 2 });
+    println!("{:?}", values);
+    values.retain(|_| true);
+    println!("{:?}", values);
+    values.retain(|_| false);
+    println!("{}", values.len());
+    values.retain(|_| { println!("unexpected"); true });
+    let mut calls = 0;
+    let mut numbers = vec![3, 7, 1, 9];
+    numbers.retain(|_| { calls += 1; calls % 2 == 1 });
+    println!("{} {:?}", calls, numbers);
+    numbers.retain(|&value| value != 1);
+    println!("{:?}", numbers);
+}
+"#,
+    );
+}
+
+#[test]
+fn retain_affine_elements_drop_once_match_stock() {
+    iterator_oracle::stock_native(
+        r#"
+struct Item { id: i32, name: String }
+impl Drop for Item { fn drop(&mut self) { println!("drop {} {}", self.id, self.name); } }
+fn main() {
+    let mut values = vec![
+        Item { id: 1, name: String::from("one") },
+        Item { id: 2, name: String::from("two") },
+        Item { id: 3, name: String::from("three") },
+        Item { id: 4, name: String::from("four") },
+    ];
+    values.retain(|value| { println!("visit {}", value.id); value.id % 2 == 1 });
+    println!("kept {} {} {}", values.len(), values[0].id, values[1].id);
+    values.retain(|_| false);
+    println!("empty {}", values.is_empty());
+}
+"#,
+    );
+}
+
+#[test]
+fn retain_nested_references_match_stock_and_reject_invalid_borrows() {
+    iterator_oracle::stock_native(
+        r#"
+fn main() {
+    let a = 3;
+    let b = 8;
+    let mut refs = vec![&a, &b, &a];
+    refs.retain(|value| **value == 3);
+    println!("{} {} {}", refs.len(), **refs.get(0).unwrap(), **refs.get(1).unwrap());
+}
+"#,
+    );
+    for source in [
+        "fn unused() { let values = vec![1]; values.retain(|_| true); } fn main() {}",
+        "fn unused() { let mut values = vec![1]; values.retain(|_| 1); } fn main() {}",
+        "fn unused() { let mut values = vec![1]; values.retain(|value| { *value = 2; true }); } fn main() {}",
+        "fn unused() { let mut values = vec![1]; let mut escaped = None; values.retain(|value| { escaped = Some(value); true }); println!(\"{:?}\", escaped); } fn main() {}",
+    ] {
+        iterator_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn implicit_deref_mut_field_assignments_match_stock() {
     iterator_oracle::stock_native(
         r#"

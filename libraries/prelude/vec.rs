@@ -219,6 +219,19 @@ impl<T> Vec<T> {
         }
     }
 
+    /// Visits each element once in source order, dropping rejected elements
+    /// before calling the predicate on the next element.
+    pub fn retain<F: FnMut(&T) -> bool>(&mut self, mut predicate: F) {
+        let mut index = 0usize;
+        while index < self.len {
+            if predicate(self.get_ref(index)) {
+                index += 1usize;
+            } else {
+                let _removed = self.remove(index);
+            }
+        }
+    }
+
     pub fn swap_remove(&mut self, index: usize) -> T {
         if index >= self.len {
             panic!("swap_remove index out of bounds");
