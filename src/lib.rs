@@ -103,6 +103,7 @@ mod remote_backend;
 mod remote_build;
 mod remote_daemon;
 mod remote_hosted;
+mod remote_status_watch;
 // Parts are used only by the remote agent, which is not built on Windows.
 mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
@@ -653,7 +654,7 @@ enum RemoteCmd {
         /// One line of Waybar custom-module JSON.
         #[arg(long)]
         waybar: bool,
-        /// Print again every N seconds.
+        /// Watch changes immediately; N seconds between machine-metric samples.
         #[arg(long, value_name = "SECS")]
         watch: Option<f64>,
     },

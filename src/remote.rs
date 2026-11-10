@@ -353,18 +353,18 @@ fn collect_hosted(probe: bool) -> Status {
         error: h.error.clone(),
         ..Default::default()
     };
-    if probe
-        && h.connected
+    if h.connected
         && let Some(t) = crate::remote_hosted::cached_target()
     {
-        let cached = cached_probe_file(HOSTED_PROBE)
-            .filter(|p| p.dest.as_deref() == Some(&t.dest) && now() - p.at < PROBE_TTL);
-        out.probe = Some(cached.unwrap_or_else(|| {
+        let cached = cached_probe_file(HOSTED_PROBE).filter(|p| p.dest.as_deref() == Some(&t.dest));
+        out.probe = if probe && cached.as_ref().is_none_or(|p| now() - p.at >= PROBE_TTL) {
             let p = run_probe_ssh(&t);
             save_probe(HOSTED_PROBE, &p);
-            p
-        }));
-    } else if probe {
+            Some(p)
+        } else {
+            cached
+        };
+    } else {
         // Machine identity outlives the session: keep the last one seen.
         out.probe = cached_probe_file(HOSTED_PROBE).map(|mut p| {
             p.ok = false;
@@ -1136,26 +1136,118 @@ fn sync_badge(d: &DaemonState) -> String {
 }
 
 pub fn status(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
+    let Some(secs) = watch else {
+        println!(
+            "{}",
+            status_output(&collect(true), json, waybar)?.trim_end()
+        );
+        return Ok(());
+    };
+    use crate::remote_status_watch::{AUTH, CLOSED, HOSTED, LOCAL, ONLINE, RemoteStatusWatch};
+    let mut events = RemoteStatusWatch::new();
+    let tick = Duration::from_secs_f64(secs.max(1.0));
+    let fallback = tick.max(Duration::from_secs(60));
+    let mut api_error = false;
+    let mut api_due: Option<Instant> = None;
+    let mut fallback_due = Instant::now() + fallback;
+    let mut metrics_due = Instant::now() + tick;
+    let mut st = collect(true);
+    let mut last = String::new();
     loop {
-        let st = collect(true);
-        let out = if waybar {
-            render_waybar(&st)
-        } else if json {
-            serde_json::to_string(&st)?
-        } else {
-            render_text(&st)
-        };
-        if watch.is_some() && !waybar && !json {
-            print!("\x1b[H\x1b[2J");
+        let out = status_output(&st, json, waybar)?;
+        if out != last {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let clear = if !waybar && !json {
+                "\x1b[H\x1b[2J"
+            } else {
+                ""
+            };
+            if writeln!(stdout, "{clear}{}", out.trim_end())
+                .and_then(|_| stdout.flush())
+                .is_err()
+            {
+                return Ok(());
+            }
+            last = out;
         }
-        println!("{}", out.trim_end());
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-        match watch {
-            Some(secs) => std::thread::sleep(Duration::from_secs_f64(secs.max(1.0))),
-            None => return Ok(()),
+
+        // Quantities (CPU/RAM/latency) still need sampling over SSH. They do
+        // not cause hosted account/credit/host-status requests. A disconnected
+        // hosted watcher with working push has no periodic status tick.
+        let hosted = st.backend == "hosted";
+        let measure = !hosted || st.hosted.as_ref().is_some_and(|h| h.connected);
+        let needs_fallback = !events.has_files() || (hosted && (!events.online() || api_error));
+        let mut deadline = api_due;
+        if measure {
+            deadline = Some(deadline.map_or(metrics_due, |d| d.min(metrics_due)));
+        }
+        if needs_fallback {
+            deadline = Some(deadline.map_or(fallback_due, |d| d.min(fallback_due)));
+        }
+        let bits = events.wait(deadline.map(|d| d.saturating_duration_since(Instant::now())));
+        if bits & CLOSED != 0 {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if bits & AUTH != 0 {
+            events.restart_hosted();
+        }
+        if bits & (HOSTED | ONLINE | AUTH) != 0 && api_due.is_none() {
+            // Bound burst debounce, never postpone a queued refresh forever.
+            api_due = Some(now + Duration::from_millis(150));
+        }
+        let refresh_api =
+            api_due.is_some_and(|d| now >= d) || (needs_fallback && now >= fallback_due);
+        let measure_now = measure && now >= metrics_due;
+        if refresh_api {
+            if matches!(crate::remote_backend::load(), Some(Backend::Hosted)) {
+                api_error = crate::remote_hosted::refresh_status_cache()
+                    .map_or(true, |s| s.error.is_some());
+            }
+            api_due = None;
+            fallback_due = Instant::now() + fallback;
+        }
+        if measure_now {
+            metrics_due = Instant::now() + tick;
+        }
+        if bits & LOCAL != 0 || refresh_api || measure_now {
+            // Cached host state plus live local daemon/session state. Never
+            // let a local file event trigger an account API request.
+            st = collect(measure_now && !hosted);
+            if measure_now
+                && hosted
+                && let Some(h) = &st.hosted
+            {
+                // Only refresh the SSH metrics, not the hosted API cache.
+                if h.connected {
+                    update_hosted_metrics(&mut st);
+                }
+            }
         }
     }
+}
+
+fn update_hosted_metrics(st: &mut Status) {
+    if let Some(t) = crate::remote_hosted::cached_target() {
+        let cached = cached_probe_file(HOSTED_PROBE)
+            .filter(|p| p.dest.as_deref() == Some(&t.dest) && now() - p.at < PROBE_TTL);
+        st.probe = Some(cached.unwrap_or_else(|| {
+            let p = run_probe_ssh(&t);
+            save_probe(HOSTED_PROBE, &p);
+            p
+        }));
+    }
+}
+
+fn status_output(st: &Status, json: bool, waybar: bool) -> Result<String> {
+    Ok(if waybar {
+        render_waybar(st)
+    } else if json {
+        serde_json::to_string(st)?
+    } else {
+        render_text(st)
+    })
 }
 
 // ---------------------------------------------------------------- lifecycle

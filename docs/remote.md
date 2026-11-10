@@ -31,6 +31,29 @@ justrust remote check|test|build|clippy <cargo args>
 With no backend configured nothing remote ever happens. Every build runs
 locally and routing costs one failed `stat`.
 
+### Continuous status and Waybar
+
+Use `justrust remote status --waybar --watch 15` as a continuous Waybar
+`exec`, without a Waybar `interval`. On Linux, local backend, login, SSH
+session and sync-daemon changes wake it through inotify. The daemon emits
+coalesced `remote/daemon-status` hints only when displayed state changes.
+
+For hosted accounts the watcher subscribes to authenticated, account-scoped
+`GET /v1/build/events` WebSocket notifications. Connection/reconnection and
+change hints fetch a fresh authoritative account/host snapshot, bypassing the
+ordinary cache TTL. Local file events only re-read cached hosted state.
+Idle hosted status therefore needs no recurring API status requests while
+the notification connection is healthy. Transport keepalives do not fetch
+status. The server owns event publication and tenant isolation.
+
+The `--watch` value remains the sample interval for quantitative machine
+metrics (SSH latency, load, RAM, disk and uptime) while a session is open.
+Those quantities must be measured, not inferred from lifecycle events. Legacy
+AWS/SSH backends retain timed measurements. If push or directory watching is
+unavailable, hosted API refresh falls back to at least 60 seconds and the
+subscription reconnects with bounded backoff. Closing the Waybar pipe stops
+the watcher, including when it is otherwise idle.
+
 ## Measured (2026-10-09, c7i.8xlarge spot in us-west-2, 29 ms round trip)
 
 | case | local (16 threads) | remote |

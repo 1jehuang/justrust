@@ -195,6 +195,22 @@ impl Creds {
         format!("header = \"Authorization: Bearer {k}\"\n")
     }
 
+    /// WebSocket credentials stay in memory, never in argv or query strings.
+    pub(crate) fn status_event_request(&self) -> (String, tungstenite::http::HeaderValue) {
+        let url = self.url("build/events");
+        let url = if let Some(rest) = url.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else {
+            format!("ws://{}", url.strip_prefix("http://").unwrap_or(&url))
+        };
+        // Creds::new rejects controls/whitespace before constructing headers.
+        let mut authorization =
+            tungstenite::http::HeaderValue::from_str(&format!("Bearer {}", self.key))
+                .expect("validated bearer credential");
+        authorization.set_sensitive(true);
+        (url, authorization)
+    }
+
     pub(crate) fn url(&self, suffix: &str) -> String {
         let suffix = suffix.trim_start_matches('/');
         let base = if suffix.starts_with("build/") {
@@ -1149,6 +1165,14 @@ pub fn status_cached(refresh: bool) -> HostedStatus {
     s.connected = master_alive();
     s.address = load_state().map(|st| st.address);
     s
+}
+
+/// A hosted change hint invalidates the TTL immediately. The stream is only a
+/// hint: all account/host/billing data still comes from authenticated APIs.
+pub fn refresh_status_cache() -> Result<HostedStatus> {
+    let s = status();
+    write_private(&dir()?.join("status.json"), &serde_json::to_vec(&s)?)?;
+    Ok(s)
 }
 
 pub fn status() -> HostedStatus {
