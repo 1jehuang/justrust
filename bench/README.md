@@ -53,6 +53,17 @@ new work directories and records `snapshot_format` in result provenance, so
 `suite.py compare` rejects mixing it with older archive-only results. Source
 fixups remain visible as worktree changes against the real pinned commit.
 
+Run `python3 bench/suite.py preflight` on the machine executing the tests before
+starting a broad run. Pinned tests require the `sqlite3` executable, not merely
+the SQLite shared library. Supply it explicitly on `PATH`, optionally from a
+verified private package extraction. The harness never installs packages or
+changes shared configuration. Synthetic runs check this before toolchain
+installation or compilation. Results retain the executable's version and SHA256
+(not its private path), and comparisons reject changed prerequisite provenance.
+Build/test children run with umask `0022`, without changing the parent shell's
+umask or relaxing the project's directory-permission checks. For client-side
+`--remote` named runs, verify prerequisites on the actual guest as well.
+
 Focus experiments with a named suite scenario (`bench/suite.py list`), a
 component factor (`bench/factors.py list`), or an additional candidate
 `--stack NAME:K=V,...` in versus. Such results support scoped claims only,

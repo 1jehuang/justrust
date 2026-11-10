@@ -40,6 +40,10 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import prerequisites
+
+RUNTIME_PREREQUISITES = prerequisites.provenance()
+
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 JR_HOME = Path(os.environ.get("JUSTRUST_HOME", HOME / ".justrust"))
@@ -747,7 +751,8 @@ def prebuilt_store(s: Scenario, root: Path) -> None:
         env.pop("JUSTRUST_PREBUILT", None)
         print(f"bench: publishing {s.name} dependencies to {store}", file=sys.stderr)
         cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
-        subprocess.run([J, *s.cmd], cwd=cwd, env=env, check=True, capture_output=True)
+        subprocess.run([J, *s.cmd], cwd=cwd, env=env, check=True, capture_output=True,
+                       umask=prerequisites.CHILD_UMASK)
         out = subprocess.run([J, "cache", "--publish", str(store)], env=env, check=True,
                              capture_output=True, text=True).stdout.strip()
         print(f"bench: {out}", file=sys.stderr)
@@ -873,7 +878,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     t0 = time.monotonic()
     # Stream stderr to timestamp the first error line the agent sees (early
     # rust-analyzer errors or rustc's), not only the exit.
-    p = subprocess.Popen([J, *s.cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p = subprocess.Popen([J, *s.cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, umask=prerequisites.CHILD_UMASK)
     first_error = None
     err_lines = []
     first_fail = []
@@ -1428,6 +1434,7 @@ def env_info() -> dict:
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
         "snapshots": {k: {r: rev for r, (_, rev) in v["repos"].items()} for k, v in SNAPSHOTS.items()},
         "snapshot_format": SNAPSHOT_FORMAT,
+        "runtime_prerequisites": RUNTIME_PREREQUISITES,
     }
 
 
@@ -1455,6 +1462,19 @@ def cmd_list(_args) -> None:
     for s in SCENARIOS:
         tag = " [cold, opt-in]" if s.cold else " [opt-in]" if s.opt_in else ""
         print(f"{s.name:28s} {s.what}{tag}\n{'':28s} justrust {' '.join(s.cmd)}")
+
+
+def preflight_runtime(require_sqlite: bool = False) -> dict:
+    global RUNTIME_PREREQUISITES
+    try:
+        RUNTIME_PREREQUISITES = prerequisites.validate(require_sqlite)
+    except ValueError as err:
+        sys.exit(str(err))
+    return RUNTIME_PREREQUISITES
+
+
+def cmd_preflight(_args) -> None:
+    print(json.dumps(preflight_runtime(require_sqlite=True), sort_keys=True, indent=2))
 
 
 def cmd_run(args) -> None:
@@ -1492,6 +1512,12 @@ def cmd_run(args) -> None:
         sys.exit("bench: local analyzer startup is not a hosted measurement; use --hosted-early on error scenarios")
     if REMOTE and args.synth is not None:
         sys.exit("bench: hosted synthetic measurements use bench/versus.py --remote")
+    if not REMOTE:
+        selected = getattr(args, "scenarios", None) or [s.name for s in SCENARIOS if not s.opt_in]
+        full_desktop_tests = any(n in BY_NAME and BY_NAME[n].snapshot == "desktop"
+                                 and BY_NAME[n].cmd[0] == "test" and "--" not in BY_NAME[n].cmd
+                                 for n in selected)
+        preflight_runtime(require_sqlite=args.synth is not None or full_desktop_tests)
     if TOOLCHAIN != "system":
         # Install up front so the first sample does not include the download.
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
@@ -1662,7 +1688,7 @@ def cmd_compare(args) -> None:
             if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
                 reasons.append(f"{label}: malformed execution environment provenance")
         if isinstance(ea, dict) and isinstance(eb, dict):
-            for key in ("snapshots", "snapshot_format", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
+            for key in ("snapshots", "snapshot_format", "runtime_prerequisites", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
                 if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
@@ -1686,6 +1712,8 @@ def cmd_compare(args) -> None:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
     if a["env"].get("snapshot_format") != b["env"].get("snapshot_format"):
         sys.exit("bench: different snapshot formats, numbers are not comparable")
+    if a["env"].get("runtime_prerequisites") != b["env"].get("runtime_prerequisites"):
+        sys.exit("bench: different runtime prerequisites, numbers are not comparable")
     for label, result in (("A", a), ("B", b)):
         issues = named_test_failure_issues(result)
         if issues:
@@ -1746,6 +1774,7 @@ def main() -> None:
     from resident_suite import add_parser as add_resident_parser
     add_resident_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
+    sub.add_parser("preflight", help="check pinned test runtime prerequisites without building").set_defaults(fn=cmd_preflight)
     r = sub.add_parser("run")
     r.add_argument("scenarios", nargs="*")
     r.add_argument("-n", type=int, default=5, help="measured runs per scenario (default 5)")

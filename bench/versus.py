@@ -167,6 +167,7 @@ def _run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> 
     pid = os.fork()
     if pid == 0:  # child: wait until the counters are attached, then exec
         try:
+            os.umask(suite.prerequisites.CHILD_UMASK)
             os.close(w)
             os.read(r, 1)
             fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
@@ -550,6 +551,7 @@ def cmd_run(args) -> None:
     stacks += [parse_stack(x) for x in args.stack]
     if stacks[0].name != "stock" and not args.only:
         sys.exit("versus: stock must be the first stack")
+    suite.preflight_runtime(require_sqlite=args.synth is not None)
     if args.synth is not None:
         return cmd_run_synth(args, stacks)
     names = args.workloads or [w.name for w in WORKLOADS if not suite.BY_NAME[w.scenario].cold]
@@ -629,6 +631,9 @@ def cmd_compare(args) -> None:
     from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
     require_matching_context(a, b)
+    for key in ("snapshot_format", "runtime_prerequisites"):
+        if a.get("env", {}).get(key) != b.get("env", {}).get(key):
+            sys.exit(f"versus: different {key}, numbers are not comparable")
     if "synth" in a or "synth" in b:
         if not ("synth" in a and "synth" in b):
             sys.exit("versus: compare a synthetic result with another synthetic result")
