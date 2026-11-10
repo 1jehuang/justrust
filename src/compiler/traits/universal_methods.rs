@@ -938,6 +938,11 @@ impl ValidatedTraitWorld {
                 "unsupported: equality RHS must be closed or one authoritative parameter",
             ));
         }
+        // Normalizing `&Self::Output` to `&K` in an open generic caller
+        // removes the projection but not its raw NoReference placeholder.
+        // Complete the origins from the declaration's existing input regions,
+        // as in closed projected applications, before validating the schema.
+        self.complete_projected_contract(&mut instantiated.signature)?;
         instantiated.predicates = self.normalize_instantiated_projection_predicates(
             &instantiated.predicates,
             context,

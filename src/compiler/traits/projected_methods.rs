@@ -196,7 +196,7 @@ impl ValidatedTraitWorld {
     // Do not ask the IR carrier walker to interpret an unreduced projection.
     /// After normalizing a projected declaration (`&Self::Target`), derive the
     /// return origins the raw schema deliberately left unresolved.
-    fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {
+    pub(super) fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {
         let layers = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
         if !charged(
             &self.budget,
