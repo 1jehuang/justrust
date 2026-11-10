@@ -131,6 +131,104 @@ impl Solver<'_, '_, '_> {
         Ok(None)
     }
 
+    /// A defining body that returns a closure for its own `impl Fn..` result:
+    /// the declared callable bound supplies the closure's argument tuple and
+    /// `Output`, exactly as a generic callee's bound would (`let mut c = 0;
+    /// move || { c += 1; c }` under `impl FnMut() -> u32`). A hint only: the
+    /// checker still proves every declared bound for the hidden type.
+    /// Returns whether a returned closure was found and constrained.
+    pub(super) fn opaque_return_callable_bounds(&mut self) -> Result<bool, String> {
+        let Some(term) = self.opaque_return else {
+            return Ok(false);
+        };
+        let Domain::Callable(callable) = self.domain(term) else {
+            return Ok(false);
+        };
+        let ir::Ty::Opaque(opaque) = self.checker.result.clone() else {
+            return Ok(false);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        for bound in opaque.bounds() {
+            self.checker.infer_work(0)?;
+            if world
+                .closure_trait_kind(bound.declaration())
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                .is_none()
+            {
+                continue;
+            }
+            let [ir::OpaqueBoundArg::Type(arguments)] = bound.args() else {
+                continue;
+            };
+            let arguments = self.fixed(arguments.clone())?;
+            self.checker.infer_storage(callable.params.len())?;
+            let tuple = self.node(Domain::Tuple(callable.params.clone()))?;
+            self.unify(arguments, tuple)?;
+            // The callable traits declare one associated type, `Output`.
+            for (_, output) in bound.equalities() {
+                self.checker.infer_work(0)?;
+                let output = self.fixed(output.clone())?;
+                self.coerce(callable.result, output)?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// A closure unsized to a callable trait object (`Box<dyn Fn(i32) -> i32>`,
+    /// `&dyn FnMut() -> u32`): the object's written argument tuple and
+    /// `Output` constrain the closure's parameters and result. A hint only:
+    /// the checker proves the unsizing and the associated binding.
+    pub(super) fn dyn_callable_hint(&mut self, actual: Term, object: Term) -> Result<(), String> {
+        let Domain::Callable(callable) = self.domain(actual) else {
+            return Ok(());
+        };
+        let Domain::Fixed(ir::Ty::Dyn(object)) = self.domain(object) else {
+            return Ok(());
+        };
+        let plan = self.checker.signatures.plan()?;
+        if plan
+            .trait_world()?
+            .closure_trait_kind(object.principal)
+            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let [arguments] = object.args.as_ref() else {
+            return Ok(());
+        };
+        let arguments = self.fixed(arguments.clone())?;
+        self.checker.infer_storage(callable.params.len())?;
+        let tuple = self.node(Domain::Tuple(callable.params.clone()))?;
+        self.unify(arguments, tuple)?;
+        // The callable traits declare one associated type, `Output`.
+        for (_, output) in object.associated_types.iter() {
+            self.checker.infer_work(0)?;
+            let output = self.fixed(output.clone())?;
+            self.coerce(callable.result, output)?;
+        }
+        Ok(())
+    }
+
+    /// Whether a cast from `source` to `target` is an unsizing coercion site:
+    /// the target points to a trait object and the operand is already the same
+    /// kind of pointer. Any other operand is left to the checker, which
+    /// reports the non-primitive cast.
+    pub(super) fn dyn_pointer_cast(&self, source: Term, target: Term) -> bool {
+        match (self.domain(source), self.domain(target)) {
+            (Domain::Ref(..), Domain::Ref(_, pointee)) => {
+                matches!(self.domain(pointee), Domain::Fixed(ir::Ty::Dyn(_)))
+            }
+            (Domain::Nominal(have, _), Domain::Nominal(want, arguments)) => {
+                have == want
+                    && arguments.len() == 1
+                    && matches!(self.domain(arguments[0]), Domain::Fixed(ir::Ty::Dyn(_)))
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn opaque_identity_matches(
         &self,
         left: &ir::OpaqueTy,

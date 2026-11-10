@@ -81,7 +81,19 @@ impl PlanCtx {
         let ir::FactsCtx::Validated(facts) = caller else {
             return Ok(None);
         };
-        let opaque_bounds = self.opaque_callable_bound_candidates(receiver, caller)?;
+        let mut opaque_bounds = self.opaque_callable_bound_candidates(receiver, caller)?;
+        // A callable trait object (`dyn Fn(i32) -> i32`) carries its exact
+        // application in the object type. Dispatch is the ordinary dynamic
+        // trait call that `select_trait` proves for that application.
+        if let ir::Ty::Dyn(object) = receiver {
+            for application in facts
+                .dynamic_applications(object)
+                .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
+            {
+                self.budget.charge_work(1)?;
+                opaque_bounds.push(ir::Predicate::Implements(application));
+            }
+        }
         for mode in [
             ir::ClosureKind::Fn,
             ir::ClosureKind::FnMut,

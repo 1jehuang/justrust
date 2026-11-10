@@ -85,6 +85,74 @@ fn opaque_callable_with_realized_nominal_local() {
 }
 
 #[test]
+fn returned_closure_infers_literals_from_declared_opaque_bound() {
+    oracle::check(
+        "opaque_returned_closure_literals",
+        &[
+            Case {
+                name: "captured_counter_literal",
+                source: "fn make_counter()->impl FnMut()->u32{let mut c=0;move||{c+=1;c}}fn main(){let mut f=make_counter();f();f();println!(\"{}\",f());}",
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "body_local_literal_result",
+                source: "fn mk()->impl Fn()->u8{||{let t=200;t}}fn main(){println!(\"{}\",mk()());}",
+                expect: Expect::Run("200\n"),
+            },
+            Case {
+                name: "unannotated_parameter_and_capture",
+                source: "fn mk()->impl Fn(u32)->u32{let c=1;move|x|x+c}fn main(){println!(\"{}\",mk()(2));}",
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "explicit_return_statement",
+                source: "fn mk()->impl Fn()->u64{let c=5;return move||c*2;}fn main(){println!(\"{}\",mk()());}",
+                expect: Expect::Run("10\n"),
+            },
+            Case {
+                name: "unused_wrong_result_type",
+                source: "fn mk()->impl Fn()->u32{||\"s\"}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_wrong_capture_type",
+                source: "fn mk()->impl Fn()->u32{let c=0i64;move||c}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn trait_object_casts_and_borrowed_callable_object_calls() {
+    oracle::check(
+        "trait_object_casts_callable_objects",
+        &[
+            Case {
+                name: "call_through_shared_callable_object",
+                source: "fn main(){let n=3;let f=move|x:i32|->i32{x+n};let r:&dyn Fn(i32)->i32=&f;println!(\"{}\",r(10));}",
+                expect: Expect::Run("13\n"),
+            },
+            Case {
+                name: "box_cast_to_trait_object",
+                source: "trait T{fn g(&self)->i32;}struct S(i32);impl T for S{fn g(&self)->i32{self.0}}fn main(){let b:Box<dyn T>=Box::new(S(3));println!(\"{}\",b.g());let c=Box::new(S(4)) as Box<dyn T>;println!(\"{}\",c.g());}",
+                expect: Expect::Run("3\n4\n"),
+            },
+            Case {
+                name: "unused_scalar_cast_to_boxed_object",
+                source: "fn bad(){let _b=3u8 as Box<dyn Fn(i32)->i32>;}fn main(){}",
+                expect: Expect::Invalid("E0605"),
+            },
+            Case {
+                name: "unused_cast_without_principal_impl",
+                source: "fn bad(){let _b=Box::new(1i32) as Box<dyn Fn(i32)->i32>;}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_callable_preserves_existing_cleanup() {
     oracle::check(
         "opaque_existing_cleanup",

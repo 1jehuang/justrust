@@ -10801,6 +10801,17 @@ impl<'a> Checker<'a> {
         {
             return self.pointer_cast_expression(value, target);
         }
+        // `value as Box<dyn Trait>` / `value as &dyn Trait`: an explicit
+        // unsizing coercion. The ordinary coercion site proves it. A value
+        // that does not coerce to exactly the target is not castable.
+        if target.owned_pointer_object().is_some() || trait_object_target(&target).is_some() {
+            let id = self.expr_with_expectation(value, Expectation::HasType(&target))?;
+            let source = &self.exprs[id.0].ty;
+            if *source != target && *source != ir::Ty::Never {
+                return Err("E0605: non-primitive cast".into());
+            }
+            return Ok(id);
+        }
         // A char target must not infer an unsuffixed integer operand as u8.
         // Preserve its independently inferred source type before checking the pair.
         let value = match target {

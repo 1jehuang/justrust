@@ -340,7 +340,12 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         let expected = solver.return_expected(expected)?;
         solver.coerce(result, expected)?;
     }
+    let returned_closure = solver.opaque_return_callable_bounds()?;
     solver.solve()?;
+    // A returned closure may only become known once deferred coercions ran.
+    if !returned_closure && solver.opaque_return_callable_bounds()? {
+        solver.solve()?;
+    }
     for term in solver.unit_defaults.clone() {
         if matches!(solver.domain(term), Domain::Unknown) {
             let unit = solver.fixed(ir::Ty::Unit)?;
@@ -1247,7 +1252,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 // `&T -> &dyn P` unsizing is proven by the checker.
                 if matches!(self.domain(b), Domain::Fixed(ir::Ty::Dyn(_))) {
-                    return Ok(());
+                    return self.dyn_callable_hint(a, b);
                 }
                 if matches!(self.domain(a), Domain::Unknown)
                     && matches!(
@@ -1272,7 +1277,7 @@ impl<'s> Solver<'_, '_, 's> {
                         Domain::Fixed(ir::Ty::Dyn(_)) | Domain::Unknown
                     ) =>
             {
-                Ok(())
+                self.dyn_callable_hint(xs[0], ys[0])
             }
             (Domain::Array(a, n), Domain::Array(b, m)) if n == m => self.coerce(a, b),
             (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
@@ -3062,10 +3067,16 @@ impl<'s> Solver<'_, '_, 's> {
                     operand = value;
                     operand_depth += 1;
                 }
-                self.expr(operand, operand_depth)?;
+                let mut source = self.expr(operand, operand_depth)?;
                 let mut result = None;
                 for target in targets.into_iter().rev() {
-                    result = Some(self.source_ty(target)?);
+                    let target = self.source_ty(target)?;
+                    // `value as Box<dyn Trait>` is an unsizing coercion site.
+                    if self.dyn_pointer_cast(source, target) {
+                        self.coerce(source, target)?;
+                    }
+                    source = target;
+                    result = Some(target);
                 }
                 Ok(result.expect("cast chain has at least one target"))
             }
