@@ -1,0 +1,30 @@
+# Pinned Desktop reload-camera repair, based on jcode-desktop commit 764e429.
+# Restore the visible position, not an animation destination whose clock is lost.
+# Keep the original viewport assertion and add an explicit camera-state regression.
+diff --git a/crates/jcode-desktop-ui/src/workspace.rs b/crates/jcode-desktop-ui/src/workspace.rs
+--- a/crates/jcode-desktop-ui/src/workspace.rs
++++ b/crates/jcode-desktop-ui/src/workspace.rs
+@@ -1860,4 +1860,6 @@
+         self.camera_x = snapshot.camera_x;
+-        self.camera_target = snapshot.camera_target;
++        // The old animation clock is not restored. Start at the visible
++        // position so the first paint cannot snap to the old destination.
++        self.camera_target = snapshot.camera_x;
+         self.camera_from = snapshot.camera_x;
+         self.camera_started = [None; STRIP_COUNT];
+diff --git a/crates/jcode-desktop-ui/src/workspace_changelog.rs b/crates/jcode-desktop-ui/src/workspace_changelog.rs
+--- a/crates/jcode-desktop-ui/src/workspace_changelog.rs
++++ b/crates/jcode-desktop-ui/src/workspace_changelog.rs
+@@ -349,6 +349,12 @@
+         assert_eq!(snapshot.active, 3);
++        let visible_camera = snapshot.camera_x;
+         let bytes = snapshot.encode().unwrap();
+         workspace.update_in(vcx, |w, window, cx| {
+             w.apply_snapshot(WorkspaceSnapshot::decode(&bytes).unwrap(), cx);
++            assert_eq!(w.camera_x, visible_camera);
++            assert_eq!(
++                w.camera_target, visible_camera,
++                "reload must not revive an animation destination without its clock"
++            );
+             w.restore_focus(window, cx);
+             w.open_changelog_in_background(cx);
