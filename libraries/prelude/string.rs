@@ -614,6 +614,7 @@ pub trait StrMethods {
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
     fn split<'a>(&'a self, separator: char) -> Split<&'a str>;
+    fn lines<'a>(&'a self) -> Lines<&'a str>;
     fn starts_with(&self, pattern: &str) -> bool;
     fn ends_with(&self, pattern: &str) -> bool;
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize>;
@@ -657,6 +658,11 @@ impl StrMethods for str {
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str> {
         let (ptr, len) = str_parts(self);
         SplitWhitespace { ptr, len, at: 0usize, marker: self }
+    }
+
+    fn lines<'a>(&'a self) -> Lines<&'a str> {
+        let (ptr, len) = str_parts(self);
+        Lines { ptr, len, at: 0usize, marker: self }
     }
 
     fn starts_with(&self, pattern: &str) -> bool {
@@ -789,6 +795,42 @@ impl<S: StrCarrier> super::iter::IntoIterator for Split<S> {
     type Item = S;
     type IntoIter = Self;
     fn into_iter(self) -> Self {
+        self
+    }
+}
+
+/// Lines of a `str`: split at `\n`, with one trailing `\r` removed from each
+/// line and no final empty line after a trailing newline.
+pub struct Lines<S> {
+    ptr: usize,
+    len: usize,
+    at: usize,
+    marker: S,
+}
+
+impl<S: StrCarrier> super::iter::Iterator for Lines<S> {
+    type Item = S;
+    fn next(&mut self) -> Option<S> {
+        if self.at >= self.len {
+            return Option::None;
+        }
+        let start = self.at;
+        let mut end = start;
+        while end < self.len && read_u8(self.ptr + end) != 10u8 {
+            end += 1usize;
+        }
+        self.at = if end < self.len { end + 1usize } else { end };
+        if end < self.len && end > start && read_u8(self.ptr + end - 1usize) == 13u8 {
+            end -= 1usize;
+        }
+        Option::Some(S::from_parts(self.ptr + start, end - start))
+    }
+}
+
+impl<S: StrCarrier> super::iter::IntoIterator for Lines<S> {
+    type Item = S;
+    type IntoIter = Lines<S>;
+    fn into_iter(self) -> Lines<S> {
         self
     }
 }

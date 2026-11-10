@@ -165,6 +165,27 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn map_or<U, F: FnOnce(T) -> U>(self, default: U, f: F) -> U {
+        match self {
+            Option::Some(value) => f(value),
+            Option::None => default,
+        }
+    }
+
+    pub fn map_or_else<U, D: FnOnce() -> U, F: FnOnce(T) -> U>(self, default: D, f: F) -> U {
+        match self {
+            Option::Some(value) => f(value),
+            Option::None => default(),
+        }
+    }
+
+    pub fn and<U>(self, other: Option<U>) -> Option<U> {
+        match self {
+            Option::Some(_) => other,
+            Option::None => Option::None,
+        }
+    }
+
     pub fn iter<'a>(&'a self) -> OptionIter<'a, T> {
         match self {
             Option::Some(value) => OptionIter {
@@ -245,7 +266,14 @@ impl<'a, T: Clone> Option<&'a mut T> {
     }
 }
 
-// TODO: unwrap_or_default once std::default is enabled.
+impl<T: super::default::Default> Option<T> {
+    pub fn unwrap_or_default(self) -> T {
+        match self {
+            Option::Some(value) => value,
+            Option::None => T::default(),
+        }
+    }
+}
 
 
 impl<T: Clone> Clone for Option<T> {

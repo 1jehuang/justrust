@@ -116,6 +116,62 @@ impl<T, E> Result<T, E> {
             Result::Err(error) => Result::Err(op(error)),
         }
     }
+
+    pub fn map_or<U, F: FnOnce(T) -> U>(self, default: U, op: F) -> U {
+        match self {
+            Result::Ok(value) => op(value),
+            Result::Err(_) => default,
+        }
+    }
+
+    pub fn map_or_else<U, D: FnOnce(E) -> U, F: FnOnce(T) -> U>(self, default: D, op: F) -> U {
+        match self {
+            Result::Ok(value) => op(value),
+            Result::Err(error) => default(error),
+        }
+    }
+
+    pub fn and<U>(self, other: Result<U, E>) -> Result<U, E> {
+        match self {
+            Result::Ok(_) => other,
+            Result::Err(error) => Result::Err(error),
+        }
+    }
+}
+
+impl<T: super::default::Default, E> Result<T, E> {
+    pub fn unwrap_or_default(self) -> T {
+        match self {
+            Result::Ok(value) => value,
+            Result::Err(_) => T::default(),
+        }
+    }
+}
+
+impl<T: Clone, E: Clone> Clone for Result<T, E> {
+    fn clone(&self) -> Result<T, E> {
+        match self {
+            Result::Ok(value) => Result::Ok(value.clone()),
+            Result::Err(error) => Result::Err(error.clone()),
+        }
+    }
+}
+
+impl<T: Copy, E: Copy> Copy for Result<T, E> {}
+
+impl<T: super::cmp::PartialEq, E: super::cmp::PartialEq> super::cmp::PartialEq for Result<T, E> {
+    fn eq(&self, other: &Result<T, E>) -> bool {
+        match self {
+            Result::Ok(left) => match other {
+                Result::Ok(right) => <T as super::cmp::PartialEq>::eq(left, right),
+                Result::Err(_) => false,
+            },
+            Result::Err(left) => match other {
+                Result::Ok(_) => false,
+                Result::Err(right) => <E as super::cmp::PartialEq>::eq(left, right),
+            },
+        }
+    }
 }
 
 // TODO: require E: Debug and print it once std::fmt is enabled.

@@ -134,3 +134,35 @@ fn invalid_format_macros_are_rejected() {
         assert!(run(name, source).is_err(), "{name} must be rejected");
     }
 }
+
+#[test]
+fn option_result_combinators_and_lines_match_stock() {
+    for workers in [1, 8] {
+        let (stdout, _) = run_with_workers(
+            &format!("std-option-result-lines-{workers}"),
+            include_str!("fixtures/std_option_result_lines.rs"),
+            workers,
+        )
+        .unwrap();
+        assert_eq!(
+            stdout,
+            "0:[alpha] 5\n1:[beta] 4\n2:[] 0\n3:[gamma] 5\n[\"one\", \"two\"] 0\n[\"a\", \"b\\r\"]\n8 -1\n5 7\n4 0 Some(\"y\") None\n[]\n9 0\n3 3\n3 0\nOk(9) Err(\"bad\")\n"
+        );
+    }
+    for (name, source) in [
+        (
+            "map-or-arity",
+            "fn main() {\n    let a: Option<i32> = Some(1);\n    let _ = a.map_or(0);\n}\n",
+        ),
+        (
+            "lines-arity",
+            "fn main() {\n    let _ = \"a\\nb\".lines(1);\n}\n",
+        ),
+        (
+            "result-clone-bound",
+            "struct N;\nfn main() {\n    let r: Result<N, N> = Ok(N);\n    let _ = r.clone();\n}\n",
+        ),
+    ] {
+        assert!(run(name, source).is_err(), "{name} must be rejected");
+    }
+}
