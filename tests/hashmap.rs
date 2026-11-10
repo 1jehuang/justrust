@@ -650,3 +650,41 @@ fn main() {
         }],
     );
 }
+
+#[test]
+fn btree_range_inventory_stays_node_local() {
+    closure_oracle::check(
+        "btree-range-node-local",
+        &[Case {
+            name: "nested_collections_and_all_range_forms",
+            source: r#"use std::collections::BTreeMap;
+use std::ops::Bound;
+fn main() {
+    let mut bt: BTreeMap<char, Vec<usize>> = BTreeMap::new();
+    for (i, c) in "mississippi".chars().enumerate() { bt.entry(c).or_insert_with(Vec::new).push(i); }
+    println!("{:?}", bt.range('j'..'q').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range('m'..='s').map(|(k, v)| (*k, v.len())).collect::<Vec<_>>());
+    println!("{:?}", bt.range('n'..).map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..'p').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..='p').map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range(..).count());
+    println!("{:?}", bt.range('a'..'b').count());
+    println!("{:?}", bt.range('i'..'i').count());
+    println!("{:?}", bt.range((Bound::Excluded('i'), Bound::Included('p'))).map(|(k, _)| *k).collect::<Vec<_>>());
+    println!("{:?}", bt.range('i'..='s').rev().map(|(k, _)| *k).collect::<Vec<_>>());
+    let mut r = bt.range('i'..='s');
+    println!("{:?} {:?}", r.next().map(|(k, _)| *k), r.next_back().map(|(k, _)| *k));
+    let mut n: BTreeMap<i32, &str> = BTreeMap::new();
+    n.insert(3, "c"); n.insert(1, "a"); n.insert(2, "b"); n.insert(9, "z");
+    for (k, v) in n.range(2..9) { println!("{k} {v}"); }
+    let lo = 2; let hi = 3;
+    let mut names: Vec<&str> = Vec::new();
+    for (_, v) in n.range(lo..=hi) { names.push(*v); }
+    println!("{}", names.join(","));
+}"#,
+            expect: Expect::Run(
+                "['m', 'p']\n[('m', 1), ('p', 2), ('s', 4)]\n['p', 's']\n['i', 'm']\n['i', 'm', 'p']\n4\n0\n0\n['m', 'p']\n['s', 'p', 'm', 'i']\nSome('i') Some('s')\n2 b\n3 c\nb,c\n",
+            ),
+        }],
+    );
+}

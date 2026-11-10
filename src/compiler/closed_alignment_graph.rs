@@ -135,36 +135,21 @@ pub(super) async fn produce(
                 );
             }
             let mut source_scratch = super::traits::TraitScratch::default();
-            let local = Local::capture_with_scratch(
+            let mut context = types.as_ref().clone();
+            let mut closed_scratch = super::traits::TraitScratch::default();
+            let continuation = Local::capture_closed_calls_with_scratch(
                 template.checked.clone(),
                 template.publication.clone(),
                 original_facts,
+                &target,
+                closed_facts,
+                &mut context,
                 budget,
+                Some(cx.authority()),
                 &mut source_scratch,
+                &mut closed_scratch,
             )
             .map_err(Error::new)?;
-            let mut context = types.as_ref().clone();
-            let mut closed_scratch = super::traits::TraitScratch::default();
-            let continuation = local
-                .closed_calls_with_scratch(
-                    &target,
-                    closed_facts,
-                    &mut context,
-                    budget,
-                    Some(cx.authority()),
-                    &mut source_scratch,
-                    &mut closed_scratch,
-                )
-                .map_err(Error::new)?;
-            continuation
-                .validate_with_scratch(
-                    &mut context,
-                    budget,
-                    Some(cx.authority()),
-                    &mut source_scratch,
-                    &mut closed_scratch,
-                )
-                .map_err(Error::new)?;
             drop(source_scratch);
             drop(closed_scratch);
             let owners: Vec<_> = continuation.provider_declarations().collect();

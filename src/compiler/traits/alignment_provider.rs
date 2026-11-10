@@ -24,6 +24,7 @@ pub(in crate::compiler) enum BoundProvider {
 }
 
 impl BoundProvider {
+    #[cfg(test)]
     pub(in crate::compiler) fn validate_same(
         &self,
         expected: &Self,

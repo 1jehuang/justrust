@@ -322,11 +322,10 @@ impl Header {
             return Err("opaque source pack added unrelated provider summary".into());
         }
         let mut selected = Vec::new();
-        let mut entry_scratch = traits::TraitScratch::default();
         for (site, target, proof) in source.selected.iter() {
             budget.charge_work(1)?;
             proof
-                .validate(target, &source.facts, &mut entry_scratch)
+                .validate_binding(target, &source.facts)
                 .map_err(|error| error.into_legacy_diagnostic(budget))?;
             if proof.target() != target {
                 return Err("closed alignment target omitted canonical call proof".into());

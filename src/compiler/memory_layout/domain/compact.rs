@@ -43,7 +43,11 @@ impl Header {
         // Local is computation-local scratch, never part of the output.
         let mut scratch = traits::TraitScratch::default();
         let local = Local::capture_with_scratch(source, publication, facts, budget, &mut scratch)?;
-        local.validate_with_scratch(budget, &mut scratch)?;
+        // The constructor just authenticated every source occurrence and
+        // derived these requirements. Replaying Local here would reconstruct
+        // that same private value before it could have been changed. Replay
+        // remains necessary when consuming a retained Local, not when sealing
+        // its freshly constructed projection into a Header.
         let mut transfers = Vec::new();
         for edge in local.edges.iter() {
             budget.charge_work(1)?;

@@ -1433,8 +1433,10 @@ impl ValidatedFacts {
         nominals: &[Ty],
         scratch: &mut TraitScratch,
     ) -> Result<SourceHeaderCallProof> {
+        let _entry = self.source_call_entry_in(target, nominals, scratch)?;
         Ok(SourceHeaderCallProof {
-            entry: self.source_call_entry_in(target, nominals, scratch)?,
+            #[cfg(test)]
+            entry: _entry,
         })
     }
     fn source_call_entry_in(
@@ -1930,8 +1932,10 @@ pub(in crate::compiler) struct SourceCallEntryProof {
 /// This cannot be used as a selected closed-entry or executable call proof.
 #[derive(Clone, Debug)]
 pub(in crate::compiler) struct SourceHeaderCallProof {
+    #[cfg(test)]
     entry: SourceCallEntryProof,
 }
+#[cfg(test)]
 impl SourceHeaderCallProof {
     pub(in crate::compiler) fn validate(
         &self,
@@ -1962,6 +1966,41 @@ impl SourceCallEntryProof {
     pub(in crate::compiler) fn target(&self) -> &CallTarget {
         &self.target
     }
+    /// Bind a retained successful proof to its exact immutable inputs. This
+    /// checks authority and live resource guards, not a fresh proof search.
+    pub(in crate::compiler) fn validate_binding(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        facts.world.check_normalization_budget()?;
+        checked_module(
+            facts.budget(),
+            facts
+                .world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        self.validate_identity(target, facts)?;
+        if !Arc::ptr_eq(&self.target.type_args, &target.type_args)
+            && !schema_instantiation::same_inputs(
+                &self.target.type_args,
+                &target.type_args,
+                facts.budget(),
+                0,
+            )?
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "source call entry changed retained type argument authority",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(test)]
     pub(in crate::compiler) fn validate(
         &self,
         target: &CallTarget,

@@ -12,6 +12,25 @@ fn cleanup_parameter_transfer_keeps_expanding_check_finite_and_receipts_exact() 
     let grow = caller.edges[0].target.declaration;
     let generic = locals.iter().find(|local| local.owner == grow).unwrap();
     assert!(generic.facts.has_normal_drop_impls());
+    let foreign_budget = ir::PlanBudget::default();
+    assert!(
+        Header::capture(
+            generic.source.clone(),
+            generic.publication.clone(),
+            generic.facts.clone(),
+            &foreign_budget,
+        )
+        .is_err()
+    );
+    assert!(
+        Header::capture(
+            caller.source.clone(),
+            generic.publication.clone(),
+            generic.facts.clone(),
+            &budget,
+        )
+        .is_err()
+    );
     let summary = source_summary(&plan, grow, &budget);
     let required = summary.requirement(grow).unwrap();
     assert_eq!(required.drop_parameters, [true]);

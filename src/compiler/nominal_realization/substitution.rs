@@ -256,60 +256,16 @@ fn substitute_source_ty_for_use(
     scratch: &mut crate::compiler::traits::TraitScratch,
     executable_storage: bool,
 ) -> Result<ir::Ty, String> {
-    if !source_facts.budget().same_authority(budget) {
-        return Err("source type closing substitution changed planning authority".into());
-    }
-    let already_current = closed_facts
-        .validate_source_type_closing_context(source_facts, env, arguments)
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    source_facts
-        .validate_ty_metadata_scratch(ty, budget, source_scratch)
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    let mut adapter = ReadSubstitution {
-        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
+    SourceSubstitution::new(
+        source_facts,
+        env,
+        arguments,
+        closed_facts,
         context,
+        budget,
         engine,
-        executable: None,
-        remint: Some(ParentLocalRemint {
-            source: source_facts,
-            destination: closed_facts,
-            environment: env,
-            parent_arguments: arguments,
-            rows: Vec::new(),
-            source_scratch: crate::compiler::traits::TraitScratch::default(),
-            destination_scratch: crate::compiler::traits::TraitScratch::default(),
-        }),
-    };
-    // Even an exact closed source must walk its typed graph capabilities under
-    // this engine. Metadata replay authenticates the world, not engine origin.
-    // Keep this no-op source path logical: it does not mint physical layout.
-    let mapped = if executable_storage && !already_current {
-        ir::substitute_ty_with_scratch(
-            ty,
-            env,
-            arguments,
-            ir::FactsCtx::Validated(closed_facts),
-            &mut adapter,
-            budget,
-            scratch,
-        )?
-    } else {
-        ir::substitute_source_ty_with_scratch(
-            ty,
-            env,
-            arguments,
-            source_facts,
-            closed_facts,
-            &mut adapter,
-            budget,
-            source_scratch,
-            scratch,
-        )?
-    };
-    closed_facts
-        .validate_ty_metadata_scratch(&mapped, budget, scratch)
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
-    Ok(mapped)
+    )
+    .ty_for_use(ty, source_scratch, scratch, executable_storage)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -355,68 +311,196 @@ pub(in crate::compiler) fn substitute_source_call_with_scratch(
     source_scratch: &mut crate::compiler::traits::TraitScratch,
     scratch: &mut crate::compiler::traits::TraitScratch,
 ) -> Result<(ir::Callee, Vec<ir::Ty>), String> {
-    if !std::ptr::eq(source_facts.env().as_ref(), env)
-        || !source_facts.budget().same_authority(budget)
-        || !std::sync::Arc::ptr_eq(source_facts.world(), closed_facts.world())
-    {
-        return Err("call substitution changed original source environment".into());
-    }
-    source_facts
-        .validate_source_flow_signature_with_scratch(
-            ir::SignatureSubject::Call(callee),
-            signature,
-            source_scratch,
-        )
-        .map_err(|e| e.into_legacy_diagnostic(budget))?;
-    let inputs = source_facts
-        .parent_local_call_inputs_with_scratch(callee, signature, source_scratch)
-        .map_err(|e| e.into_legacy_diagnostic(budget))?;
-    budget.retain_bytes(std::mem::size_of_val(inputs.as_slice()))?;
-    let mut nominals = Vec::new();
-    nominals
-        .try_reserve_exact(inputs.len())
-        .map_err(|_| "call substitution nominal input allocation failed")?;
-    let mut adapter = ReadSubstitution {
-        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
+    SourceSubstitution::new(
+        source_facts,
+        env,
+        arguments,
+        closed_facts,
         context,
+        budget,
         engine,
-        executable: None,
-        remint: Some(ParentLocalRemint {
-            source: source_facts,
-            destination: closed_facts,
-            environment: env,
-            parent_arguments: arguments,
-            rows: Vec::new(),
-            source_scratch: crate::compiler::traits::TraitScratch::default(),
-            destination_scratch: crate::compiler::traits::TraitScratch::default(),
-        }),
-    };
-    for input in &inputs {
-        nominals.push(ir::substitute_source_ty_with_scratch(
-            input,
+    )
+    .call(callee, signature, source_scratch, scratch)
+}
+
+/// One source-closing traversal. Proof scratch is local to the node and all
+/// type roots share the same immutable source, destination and engine context.
+/// Individual reads still authenticate their current capabilities and guards.
+pub(in crate::compiler) struct SourceSubstitution<'a> {
+    adapter: ReadSubstitution<'a>,
+    budget: &'a ir::PlanBudget,
+}
+
+impl<'a> SourceSubstitution<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::compiler) fn new(
+        source_facts: &'a crate::compiler::traits::ValidatedFacts,
+        env: &'a ir::GenericEnv,
+        arguments: &'a [ir::Ty],
+        closed_facts: &'a crate::compiler::traits::ValidatedFacts,
+        context: &'a mut frontend::PlanCtx,
+        budget: &'a ir::PlanBudget,
+        engine: Option<EngineAuthority>,
+    ) -> Self {
+        let adapter = ReadSubstitution {
+            nominal_scratch: crate::compiler::traits::TraitScratch::default(),
+            context,
+            engine,
+            executable: None,
+            remint: Some(ParentLocalRemint {
+                source: source_facts,
+                destination: closed_facts,
+                environment: env,
+                parent_arguments: arguments,
+                rows: Vec::new(),
+                source_scratch: crate::compiler::traits::TraitScratch::default(),
+                destination_scratch: crate::compiler::traits::TraitScratch::default(),
+            }),
+        };
+        Self { adapter, budget }
+    }
+
+    pub(in crate::compiler) fn ty(
+        &mut self,
+        ty: &ir::Ty,
+        source_scratch: &mut crate::compiler::traits::TraitScratch,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+    ) -> Result<ir::Ty, String> {
+        self.ty_for_use(ty, source_scratch, scratch, true)
+    }
+
+    pub(in crate::compiler) fn schema_ty(
+        &mut self,
+        ty: &ir::Ty,
+        source_scratch: &mut crate::compiler::traits::TraitScratch,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+    ) -> Result<ir::Ty, String> {
+        self.ty_for_use(ty, source_scratch, scratch, false)
+    }
+
+    fn ty_for_use(
+        &mut self,
+        ty: &ir::Ty,
+        source_scratch: &mut crate::compiler::traits::TraitScratch,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+        executable_storage: bool,
+    ) -> Result<ir::Ty, String> {
+        let remint = self
+            .adapter
+            .remint
+            .as_ref()
+            .ok_or("source substitution lost its scoped context")?;
+        let source_facts = remint.source;
+        let closed_facts = remint.destination;
+        let env = remint.environment;
+        let arguments = remint.parent_arguments;
+        let budget = self.budget;
+        if !source_facts.budget().same_authority(budget) {
+            return Err("source type closing substitution changed planning authority".into());
+        }
+        let already_current = closed_facts
+            .validate_source_type_closing_context(source_facts, env, arguments)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        source_facts
+            .validate_ty_metadata_scratch(ty, budget, source_scratch)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        // Even an exact closed source must walk its typed graph capabilities under
+        // this engine. Metadata replay authenticates the world, not engine origin.
+        // Keep this no-op source path logical: it does not mint physical layout.
+        let mapped = if executable_storage && !already_current {
+            ir::substitute_ty_with_scratch(
+                ty,
+                env,
+                arguments,
+                ir::FactsCtx::Validated(closed_facts),
+                &mut self.adapter,
+                budget,
+                scratch,
+            )?
+        } else {
+            ir::substitute_source_ty_with_scratch(
+                ty,
+                env,
+                arguments,
+                source_facts,
+                closed_facts,
+                &mut self.adapter,
+                budget,
+                source_scratch,
+                scratch,
+            )?
+        };
+        closed_facts
+            .validate_ty_metadata_scratch(&mapped, budget, scratch)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        Ok(mapped)
+    }
+
+    pub(in crate::compiler) fn call(
+        &mut self,
+        callee: &ir::Callee,
+        signature: &ir::Signature,
+        source_scratch: &mut crate::compiler::traits::TraitScratch,
+        scratch: &mut crate::compiler::traits::TraitScratch,
+    ) -> Result<(ir::Callee, Vec<ir::Ty>), String> {
+        let remint = self
+            .adapter
+            .remint
+            .as_ref()
+            .ok_or("source substitution lost its scoped context")?;
+        let source_facts = remint.source;
+        let closed_facts = remint.destination;
+        let env = remint.environment;
+        let arguments = remint.parent_arguments;
+        let budget = self.budget;
+        if !std::ptr::eq(source_facts.env().as_ref(), env)
+            || !source_facts.budget().same_authority(budget)
+            || !std::sync::Arc::ptr_eq(source_facts.world(), closed_facts.world())
+        {
+            return Err("call substitution changed original source environment".into());
+        }
+        source_facts
+            .validate_source_flow_signature_with_scratch(
+                ir::SignatureSubject::Call(callee),
+                signature,
+                source_scratch,
+            )
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let inputs = source_facts
+            .parent_local_call_inputs_with_scratch(callee, signature, source_scratch)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        budget.retain_bytes(std::mem::size_of_val(inputs.as_slice()))?;
+        let mut nominals = Vec::new();
+        nominals
+            .try_reserve_exact(inputs.len())
+            .map_err(|_| "call substitution nominal input allocation failed")?;
+        for input in &inputs {
+            nominals.push(ir::substitute_source_ty_with_scratch(
+                input,
+                env,
+                arguments,
+                source_facts,
+                closed_facts,
+                &mut self.adapter,
+                budget,
+                source_scratch,
+                scratch,
+            )?);
+        }
+        let target = ir::substitute_source_callee_with_nominals_scratch(
+            callee,
             env,
             arguments,
             source_facts,
             closed_facts,
-            &mut adapter,
+            &nominals,
+            &mut self.adapter,
             budget,
             source_scratch,
             scratch,
-        )?);
+        )?;
+        Ok((target, nominals))
     }
-    let target = ir::substitute_source_callee_with_nominals_scratch(
-        callee,
-        env,
-        arguments,
-        source_facts,
-        closed_facts,
-        &nominals,
-        &mut adapter,
-        budget,
-        source_scratch,
-        scratch,
-    )?;
-    Ok((target, nominals))
 }
 
 struct ReadSubstitution<'a> {
