@@ -6,6 +6,7 @@ mod associated_method;
 mod borrow_coercion;
 mod closure_value;
 mod generic_method;
+mod lexical_block;
 mod projected_borrow;
 mod shared_deref;
 
@@ -364,6 +365,7 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
     let children: Vec<&Expr> = match source {
+        Expr::Block(block) => return lexical_block::syntax(block, budget, depth + 1),
         Expr::AssociatedCall {
             type_args, args, ..
         } if type_args.is_empty() => {
@@ -638,6 +640,16 @@ pub(super) fn supported(
         }
     }
     match source {
+        Expr::Block(block) => lexical_block::supported(
+            block,
+            node,
+            plan,
+            function,
+            inventory,
+            original,
+            budget,
+            depth + 1,
+        ),
         Expr::Var(_) | Expr::Borrow { .. } | Expr::BorrowValue { .. } => {
             sr::work(budget, node.path.len())?;
             let Some(binding) = inventory.operand_nodes.get(&node.path) else {
@@ -850,8 +862,6 @@ pub(super) fn supported(
                     .registry
                     .declaration(target.declaration)
                     .map_err(|e| source_error(budget, &e))?;
-                let closed_header =
-                    view.generic_env().total_arity() == 0 && target.type_args.is_empty();
                 if (!args.is_empty()
                     || matches!(
                         declaration.receiver,
@@ -859,8 +869,7 @@ pub(super) fn supported(
                             kind: ir::BorrowKind::Mut
                         }
                     ))
-                    && (!closed_header
-                        || !matches!(declaration.receiver, ReceiverKind::Borrowed { .. })
+                    && (!matches!(declaration.receiver, ReceiverKind::Borrowed { .. })
                         || !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)))
                 {
                     return Ok(false);
@@ -2653,6 +2662,9 @@ impl Replay<'_> {
             .get(id.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input expression missing"))?;
         let ty = match (source, &actual.kind) {
+            (Expr::Block(source), ir::ExprKind::Block(block)) => {
+                self.lexical_block(source, node, block, expected, depth + 1)?
+            }
             (Expr::Var(_), _)
                 if closure_value::provider(&self.original.plan, source, self.budget)?.is_some() =>
             {
@@ -3409,6 +3421,53 @@ impl Replay<'_> {
 #[cfg(test)]
 mod literal_context_tests {
     use super::*;
+
+    #[test]
+    fn lexical_block_producers_reject_changed_effects_and_scope() {
+        let source = "struct Bag<T>{value:T}impl<T> Bag<T>{fn set(&mut self,value:T){self.value=value;}}fn seed<T>(value:T)->Bag<T>{Bag{value}}fn consume<T>(value:T){}fn main(){let sibling=\"sibling\";let mut bag={let mut inside=seed(\"first\");inside.set(\"second\");inside};consume(&mut bag);}";
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected lexical source block");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        assert!(
+            !replay_source_body(&original, checked, publication.facts(), &budget)
+                .unwrap()
+                .is_empty()
+        );
+        let block_id = checked.exprs.iter().position(|expression| matches!(&expression.kind, ir::ExprKind::Block(block) if block.statements.len() == 2)).unwrap();
+        for mutation in 0..4 {
+            let mut forged = checked.as_ref().clone();
+            let ir::ExprKind::Block(block) = &mut forged.exprs[block_id].kind else {
+                unreachable!()
+            };
+            match mutation {
+                0 => {
+                    block.statements.pop();
+                }
+                1 => block.statements.swap(0, 1),
+                2 => block.tail = None,
+                3 => {
+                    let ir::TypedStmt::Let { local, .. } = &mut block.statements[0] else {
+                        unreachable!()
+                    };
+                    *local = ir::LocalId(usize::MAX);
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                    .is_err(),
+                "forged lexical block mutation {mutation} passed"
+            );
+        }
+    }
 
     #[test]
     fn generic_method_chains_require_unique_authored_role_not_deref_placeholders() {

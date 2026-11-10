@@ -1,6 +1,6 @@
 //! Source-derived method results. Checked actuals are comparison targets.
-//! Generic owners remain zero-argument. Authored arguments and mutable local
-//! receivers require a closed original header, including fixed formal inputs.
+//! Borrowed local receivers reconstruct their owner before authored arguments
+//! receive concrete parameter context. Method-owned binders remain unsupported.
 use super::*;
 
 impl Replay<'_> {
@@ -111,12 +111,10 @@ impl Replay<'_> {
             .as_ref()
             .ok_or_else(|| FactsError::invalid(self.budget, "generic method owner missing"))?;
         let closed_header = view.generic_env().total_arity() == 0 && direct.type_args.is_empty();
-        if !written.is_empty()
-            && (!closed_header || !matches!(info.receiver, ReceiverKind::Borrowed { .. }))
-        {
+        if !written.is_empty() && !matches!(info.receiver, ReceiverKind::Borrowed { .. }) {
             return Err(FactsError::unsupported(
                 self.budget,
-                "authored method arguments require a closed source header",
+                "authored method arguments require an original borrowed owner",
             ));
         }
         if info.param_env.arity() != 0
@@ -196,7 +194,7 @@ impl Replay<'_> {
                     (owner.clone(), owner, ir::CallExpectation::NoFirmReference)
                 }
                 ReceiverKind::Borrowed { kind }
-                    if kind == ir::BorrowKind::Shared || closed_header =>
+                    if kind == ir::BorrowKind::Shared || kind == ir::BorrowKind::Mut =>
                 {
                     if !matches!(receiver, Expr::Var(path) if is_local_shaped_path(path)) {
                         return Err(FactsError::unsupported(
@@ -299,8 +297,40 @@ impl Replay<'_> {
         }
         let mut inputs = Vec::new();
         sr::push(&mut inputs, input.clone(), self.budget)?;
+        let mut materialize = |decl, args: &[ir::Ty]| {
+            self.original
+                .plan
+                .intern_nominal(
+                    decl,
+                    args,
+                    ir::FactsCtx::Validated(&self.original.facts),
+                    self.budget,
+                )
+                .map_err(|e| source_error(self.budget, &e))
+        };
+        // Receiver replay independently fixes every owner actual before authored
+        // arguments gain context. Checked type arguments never supply that context.
+        let owner_actuals = state.finish(false, &mut materialize)?.ok_or_else(|| {
+            FactsError::unsupported(
+                self.budget,
+                "source receiver leaves method owner unresolved",
+            )
+        })?;
+        let owner_target = ir::CallTarget {
+            declaration: direct.declaration,
+            type_args: owner_actuals.into(),
+        };
+        let owner_signature = self
+            .original
+            .plan
+            .instantiate_signature(
+                &owner_target,
+                ir::FactsCtx::Validated(&self.original.facts),
+                self.budget,
+            )
+            .map_err(|e| source_error(self.budget, &e))?;
         for (index, source) in written.iter().enumerate() {
-            let formal = &view.signature().params[index + 1];
+            let formal = &owner_signature.params[index + 1];
             let expectation = match formal {
                 ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
                 _ => ir::CallExpectation::NoFirmReference,
@@ -318,28 +348,12 @@ impl Replay<'_> {
             if !self.equal(formal, &actual)? {
                 return Err(FactsError::invalid(
                     self.budget,
-                    "closed method argument differs from original header",
+                    "method argument differs from independently instantiated source header",
                 ));
             }
             sr::push(&mut inputs, actual, self.budget)?;
         }
-        let mut materialize = |decl, args: &[ir::Ty]| {
-            self.original
-                .plan
-                .intern_nominal(
-                    decl,
-                    args,
-                    ir::FactsCtx::Validated(&self.original.facts),
-                    self.budget,
-                )
-                .map_err(|e| source_error(self.budget, &e))
-        };
-        let actuals = state.finish(false, &mut materialize)?.ok_or_else(|| {
-            FactsError::unsupported(
-                self.budget,
-                "generic source receiver leaves owner arguments unresolved",
-            )
-        })?;
+        let actuals = owner_target.type_args;
         if actuals.len() != direct.type_args.len() {
             return Err(FactsError::invalid(
                 self.budget,
@@ -360,7 +374,7 @@ impl Replay<'_> {
         )?;
         let inferred_target = ir::CallTarget {
             declaration: direct.declaration,
-            type_args: actuals.into(),
+            type_args: actuals,
         };
         let inferred = self
             .original
@@ -428,7 +442,7 @@ impl Replay<'_> {
             ));
         }
         for (index, argument) in args.iter().enumerate().skip(1) {
-            let expectation = match &view.signature().params[index] {
+            let expectation = match &inferred.params[index] {
                 ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
                 _ => ir::CallExpectation::NoFirmReference,
             };

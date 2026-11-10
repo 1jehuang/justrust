@@ -354,3 +354,44 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn variadic_reference_vec_callbacks_replay_lexical_sources() {
+    oracle::stock_native(
+        r#"fn modify<V,F:FnOnce(&mut V)>(values:&mut Vec<V>,f:F) {
+    if let Some(value)=values.get_mut(0) { f(value); }
+}
+fn inspect<V,F:FnOnce(&V)>(values:&Vec<V>,f:F) {
+    if let Some(value)=values.get(0) { f(value); }
+}
+fn fixed<F:FnOnce(&mut &str)>(values:&mut Vec<&str>,f:F) {
+    if let Some(value)=values.get_mut(0) { f(value); }
+}
+fn main() {
+    let mut values=vec!["a","untouched"];
+    modify(&mut values,|slot|*slot="b");
+    fixed(&mut values,|slot|*slot="c");
+    inspect(&values,|value|println!("{}",value));
+    println!("{:?}",values);
+    let mut annotated:Vec<&str>=vec!["first","second","third"];
+    modify(&mut annotated,|slot|*slot="changed");
+    println!("{:?}",annotated);
+    let left=7i32;
+    let right=11i32;
+    let nested=vec![vec![&left,&right],vec![&right,&left]];
+    inspect(&nested,|value|println!("{:?}",value));
+    let __jr_vec_tmp="outside";
+    let scoped={let __jr_vec_tmp="inside";vec![__jr_vec_tmp,"tail"]};
+    inspect(&scoped,|value|println!("{}",value));
+    println!("{}",__jr_vec_tmp);
+}"#,
+    );
+    for source in [
+        "fn inspect<V,F:FnOnce(&V)>(v:&Vec<V>,f:F){if let Some(x)=v.get(0){f(x);}}fn unused(){let escaped={let local=1i32;vec![&local,&local]};inspect(&escaped,|x|println!(\"{}\",x));}fn main(){}",
+        "fn modify<V,F:FnOnce(&mut V)>(v:&mut Vec<V>,f:F){if let Some(x)=v.get_mut(0){f(x);}}fn unused<'a>(v:&mut Vec<&'a str>){let s=String::from(\"short\");let values=vec![s.as_str(),\"tail\"];modify(v,|slot|*slot=values[0]);}fn main(){}",
+        "fn modify<V,F:FnOnce(&mut V)>(v:&mut Vec<V>,f:F){if let Some(x)=v.get_mut(0){f(x);}}fn unused(){let mut v=vec![\"a\",\"b\"];let first=v.get_mut(0).unwrap();modify(&mut v,|slot|*slot=\"changed\");println!(\"{}\",first);}fn main(){}",
+        "fn unused(){let outer=vec![\"outer\",\"tail\"];let _inner={let hidden=vec![\"inner\",\"tail\"];hidden};println!(\"{:?}\",hidden);let _=outer;}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
