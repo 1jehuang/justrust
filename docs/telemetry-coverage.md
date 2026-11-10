@@ -28,6 +28,11 @@ and custom telemetry endpoints must never receive hosted credentials.
 - Explain startup, lock wait, compile, build gaps, tests, and tail time.
 - Explain dependency and workspace cache hit/miss counts and observed costs.
 - Distinguish measured contention from incomplete CPU or compiler-phase coverage.
+  Compiler phases come from the jr-rustc phase ledger (an environment variable
+  and one file per compiler process, so no flag or cache key changes) and cover
+  every unit when the pinned jr toolchain supports it. `justrust show` states
+  how many units and how much rustc wall time have a phase explanation. Other
+  toolchains have a split only with `JUSTRUST_PASSES=on`.
 - Surface queued delivery, retryable failures, and rejected telemetry explicitly.
 - Preserve anonymous telemetry and all existing opt-out controls.
 

@@ -392,6 +392,65 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
             "  rustc CPU {:.1}s, rustc wall sum {:.1}s, pass timings for {} of {}",
             u.rustc_cpu_secs, u.rustc_wall_sum, u.with_pass_timings, u.compiled
         );
+        if let Some(sp) = &u.phase_split {
+            let all = (sp.frontend + sp.codegen + sp.link + sp.incremental + sp.other).max(1e-9);
+            let _ = writeln!(
+                o,
+                "\n  Compiler phases, all {} timed units ({:.1}s of {:.1}s rustc wall explained)",
+                u.with_pass_timings, u.phase_wall_secs, u.rustc_wall_sum
+            );
+            for (name, secs, what) in [
+                (
+                    "frontend",
+                    sp.frontend,
+                    "parse, expand, resolve, type and borrow check, lints, metadata",
+                ),
+                (
+                    "codegen",
+                    sp.codegen,
+                    "monomorphize, LLVM IR, wait for LLVM",
+                ),
+                ("link", sp.link, "linker and output files"),
+                (
+                    "incremental",
+                    sp.incremental,
+                    "load and save the incremental cache",
+                ),
+                (
+                    "other",
+                    sp.other,
+                    "compiler start, crate loading, untimed work",
+                ),
+            ] {
+                let _ = writeln!(
+                    o,
+                    "    {:<12} {:>7.2}s {:>4.0}%  {}",
+                    name,
+                    secs,
+                    100.0 * secs / all,
+                    what
+                );
+            }
+            if u.proc_macro_secs >= 0.005 {
+                let _ = writeln!(
+                    o,
+                    "    of frontend: {:.2}s running proc macros",
+                    u.proc_macro_secs
+                );
+            }
+            if u.llvm_thread_secs >= 0.005 {
+                let _ = writeln!(
+                    o,
+                    "    LLVM optimize and emit: {:.2}s summed over worker threads",
+                    u.llvm_thread_secs
+                );
+            }
+        } else {
+            let _ = writeln!(
+                o,
+                "  no compiler phase split: needs a jr toolchain with the phase ledger, or JUSTRUST_PASSES=on"
+            );
+        }
         let _ = writeln!(
             o,
             "\n  {:<34} {:>7} {:>7} {:>7} {:>7} {:>8}  SPLIT (frontend/codegen/link/incr/other)",
@@ -431,7 +490,12 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         if let Some(t) = s.top_units.first().filter(|t| !t.top_passes.is_empty()) {
             let _ = writeln!(o, "\n  Slowest rustc passes in {}", t.name);
             for pass in &t.top_passes {
-                let _ = writeln!(o, "    {:<44} {:>7.2}s", pass.name, pass.secs);
+                let calls = if pass.calls > 1 {
+                    format!("  x{}", pass.calls)
+                } else {
+                    String::new()
+                };
+                let _ = writeln!(o, "    {:<44} {:>7.2}s{calls}", pass.name, pass.secs);
             }
         }
     }

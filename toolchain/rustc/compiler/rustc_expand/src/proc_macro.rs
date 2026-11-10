@@ -42,6 +42,7 @@ impl base::BangProcMacro for BangProcMacro {
         input: TokenStream,
     ) -> Result<TokenStream, ErrorGuaranteed> {
         let _timer = record_expand_proc_macro(ecx, "expand_proc_macro", span);
+        let _jr_phase = rustc_data_structures::profiling::jr_phase("expand_proc_macro");
 
         let proc_macro_backtrace = ecx.ecfg.proc_macro_backtrace;
         let strategy = exec_strategy(ecx.sess);
@@ -96,6 +97,7 @@ pub fn expand_attr_macro(
     client: pm::bridge::client::Client,
 ) -> Result<TokenStream, ErrorGuaranteed> {
     let _timer = record_expand_proc_macro(ecx, "expand_proc_macro", span);
+    let _jr_phase = rustc_data_structures::profiling::jr_phase("expand_proc_macro");
 
     let proc_macro_backtrace = ecx.ecfg.proc_macro_backtrace;
     let strategy = exec_strategy(ecx.sess);
@@ -210,6 +212,7 @@ pub fn expand_derive_macro(
             let event_arg = invoc_expn_data.kind.descr();
             recorder.record_arg_with_span(ecx.sess.source_map(), event_arg, span);
         });
+    let _jr_phase = rustc_data_structures::profiling::jr_phase("expand_proc_macro");
 
     let proc_macro_backtrace = ecx.ecfg.proc_macro_backtrace;
     let strategy = exec_strategy(ecx.sess);

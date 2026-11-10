@@ -154,6 +154,22 @@ pub struct UnitStats {
     /// Sum of unit wall times (exceeds compile phase when units overlap).
     pub rustc_wall_sum: f64,
     pub with_pass_timings: usize,
+    /// Compiler phases summed over every unit with phase data. Seconds of
+    /// rustc main-thread time, so parallel units add up past wall time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_split: Option<Split>,
+    /// Wall time of the units `phase_split` covers. Against `rustc_wall_sum`
+    /// this is how much of the compile time has a phase explanation.
+    #[serde(default)]
+    pub phase_wall_secs: f64,
+    /// Time inside proc-macro expansion (derives, attribute and function-like
+    /// macros), part of the frontend. Only the compiler's phase ledger has it.
+    #[serde(default)]
+    pub proc_macro_secs: f64,
+    /// LLVM optimization and machine-code generation, summed over the
+    /// compiler's worker threads (can exceed wall time). Phase ledger only.
+    #[serde(default)]
+    pub llvm_thread_secs: f64,
     /// Dependency units restored from the shared dependency cache.
     #[serde(default)]
     pub depcache_hits: usize,
@@ -492,18 +508,19 @@ pub fn split_passes(passes: &[Pass]) -> Option<Split> {
         })
         .map(|p| p.secs)
         .sum::<f64>();
+    // Outermost phases only. `coherence_checking` runs inside
+    // `type_check_crate`, and `lint_checking` and `privacy_checking_modules`
+    // inside `misc_checking_3`: adding them counted that time twice and put
+    // the frontend above the unit's total (serde_core: 2.72s of 2.47s).
     let frontend_parts = [
         "parse_crate",
         "expand_crate",
         "resolve_crate",
         "AST_validation",
         "misc_checking_1",
-        "coherence_checking",
         "type_check_crate",
         "MIR_borrow_checking",
         "MIR_effect_checking",
-        "lint_checking",
-        "privacy_checking_modules",
         "misc_checking_3",
         "generate_crate_metadata",
         "drop_ast",
@@ -518,6 +535,29 @@ pub fn split_passes(passes: &[Pass]) -> Option<Split> {
         incremental,
         other,
     })
+}
+
+fn sum_splits(splits: impl Iterator<Item = Split>) -> Option<Split> {
+    splits.fold(None, |acc, s| {
+        let a = acc.unwrap_or_default();
+        Some(Split {
+            frontend: a.frontend + s.frontend,
+            codegen: a.codegen + s.codegen,
+            link: a.link + s.link,
+            incremental: a.incremental + s.incremental,
+            other: a.other + s.other,
+        })
+    })
+}
+
+/// Seconds every unit spent in the named phases.
+fn pass_secs(units: &[Unit], names: &[&str]) -> f64 {
+    units
+        .iter()
+        .flat_map(|u| &u.passes)
+        .filter(|p| names.contains(&p.name.as_str()))
+        .map(|p| p.secs)
+        .sum()
 }
 
 fn unit_kind(u: &Unit) -> String {
@@ -897,6 +937,14 @@ pub fn build(
         rustc_cpu_secs: units.iter().map(|u| u.user + u.sys).sum(),
         rustc_wall_sum: units.iter().map(|u| u.wall).sum(),
         with_pass_timings: units.iter().filter(|u| !u.passes.is_empty()).count(),
+        phase_split: sum_splits(units.iter().filter_map(|u| split_passes(&u.passes))),
+        phase_wall_secs: units
+            .iter()
+            .filter(|u| split_passes(&u.passes).is_some())
+            .map(|u| u.wall)
+            .sum(),
+        proc_macro_secs: pass_secs(units, &["expand_proc_macro"]),
+        llvm_thread_secs: pass_secs(units, &["LLVM_module_optimize", "LLVM_module_codegen"]),
         depcache_hits: units
             .iter()
             .filter(|u| matches!(u.depcache.as_str(), "hit" | "remote" | "peer" | "prebuilt"))
@@ -2237,9 +2285,13 @@ mod tests {
             name: n.into(),
             secs: s,
             rss_end_mb: 0.0,
+            calls: 0,
         };
         let passes = vec![
             p("type_check_crate", 2.0),
+            p("coherence_checking", 0.7),
+            p("misc_checking_3", 0.0),
+            p("lint_checking", 0.0),
             p("MIR_borrow_checking", 1.0),
             p("codegen_crate", 3.0),
             p("codegen_to_LLVM_IR", 2.5),
@@ -2257,6 +2309,57 @@ mod tests {
         assert_eq!(s.link, 1.0);
         assert_eq!(s.incremental, 0.5);
         assert_eq!(s.other, 0.5);
+    }
+
+    #[test]
+    fn sums_phases_over_units_and_reports_ledger_only_phases() {
+        let p = |n: &str, s: f64, calls: u64| Pass {
+            name: n.into(),
+            secs: s,
+            rss_end_mb: 0.0,
+            calls,
+        };
+        let units = [
+            Unit {
+                passes: vec![
+                    p("expand_crate", 2.0, 1),
+                    p("expand_proc_macro", 1.5, 40),
+                    p("codegen_crate", 1.0, 1),
+                    p("LLVM_module_optimize", 3.0, 16),
+                    p("LLVM_module_codegen", 2.0, 16),
+                    p("total", 4.0, 1),
+                ],
+                ..Default::default()
+            },
+            Unit {
+                passes: vec![
+                    p("type_check_crate", 1.0, 1),
+                    p("expand_proc_macro", 0.5, 3),
+                    p("link", 0.25, 1),
+                    p("total", 1.5, 1),
+                ],
+                ..Default::default()
+            },
+            // No phase data: contributes nothing and is not counted as explained.
+            Unit::default(),
+        ];
+        let s = sum_splits(units.iter().filter_map(|u| split_passes(&u.passes))).unwrap();
+        assert_eq!(s.frontend, 3.0);
+        assert_eq!(s.codegen, 1.0);
+        assert_eq!(s.link, 0.25);
+        // Worker-thread LLVM time is not on the main thread, so it stays out
+        // of the split: the parts still add up to the units' totals.
+        assert_eq!(s.other, 1.25);
+        assert_eq!(
+            s.frontend + s.codegen + s.link + s.incremental + s.other,
+            5.5
+        );
+        assert_eq!(pass_secs(&units, &["expand_proc_macro"]), 2.0);
+        assert_eq!(
+            pass_secs(&units, &["LLVM_module_optimize", "LLVM_module_codegen"]),
+            5.0
+        );
+        assert!(sum_splits(std::iter::empty()).is_none());
     }
 
     #[test]

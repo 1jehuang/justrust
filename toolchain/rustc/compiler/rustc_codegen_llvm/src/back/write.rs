@@ -862,6 +862,7 @@ pub(crate) fn optimize(
     config: &ModuleConfig,
 ) {
     let _timer = prof.generic_activity_with_arg("LLVM_module_optimize", &*module.name);
+    let _jr_phase = rustc_data_structures::profiling::jr_phase("LLVM_module_optimize");
 
     let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
     let dcx = dcx.handle();
@@ -950,6 +951,7 @@ pub(crate) fn codegen(
     config: &ModuleConfig,
 ) -> CompiledModule {
     let _timer = prof.generic_activity_with_arg("LLVM_module_codegen", &*module.name);
+    let _jr_phase = rustc_data_structures::profiling::jr_phase("LLVM_module_codegen");
 
     let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
     let dcx = dcx.handle();

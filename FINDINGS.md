@@ -9853,3 +9853,45 @@ outputs: `target/` of scratch roots with no file modified in 6 h, and the
 unused firefox cache. Sources untouched. Result: 345G used, 139G free (72%).
 Follow-up: GC should cover unregistered/old mirror targets, ad hoc caches under
 `~/.cache`, and age out `~/.justrust/sent`.
+
+## 2026-11-09: compiler phase ledger, phase timing for every unit by default
+
+`justrust show` had no compiler phase split by default ("pass timings for 0 of
+N"): the split came only from `-Ztime-passes`, which is opt-in
+(`JUSTRUST_PASSES`) because it is a compiler flag (incremental cache key) and
+costs time. Measured on the `justrust` lib check unit, interleaved, 5 rounds:
+about 5% wall (9.80s to 10.32s). 12,410 stderr lines, nearly all per-item
+`drop_ast` events, each with two `/proc/self/statm` reads. It also never
+reported proc-macro expansion or LLVM worker-thread time.
+
+jr-rustc now keeps a phase ledger (`JrPhaseLedger`, `rustc_data_structures`
+profiling): with `JUSTRUST_RUSTC_PHASES_FILE=<path>` in the environment it sums
+duration and call count per phase in memory and writes one small TSV at exit.
+It adds `expand_proc_macro`, `LLVM_module_optimize`, `LLVM_module_codegen` and
+`codegen_to_LLVM_IR`. The shim sets the variable for every unit when the jr
+toolchain's driver contains the variable name (cached in `<toolchain>/.jr-phases`),
+reads the file after the compiler exits and stores it as the unit's passes.
+`JUSTRUST_PASSES=0` turns it off. An explicit `-Ztime-passes` still wins.
+
+Verified on a cold `serde`/`serde_json` test build (run
+20261109-171010556-3043041, staged dev compiler `jr-d9a5aea08737`): pass
+timings for 18 of 18 units including dependencies and build scripts, 10.8s of
+10.8s rustc wall explained, each unit's ledger total within 0.02s of the wall
+the shim measured. Re-running with the ledger off and on again: 0 compiled,
+12 fresh both times, so it does not touch cargo fingerprints. It is an
+environment variable and not a flag, so no compiler or depcache key sees it.
+
+Cost: not measurable. Same dev compiler, interleaved off/ledger, median wall:
+`justrust` lib 16.53s vs 16.21s (7 rounds), `syn` 2.83s vs 2.82s (25 rounds),
+`regex_automata` ledger 0.6% below off (25 rounds). The machine was shared, with
+run-to-run spread of several percent, so read this as "below noise", not as a
+speedup.
+
+Also fixed: the frontend total added `coherence_checking` on top of
+`type_check_crate`, and `lint_checking` and `privacy_checking_modules` on top
+of `misc_checking_3`, which contain them. serde_core showed 2.72s of frontend
+in a 2.47s compile.
+
+Not covered yet: units answered early by the shim (compiler still running when
+the shim replies), hosted runs until the build hosts get a compiler and client
+with the ledger, and the shipped PGO/BOLT compiler, which predates this.

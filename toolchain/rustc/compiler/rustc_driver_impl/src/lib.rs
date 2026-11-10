@@ -1753,6 +1753,8 @@ pub unsafe fn main() -> ExitCode {
         let end_rss = get_resident_set_size();
         print_time_passes_entry("total", start_time.elapsed(), start_rss, end_rss, format);
     }
+    // justrust: per-phase totals for the build recorder.
+    rustc_data_structures::profiling::jr_phases_write(start_time.elapsed());
 
     exit_code
 }

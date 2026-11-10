@@ -12,6 +12,13 @@
 //! (FINDINGS 41). `JUSTRUST_PASSES=on` turns it on where it is cache-safe,
 //! `JUSTRUST_PASSES=always` everywhere, at the cost of one cold incremental
 //! rebuild whenever the mode flips.
+//!
+//! Default phase timing: on a jr compiler with the phase ledger
+//! (`phase_ledger_path`), every unit gets its per-phase split without
+//! `-Ztime-passes`. The compiler sums phase durations in memory and writes one
+//! file at exit, named by `JUSTRUST_RUSTC_PHASES_FILE`. That is an environment
+//! variable, not a compiler option, so no cache key moves and dependency units
+//! stay eligible for the depcache. `JUSTRUST_PASSES=0` turns it off.
 
 use crate::paths;
 use serde::Serialize;
@@ -68,6 +75,14 @@ pub struct Pass {
     pub name: String,
     pub secs: f64,
     pub rss_end_mb: f64,
+    /// How many times the phase ran, when the compiler's phase ledger
+    /// reported it (zero from `-Ztime-passes`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub calls: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 fn real_rustc() -> PathBuf {
@@ -171,6 +186,76 @@ fn proc_macro_inputs_tracked(toolchain: &std::path::Path) -> bool {
         let _ = std::fs::rename(&tmp, &marker);
     }
     found
+}
+
+/// Whether the toolchain's compiler has the phase ledger
+/// (`JUSTRUST_RUSTC_PHASES_FILE`, jr-rustc `jr_phases_write`). Scanned once
+/// per toolchain and remembered in `<toolchain>/.jr-phases`.
+fn phase_ledger_supported(toolchain: &std::path::Path) -> bool {
+    let marker = toolchain.join(".jr-phases");
+    if let Ok(v) = std::fs::read_to_string(&marker) {
+        return v.trim() == "yes";
+    }
+    let found = std::fs::read_dir(toolchain.join("lib"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            n.starts_with("librustc_driver") && n.ends_with(".so")
+        })
+        .any(|e| {
+            std::fs::read(e.path())
+                .is_ok_and(|b| memchr::memmem::find(&b, b"JUSTRUST_RUSTC_PHASES_FILE").is_some())
+        });
+    let tmp = toolchain.join(format!(".jr-phases.{}", std::process::id()));
+    if std::fs::write(&tmp, if found { "yes\n" } else { "no\n" }).is_ok() {
+        let _ = std::fs::rename(&tmp, &marker);
+    }
+    found
+}
+
+/// Where this unit's compiler writes its phase ledger, when it can.
+///
+/// On by default for every unit (dependencies too) on a jr compiler that has
+/// the ledger: it is an environment variable the compiler reads, not a
+/// compiler option, so no incremental, depcache or cargo fingerprint key
+/// moves, and it costs no stderr traffic. `JUSTRUST_PASSES=0` turns it off.
+fn phase_ledger_path(real: &std::path::Path, run_dir: &std::path::Path) -> Option<PathBuf> {
+    if matches!(
+        std::env::var("JUSTRUST_PASSES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    ) || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
+    {
+        return None;
+    }
+    let toolchain = real.parent()?.parent()?;
+    if !toolchain.file_name()?.to_string_lossy().starts_with("jr-")
+        || !phase_ledger_supported(toolchain)
+    {
+        return None;
+    }
+    let dir = run_dir.join("phases");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join(format!("{}.tsv", std::process::id())))
+}
+
+/// Parse a phase ledger: `label\tseconds\tcount` per line.
+fn parse_phase_ledger(text: &str) -> Vec<Pass> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let name = f.next().filter(|n| !n.is_empty())?;
+            let secs = f.next()?.parse::<f64>().ok().filter(|s| s.is_finite())?;
+            Some(Pass {
+                name: name.to_owned(),
+                secs,
+                rss_end_mb: 0.0,
+                calls: f.next().and_then(|c| c.parse().ok()).unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
 /// Parallel front end for optimized workspace crates. rustc runs its front
@@ -395,6 +480,15 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if passes_on {
         cmd.arg("-Ztime-passes").arg("-Ztime-passes-format=json");
     }
+    // Explicit -Ztime-passes wins: it has memory figures the ledger lacks.
+    let ledger = (!passes_on)
+        .then(|| phase_ledger_path(real, run_dir))
+        .flatten();
+    match &ledger {
+        Some(path) => cmd.env("JUSTRUST_RUSTC_PHASES_FILE", path),
+        // Never inherited: a nested build must not write another unit's file.
+        None => cmd.env_remove("JUSTRUST_RUSTC_PHASES_FILE"),
+    };
     if plan.is_none() {
         let hot =
             crate::hotpatch::rustc_args(described.local, described.test, !link_args.is_empty());
@@ -497,6 +591,14 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     unit.exit = exit;
     unit.rmeta_secs = rmeta_at.lock().ok().and_then(|g| *g).map(|t| t - start);
     unit.passes = std::mem::take(&mut *passes.lock().unwrap());
+    if let Some(path) = &ledger {
+        // Written when the compiler exits. After an early reply it is still
+        // running, so that unit has no split.
+        if let Ok(text) = std::fs::read_to_string(path) {
+            unit.passes = parse_phase_ledger(&text);
+            let _ = std::fs::remove_file(path);
+        }
+    }
     if let Ok(line) = serde_json::to_string(&unit) {
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }
@@ -633,6 +735,7 @@ fn parse_pass(json: &[u8]) -> Option<Pass> {
         name: v.get("pass")?.as_str()?.to_owned(),
         secs: v.get("time")?.as_f64()?,
         rss_end_mb: v.get("rss_end").and_then(|r| r.as_f64()).unwrap_or(0.0) / 1_048_576.0,
+        calls: 0,
     })
 }
 
@@ -878,6 +981,39 @@ mod tests {
             let args = flags.iter().map(OsString::from).collect::<Vec<_>>();
             assert_eq!(describe(&args).frontend_threads, None, "{flags:?}");
         }
+    }
+
+    #[test]
+    fn parses_phase_ledger() {
+        let p = parse_phase_ledger(
+            "type_check_crate\t2.089000\t1\nexpand_proc_macro\t0.400000\t3120\n\nbad\tx\t1\ntotal\t6.976000\t1\n",
+        );
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].name, "type_check_crate");
+        assert_eq!(p[0].secs, 2.089);
+        assert_eq!(
+            (p[1].name.as_str(), p[1].calls),
+            ("expand_proc_macro", 3120)
+        );
+        assert_eq!(p[2].name, "total");
+    }
+
+    #[test]
+    fn phase_ledger_detected_from_driver() {
+        let dir = std::env::temp_dir().join(format!("jr-phases-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/librustc_driver-x.so"), b"old driver").unwrap();
+        assert!(!phase_ledger_supported(&dir));
+        std::fs::remove_file(dir.join(".jr-phases")).unwrap();
+        std::fs::write(
+            dir.join("lib/librustc_driver-x.so"),
+            b"..JUSTRUST_RUSTC_PHASES_FILE..",
+        )
+        .unwrap();
+        assert!(phase_ledger_supported(&dir));
+        assert!(phase_ledger_supported(&dir), "cached");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

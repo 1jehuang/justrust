@@ -232,6 +232,7 @@ impl SelfProfilerRef {
             self.print_verbose_generic_activities.map(|format| (event_label.to_owned(), format));
 
         VerboseTimingGuard::start(message_and_format, self.generic_activity(event_label))
+            .with_jr_phase(event_label)
     }
 
     /// Like `verbose_generic_activity`, but with an extra arg.
@@ -251,6 +252,7 @@ impl SelfProfilerRef {
             message_and_format,
             self.generic_activity_with_arg(event_label, event_arg),
         )
+        .with_jr_phase(event_label)
     }
 
     /// Start profiling a generic activity. Profiling continues until the
@@ -823,6 +825,7 @@ struct VerboseInfo {
 pub struct VerboseTimingGuard<'a> {
     info: Option<VerboseInfo>,
     _guard: TimingGuard<'a>,
+    _jr_phase: JrPhaseGuard,
 }
 
 impl<'a> VerboseTimingGuard<'a> {
@@ -832,6 +835,7 @@ impl<'a> VerboseTimingGuard<'a> {
     ) -> Self {
         VerboseTimingGuard {
             _guard,
+            _jr_phase: JrPhaseGuard(None),
             info: message_and_format.map(|(message, format)| VerboseInfo {
                 start_time: Instant::now(),
                 start_rss: get_resident_set_size(),
@@ -845,6 +849,98 @@ impl<'a> VerboseTimingGuard<'a> {
     pub fn run<R>(self, f: impl FnOnce() -> R) -> R {
         let _timer = self;
         f()
+    }
+
+    /// justrust: also account this activity in the phase ledger.
+    #[inline]
+    fn with_jr_phase(mut self, label: &'static str) -> Self {
+        self._jr_phase = jr_phase(label);
+        self
+    }
+}
+
+/// justrust: the phase ledger. With `JUSTRUST_RUSTC_PHASES_FILE=<path>` in
+/// the environment the compiler sums the wall time of every verbose activity
+/// (what `-Ztime-passes` prints) per label in memory and writes one small
+/// file when it exits: `label\tseconds\tcount` per line.
+///
+/// This is what lets the build recorder show a per-phase split for every
+/// unit by default. `-Ztime-passes` is not usable for that: it prints one
+/// stderr line and reads `/proc/self/statm` twice per event, and `drop_ast`
+/// alone fires once per item (12,356 of 12,404 events on a 92k-line crate,
+/// +5% wall). The ledger costs two clock reads and one uncontended lock per
+/// event, does no I/O until exit, and is not a compiler option, so it cannot
+/// change an incremental or artifact cache key.
+///
+/// Activities that run on worker threads (`jr_phase` call sites in codegen)
+/// are summed over threads, so their total can exceed wall time.
+struct JrPhaseLedger {
+    path: std::path::PathBuf,
+    phases: parking_lot::Mutex<FxHashMap<&'static str, (Duration, u64)>>,
+}
+
+fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
+    static LEDGER: std::sync::OnceLock<Option<JrPhaseLedger>> = std::sync::OnceLock::new();
+    LEDGER
+        .get_or_init(|| {
+            let path = std::env::var_os("JUSTRUST_RUSTC_PHASES_FILE")?;
+            (!path.is_empty()).then(|| JrPhaseLedger {
+                path: path.into(),
+                phases: parking_lot::Mutex::new(FxHashMap::default()),
+            })
+        })
+        .as_ref()
+}
+
+/// Accounts the time until it is dropped to `label` in the phase ledger.
+#[must_use]
+pub struct JrPhaseGuard(Option<(&'static str, Instant)>);
+
+impl Drop for JrPhaseGuard {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some((label, start)) = self.0 {
+            jr_phase_add(label, start.elapsed());
+        }
+    }
+}
+
+/// Start timing `label` for the phase ledger. Free when the ledger is off.
+#[inline]
+pub fn jr_phase(label: &'static str) -> JrPhaseGuard {
+    JrPhaseGuard(jr_phase_ledger().map(|_| (label, Instant::now())))
+}
+
+/// Add an already measured duration to `label` in the phase ledger.
+pub fn jr_phase_add(label: &'static str, dur: Duration) {
+    if let Some(ledger) = jr_phase_ledger() {
+        let mut phases = ledger.phases.lock();
+        let entry = phases.entry(label).or_insert((Duration::ZERO, 0));
+        entry.0 += dur;
+        entry.1 += 1;
+    }
+}
+
+/// Write the phase ledger, with `total` as the whole compiler session.
+/// Best effort: profiling never fails a compilation.
+pub fn jr_phases_write(total: Duration) {
+    use std::fmt::Write;
+    let Some(ledger) = jr_phase_ledger() else { return };
+    let mut out = String::new();
+    {
+        let phases = ledger.phases.lock();
+        let mut rows: Vec<_> = phases.iter().map(|(label, v)| (*label, *v)).collect();
+        rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
+        for (label, (dur, count)) in rows {
+            let _ = writeln!(out, "{label}\t{:.6}\t{count}", dur.as_secs_f64());
+        }
+    }
+    let _ = writeln!(out, "total\t{:.6}\t1", total.as_secs_f64());
+    // The reader only looks after this process exited, and a rename keeps a
+    // killed compiler from leaving half a file.
+    let tmp = ledger.path.with_extension("tmp");
+    if fs::write(&tmp, out).is_ok() {
+        let _ = fs::rename(&tmp, &ledger.path);
     }
 }
 

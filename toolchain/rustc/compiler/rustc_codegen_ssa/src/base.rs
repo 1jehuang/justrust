@@ -898,6 +898,8 @@ pub fn codegen_crate<
 
     ongoing_codegen.codegen_finished(tcx);
 
+    rustc_data_structures::profiling::jr_phase_add("codegen_to_LLVM_IR", total_codegen_time);
+
     // Since the main thread is sometimes blocked during codegen, we keep track
     // -Ztime-passes output manually.
     if tcx.sess.opts.unstable_opts.time_passes {
