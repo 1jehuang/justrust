@@ -329,3 +329,28 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn projected_sequence_reference_callbacks_match_stock() {
+    oracle::stock_native(
+        r#"use std::collections::BTreeMap;
+fn modify<V,F:FnOnce(&mut V)>(values:&mut (Vec<V>,Vec<V>),f:F) {
+    if let Some(value)=values.1.get_mut(0) { f(value); }
+}
+fn main() {
+    let mut values=(vec!["left"],vec!["right"]);
+    modify(&mut values,|slot|*slot="changed");
+    println!("{:?} {:?}",values.0,values.1);
+    let mut map:BTreeMap<i32,&str>=BTreeMap::new();
+    map.insert(1,"before");
+    map.entry(1).and_modify(|slot|*slot="after");
+    println!("{:?}",map);
+}"#,
+    );
+    for source in [
+        r#"fn modify<V,F:FnOnce(&mut V)>(v:&mut (Vec<V>,Vec<V>),f:F){if let Some(x)=v.1.get_mut(0){f(x);}}fn unused<'a>(v:&mut (Vec<&'a str>,Vec<&'a str>)){let s=String::from("short");modify(v,|slot|*slot=s.as_str());}fn main(){}"#,
+        r#"fn modify<V,F:FnOnce(&mut V)>(v:&mut (Vec<V>,Vec<V>),f:F){if let Some(x)=v.1.get_mut(0){f(x);}}fn unused(v:&mut (Vec<&str>,Vec<&str>)){let first=v.1.get_mut(0).unwrap();modify(v,|slot|*slot="changed");println!("{}",first);}fn main(){}"#,
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

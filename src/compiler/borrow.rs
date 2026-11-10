@@ -3588,7 +3588,6 @@ impl CarrierBuilder<'_, '_> {
         // the original object, every loan authority and its complete issued
         // cell domain. It cannot mint a cell or a disjoint element target.
         if target.precision == TargetPrecision::Exact
-            && target.place.projection.is_empty()
             && let CanonicalRoot::ParameterReferent(local, source) = &target.place.root
             && let Ty::Ref {
                 kind: result_kind,
@@ -3631,7 +3630,9 @@ impl CarrierBuilder<'_, '_> {
                 referent,
             } = original
                 && (original_kind == BorrowKind::Mut || result_kind == BorrowKind::Shared)
-                && referent.as_ref() != result_referent.as_ref()
+                && let Some(projected) =
+                    probe_projected_shape(&referent, &target.place.projection, self.budget)?
+                && projected != *result_referent
             {
                 target.precision = TargetPrecision::Subtree;
             }
@@ -10605,30 +10606,46 @@ mod parameter_equality_tests {
 
     #[test]
     fn parameter_result_widening_retains_original_issued_cover() {
-        for (source, source_kind) in [
+        for (source, source_kind, field) in [
             (
                 "fn inspect(values:&[&i32]){let _=values;}fn main(){}",
                 BorrowKind::Shared,
+                None,
             ),
             (
                 "fn inspect(values:&mut [&i32]){let _=values;}fn main(){}",
                 BorrowKind::Mut,
+                None,
             ),
             (
                 "fn inspect(values:&Vec<&i32>){let _=values;}fn main(){}",
                 BorrowKind::Shared,
+                None,
             ),
             (
                 "fn inspect(values:&mut Vec<&i32>){let _=values;}fn main(){}",
                 BorrowKind::Mut,
+                None,
             ),
             (
                 "fn inspect(values:&mut [&i32;2]){let _=values;}fn main(){}",
                 BorrowKind::Mut,
+                None,
             ),
             (
                 "fn inspect(values:&mut (&i32,&i32)){let _=values;}fn main(){}",
                 BorrowKind::Mut,
+                None,
+            ),
+            (
+                "fn inspect(values:&mut (Vec<&i32>,Vec<&i32>)){let _=values;}fn main(){}",
+                BorrowKind::Mut,
+                Some(1),
+            ),
+            (
+                "fn inspect(values:&(Vec<&i32>,Vec<&i32>)){let _=values;}fn main(){}",
+                BorrowKind::Shared,
+                Some(0),
             ),
         ] {
             let snapshot = Arc::new(crate::compiler::Snapshot {
@@ -10667,7 +10684,10 @@ mod parameter_equality_tests {
                 .iter()
                 .find(|(input, _)| input.param == 0 && input.location == location)
                 .unwrap();
-            let target = builder.targets[origin.0][0].clone();
+            let mut target = builder.targets[origin.0][0].clone();
+            if let Some(field) = field {
+                target.place.projection.push(Projection::Field(field));
+            }
             let element = Ty::Ref {
                 kind: BorrowKind::Shared,
                 referent: Arc::new(Ty::Int(ir::IntTy::I32)),
@@ -10724,7 +10744,23 @@ mod parameter_equality_tests {
                     .structural_result_target(forged, &result, &location)
                     .is_err()
             );
-            let same = function.locals[function.params[0].0].ty.clone();
+            let original = ir::carrier_at(
+                &function.locals[function.params[0].0].ty,
+                &location,
+                &builder.ledger,
+            )
+            .unwrap();
+            let Ty::Ref { kind, referent } = original else {
+                panic!("issued parameter reference");
+            };
+            let same = Ty::Ref {
+                kind,
+                referent: Arc::new(
+                    probe_projected_shape(&referent, &target.place.projection, builder.budget)
+                        .unwrap()
+                        .unwrap(),
+                ),
+            };
             assert_eq!(
                 builder
                     .structural_result_target(target.clone(), &same, &location)
