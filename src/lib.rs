@@ -611,10 +611,10 @@ enum ToolchainCmd {
     /// toolchain (`JUSTRUST_TOOLCHAIN=system` to opt out). Proc-macro caching
     /// requires enforced inputs, or experimental `JUSTRUST_CACHE_PROC_MACROS=1`.
     JrInstall {
-        /// Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy}.
+        /// Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy,rustfmt,cargo-fmt}.
         #[arg(default_value = "~/justrust/toolchain/rustc/build/host/stage2")]
         sysroot: String,
-        /// Installed official toolchain to take cargo and rustfmt from.
+        /// Installed toolchain to take Cargo binaries from; formatters must come from the owned sysroot.
         #[arg(long, default_value = "nightly-2026-10-08")]
         cargo_from: String,
         /// Stage for explicit pins only, without changing the default compiler.
@@ -1513,6 +1513,18 @@ mod passthrough_tests {
             panic!("expected jr-install command");
         };
         assert_eq!(sysroot, "~/justrust/toolchain/rustc/build/host/stage2");
+    }
+
+    #[test]
+    fn jr_install_help_requires_owned_formatters() {
+        let error = Cli::try_parse_from(["justrust", "toolchain", "jr-install", "--help"])
+            .err()
+            .expect("help must return the display-help result");
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        assert!(help.contains("rustfmt,cargo-fmt"));
+        assert!(help.contains("formatters must come from the owned sysroot"));
+        assert!(!help.contains("take cargo and rustfmt from"));
     }
 
     #[test]
