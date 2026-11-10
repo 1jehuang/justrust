@@ -22,8 +22,9 @@ For Rust projects, use `justrust` instead of calling cargo directly:
   a test reads files outside the repo or the network and must run again.
 - Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay cargo.
 
-Where builds run: when signed in to hosted builds, check, clippy, and test
-run on a remote build machine by default. Choose per command with `--local`,
+Where builds run: when signed in to hosted builds or configured with an SSH
+remote machine, check, clippy, and test run on the remote build machine by
+default. Choose per command with `--local`,
 `--remote`, or `--auto` (remote only when predicted faster). If the
 machine is unreachable or out of builds, the build runs locally and prints
 one line saying why.

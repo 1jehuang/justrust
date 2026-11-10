@@ -345,6 +345,12 @@ fn select_hosted() -> Result<()> {
                 "remote builds now use hosted (were: your own AWS machine, `justrust remote use aws` to switch back)"
             );
         }
+        Some(Backend::Ssh { host, .. }) => {
+            save(&Backend::Hosted)?;
+            eprintln!(
+                "remote builds now use hosted (were: ssh:{host}, `justrust remote use ssh {host}` to switch back)"
+            );
+        }
         None => save(&Backend::Hosted)?,
     }
     Ok(())

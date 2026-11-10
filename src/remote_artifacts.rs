@@ -65,6 +65,8 @@ struct Have {
 enum Frame {
     Hello {
         arch: String,
+        #[serde(default)]
+        os: String,
         dir: String,
     },
     Selected {
@@ -121,6 +123,7 @@ fn artifact_name(n: &str, mode: u32) -> bool {
     }
     n.ends_with(".so")
         || n.contains(".so.")
+        || n.ends_with(".dylib")
         || n.ends_with(".exe")
         || n.ends_with(".dll")
         || mode & 0o111 != 0
@@ -469,6 +472,7 @@ fn serve_selected_dir(
         &mut out,
         &Frame::Hello {
             arch: std::env::consts::ARCH.into(),
+            os: std::env::consts::OS.into(),
             dir: dir.display().to_string(),
         },
         &[],
@@ -577,6 +581,12 @@ fn anchor(streamed: &[(String, u64, PathBuf)], size: u64) -> Option<&(String, u6
         .min_by_key(|(_, s, _)| s.abs_diff(size))
 }
 
+/// Whether a machine reporting this `uname -sm` builds executables that are
+/// not this host's. Unknown counts as the same platform.
+fn foreign_platform(remote: Option<&str>) -> bool {
+    remote.is_some_and(|p| crate::remote::platform_differs(p, &crate::remote::local_platform()))
+}
+
 fn records_path() -> Result<PathBuf> {
     Ok(crate::remote::dir()?.join("fetched.json"))
 }
@@ -635,6 +645,16 @@ fn recorded_have_list(dir: &Path, records: &BTreeMap<String, Record>) -> Vec<Hav
 /// Missing shared libraries or symbol versions (a machine with a newer
 /// glibc) make the binary useless here. `ldd` prints "not found" for both.
 fn check_libs(p: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let _ = Command::new("codesign")
+            .args(["-s", "-", "-f"])
+            .arg(p)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return Ok(());
+    }
     let Ok(o) = Command::new("ldd").arg(p).stdin(Stdio::null()).output() else {
         return Ok(());
     };
@@ -659,17 +679,22 @@ fn check_libs(p: &Path) -> Result<()> {
 
 fn check_native_test(data: &[u8]) -> Result<()> {
     use object::{Object, ObjectKind};
-    let file = object::File::parse(data).context("selected test is not a native ELF executable")?;
+    let file = object::File::parse(data).context("selected test is not a native executable")?;
     let expected = match std::env::consts::ARCH {
         "x86_64" => object::Architecture::X86_64,
         "aarch64" => object::Architecture::Aarch64,
         arch => bail!("unsupported native test architecture {arch}"),
     };
-    if file.format() != object::BinaryFormat::Elf
+    let expected_format = if cfg!(target_os = "macos") {
+        object::BinaryFormat::MachO
+    } else {
+        object::BinaryFormat::Elf
+    };
+    if file.format() != expected_format
         || file.architecture() != expected
         || !matches!(file.kind(), ObjectKind::Executable | ObjectKind::Dynamic)
     {
-        bail!("selected test artifact is not a matching native ELF executable");
+        bail!("selected test artifact is not a matching native executable");
     }
     Ok(())
 }
@@ -862,7 +887,9 @@ fn apply(
             }
             Validation::Darwin(target) => check_darwin(&std::fs::read(&tmp)?, target)?,
             Validation::Arm64 => crate::arm64_tools::validate_artifact(&std::fs::read(&tmp)?)?,
-            Validation::NativeBuild if mode & 0o111 != 0 || name.contains(".so") => {
+            Validation::NativeBuild
+                if mode & 0o111 != 0 || name.contains(".so") || name.ends_with(".dylib") =>
+            {
                 check_libs(&tmp)?
             }
             Validation::NativeBuild => (),
@@ -914,6 +941,14 @@ fn fetch_inner(
         crate::darwin_tools::supported(target) || crate::ios_tools::supported(target)
     });
     let arm64 = build_target(args).is_some_and(crate::arm64_tools::supported);
+    // An untargeted build on an ssh machine with another OS or CPU yields that
+    // machine's executables. A newer file built here is a different program.
+    let foreign = build_target(args).is_none()
+        && matches!(
+            crate::remote_backend::load(),
+            Some(crate::remote_backend::Backend::Ssh { ref host, ref opts })
+                if foreign_platform(crate::remote::ssh_platform(host, opts).as_deref())
+        );
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
     // release. Only reuse files with known remote provenance for musl.
@@ -924,7 +959,7 @@ fn fetch_inner(
     }
     .into_iter()
     .filter(|h| {
-        (musl.is_none() && windows.is_none() && !glibc && darwin.is_none() && !arm64)
+        (musl.is_none() && windows.is_none() && !glibc && darwin.is_none() && !arm64 && !foreign)
             || h.id.is_some()
     })
     .filter(|h| {
@@ -948,9 +983,16 @@ fn fetch_inner(
     })
     .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
+    let is_ssh_backend = matches!(backend, crate::remote_backend::Backend::Ssh { .. });
     let t = backend.ensure_ready()?;
+    let active_prefix = crate::remote_daemon::active_prefix();
+    let remote_cwd = if active_prefix.is_empty() {
+        cwd.display().to_string()
+    } else {
+        format!("{active_prefix}{}", cwd.display())
+    };
     let req = Request {
-        cwd: cwd.display().to_string(),
+        cwd: remote_cwd,
         args: artifact_args(args),
         start,
         have,
@@ -959,7 +1001,9 @@ fn fetch_inner(
     };
     let mut child = t
         .command()
-        .arg(format!("~/.cargo/bin/justrust {ARG}"))
+        .arg(format!(
+            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; ~/.cargo/bin/justrust {ARG}"
+        ))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -975,6 +1019,7 @@ fn fetch_inner(
     let mut patched = 0;
     let mut bytes = 0u64;
     let mut remote_dir = None;
+    let mut remote_darwin_target: Option<&'static str> = None;
     let mut selected = None;
     let mut streamed: std::collections::HashSet<String> = Default::default();
     let res = (|| -> Result<()> {
@@ -985,12 +1030,24 @@ fn fetch_inner(
                 bail!("the machine closed the artifact stream early");
             }
             match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
-                Frame::Hello { arch, dir } => {
+                Frame::Hello { arch, os, dir } => {
+                    let cross_darwin_ssh = is_ssh_backend
+                        && test_run.is_none()
+                        && os == "macos"
+                        && std::env::consts::OS != "macos";
+                    if cross_darwin_ssh {
+                        remote_darwin_target = match arch.as_str() {
+                            "aarch64" => Some("aarch64-apple-darwin"),
+                            "x86_64" => Some("x86_64-apple-darwin"),
+                            _ => None,
+                        };
+                    }
                     if musl.is_none()
                         && windows.is_none()
                         && !glibc
                         && darwin.is_none()
                         && !arm64
+                        && remote_darwin_target.is_none()
                         && arch != std::env::consts::ARCH
                     {
                         bail!(
@@ -1059,7 +1116,7 @@ fn fetch_inner(
                         } else {
                             Validation::WindowsBuild(target)
                         }
-                    } else if let Some(target) = darwin {
+                    } else if let Some(target) = darwin.or(remote_darwin_target) {
                         Validation::Darwin(target)
                     } else if arm64 {
                         Validation::Arm64
@@ -1660,6 +1717,7 @@ mod tests {
     fn names() {
         assert!(artifact_name("justrust", 0o755));
         assert!(artifact_name("libfoo.so", 0o644));
+        assert!(artifact_name("libfoo.dylib", 0o644));
         assert!(!artifact_name("justrust.d", 0o755));
         assert!(!artifact_name("libfoo.rlib", 0o644));
         assert!(!artifact_name("notes.txt", 0o644));
@@ -1672,6 +1730,14 @@ mod tests {
         assert!(!safe_name("../x"));
         assert!(!safe_name("/etc/passwd"));
         assert!(!safe_name(""));
+    }
+
+    #[test]
+    fn only_a_known_different_platform_is_foreign() {
+        let here = crate::remote::local_platform();
+        assert!(!foreign_platform(None));
+        assert!(!foreign_platform(Some(&here)));
+        assert!(foreign_platform(Some("Plan9 mips")));
     }
 
     #[test]

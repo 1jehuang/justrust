@@ -76,12 +76,17 @@ fn new_token() -> String {
 }
 
 /// Shell script printing, gzipped, the token, then `size path` for each
-/// NUL-separated gzipped path on stdin that exists.
+/// NUL-separated gzipped path on stdin that exists. Supports both GNU `stat -c`
+/// (Linux) and BSD `stat -f` (macOS).
 fn probe_script(remote: &str) -> String {
     let q = crate::remote_build::shell_quote;
     format!(
         "{{ cat {t} 2>/dev/null; rm -f {t}; echo; cd {} || exit 1; \
-         gzip -dc | xargs -0 -r stat -c '%s %n' -- 2>/dev/null; true; }} | gzip -1",
+         if stat -c '%s %n' . >/dev/null 2>&1; then \
+           gzip -dc | xargs -0 -r stat -c '%s %n' -- 2>/dev/null; \
+         else \
+           gzip -dc | xargs -0 stat -f '%z %N' -- 2>/dev/null; \
+         fi; true; }} | gzip -1",
         q(remote),
         t = q(&format!("{remote}/{TOKEN_FILE}")),
     )

@@ -699,7 +699,51 @@ impl Mirror {
             .arg(&dst)
             .stdin(Stdio::null())
             .stderr(Stdio::piped());
-        rsync_retry(root, || c.output().context("rsync (is it installed?)"))
+        if cfg!(target_os = "macos") && self.target.is_none() {
+            ensure_local_dirs_writable(Path::new(&remote));
+        }
+        let sent = rsync_retry(root, || c.output().context("rsync (is it installed?)"))?;
+        if cfg!(target_os = "macos") {
+            match &self.target {
+                None => ensure_local_dirs_writable(Path::new(&remote)),
+                Some(t) => {
+                    let q = shell_quote(&remote);
+                    let _ = t
+                        .command()
+                        .arg(format!(
+                            "find {q} -type d ! -perm -u+w -exec chmod u+w {{}} +"
+                        ))
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+            }
+        }
+        Ok(sent)
+    }
+}
+
+fn ensure_local_dirs_writable(dir: &Path) {
+    let Ok(m) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !m.is_dir() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = m.permissions().mode();
+        if mode & 0o200 == 0 {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode | 0o200));
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        ensure_local_dirs_writable(&entry.path());
     }
 }
 

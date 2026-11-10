@@ -73,6 +73,9 @@ pub struct Probe {
     pub region: Option<String>,
     #[serde(default)]
     pub spot: bool,
+    /// `uname -sm` of the machine (`Darwin arm64`, `Linux x86_64`).
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 /// The local sync daemon, from its socket (no network).
@@ -307,6 +310,7 @@ pub fn collect(probe: bool) -> Status {
         },
         Some(Backend::Aws) => collect_aws(probe),
         Some(Backend::Hosted) => collect_hosted(probe),
+        Some(Backend::Ssh { host, opts }) => collect_ssh(&host, &opts, probe),
     };
     out.daemon = daemon_state();
     out.signed_in = crate::remote_hosted::signed_in();
@@ -448,6 +452,82 @@ fn first_line(s: &str) -> String {
 
 const AWS_PROBE: &str = "probe.json";
 const HOSTED_PROBE: &str = "probe-hosted.json";
+const SSH_PROBE: &str = "probe-ssh.json";
+
+/// This host as `uname -sm` prints it (`Linux x86_64`, `Darwin arm64`).
+pub fn local_platform() -> String {
+    let os = match std::env::consts::OS {
+        "linux" => "Linux",
+        "macos" => "Darwin",
+        other => other,
+    };
+    let arch = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "arm64",
+        (_, arch) => arch,
+    };
+    format!("{os} {arch}")
+}
+
+/// Whether a machine reporting `uname -sm` as `remote` runs other code than
+/// this host: its executables do not run here. Linux names 64-bit Arm
+/// `aarch64`, macOS `arm64`.
+pub fn platform_differs(remote: &str, local: &str) -> bool {
+    let norm = |s: &str| s.trim().replace("arm64", "aarch64");
+    norm(remote) != norm(local)
+}
+
+/// `uname -sm` of the ssh backend's machine: from the last probe of this
+/// host, else probed now (one ssh, then cached).
+pub fn ssh_platform(host: &str, opts: &[String]) -> Option<String> {
+    if let Some(p) = cached_probe_file(SSH_PROBE)
+        .filter(|p| p.ok && p.dest.as_deref() == Some(host))
+        .and_then(|p| p.platform)
+    {
+        return Some(p);
+    }
+    let t = crate::remote_backend::ssh_target(host, opts).ok()?;
+    let p = run_probe_ssh(&t);
+    save_probe(SSH_PROBE, &p);
+    p.platform.filter(|_| p.ok)
+}
+
+fn collect_ssh(host: &str, opts: &[String], probe: bool) -> Status {
+    let mut out = Status {
+        configured: true,
+        backend: "ssh".into(),
+        host: Some(host.to_owned()),
+        state: "running".into(),
+        ..Default::default()
+    };
+    let cached = cached_probe_file(SSH_PROBE).filter(|p| p.dest.as_deref() == Some(host));
+    let p = match cached {
+        Some(p) if !probe || now() - p.at < PROBE_TTL => Some(p),
+        _ if probe => match crate::remote_backend::ssh_target(host, opts) {
+            Ok(t) => {
+                let p = run_probe_ssh(&t);
+                save_probe(SSH_PROBE, &p);
+                Some(p)
+            }
+            Err(e) => {
+                out.state = "error".into();
+                out.error = Some(e.to_string());
+                None
+            }
+        },
+        other => other,
+    };
+    if let Some(p) = &p {
+        if !p.ok {
+            out.state = "unreachable".into();
+            out.error = p.error.clone();
+        }
+        out.instance_type = p.instance_type.clone();
+        out.region = p.region.clone();
+        out.spot = p.spot;
+    }
+    out.probe = p;
+    out
+}
 
 fn cached_probe() -> Option<Probe> {
     cached_probe_file(AWS_PROBE)
@@ -582,22 +662,53 @@ fn tcp_rtt(ip: &str) -> Option<f64> {
 }
 
 const PROBE_SCRIPT: &str = r#"
-nproc
-cut -d' ' -f1 /proc/loadavg
-awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%.2f %.2f\n", t/1048576, (t-a)/1048576}' /proc/meminfo
-df --output=pcent / | tail -1 | tr -dc 0-9; echo
-(~/.cargo/bin/rustc --version 2>/dev/null || rustc --version 2>/dev/null || echo none)
-test -f /var/lib/justrust/ready -o -f /opt/jcode-build/ready && echo ready || echo setup
-if [ -f /var/lib/justrust/idle-left ]; then cat /var/lib/justrust/idle-left
-elif [ -x /opt/jcode-build/idle.sh ]; then s=$(cat /run/jcode-build-idle-since 2>/dev/null || date +%s); echo $(( (1800 - $(date +%s) + s) / 60 ))
-else echo -; fi
-cut -d' ' -f1 /proc/uptime
-cat /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input 2>/dev/null | awk '$1>1000&&$1<150000{if($1>m)m=$1}END{if(m)printf "%.1f\n",m/1000; else print "-"}'
-t=$(curl -sf -m 1 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null)
-m() { [ -n "$t" ] && curl -sf -m 1 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null; echo; }
-m instance-type
-m placement/region
-m instance-life-cycle
+PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH"
+os=$(uname -s 2>/dev/null)
+if [ "$os" = "Darwin" ]; then
+  sysctl -n hw.logicalcpu 2>/dev/null || echo 0
+  sysctl -n vm.loadavg 2>/dev/null | awk '{gsub(/[{}]/,""); print $1}'
+  total=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+  psize=$(sysctl -n hw.pagesize 2>/dev/null || echo 16384)
+  vm_stat 2>/dev/null | awk -v t="$total" -v p="$psize" '
+    /Pages active:/{a=$3}
+    /Pages wired down:/{w=$4}
+    /Pages occupied by compressor:/{c=$5}
+    END{
+      gsub(/\./,"",a); gsub(/\./,"",w); gsub(/\./,"",c);
+      used=(a+w+c)*p;
+      printf "%.2f %.2f\n", t/1073741824, used/1073741824
+    }'
+  df -k / 2>/dev/null | tail -1 | awk '{gsub(/%/,"",$5); print $5}'
+  (rustc --version 2>/dev/null || echo none)
+  echo ready
+  echo -
+  boot=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*{ sec = \([0-9]*\).*/\1/p')
+  if [ -n "$boot" ]; then echo $(( $(date +%s) - boot )); else echo -; fi
+  echo -
+  chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+  arch=$(uname -m 2>/dev/null)
+  echo "${chip:-macOS} ($arch)"
+  sw_vers -productVersion 2>/dev/null | awk '{print "macOS "$1}'
+  echo on-demand
+else
+  nproc
+  cut -d' ' -f1 /proc/loadavg
+  awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%.2f %.2f\n", t/1048576, (t-a)/1048576}' /proc/meminfo
+  df --output=pcent / | tail -1 | tr -dc 0-9; echo
+  (~/.cargo/bin/rustc --version 2>/dev/null || rustc --version 2>/dev/null || echo none)
+  test -f /var/lib/justrust/ready -o -f /opt/jcode-build/ready && echo ready || echo setup
+  if [ -f /var/lib/justrust/idle-left ]; then cat /var/lib/justrust/idle-left
+  elif [ -x /opt/jcode-build/idle.sh ]; then s=$(cat /run/jcode-build-idle-since 2>/dev/null || date +%s); echo $(( (1800 - $(date +%s) + s) / 60 ))
+  else echo -; fi
+  cut -d' ' -f1 /proc/uptime
+  cat /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input 2>/dev/null | awk '$1>1000&&$1<150000{if($1>m)m=$1}END{if(m)printf "%.1f\n",m/1000; else print "-"}'
+  t=$(curl -sf -m 1 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null)
+  m() { [ -n "$t" ] && curl -sf -m 1 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null; echo; }
+  m instance-type
+  m placement/region
+  m instance-life-cycle
+fi
+uname -sm
 "#;
 
 fn run_probe(ip: &str) -> Probe {
@@ -680,6 +791,7 @@ fn fill_probe(p: &mut Probe, res: Result<std::process::Output>) {
             p.instance_type = some(get(9));
             p.region = some(get(10));
             p.spot = get(11) == "spot";
+            p.platform = some(get(12));
         }
         Ok(o) => p.error = Some(first_line(&String::from_utf8_lossy(&o.stderr))),
         Err(e) => p.error = Some(first_line(&e.to_string())),
@@ -709,6 +821,7 @@ pub fn render_text(s: &Status) -> String {
     }
     match s.backend.as_str() {
         "hosted" => render_hosted(&mut o, s),
+        "ssh" => render_ssh_header(&mut o, s),
         _ if !s.configured => {
             let _ = writeln!(o, "remote builds: not set up (every build runs locally)");
             let _ = writeln!(
@@ -795,6 +908,26 @@ fn render_daemon(o: &mut String, s: &Status) {
     }
     if let Some(r) = &s.routing {
         let _ = writeln!(o, "routing: JUSTRUST_REMOTE={r}");
+    }
+}
+
+fn render_ssh_header(o: &mut String, s: &Status) {
+    let _ = writeln!(
+        o,
+        "remote compile machine: ssh ({}), {}",
+        s.host.as_deref().unwrap_or("?"),
+        s.state
+    );
+    let platform = s.probe.as_ref().and_then(|p| p.platform.as_ref());
+    if let Some(t) = s.instance_type.as_ref().or(platform) {
+        let _ = writeln!(
+            o,
+            "  {t}{}",
+            s.region
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        );
     }
 }
 
@@ -1207,8 +1340,10 @@ touch /var/lib/justrust/ready
 }
 
 pub fn up(opts: UpOptions) -> Result<()> {
-    if crate::remote_backend::load() == Some(Backend::Hosted) {
-        return crate::remote_hosted::up();
+    match crate::remote_backend::load() {
+        Some(Backend::Hosted) => return crate::remote_hosted::up(),
+        Some(Backend::Ssh { host, opts }) => return up_ssh(&host, &opts),
+        _ => {}
     }
     if let Some(st) = load_state()? {
         let d = describe(&st)?;
@@ -1341,6 +1476,40 @@ fn wait_running(st: &State) -> Result<()> {
     Ok(())
 }
 
+fn up_ssh(host: &str, opts: &[String]) -> Result<()> {
+    let t = crate::remote_backend::ssh_target(host, opts)?;
+    let setup = r#"
+set -e
+export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH"
+if ! command -v rustc >/dev/null 2>&1; then
+  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable -c clippy,rustfmt
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v zstd >/dev/null 2>&1; then
+  if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+    brew install zstd
+  fi
+fi
+# Checks, lints and tests work without zstd. Only returning executables
+# from `build` and `test --no-run` needs it.
+if ! command -v zstd >/dev/null 2>&1; then
+  echo "justrust remote: zstd is not installed on this machine: check, clippy and test work, but remote build cannot return executables. Install it (macOS: brew install zstd, Debian/Ubuntu: sudo apt-get install zstd)" >&2
+fi
+"#;
+    let status = t.command().arg(setup).status()?;
+    if !status.success() {
+        bail!("failed to verify or set up remote SSH host {host}");
+    }
+    let p = run_probe_ssh(&t);
+    save_probe(SSH_PROBE, &p);
+    println!(
+        "ssh:{host} ready ({}, {})",
+        p.instance_type.as_deref().unwrap_or("remote"),
+        p.rustc.as_deref().unwrap_or("rustc")
+    );
+    Ok(())
+}
+
 /// Explains why an aws-only command has nothing to do for this backend.
 fn not_aws_note(cmd: &str) -> Option<String> {
     match crate::remote_backend::load()? {
@@ -1348,13 +1517,24 @@ fn not_aws_note(cmd: &str) -> Option<String> {
         Backend::Hosted => Some(format!(
             "`remote {cmd}` applies to the AWS machine (`justrust remote up`). Remote builds use the hosted machine: `justrust remote down` stops it, and it is never destroyed from here"
         )),
+        Backend::Ssh { host, .. } => Some(format!(
+            "`remote {cmd}` applies to the AWS machine (`justrust remote up`). Remote builds use ssh:{host} (`justrust remote use off` to disable)"
+        )),
     }
 }
 
 pub fn down() -> Result<()> {
-    if crate::remote_backend::load() == Some(Backend::Hosted) {
-        crate::remote_daemon::stop();
-        return crate::remote_hosted::down();
+    match crate::remote_backend::load() {
+        Some(Backend::Hosted) => {
+            crate::remote_daemon::stop();
+            return crate::remote_hosted::down();
+        }
+        Some(Backend::Ssh { host, .. }) => {
+            crate::remote_daemon::stop();
+            println!("stopped sync daemon for ssh:{host}");
+            return Ok(());
+        }
+        _ => {}
     }
     let note = not_aws_note("down");
     let Some(st) = load_state()? else {
@@ -1442,6 +1622,9 @@ pub fn destroy() -> Result<()> {
 pub fn ssh(cmd: Vec<String>) -> Result<()> {
     let mut c = match crate::remote_backend::load() {
         Some(Backend::Hosted) => crate::remote_hosted::ensure_ready()?.command(),
+        Some(Backend::Ssh { host, opts }) => {
+            crate::remote_backend::ssh_target(&host, &opts)?.command()
+        }
         _ => aws_ssh_command()?,
     };
     if cmd.is_empty() {
@@ -1754,5 +1937,99 @@ mod tests {
             .and_then(|r| r.split("\nEOF").next())
             .unwrap();
         assert!(unit.contains("rm -f /var/lib/justrust/idle-left"), "{unit}");
+    }
+
+    #[test]
+    fn fill_probe_darwin_arm64() {
+        let out = "10\n1.92\n16.00 10.00\n11\nrustc 1.99.1\nready\n-\n472440\n-\nApple M4 (arm64)\nmacOS 27.2\non-demand\nDarwin arm64\n";
+        let mut p = Probe::default();
+        fill_probe(
+            &mut p,
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: out.into(),
+                stderr: vec![],
+            }),
+        );
+        assert!(p.ok && p.ready);
+        assert_eq!(p.cores, Some(10));
+        assert_eq!(p.instance_type.as_deref(), Some("Apple M4 (arm64)"));
+        assert_eq!(p.region.as_deref(), Some("macOS 27.2"));
+        assert!(!p.spot);
+        assert_eq!(p.uptime_s, Some(472440.0));
+        assert_eq!(p.platform.as_deref(), Some("Darwin arm64"));
+    }
+
+    #[test]
+    fn platform_comparison_decides_whether_binaries_run_here() {
+        assert!(platform_differs("Darwin arm64", "Linux x86_64"));
+        assert!(platform_differs("Linux aarch64", "Linux x86_64"));
+        assert!(platform_differs("Linux aarch64", "Darwin arm64"));
+        assert!(!platform_differs("Linux x86_64\n", "Linux x86_64"));
+        assert!(!platform_differs("Darwin arm64", "Darwin arm64"));
+        assert!(!platform_differs(&local_platform(), &local_platform()));
+    }
+
+    // Runs the real probe script through `sh`: every line the parser reads
+    // must come out on this host, and `uname -sm` must be the last.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn probe_script_runs_on_this_host() {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(PROBE_SCRIPT)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let mut p = Probe::default();
+        fill_probe(&mut p, Ok(out));
+        assert!(p.ok, "{p:?}");
+        assert!(p.cores.is_some_and(|c| c > 0), "{p:?}");
+        assert!(p.mem_total_gb.is_some_and(|m| m > 0.0), "{p:?}");
+        assert!(p.mem_used_gb.is_some(), "{p:?}");
+        assert!(p.uptime_s.is_some_and(|u| u > 0.0), "{p:?}");
+        assert_eq!(p.platform, Some(local_platform()), "{p:?}");
+    }
+
+    #[test]
+    fn text_ssh_renders_darwin_machine_details() {
+        let s = Status {
+            configured: true,
+            backend: "ssh".into(),
+            state: "running".into(),
+            host: Some("wayamac".into()),
+            instance_type: Some("Apple M4 (arm64)".into()),
+            region: Some("macOS 27.2".into()),
+            probe: Some(Probe {
+                ok: true,
+                ready: true,
+                cores: Some(10),
+                load1: Some(1.92),
+                mem_total_gb: Some(16.0),
+                mem_used_gb: Some(10.0),
+                rustc: Some("rustc 1.99.1".into()),
+                uptime_s: Some(472440.0),
+                ..Default::default()
+            }),
+            daemon: Some(daemon(true)),
+            routing: Some("default".into()),
+            ..Default::default()
+        };
+        let t = render_text(&s);
+        assert!(
+            t.contains("remote compile machine: ssh (wayamac), running"),
+            "{t}"
+        );
+        assert!(t.contains("Apple M4 (arm64) (macOS 27.2)"), "{t}");
+        assert!(t.contains("up 131h14m"), "{t}");
+    }
+
+    #[test]
+    fn probe_script_matches_kern_boottime_sec_not_usec() {
+        assert!(
+            PROBE_SCRIPT.contains(r"sed -n 's/.*{ sec = \([0-9]*\).*/\1/p'"),
+            "PROBE_SCRIPT must anchor on '{{ sec = ' so usec is not matched"
+        );
     }
 }

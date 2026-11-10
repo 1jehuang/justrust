@@ -7,13 +7,17 @@ shared cache, and licensing are in [remote-strategy.md](remote-strategy.md).
 
 Hosted builds (the Jcode build fleet) are the remote path going forward.
 The `aws` backend (a machine in your own AWS account) is legacy and is
-removed once hosted matches it. The `ssh` backend (any machine you have)
-was removed: a `backend.json` naming it reads as no backend.
+removed once hosted matches it. The `ssh` backend runs builds on any
+machine you can reach over ssh, Linux or macOS (Apple Silicon or Intel),
+with no account: `justrust remote use ssh <[user@]host> [ssh options]`.
+See [Your own machine over ssh](#your-own-machine-over-ssh).
 
 ```text
 justrust login                      sign in: selects hosted builds
 justrust remote up                  start the machine (hosted, or create the AWS one)
 justrust remote use hosted|aws|off  choose the backend, or turn remote off
+justrust remote use ssh <host> [ssh options]
+                                    build on your own Linux or macOS machine
 justrust remote env                 JR_REMOTE_KIND/DEST/SSH for scripts (starts the machine)
 justrust remote status              backend, machine health, sync daemon, routing
                     --json, --waybar for a Waybar module, --watch N to refresh
@@ -168,6 +172,39 @@ for aws (`instance_type`, `region`, `spot`, `public_ip`).
   link against (wayland, xkbcommon, alsa, fontconfig, freetype, xcb,
   vulkan), then rustup stable, and writes `/var/lib/justrust/ready`.
   `status` shows `setup` until then.
+
+### Your own machine over ssh
+
+```text
+justrust remote use ssh mac-mini            any ssh destination or ~/.ssh/config alias
+justrust remote use ssh me@box -p 2222      extra arguments are passed to ssh
+justrust remote up                          installs rustup if missing, then probes
+justrust remote status
+```
+
+The machine can be Linux or macOS, x86_64 or aarch64, and the client can be
+either too (a Linux x86_64 laptop building on an Apple Silicon Mac mini
+works). No account or token is involved. Requirements: key-based ssh login
+(connections use `BatchMode=yes`), `rsync`, and `zstd` to bring executables
+back. On macOS, Homebrew's bin directories are added to `PATH`, since a
+non-interactive ssh shell does not have them.
+
+- **justrust on the machine.** Same OS and CPU as the client: the client's
+  own binary is uploaded. Otherwise it is never uploaded (a Linux ELF does
+  not run on macOS): the machine builds justrust from the client's source
+  checkout in `~/.justrust/bootstrap-src`, or with `cargo install`.
+- **Paths.** Sources are mirrored at the client's absolute paths when the
+  machine can create them. When it cannot (macOS reserves `/home` for
+  autofs, Linux has no writable `/Users`), they go under
+  `~/.justrust-mirror` and that prefix is stripped from build output.
+- **Routing.** `check`, `clippy`, and `test` run on the machine by default,
+  like hosted. They see the machine's OS and CPU: a `cfg(target_os)` check
+  or a test runs as macOS code on a Mac. When the machine's OS or CPU
+  differs from the client's, an untargeted `build` or `test --no-run` stays
+  local, so `target/` holds binaries this host can run. `--remote` or
+  `--target` sends it anyway.
+- **Lifecycle.** justrust never starts, stops, or bills the machine.
+  `remote down` only stops the sync daemon.
 
 ## The sync daemon
 
