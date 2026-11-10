@@ -1,6 +1,110 @@
 use super::*;
 
 #[test]
+fn generic_input_call_result_replays_original_tuple_and_equality_sources() {
+    let (plan, checked, _) = fixture_graph_source(
+        "use std::ops::Add;fn apply<T:Add<Output=T>+Copy>(){let f=|a:T,&b:&T|a+b;}fn main(){}",
+    );
+    let receipt = checked.ty.result_receipt().unwrap();
+    let origins = receipt.input_call_origins().unwrap();
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0].argument, 0);
+    assert_eq!(origins[1].argument, 1);
+    assert_eq!(origins[1].projection.as_ref(), &[ir::Projection::Deref]);
+    let world = plan.trait_world().unwrap();
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract().results.len(), 1);
+        let returned = &view.contract().results[0];
+        assert_eq!(returned.sources.len(), 2);
+        for (argument, source) in returned.sources.iter().enumerate() {
+            assert_eq!(source.param, 1);
+            assert_eq!(
+                source.location.path.0.as_ref(),
+                &[ir::CarrierStep::Field(argument)]
+            );
+            assert!(
+                matches!(source.location.channel, ir::CarrierChannel::ParamTail { prefix, .. } if prefix == argument as u8)
+            );
+        }
+        for mutation in 0..4 {
+            let mut forged = body.as_ref().clone();
+            match mutation {
+                0 => forged.call_evidence = Arc::from([]),
+                1 => {
+                    let ir::ExprKind::Call { args, .. } = &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("required call")
+                    };
+                    args.swap(0, 1);
+                }
+                2 => {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::TraitItem(call),
+                        ..
+                    } = &mut forged.exprs[receipt.tail().0].kind
+                    else {
+                        panic!("required call")
+                    };
+                    call.item = checked.ty.provider();
+                }
+                3 => forged.exprs[origins[1].value.0].kind = ir::ExprKind::Local(forged.params[0]),
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_source(receipt, &forged, &facts).is_err(),
+                "{mode:?} {mutation}"
+            );
+        }
+        let mut changed = origins.to_vec();
+        changed[1].argument = 0;
+        let forged = receipt
+            .as_ref()
+            .clone()
+            .with_input_origins(changed.into())
+            .unwrap();
+        assert!(validate_source(&forged, &body, &facts).is_err());
+        let ir::ExprKind::Call {
+            target, signature, ..
+        } = &body.exprs[receipt.tail().0].kind
+        else {
+            panic!("required call")
+        };
+        let original = facts
+            .carrier_contract(ir::SignatureSubject::Call(target))
+            .unwrap();
+        original
+            .validate_input_call_result(
+                &facts,
+                ir::SignatureSubject::Call(target),
+                signature,
+                &returned.location,
+            )
+            .unwrap();
+        assert!(
+            original
+                .validate_restricted_result(
+                    &facts,
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &returned.location
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn static_string_result_retains_empty_origins_and_replays_literal_source() {
     let (plan, checked, _) =
         fixture_graph_source("fn inspect(){let f=||\"static text\";}fn main(){}");

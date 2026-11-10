@@ -277,17 +277,107 @@ impl ValidatedTraitWorld {
                 ));
             }
             for location in locations.iter() {
-                original_view.validate_restricted_result(
-                    facts,
-                    SignatureSubject::Call(&original_call),
-                    &required_signature,
-                    location,
-                )?;
+                if receipt.input_call_origins().is_some() {
+                    original_view.validate_input_call_result(
+                        facts,
+                        SignatureSubject::Call(&original_call),
+                        &required_signature,
+                        location,
+                    )?;
+                } else {
+                    original_view.validate_restricted_result(
+                        facts,
+                        SignatureSubject::Call(&original_call),
+                        &required_signature,
+                        location,
+                    )?;
+                }
             }
         }
         let source_regions = self.validate_source_regions(closure.provider(), &signature)?;
         let (mut contract, regions) =
             self.derive_carriers(&signature, &source_regions, facts.env())?;
+        if let Some(origins) = receipt.input_call_origins() {
+            let (call, _) = self.realize_closure_result_witness(&closure, receipt)?;
+            let call_signature = self.instantiate_trait_signature(&call, facts)?;
+            if origins.len() != call_signature.params.len()
+                || origins.len() != receipt.arguments().len()
+                || !self.eq_ty(&call_signature.result, &signature.result, 0)?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure input call changed canonical argument arity",
+                ));
+            }
+            let callee = Callee::TraitItem(call);
+            let original_view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
+            for (input, parameter) in origins.iter().zip(call_signature.params.iter()) {
+                if !self.eq_ty(
+                    &charged(&self.budget, input.projected_type(closure.params(), &self.budget))?,
+                    parameter, 0,
+                )? {
+                    return Err(FactsError::invalid(&self.budget, "closure input call changed an ordered canonical argument type"));
+                }
+            }
+            let mut returned = Vec::new();
+            for row in original_view.contract().results.iter() {
+                original_view.validate_input_call_result(
+                    facts,
+                    SignatureSubject::Call(&callee),
+                    &call_signature,
+                    &row.location,
+                )?;
+                let mut sources = Vec::new();
+                for source in row.sources.iter() {
+                    let input = origins.get(source.param).ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "closure input call names a foreign argument",
+                        )
+                    })?;
+                    let rows = charged(
+                        &self.budget,
+                        input.value_carriers(closure.params(), &self.budget),
+                    )?;
+                    let mapped = rows
+                        .iter()
+                        .find(|row| row.location == source.location)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "closure input call lost an exact argument carrier",
+                            )
+                        })?;
+                    for input in mapped.sources.iter() {
+                        charged(
+                            &self.budget,
+                            self.budget
+                                .charge_work(contract.inputs.len() + sources.len()),
+                        )?;
+                        if !contract.inputs.contains(input) {
+                            return Err(FactsError::invalid(
+                                &self.budget,
+                                "closure input call source is outside canonical tuple domain",
+                            ));
+                        }
+                        if !sources.contains(input) {
+                            push(&self.budget, &mut sources, input.clone())?;
+                        }
+                    }
+                }
+                retain::<ir::InputCarrier>(&self.budget, sources.len())?;
+                push(
+                    &self.budget,
+                    &mut returned,
+                    ir::CarrierReturn {
+                        location: row.location.clone(),
+                        sources: sources.into(),
+                    },
+                )?;
+            }
+            retain::<ir::CarrierReturn>(&self.budget, returned.len())?;
+            contract.results = returned.into();
+        }
         if receipt.capture_witness().is_some() {
             let results = self.captured_result_carriers(&closure, mode, &signature, facts)?;
             for returned in results.iter() {

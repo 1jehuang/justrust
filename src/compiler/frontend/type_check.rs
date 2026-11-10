@@ -10156,7 +10156,8 @@ impl<'a> Checker<'a> {
         } else {
             None
         };
-        // Autoref of an owned rvalue borrows a full-expression temporary.
+        // Autoref of a value rvalue borrows a full-expression temporary,
+        // including a reference value used as Self (for example &str -> &&str).
         // Keep its storage outside the receiver block so a destructor runs
         // after the entire statement, not immediately after this method call.
         if selected.depth == 0
@@ -10164,7 +10165,7 @@ impl<'a> Checker<'a> {
                 selected.adjustment,
                 ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
             )
-            && !matches!(ty, ir::Ty::Ref { .. })
+            && (!matches!(ty, ir::Ty::Ref { .. }) || !place_expression(receiver))
             && indexed_receiver.is_none()
             && static_source_place(receiver).is_err()
         {

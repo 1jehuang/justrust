@@ -43,7 +43,21 @@ impl ValidatedTraitWorld {
                 env,
                 0,
                 &mut |projection| {
-                    if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
+                    if let Some(ty) =
+                        self.declared_equality_rhs(projection, &context.predicates.predicates, env)?
+                    {
+                        self.require_in(
+                            &Predicate::ProjectionEq {
+                                projection: projection.clone(),
+                                ty: ty.clone(),
+                            },
+                            context,
+                            &mut active,
+                        )?;
+                        Ok(ty)
+                    } else if associated_types::nominal_application_self(
+                        &projection.trait_ref.self_ty,
+                    ) {
                         self.normalize_closed_projected_type_with(
                             &Ty::AssociatedType(Arc::new(projection.clone())),
                             context,

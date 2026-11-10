@@ -121,6 +121,31 @@ pub(super) struct EqualityResultAuthority {
 }
 
 impl CarrierContractView {
+    /// Input composition is distinct from a storage-free restricted result.
+    /// Both the equality certificate and the complete source-owned row must
+    /// survive canonical replay before any argument occurrence can be mapped.
+    pub(in crate::compiler) fn validate_input_call_result(
+        &self,
+        facts: &ValidatedFacts,
+        subject: ir::SignatureSubject<'_>,
+        signature: &ir::Signature,
+        location: &ir::CarrierLocation,
+    ) -> Result<()> {
+        self.validate_result_flow(facts, subject, signature, location)?;
+        if !self.equality_results.as_ref().is_some_and(|authority| {
+            authority.certificates.iter().any(|certificate| certificate.result == *location)
+        }) || !self.contract.results.iter().any(|row| {
+            row.location == *location && !row.sources.is_empty()
+                && row.sources.iter().all(|source| self.contract.inputs.contains(source))
+        }) {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "closure input call lacks exact equality and canonical source authority",
+            ));
+        }
+        Ok(())
+    }
+
     /// A restricted result receipt must retain a real equality-dependent
     /// certificate, never infer authority from an empty source union.
     pub(in crate::compiler) fn validate_restricted_result(

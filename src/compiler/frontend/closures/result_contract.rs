@@ -4,6 +4,8 @@ use super::super::type_check::Checker;
 use super::*;
 #[path = "captured_result.rs"]
 mod captured_result;
+#[path = "input_value_result.rs"]
+mod input_value_result;
 #[cfg(test)]
 #[path = "result_contract_tests.rs"]
 mod tests;
@@ -234,18 +236,51 @@ impl Checker<'_> {
         let view = facts
             .carrier_contract(ir::SignatureSubject::Call(&callee))
             .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
-        view.validate_restricted_result(
-            facts,
-            ir::SignatureSubject::Call(&callee),
-            signature,
-            &locations[0],
-        )
-        .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+        let input_call = view
+            .contract()
+            .results
+            .iter()
+            .any(|row| row.location == locations[0] && !row.sources.is_empty());
+        let mut origins = Vec::new();
+        if input_call {
+            view.validate_input_call_result(
+                facts,
+                ir::SignatureSubject::Call(&callee),
+                signature,
+                &locations[0],
+            )
+            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+            plan.budget
+                .retain_bytes(args.len() * std::mem::size_of::<ir::ClosureInputValueOrigin>())?;
+            for argument in args {
+                origins.push(
+                    input_value_result::parameter_origin(
+                        &self.exprs,
+                        &self.locals,
+                        prefix,
+                        tuple,
+                        *argument,
+                        &plan.budget,
+                    )?
+                    .ok_or(
+                        "unsupported: closure input call requires original tuple argument values",
+                    )?,
+                );
+            }
+        } else {
+            view.validate_restricted_result(
+                facts,
+                ir::SignatureSubject::Call(&callee),
+                signature,
+                &locations[0],
+            )
+            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+        }
         plan.budget.retain_bytes(
             std::mem::size_of::<ir::ClosureResultReceipt>()
                 + args.len() * std::mem::size_of::<ir::ExprId>(),
         )?;
-        Ok(Some(Arc::new(ir::ClosureResultReceipt::new(
+        let receipt = ir::ClosureResultReceipt::new(
             owner,
             provider,
             site,
@@ -254,7 +289,13 @@ impl Checker<'_> {
             args.clone().into(),
             signature.clone(),
             &plan.budget,
-        )?)))
+        )?;
+        let receipt = if input_call {
+            receipt.with_input_origins(origins.into())?
+        } else {
+            receipt
+        };
+        Ok(Some(Arc::new(receipt)))
     }
 }
 
@@ -420,18 +461,60 @@ pub(in crate::compiler) fn validate_source(
         );
     }
     audit_arguments(&source.exprs, receipt.tail(), budget)?;
+    if let Some(origins) = receipt.input_call_origins() {
+        let (closure, _) = facts
+            .closure_lowering_identity()
+            .ok_or("closure input call lacks actual body authority")?;
+        if closure.owner() != receipt.owner()
+            || closure.provider() != receipt.provider()
+            || closure.site() != receipt.site()
+            || closure
+                .result_receipt()
+                .is_none_or(|original| !original.same_source_shape(receipt))
+        {
+            return Err(
+                "closure input call changed original parent-sealed source authority".into(),
+            );
+        }
+        if origins.len() != args.len() {
+            return Err("closure input call changed its source argument arity".into());
+        }
+        for (origin, argument) in origins.iter().zip(args) {
+            let actual = input_value_result::value_origin(
+                &source.exprs,
+                &source.locals,
+                &source.body.statements,
+                source.params[1],
+                *argument,
+                budget,
+            )?
+            .ok_or("closure input call lost its original tuple source")?;
+            if &actual != origin {
+                return Err("closure input call changed its original tuple occurrence".into());
+            }
+        }
+    }
     let callee = ir::Callee::TraitItem(call.clone());
     let view = facts
         .carrier_contract(ir::SignatureSubject::Call(&callee))
         .map_err(|error| error.into_legacy_diagnostic(budget))?;
     for location in ir::carrier_locations(&source.result, budget)?.iter() {
-        view.validate_restricted_result(
-            facts,
-            ir::SignatureSubject::Call(&callee),
-            signature,
-            location,
-        )
-        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        let validation = if receipt.input_call_origins().is_some() {
+            view.validate_input_call_result(
+                facts,
+                ir::SignatureSubject::Call(&callee),
+                signature,
+                location,
+            )
+        } else {
+            view.validate_restricted_result(
+                facts,
+                ir::SignatureSubject::Call(&callee),
+                signature,
+                location,
+            )
+        };
+        validation.map_err(|error| error.into_legacy_diagnostic(budget))?;
     }
     Ok(())
 }

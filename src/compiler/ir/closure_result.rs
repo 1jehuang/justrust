@@ -3,6 +3,9 @@ use super::*;
 #[path = "closure_capture_result.rs"]
 mod capture;
 pub(in crate::compiler) use capture::*;
+#[path = "closure_input_result.rs"]
+mod input;
+pub(in crate::compiler) use input::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ResultTypeWitness {
@@ -83,6 +86,7 @@ enum ResultCallWitness {
         self_ty: ResultTypeWitness,
         trait_args: Arc<[ResultTypeWitness]>,
         method_args: Arc<[ResultTypeWitness]>,
+        inputs: Option<Arc<[ClosureInputValueOrigin]>>,
     },
     Argument {
         declaration: Option<DeclId>,
@@ -182,6 +186,7 @@ impl ClosureResultReceipt {
                     .map(|ty| ResultTypeWitness::from_ty(ty, budget, 0))
                     .collect::<Result<Vec<_>, _>>()?
                     .into(),
+                inputs: None,
             },
             result: ResultTypeWitness::from_ty(&signature.result, budget, 0)?,
             arguments,
@@ -370,6 +375,32 @@ impl ClosureResultReceipt {
     pub fn same_source_shape(&self, other: &Self) -> bool {
         self == other
     }
+
+    pub(in crate::compiler) fn with_input_origins(
+        mut self,
+        origins: Arc<[ClosureInputValueOrigin]>,
+    ) -> Result<Self, String> {
+        let ResultCallWitness::Required { inputs, .. } = &mut self.call else {
+            return Err("closure input call requires an original required-call witness".into());
+        };
+        if origins.len() != self.arguments.len()
+            || origins
+                .iter()
+                .zip(self.arguments.iter())
+                .any(|(origin, value)| origin.value != *value)
+        {
+            return Err("closure input call changed its ordered argument occurrences".into());
+        }
+        *inputs = Some(origins);
+        Ok(self)
+    }
+
+    pub(in crate::compiler) fn input_call_origins(&self) -> Option<&[ClosureInputValueOrigin]> {
+        match &self.call {
+            ResultCallWitness::Required { inputs, .. } => inputs.as_deref(),
+            _ => None,
+        }
+    }
     pub(in crate::compiler) fn realize_call(
         &self,
         binding: &impl Fn(ParamId) -> Result<Ty, String>,
@@ -381,6 +412,7 @@ impl ClosureResultReceipt {
             self_ty,
             trait_args,
             method_args,
+            ..
         } = &self.call
         else {
             return Err("closure argument result is not a required-call witness".into());

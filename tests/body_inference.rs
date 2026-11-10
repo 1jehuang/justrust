@@ -31,6 +31,26 @@ fn temporary_method_receivers_match_stock() {
                 source: r#"struct D { n: i32 } impl Drop for D { fn drop(&mut self) {} } impl D { fn get(&self) -> &i32 { &self.n } } fn main() { let value = D { n: 7 }.get(); println!("{}", *value); }"#,
                 expect: Expect::Invalid("E0716"),
             },
+            Case {
+                name: "reference_value_literal_and_call_autoref",
+                source: r#"use std::fmt::Display;trait Describe{fn describe(&self)->String;}impl<T:Display>Describe for T{fn describe(&self)->String{format!("<{}>",self)}}fn reference<'a>(text:&'a str,count:&mut i32)->&'a str{*count+=1;text}fn main(){let mut count=0;println!("{} {}","hi".describe(),reference("there",&mut count).describe());println!("{}",count);}"#,
+                expect: Expect::Run("<hi> <there>\n1\n"),
+            },
+            Case {
+                name: "mutable_reference_value_autoref",
+                source: r#"trait Bump{fn bump(&mut self)->i32;}impl Bump for &mut i32{fn bump(&mut self)->i32{**self+=1;**self}}fn reference(n:&mut i32)->&mut i32{n}fn main(){let mut n=4;println!("{}",reference(&mut n).bump());println!("{}",n);}"#,
+                expect: Expect::Run("5\n5\n"),
+            },
+            Case {
+                name: "reference_handle_temporary_return_escape",
+                source: r#"trait Keep{fn keep(&self)->&Self{self}}impl<T>Keep for T{}fn reference()->&'static str{"hi"}fn unused<'a>()->&'a &'static str{reference().keep()}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "mutable_reference_temporary_preserves_exclusivity",
+                source: r#"trait Touch{fn touch(&mut self){}}impl<T>Touch for T{}fn reference(n:&mut i32)->&mut i32{n}fn unused(){let mut n=0;let first=&mut n;reference(&mut n).touch();*first=1;}fn main(){}"#,
+                expect: Expect::Invalid("E0499"),
+            },
         ],
     );
 }

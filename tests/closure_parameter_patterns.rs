@@ -5,6 +5,61 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn generic_iterator_closure_projection() {
+    oracle::check(
+        "generic_iterator_closure_projection",
+        &[Case {
+            name: "generic_map_sum",
+            source: "fn total<I:Iterator<Item=i32>>(it:I)->i32{it.map(|x|x+1).sum()}fn main(){println!(\"{}\",total((0..3).into_iter()));}",
+            expect: Expect::Run("6\n"),
+        }],
+    );
+}
+
+#[test]
+fn generic_iterator_fold_source_projection() {
+    oracle::check(
+        "generic_iterator_closure_projection",
+        &[
+            Case {
+                name: "unchanged_m2_generic_traits",
+                source: include_str!("milestones/m2/02_generic_traits.rs"),
+                expect: Expect::Run(include_str!("milestones/m2/02_generic_traits.stdout")),
+            },
+            Case {
+                name: "generic_fold_parameter_and_reference_pattern",
+                source: "use std::ops::Add;fn sum_all<T:Add<Output=T>+Default+Copy>(xs:&[T])->T{xs.iter().fold(T::default(),|a,&b|a+b)}fn main(){println!(\"{} {}\",sum_all(&[1u32,2,3]),sum_all(&[0.25f64,0.5]));}",
+                expect: Expect::Run("6 0.75\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn generic_iterator_closure_projection_rejects_invalid_sources() {
+    oracle::check(
+        "generic_iterator_closure_projection_invalid",
+        &[
+            Case {
+                name: "unused_wrong_closure_argument",
+                source: "fn unused<I:Iterator<Item=i32>>(it:I)->i32{it.map(|x:bool|if x{1}else{0}).sum()}fn main(){}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "unused_noncopy_reference_pattern",
+                source: "use std::ops::Add;fn unused<T:Add<Output=T>+Default>(xs:&[T])->T{xs.iter().fold(T::default(),|a,&b|a+b)}fn main(){}",
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "unused_generic_result_local_escape",
+                source: "use std::ops::Add;fn unused<'a,T:Add<Output=T>+Copy>(x:T)->&'a T{let f=|a:T,b:T|a+b;let value=f(x,x);&value}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn nested_shared_reference_parameter_copies_the_referent() {
     oracle::check(
         "closure_parameter_reference_pattern",
