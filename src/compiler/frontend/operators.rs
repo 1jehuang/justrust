@@ -1071,6 +1071,10 @@ impl type_check::Checker<'_> {
                 let Some(spec) = binary_trait(*op) else {
                     return Ok(None);
                 };
+                if let Some(id) = self.array_equality(*op, left, right)? {
+                    self.record_operator(e as *const Expr as usize, id)?;
+                    return Ok(Some(id));
+                }
                 let Some(lhs) = self.method_receiver_hint(left)? else {
                     return Ok(None);
                 };

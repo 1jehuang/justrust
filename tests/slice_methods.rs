@@ -822,6 +822,76 @@ fn double_ended_slice_iteration_matches_stock() {
 }
 
 #[test]
+fn array_equality_matches_stock() {
+    check(
+        "array-equality",
+        &[
+            Case {
+                name: "values_literals_fields_and_temporaries",
+                source: r#"fn mk(n: i32) -> [i32; 3] { println!("mk {n}"); [n, 2, 3] }
+struct S { a: [u8; 2] }
+fn main() {
+    let a = [1, 2, 3]; let b = [1, 2, 3]; let c = [1, 2, 4];
+    println!("{} {} {} {}", a == b, a != b, a == c, a != c);
+    println!("{} {}", a == [1, 2, 3], [1, 2, 4] == a);
+    println!("{} {}", mk(1) == mk(1), mk(1) != mk(2));
+    let s = [String::from("x"), String::from("y")]; let t = [String::from("x"), String::from("z")];
+    println!("{} {}", s == t, s != t); println!("{}", s[0]);
+    let p = S { a: [1, 2] }; let q = S { a: [1, 2] };
+    println!("{} {}", p.a == q.a, p.a == [1u8, 3]);
+    let x: [u8; 4] = [7; 4]; println!("{} {}", x == [7; 4], x == [7u8, 7, 7, 8]);
+    let f = [1.0, f64::NAN]; println!("{} {}", f == f, f != f);
+    println!("{}", [1.0, f64::NAN] == [1.0, f64::NAN]);
+    let e: [i32; 0] = []; println!("{}", e == e);
+    if a == b && a != c { println!("ok"); }
+}"#,
+                expect: Expect::Run(
+                    "true false false true\ntrue false\nmk 1\nmk 1\nmk 1\nmk 2\ntrue true\nfalse true\nx\ntrue false\ntrue false\nfalse true\nfalse\ntrue\nok\n",
+                ),
+            },
+            // Stock calls the element `ne` for both `==` and `!=` on arrays,
+            // and `eq` / `ne` respectively on tuples, in order, stopping early.
+            Case {
+                name: "user_impl_call_order_and_count",
+                source: r#"struct P(i32);
+impl PartialEq for P {
+    fn eq(&self, o: &P) -> bool { println!("eq {} {}", self.0, o.0); self.0 == o.0 }
+    fn ne(&self, o: &P) -> bool { println!("ne {} {}", self.0, o.0); self.0 != o.0 }
+}
+fn mk(n: i32) -> [P; 3] { println!("mk {n}"); [P(n), P(2), P(3)] }
+fn main() {
+    let a = [P(1), P(2), P(3)]; let b = [P(1), P(9), P(3)];
+    println!("{}", a == b); println!("{}", a != b); println!("{}", a == a); println!("{}", a != a);
+    println!("{}", mk(1) == mk(1)); println!("{}", mk(1) != mk(5));
+    let t = (P(1), P(2)); let u = (P(1), P(7));
+    println!("{}", t == u); println!("{}", t != u); println!("{}", t == t); println!("{}", t != t);
+    let e: [P; 0] = []; println!("{} {}", e == e, e != e);
+}"#,
+                expect: Expect::Run(
+                    "ne 1 1\nne 2 9\nfalse\nne 1 1\nne 2 9\ntrue\nne 1 1\nne 2 2\nne 3 3\ntrue\nne 1 1\nne 2 2\nne 3 3\nfalse\nmk 1\nmk 1\nne 1 1\nne 2 2\nne 3 3\ntrue\nmk 1\nmk 5\nne 1 5\ntrue\neq 1 1\neq 2 7\nfalse\nne 1 1\nne 2 7\ntrue\neq 1 1\neq 2 2\ntrue\nne 1 1\nne 2 2\nfalse\ntrue false\n",
+                ),
+            },
+            Case {
+                name: "different_lengths",
+                source: r#"fn main() { let a = [1, 2, 3]; let b = [1, 2]; println!("{}", a == b); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "element_without_partial_eq",
+                source: r#"struct N(i32);
+fn main() { let a = [N(1)]; let b = [N(1)]; println!("{}", a == b); }"#,
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "different_element_types",
+                source: r#"fn main() { let a = [1i32, 2]; let b = [1i64, 2]; println!("{}", a == b); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn inclusive_and_reverse_integer_ranges_match_stock() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;

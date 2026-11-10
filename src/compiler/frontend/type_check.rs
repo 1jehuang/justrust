@@ -9,6 +9,8 @@ mod associated_hint;
 mod binary_expression;
 
 mod array_iterator;
+#[path = "type_check/array_methods.rs"]
+mod array_methods;
 mod byte_strings;
 #[path = "type_check/callable_arguments.rs"]
 mod callable_arguments;
@@ -9878,6 +9880,12 @@ impl<'a> Checker<'a> {
                     // The selected impl fixes the operand type, so a
                     // constructor operand (`x == W { a: 1 }`) infers from it.
                     self.borrow_value(ir::BorrowKind::Shared, source, Some(ty))?
+                };
+                // `[T; N] == [U; N]` compares as slices.
+                let id = if ty.slice_ref_element().is_some() {
+                    self.array_reference_as_slice(id)?
+                } else {
+                    id
                 };
                 (id, None)
             } else if identity

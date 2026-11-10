@@ -432,3 +432,34 @@ impl<'a, T> SliceIter<'a, T> for &'a [T] {
     }
 }
 
+
+/// Element-wise slice equality. Arrays of equal length compare through it.
+impl<T: super::cmp::PartialEq<U>, U> super::cmp::PartialEq<[U]> for [T] {
+    fn eq(&self, other: &[U]) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.len() {
+            if <T as super::cmp::PartialEq<U>>::ne(&self[i], &other[i]) {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
+    }
+
+    fn ne(&self, other: &[U]) -> bool {
+        if self.len() != other.len() {
+            return true;
+        }
+        let mut i = 0usize;
+        while i < self.len() {
+            if <T as super::cmp::PartialEq<U>>::ne(&self[i], &other[i]) {
+                return true;
+            }
+            i += 1usize;
+        }
+        false
+    }
+}

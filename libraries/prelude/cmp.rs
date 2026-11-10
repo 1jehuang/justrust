@@ -546,6 +546,9 @@ impl<A: PartialEq> PartialEq for (A,) {
     fn eq(&self, other: &(A,)) -> bool {
         <A as PartialEq>::eq(&(*self).0, &(*other).0)
     }
+    fn ne(&self, other: &(A,)) -> bool {
+        <A as PartialEq>::ne(&(*self).0, &(*other).0)
+    }
 }
 impl<A: Eq> Eq for (A,) {}
 impl<A: PartialOrd> PartialOrd for (A,) {
@@ -571,6 +574,10 @@ impl<A: PartialEq, B: PartialEq> PartialEq for (A, B) {
     fn eq(&self, other: &(A, B)) -> bool {
         <A as PartialEq>::eq(&(*self).0, &(*other).0)
             && <B as PartialEq>::eq(&(*self).1, &(*other).1)
+    }
+    fn ne(&self, other: &(A, B)) -> bool {
+        <A as PartialEq>::ne(&(*self).0, &(*other).0)
+            || <B as PartialEq>::ne(&(*self).1, &(*other).1)
     }
 }
 impl<A: Eq, B: Eq> Eq for (A, B) {}
@@ -606,6 +613,11 @@ impl<A: PartialEq, B: PartialEq, C: PartialEq> PartialEq for (A, B, C) {
         <A as PartialEq>::eq(&(*self).0, &(*other).0)
             && <B as PartialEq>::eq(&(*self).1, &(*other).1)
             && <C as PartialEq>::eq(&(*self).2, &(*other).2)
+    }
+    fn ne(&self, other: &(A, B, C)) -> bool {
+        <A as PartialEq>::ne(&(*self).0, &(*other).0)
+            || <B as PartialEq>::ne(&(*self).1, &(*other).1)
+            || <C as PartialEq>::ne(&(*self).2, &(*other).2)
     }
 }
 impl<A: Eq, B: Eq, C: Eq> Eq for (A, B, C) {}
@@ -650,6 +662,12 @@ impl<A: PartialEq, B: PartialEq, C: PartialEq, D: PartialEq> PartialEq for (A, B
             && <B as PartialEq>::eq(&(*self).1, &(*other).1)
             && <C as PartialEq>::eq(&(*self).2, &(*other).2)
             && <D as PartialEq>::eq(&(*self).3, &(*other).3)
+    }
+    fn ne(&self, other: &(A, B, C, D)) -> bool {
+        <A as PartialEq>::ne(&(*self).0, &(*other).0)
+            || <B as PartialEq>::ne(&(*self).1, &(*other).1)
+            || <C as PartialEq>::ne(&(*self).2, &(*other).2)
+            || <D as PartialEq>::ne(&(*self).3, &(*other).3)
     }
 }
 impl<A: Eq, B: Eq, C: Eq, D: Eq> Eq for (A, B, C, D) {}
