@@ -159,6 +159,7 @@ SNAPSHOTS = {
         "patches": [
             ("jcode-desktop", "bench/patches/changelog-viewport-visible-camera.patch"),
             ("jcode-desktop", "bench/patches/desktop-portable-math-fonts.patch"),
+            ("jcode-desktop", "bench/patches/desktop-settled-tab-assertions.patch"),
             ("jcode", "bench/patches/jcode-description-consent.patch"),
             ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
         ],
@@ -1682,6 +1683,11 @@ def named_test_failure_issues(result: dict) -> list[str]:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if getattr(args, "require_valid", False) and not (
+            "synth" in a and "synth" in b
+            and not a.get("schema", "").startswith("native_resident")
+            and not b.get("schema", "").startswith("native_resident")):
+        sys.exit("bench: --require-valid supports only synthetic comparisons")
     if a.get("schema", "").startswith("native_resident") or b.get("schema", "").startswith("native_resident"):
         from resident_suite import compare
         compare(a, b, args.floor)
@@ -1713,6 +1719,8 @@ def cmd_compare(args) -> None:
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
             print("Synthetic comparison blocked:\n" + "\n".join(f"- {why}" for why in reasons))
+            if getattr(args, "require_valid", False):
+                sys.exit(2)
             return
         print(f"A {args.a} (justrust {ea['justrust_rev']})\nB {args.b} (justrust {eb['justrust_rev']})")
         # Stack names can differ (toolchain suffix): compare position by position.
@@ -1727,6 +1735,8 @@ def cmd_compare(args) -> None:
                          for key in ("stats", "samples", "errors")}}
                 for p in sb["results"]]}
         print(synth_run.compare(sa, sb))
+        if getattr(args, "require_valid", False) and synth_run.comparison_issues(sa, sb):
+            sys.exit(2)
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
@@ -1837,6 +1847,8 @@ def main() -> None:
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
+    c.add_argument("--require-valid", action="store_true",
+                   help="exit nonzero for an ineligible synthetic comparison (automation gate)")
     c.add_argument("--floor", type=float, default=10.0, metavar="PCT",
                    help="minimum median change to call a difference (default 10%%)")
     c.set_defaults(fn=cmd_compare)

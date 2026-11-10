@@ -35,7 +35,7 @@ For general speed claims and default promotion:
 
 ```sh
 bench/suite.py run --synth 1 -n 1       # baseline and candidate, separately
-bench/suite.py compare A.json B.json   # matched synthetic results
+bench/suite.py compare A.json B.json --require-valid  # automation: nonzero if invalid
 bench/versus.py run --synth 1 -n 1      # stock vs caches-off vs default
 ```
 
@@ -68,6 +68,12 @@ project overlays, place the destructive-command fixture outside the intentional
 system-temp allowance, and isolate/invalidate process-global wake/hook test
 configuration (wake locking credited to `b82768c61`). They change neither
 production command-risk policy nor test assertions, threading, or timeouts.
+The two tab-layout fixtures settle their existing camera/tab animation helpers
+before sampling geometry, following `ae6a7d4`. Their original assertions remain
+intact. This avoids measuring wall-clock tween progress as a layout regression.
+For automation, synthetic `compare --require-valid` exits nonzero for incomplete,
+noisy, failed, or mismatched results. Ordinary `compare` retains its human-report
+exit behavior, so a printed blocked comparison alone is not an acceptance gate.
 These repaired workloads cannot be compared with the
 earlier failing fixtures as a speed claim.
 

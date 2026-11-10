@@ -436,11 +436,11 @@ def detail(synth: dict) -> str:
     return "\n".join(out)
 
 
-def compare(a: dict, b: dict) -> str:
-    """Same seed and generator: per stack, mean wall and instructions A -> B."""
+def comparison_issues(a: dict, b: dict) -> list[str]:
+    """Structured eligibility for automation, shared with the human report."""
     reasons = [f"{label}: {why}" for label, data in (("A", a), ("B", b)) for why in _blocked(data)]
     if _structure(a) or _structure(b):
-        return "Synthetic comparison blocked:\n" + "\n".join(f"- {why}" for why in reasons)
+        return reasons
     keys = ("seed", "points", "reps", "generator", "sample_info", "stack_names")
     for key in keys:
         if key not in a or key not in b or a[key] != b[key]:
@@ -451,6 +451,12 @@ def compare(a: dict, b: dict) -> str:
                     for p in data["results"]}
         if plans(a) != plans(b):
             reasons.append("point plans differ: compare identical commands, edits and snapshots")
+    return reasons
+
+
+def compare(a: dict, b: dict) -> str:
+    """Same seed and generator: per stack, mean wall and instructions A -> B."""
+    reasons = comparison_issues(a, b)
     if reasons:
         return "Synthetic comparison blocked:\n" + "\n".join(f"- {why}" for why in reasons)
     ok = {p["i"] for p in _complete(a)} & {p["i"] for p in _complete(b)}
