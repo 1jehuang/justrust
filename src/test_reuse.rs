@@ -1,19 +1,20 @@
-//! Reuse the result of an identical passing `test` run instead of running it
-//! again.
+//! Experimental opt-in reuse of a passing `test` run instead of running it
+//! again (`JUSTRUST_TEST_REUSE=1`).
 //!
 //! Agents often rerun the exact same `justrust test ...` with nothing changed
 //! (to see output again, after an unrelated thought, or to double check).
 //! When the command, its environment, the justrust binary and every source
 //! file the build can read are exactly as they were at the start of a run
-//! that passed, the result is known: this prints that run's results and exits
-//! 0 without syncing, compiling or running anything.
+//! that passed, this can replay that run's results and exit 0 without syncing,
+//! compiling or running anything. Source equality alone does not prove test
+//! determinism, so this requires an explicit user assertion via the opt-in.
 //!
 //! The key is captured before the build starts and records each file's size,
 //! mode and mtime in nanoseconds. Any edit after that point, including one
 //! during the stored run, changes a stamp, so a later run can match only a
 //! tree nobody touched since the stored run started. Files outside the source
 //! roots (gitignored files, `/tmp`, the network) are not covered: tests that
-//! depend on them should run with `--rerun` or `JUSTRUST_TEST_REUSE=0`.
+//! depend on them must not opt in. `--rerun` bypasses reuse for one run.
 //!
 //! Only passing runs are reused, for at most `MAX_AGE_SECS`. Scanning the
 //! tree costs time (26 ms for 4,000 files, 600 ms for 95,000), so a command
@@ -85,8 +86,15 @@ fn dir() -> Option<PathBuf> {
 }
 
 fn enabled() -> bool {
-    !std::env::var_os("JUSTRUST_TEST_REUSE").is_some_and(|v| v == "0")
+    enabled_setting(std::env::var_os("JUSTRUST_TEST_REUSE").as_deref())
         && std::env::var_os(crate::route::ON_AGENT).is_none()
+}
+
+fn enabled_setting(value: Option<&std::ffi::OsStr>) -> bool {
+    matches!(
+        value.and_then(|v| v.to_str()),
+        Some("1" | "on" | "true" | "yes")
+    )
 }
 
 /// Whether this cargo command's result can be reused at all.
@@ -341,6 +349,23 @@ mod tests {
 
     fn os(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn test_result_reuse_requires_explicit_opt_in() {
+        assert!(!enabled_setting(None));
+        for value in ["", "0", "off", "false", "no", "auto", "unknown"] {
+            assert!(
+                !enabled_setting(Some(std::ffi::OsStr::new(value))),
+                "{value}"
+            );
+        }
+        for value in ["1", "on", "true", "yes"] {
+            assert!(
+                enabled_setting(Some(std::ffi::OsStr::new(value))),
+                "{value}"
+            );
+        }
     }
 
     #[test]
