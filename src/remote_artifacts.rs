@@ -906,7 +906,31 @@ fn apply(
 /// Client side: bring back what the remote `build` (args, subcommand
 /// first) produced. Returns a one-line summary.
 pub fn fetch(args: &[String], start: f64) -> Result<String> {
-    fetch_inner(args, start, None).map(|(line, _)| line)
+    retry_full(|| fetch_inner(args, start, None)).map(|(line, _)| line)
+}
+
+/// A delta only decodes against the exact base the machine remembers. When
+/// the local copy changed under it (another build, a concurrent fetch), the
+/// decode fails: ask once more, advertising nothing, so the machine sends
+/// full copies instead of the whole build failing.
+fn retry_full<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
+    match f() {
+        Err(e) if is_delta_failure(&e) => {
+            eprintln!("justrust remote: delta did not apply ({e:#}); fetching full copies");
+            FORCE_FULL.store(true, std::sync::atomic::Ordering::Relaxed);
+            let r = f();
+            FORCE_FULL.store(false, std::sync::atomic::Ordering::Relaxed);
+            r
+        }
+        r => r,
+    }
+}
+
+static FORCE_FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn is_delta_failure(e: &anyhow::Error) -> bool {
+    let s = format!("{e:#}");
+    s.contains("(delta)") || s.contains("artifact delta against unknown base")
 }
 
 /// Selected Cargo test artifacts, with only local executable/filename paths.
@@ -916,7 +940,7 @@ pub(crate) fn fetch_tests(
     start: f64,
     run_id: &str,
 ) -> Result<(String, Vec<serde_json::Value>)> {
-    fetch_inner(args, start, Some(run_id))
+    retry_full(|| fetch_inner(args, start, Some(run_id)))
 }
 
 fn fetch_inner(
@@ -981,6 +1005,7 @@ fn fetch_inner(
         };
         std::fs::read(dir.join(&h.name)).is_ok_and(|data| validate(&data).is_ok())
     })
+    .filter(|_| !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed))
     .collect();
     let backend = crate::remote_backend::load().context("no remote machine configured")?;
     let is_ssh_backend = matches!(backend, crate::remote_backend::Backend::Ssh { .. });
@@ -997,7 +1022,7 @@ fn fetch_inner(
         start,
         have,
         test_run: test_run.map(str::to_owned),
-        anchors: true,
+        anchors: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
     };
     let mut child = t
         .command()
@@ -1753,6 +1778,29 @@ mod tests {
         // Client built it itself, older than ours: send. Newer: keep.
         assert!(needed(Some(&have(None, 5.0)), "a", 10.0, 100.0));
         assert!(!needed(Some(&have(None, 20.0)), "a", 10.0, 100.0));
+    }
+
+    #[test]
+    fn delta_failure_retries_once_with_full_copies() {
+        let mut calls = Vec::new();
+        let r: Result<u32> = retry_full(|| {
+            calls.push(FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed));
+            if calls.len() == 1 {
+                bail!("could not decode jcode (delta)")
+            }
+            Ok(7)
+        });
+        assert_eq!(r.unwrap(), 7);
+        assert_eq!(calls, vec![false, true]);
+        assert!(!FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed));
+        // Other failures are not retried.
+        let mut n = 0;
+        let r: Result<()> = retry_full(|| {
+            n += 1;
+            bail!("could not decode jcode")
+        });
+        assert!(r.is_err());
+        assert_eq!(n, 1);
     }
 
     /// Full round trip through serve and apply, then a delta against the
