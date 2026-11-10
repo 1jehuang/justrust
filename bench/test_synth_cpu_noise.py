@@ -16,11 +16,12 @@ synth, _ = suite._synth()
 
 
 class SyntheticCpuNoiseTests(unittest.TestCase):
-    def sample(self, other=0.0, valid=True, foreign=0):
+    def sample(self, other=0.0, valid=True, foreign=0, remote=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             plan = SimpleNamespace(snap='fixture', cwd='.', point=SimpleNamespace(i=0), expect_fail=False)
-            stack = versus.Stack('fixture', 'fixture', False, {})
+            stack = versus.Stack('fixture', 'fixture', False,
+                                 {'JUSTRUST_REMOTE': 'force'} if remote else {})
             def counted(argv, cwd, env, log):
                 log.write_text('test result: ok. 1 passed; 0 failed\n')
                 return {'exit': 0, 'wall': 1.0, 'cpu_noise_valid': valid,
@@ -29,7 +30,6 @@ class SyntheticCpuNoiseTests(unittest.TestCase):
                     patch.object(versus, 'WORK', root), \
                     patch.object(versus, 'stack_env', return_value={}), \
                     patch.object(versus, 'run_counted', side_effect=counted), \
-                    patch.object(versus, '_mark_remote'), \
                     patch.object(suite, 'foreign_load', return_value=(27.47, foreign)):
                 return synth._run(stack, plan, ['test'], 'run')
 
@@ -44,6 +44,12 @@ class SyntheticCpuNoiseTests(unittest.TestCase):
             with self.subTest(other=other, valid=valid, foreign=foreign):
                 self.assertTrue(self.sample(other, valid, foreign)['noisy'])
         self.assertFalse(self.sample(4.0)['noisy'])
+
+    def test_remote_client_coverage_cannot_be_reported_quiet(self):
+        row = self.sample(remote=True)
+        self.assertTrue(row['noisy'])
+        self.assertFalse(row['cpu_noise_valid'])
+        self.assertEqual(row['cpu_noise_scope'], 'client-host-only')
 
     def test_new_policy_and_threshold_changes_cannot_mix_with_old_results(self):
         base = {'justrust_rev': 'fixture', 'snapshots': {'fixture': 'pin'},

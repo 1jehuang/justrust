@@ -71,6 +71,8 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=No
     r.update({"id": rid if st.justrust else None, "tests_passed": passed, "load_before": load,
               "foreign_rustc_before": rustc, "noisy": versus.sample_noisy(r, rustc), "log": str(log)})
     versus._mark_remote(st, r, out)
+    # Remote marking can invalidate client-only CPU coverage.
+    r["noisy"] = versus.sample_noisy(r, rustc)
     if "remote" in r and r["remote"] is None and cmd[0] in ("check", "clippy", "test"):
         r["fell_back_local"] = True
     return r
