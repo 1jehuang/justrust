@@ -103,7 +103,7 @@ fn running_generated_executable_without_output_cwd_or_fd_is_live_use() {
     std::fs::create_dir(&output).unwrap();
     let executable = output.join("generated-sleeper");
     std::fs::copy("/bin/sleep", &executable).unwrap();
-    let child = Child(
+    let mut child = Child(
         std::process::Command::new(&executable)
             .arg("30")
             .current_dir("/")
@@ -111,6 +111,20 @@ fn running_generated_executable_without_output_cwd_or_fd_is_live_use() {
             .unwrap(),
     );
     let base = PathBuf::from(format!("/proc/{}", child.0.id()));
+    // Hosted subprocess launch may return while its trampoline still runs.
+    // Observe the actual executable before checking its consumer footprint.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::fs::read_link(base.join("exe")).ok().as_ref() != Some(&executable) {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "generated sleeper exited before exec readiness"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "generated sleeper did not reach exec readiness"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(std::fs::read_link(base.join("exe")).unwrap(), executable);
     assert!(
         !std::fs::read_link(base.join("cwd"))
