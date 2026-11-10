@@ -381,6 +381,25 @@ impl<T> super::iter::IntoIterator for Vec<T> {
     }
 }
 
+impl<T, const N: usize> super::iter::IntoIterator for [T; N] {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+    fn into_iter(self) -> IntoIter<T> {
+        // The wrapper owns the array storage without dropping moved elements.
+        // Reserve before the first move, then transfer every element exactly
+        // once into the existing front/back owning iterator representation.
+        let array = core::mem::ManuallyDrop::new(self);
+        let source = &array as *const core::mem::ManuallyDrop<[T; N]> as *mut T;
+        let mut values = Vec::with_capacity(N);
+        let mut index = 0usize;
+        while index < N {
+            values.push(unsafe { *slot(source, index) });
+            index += 1usize;
+        }
+        values.into_iter()
+    }
+}
+
 // Elements drop front to back, as stock, then the buffer is released.
 impl<T> Drop for Vec<T> {
     fn drop(&mut self) {

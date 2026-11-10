@@ -12,6 +12,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod coherence_oracle;
 
 #[test]
+fn const_impl_owned_array_iteration_collection_milestone() {
+    coherence_oracle::stock_native(include_str!("milestones/m2/03_collections.rs"));
+    coherence_oracle::stock_native(
+        r#"fn main(){let a=[String::from("a"),String::from("b")];let mut i=a.into_iter();println!("{} {}",i.next().unwrap(),i.next_back().unwrap());let empty:[String;0]=[];println!("{}",empty.into_iter().count());}"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"fn main(){let a=[String::from("a")];let _i=a.into_iter();println!("{}",a[0]);}"#,
+    );
+}
+
+#[test]
 fn const_impl_array_heads_keep_owned_element_and_extent_slots() {
     coherence_oracle::stock_native(
         r#"
