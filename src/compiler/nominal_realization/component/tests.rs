@@ -1314,6 +1314,9 @@ fn forged_component_members_fields_witnesses_and_external_receipts_reject() {
         },
         |fact| fact.layout_order = Arc::from([]),
         |fact| fact.metadata_heights = Arc::from([usize::MAX]),
+        |fact| fact.sequence_shapes = Arc::from([]),
+        |fact| fact.sequence_shapes = Arc::from([false, false]),
+        |fact| fact.sequence_shapes = Arc::from([true]),
         |fact| fact.external = Arc::from([]),
         |fact| {
             let mut members = fact.members.to_vec();

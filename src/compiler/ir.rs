@@ -8345,6 +8345,14 @@ impl Ty {
         let [element] = def.type_args.as_ref() else {
             return None;
         };
+        if let Some(read) = value.realization()
+            && read.is_component()
+        {
+            // The exact rooted read was checked above. Its immutable sequence
+            // witness authenticates the original binding and all three
+            // instantiated field equations without unfolding symbolic storage.
+            return read.component_sequence_shape().then_some(element);
+        }
         let [pointer, length, capacity] = def.fields.concrete_ownership_fields()? else {
             return None;
         };

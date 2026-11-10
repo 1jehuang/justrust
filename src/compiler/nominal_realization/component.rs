@@ -27,6 +27,7 @@ struct ComponentFact {
     layout_order: Arc<[usize]>,
     metadata_heights: Arc<[usize]>,
     pointer_kinds: Arc<[Option<ir::OwnedPointerKind>]>,
+    sequence_shapes: Arc<[bool]>,
 }
 impl crate::engine::Fact for ComponentFact {}
 
@@ -143,6 +144,7 @@ fn validate(
     used.resize(fact.external.len(), false);
     if fact.metadata_heights.len() != fact.members.len()
         || fact.pointer_kinds.len() != fact.members.len()
+        || fact.sequence_shapes.len() != fact.members.len()
     {
         return Err(Error::new("component metadata witness omitted members"));
     }
@@ -166,6 +168,7 @@ fn validate(
         let env = &member.source.proof().schema().env;
         if fact.metadata_heights[index] != member_height(&member.actuals, &member.fields, b)?
             || fact.pointer_kinds[index] != pointer_kind(member, b)?
+            || fact.sequence_shapes[index] != sequence_shape(member, b)?
         {
             return Err(Error::new("component compressed metadata witness changed"));
         }
@@ -495,6 +498,29 @@ fn pointer_kind(
     }
 }
 
+fn sequence_shape(member: &Member, b: &ir::PlanBudget) -> Result<bool, Error> {
+    b.charge_work(1).map_err(Error::new)?;
+    // Retain the original sealed native-sequence construction authority. A
+    // pointer-shaped user struct or a matching display name is insufficient.
+    let source = member.source.template();
+    if source.owned_sequence_element().is_none() {
+        return Ok(false);
+    }
+    let [actual] = member.actuals.as_ref() else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        member.fields.as_ref(),
+        [(pointer, Term::RawPtr(ir::BorrowKind::Mut, pointee)),
+         (length, Term::Int(ir::IntTy::Usize)),
+         (capacity, Term::Int(ir::IntTy::Usize))]
+        if *pointer == (FieldCoordinate { variant: None, field: 0 })
+            && *length == (FieldCoordinate { variant: None, field: 1 })
+            && *capacity == (FieldCoordinate { variant: None, field: 2 })
+            && pointee.as_ref() == actual
+    ))
+}
+
 fn term_height(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<usize, Error> {
     b.check_depth(depth).map_err(Error::new)?;
     b.charge_work(1).map_err(Error::new)?;
@@ -609,9 +635,11 @@ async fn produce(cx: &Context, raw: Key) -> Result<ComponentFact, Error> {
     }
     let mut heights = topology::storage(members.len(), b)?;
     let mut pointers = topology::storage(members.len(), b)?;
+    let mut sequences = topology::storage(members.len(), b)?;
     for member in &members {
         heights.push(member_height(&member.actuals, &member.fields, b)?);
         pointers.push(pointer_kind(member, b)?);
+        sequences.push(sequence_shape(member, b)?);
     }
     let fact = ComponentFact {
         key,
@@ -621,6 +649,7 @@ async fn produce(cx: &Context, raw: Key) -> Result<ComponentFact, Error> {
         layout_order: order.into(),
         metadata_heights: heights.into(),
         pointer_kinds: pointers.into(),
+        sequence_shapes: sequences.into(),
     };
     // Complete source, predicate, membership, pointer and size validation is
     // mandatory before publication. This is not an executable nominal read.
@@ -1075,6 +1104,9 @@ impl ReadComponent {
     }
     pub(super) fn metadata_height(&self, member: u32) -> usize {
         self.fact.metadata_heights[member as usize]
+    }
+    pub(super) fn sequence_shape(&self, member: u32) -> bool {
+        self.fact.sequence_shapes[member as usize]
     }
     pub(super) fn pointer_kind(&self, member: u32) -> Option<ir::OwnedPointerKind> {
         self.fact.pointer_kinds[member as usize]

@@ -123,6 +123,12 @@ impl ReadNominal {
             Self::Acyclic(_) => None,
         }
     }
+    pub(in crate::compiler) fn component_sequence_shape(&self) -> bool {
+        match self {
+            Self::Component(read) => read.sequence_shape(),
+            Self::Acyclic(_) => false,
+        }
+    }
     pub(in crate::compiler) fn component_pointer_kind(&self) -> Option<ir::OwnedPointerKind> {
         match self {
             Self::Component(read) => read.pointer_kind(),

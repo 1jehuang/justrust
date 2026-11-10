@@ -145,6 +145,9 @@ impl RootedNominal {
         }
         Ok(())
     }
+    pub(super) fn sequence_shape(&self) -> bool {
+        self.read.sequence_shape(self.member)
+    }
     pub(super) fn pointer_kind(&self) -> Option<ir::OwnedPointerKind> {
         self.read.pointer_kind(self.member)
     }
