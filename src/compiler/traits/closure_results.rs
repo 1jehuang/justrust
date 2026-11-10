@@ -313,10 +313,17 @@ impl ValidatedTraitWorld {
             let original_view = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
             for (input, parameter) in origins.iter().zip(call_signature.params.iter()) {
                 if !self.eq_ty(
-                    &charged(&self.budget, input.projected_type(closure.params(), &self.budget))?,
-                    parameter, 0,
+                    &charged(
+                        &self.budget,
+                        input.projected_type(closure.params(), &self.budget),
+                    )?,
+                    parameter,
+                    0,
                 )? {
-                    return Err(FactsError::invalid(&self.budget, "closure input call changed an ordered canonical argument type"));
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure input call changed an ordered canonical argument type",
+                    ));
                 }
             }
             let mut returned = Vec::new();

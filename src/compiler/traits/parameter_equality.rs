@@ -133,10 +133,17 @@ impl CarrierContractView {
     ) -> Result<()> {
         self.validate_result_flow(facts, subject, signature, location)?;
         if !self.equality_results.as_ref().is_some_and(|authority| {
-            authority.certificates.iter().any(|certificate| certificate.result == *location)
+            authority
+                .certificates
+                .iter()
+                .any(|certificate| certificate.result == *location)
         }) || !self.contract.results.iter().any(|row| {
-            row.location == *location && !row.sources.is_empty()
-                && row.sources.iter().all(|source| self.contract.inputs.contains(source))
+            row.location == *location
+                && !row.sources.is_empty()
+                && row
+                    .sources
+                    .iter()
+                    .all(|source| self.contract.inputs.contains(source))
         }) {
             return Err(FactsError::invalid(
                 facts.budget(),
