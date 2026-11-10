@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 DEFAULT_LOCK = "/home/ec2-user/.jcode/scratch/fish-milestones/build.lock"
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
@@ -96,8 +97,14 @@ def run(command, cwd, capture=False):
 
 
 def hosted(command, cwd, lock):
+    queued = time.monotonic()
     with locked(lock):
-        run(command, cwd)
+        started = time.monotonic()
+        print(f"Build queue wait: {started - queued:.3f}s", flush=True)
+        try:
+            run(command, cwd)
+        finally:
+            print(f"Command wall time: {time.monotonic() - started:.3f}s", flush=True)
 
 
 def target_commands(args, filtered=True):

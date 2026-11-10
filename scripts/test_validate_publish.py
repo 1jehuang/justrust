@@ -306,6 +306,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(worker.exitcode, 0)
         self.assertEqual(self.lock.stat().st_ino, inode)
 
+    def test_queue_and_command_timings_include_failed_commands(self):
+        output = io.StringIO()
+        failure = subprocess.CalledProcessError(1, ["justrust", "test"])
+        with patch.object(workflow.time, "monotonic", side_effect=[1.0, 4.0, 9.0]), \
+                patch.object(workflow, "run", side_effect=failure), \
+                contextlib.redirect_stdout(output):
+            with self.assertRaises(subprocess.CalledProcessError):
+                workflow.hosted(["justrust", "test"], self.repo, self.lock)
+        self.assertIn("Build queue wait: 3.000s", output.getvalue())
+        self.assertIn("Command wall time: 5.000s", output.getvalue())
+
     def test_hosted_commands_hold_build_and_publication_locks(self):
         def check_locks():
             for path in (self.lock, Path(str(self.lock) + ".publication")):
