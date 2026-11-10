@@ -160,6 +160,7 @@ SNAPSHOTS = {
             ("jcode-desktop", "bench/patches/changelog-viewport-visible-camera.patch"),
             ("jcode-desktop", "bench/patches/desktop-portable-math-fonts.patch"),
             ("jcode", "bench/patches/jcode-description-consent.patch"),
+            ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
         ],
     },
     "justrust": {

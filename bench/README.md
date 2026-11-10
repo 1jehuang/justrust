@@ -63,7 +63,12 @@ raising the token cap). A separate portable-font repair enables
 Without it, debug artifacts read fonts from the original compiler machine's
 registry path instead of carrying their bytes, so shared-cache hits can render
 text instead of glyph paths on another machine. The original SVG assertions
-remain unchanged. These repaired workloads cannot be compared with the
+remain unchanged. App-core fixture repairs keep the empty skill registry outside
+project overlays, place the destructive-command fixture outside the intentional
+system-temp allowance, and isolate/invalidate process-global wake/hook test
+configuration (wake locking credited to `b82768c61`). They change neither
+production command-risk policy nor test assertions, threading, or timeouts.
+These repaired workloads cannot be compared with the
 earlier failing fixtures as a speed claim.
 
 Run `python3 bench/suite.py preflight` on the machine executing the tests before
