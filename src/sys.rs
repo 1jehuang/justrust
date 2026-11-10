@@ -11,6 +11,36 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 
+/// Whether a system battery explicitly reports that it is discharging.
+/// Optional eager cache transfers can wait for AC power. Unknown state and
+/// unsupported platforms preserve existing behavior; peripheral batteries do
+/// not determine the host's power policy.
+pub fn battery_discharging() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        battery_discharging_at(Path::new("/sys/class/power_supply"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn battery_discharging_at(root: &Path) -> bool {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            let read = |name| std::fs::read_to_string(path.join(name)).unwrap_or_default();
+            read("type").trim() == "Battery"
+                && read("scope").trim() != "Device"
+                && read("status").trim() == "Discharging"
+        })
+}
+
 /// Local stream sockets: Unix domain sockets on Unix, AF_UNIX sockets on
 /// Windows 10 1803+ (`uds_windows`), with the same API surface.
 pub mod net {
@@ -704,6 +734,39 @@ fn process_cpu(child: &std::process::Child) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_discharging_system_batteries_defer_eager_transfers() {
+        let root = std::env::temp_dir().join(format!("jr-sys-power-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!battery_discharging_at(&root), "unknown platform state");
+        let battery = root.join("BAT0");
+        std::fs::create_dir_all(&battery).unwrap();
+        assert!(!battery_discharging_at(&root), "missing attributes");
+        for (kind, scope, status, expected) in [
+            ("Battery\n", "System\n", "Discharging\n", true),
+            ("Battery", "System", "Charging", false),
+            ("Battery", "System", "Full", false),
+            ("Battery", "System", "Not charging", false),
+            ("Battery", "System", "Unknown", false),
+            ("Battery", "Device", "Discharging", false),
+            ("Mains", "System", "Discharging", false),
+            ("USB", "System", "Discharging", false),
+            ("Battery", "", "Discharging", true),
+        ] {
+            std::fs::write(battery.join("type"), kind).unwrap();
+            std::fs::write(battery.join("scope"), scope).unwrap();
+            std::fs::write(battery.join("status"), status).unwrap();
+            assert_eq!(
+                battery_discharging_at(&root),
+                expected,
+                "{kind:?} {scope:?} {status:?}"
+            );
+        }
+        std::fs::remove_file(battery.join("scope")).unwrap();
+        assert!(battery_discharging_at(&root), "older kernels omit scope");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn path_components_with_either_separator() {

@@ -1633,7 +1633,9 @@ fn peer_offsets_file() -> Option<PathBuf> {
 /// entries this machine compiled since last time, and take the ones it
 /// compiled, so whichever side builds next finds them. Runs only when no
 /// build is relayed (pushing never competes with a remote run's output),
-/// and moves the most valuable entries first.
+/// and moves the most valuable entries first. On a discharging system battery,
+/// leave this optional warmup until AC returns; demand-driven fetches remain
+/// available and journal offsets must not advance while warmup is deferred.
 fn peer_sync_loop(d: &Daemon) {
     let file = peer_offsets_file();
     let mut off: PeerOffsets = file
@@ -1641,9 +1643,22 @@ fn peer_sync_loop(d: &Daemon) {
         .and_then(|f| std::fs::read(f).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
+    let mut battery_deferred = false;
     loop {
         std::thread::sleep(Duration::from_secs(5));
         if d.draining.load(Ordering::SeqCst) || d.info.lock().map_or(1, |i| i.active) > 0 {
+            continue;
+        }
+        let on_battery = crate::sys::battery_discharging();
+        if on_battery != battery_deferred {
+            log(if on_battery {
+                "peer cache: deferring eager transfers while system battery is discharging"
+            } else {
+                "peer cache: resuming eager transfers after battery discharge ended"
+            });
+            battery_deferred = on_battery;
+        }
+        if on_battery {
             continue;
         }
         let Some(relay) = d.peer.lock().ok().and_then(|c| c.clone()) else {
