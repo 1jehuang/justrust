@@ -8,6 +8,134 @@ pub struct Rc<T: ?Sized> {
     strong: *mut usize,
 }
 
+/// A non-owning observer of an Rc control allocation `[strong, weak]`.
+/// A null control pointer is the detached `Weak::new()` state.
+pub struct Weak<T: ?Sized> {
+    ptr: *mut T,
+    strong: *mut usize,
+}
+
+fn control_bytes() -> usize {
+    storage_stride::<usize>() * 2usize
+}
+
+fn weak_slot(strong: *mut usize) -> *mut usize {
+    (strong as usize + storage_stride::<usize>()) as *mut usize
+}
+
+impl<T> Weak<T> {
+    pub fn new() -> Weak<T> {
+        Weak {
+            ptr: 0usize as *mut T,
+            strong: 0usize as *mut usize,
+        }
+    }
+}
+
+impl<T: ?Sized> Weak<T> {
+    pub fn upgrade(&self) -> Option<Rc<T>> {
+        let strong = self.strong;
+        if strong as usize == 0usize {
+            return None;
+        }
+        unsafe {
+            if *strong == 0usize {
+                return None;
+            }
+            if *strong == 18446744073709551615usize {
+                super::process::abort();
+            }
+            *strong += 1usize;
+        }
+        Some(Rc {
+            ptr: self.ptr,
+            strong,
+        })
+    }
+
+    pub fn strong_count(&self) -> usize {
+        if self.strong as usize == 0usize {
+            return 0usize;
+        }
+        unsafe { *self.strong }
+    }
+
+    pub fn weak_count(&self) -> usize {
+        if self.strong as usize == 0usize {
+            return 0usize;
+        }
+        unsafe {
+            if *self.strong == 0usize {
+                return 0usize;
+            }
+            *weak_slot(self.strong) - 1usize
+        }
+    }
+
+    pub fn ptr_eq(&self, other: &Weak<T>) -> bool {
+        self.strong as usize == other.strong as usize
+    }
+}
+
+impl<T: ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Weak<T> {
+        let strong = self.strong;
+        if strong as usize != 0usize {
+            unsafe {
+                let weak = weak_slot(strong);
+                if *weak == 18446744073709551615usize {
+                    super::process::abort();
+                }
+                *weak += 1usize;
+            }
+        }
+        Weak {
+            ptr: self.ptr,
+            strong,
+        }
+    }
+}
+
+impl<T: ?Sized> Drop for Weak<T> {
+    fn drop(&mut self) {
+        let strong = self.strong;
+        if strong as usize == 0usize {
+            return;
+        }
+        unsafe {
+            let weak = weak_slot(strong);
+            *weak -= 1usize;
+            if *weak == 0usize {
+                raw_free(strong as usize, control_bytes());
+            }
+        }
+    }
+}
+
+impl<T> super::default::Default for Weak<T> {
+    fn default() -> Weak<T> {
+        Weak::new()
+    }
+}
+
+impl<T: ?Sized> super::fmt::Debug for Weak<T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.write_str("(Weak)")
+    }
+}
+
+impl<T: super::fmt::Debug + ?Sized> super::fmt::Debug for Rc<T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        <T as super::fmt::Debug>::fmt(unsafe { &*self.ptr }, f)
+    }
+}
+
+impl<T: super::fmt::Display + ?Sized> super::fmt::Display for Rc<T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        <T as super::fmt::Display>::fmt(unsafe { &*self.ptr }, f)
+    }
+}
+
 impl<T> Rc<T> {
     pub fn new(value: T) -> Rc<T> {
         let bytes = storage_stride::<T>();
@@ -16,7 +144,7 @@ impl<T> Rc<T> {
         if p as usize == 0usize {
             panic!("memory allocation failed");
         }
-        let strong = raw_alloc(storage_stride::<usize>()) as *mut usize;
+        let strong = raw_alloc(control_bytes()) as *mut usize;
         if strong as usize == 0usize {
             raw_free(p as usize, bytes);
             panic!("memory allocation failed");
@@ -24,6 +152,8 @@ impl<T> Rc<T> {
         unsafe {
             *p = value;
             *strong = 1usize;
+            // Every strong owner collectively holds one weak share.
+            *weak_slot(strong) = 1usize;
         }
         Rc { ptr: p, strong }
     }
@@ -32,6 +162,25 @@ impl<T> Rc<T> {
 impl<T: ?Sized> Rc<T> {
     pub fn strong_count(this: &Rc<T>) -> usize {
         unsafe { *this.strong }
+    }
+
+    pub fn weak_count(this: &Rc<T>) -> usize {
+        unsafe { *weak_slot(this.strong) - 1usize }
+    }
+
+    pub fn downgrade(this: &Rc<T>) -> Weak<T> {
+        let strong = this.strong;
+        unsafe {
+            let weak = weak_slot(strong);
+            if *weak == 18446744073709551615usize {
+                super::process::abort();
+            }
+            *weak += 1usize;
+        }
+        Weak {
+            ptr: this.ptr,
+            strong,
+        }
     }
 
     pub fn ptr_eq(this: &Rc<T>, other: &Rc<T>) -> bool {
@@ -169,6 +318,30 @@ impl<T> RefCell<T> {
 
     pub fn into_inner(self) -> T {
         self.value
+    }
+}
+
+struct BorrowedPlaceholder {
+    private: (),
+}
+
+impl super::fmt::Debug for BorrowedPlaceholder {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.write_str("<borrowed>")
+    }
+}
+
+impl<T: super::fmt::Debug> super::fmt::Debug for RefCell<T> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        if self.flag.get() == 18446744073709551615usize {
+            return f
+                .debug_struct("RefCell")
+                .field("value", &BorrowedPlaceholder { private: () })
+                .finish();
+        }
+        f.debug_struct("RefCell")
+            .field("value", &self.value)
+            .finish()
     }
 }
 

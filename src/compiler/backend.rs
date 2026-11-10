@@ -1694,23 +1694,13 @@ impl<'a> Emitter<'a> {
                     self.drop_glue(value)?;
                     self.bytes(&[0x48, 0x83, 0xc4, 8]);
                 }
-                for (offset, extent) in [
-                    (data_offset, bytes),
-                    (
-                        count_offset,
-                        value_size(
-                            &ir::Ty::Int(ir::IntTy::Usize),
-                            self.concrete.facts().budget(),
-                        )?,
-                    ),
-                ] {
-                    self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
-                    self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact allocation
-                    self.i32(offset);
-                    self.bytes(&[0xbe]); // esi = exact typed storage extent
-                    self.i32(extent);
-                    self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]);
-                }
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
+                self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact value allocation
+                self.i32(data_offset);
+                self.bytes(&[0xbe]); // esi = exact typed storage extent
+                self.i32(bytes);
+                self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]);
+                self.rc_release_control(count_offset)?;
                 self.patch(shared, self.position())?;
             }
             DropGlue::BoxedObject | DropGlue::RcObject => {
@@ -1754,15 +1744,7 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0xb8, 11, 0, 0, 0]); // mov eax, 11 (munmap)
                 self.bytes(&[0x0f, 0x05]); // syscall
                 if let Some(offset) = count_offset {
-                    self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // reload live owner carrier
-                    self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact count allocation
-                    self.i32(offset);
-                    self.bytes(&[0xbe]); // esi = typed usize storage stride
-                    self.i32(value_size(
-                        &ir::Ty::Int(ir::IntTy::Usize),
-                        self.concrete.facts().budget(),
-                    )?);
-                    self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]); // munmap
+                    self.rc_release_control(offset)?;
                 }
                 if let Some(shared) = shared {
                     self.patch(shared, self.position())?;
@@ -1790,6 +1772,25 @@ impl<'a> Emitter<'a> {
             }
         }
         Ok(())
+    }
+    /// The last strong share gives up the implicit weak share held by all
+    /// strong owners. The `[strong, weak]` control allocation is released
+    /// only when no `Weak` remains. [rsp] addresses the Rc carrier.
+    fn rc_release_control(&mut self, count_offset: i32) -> Result<(), String> {
+        let word = value_size(
+            &ir::Ty::Int(ir::IntTy::Usize),
+            self.concrete.facts().budget(),
+        )?;
+        let weak = i8::try_from(word).map_err(|_| "Rc control word offset")?;
+        self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // rax = owner carrier
+        self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = control allocation
+        self.i32(count_offset);
+        self.bytes(&[0x48, 0xff, 0x4f, weak as u8]); // dec qword [rdi+weak]
+        let observed = self.jump(&[0x0f, 0x85]); // live Weak keeps the counts
+        self.bytes(&[0xbe]); // esi = both typed usize words
+        self.i32(word.checked_mul(2).ok_or("Rc control extent")?);
+        self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]); // munmap
+        self.patch(observed, self.position())
     }
     fn drop_at_offset(
         &mut self,

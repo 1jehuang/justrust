@@ -1,0 +1,23 @@
+1 2 1 2
+(Weak) true
+up 1 strong=2
+drop 1
+after rc: true 0 0
+one weak left 0
+inner 1
+outer 0
+drop 2
+true 0 0 true (Weak)
+1 8
+drop 7
+watcher 8 sees 0
+gone true
+dyn 4 1 1
+drop 4
+dyn dead true
+dyn alive 5
+drop 5
+3
+drop 6
+3
+end 0

@@ -1231,6 +1231,35 @@ fn source_drop_aggregate_positions_match_stock() {
 }
 
 #[test]
+fn rc_weak_observes_without_owning_and_frees_counts_last() {
+    runs("rc_weak");
+    for (name, source, needle) in [
+        (
+            "weak_use_after_move",
+            "use std::rc::{Rc, Weak}; struct Value { n: i32 } fn main() { let rc = Rc::new(Value { n: 1 }); let weak = Rc::downgrade(&rc); drop(weak); let again = weak.upgrade(); }",
+            "initialization/move analysis",
+        ),
+        (
+            "weak_is_not_a_deref_owner",
+            "use std::rc::{Rc, Weak}; struct Value { n: i32 } fn main() { let rc = Rc::new(Value { n: 1 }); let weak = Rc::downgrade(&rc); let n = weak.n; }",
+            "unknown nominal field",
+        ),
+        (
+            "unused_weak_pointee_mismatch",
+            "use std::rc::{Rc, Weak}; fn unused() { let rc = Rc::new(1u8); let weak: Weak<u32> = Rc::downgrade(&rc); } fn main() {}",
+            "E0308",
+        ),
+        (
+            "upgrade_is_optional",
+            "use std::rc::{Rc, Weak}; struct Value { n: i32 } fn main() { let rc = Rc::new(Value { n: 1 }); let weak = Rc::downgrade(&rc); let strong: Rc<Value> = weak.upgrade(); }",
+            "E0308",
+        ),
+    ] {
+        rejects_source(name, source, needle);
+    }
+}
+
+#[test]
 fn raw_pointer_reads_writes_casts_and_equality() {
     runs("raw_read_write");
     use pointer_coercion_oracle::{Case, Expect};
