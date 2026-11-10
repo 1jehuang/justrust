@@ -271,3 +271,82 @@ fn main() { println!("{}", f(&"x")); }"#,
         ],
     );
 }
+
+/// A guard sees a by-value non-Copy binding through a shared reference. The
+/// move happens only once the guard passes, so a failed guard leaves the
+/// scrutinee whole for later arms.
+#[test]
+fn guarded_by_value_bindings_match_stock() {
+    oracle::check(
+        "guard-by-value",
+        &[
+            Case {
+                name: "moves_after_guard",
+                source: r#"use std::cell::Cell;
+struct D<'a>(&'a Cell<i32>, i32);
+impl<'a> Drop for D<'a> { fn drop(&mut self) { self.0.set(self.0.get() + 1); println!("drop {}", self.1); } }
+enum E { A(String), B(String, i32), C }
+enum N { W(Option<(String, i32)>), Z }
+fn fail_then_later(e: E) -> String { match e { E::A(s) if s.len() > 3 => format!("long {s}"), E::A(s) => format!("short {s}"), E::B(s, n) if n > 0 => { let t = s; format!("pos {t} {n}") } E::B(s, _) => s, E::C => String::from("c") } }
+fn whole(s: String) -> String { match s { t if t.is_empty() => String::from("empty"), t if t == "x" => t + "!", t => t } }
+fn by_ref(e: &E) -> usize { match e { E::A(s) if s.len() > 3 => s.len(), E::A(s) => s.len() + 100, E::B(s, n) if *n > 0 => s.len(), E::B(..) => 0, E::C => 1 } }
+fn by_mut(e: &mut E) -> usize { match e { E::A(s) if s.len() > 3 => { s.push('!'); s.len() } E::A(s) => { s.push('?'); s.len() + 100 } _ => 0 } }
+fn nested(n: N) -> String { match n { N::W(Some((s, k))) if k > 1 => s, N::W(Some((s, _))) => s + "-low", N::W(None) => String::from("none"), N::Z => String::from("z") } }
+fn guard_borrows(v: Vec<String>, x: String) -> String { match x { y if v.contains(&y) && y == "key" => format!("has {y}"), y => format!("no {y}") } }
+fn drops(c: &Cell<i32>, pass: bool) -> i32 { let o = Some(D(c, 7)); match o { Some(d) if pass && d.1 == 7 => { println!("body {}", d.1); 1 } Some(d) => { println!("later {}", d.1); 2 } None => 3 } }
+fn main() {
+    println!("{}", fail_then_later(E::A("hello".into())));
+    println!("{}", fail_then_later(E::A("hi".into())));
+    println!("{}", fail_then_later(E::B("b".into(), 2)));
+    println!("{}", fail_then_later(E::B("b".into(), -2)));
+    println!("{}", fail_then_later(E::C));
+    println!("{} {} {}", whole(String::new()), whole("x".into()), whole("yz".into()));
+    println!("{} {} {} {} {}", by_ref(&E::A("hello".into())), by_ref(&E::A("hi".into())), by_ref(&E::B("abc".into(), 1)), by_ref(&E::B("abc".into(), 0)), by_ref(&E::C));
+    let mut a = E::A("hello".into()); let mut b = E::A("hi".into());
+    println!("{} {}", by_mut(&mut a), by_mut(&mut b));
+    if let E::A(s) = &a { println!("{s}"); }
+    if let E::A(s) = &b { println!("{s}"); }
+    println!("{} {} {} {}", nested(N::W(Some(("p".into(), 5)))), nested(N::W(Some(("q".into(), 0)))), nested(N::W(None)), nested(N::Z));
+    println!("{}", guard_borrows(vec!["key".to_string()], "key".into()));
+    println!("{}", guard_borrows(vec!["key".to_string()], "rose".into()));
+    let c = Cell::new(0);
+    println!("r {}", drops(&c, true)); println!("count {}", c.get());
+    println!("r {}", drops(&c, false)); println!("count {}", c.get());
+}"#,
+                expect: Expect::Run(
+                    "long hello\nshort hi\npos b 2\nb\nc\nempty x! yz\n5 102 3 0 1\n6 103\nhello!\nhi?\np q-low none z\nhas key\nno rose\nbody 7\ndrop 7\nr 1\ncount 1\nlater 7\ndrop 7\nr 2\ncount 2\n",
+                ),
+            },
+            Case {
+                name: "or_rows_move_after_guard",
+                source: r#"use std::cell::Cell;
+struct D<'a>(&'a Cell<i32>, i32);
+impl<'a> Drop for D<'a> { fn drop(&mut self) { self.0.set(self.0.get() + 1); println!("drop {}", self.1); } }
+enum E<'a> { A(D<'a>, i32), B(i32, D<'a>), C }
+fn f(e: E<'_>, pass: bool) -> i32 { match e { E::A(d, n) | E::B(n, d) if pass && n > 0 => { let k = d; println!("body {} {n}", k.1); 1 } E::A(d, _) | E::B(_, d) => { println!("later {}", d.1); 2 } E::C => 3 } }
+fn g(o: Option<Result<String, String>>) -> String { match o { Some(Ok(s) | Err(s)) if s.len() > 1 => s + "+", Some(Ok(s)) => s + "ok", Some(Err(s)) => s + "err", None => String::new() } }
+fn main() {
+    let c = Cell::new(0);
+    println!("{}", f(E::A(D(&c, 1), 5), true)); println!("{}", f(E::B(5, D(&c, 2)), true));
+    println!("{}", f(E::A(D(&c, 3), 5), false)); println!("{}", f(E::B(0, D(&c, 4)), true)); println!("{}", f(E::C, true));
+    println!("count {}", c.get());
+    println!("{} {} {} {} [{}]", g(Some(Ok("ab".into()))), g(Some(Err("cd".into()))), g(Some(Ok("a".into()))), g(Some(Err("c".into()))), g(None));
+}"#,
+                expect: Expect::Run(
+                    "body 1 5\ndrop 1\n1\nbody 2 5\ndrop 2\n1\nlater 3\ndrop 3\n2\nlater 4\ndrop 4\n2\n3\ncount 4\nab+ cd+ aok cerr []\n",
+                ),
+            },
+            Case {
+                name: "move_in_guard",
+                source: r#"fn take(s: String) -> bool { s.len() > 1 }
+fn main() { let o = Some(String::from("ab")); let r = match o { Some(s) if take(s) => 1, Some(_) => 2, None => 3 }; println!("{r}"); }"#,
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "assign_in_guard",
+                source: r#"fn main() { let o = Some(String::from("ab")); let r = match o { Some(s) if { s = String::new(); true } => s.len(), Some(_) => 2, None => 3 }; println!("{r}"); }"#,
+                expect: Expect::Invalid("E0594"),
+            },
+        ],
+    );
+}

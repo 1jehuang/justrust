@@ -12084,10 +12084,17 @@ impl<'a> Checker<'a> {
                         }
                     }
                     if arm.guard.is_some() {
+                        // A by-value non-Copy binding is viewed through a shared
+                        // reference in the guard and moved only once it passes
+                        // (cfg/guard_bindings.rs). A `mut` one would need a
+                        // distinct guard-time immutability rule.
                         for pending in plan.bindings.rows.as_slice() {
                             let binding = &pending.local;
-                            if binding.borrow.is_none() && !self.facts().must_copy(&binding.ty)? {
-                                return Err("unsupported: guarded match arms with by-value non-Copy bindings (use `ref`)".into());
+                            if binding.borrow.is_none()
+                                && binding.mutable
+                                && !self.facts().must_copy(&binding.ty)?
+                            {
+                                return Err("unsupported: guarded match arms with `mut` by-value non-Copy bindings".into());
                             }
                         }
                     }

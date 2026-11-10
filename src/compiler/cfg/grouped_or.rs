@@ -32,6 +32,8 @@ impl Lowerer<'_> {
         }
         entries.push(rejected);
         let mut bindings = None;
+        let (views, deferred) = (self.guard_views.len(), self.guard_deferred.len());
+        let mut row_moves = Vec::with_capacity(rows.len());
         for (index, row) in rows.iter().enumerate() {
             self.current = entries[index];
             let tested = self.pattern_test(id, source, row, completes)?;
@@ -40,7 +42,11 @@ impl Lowerer<'_> {
                 self.end_storage(*local, Some(id));
             }
             self.push_scope()?;
-            self.initialize_pattern_bindings(id, source, row, completes)?;
+            self.guard_deferring = arm.guard.is_some();
+            let bound = self.initialize_pattern_bindings(id, source, row, completes);
+            self.guard_deferring = false;
+            bound?;
+            row_moves.push(self.guard_deferred.split_off(deferred));
             if bindings.is_none() {
                 bindings = self.scopes.last().cloned();
             }
@@ -65,6 +71,7 @@ impl Lowerer<'_> {
         *self.scopes.last_mut().unwrap() = bindings.unwrap_or_default();
         if let Some(guard) = arm.guard {
             let condition = self.expression(guard)?;
+            self.guard_views.truncate(views);
             let pass = self.block();
             let fail = self.block();
             self.terminate(
@@ -105,6 +112,12 @@ impl Lowerer<'_> {
             }
             self.terminate(Terminator::Goto(rejected), Some(id))?;
             self.current = pass;
+            self.bind_row_moves(
+                &Alternatives { source, rows },
+                row_moves,
+                (&attempt, &retry),
+                id,
+            )?;
         }
         let value = self.expression(arm.body)?;
         if completes {

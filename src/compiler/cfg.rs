@@ -13,6 +13,7 @@ mod closure_template;
 mod drop_normal;
 pub(super) use closure_template::lower_closure_template;
 mod grouped_or;
+mod guard_bindings;
 mod intrinsics;
 mod runtime_sites;
 pub use drop_normal::ValidatedCleanupCall;
@@ -4208,6 +4209,12 @@ struct Lowerer<'a> {
     drop_enabled: bool,
     scopes: Vec<Vec<LocalId>>,
     loops: Vec<LoopTarget>,
+    /// Binding local to hidden `&T` local, while a guard is being lowered.
+    guard_views: Vec<(LocalId, LocalId)>,
+    /// By-value moves waiting for their guard's success edge.
+    guard_deferred: Vec<guard_bindings::Deferred>,
+    /// Set while binding the pattern of an arm that has a guard.
+    guard_deferring: bool,
 }
 
 impl Lowerer<'_> {
@@ -4649,11 +4656,20 @@ impl Lowerer<'_> {
             }
             self.live(*local, Some(id));
             if completes {
-                self.assign(
-                    place(*local),
-                    Rvalue::Use(self.consume(source.clone())?),
-                    Some(id),
-                );
+                if self.guard_defers(source, true)? {
+                    let whole = ir::PatternBinding {
+                        local: *local,
+                        projection: Vec::new(),
+                        borrow: None,
+                    };
+                    self.defer_guard_binding(&whole, source.clone(), id)?;
+                } else {
+                    self.assign(
+                        place(*local),
+                        Rvalue::Use(self.consume(source.clone())?),
+                        Some(id),
+                    );
+                }
             }
         }
         if let ir::MatchPattern::EnumVariant { bindings, .. }
@@ -4673,7 +4689,11 @@ impl Lowerer<'_> {
                         selected.projection.extend_from_slice(&binding.projection);
                         selected
                     };
-                    self.bind_selected(binding, selected, id)?;
+                    if self.guard_defers(&selected, binding.borrow.is_none())? {
+                        self.defer_guard_binding(binding, selected, id)?;
+                    } else {
+                        self.bind_selected(binding, selected, id)?;
+                    }
                 }
             }
         }
@@ -4778,10 +4798,15 @@ impl Lowerer<'_> {
                 self.end_storage(*local, Some(id));
             }
             self.push_scope()?;
-            self.initialize_pattern_bindings(id, &source, pattern, completes)?;
+            let (views, deferred) = (self.guard_views.len(), self.guard_deferred.len());
+            self.guard_deferring = guard.is_some();
+            let bound = self.initialize_pattern_bindings(id, &source, pattern, completes);
+            self.guard_deferring = false;
+            bound?;
             let mut guard_fallthrough = None;
             if let Some(guard) = guard {
                 let condition = self.expression(guard)?;
+                let moves = self.end_guard_view(views, deferred);
                 let pass = self.block();
                 let fail = self.block();
                 self.terminate(
@@ -4798,6 +4823,7 @@ impl Lowerer<'_> {
                 self.cleanup(self.scopes.len() - 1, Some(id));
                 self.terminate(Terminator::Goto(after), Some(id))?;
                 self.current = pass;
+                self.bind_deferred(moves, id)?;
             }
             let value = self.expression(body)?;
             if completes {
@@ -5156,7 +5182,7 @@ impl Lowerer<'_> {
                 .get(root.0)
                 .ok_or("invalid pattern initializer expression")?;
             match &expression.kind {
-                ir::ExprKind::Local(local) => break place(*local),
+                ir::ExprKind::Local(local) => break self.local_place(*local),
                 ir::ExprKind::Deref { value } => {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("dereference projection depth exceeds limit 128".into());
@@ -5865,6 +5891,7 @@ impl Lowerer<'_> {
                 if !self.used_loans.insert(loan) {
                     return Err("unsupported: repeated borrow expression materialization".into());
                 }
+                let place = &self.retarget_guard_loan(loan, place);
                 self.inspect_index_prefixes(place, origin)?;
                 self.assign(destination.clone(), Rvalue::Borrow(loan), origin);
             }
@@ -6054,7 +6081,7 @@ impl Lowerer<'_> {
             ),
             ir::ExprKind::Local(local) => self.assign(
                 destination.clone(),
-                Rvalue::Use(self.consume(place(*local))?),
+                Rvalue::Use(self.consume(self.local_place(*local))?),
                 origin,
             ),
             ir::ExprKind::Field { .. } | ir::ExprKind::Index { .. } => {
@@ -7028,6 +7055,9 @@ fn lower_internal_with_source(
         drop_enabled,
         scopes: vec![source.params.clone()],
         loops: Vec::new(),
+        guard_views: Vec::new(),
+        guard_deferred: Vec::new(),
+        guard_deferring: false,
     };
     lowerer.statement(Statement::StorageLive(return_local), None);
     if source.result == Ty::Unit {
@@ -7628,6 +7658,9 @@ mod panic_terminal_tests {
             drop_enabled: false,
             scopes: vec![Vec::new()],
             loops: Vec::new(),
+            guard_views: Vec::new(),
+            guard_deferred: Vec::new(),
+            guard_deferring: false,
         };
         assert!(publication.facts().budget().same_authority(&budget));
         assert!(lowerer.budget.unwrap().same_authority(&budget));
@@ -11502,6 +11535,9 @@ mod tests {
             drop_enabled: false,
             scopes: vec![],
             loops: vec![],
+            guard_views: Vec::new(),
+            guard_deferred: Vec::new(),
+            guard_deferring: false,
         };
         assert!(
             budget
@@ -12798,6 +12834,9 @@ mod tests {
             drop_enabled: false,
             scopes: Vec::new(),
             loops: Vec::new(),
+            guard_views: Vec::new(),
+            guard_deferred: Vec::new(),
+            guard_deferring: false,
         }
     }
 
