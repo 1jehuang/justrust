@@ -30,12 +30,20 @@ impl<'a> Checker<'a> {
                 && info.kind == ir::DeclKind::TraitItem
             {
                 let owner = info.owner.ok_or("trait callable missing canonical owner")?;
-                let source = plan.registry.source_trait(owner)?;
-                let item = source
-                    .items
-                    .get(info.source_index)
-                    .ok_or("trait callable missing canonical source item")?;
-                unsafety = item.signature.unsafety;
+                let owner_info = plan.registry.declaration(owner)?;
+                if owner_info.kind != ir::DeclKind::Trait {
+                    return Err("trait callable owner is not a canonical trait".into());
+                }
+                // Catalog trait items have no source declaration to inspect.
+                // source_trait is a dyn-source lookup and rejects those owners.
+                if owner_info.source_index != usize::MAX {
+                    let source = plan.registry.source_trait(owner)?;
+                    let item = source
+                        .items
+                        .get(info.source_index)
+                        .ok_or("trait callable missing canonical source item")?;
+                    unsafety = item.signature.unsafety;
+                }
             }
         }
         if unsafety {
