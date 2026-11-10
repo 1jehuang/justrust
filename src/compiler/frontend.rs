@@ -144,6 +144,107 @@ pub(super) enum NominalCallablePublication {
 mod canonical_source_replay_tests {
     use super::*;
     #[test]
+    fn original_callee_replays_typed_nominal_actuals_without_weakening_authority() {
+        let compiled = super::super::compile(
+            "struct Pair<T,U>{first:T,second:U}fn main(){let pair=Pair::<u32,bool>{first:7u32,second:true};}".into(),
+            1,
+            false,
+        ).unwrap();
+        let graph = compiled
+            .control_flow
+            .iter()
+            .flat_map(|body| &body.locals)
+            .find_map(|local| {
+                let ir::Ty::Struct(nominal) = &local.ty else {
+                    return None;
+                };
+                (nominal.realization().is_some()
+                    && nominal.def().type_args.as_ref()
+                        == [ir::Ty::Int(ir::IntTy::U32), ir::Ty::Bool])
+                .then_some(nominal.clone())
+            })
+            .expect("fixture must contain a typed graph Pair<u32,bool>");
+        let budget = ir::PlanBudget::default();
+        let mut definition = graph.def().clone();
+        definition.id =
+            replay_nominal_source_id(definition.source_decl, &definition.type_args, &budget)
+                .unwrap();
+        let source = ir::StructTy::new(definition);
+        let nested = |ty| ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Tuple(Arc::from([ty, ir::Ty::Int(ir::IntTy::U16)]))),
+        };
+        let original = ir::Callee::Direct(ir::CallTarget {
+            declaration: source.def().source_decl,
+            type_args: Arc::from([nested(ir::Ty::Struct(source.clone()))]),
+        });
+        let actual = ir::Callee::Direct(ir::CallTarget {
+            declaration: source.def().source_decl,
+            type_args: Arc::from([nested(ir::Ty::Struct(graph.clone()))]),
+        });
+        assert!(
+            !replay_type_equal(
+                &original.type_arguments()[0],
+                &actual.type_arguments()[0],
+                &budget
+            )
+            .unwrap()
+        );
+        validate_original_callee(&original, &actual, &budget).unwrap();
+        validate_original_callee(&actual, &original, &budget).unwrap();
+        for mutation in 0..6 {
+            let ir::Callee::Direct(mut forged) = original.clone() else {
+                unreachable!()
+            };
+            match mutation {
+                0 => forged.declaration.index += 1,
+                1 => {
+                    let mut changed = source.def().clone();
+                    changed.type_args = Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U32)]);
+                    changed.id =
+                        replay_nominal_source_id(changed.source_decl, &changed.type_args, &budget)
+                            .unwrap();
+                    forged.type_args =
+                        Arc::from([nested(ir::Ty::Struct(ir::StructTy::new(changed)))]);
+                }
+                2 => {
+                    let mut changed = source.def().clone();
+                    changed.id.index = ir::NominalIndex::SourceSlot(
+                        changed.id.index.source_slot().unwrap().wrapping_add(1),
+                    );
+                    forged.type_args =
+                        Arc::from([nested(ir::Ty::Struct(ir::StructTy::new(changed)))]);
+                }
+                3 => {
+                    forged.type_args = Arc::from([nested(ir::Ty::Struct(ir::StructTy::new(
+                        graph.def().clone(),
+                    )))])
+                }
+                4 => {
+                    forged.type_args = Arc::from([nested(ir::Ty::Struct(
+                        ir::StructTy::new(graph.def().clone())
+                            .with_realization(graph.realization().unwrap().clone()),
+                    ))])
+                }
+                5 => {
+                    forged.type_args = Arc::from([ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(ir::Ty::Tuple(Arc::from([
+                            ir::Ty::Struct(source.clone()),
+                            ir::Ty::Int(ir::IntTy::U16),
+                        ]))),
+                    }])
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_original_callee(&ir::Callee::Direct(forged), &actual, &budget).is_err(),
+                "forged original nominal call mutation {mutation} passed"
+            );
+        }
+    }
+
+    #[test]
     fn virtual_source_replay_keeps_callee_and_vtable_authority() {
         let text = "trait Get{fn get(&self)->i32;}fn f(x:&dyn Get)->i32{x.get()}fn main(){}";
         let (_, _, budget, publication) = published(text, 0);
@@ -3086,7 +3187,11 @@ fn validate_original_callee(
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
     validate_original_callee_with(original, actual, budget, |a, b| {
-        replay_type_equal(a, b, budget)
+        // Source slots and typed graph reads may name the same canonical
+        // declaration application. Compare the declaration and ordered actuals
+        // through their authenticated identities, not their storage domain.
+        // Graph-to-graph identity remains exact, including engine authority.
+        sr::replay_types_equal(a, b, budget)
     })
 }
 
@@ -7617,6 +7722,13 @@ fn replay_shared_local_inputs(
                 budget,
                 "source input differs from canonical parameter",
             ));
+        }
+        // Only independently replayed source inputs enter the next argument's
+        // context. For example, &mut Vec<u32> coerced to &mut [K] fixes K=u32
+        // before a later unsuffixed integer is replayed. Never infer this from
+        // the retained target actuals or instantiated signature.
+        if binder.is_some() {
+            context.constrain_input(&view.signature().params[index], &input)?;
         }
         sr::push(&mut input_types, input, budget)?;
     }

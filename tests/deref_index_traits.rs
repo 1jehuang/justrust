@@ -69,6 +69,20 @@ fn main() {
                 source: r#"fn bad<K>(v: Vec<K>) -> &'static K { &v[0] } fn main() {}"#,
                 expect: Expect::Invalid("E0515"),
             },
+            Case {
+                name: "unused_slice_input_does_not_change_element_family",
+                source: r#"fn set<K: Copy>(v: &mut [K], i: usize, x: K) { v[i] = x; }
+fn bad(v: &mut Vec<u8>) { set(v, 0, 7u16); }
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_slice_input_integer_must_fit_source_element",
+                source: r#"fn set<K: Copy>(v: &mut [K], i: usize, x: K) { v[i] = x; }
+fn bad(v: &mut Vec<u8>) { set(v, 0, 256); }
+fn main() {}"#,
+                expect: Expect::Invalid("literal out of range"),
+            },
         ],
     );
 }
