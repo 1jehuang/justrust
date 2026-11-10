@@ -581,8 +581,8 @@ enum ToolchainCmd {
     Wild,
     /// Install a jr-rustc build (justrust's rustc fork) as toolchain
     /// `jr-<commit>`. With no pin, builds then use the newest installed jr
-    /// toolchain and its proc-macro cache (`JUSTRUST_TOOLCHAIN=system` or
-    /// `JUSTRUST_CACHE_PROC_MACROS=0` to opt out).
+    /// toolchain (`JUSTRUST_TOOLCHAIN=system` to opt out). Proc-macro caching
+    /// requires enforced inputs, or experimental `JUSTRUST_CACHE_PROC_MACROS=1`.
     JrInstall {
         /// Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy}.
         #[arg(default_value = "~/justrust/toolchain/rustc/build/host/stage2")]

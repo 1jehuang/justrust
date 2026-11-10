@@ -26,6 +26,8 @@ def macro_source(kind, revision=0, api='modern', family='functionlike'):
     path_call = ('proc_macro::tracked::path' if api == 'modern' else 'proc_macro::tracked_path::path')
     if kind == 'env':
         value = 'std::env::var("JR_MACRO_INPUT").unwrap()'
+    elif kind == 'env_iter':
+        value = 'std::env::vars().find(|(key, _)| key == "JR_MACRO_INPUT").unwrap().1'
     elif kind == 'tracked_env':
         value = env_call + '("JR_MACRO_INPUT").unwrap()'
     elif kind in ('file', 'tracked_path'):
@@ -192,7 +194,7 @@ def run(rustc, root):
     harness = Harness(rustc, root)
     version = execute([harness.rustc, '-vV'], root, harness.env)
     cases = [harness.scenario(kind, family) for family in ('derive', 'attribute', 'functionlike')
-             for kind in ('constant', 'env', 'tracked_env', 'file', 'tracked_path')]
+             for kind in ('constant', 'env', 'env_iter', 'tracked_env', 'file', 'tracked_path')]
     drivers = sorted(Path(harness.rustc).parent.parent.glob('lib/librustc_driver*.so'))
     return {'schema': 2, 'rustc': harness.rustc,
             'driver_libraries': [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in drivers],

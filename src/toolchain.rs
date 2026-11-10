@@ -1248,13 +1248,10 @@ pub fn status() -> Result<()> {
         None => {
             let off = std::env::var("JUSTRUST_TOOLCHAIN").is_ok_and(|v| is_off(v.trim()));
             if let Some(jr) = default_jr().filter(|_| !off) {
-                let cache = if matches!(
-                    std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref(),
-                    Ok("0") | Ok("off") | Ok("false") | Ok("no")
-                ) {
-                    "off (JUSTRUST_CACHE_PROC_MACROS=0)"
-                } else {
+                let cache = if crate::shim::proc_macro_cache_enabled(&jr.dir) {
                     "on"
+                } else {
+                    "off (requires enforced inputs or experimental opt-in)"
                 };
                 let ver = jr.info().map(|i| i.rustc_version).unwrap_or_default();
                 println!(

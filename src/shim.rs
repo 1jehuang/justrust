@@ -124,11 +124,10 @@ fn exec(real: &PathBuf, args: &[OsString]) -> ! {
 }
 
 /// `-Zcache-proc-macros` for incremental units on our compiler.
-/// On by default when the compiler tracks proc-macro environment and file
-/// inputs (jr-rustc 6374f2b9b and later, see `proc_macro_inputs_tracked`),
-/// which makes derive/attribute cache hits invalidate when an input changes
-/// (gate: `bench/reuse-macro-input-accept.py`). Older jr compilers can serve
-/// stale expansions, so there it stays an explicit opt-in.
+/// Default-on requires enforced input tracking, not merely an observational
+/// query. Libc interposition misses environment enumeration, direct syscalls,
+/// inherited descriptors, and some clock reads. No currently shipped compiler
+/// advertises the enforced capability. Explicit opt-in remains experimental.
 /// `JUSTRUST_CACHE_PROC_MACROS=0/off/false/no` disables it,
 /// `1/on/true/yes` forces it. The flag is part of rustc's incremental key,
 /// independent of recording.
@@ -144,14 +143,10 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
     if !is_jr || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none() {
         return None;
     }
-    let enabled = match std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref() {
-        Ok("1") | Ok("on") | Ok("true") | Ok("yes") => true,
-        Ok("0") | Ok("off") | Ok("false") | Ok("no") => false,
-        _ => real
-            .parent()
-            .and_then(|b| b.parent())
-            .is_some_and(proc_macro_inputs_tracked),
-    };
+    let enabled = real
+        .parent()
+        .and_then(|b| b.parent())
+        .is_some_and(proc_macro_cache_enabled);
     if !enabled {
         return None;
     }
@@ -164,11 +159,19 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
     (incremental && !already).then(|| OsString::from("-Zcache-proc-macros"))
 }
 
-/// Whether the toolchain's compiler driver tracks proc-macro inputs: it
-/// defines the `jr_proc_macro_inputs` query. Scanned once per toolchain and
-/// remembered in `<toolchain>/.jr-pm-inputs` (toolchains are immutable).
-fn proc_macro_inputs_tracked(toolchain: &std::path::Path) -> bool {
-    let marker = toolchain.join(".jr-pm-inputs");
+pub(crate) fn proc_macro_cache_enabled(toolchain: &std::path::Path) -> bool {
+    match std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref() {
+        Ok("1" | "on" | "true" | "yes") => true,
+        Ok("0" | "off" | "false" | "no") => false,
+        _ => proc_macro_inputs_enforced(toolchain),
+    }
+}
+
+/// Whether the compiler advertises enforced proc-macro input isolation.
+/// Observational `jr_proc_macro_inputs` tracking is deliberately insufficient.
+/// A distinct marker prevents old probe results enabling unsafe reuse.
+fn proc_macro_inputs_enforced(toolchain: &std::path::Path) -> bool {
+    let marker = toolchain.join(".jr-pm-inputs-enforced-v1");
     if let Ok(v) = std::fs::read_to_string(&marker) {
         return v.trim() == "yes";
     }
@@ -182,10 +185,11 @@ fn proc_macro_inputs_tracked(toolchain: &std::path::Path) -> bool {
             n.starts_with("librustc_driver") && n.ends_with(".so")
         })
         .any(|e| {
-            std::fs::read(e.path())
-                .is_ok_and(|b| memchr::memmem::find(&b, b"jr_proc_macro_inputs").is_some())
+            std::fs::read(e.path()).is_ok_and(|b| {
+                memchr::memmem::find(&b, b"jr_proc_macro_inputs_enforced_v1").is_some()
+            })
         });
-    let tmp = toolchain.join(format!(".jr-pm-inputs.{}", std::process::id()));
+    let tmp = toolchain.join(format!(".jr-pm-inputs-enforced-v1.{}", std::process::id()));
     if std::fs::write(&tmp, if found { "yes\n" } else { "no\n" }).is_ok() {
         let _ = std::fs::rename(&tmp, &marker);
     }
@@ -876,24 +880,30 @@ mod tests {
     }
 
     #[test]
-    fn proc_macro_input_tracking_detected_from_driver() {
+    fn proc_macro_input_enforcement_required_from_driver() {
         let dir = std::env::temp_dir().join(format!("jr-pmi-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("lib")).unwrap();
-        std::fs::write(dir.join("lib/librustc_driver-x.so"), b"old driver").unwrap();
-        assert!(!proc_macro_inputs_tracked(&dir));
-        assert_eq!(
-            std::fs::read_to_string(dir.join(".jr-pm-inputs")).unwrap(),
-            "no\n"
-        );
-        std::fs::remove_file(dir.join(".jr-pm-inputs")).unwrap();
+        // Neither an old positive marker nor the observational query is enough.
+        std::fs::write(dir.join(".jr-pm-inputs"), "yes\n").unwrap();
         std::fs::write(
             dir.join("lib/librustc_driver-x.so"),
             b"..jr_proc_macro_inputs..",
         )
         .unwrap();
-        assert!(proc_macro_inputs_tracked(&dir));
-        assert!(proc_macro_inputs_tracked(&dir), "cached");
+        assert!(!proc_macro_inputs_enforced(&dir));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".jr-pm-inputs-enforced-v1")).unwrap(),
+            "no\n"
+        );
+        std::fs::remove_file(dir.join(".jr-pm-inputs-enforced-v1")).unwrap();
+        std::fs::write(
+            dir.join("lib/librustc_driver-x.so"),
+            b"..jr_proc_macro_inputs_enforced_v1..",
+        )
+        .unwrap();
+        assert!(proc_macro_inputs_enforced(&dir));
+        assert!(proc_macro_inputs_enforced(&dir), "cached");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
