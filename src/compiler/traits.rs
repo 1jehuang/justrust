@@ -11597,11 +11597,17 @@ impl ValidatedTraitWorld {
         if let Some(caller) = context.metadata_facts()
             && self.same_env(context.env(), caller.env())?
         {
-            scratch.signature_formations.check_signature_root(caller, actual)?;
+            scratch
+                .signature_formations
+                .check_signature_root(caller, actual)?;
         } else {
             self.validate_ty_inner_with_facts(
-                actual, context.env(), 0, TypeUse::Root,
-                &mut TypeWalk::default(), context.metadata_facts(),
+                actual,
+                context.env(),
+                0,
+                TypeUse::Root,
+                &mut TypeWalk::default(),
+                context.metadata_facts(),
             )?;
         }
         // Non-Self arguments can also carry references (for example

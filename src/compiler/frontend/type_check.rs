@@ -5629,7 +5629,11 @@ impl<'a> Checker<'a> {
                                 if let Some(element) = target
                                     .shared_slice_element()
                                     .or_else(|| target.mut_slice_element())
-                                    .or_else(|| target.shared_array_element_len().map(|(element, _)| element))
+                                    .or_else(|| {
+                                        target
+                                            .shared_array_element_len()
+                                            .map(|(element, _)| element)
+                                    })
                                 {
                                     ir::validate_shared_slice_element(
                                         element,
@@ -5805,7 +5809,9 @@ impl<'a> Checker<'a> {
                     .borrow()
                     .get(&ty.def().id)
                     .and_then(|fields| fields.get(&key))
-                    .ok_or_else(|| format!("unknown nominal field {name:?} in {}", ty.def().name))?;
+                    .ok_or_else(|| {
+                        format!("unknown nominal field {name:?} in {}", ty.def().name)
+                    })?;
                 let definitions = ty.def().fields.read(&self.signatures.plan()?.budget)?;
                 let field = &definitions[index];
                 if !self.visible(&field.visibility)? {

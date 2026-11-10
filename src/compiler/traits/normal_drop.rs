@@ -785,7 +785,8 @@ impl ValidatedFacts {
         if let Some(read) = owner.realization() {
             read.check_definition(ty)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            scratch.replay_nominal(read, ty, self)
+            scratch
+                .replay_nominal(read, ty, self)
                 .map_err(|error| FactsError::from_message(self.budget(), &error))?;
             if read.is_component() {
                 if read.component_pointer_kind() != Some(ir::OwnedPointerKind::Box) {
@@ -874,12 +875,14 @@ impl ValidatedFacts {
             left_read
                 .check_definition(left)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            scratch.replay_nominal(left_read, left, self)
+            scratch
+                .replay_nominal(left_read, left, self)
                 .map_err(|error| FactsError::from_message(self.budget(), &error))?;
             right_read
                 .check_definition(right)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            scratch.replay_nominal(right_read, right, self)
+            scratch
+                .replay_nominal(right_read, right, self)
                 .map_err(|error| FactsError::from_message(self.budget(), &error))?;
             self.validate_ty_scratch(left, scratch)?;
             self.validate_ty_scratch(right, scratch)?;

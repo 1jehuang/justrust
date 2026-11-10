@@ -324,8 +324,11 @@ fn completed_component_replay_shares_fact_not_rooted_type_identity() {
         let own = provider(source, &[0, 1], &[]);
         let world = own.plan.trait_world().unwrap();
         let key = ComponentKey::encode(
-            world.nominal_realization_world(), &own.roots, world.budget(),
-        ).unwrap();
+            world.nominal_realization_world(),
+            &own.roots,
+            world.budget(),
+        )
+        .unwrap();
         let foreign = provider(source, &[0, 1], &[]);
         let foreign_world = foreign.plan.trait_world().unwrap();
         let engine = crate::engine::Engine::new(own);
@@ -343,16 +346,22 @@ fn completed_component_replay_shares_fact_not_rooted_type_identity() {
         // but a completed type/environment row is retained only once.
         let env = ir::GenericEnv::new(&[], world.budget()).unwrap();
         let mut metadata = traits::NominalReplays::default();
-        world.validate_ty_metadata_with(&first, &env, 0, &mut metadata).unwrap();
+        world
+            .validate_ty_metadata_with(&first, &env, 0, &mut metadata)
+            .unwrap();
         let before_rows = metadata.replay_counts();
         let pair = ir::Ty::Tuple(Arc::from([first.clone(), first.clone()]));
-        world.validate_ty_metadata_with(&pair, &env, 0, &mut metadata).unwrap();
+        world
+            .validate_ty_metadata_with(&pair, &env, 0, &mut metadata)
+            .unwrap();
         let after_rows = metadata.replay_counts();
         assert_eq!(after_rows.2, before_rows.2 + 1);
         assert_eq!(after_rows.3, before_rows.3 + 1);
         let mut replays = traits::NominalReplays::default();
         let before = world.budget().usage_snapshot().work;
-        reads[0].replay_component_dependency(&first, &world, 2, &mut replays).unwrap();
+        reads[0]
+            .replay_component_dependency(&first, &world, 2, &mut replays)
+            .unwrap();
         let cold = world.budget().usage_snapshot().work - before;
         let completed = replays.replay_counts();
         assert!(completed.0 >= 2, "external receipt was not replayed");
@@ -360,7 +369,8 @@ fn completed_component_replay_shares_fact_not_rooted_type_identity() {
         assert!(!replays.contains_fact_at(&reads[1], &world, 3).unwrap());
         let before = world.budget().usage_snapshot().work;
         for (read, ty) in [(&reads[1], &second), (&reads[0], &first)] {
-            read.replay_component_dependency(ty, &world, 1, &mut replays).unwrap();
+            read.replay_component_dependency(ty, &world, 1, &mut replays)
+                .unwrap();
         }
         assert!(world.budget().usage_snapshot().work - before < cold);
         assert_eq!(replays.replay_counts(), completed);
@@ -368,14 +378,20 @@ fn completed_component_replay_shares_fact_not_rooted_type_identity() {
         // A whole-component proof does not equate two root selections or
         // authorize a changed definition attached to a genuine selected read.
         assert!(reads[1].replay_with(&first, &world, &mut replays).is_err());
-        let ir::Ty::Struct(original) = &second else { panic!("struct second") };
+        let ir::Ty::Struct(original) = &second else {
+            panic!("struct second")
+        };
         let mut changed = original.def().clone();
         changed.fields = Arc::<[ir::FieldDef]>::from([]).into();
         let forged = ir::Ty::Struct(
             ir::StructTy::new_parent_local(changed).with_realization(reads[1].clone()),
         );
         assert!(reads[1].replay_with(&forged, &world, &mut replays).is_err());
-        assert!(reads[1].replay_with(&second, &foreign_world, &mut replays).is_err());
+        assert!(
+            reads[1]
+                .replay_with(&second, &foreign_world, &mut replays)
+                .is_err()
+        );
         assert_eq!(replays.replay_counts(), completed);
 
         let fact = engine.fact_of::<ComponentFact>(&key.0, 0).unwrap();
@@ -383,22 +399,38 @@ fn completed_component_replay_shares_fact_not_rooted_type_identity() {
         let mut heights = changed_fact.metadata_heights.to_vec();
         heights[0] = usize::MAX;
         changed_fact.metadata_heights = heights.into();
-        let forged_read = ReadComponent { fact: Arc::new(changed_fact), cells: Arc::from([]) };
+        let forged_read = ReadComponent {
+            fact: Arc::new(changed_fact),
+            cells: Arc::from([]),
+        };
         let member = forged_read.member_for(reads[1].application_key()).unwrap();
-        let forged_capability = ReadNominal::Component(
-            forged_read.materialize(member, world.budget()).unwrap(),
-        );
+        let forged_capability =
+            ReadNominal::Component(forged_read.materialize(member, world.budget()).unwrap());
         assert!(!reads[1].same_replay_fact(&forged_capability));
-        assert!(!replays.contains_fact_at(&forged_capability, &world, 1).unwrap());
+        assert!(
+            !replays
+                .contains_fact_at(&forged_capability, &world, 1)
+                .unwrap()
+        );
         let forged_root = forged_capability.definition().unwrap();
-        assert!(forged_capability.replay_with(&forged_root, &world, &mut replays).is_err());
+        assert!(
+            forged_capability
+                .replay_with(&forged_root, &world, &mut replays)
+                .is_err()
+        );
 
-        reads[1].replay_component_dependency(&second, &world, 3, &mut replays).unwrap();
+        reads[1]
+            .replay_component_dependency(&second, &world, 3, &mut replays)
+            .unwrap();
         assert!(replays.contains_fact_at(&reads[0], &world, 3).unwrap());
         assert!(!replays.contains_fact_at(&reads[0], &world, 4).unwrap());
         assert_eq!(replays.replay_counts(), completed);
         let limit = world.budget().limits().depth;
-        assert!(reads[1].replay_component_dependency(&second, &world, limit, &mut replays).is_err());
+        assert!(
+            reads[1]
+                .replay_component_dependency(&second, &world, limit, &mut replays)
+                .is_err()
+        );
         let failure = world.budget().first_resource_failure();
         assert!(failure.is_some());
         assert!(replays.contains_fact_at(&reads[0], &world, 0).is_err());
