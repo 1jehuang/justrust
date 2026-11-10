@@ -61,6 +61,14 @@ fn boxed_recursive_tree_drops_in_stock_order() {
     runs("box_tree_drop");
 }
 
+/// A type applied to a pointer wrapper of itself (`Link<Holder>` inside
+/// `Holder`, `Weak<Watched>` inside `Watched`). Metadata validation used to
+/// recurse without bound here and overflow the compiler stack.
+#[test]
+fn self_applied_pointer_wrappers_validate_and_run() {
+    runs("self_pointer_holder");
+}
+
 #[test]
 fn by_value_recursion_is_rejected() {
     for source in [

@@ -283,8 +283,16 @@ impl Context {
             | (FactsSubject::SchemaItem(a), FactsSubject::SchemaItem(b))
             | (FactsSubject::UniversalCallable(a), FactsSubject::UniversalCallable(b)) => a == b,
             (FactsSubject::ClosedInstance(a), FactsSubject::ClosedInstance(b)) => {
+                // The same immutable argument allocation is the same input,
+                // including a recursive back edge that never matches by walk.
                 a.declaration == b.declaration
-                    && schema_instantiation::same_inputs(&a.type_args, &b.type_args, budget, 0)?
+                    && (Arc::ptr_eq(&a.type_args, &b.type_args)
+                        || schema_instantiation::same_inputs(
+                            &a.type_args,
+                            &b.type_args,
+                            budget,
+                            0,
+                        )?)
             }
             _ => false,
         })
@@ -315,12 +323,13 @@ impl Context {
             | (FactsSubject::UniversalCallable(a), FactsSubject::UniversalCallable(b)) => a == b,
             (FactsSubject::ClosedInstance(a), FactsSubject::ClosedInstance(b)) => {
                 a.declaration == b.declaration
-                    && schema_instantiation::same_inputs(
-                        &a.type_args,
-                        &b.type_args,
-                        &world.budget,
-                        0,
-                    )?
+                    && (Arc::ptr_eq(&a.type_args, &b.type_args)
+                        || schema_instantiation::same_inputs(
+                            &a.type_args,
+                            &b.type_args,
+                            &world.budget,
+                            0,
+                        )?)
             }
             _ => false,
         })
