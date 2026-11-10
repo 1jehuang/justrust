@@ -15,3 +15,6 @@ bench/results/partial/
 bench/results/critpath/*/
 toolchain/rustc/**/*.pending-snap
 toolchain/rustc/**/*.snap.new
+
+# Local Wrangler account metadata
+/.wrangler/cache/
