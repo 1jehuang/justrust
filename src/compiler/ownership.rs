@@ -1544,13 +1544,14 @@ impl Budget {
 /// repeated shared aggregate types that could otherwise expand exponentially.
 #[cfg(test)]
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
-    preflight_with_plan(f, limits, None, FactsCtx::Concrete).map(|_| ())
+    preflight_with_plan(f, limits, None, FactsCtx::Concrete, false).map(|_| ())
 }
 fn preflight_with_plan(
     f: &cfg::Function,
     limits: Limits,
     plan: Option<&super::ir::PlanBudget>,
     facts: FactsCtx<'_>,
+    source_signatures: bool,
 ) -> Result<usize, Exhausted> {
     fn contract_scratch(
         type_work: usize,
@@ -1832,8 +1833,26 @@ fn preflight_with_plan(
         };
         param_types.push(local.ty.clone());
     }
+    // Use the same immutable source/storage selection as the full verifier.
+    // Preflight may bound source contracts, never realize executable fields.
+    let mut signature_scratch = super::traits::TraitScratch::default();
+    let mut validate_signature =
+        |authority: &ValidatedFacts,
+         subject: super::ir::SignatureSubject<'_>,
+         signature: &super::ir::Signature| {
+            if source_signatures {
+                authority.validate_source_flow_signature_with_scratch(
+                    subject,
+                    signature,
+                    &mut signature_scratch,
+                )
+            } else {
+                authority.validate_signature_with(subject, signature, &mut signature_scratch)
+            }
+        };
     let own_valid = if let FactsCtx::Validated(authority) = facts {
-        match authority.validate_signature(
+        match validate_signature(
+            authority,
             super::ir::SignatureSubject::Body,
             &super::ir::Signature {
                 params: param_types,
@@ -2055,9 +2074,11 @@ fn preflight_with_plan(
                     &mut budget,
                 )?;
                 let call_valid = if let FactsCtx::Validated(authority) = facts {
-                    match authority
-                        .validate_signature(super::ir::SignatureSubject::Call(target), signature)
-                    {
+                    match validate_signature(
+                        authority,
+                        super::ir::SignatureSubject::Call(target),
+                        signature,
+                    ) {
                         Ok(()) => true,
                         Err(error) if error.is_resource() => return Err(Exhausted),
                         Err(_) => false,
@@ -4372,7 +4393,13 @@ fn analyze_with_context(
         complete: true,
     };
     let result = (|| -> Result<(), Exhausted> {
-        let scratch = preflight_with_plan(f, limits, plan, facts)?;
+        let scratch = preflight_with_plan(
+            f,
+            limits,
+            plan,
+            facts,
+            physical.is_none() && f.has_source_signature_metadata(),
+        )?;
         let mut budget = Budget::for_plan(limits.work, plan);
         // Per task: scale this analysis' own state bound by its input.
         let state_bytes = crate::engine::with_current_meter(|meter| {

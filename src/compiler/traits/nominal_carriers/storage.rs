@@ -1,5 +1,128 @@
 use super::*;
 
+/// One typed signature reconstruction owns these occurrence correspondences.
+/// Original families remain semantic identities. Only their carrier expansion
+/// uses the independently validated mapped occurrence, never a reminted field.
+#[derive(Default)]
+pub(in crate::compiler::traits) struct CarrierFamilyActuals {
+    values: Vec<(ir::CarrierFamily, Ty)>,
+}
+
+impl CarrierFamilyActuals {
+    pub(in crate::compiler::traits) fn from_signature(
+        world: &ValidatedTraitWorld,
+        raw: &GenericSchema,
+        arguments: &[Ty],
+        signature: &Signature,
+    ) -> Result<Self> {
+        if raw.signature.params.len() != signature.params.len()
+            || arguments.len() != raw.env.total_arity()
+        {
+            return Err(FactsError::invalid(
+                world.budget(),
+                "mapped family signature arity changed",
+            ));
+        }
+        let mut result = Self::default();
+        let mut found = Vec::new();
+        for _ in arguments {
+            push(world.budget(), &mut found, None)?;
+        }
+        let mut visited = Vec::new();
+        for (original, mapped) in raw
+            .signature
+            .params
+            .iter()
+            .zip(&signature.params)
+            .chain(std::iter::once((&raw.signature.result, &signature.result)))
+        {
+            storage_occurrences_in(
+                world,
+                &raw.env,
+                arguments,
+                original,
+                mapped,
+                &mut found,
+                &mut visited,
+                0,
+                &mut |original, mapped| {
+                    let key = match original {
+                        Ty::AssociatedType(value) => ir::CarrierFamily::Projection(value.clone()),
+                        Ty::Opaque(value) => ir::CarrierFamily::Opaque(value.clone()),
+                        _ => unreachable!(),
+                    };
+                    // Keep each typed occurrence until semantic realization.
+                    // A source field may still spell the same instantiated
+                    // associated type that another occurrence has normalized.
+                    push(world.budget(), &mut result.values, (key, mapped.clone()))
+                },
+            )?;
+        }
+        Ok(result)
+    }
+
+    fn same_family(
+        world: &ValidatedTraitWorld,
+        left: &ir::CarrierFamily,
+        right: &ir::CarrierFamily,
+    ) -> Result<bool> {
+        charged(world.budget(), world.budget().charge_work(1))?;
+        match (left, right) {
+            (ir::CarrierFamily::Projection(a), ir::CarrierFamily::Projection(b)) => {
+                world.same_projection(a, b)
+            }
+            (ir::CarrierFamily::Opaque(a), ir::CarrierFamily::Opaque(b)) => {
+                world.eq_ty(&Ty::Opaque(a.clone()), &Ty::Opaque(b.clone()), 0)
+            }
+            _ => Ok(left == right),
+        }
+    }
+
+    pub(in crate::compiler::traits) fn actual(
+        &self,
+        world: &ValidatedTraitWorld,
+        family: &ir::CarrierFamily,
+        logical: Ty,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
+        world.check_facts(facts, true)?;
+        let mut selected: Option<(usize, Ty)> = None;
+        for (original, mapped) in &self.values {
+            if Self::same_family(world, original, family)? {
+                // The signature authenticates each occurrence, but source
+                // fields can retain projections. Compare their normal forms
+                // under this exact caller, not an uninstantiated spelling.
+                let mapped = if world.type_contains_projection(mapped, 0)? {
+                    world.normalize_carrier_equality_type_with_scratch(mapped, facts, scratch)?
+                } else {
+                    mapped.clone()
+                };
+                if !world.eq_ty(&logical, &mapped, 0)? {
+                    return Err(FactsError::invalid(
+                        world.budget(),
+                        "mapped family has conflicting typed occurrences or changed its semantic actual",
+                    ));
+                }
+                let mut mappings = Vec::new();
+                world.collect_nominal_mappings(&logical, &mapped, &mut mappings, 0)?;
+                charged(world.budget(), world.budget().charge_work(mappings.len()))?;
+                let graph_nodes = mappings
+                    .iter()
+                    .filter(|mapping| mapping.instantiated.index.is_graph())
+                    .count();
+                if selected
+                    .as_ref()
+                    .is_none_or(|(previous, _)| graph_nodes > *previous)
+                {
+                    selected = Some((graph_nodes, mapped));
+                }
+            }
+        }
+        Ok(selected.map_or(logical, |(_, mapped)| mapped))
+    }
+}
+
 impl NominalCarrierAuthority {
     /// Recover storage representations only from occurrences in the exact
     /// authenticated mapped signature. Canonical declaration actuals remain
@@ -71,8 +194,36 @@ pub(super) fn storage_occurrences(
     visited: &mut Vec<(ir::NominalAppId, ir::NominalAppId)>,
     depth: usize,
 ) -> Result<()> {
+    storage_occurrences_in(
+        world,
+        env,
+        arguments,
+        original,
+        mapped,
+        found,
+        visited,
+        depth,
+        &mut |_, _| Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn storage_occurrences_in(
+    world: &ValidatedTraitWorld,
+    env: &GenericEnv,
+    arguments: &[Ty],
+    original: &Ty,
+    mapped: &Ty,
+    found: &mut [Option<Ty>],
+    visited: &mut Vec<(ir::NominalAppId, ir::NominalAppId)>,
+    depth: usize,
+    family: &mut dyn FnMut(&Ty, &Ty) -> Result<()>,
+) -> Result<()> {
     charged(world.budget(), world.budget().check_depth(depth))?;
     charged(world.budget(), world.budget().charge_work(1))?;
+    if matches!(original, Ty::AssociatedType(_) | Ty::Opaque(_)) {
+        family(original, mapped)?;
+    }
     if let Ty::Param(parameter) = original {
         let index = env
             .ordered_params()
@@ -110,7 +261,17 @@ pub(super) fn storage_occurrences(
         return Ok(());
     }
     let mut recurse = |a: &Ty, b: &Ty| {
-        storage_occurrences(world, env, arguments, a, b, found, visited, depth + 1)
+        storage_occurrences_in(
+            world,
+            env,
+            arguments,
+            a,
+            b,
+            found,
+            visited,
+            depth + 1,
+            family,
+        )
     };
     match (original, mapped) {
         (
@@ -158,13 +319,23 @@ pub(super) fn storage_occurrences(
                 ));
             }
             for (a, b) in a.def().type_args.iter().zip(b.def().type_args.iter()) {
-                storage_occurrences(world, env, arguments, a, b, found, visited, depth + 1)?;
+                storage_occurrences_in(
+                    world,
+                    env,
+                    arguments,
+                    a,
+                    b,
+                    found,
+                    visited,
+                    depth + 1,
+                    family,
+                )?;
             }
             for (a, b) in nominal_fields(&a.def().fields, world.budget())?
                 .iter()
                 .zip(nominal_fields(&b.def().fields, world.budget())?.iter())
             {
-                storage_occurrences(
+                storage_occurrences_in(
                     world,
                     env,
                     arguments,
@@ -173,6 +344,7 @@ pub(super) fn storage_occurrences(
                     found,
                     visited,
                     depth + 1,
+                    family,
                 )?;
             }
         }
@@ -192,7 +364,17 @@ pub(super) fn storage_occurrences(
                 ));
             }
             for (a, b) in a.def().type_args.iter().zip(b.def().type_args.iter()) {
-                storage_occurrences(world, env, arguments, a, b, found, visited, depth + 1)?;
+                storage_occurrences_in(
+                    world,
+                    env,
+                    arguments,
+                    a,
+                    b,
+                    found,
+                    visited,
+                    depth + 1,
+                    family,
+                )?;
             }
             for (a, b) in a.def().variants.iter().zip(b.def().variants.iter()) {
                 if a.fields.len() != b.fields.len() {
@@ -205,7 +387,7 @@ pub(super) fn storage_occurrences(
                     .iter()
                     .zip(nominal_fields(&b.fields, world.budget())?.iter())
                 {
-                    storage_occurrences(
+                    storage_occurrences_in(
                         world,
                         env,
                         arguments,
@@ -214,6 +396,7 @@ pub(super) fn storage_occurrences(
                         found,
                         visited,
                         depth + 1,
+                        family,
                     )?;
                 }
             }

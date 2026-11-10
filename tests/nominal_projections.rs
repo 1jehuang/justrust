@@ -53,6 +53,9 @@ fn generic_closed_associated_nominal_dependencies_preserve_ordered_storage() {
     oracle::stock_native(
         r#"trait It{type Item;}struct Pair<A,B>{left:A,right:B}struct C;impl It for C{type Item=Option<Pair<i32,bool>>;}struct Store<I:It>{value:I::Item}fn store<I:It>(value:I::Item)->Store<I>{Store::<I>{value}}fn main(){let p=store::<C>(Some(Pair::<i32,bool>{left:41,right:true}));if let Some(v)=p.value{println!("{} {}",v.left,v.right);}}"#,
     );
+    oracle::stock_native(
+        r#"trait It{type Item;}struct Pair<A,B>{left:A,right:B}struct C;impl It for C{type Item=Option<Pair<i32,bool>>;}struct Store<I:It>{value:I::Item}trait Make{type Out;}struct D;impl Make for D{type Out=Store<C>;}fn identity<T>(value:T)->T{value}fn forward<M:Make>(value:M::Out)->M::Out{identity::<M::Out>(value)}fn main(){let p=forward::<D>(Store::<C>{value:Some(Pair::<i32,bool>{left:41,right:true})});if let Some(v)=p.value{println!("{} {}",v.left,v.right);}}"#,
+    );
     oracle::stock_and_native_reject(
         "trait It{type Item;}struct Pair<A,B>{left:A,right:B}struct C;impl It for C{type Item=Pair<i32,bool>;}struct Store<I:It>{value:I::Item}fn wrong()->Store<C>{Store::<C>{value:Pair::<bool,i32>{left:true,right:41}}}fn main(){}",
     );

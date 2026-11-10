@@ -7708,6 +7708,9 @@ impl ValidatedTraitWorld {
                 "carrier transport argument arity mismatch",
             ));
         }
+        let actuals = nominal_carriers::CarrierFamilyActuals::from_signature(
+            self, &raw, &arguments, &signature,
+        )?;
         let mut nominals = Vec::new();
         for (old, new) in raw
             .signature
@@ -7789,6 +7792,7 @@ impl ValidatedTraitWorld {
                         projection, &raw.env, &arguments, facts, scratch,
                     )?,
             };
+            let actual = actuals.actual(self, &family, actual, facts, scratch)?;
             for relative in
                 charged(&self.budget, ir::carrier_locations(&actual, &self.budget))?.iter()
             {
@@ -7839,13 +7843,14 @@ impl ValidatedTraitWorld {
         let mut inputs = Vec::new();
         reserve_carriers(&self.budget, &mut inputs, retained.contract.inputs.len())?;
         for input in retained.contract.inputs.iter() {
-            for expanded in self.expand_carrier_with_scratch(
+            for expanded in self.expand_carrier_in(
                 &input.location,
                 &raw.env,
                 &arguments,
                 &nominals,
                 facts,
                 scratch,
+                &actuals,
             )? {
                 if inputs.len() >= ir::MAX_LOAN_SITES {
                     return Err(FactsError::resource(
@@ -7865,15 +7870,16 @@ impl ValidatedTraitWorld {
         }
         let mut results = Vec::new();
         for result in retained.contract.results.iter() {
-            for output in self.expand_carrier_with_scratch(
+            for output in self.expand_carrier_in(
                 &result.location,
                 &raw.env,
                 &arguments,
                 &nominals,
                 facts,
                 scratch,
+                &actuals,
             )? {
-                let sources = self.expand_result_sources_with_scratch(
+                let sources = self.expand_result_sources_in(
                     declaration,
                     result,
                     &output,
@@ -7883,6 +7889,7 @@ impl ValidatedTraitWorld {
                     &nominals,
                     facts,
                     scratch,
+                    &actuals,
                 )?;
                 push(
                     &self.budget,
@@ -7896,13 +7903,14 @@ impl ValidatedTraitWorld {
         }
         let mut writes = Vec::new();
         for write in retained.contract.writes.iter() {
-            for destination in self.expand_carrier_with_scratch(
+            for destination in self.expand_carrier_in(
                 &write.destination.location,
                 &raw.env,
                 &arguments,
                 &nominals,
                 facts,
                 scratch,
+                &actuals,
             )? {
                 let destination_ty =
                     signature
@@ -7917,7 +7925,7 @@ impl ValidatedTraitWorld {
                 if !self.carrier_writable(destination_ty, &destination.location)? {
                     continue;
                 }
-                let sources = self.expand_carrier_sources(
+                let sources = self.expand_carrier_sources_in(
                     &write.destination.location.channel,
                     &write.sources,
                     destination.component.as_ref(),
@@ -7926,6 +7934,7 @@ impl ValidatedTraitWorld {
                     &nominals,
                     facts,
                     scratch,
+                    &actuals,
                 )?;
                 push(
                     &self.budget,
@@ -7989,13 +7998,14 @@ impl ValidatedTraitWorld {
                 }
                 ref other => other.clone(),
             };
-            for expanded in self.expand_carrier_with_scratch(
+            for expanded in self.expand_carrier_in(
                 &row.location,
                 &raw.env,
                 &arguments,
                 &nominals,
                 facts,
                 scratch,
+                &actuals,
             )? {
                 push(
                     &self.budget,
@@ -8137,6 +8147,34 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<Arc<[ir::InputCarrier]>> {
+        self.expand_result_sources_in(
+            declaration,
+            result,
+            output,
+            declared_inputs,
+            raw,
+            args,
+            nominals,
+            facts,
+            scratch,
+            &nominal_carriers::CarrierFamilyActuals::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expand_result_sources_in(
+        &self,
+        declaration: DeclId,
+        result: &ir::CarrierReturn,
+        output: &ExpandedCarrier,
+        declared_inputs: &[ir::InputCarrier],
+        raw: &GenericSchema,
+        args: &[Ty],
+        nominals: &[ir::NominalCarrierMapping],
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+        actuals: &nominal_carriers::CarrierFamilyActuals,
+    ) -> Result<Arc<[ir::InputCarrier]>> {
         let env = raw.env.as_ref();
         if result.sources.is_empty()
             && matches!(
@@ -8161,13 +8199,14 @@ impl ValidatedTraitWorld {
                         if input.param != source.param {
                             continue;
                         }
-                        for expanded in self.expand_carrier_with_scratch(
+                        for expanded in self.expand_carrier_in(
                             &input.location,
                             env,
                             args,
                             nominals,
                             facts,
                             scratch,
+                            actuals,
                         )? {
                             admitted |= self.same_location(&source.location, &expanded.location)?;
                         }
@@ -8187,13 +8226,14 @@ impl ValidatedTraitWorld {
                 if matches!(input.location.channel, ir::CarrierChannel::Fixed(_)) {
                     continue;
                 }
-                for expanded in self.expand_carrier_with_scratch(
+                for expanded in self.expand_carrier_in(
                     &input.location,
                     env,
                     args,
                     nominals,
                     facts,
                     scratch,
+                    actuals,
                 )? {
                     if sources.len() >= ir::MAX_LOAN_SITES {
                         return Err(FactsError::resource(
@@ -8213,7 +8253,7 @@ impl ValidatedTraitWorld {
             }
             return Ok(Arc::from(sources));
         }
-        self.expand_carrier_sources(
+        self.expand_carrier_sources_in(
             &result.location.channel,
             &result.sources,
             output.component.as_ref(),
@@ -8222,10 +8262,11 @@ impl ValidatedTraitWorld {
             nominals,
             facts,
             scratch,
+            actuals,
         )
     }
     #[allow(clippy::too_many_arguments)]
-    fn expand_carrier_sources(
+    fn expand_carrier_sources_in(
         &self,
         destination: &ir::CarrierChannel,
         sources: &[ir::InputCarrier],
@@ -8235,16 +8276,18 @@ impl ValidatedTraitWorld {
         nominals: &[ir::NominalCarrierMapping],
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
+        actuals: &nominal_carriers::CarrierFamilyActuals,
     ) -> Result<Arc<[ir::InputCarrier]>> {
         let mut output = Vec::new();
         for source in sources {
-            for expanded in self.expand_carrier_with_scratch(
+            for expanded in self.expand_carrier_in(
                 &source.location,
                 env,
                 args,
                 nominals,
                 facts,
                 scratch,
+                actuals,
             )? {
                 let matches = match (component, expanded.component.as_ref()) {
                     (
@@ -8422,6 +8465,28 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<Vec<ExpandedCarrier>> {
+        self.expand_carrier_in(
+            location,
+            env,
+            args,
+            nominals,
+            facts,
+            scratch,
+            &nominal_carriers::CarrierFamilyActuals::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expand_carrier_in(
+        &self,
+        location: &ir::CarrierLocation,
+        env: &GenericEnv,
+        args: &[Ty],
+        nominals: &[ir::NominalCarrierMapping],
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+        actuals: &nominal_carriers::CarrierFamilyActuals,
+    ) -> Result<Vec<ExpandedCarrier>> {
         let mut path = Vec::new();
         for step in location.path.0.iter() {
             let mut step = step.clone();
@@ -8482,6 +8547,18 @@ impl ValidatedTraitWorld {
                     }
                     _ => unreachable!(),
                 };
+                let actual = actuals.actual(
+                    self,
+                    &location.channel.family().ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "mapped expansion lost its original family",
+                        )
+                    })?,
+                    actual,
+                    facts,
+                    scratch,
+                )?;
                 for relative in
                     charged(&self.budget, ir::carrier_locations(&actual, &self.budget))?.iter()
                 {

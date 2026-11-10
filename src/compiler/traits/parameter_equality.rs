@@ -1067,9 +1067,11 @@ impl ValidatedTraitWorld {
             &self.budget,
             ir::derive_signature_origin_schema(&canonical.signature, &canonical.env, &self.budget),
         )?;
-        let expected = self.transport_carrier_parts_in(
+        let storage_arguments =
+            self.carrier_storage_arguments(view.declaration, &expected_arguments, &signature)?;
+        let mut expected = self.transport_carrier_parts_in(
             view.declaration,
-            expected_arguments,
+            storage_arguments,
             signature,
             facts,
             result_schema(&self.budget, &canonical)?,
@@ -1079,6 +1081,9 @@ impl ValidatedTraitWorld {
             view.result_subject.clone(),
             active,
         )?;
+        // Reconstruct graph coordinates from typed occurrences while keeping
+        // immutable source actuals as the argument identity of the view.
+        expected.arguments = expected_arguments;
         if view.origin != expected.origin
             || view.fixed != expected.fixed
             || view.regions != expected.regions
@@ -1378,6 +1383,50 @@ mod tests {
         assert_eq!(
             view.validate_for(facts).unwrap_err().kind(),
             FactsErrorKind::InvalidMetadata
+        );
+    }
+
+    #[test]
+    fn closed_nominal_source_carrier_does_not_authorize_executable_fields() {
+        let source = frontend::parse(
+            "trait It{type Item;}struct R;impl It for R{type Item=i32;}\
+             enum Slot<T>{Empty,Value(T)}struct Buffer<I:It>{value:Slot<I::Item>}\
+             trait Make{type Out;}struct C;\
+             impl Make for C{type Out=Buffer<R>;}\
+             fn identity<T>(value:T)->T{value}\
+             fn forward<M:Make>(value:M::Out)->M::Out{identity::<M::Out>(value)}\
+             fn witness(value:C){}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let receiver = world
+            .callable_schema(plan.function_decl(2).unwrap())
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        let facts = world
+            .instance_facts(&CallTarget {
+                declaration: plan.function_decl(1).unwrap(),
+                type_args: Arc::from([receiver]),
+            })
+            .unwrap();
+        let view = facts
+            .source_carrier_contract(SignatureSubject::Body)
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        assert!(!view.executable_storage);
+        facts
+            .validate_source_flow_signature(SignatureSubject::Body, &view.result_signature)
+            .unwrap();
+        // Replaying a logical view must never confer physical field authority.
+        assert_eq!(
+            facts
+                .validate_signature(SignatureSubject::Body, &view.result_signature)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
         );
     }
 

@@ -90,10 +90,26 @@ impl CarrierContractView {
         scratch: &mut TraitScratch,
     ) -> Result<Option<Ty>> {
         replay.validate_for(self, facts)?;
+        let actuals = if self.source_schema.is_some() || self.nominal.is_some() {
+            nominal_carriers::CarrierFamilyActuals::from_signature(
+                &facts.world,
+                &facts
+                    .world
+                    .normalized_declaration_schema(self.declaration)?,
+                &self.arguments,
+                &self.result_signature,
+            )?
+        } else {
+            nominal_carriers::CarrierFamilyActuals::default()
+        };
         match family {
             ir::CarrierFamily::Parameter(parameter) => {
-                if let Some(nominal) = &self.nominal {
-                    let arguments = nominal.storage_arguments(facts)?;
+                if self.source_schema.is_some() || self.nominal.is_some() {
+                    let arguments = facts.world.carrier_storage_arguments(
+                        self.declaration,
+                        &self.arguments,
+                        &self.result_signature,
+                    )?;
                     return Ok(self
                         .original_env
                         .ordered_params()
@@ -135,10 +151,17 @@ impl CarrierContractView {
                         "opaque family is absent from exact original carrier contract",
                     ));
                 }
-                Ok(Some(facts.world.realize_opaque_family_with_scratch(
+                let logical = facts.world.realize_opaque_family_with_scratch(
                     opaque,
                     &self.original_env,
                     &self.arguments,
+                    facts,
+                    scratch,
+                )?;
+                Ok(Some(actuals.actual(
+                    &facts.world,
+                    family,
+                    logical,
                     facts,
                     scratch,
                 )?))
@@ -179,10 +202,17 @@ impl CarrierContractView {
                         "projection family is absent from exact original carrier contract",
                     ));
                 }
-                Ok(Some(facts.world.realize_projection_family_with_scratch(
+                let logical = facts.world.realize_projection_family_with_scratch(
                     projection,
                     &self.original_env,
                     &self.arguments,
+                    facts,
+                    scratch,
+                )?;
+                Ok(Some(actuals.actual(
+                    &facts.world,
+                    family,
+                    logical,
                     facts,
                     scratch,
                 )?))
@@ -217,12 +247,17 @@ impl ValidatedTraitWorld {
             self.substitute_carrier_schema(&schema, args, facts, scratch.for_world(self.id))?;
         let actual = value.signature.result;
         if self.raw_associated_ty_is_closed(&actual, 0)? {
+            // A family realizes declaration carrier topology, not executable
+            // field storage. Match the logical equality path below even when
+            // the substituted projection is fully closed. Executable roots
+            // still require their independent physical signature validation.
             return Ok(self
-                .normalize_closed_projected_type_with(
+                .normalize_closed_projected_type_for_use(
                     &actual,
-                    ProofContext::from_facts(facts),
+                    ProofContext::from_facts(facts).for_storage(false),
                     false,
                     scratch.for_world(self.id),
+                    false,
                 )?
                 .0);
         }
@@ -243,7 +278,7 @@ impl ValidatedTraitWorld {
     // Carrier channels and the instantiated signature must use the same
     // authenticated equality normal form. A rigid family stays rigid only
     // when the caller has no reduction for that exact associated item.
-    fn normalize_carrier_equality_type_with_scratch(
+    pub(super) fn normalize_carrier_equality_type_with_scratch(
         &self,
         ty: &Ty,
         facts: &ValidatedFacts,
@@ -261,7 +296,7 @@ impl ValidatedTraitWorld {
         )?;
         let context = ProofContext {
             transport: ParentLocalTransport::new(&inputs),
-            ..ProofContext::from_facts(facts)
+            ..ProofContext::from_facts(facts).for_storage(false)
         };
         context
             .transport
@@ -403,7 +438,7 @@ impl ValidatedTraitWorld {
         }
         let context = ProofContext {
             transport: ParentLocalTransport::new(&nominals),
-            ..ProofContext::from_facts(facts)
+            ..ProofContext::from_facts(facts).for_storage(false)
         };
         context
             .transport

@@ -5,6 +5,7 @@ use super::*;
 use crate::compiler::cfg;
 
 mod storage;
+pub(super) use storage::CarrierFamilyActuals;
 
 #[derive(Clone, Debug)]
 pub(super) struct NominalCarrierAuthority {
@@ -500,6 +501,124 @@ mod tests {
             }
         }
         panic!("CHECK did not publish the expected graph nominal call");
+    }
+
+    #[test]
+    fn mapped_projection_families_reject_conflicting_occurrences_and_wrong_semantics() {
+        let program = compiler::frontend::parse(
+            "trait It{type Item;}struct C;impl It for C{type Item=i32;}\
+             fn forward<I:It>(value:I::Item)->I::Item{value}fn witness(value:C){}fn main(){}",
+        )
+        .unwrap();
+        let plan =
+            compiler::frontend::PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let raw = world
+            .callable_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let receiver = world
+            .callable_schema(plan.function_decl(1).unwrap())
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        let arguments = [receiver.clone()];
+        let facts = world
+            .callable_facts(plan.function_decl(2).unwrap())
+            .unwrap();
+        let mut scratch = TraitScratch::default();
+        let Ty::AssociatedType(projection) = &raw.signature.result else {
+            panic!("fixture requires its original associated family");
+        };
+        let family = ir::CarrierFamily::Projection(projection.clone());
+        let mut signature = raw.signature.clone();
+        signature.params[0] = Ty::Int(ir::IntTy::I32);
+        signature.result = Ty::Bool;
+        let conflicting =
+            CarrierFamilyActuals::from_signature(&world, &raw, &arguments, &signature).unwrap();
+        assert_eq!(
+            conflicting
+                .actual(
+                    &world,
+                    &family,
+                    Ty::Int(ir::IntTy::I32),
+                    &facts,
+                    &mut scratch
+                )
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        signature.result = Ty::Int(ir::IntTy::I32);
+        let actuals =
+            CarrierFamilyActuals::from_signature(&world, &raw, &arguments, &signature).unwrap();
+        assert_eq!(
+            actuals
+                .actual(&world, &family, Ty::Bool, &facts, &mut scratch)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        assert_eq!(
+            actuals
+                .actual(
+                    &world,
+                    &family,
+                    Ty::Int(ir::IntTy::I32),
+                    &facts,
+                    &mut scratch
+                )
+                .unwrap(),
+            Ty::Int(ir::IntTy::I32)
+        );
+        // The same actual may remain projected in a source field while a
+        // parameter occurrence has already normalized. Exact caller proof,
+        // not raw spelling equality, must accept those two occurrences.
+        let mut source_projection = projection.as_ref().clone();
+        source_projection.trait_ref.self_ty = receiver;
+        signature.result = Ty::AssociatedType(Arc::new(source_projection));
+        let actuals =
+            CarrierFamilyActuals::from_signature(&world, &raw, &arguments, &signature).unwrap();
+        assert_eq!(
+            actuals
+                .actual(
+                    &world,
+                    &family,
+                    Ty::Int(ir::IntTy::I32),
+                    &facts,
+                    &mut scratch
+                )
+                .unwrap(),
+            Ty::Int(ir::IntTy::I32)
+        );
+    }
+
+    #[test]
+    fn graph_source_projected_nominal_results_use_typed_mapped_storage() {
+        for workers in [1, 8] {
+            let engine = Engine::new(compiler::CompilerProvider(Arc::new(Snapshot {
+                input: Input::Text(
+                    "struct Buffer<I:Iterator>{value:Option<I::Item>}\
+                     trait Make{type Out;}struct C;\
+                     impl Make for C{type Out=Buffer<std::ops::Range<i32>>;}\
+                     fn identity<T>(value:T)->T{value}\
+                     fn forward<M:Make>(value:M::Out)->M::Out{identity::<M::Out>(value)}\
+                     fn main(){let stored=forward::<C>(Buffer::<std::ops::Range<i32>>{value:Some(37)});\
+                     if let Some(value)=stored.value{println!(\"{}\",value);}}"
+                        .into(),
+                ),
+                source_options: source::SourceOptions::default(),
+                budget: PlanBudget::default(),
+            })));
+            let check = engine.request(crate::compiler::keys::CheckRoot.key());
+            let report = engine.run(workers).unwrap();
+            check.completion().unwrap();
+            assert!(report.capture_complete);
+            assert!(!report.node_evaluations.iter().any(|(key, _)| matches!(
+                key.kind,
+                compiler::BUILD | compiler::OBJECT | compiler::INSTANCE
+            )));
+        }
     }
 
     #[test]

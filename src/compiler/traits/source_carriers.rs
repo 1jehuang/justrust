@@ -304,9 +304,14 @@ impl ValidatedFacts {
             source: body_validation::SourceKey::retain(self, &inputs)?,
             inputs: inputs.into(),
         });
+        let storage_arguments = self.world.carrier_storage_arguments(
+            declaration,
+            &arguments,
+            &application.signature,
+        )?;
         let mut view = self.world.transport_carrier_parts_with_scratch(
             declaration,
-            arguments,
+            storage_arguments,
             application.signature,
             self,
             raw,
@@ -316,6 +321,9 @@ impl ValidatedFacts {
             result_subject,
             scratch,
         )?;
+        // Typed occurrences determine expansion, not the canonical ordered
+        // actuals retained by source identity and all subsequent replays.
+        view.arguments = arguments;
         view.source_schema = Some(authority);
         view.executable_storage = false;
         self.world
@@ -428,6 +436,9 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<(DeclId, Arc<[Ty]>, InstantiatedSchema)> {
+        // Every consumer reconstructs the same declaration-only application,
+        // including equality replay entered from an executable caller.
+        let context = context.for_storage(false);
         self.check_facts(facts, true)?;
         self.check_proof_context_caller(context)?;
         let (declaration, arguments, schema) = match subject {

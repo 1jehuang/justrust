@@ -3708,6 +3708,18 @@ impl Function {
         snapshot.validate(self, facts, budget)
     }
 
+    /// Select source-signature reconstruction from immutable CFG provenance.
+    /// This is not admission: the owning verifier must still replay provenance.
+    pub(super) fn has_source_signature_metadata(&self) -> bool {
+        self.lowering_proof
+            .as_ref()
+            .is_some_and(|shape| shape.original_publication.is_some())
+            || self
+                .body_substitution
+                .as_ref()
+                .is_some_and(|proof| proof.has_typed_engine())
+    }
+
     pub fn validate_with_facts(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
         self.validate_with_facts_mode(facts, None)
     }
@@ -3768,14 +3780,7 @@ impl Function {
         // Neither case should reconstruct physical storage from source schemas.
         let source_signature_metadata = physical.is_none()
             && facts.validated().is_some()
-            && (self
-                .lowering_proof
-                .as_ref()
-                .is_some_and(|shape| shape.original_publication.is_some())
-                || self
-                    .body_substitution
-                    .as_ref()
-                    .is_some_and(|proof| proof.has_typed_engine()));
+            && self.has_source_signature_metadata();
         if self.params.len() >= ir::MAX_PATTERN_PROJECTION_WORK {
             return Err("reference contract parameter resource limit exceeded".into());
         }
