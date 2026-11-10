@@ -89,10 +89,17 @@ pub(super) struct SourceImpl {
     source: OriginalSpan,
     issuer: crate::compiler::source::EmbeddedOriginalFile,
     module: ModuleId,
-    member: AstIdent,
-    visibility: ir::Visibility,
-    initializer: Arc<ScalarSource>,
+    content: Content,
     _admitted: crate::compiler::expansion_budget::RetainedBytes,
+}
+#[derive(Clone, Debug)]
+enum Content {
+    Constant {
+        member: AstIdent,
+        visibility: ir::Visibility,
+        initializer: Arc<ScalarSource>,
+    },
+    Methods(Arc<primitive_methods::Methods>),
 }
 fn single_constant(block: &ImplDecl) -> Result<&AssociatedConstDecl, String> {
     if block.trait_path.is_some()
@@ -120,7 +127,7 @@ pub(super) fn capture(
     snapshot: &crate::compiler::token_session::SourceSnapshot,
     budget: &crate::compiler::expansion_budget::ExpansionBudget,
 ) -> Result<Option<Arc<SourceImpl>>, String> {
-    if block.trait_path.is_some() || !matches!(block.self_ty, Type::Int(_)) {
+    if block.trait_path.is_some() || !matches!(block.self_ty, Type::Int(_) | Type::Bool) {
         return Ok(None);
     }
     let Some(source) = block.original_source else {
@@ -132,12 +139,16 @@ pub(super) fn capture(
     else {
         return Ok(None);
     };
-    let member = single_constant(block)?;
-    let initializer = member
-        .initializer
-        .as_ref()
-        .ok_or("reserved primitive source initializer is missing")?;
-    let nodes = ScalarSource::nodes(initializer, 0)?;
+    let (methods, nodes) = if block.items.is_empty() {
+        let member = single_constant(block)?;
+        let initializer = member
+            .initializer
+            .as_ref()
+            .ok_or("reserved primitive source initializer is missing")?;
+        (None, ScalarSource::nodes(initializer, 0)?)
+    } else {
+        (Some(primitive_methods::Methods::capture(block, budget)?), 0)
+    };
     use crate::compiler::expansion_budget::{Counter, Storage};
     budget
         .charge(Counter::Work, nodes as u64)
@@ -147,14 +158,28 @@ pub(super) fn capture(
         .reserve(Storage::Retained, bytes as u64)
         .and_then(|lease| lease.retain())
         .map_err(|error| error.to_string())?;
+    let content = if let Some(methods) = methods {
+        Content::Methods(Arc::new(methods))
+    } else {
+        let member = single_constant(block)?;
+        Content::Constant {
+            member: member.name,
+            visibility: member.visibility.clone(),
+            initializer: Arc::new(ScalarSource::capture(
+                member
+                    .initializer
+                    .as_ref()
+                    .ok_or("reserved primitive initializer missing")?,
+                0,
+            )?),
+        }
+    };
     Ok(Some(Arc::new(SourceImpl {
         implementation,
         source,
         issuer: issuer.clone(),
         module: block.module,
-        member: member.name,
-        visibility: member.visibility.clone(),
-        initializer: Arc::new(ScalarSource::capture(initializer, 0)?),
+        content,
         _admitted: admitted,
     })))
 }
@@ -203,16 +228,27 @@ impl SourceImpl {
         {
             return Err("reserved primitive impl changed original source occurrence".into());
         }
+        let Content::Constant {
+            member: original_member,
+            visibility,
+            initializer,
+        } = &self.content
+        else {
+            let Content::Methods(methods) = &self.content else {
+                unreachable!()
+            };
+            return methods.replay(block, names);
+        };
         let member = single_constant(block)?;
-        if !exact_source_ident(names, member.name, self.member)?
-            || member.visibility != self.visibility
+        if !exact_source_ident(names, member.name, *original_member)?
+            || member.visibility != *visibility
             || ScalarSource::capture(
                 member
                     .initializer
                     .as_ref()
                     .ok_or("reserved primitive initializer missing")?,
                 0,
-            )? != *self.initializer
+            )? != **initializer
         {
             return Err(
                 "reserved primitive constant changed original member occurrence or initializer"
@@ -240,11 +276,27 @@ impl SourceImpl {
             || info.kind != ir::DeclKind::Impl
             || info.source_index != index
             || registry.impl_ids.get(index) != Some(&declaration)
-            || actual != &ir::Ty::Int(ir::IntTy::I32)
         {
             return Err(
                 "reserved primitive impl changed original source or canonical owner".into(),
             );
+        }
+        if let Content::Methods(methods) = &self.content {
+            let owner_matches = match (&block.self_ty, actual) {
+                (Type::Bool, ir::Ty::Bool) => true,
+                (Type::Int(a), ir::Ty::Int(b)) => a == b,
+                _ => false,
+            };
+            if !owner_matches {
+                return Err("primitive method changed canonical owner".into());
+            }
+            methods.require_resolved()?;
+            methods.charge_registration(budget)?;
+            budget.charge_work(block.items.len())?;
+            return self.replay_source(block, index, &program.names, &program.embedded_issuers);
+        }
+        if actual != &ir::Ty::Int(ir::IntTy::I32) {
+            return Err("primitive constant changed canonical owner".into());
         }
         let member = single_constant(block)?;
         let nodes = ScalarSource::nodes(
@@ -257,5 +309,41 @@ impl SourceImpl {
         budget.charge_work(nodes)?;
         budget.retain_bytes(nodes * std::mem::size_of::<ScalarSource>())?;
         self.replay_source(block, index, &program.names, &program.embedded_issuers)
+    }
+
+    pub(super) fn has_methods(&self) -> bool {
+        matches!(self.content, Content::Methods(_))
+    }
+
+    pub(super) fn require_original_methods(&self) -> Result<(), String> {
+        if let Content::Methods(methods) = &self.content {
+            methods.require_original()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn resolved_methods(
+        self: &Arc<Self>,
+        resolution: root_resolution::PrimitiveResolution,
+        budget: &crate::compiler::expansion_budget::ExpansionBudget,
+    ) -> Result<Arc<Self>, String> {
+        let resolved = resolution.consume(self)?;
+        if self.has_methods() != resolved.is_some() {
+            return Err("primitive resolution changed source impl kind".into());
+        }
+        let Some(resolved) = resolved else {
+            return Ok(self.clone());
+        };
+        let admitted = budget
+            .reserve(
+                crate::compiler::expansion_budget::Storage::Retained,
+                std::mem::size_of::<Self>() as u64,
+            )
+            .and_then(|lease| lease.retain())
+            .map_err(|e| e.to_string())?;
+        let mut source = (**self).clone();
+        source.content = Content::Methods(Arc::new(resolved.into_resolved()?));
+        source._admitted = admitted;
+        Ok(Arc::new(source))
     }
 }

@@ -50,11 +50,8 @@ impl Checker<'_> {
     ) -> Result<InherentMethodCandidate, String> {
         let plan = self.signatures.plan()?;
         let nominal = match receiver {
-            ir::Ty::Dyn(object) => object.principal,
-            _ => match nominal_parts(receiver) {
-                Some((nominal, _)) => nominal,
-                None => return Ok(InherentMethodCandidate::Missing),
-            },
+            ir::Ty::Dyn(object) => Some(object.principal),
+            _ => nominal_parts(receiver).map(|(nominal, _)| nominal),
         };
         let mut candidate = None;
         for id in &plan.registry.function_ids {
@@ -65,7 +62,9 @@ impl Checker<'_> {
             };
             if filter.is_some_and(|mode| receiver_mode(mode) != receiver_mode(associated.receiver))
                 || associated.trait_decl.is_some()
-                || associated.nominal != nominal
+                || nominal.map_or(associated.nominal != associated.impl_decl, |nominal| {
+                    associated.nominal != nominal
+                })
                 || !plan.registry.source_member_equal(info.path.item, *name)?
             {
                 continue;
@@ -84,6 +83,19 @@ impl Checker<'_> {
             Some((id, bindings)) => InherentMethodCandidate::Unique(id, bindings),
             None => InherentMethodCandidate::Missing,
         })
+    }
+
+    pub(in crate::compiler::frontend) fn unique_inherent_candidate_hint(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+    ) -> Result<Option<ir::DeclId>, String> {
+        Ok(
+            match self.inherent_method_candidate(receiver, name, None)? {
+                InherentMethodCandidate::Unique(id, _) => Some(id),
+                InherentMethodCandidate::Missing | InherentMethodCandidate::Ambiguous => None,
+            },
+        )
     }
 
     /// A callback's type need not be known when the enclosing impl alone

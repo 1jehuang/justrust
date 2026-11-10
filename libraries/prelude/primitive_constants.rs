@@ -3,3 +3,9 @@
 impl i32 {
     pub const MIN: i32 = -2147483647i32 - 1i32;
 }
+
+impl bool {
+    pub fn then_some<T>(self, value: T) -> Option<T> {
+        if self { Some(value) } else { None }
+    }
+}

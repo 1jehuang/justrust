@@ -9234,6 +9234,7 @@ mod mutable_range_source_tests;
 mod name_tests;
 mod or_patterns;
 mod primitive_constants;
+mod primitive_methods;
 mod range_expr;
 mod raw_slices;
 mod receiver_authority;

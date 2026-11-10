@@ -1382,7 +1382,10 @@ impl<'s> Solver<'_, '_, 's> {
         name: AstIdent,
     ) -> Result<Option<ir::DeclId>, String> {
         let Domain::Nominal(nominal, arguments) = self.domain(receiver) else {
-            return Ok(None);
+            return match self.domain(receiver) {
+                Domain::Fixed(ty) => self.checker.unique_inherent_candidate_hint(&ty, &name),
+                _ => Ok(None),
+            };
         };
         let unfiltered = self.candidate(nominal, name)?;
         if unfiltered.is_some() || self.contains_callable(receiver, 0)? {

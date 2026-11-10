@@ -5443,7 +5443,50 @@ fn resolve_trait_decl(
     })
 }
 
+/// Issued only by the owning impl resolver after its actual source operation.
+pub(super) struct PrimitiveResolution {
+    original: Arc<primitive_constants::SourceImpl>,
+    methods: Option<primitive_methods::Methods>,
+}
+impl PrimitiveResolution {
+    pub(super) fn consume(
+        self,
+        original: &Arc<primitive_constants::SourceImpl>,
+    ) -> Result<Option<primitive_methods::Methods>, String> {
+        if !Arc::ptr_eq(&self.original, original) {
+            return Err("primitive resolution changed original source authority".into());
+        }
+        Ok(self.methods)
+    }
+}
+
 fn resolve_impl_block(
+    resolver: &mut Resolver<'_>,
+    source_index: usize,
+    block: &mut ImplDecl,
+    primitive_issuers: &[crate::compiler::source::EmbeddedOriginalFile],
+) -> Result<(), String> {
+    if let Some(source) = block.primitive_source.clone() {
+        let names = resolver.program.names.clone();
+        source.require_original_methods()?;
+        source.replay_source(block, source_index, &names, primitive_issuers)?;
+        resolve_impl_block_contents(resolver, source_index, block, primitive_issuers)?;
+        let methods = if source.has_methods() {
+            Some(primitive_methods::Methods::capture(block, names.budget())?)
+        } else {
+            None
+        };
+        let resolution = PrimitiveResolution {
+            original: source.clone(),
+            methods,
+        };
+        block.primitive_source = Some(source.resolved_methods(resolution, names.budget())?);
+        return Ok(());
+    }
+    resolve_impl_block_contents(resolver, source_index, block, primitive_issuers)
+}
+
+fn resolve_impl_block_contents(
     resolver: &mut Resolver<'_>,
     source_index: usize,
     block: &mut ImplDecl,

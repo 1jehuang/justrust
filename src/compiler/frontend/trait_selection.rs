@@ -755,7 +755,9 @@ impl PlanCtx {
                 || filter
                     .is_some_and(|mode| receiver_mode(mode) != receiver_mode(associated.receiver))
                 || associated.trait_decl.is_some()
-                || Some(associated.nominal) != nominal
+                || nominal.map_or(associated.nominal != associated.impl_decl, |nominal| {
+                    associated.nominal != nominal
+                })
                 || !self.registry.source_member_equal(info.path.item, *name)?
             {
                 continue;

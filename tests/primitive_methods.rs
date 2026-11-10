@@ -18,6 +18,60 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn primitive_inherent_then_some_is_generic_and_eager() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "primitive-inherent-then-some",
+        &[
+            Case {
+                name: "eager_drop_and_inherent_precedence",
+                source: r#"
+trait Pretend { fn then_some(self, value: i32) -> i32; }
+impl Pretend for bool { fn then_some(self, value: i32) -> i32 { value + 100 } }
+struct Token(i32);
+impl Drop for Token { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn make(value: i32) -> Token { println!("make {}", value); Token(value) }
+fn generic<T>(flag:bool, value:T)->Option<T>{flag.then_some(value)}
+fn main(){
+    let absent = false.then_some(make(1));
+    println!("none {}", absent.is_none());
+    let present = true.then_some(make(2));
+    println!("some {}", present.is_some());
+    drop(present);
+    println!("{} {}", true.then_some(7).unwrap(), generic(true, String::from("owned")).unwrap());
+    println!("{:?}", generic(false, (3usize, 4usize)));
+    let word = String::from("borrowed");
+    println!("{} {}", bool::then_some::<usize>(true, 9).unwrap(), (&true).then_some(word.as_str()).unwrap());
+}"#,
+                expect: Expect::Run(
+                    "make 1\ndrop 1\nnone true\nmake 2\nsome true\ndrop 2\n7 owned\nNone\n9 borrowed\n",
+                ),
+            },
+            Case {
+                name: "untrusted_primitive_method_impl",
+                source: "impl bool { fn forged(self) -> bool { self } } fn main(){}",
+                expect: Expect::Invalid("E0390"),
+            },
+            Case {
+                name: "unused_generic_wrong_result",
+                source: "fn unused<T>(value:T)->Option<bool>{true.then_some(value)}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_missing_argument",
+                source: "fn unused(){false.then_some();}fn main(){}",
+                expect: Expect::Invalid("E0061"),
+            },
+            Case {
+                name: "unused_payload_cannot_escape",
+                source: "fn unused<'a>()->Option<&'a str>{let value=String::from(\"local\");true.then_some(value.as_str())}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn integer_rem_euclid_const_and_runtime_match_stock() {
     use closure_oracle::{Case, Expect};
     parse_oracle(
