@@ -826,7 +826,8 @@ impl PlanState {
                         ..
                     }
                 ) {
-                    let item = registry.associated_type_item(trait_ref.declaration, item, budget)?;
+                    let item =
+                        registry.associated_type_item(trait_ref.declaration, item, budget)?;
                     (trait_ref, item)
                 } else {
                     self.inherited_associated_owner(

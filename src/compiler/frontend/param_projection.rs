@@ -153,10 +153,8 @@ mod tests {
 
     #[test]
     fn projection_syntax_is_retained_by_exact_source_authority() {
-        let program = parse(
-            "trait Has{type Item;}fn id<I:Has>(x:I::Item)->I::Item{x}fn main(){}",
-        )
-        .unwrap();
+        let program =
+            parse("trait Has{type Item;}fn id<I:Has>(x:I::Item)->I::Item{x}fn main(){}").unwrap();
         let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
         let declaration = plan.function_decl(0).unwrap();
         let context = plan.registry.source_type_context(declaration).unwrap();
