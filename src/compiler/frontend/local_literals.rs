@@ -3346,8 +3346,8 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Field { base, field } => {
                 // Retain a completed source result just as nested method calls
                 // do. Checked field lowering still proves every Deref step.
-                let receiver_site =
-                    type_check::genuine_call(base).then_some(base.as_ref() as *const Expr as usize);
+                let receiver_site = type_check::projected_rvalue_base(base)
+                    .then_some(base.as_ref() as *const Expr as usize);
                 let base = self.expr(base, depth + 1)?;
                 if let Some(site) = receiver_site {
                     self.checker.infer_storage(1)?;

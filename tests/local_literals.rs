@@ -245,6 +245,21 @@ fn later_numeric_constraints_match_stock() {
                 expect: Expect::Run("3 7\n"),
             },
             Case {
+                name: "projected_generic_call_and_tuple_literal",
+                source: "mod util{pub fn twice<T:Clone>(x:T)->(T,T){(x.clone(),x)}}struct W<T>{v:T}fn wrap<T>(x:T)->W<T>{W{v:x}}fn take(x:u32)->u32{x}const UNIT:u32=1;fn main(){let a=UNIT+util::twice(4000000000).0;let b:u64=wrap(1).v+10000000000;let c=take(util::twice(4100000000).1);let d:u8=(200,2).0;let e:i64=(1,(9000000000,3)).1.0;println!(\"{a} {b} {c} {d} {e}\");}",
+                expect: Expect::Run("4000000001 10000000001 4100000000 200 9000000000\n"),
+            },
+            Case {
+                name: "projected_generic_call_conflict",
+                source: "fn pair<T:Copy>(x:T)->(T,T){(x,x)}fn unused(){let a:u32=pair(1u8).0;}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "projected_tuple_literal_conflict",
+                source: "fn unused(){let a:u8=(1u16,2).0;}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "tail",
                 source: "fn f()->u32{let mut steps=0;steps+=1;steps}fn main(){println!(\"{}\",f());}",
                 expect: Expect::Run("1\n"),

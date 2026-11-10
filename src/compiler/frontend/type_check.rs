@@ -2137,6 +2137,11 @@ pub(super) fn genuine_call(expr: &Expr) -> bool {
         _ => false,
     }
 }
+/// Field bases with no binding of their own: the solved per-body equation is
+/// the only carrier of an inferred type (`pair(1).0`, `(1, 2).0`).
+pub(super) fn projected_rvalue_base(expr: &Expr) -> bool {
+    genuine_call(expr) || matches!(expr, Expr::Tuple(_))
+}
 /// Place expressions that an rvalue temporary would wrongly copy.
 pub(super) fn place_expression(expr: &Expr) -> bool {
     match expr {
@@ -5403,7 +5408,19 @@ impl<'a> Checker<'a> {
             }
             Expr::Unary { .. } | Expr::Binary { .. } => self.operator_result_hint(e)?,
             Expr::Field { base, field } => {
-                if let Some(ty) = self.scalar_hint(base)? {
+                // A projected call or literal aggregate (`pair(1).0`,
+                // `(1, 2).0`) takes its completed source equation before any
+                // independent literal fallback.
+                let solved = if projected_rvalue_base(base) {
+                    self.solved_receiver_hint(base)
+                } else {
+                    None
+                };
+                let base_hint = match solved {
+                    Some(ty) => Some(ty),
+                    None => self.scalar_hint(base)?,
+                };
+                if let Some(ty) = base_hint {
                     let mut receiver = &ty;
                     loop {
                         receiver = match receiver {
@@ -12963,7 +12980,15 @@ impl<'a> Checker<'a> {
                         Flow { ty, completes },
                     )
                 } else {
-                    let mut base = self.expr(base)?;
+                    // A generic call result projected at once (`pair(1).0`) has
+                    // no binding to carry the solved type, so the completed
+                    // source equation is the expectation. It remains checked.
+                    let solved = if projected_rvalue_base(receiver) {
+                        self.solved_receiver_hint(receiver)
+                    } else {
+                        None
+                    };
+                    let mut base = self.expr_expected(base, solved.as_ref())?;
                     let mut flow = self.flow(base);
                     if let ir::Ty::Ref { referent, .. } = &flow.ty {
                         // An overloaded `Index` receiver (`v[0].f` with
