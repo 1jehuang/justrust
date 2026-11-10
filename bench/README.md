@@ -52,6 +52,14 @@ archive. Missing packs fail before the snapshot is stamped ready. Format 2 uses
 new work directories and records `snapshot_format` in result provenance, so
 `suite.py compare` rejects mixing it with older archive-only results. Source
 fixups remain visible as worktree changes against the real pinned commit.
+Each work directory and result also carries a fingerprint of the exact fixups
+and patch bytes. Editing a repair creates a new directory rather than changing
+an already prepared snapshot. Comparisons reject different repair fingerprints.
+The credited patches currently restore Desktop's visible reload camera position
+(`764e429`, retaining the original viewport assertion) and import Jcode's existing
+description-consent/schema repair (`2474a4f81`, without removing consent text or
+raising the token cap). These repaired workloads cannot be compared with the
+earlier failing fixtures as a speed claim.
 
 Run `python3 bench/suite.py preflight` on the machine executing the tests before
 starting a broad run. Pinned tests require the `sqlite3` executable, not merely

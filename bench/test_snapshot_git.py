@@ -80,6 +80,43 @@ class SnapshotGitTests(unittest.TestCase):
         with patch.object(suite, "WORK", self.root):
             self.assertTrue(suite.snapshot_dir("desktop").name.startswith("v2-"))
 
+    def test_patch_content_changes_workdir_without_mutating_previous_snapshot(self):
+        repair = self.root / "repair.patch"
+        repair.write_text("diff --git a/hello.txt b/hello.txt\n--- a/hello.txt\n+++ b/hello.txt\n"
+                          "@@ -1 +1 @@\n-hello\n+world\n")
+        spec = {"repos": {"fixture": (self.source, self.rev)}, "cwd": "fixture",
+                "patches": [("fixture", "repair.patch")]}
+        with patch.object(suite, "ROOT", self.root), patch.object(suite, "WORK", self.root / "work"), \
+                patch.object(suite, "SNAPSHOTS", {"fixture": spec}), \
+                patch.object(suite, "bench_lock"), patch.dict(suite.os.environ, {"JUSTRUST_BENCH_SRC": ""}):
+            first_fingerprint = suite.snapshot_fingerprint("fixture")
+            first = suite.prepare("fixture")
+            self.assertEqual((first / "fixture/hello.txt").read_text(), "world\n")
+            self.assertEqual(suite.prepare("fixture"), first)
+            self.assertEqual(suite.sh(["git", "-C", str(first / "fixture"), "rev-parse", "HEAD"]), self.commit)
+            repair.write_text(repair.read_text().replace("+world", "+other"))
+            self.assertNotEqual(suite.snapshot_fingerprint("fixture"), first_fingerprint)
+            second = suite.prepare("fixture")
+            self.assertNotEqual(first, second)
+            self.assertEqual((second / "fixture/hello.txt").read_text(), "other\n")
+            self.assertEqual((first / "fixture/hello.txt").read_text(), "world\n")
+
+    def test_fixup_content_also_changes_snapshot_fingerprint(self):
+        spec = {"repos": {"fixture": (self.source, self.rev)}, "cwd": "fixture", "fixups": []}
+        with patch.object(suite, "SNAPSHOTS", {"fixture": spec}):
+            before = suite.snapshot_fingerprint("fixture")
+            spec["fixups"].append(("fixture/hello.txt", "hello", "world", 1))
+            self.assertNotEqual(suite.snapshot_fingerprint("fixture"), before)
+
+    def test_named_comparison_rejects_repaired_source_mismatch(self):
+        a = self.root / "old.json"
+        b = self.root / "new.json"
+        for path, fingerprint in ((a, "before"), (b, "after")):
+            path.write_text(json.dumps({"env": {"snapshots": {}, "snapshot_fingerprints": fingerprint},
+                                        "scenarios": {}}))
+        with self.assertRaisesRegex(SystemExit, "different snapshot repairs"):
+            suite.cmd_compare(argparse.Namespace(a=str(a), b=str(b), floor=10))
+
     def test_named_comparison_rejects_snapshot_format_change(self):
         a = self.root / "a.json"
         b = self.root / "b.json"

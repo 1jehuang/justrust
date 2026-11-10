@@ -631,7 +631,7 @@ def cmd_compare(args) -> None:
     from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
     require_matching_context(a, b)
-    for key in ("snapshot_format", "runtime_prerequisites"):
+    for key in ("snapshot_format", "snapshot_fingerprints", "runtime_prerequisites"):
         if a.get("env", {}).get(key) != b.get("env", {}).get(key):
             sys.exit(f"versus: different {key}, numbers are not comparable")
     if "synth" in a or "synth" in b:

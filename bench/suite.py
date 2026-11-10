@@ -156,6 +156,10 @@ SNAPSHOTS = {
                 2,
             ),
         ],
+        "patches": [
+            ("jcode-desktop", "bench/patches/changelog-viewport-visible-camera.patch"),
+            ("jcode", "bench/patches/jcode-description-consent.patch"),
+        ],
     },
     "justrust": {
         "repos": {"justrust": (ROOT, "f97fcc2")},
@@ -461,10 +465,18 @@ def sh(cmd: list[str], cwd: Path | None = None) -> str:
     ).stdout.strip()
 
 
+def snapshot_fingerprint(name: str) -> str:
+    spec = SNAPSHOTS[name]
+    identity = {"format": SNAPSHOT_FORMAT, "fixups": spec.get("fixups", []),
+                "patches": [(repo, path, hashlib.sha256((ROOT / path).read_bytes()).hexdigest())
+                            for repo, path in spec.get("patches", [])]}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
 def snapshot_dir(name: str) -> Path:
     spec = SNAPSHOTS[name]
     key = "-".join(f"{r}@{rev}" for r, (_, rev) in sorted(spec["repos"].items()))
-    return WORK / name / f"v{SNAPSHOT_FORMAT}-{key}"
+    return WORK / name / f"v{SNAPSHOT_FORMAT}-{snapshot_fingerprint(name)[:12]}-{key}"
 
 
 _BENCH_LOCK = None
@@ -586,6 +598,11 @@ def prepare(name: str) -> Path:
             if s.count(old) != count:
                 sys.exit(f"bench: fixup for {rel} matches {s.count(old)} times, expected {count}")
             p.write_text(s.replace(old, new))
+        for patch_repo, rel in SNAPSHOTS[name].get("patches", []):
+            if patch_repo == repo:
+                patch = ROOT / rel
+                subprocess.run(["git", "-C", str(dst), "apply", "--check", str(patch)], check=True)
+                subprocess.run(["git", "-C", str(dst), "apply", str(patch)], check=True)
         stamp.write_text(rev + "\n")
     return root
 
@@ -1434,6 +1451,7 @@ def env_info() -> dict:
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
         "snapshots": {k: {r: rev for r, (_, rev) in v["repos"].items()} for k, v in SNAPSHOTS.items()},
         "snapshot_format": SNAPSHOT_FORMAT,
+        "snapshot_fingerprints": {name: snapshot_fingerprint(name) for name in SNAPSHOTS},
         "runtime_prerequisites": RUNTIME_PREREQUISITES,
     }
 
@@ -1688,7 +1706,7 @@ def cmd_compare(args) -> None:
             if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
                 reasons.append(f"{label}: malformed execution environment provenance")
         if isinstance(ea, dict) and isinstance(eb, dict):
-            for key in ("snapshots", "snapshot_format", "runtime_prerequisites", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
+            for key in ("snapshots", "snapshot_format", "snapshot_fingerprints", "runtime_prerequisites", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
                 if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
@@ -1712,6 +1730,8 @@ def cmd_compare(args) -> None:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
     if a["env"].get("snapshot_format") != b["env"].get("snapshot_format"):
         sys.exit("bench: different snapshot formats, numbers are not comparable")
+    if a["env"].get("snapshot_fingerprints") != b["env"].get("snapshot_fingerprints"):
+        sys.exit("bench: different snapshot repairs, numbers are not comparable")
     if a["env"].get("runtime_prerequisites") != b["env"].get("runtime_prerequisites"):
         sys.exit("bench: different runtime prerequisites, numbers are not comparable")
     for label, result in (("A", a), ("B", b)):
