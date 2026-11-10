@@ -317,6 +317,45 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("Build queue wait: 3.000s", output.getvalue())
         self.assertIn("Command wall time: 5.000s", output.getvalue())
 
+    def test_target_export_copies_own_inputs_without_git_before_queue(self):
+        export = self.root / "own-export"
+        export.mkdir()
+        (export / "own.rs").write_text("old own feature")
+        (export / "alias.rs").symlink_to("own.rs")
+        (export / "target").mkdir()
+        (export / "target" / "ignored").write_text("build artifact")
+        observed = []
+
+        def hosted(command, cwd, lock):
+            self.assertNotEqual(Path(cwd), export)
+            (export / "own.rs").write_text("later edit")
+            observed.append((Path(cwd) / "own.rs").read_text())
+            self.assertEqual((Path(cwd) / "alias.rs").read_text(), "old own feature")
+            self.assertFalse((Path(cwd) / "target").exists())
+            self.assertFalse((Path(cwd) / "source").exists())
+
+        with patch.object(workflow, "hosted", side_effect=hosted):
+            result = workflow.main(["target", "--tree", str(export), "--unit",
+                                    "--package", "justrust-graph", "--lock", str(self.lock)])
+        self.assertEqual(result, 0)
+        self.assertEqual(observed, ["old own feature"])
+        self.assertEqual((export / "own.rs").read_text(), "later edit")
+
+    def test_export_rejects_escaping_directory_symlink_before_build(self):
+        export = self.root / "unsafe-export"
+        export.mkdir()
+        (export / "outside").symlink_to("../repo", target_is_directory=True)
+        with patch.object(workflow, "hosted") as hosted:
+            self.assertEqual(workflow.main(["target", "--tree", str(export), "--unit"]), 1)
+            hosted.assert_not_called()
+
+    def test_export_cannot_be_used_to_publish_uncommitted_inputs(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                workflow.main(["publish", "--tree", str(self.repo), "--unit",
+                               "--candidate", self.candidate])
+        self.assertEqual(error.exception.code, 2)
+
     def test_hosted_commands_hold_build_and_publication_locks(self):
         def check_locks():
             for path in (self.lock, Path(str(self.lock) + ".publication")):

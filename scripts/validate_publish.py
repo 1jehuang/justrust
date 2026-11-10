@@ -22,7 +22,28 @@ EXCLUDED_PARTS = {".git", "target", "__pycache__", ".cache", ".pytest_cache",
                   ".mypy_cache", ".ruff_cache", "node_modules"}
 
 
-def snapshot(repo, destination):
+def export_inputs(repo):
+    """Enumerate an already prepared export without traversing directory links."""
+    def failed(error):
+        raise error
+
+    paths = []
+    for directory, directories, files in os.walk(repo, followlinks=False, onerror=failed):
+        relative = Path(directory).relative_to(repo)
+        for name in list(directories):
+            child = relative / name
+            if name in EXCLUDED_PARTS or child.parts in (("data", "runs"), ("experiments", "results")):
+                directories.remove(name)
+            elif (repo / child).is_symlink():
+                paths.append(child)
+                directories.remove(name)
+        paths.extend(relative / name for name in files)
+        if len(paths) > 100_000:
+            raise ValueError("source export exceeds 100000 input paths")
+    return paths
+
+
+def snapshot(repo, destination, exported=False):
     """Copy listed working-tree inputs, never the index or Git object contents.
 
     Capture happens before the first build-lock acquisition. Deleted tracked
@@ -30,9 +51,12 @@ def snapshot(repo, destination):
     Generated history and caches are not compiler inputs. Unexpected large
     inputs fail explicitly instead of silently creating an incomplete tree.
     """
-    names = subprocess.check_output(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=repo)
-    paths = sorted({Path(os.fsdecode(name)) for name in names.split(b"\0") if name})
+    if exported:
+        paths = sorted(set(export_inputs(repo)))
+    else:
+        names = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=repo)
+        paths = sorted({Path(os.fsdecode(name)) for name in names.split(b"\0") if name})
     total = 0
     links = []
     for relative in paths:
@@ -178,7 +202,9 @@ def publish(args, repo):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["target", "publish"])
-    parser.add_argument("--repo", default=".")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--repo", default=".")
+    source.add_argument("--tree", help="target-only prepared source export without Git metadata; copied before queueing")
     parser.add_argument("--lock", default=DEFAULT_LOCK)
     parser.add_argument("--publication-lock")
     parser.add_argument("--scratch-dir", help="parent for temporary committed-tree extraction")
@@ -202,14 +228,21 @@ def main(argv=None):
         parser.error("filter must be a non-option test-name substring of at most 256 characters")
     if args.mode == "publish" and not re.fullmatch(r"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", args.candidate or ""):
         parser.error("publish requires --candidate with a full commit hash")
+    if args.mode == "publish" and args.tree:
+        parser.error("--tree is target-only; publication requires a committed Git candidate")
     if args.mode == "target" and (args.push or args.candidate or args.lib):
         parser.error("--push, --candidate and --lib are publication-only")
     try:
-        repo = Path(run(["git", "rev-parse", "--show-toplevel"], args.repo, True))
+        if args.tree:
+            repo = Path(args.tree).expanduser().resolve(strict=True)
+            if not repo.is_dir():
+                raise ValueError("--tree must be a source directory")
+        else:
+            repo = Path(run(["git", "rev-parse", "--show-toplevel"], args.repo, True))
         if args.mode == "target":
             with tempfile.TemporaryDirectory(prefix="justrust-target-", dir=args.scratch_dir) as temporary:
                 tree = Path(temporary)
-                snapshot(repo, tree)
+                snapshot(repo, tree, exported=bool(args.tree))
                 targets(args, tree)
         else:
             publish(args, repo)
