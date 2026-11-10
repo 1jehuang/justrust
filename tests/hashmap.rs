@@ -7,6 +7,30 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn map_debug_matches_stock() {
+    closure_oracle::check(
+        "map-debug",
+        &[
+            Case {
+                name: "ordered_keys_single_hash_entry_and_empty_maps",
+                source: r#"use std::collections::{BTreeMap,HashMap};fn main(){let mut m:BTreeMap<i32,&str>=BTreeMap::new();m.insert(3,"c");m.insert(1,"a");m.insert(2,"b");println!("{m:?}");let mut h:HashMap<&str,i32>=HashMap::new();h.insert("only",7);println!("{h:?}");let a:BTreeMap<i32,String>=BTreeMap::new();let b:HashMap<String,i32>=HashMap::new();println!("{a:?} {b:?}");}"#,
+                expect: Expect::Run("{1: \"a\", 2: \"b\", 3: \"c\"}\n{\"only\": 7}\n{} {}\n"),
+            },
+            Case {
+                name: "ordered_map_value_needs_debug_in_unused_fn",
+                source: r#"use std::collections::BTreeMap;struct Value;fn unused(m:BTreeMap<i32,Value>){println!("{m:?}");}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "hash_map_value_needs_debug_in_unused_fn",
+                source: r#"use std::collections::HashMap;struct Value;fn unused(m:HashMap<i32,Value>){println!("{m:?}");}fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn entry_and_modify_matches_stock() {
     closure_oracle::check(
         "entry-and-modify",

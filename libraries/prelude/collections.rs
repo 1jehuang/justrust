@@ -581,3 +581,29 @@ impl<K, V> super::default::Default for BTreeMap<K, V> {
         BTreeMap { keys: Vec::new(), values: Vec::new() }
     }
 }
+
+/// `{key: value, ..}` in ascending key order, as std prints it.
+impl<K: super::fmt::Debug, V: super::fmt::Debug> super::fmt::Debug for BTreeMap<K, V> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        let mut map = f.debug_map();
+        let mut i = 0usize;
+        while i < self.keys.len() {
+            map = map.entry(self.keys.get_ref(i), self.values.get_ref(i));
+            i += 1usize;
+        }
+        map.finish()
+    }
+}
+
+/// `{key: value, ..}`. Entry order is unspecified, as in std.
+impl<K: super::fmt::Debug, V: super::fmt::Debug, S> super::fmt::Debug for HashMap<K, V, S> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        let mut map = f.debug_map();
+        let mut i = 0usize;
+        while i < self.keys.len() {
+            map = map.entry(self.keys.get_ref(i), self.values.get_ref(i));
+            i += 1usize;
+        }
+        map.finish()
+    }
+}
