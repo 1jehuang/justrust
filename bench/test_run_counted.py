@@ -144,7 +144,12 @@ class RunCountedTests(unittest.TestCase):
         result, text = self.run_helper()
         self.assertEqual(result['exit'], 0)
         self.assert_probe(text)
-        self.assertEqual(set(result), {'wall', 'exit', 'cpu', 'max_rss_mb', 'instructions'})
+        self.assertEqual(set(result), {'wall', 'exit', 'cpu', 'max_rss_mb', 'instructions',
+                                       'avg_other_cores', 'system_busy_cores', 'tree_cores',
+                                       'steal_cores', 'cpu_noise_valid', 'cpu_noise_scope',
+                                       'cpu_noise_wall_seconds', 'cpu_noise_clock_ticks_per_second'})
+        self.assertIsInstance(result['cpu_noise_valid'], bool)
+        self.assertEqual(result['cpu_noise_scope'], 'invocation-host')
         for key in ('wall', 'cpu', 'max_rss_mb'):
             self.assertGreaterEqual(result[key], 0)
         self.assertIsNone(result['instructions'])

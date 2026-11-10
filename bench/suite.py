@@ -133,6 +133,8 @@ MINIZ_OPT_LEVEL = None
 # A sample is noisy when other processes averaged more than this many cores
 # or another rustc was running when it started.
 NOISY_CORES = float(os.environ.get("BENCH_NOISY_CORES", "4"))
+NOISE_POLICY = {"suite": "recorder-other-cpu-v1", "counted": "proc-stat-wait4-v1",
+                "max_other_cores": NOISY_CORES}
 
 # Pinned sources. Bump deliberately (and say so in FINDINGS.md): results from
 # different pins are not comparable, and `compare` refuses to mix them.
@@ -1429,6 +1431,7 @@ def env_info() -> dict:
         "mem_gb": round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
         "kernel": platform.release(),
         "foreign_rustc_policy": FOREIGN_RUSTC_POLICY,
+        "noise_policy": NOISE_POLICY,
         "justrust": version,
         # Legacy label retained for old compare consumers. Repository HEAD is
         # not necessarily the installed executable's build revision.
@@ -1714,7 +1717,7 @@ def cmd_compare(args) -> None:
             if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
                 reasons.append(f"{label}: malformed execution environment provenance")
         if isinstance(ea, dict) and isinstance(eb, dict):
-            for key in ("snapshots", "snapshot_format", "snapshot_fingerprints", "runtime_prerequisites", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
+            for key in ("snapshots", "snapshot_format", "snapshot_fingerprints", "runtime_prerequisites", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy", "noise_policy"):
                 if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
@@ -1750,6 +1753,8 @@ def cmd_compare(args) -> None:
         issues = named_test_failure_issues(result)
         if issues:
             sys.exit(f"bench: {label}: comparison blocked: " + "; ".join(issues))
+    if a["env"].get("noise_policy") != b["env"].get("noise_policy"):
+        sys.exit("bench: different noise_policy, numbers are not comparable")
     if a["env"].get("foreign_rustc_policy") != b["env"].get("foreign_rustc_policy"):
         sys.exit("bench: different foreign_rustc_policy, numbers are not comparable")
     if a["env"].get("host") != b["env"].get("host"):

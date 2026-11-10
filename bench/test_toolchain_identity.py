@@ -244,6 +244,7 @@ class ToolchainIdentityTests(unittest.TestCase):
             return {'exit': 0, 'wall': 0.01, 'log': str(self.root / tag)}
 
         with patch.object(synth, '_run', side_effect=execute), \
+                patch.object(synth.gen, '_locked'), \
                 patch.object(synth.gen, 'restore_all'), patch.object(synth.gen, 'apply', return_value=[]), \
                 patch.object(synth.gen, 'restore') as restore, patch.object(synth.os, 'sync'), \
                 self.assertRaisesRegex(ValueError, 'wrong compiler'):

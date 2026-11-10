@@ -218,8 +218,19 @@ live-process policy excludes only proven `/proc/<pid>/stat` zombie/dead states
 `Z`, `X`, and `x`. Sleeping, blocked, stopped, and runnable compilers still count.
 Discovery, read, identity, or state failures abort with unknown coverage instead
 of becoming zero. Comparisons reject mixed policies, so apply this consistently
-to both sides of a new pair, never retroactively to old runs. Load and average
-other-CPU thresholds are unchanged. The pinned recorder's raw sampled rustc count
+to both sides of a new pair, never retroactively to old runs.
+
+Counted synthetic/versus samples now record `noise_policy` and measure CPU busy
+tick deltas across the actual invocation, subtracting its waited process-tree
+user/system CPU. The first eight `/proc/stat` fields exclude double-counted guest
+time, idle and I/O-wait are not busy, and steal time remains conservatively
+external contention. Unknown or invalid coverage stays noisy. The four-core
+threshold and foreign-compiler rule are unchanged. `load_before` remains a raw
+diagnostic, not a noise verdict: prebuilds and previous commands increase that
+one-minute average even when no other work is running. Named suite samples keep
+the recorder's other-CPU accounting. Comparisons reject changed noise methods or
+thresholds, and old noisy results are never reclassified.
+The pinned recorder's raw sampled rustc count
 may still include zombies and is retained unchanged. A zero live-before count
 does not imply zero sampled legacy count or a quiet overall CPU window.
 

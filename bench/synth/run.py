@@ -69,7 +69,7 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=No
         t = json.loads(summ.read_text()).get("tests", {})
         passed, r["tests_failed"] = t.get("passed", passed), t.get("failed", r["tests_failed"])
     r.update({"id": rid if st.justrust else None, "tests_passed": passed, "load_before": load,
-              "foreign_rustc_before": rustc, "noisy": rustc > 0 or load > suite.NOISY_CORES, "log": str(log)})
+              "foreign_rustc_before": rustc, "noisy": versus.sample_noisy(r, rustc), "log": str(log)})
     versus._mark_remote(st, r, out)
     if "remote" in r and r["remote"] is None and cmd[0] in ("check", "clippy", "test"):
         r["fell_back_local"] = True
