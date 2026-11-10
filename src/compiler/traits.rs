@@ -10643,6 +10643,23 @@ impl ValidatedTraitWorld {
         caller: Option<&ValidatedFacts>,
         executable_storage: bool,
     ) -> Result<InstantiatedSchema> {
+        self.instantiate_scratch_for_use_with_owner_family(
+            schema, args, facts, declaration, active, caller, executable_storage, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_scratch_for_use_with_owner_family(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        facts: ProofContext<'_>,
+        declaration: Option<DeclId>,
+        active: &mut ProofScratch,
+        caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
+        owner_family: Option<&projected_methods::ProjectedCarrierBase>,
+    ) -> Result<InstantiatedSchema> {
         let facts = facts.for_storage(executable_storage);
         self.check_proof_context_caller(facts)?;
         if let Some(caller) = caller {
@@ -10665,6 +10682,7 @@ impl ValidatedTraitWorld {
                 arena,
                 caller,
                 executable_storage,
+                owner_family,
             )
         })
     }
@@ -10678,6 +10696,7 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
         caller: Option<&ValidatedFacts>,
         executable_storage: bool,
+        owner_family: Option<&projected_methods::ProjectedCarrierBase>,
     ) -> Result<InstantiatedSchema> {
         // Legacy const binders have no entries in args. Letting them pass
         // would silently erase unconstrained const parameters from a call.
@@ -10773,6 +10792,31 @@ impl ValidatedTraitWorld {
         // Authenticate source callable result authority before consuming the
         // normalized projection. Closure outputs may introduce reference layers
         // whose exact lifetime topology is supplied by that source receipt.
+        if let Some(base) = owner_family {
+            self.complete_projected_owner_family(base, &mut result.signature)?;
+        } else if let Some(declaration) = declaration {
+            let target = CallTarget {
+                declaration,
+                type_args: args.into(),
+            };
+            if let Some(signature) = self.specialize_owner_callable_result(
+                &target,
+                schema,
+                &result.signature,
+                facts,
+            )? {
+                result.signature = signature;
+            } else if let Some(contract) = self.specialize_required_owner_result(
+                declaration,
+                schema,
+                args,
+                &result.signature,
+                facts,
+                active,
+            )? {
+                result.signature.ref_contract = contract;
+            }
+        }
         self.complete_projected_contract(&mut result.signature)?;
         if executable_storage {
             self.validate_signature_shape_with_scratch(

@@ -55,7 +55,7 @@ pub(super) struct ProjectedApplication {
     pub(super) evidence: Arc<ProjectedMethodEvidence>,
 }
 
-struct ProjectedCarrierBase {
+pub(super) struct ProjectedCarrierBase {
     schema: GenericSchema,
     retained: DeclarationCarriers,
     arguments: Arc<[Ty]>,
@@ -1947,26 +1947,86 @@ impl ValidatedTraitWorld {
         Ok(Some(original))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn specialize_required_owner_result(
+        &self,
+        declaration: DeclId,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        signature: &Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<Option<Arc<ir::RefContract>>> {
+        if charged(&self.budget, ir::root_reference_layers(&signature.result))?
+            <= signature.ref_contract.results.len()
+            || context.phase != FactsPhase::Closed
+            || !std::ptr::eq(context.predicates, self.empty.as_ref())
+        {
+            return Ok(None);
+        }
+        let Some(position) = self.item_header_index.get(&self.budget, declaration)? else {
+            return Ok(None);
+        };
+        let item = &self.headers.items[position];
+        let owner = self.trait_header(item.trait_decl)?;
+        if item.default.is_some()
+            || arguments.len() != owner.env.total_arity()
+            || self.info(declaration)?.own_env.arity() != 0
+            || !matches!(item.schema.signature.result, Ty::AssociatedType(_))
+        {
+            return Ok(None);
+        }
+        self.validate_declaration_schema(declaration, schema)?;
+        let self_ty = arguments.first().ok_or_else(|| {
+            FactsError::invalid(&self.budget, "required source family lost Self actual")
+        })?;
+        let goal = TraitRef {
+            declaration: item.trait_decl,
+            self_ty: self_ty.clone(),
+            args: arguments[1..].into(),
+        };
+        if !self.goal_is_closed_in_with(&goal, context, active)? {
+            return Ok(None);
+        }
+        let selection = self.require_in(&Predicate::Implements(goal.clone()), context, active)?;
+        if !matches!(selection.0.origin, ProofOrigin::Implementation { .. }) {
+            return Ok(None);
+        }
+        self.projected_implementation_result_contract(item, &goal, &selection, signature, context)
+    }
+
     fn specialize_projected_owner_base(
         &self,
         base: &ProjectedCarrierBase,
         context: ProofContext<'_>,
     ) -> Result<Signature> {
-        let mut instantiated = self.instantiate_in(
+        let instantiated = self.instantiate_scratch_for_use_with_owner_family(
             &base.schema,
             &base.arguments,
             context,
             Some(base.retained.declaration),
+            &mut ProofScratch::default(),
+            context.original,
+            context.executable_storage,
+            Some(base),
         )?;
+        Ok(instantiated.signature)
+    }
+
+    pub(super) fn complete_projected_owner_family(
+        &self,
+        base: &ProjectedCarrierBase,
+        signature: &mut Signature,
+    ) -> Result<()> {
         let Ty::Param(parameter) = &base.schema.signature.result else {
-            return Ok(instantiated.signature);
+            return Ok(());
         };
         if charged(
             &self.budget,
-            ir::root_reference_layers(&instantiated.signature.result),
+            ir::root_reference_layers(&signature.result),
         )? == 0
         {
-            return Ok(instantiated.signature);
+            return Ok(());
         }
         // The root row is only region topology. The nonempty return authority
         // is the exact original parameter family, including its owned field
@@ -2039,21 +2099,91 @@ impl ValidatedTraitWorld {
                 "projected result has no original input family authority",
             ));
         }
+        // A family stored in an owned input field has no positioned input
+        // reference. Consequently ordinary topology substitution cannot issue
+        // its result rows. The authenticated carrier above, not a provided
+        // method or a matching concrete input type, owns those hidden loans.
+        // Materialize only the positions of this exact parameter actual here.
+        // Carrier substitution retains the nonempty field-path sources.
+        let layers = charged(
+            &self.budget,
+            ir::root_reference_layers(&signature.result),
+        )?;
+        let fixed = &signature.ref_contract;
+        let mut positioned = Vec::new();
+        let mut outlives = Vec::new();
+        for row in fixed.results.iter() {
+            push(&self.budget, &mut positioned, row.clone())?;
+        }
+        for edge in fixed.outlives.iter() {
+            push(&self.budget, &mut outlives, *edge)?;
+        }
+        let mut next = usize::from(fixed.region_count);
+        for depth in 0..layers {
+            charged(
+                &self.budget,
+                self.budget.charge_work(positioned.len().saturating_mul(2) + 1),
+            )?;
+            let position = ir::ReferencePosition { depth: depth as u8 };
+            if positioned.iter().any(|row| row.position == position) {
+                continue;
+            }
+            if next >= ir::MAX_REGION_PARAMS {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "projected family topology region limit exceeded",
+                ));
+            }
+            let region = ir::RegionParamId(next as u16);
+            next += 1;
+            if depth > 0 {
+                let above = positioned
+                    .iter()
+                    .find(|row| usize::from(row.position.depth) == depth - 1)
+                    .ok_or_else(|| {
+                        FactsError::invalid(&self.budget, "projected family lost parent layer")
+                    })?;
+                push(&self.budget, &mut outlives, (region, above.region))?;
+            }
+            push(
+                &self.budget,
+                &mut positioned,
+                ir::ResultReference {
+                    position,
+                    region,
+                    returns: ir::ReturnContract::NoReference,
+                },
+            )?;
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(positioned.len().saturating_mul(positioned.len())),
+        )?;
+        positioned.sort_by_key(|row| row.position);
+        let raw = ir::RefContract {
+            region_count: next as u16,
+            input_regions: fixed.input_regions.clone(),
+            results: positioned.into(),
+            outlives: outlives.into(),
+            static_regions: fixed.static_regions,
+        };
+        signature.ref_contract =
+            charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?;
         let results = charged(
             &self.budget,
             ir::derive_return_contracts(
-                &instantiated.signature.params,
-                &instantiated.signature.result,
-                &instantiated.signature.ref_contract,
+                &signature.params,
+                &signature.result,
+                &signature.ref_contract,
                 &self.budget,
             ),
         )?;
         retain::<ir::RefContract>(&self.budget, 1)?;
-        instantiated.signature.ref_contract = Arc::new(ir::RefContract {
+        signature.ref_contract = Arc::new(ir::RefContract {
             results,
-            ..(*instantiated.signature.ref_contract).clone()
+            ..(*signature.ref_contract).clone()
         });
-        Ok(instantiated.signature)
+        Ok(())
     }
 
     fn projected_implementation_result_contract(
@@ -3487,6 +3617,13 @@ mod tests {
             .unwrap();
         view.validate_for(&facts).unwrap();
         assert_eq!(view.fixed.results.len(), 1);
+        assert!(view.fixed.input_regions.is_empty());
+        assert!(
+            view.fixed.results.iter().all(|row| !matches!(
+                row.returns,
+                ir::ReturnContract::NoReference
+            ))
+        );
         let selected = world.resolve_trait_call(&call, &facts).unwrap();
         let Callee::Direct(provider) = &selected.callee else {
             panic!("expected exact provided method")
@@ -3541,11 +3678,11 @@ mod tests {
             );
         }
         let raw = world
-            .instantiate_in(
+            .substitute_projected_schema_with(
                 &provider_schema,
                 &provider.type_args,
                 ProofContext::from_facts(&facts),
-                Some(provider.declaration),
+                &mut ProofScratch::default(),
             )
             .unwrap();
         assert!(
