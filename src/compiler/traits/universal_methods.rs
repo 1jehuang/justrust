@@ -127,7 +127,15 @@ impl ValidatedFacts {
                         || (context.phase == FactsPhase::Universal
                             && associated_types::implementation_application_self(
                                 &projection.trait_ref.self_ty,
-                            ))
+                            )
+                            && self
+                                .world
+                                .declared_equality_rhs(
+                                    projection,
+                                    &self.predicates.predicates,
+                                    self.env(),
+                                )?
+                                .is_none())
                     {
                         let (normal, dependencies) =
                             self.world.normalize_closed_projected_type_for_use(
