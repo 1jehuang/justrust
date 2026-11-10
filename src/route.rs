@@ -73,9 +73,9 @@ pub fn mode() -> Mode {
 fn remote_required() -> bool {
     crate::nolocal::disabled()
         || matches!(
-        std::env::var("JUSTRUST_REMOTE_REQUIRED").as_deref(),
-        Ok("1" | "true" | "yes")
-    )
+            std::env::var("JUSTRUST_REMOTE_REQUIRED").as_deref(),
+            Ok("1" | "true" | "yes")
+        )
 }
 
 fn required_mode(mode: Mode, required: bool) -> Mode {
@@ -588,7 +588,10 @@ static ROUTED_CMD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 fn say_local(why: &str) {
     if remote_required() && compiles() {
         if crate::nolocal::disabled() {
-            eprintln!("{}", crate::nolocal::refusal(&format!("local build ({why})")));
+            eprintln!(
+                "{}",
+                crate::nolocal::refusal(&format!("local build ({why})"))
+            );
         } else {
             eprintln!("justrust: remote required, refusing local build ({why})");
         }
@@ -618,8 +621,23 @@ fn compiles() -> bool {
 fn is_compiling_sub(s: &str) -> bool {
     matches!(
         s,
-        "build" | "b" | "check" | "c" | "clippy" | "test" | "t" | "bench" | "run" | "r"
-            | "rustc" | "rustdoc" | "doc" | "d" | "zigbuild" | "install" | "fix"
+        "build"
+            | "b"
+            | "check"
+            | "c"
+            | "clippy"
+            | "test"
+            | "t"
+            | "bench"
+            | "run"
+            | "r"
+            | "rustc"
+            | "rustdoc"
+            | "doc"
+            | "d"
+            | "zigbuild"
+            | "install"
+            | "fix"
     )
 }
 

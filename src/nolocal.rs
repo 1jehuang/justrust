@@ -21,8 +21,7 @@ fn flag_file() -> Option<PathBuf> {
 
 /// Local compiles are forbidden (`justrust local off`). One stat, no parse.
 pub fn disabled() -> bool {
-    std::env::var_os(crate::route::ON_AGENT).is_none()
-        && flag_file().is_some_and(|f| f.exists())
+    std::env::var_os(crate::route::ON_AGENT).is_none() && flag_file().is_some_and(|f| f.exists())
 }
 
 pub fn reason() -> Option<String> {
@@ -56,19 +55,20 @@ fn command_at(f: &std::path::Path, action: &str, reason: Option<String>) -> Resu
             if let Some(d) = f.parent() {
                 std::fs::create_dir_all(d)?;
             }
-            std::fs::write(f, reason.unwrap_or_else(|| "disabled by user".into()) + "\n")?;
+            std::fs::write(
+                f,
+                reason.unwrap_or_else(|| "disabled by user".into()) + "\n",
+            )?;
             println!("local compiles: OFF. All builds go to hosted machines, no local fallback.");
             println!("turn back on: justrust local on");
         }
-        "on" | "enable" => {
-            match std::fs::remove_file(f) {
-                Ok(()) => println!("local compiles: ON"),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    println!("local compiles: already ON")
-                }
-                Err(e) => return Err(e.into()),
+        "on" | "enable" => match std::fs::remove_file(f) {
+            Ok(()) => println!("local compiles: ON"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("local compiles: already ON")
             }
-        }
+            Err(e) => return Err(e.into()),
+        },
         "status" | "" => {
             if f.exists() {
                 println!(
