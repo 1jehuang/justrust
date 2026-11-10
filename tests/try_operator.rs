@@ -27,6 +27,49 @@ fn main() {
                 expect: Expect::Run("102\nerr 3\n4\nnone\n42\nnone\n"),
             },
             Case {
+                name: "generic_operand_success_context_and_distinct_residual",
+                source: r#"enum AppError { Parse(std::num::ParseIntError), Negative(i64), Empty }
+impl From<std::num::ParseIntError> for AppError {
+    fn from(e: std::num::ParseIntError) -> Self { AppError::Parse(e) }
+}
+fn parse_pos(s: &str) -> Result<i64, AppError> {
+    let s = s.trim();
+    if s.is_empty() { return Err(AppError::Empty); }
+    let n: i64 = s.parse()?;
+    if n < 0 { Err(AppError::Negative(n)) } else { Ok(n) }
+}
+struct Source;
+impl Source { fn value<T: Default>(&self) -> Option<T> { Some(T::default()) } }
+fn optional() -> Option<u16> { let n: u16 = Source.value()?; Some(n + 2) }
+fn main() {
+    for text in [" 12 ", "-3", "x", ""] {
+        match parse_pos(text) {
+            Ok(n) => println!("ok {}", n),
+            Err(AppError::Parse(_)) => println!("parse"),
+            Err(AppError::Negative(n)) => println!("negative {}", n),
+            Err(AppError::Empty) => println!("empty"),
+        }
+    }
+    println!("{:?}", optional());
+}"#,
+                expect: Expect::Run("ok 12\nnegative -3\nparse\nempty\nSome(2)\n"),
+            },
+            Case {
+                name: "unused_try_missing_residual_conversion",
+                source: r#"struct E;
+fn unused(s: &str) -> Result<i64, E> { let n: i64 = s.parse()?; Ok(n) }
+fn main() {}"#,
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "unused_try_conflicting_success_type",
+                source: r#"fn unused(s: &str) -> Result<i64, std::num::ParseIntError> {
+    let n: i64 = s.parse::<u8>()?; Ok(n)
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "loop_early_exit",
                 source: r#"fn sum(v: [i32; 4]) -> Result<i32, i32> {
     let mut total = 0;

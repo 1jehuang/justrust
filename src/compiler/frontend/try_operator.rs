@@ -56,7 +56,11 @@ impl Checker<'_> {
 
     #[inline(never)]
     pub(super) fn lower_try(&mut self, operand: &Expr) -> Result<(ir::ExprKind, Flow), String> {
-        let scrutinee = self.expr(operand)?;
+        // This is a completed source equation, not the enclosing function's
+        // carrier: its residual error may differ and still requires From below.
+        // Normal checked expression selection re-proves the hinted application.
+        let expected = self.solved_receiver_hint(operand);
+        let scrutinee = self.expr_expected(operand, expected.as_ref())?;
         let source = self.flow(scrutinee);
         let Some((input, kind)) = carrier(&source.ty) else {
             return Err(format!(

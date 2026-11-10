@@ -3522,7 +3522,13 @@ impl<'s> Solver<'_, '_, 's> {
                 // `e?` on the prelude Option/Result yields the success
                 // payload: tie the result term to the carrier's `T` so later
                 // uses (`x + x`) see the operand's exact type.
+                let operand_site = operand.as_ref() as *const Expr as usize;
                 let carrier = self.expr(operand, depth + 1)?;
+                // Preserve the complete carrier solved from the success-payload
+                // equation. Checking the operand must receive that source context,
+                // not infer its generic result again without the surrounding `?`.
+                self.checker.infer_storage(1)?;
+                self.receiver_sites.push((operand_site, carrier));
                 if let Some(payload) = self.try_payload(carrier)? {
                     return Ok(payload);
                 }
