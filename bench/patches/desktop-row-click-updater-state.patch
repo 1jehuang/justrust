@@ -1,0 +1,21 @@
+Subject: [benchmark fixture] Stabilize updater input during row-tab click test
+
+The row-switch test samples tab bounds and clicks them in separate renders.
+Like the hint geometry test, its header width depends on global updater
+state. Participate in the existing updater mutex across that interval.
+Retain all original click, row-selection, and geometry assertions and
+normal threading. This is independent of wall-clock animation settlement.
+
+diff --git a/crates/jcode-desktop-ui/src/live_tabs.rs b/crates/jcode-desktop-ui/src/live_tabs.rs
+--- a/crates/jcode-desktop-ui/src/live_tabs.rs
++++ b/crates/jcode-desktop-ui/src/live_tabs.rs
+@@ -1971,6 +1971,9 @@ mod tests {
+ 
+     #[gpui::test]
+     fn live_tabs_switch_rows_and_stay_detached_from_panels(cx: &mut gpui::TestAppContext) {
++        // The global updater action changes version-pill width and therefore
++        // tab hit targets. Keep it stable from bounds capture through click.
++        let _update_guard = crate::updates::test_lock();
+         let (workspace, vcx) = cx.add_window_view(|_, cx| {
+             let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
+             workspace.show_sidebar = false;
