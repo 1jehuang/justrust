@@ -56,6 +56,95 @@ match show(&mk(5)){5=>println!("five"),_=>{}}let c=RefCell::new(5i32);*c.borrow_
 }
 
 #[test]
+fn aggregate_drop_patterns_preserve_owned_paths() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check(
+        "aggregate-drop-patterns",
+        &[
+            Case {
+                name: "tuple_match_moves_each_destructor_owner_once",
+                source: r#"struct D(i32);impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}fn main(){match (D(1),D(2)){(a,b)=>{drop(a);drop(b);}}}"#,
+                expect: Expect::Run("drop 1\ndrop 2\n"),
+            },
+            Case {
+                name: "struct_remainder_and_borrowed_tuple_field_keep_drop_order",
+                source: r#"struct D(i32);impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}struct Pair{first:D,second:D}
+fn main(){{let pair=Pair{first:D(1),second:D(2)};match pair{Pair{first,..}=>{println!("arm");drop(first);}}println!("after");}
+println!("between");match (D(3),D(4)){(ref first,second)=>{println!("seen {}",first.0);drop(second);}}}"#,
+                expect: Expect::Run(
+                    "arm\ndrop 1\nafter\ndrop 2\nbetween\nseen 3\ndrop 4\ndrop 3\n",
+                ),
+            },
+            Case {
+                name: "own_destructor_allows_only_copy_reads_and_borrows",
+                source: r#"struct Owner{n:i32,word:String}impl Drop for Owner{fn drop(&mut self){println!("owner {}",self.n);}}fn main(){let value=Owner{n:7,word:String::from("kept")};match value{Owner{n,ref word}=>println!("{} {}",n,word)}println!("after");}"#,
+                expect: Expect::Run("7 kept\nafter\nowner 7\n"),
+            },
+            Case {
+                name: "own_enum_destructor_keeps_copy_and_borrowed_payloads",
+                source: r#"enum Owner{Value(i32,String),Empty}impl Drop for Owner{fn drop(&mut self){println!("owner");}}fn main(){let value=Owner::Value(8,String::from("kept"));match value{Owner::Value(n,ref word)=>println!("{} {}",n,word),Owner::Empty=>{}}println!("after");}"#,
+                expect: Expect::Run("8 kept\nafter\nowner\n"),
+            },
+            Case {
+                name: "unused_noncopy_extraction_from_own_drop_is_rejected",
+                source: r#"struct Owner{word:String}impl Drop for Owner{fn drop(&mut self){}}fn unused(value:Owner){match value{Owner{word}=>drop(word)}}fn main(){}"#,
+                expect: Expect::Invalid("E0509"),
+            },
+            Case {
+                name: "unused_enum_own_drop_payload_cannot_be_extracted",
+                source: r#"enum Owner{Value(String),Empty}impl Drop for Owner{fn drop(&mut self){}}fn unused(value:Owner){match value{Owner::Value(word)=>drop(word),Owner::Empty=>{}}}fn main(){}"#,
+                expect: Expect::Invalid("E0509"),
+            },
+            Case {
+                name: "unused_nested_own_drop_prefix_cannot_be_extracted",
+                source: r#"struct Owner{word:String}impl Drop for Owner{fn drop(&mut self){}}struct Wrapper{inner:Owner}fn unused(value:Wrapper){match value{Wrapper{inner:Owner{word}}=>drop(word)}}fn main(){}"#,
+                expect: Expect::Invalid("E0509"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn aggregate_drop_patterns_keep_indexed_move_boundary() {
+    let source = r#"struct D(i32);impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}fn unused(){match [D(1),D(2)]{[first,_]=>drop(first)}}fn main(){}"#;
+    let scratch = Scratch::new();
+    let input = scratch.write("indexed-pattern.rs", source.as_bytes());
+    let stock_image = scratch.path("stock-indexed-pattern");
+    let stock = capture(
+        Command::new(stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "-Cpanic=abort", "-Awarnings"])
+            .arg(input)
+            .arg("-o")
+            .arg(stock_image),
+        &scratch,
+        30,
+    );
+    successful(
+        &stock,
+        "stock accepts the deliberately unsupported indexed Drop move",
+    );
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let failure = match compiler::compile_observed(source.into(), workers, check_only) {
+                Err(failure) => failure,
+                Ok(_) => panic!(
+                    "workers={workers} CHECK={check_only}: indexed Drop move was admitted without per-index cleanup"
+                ),
+            };
+            assert!(
+                failure.error.to_string().contains(
+                    "unsupported: non-Copy bindings through array patterns are unsupported"
+                ),
+                "workers={workers} CHECK={check_only}: {failure}"
+            );
+            assert!(failure.resource_usage.first_failure.is_none());
+            assert!(!failure.resource_usage.poisoned);
+        }
+    }
+}
+
+#[test]
 fn direct_let_borrowed_destructor_temporaries_match_stock() {
     use explicit_drop_oracle::{Case, Expect};
     explicit_drop_oracle::check(

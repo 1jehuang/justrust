@@ -91,6 +91,74 @@ pub(super) fn descriptor(
     }
 }
 
+/// Authenticate each owned pattern move before relying on per-field cleanup.
+/// Whole owners move intact. Structural fields use the existing path flags,
+/// but no non-Copy move may cross an owner with its own destructor.
+fn admit_pattern_moves(
+    root: &Ty,
+    pattern: &ir::MatchPattern,
+    facts: ir::FactsCtx<'_>,
+    depth: usize,
+) -> Result<(), String> {
+    let authority = facts
+        .validated()
+        .ok_or("Drop pattern requires validated caller facts")?;
+    authority.budget().check_depth(depth)?;
+    authority.budget().charge_work(1)?;
+    let bindings = match pattern {
+        ir::MatchPattern::Or { rows, .. } => {
+            for row in rows {
+                admit_pattern_moves(root, row, facts, depth + 1)?;
+            }
+            return Ok(());
+        }
+        ir::MatchPattern::Aggregate { bindings, .. }
+        | ir::MatchPattern::EnumVariant { bindings, .. }
+        | ir::MatchPattern::Decision { bindings, .. } => bindings,
+        _ => return Ok(()),
+    };
+    for binding in bindings {
+        authority.budget().charge_work(1)?;
+        let selected = facts.projected_ty(root, &binding.projection, authority.budget())?;
+        if binding.borrow.is_some() || facts.must_copy(&selected)? {
+            continue;
+        }
+        for (index, step) in binding.projection.iter().enumerate() {
+            authority.budget().charge_work(1)?;
+            // Downcast and its field are one canonical projection step. The
+            // enum owner was checked before the downcast, and the complete
+            // binding projection above already authenticated the field.
+            if index > 0 && matches!(binding.projection[index - 1], ir::Projection::Downcast(_)) {
+                continue;
+            }
+            let owner =
+                facts.projected_ty(root, &binding.projection[..index], authority.budget())?;
+            if descriptor(&owner, facts)?.is_some_and(|d| d.own_target().is_some()) {
+                return Err(
+                    "E0509: cannot move out of a type which implements the `Drop` trait".into(),
+                );
+            }
+            match step {
+                ir::Projection::ConstantIndex(_) | ir::Projection::DynamicIndex(_) => {
+                    return Err("unsupported: indexed normal Drop pattern move".into());
+                }
+                ir::Projection::Deref
+                    if !matches!(
+                        owner.owned_pointer_pointee(),
+                        Some((ir::OwnedPointerKind::Box, _))
+                    ) =>
+                {
+                    // References and raw pointers do not transfer the tracked
+                    // root's storage. Their reads remain ordinary loan checks.
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 /// This whole-arena check includes dead syntax. References do not own their
 /// referents: ordinary loan analysis checks their uses against the canonical
 /// cleanup's exclusive receiver access. No separate borrowed-owner exemption
@@ -127,63 +195,19 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
     // Every demanded closed body is lowered again before its generated shape
     // is sealed. The instance frontier separately demands each concrete cleanup
     // target, so a universal unresolved type is never a no-drop executable proof.
-    // Structural enums can move individual payloads: backend cleanup follows
-    // their active variant and per-payload move flags. An owner's own Drop
-    // still forbids such moves, and other aggregate patterns remain scoped out.
+    // Structural pattern moves use the same typed projections and runtime
+    // path flags as ordinary partial moves. Validate every owned prefix,
+    // including nested own-Drop boundaries, before publishing this CFG.
     for expression in &source.exprs {
         authority.budget().charge_work(1)?;
         if let ir::ExprKind::Match {
             scrutinee, arms, ..
         } = &expression.kind
-            && let Some(destructor) = descriptor(&source.exprs[scrutinee.0].ty, facts)?
-            && !(destructor.own_target().is_none()
-                && matches!(
-                    destructor.glue(),
-                    crate::compiler::traits::DropGlue::Variants(_)
-                ))
+            && descriptor(&source.exprs[scrutinee.0].ty, facts)?.is_some()
         {
-            if destructor.own_target().is_some()
-                && matches!(&source.exprs[scrutinee.0].ty, Ty::Enum(_))
-            {
-                for arm in arms {
-                    let bindings = match &arm.pattern {
-                        ir::MatchPattern::EnumVariant { bindings, .. }
-                        | ir::MatchPattern::Decision { bindings, .. } => bindings,
-                        _ => continue,
-                    };
-                    for binding in bindings {
-                        authority.budget().charge_work(1)?;
-                        // A borrow, Copy read, whole-value binding or a move
-                        // through a reference is not E0509 payload extraction.
-                        if binding.borrow.is_none()
-                            && matches!(
-                                binding.projection.first(),
-                                Some(ir::Projection::Downcast(_))
-                            )
-                            && !binding.projection.contains(&ir::Projection::Deref)
-                            && !facts.must_copy(&facts.projected_ty(
-                                &source.exprs[scrutinee.0].ty,
-                                &binding.projection,
-                                authority.budget(),
-                            )?)?
-                        {
-                            return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
-                        }
-                    }
-                }
+            for arm in arms {
+                admit_pattern_moves(&source.exprs[scrutinee.0].ty, &arm.pattern, facts, 0)?;
             }
-            // A whole-value binding or wildcard does not destructure the
-            // owner (the `for` desugar's `match into_iter(x) { mut iter => .. }`):
-            // ownership moves intact, or the temporary drops as a whole.
-            if arms.iter().all(|arm| {
-                matches!(
-                    arm.pattern,
-                    ir::MatchPattern::Binding(_) | ir::MatchPattern::Wildcard
-                )
-            }) {
-                continue;
-            }
-            return Err("unsupported: pattern matching a normal Drop owner".into());
         }
     }
     Ok(enabled)
