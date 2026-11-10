@@ -333,22 +333,54 @@ impl<K: super::cmp::Ord, V> BTreeMap<K, V> {
         self.keys.len() == 0usize
     }
 
-    pub fn contains_key(&self, key: &K) -> bool {
-        match self.search(key) {
+    /// `search` for a borrowed form of the key, as in `get("name")` on
+    /// `BTreeMap<String, V>`. `Borrow` keeps the two orders identical.
+    fn search_borrowed<Q: ?Sized + super::cmp::Ord>(
+        &self,
+        key: &Q,
+    ) -> super::result::Result<usize, usize>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        let mut left = 0usize;
+        let mut right = self.keys.len();
+        while left < right {
+            let middle = left + (right - left) / 2usize;
+            let stored: &Q = self.keys.get_ref(middle).borrow();
+            match stored.cmp(key) {
+                super::cmp::Ordering::Less => left = middle + 1usize,
+                super::cmp::Ordering::Greater => right = middle,
+                super::cmp::Ordering::Equal => return super::result::Result::Ok(middle),
+            }
+        }
+        super::result::Result::Err(left)
+    }
+
+    pub fn contains_key<Q: ?Sized + super::cmp::Ord>(&self, key: &Q) -> bool
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(key) {
             super::result::Result::Ok(_) => true,
             super::result::Result::Err(_) => false,
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
-        match self.search(key) {
+    pub fn get<Q: ?Sized + super::cmp::Ord>(&self, key: &Q) -> Option<&V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(key) {
             super::result::Result::Ok(i) => Option::Some(self.values.get_ref(i)),
             super::result::Result::Err(_) => Option::None,
         }
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        match self.search(key) {
+    pub fn get_mut<Q: ?Sized + super::cmp::Ord>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(key) {
             super::result::Result::Ok(i) => self.values.get_mut(i),
             super::result::Result::Err(_) => Option::None,
         }
@@ -368,8 +400,11 @@ impl<K: super::cmp::Ord, V> BTreeMap<K, V> {
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        match self.search(key) {
+    pub fn remove<Q: ?Sized + super::cmp::Ord>(&mut self, key: &Q) -> Option<V>
+    where
+        K: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(key) {
             super::result::Result::Ok(i) => {
                 let _k = self.keys.remove(i);
                 Option::Some(self.values.remove(i))

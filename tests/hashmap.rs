@@ -405,6 +405,71 @@ fn main() {
     );
 }
 
+/// Ordered maps and sets look up by any borrowed form of the key, so a
+/// `String` key is found by `&str`.
+#[test]
+fn btree_borrowed_lookups_match_stock() {
+    closure_oracle::check(
+        "btree-borrowed-lookups",
+        &[
+            Case {
+                name: "map_and_set_by_str_and_owned",
+                source: r#"use std::collections::{BTreeMap, BTreeSet};
+fn find<'a>(m: &'a BTreeMap<String, Vec<u32>>, k: &str) -> Option<&'a Vec<u32>> { m.get(k) }
+fn main() {
+    let mut m: BTreeMap<String, u32> = BTreeMap::new();
+    for (k, v) in [("pear", 3), ("apple", 1), ("fig", 2), ("zucchini", 9), ("kiwi", 5)] { m.insert(k.to_string(), v); }
+    let name: &str = "fig";
+    let owned = String::from("pear");
+    if let Some(v) = m.get_mut(name) { *v += 10; }
+    if let Some(v) = m.get_mut(&owned) { *v += 100; }
+    println!("{:?} {:?} {:?} {:?}", m.get(name), m.get(&owned), m.get("nope"), m.get(owned.as_str()));
+    println!("{} {} {} {}", m.contains_key("apple"), m.contains_key(&owned), m.contains_key(""), m.contains_key("zucchini"));
+    println!("{:?} {:?} {:?} {:?}", m.remove("apple"), m.remove("apple"), m.remove(&owned), m.remove(&String::from("kiwi")));
+    println!("{:?} {}", m, m[&String::from("fig")]);
+    let mut n: BTreeMap<u32, String> = BTreeMap::new();
+    n.insert(3, "three".to_string()); n.insert(1, "one".to_string()); n.insert(2, "two".to_string());
+    let two = 2;
+    println!("{:?} {:?} {}", n.get(&1), n.get(&7), n.contains_key(&two));
+    println!("{:?}", n.remove(&3));
+    if let Some(v) = n.get_mut(&two) { *v = "TWO".to_string(); }
+    println!("{:?}", n);
+    let mut g: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    g.entry("a".to_string()).or_default().push(4);
+    println!("{:?} {:?}", find(&g, "a"), find(&g, "b"));
+    let mut t: BTreeMap<(i32, i32), char> = BTreeMap::new();
+    t.insert((1, 2), 'x');
+    println!("{:?} {:?}", t.get(&(1, 2)), t.get(&(2, 1)));
+    let mut s: BTreeSet<String> = BTreeSet::new();
+    for w in ["delta", "alpha", "charlie", "bravo"] { s.insert(w.to_string()); }
+    println!("{} {} {}", s.contains("alpha"), s.contains(&owned), s.contains(&String::from("delta")));
+    println!("{:?} {:?}", s.get("bravo"), s.get("zulu"));
+    println!("{} {} {:?} {:?}", s.remove("alpha"), s.remove("alpha"), s.take("charlie"), s.take("charlie"));
+    println!("{:?}", s);
+    let mut u: BTreeSet<i64> = BTreeSet::new();
+    u.insert(5); u.insert(-1);
+    println!("{} {} {} {:?}", u.contains(&5), u.contains(&6), u.remove(&-1), u);
+}"#,
+                expect: Expect::Run(
+                    "Some(12) Some(103) None Some(103)\ntrue true false true\nSome(1) None Some(103) Some(5)\n{\"fig\": 12, \"zucchini\": 9} 12\nSome(\"one\") None true\nSome(\"three\")\n{1: \"one\", 2: \"TWO\"}\nSome([4]) None\nSome('x') None\ntrue false true\nSome(\"bravo\") None\ntrue false Some(\"charlie\") None\n{\"bravo\", \"delta\"}\ntrue false true {5}\n",
+                ),
+            },
+            Case {
+                name: "map_lookup_by_unrelated_type",
+                source: r#"use std::collections::BTreeMap;
+fn main() { let mut m: BTreeMap<String, u32> = BTreeMap::new(); m.insert("a".to_string(), 1); let k = 3u32; println!("{:?}", m.get(&k)); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "set_lookup_by_unrelated_type",
+                source: r#"use std::collections::BTreeSet;
+fn main() { let mut s: BTreeSet<String> = BTreeSet::new(); s.insert("a".to_string()); let k = 3u32; println!("{}", s.contains(&k)); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
 #[test]
 fn lazy_entry_callbacks_preserve_vacancy_and_key_authority() {
     closure_oracle::check(

@@ -285,8 +285,30 @@ impl<T: Ord> BTreeSet<T> {
     pub fn clear(&mut self) {
         self.items.clear();
     }
-    pub fn contains(&self, value: &T) -> bool {
-        match self.search(value) {
+    /// `search` for a borrowed form of the element, as in `contains("name")`
+    /// on `BTreeSet<String>`. `Borrow` keeps the two orders identical.
+    fn search_borrowed<Q: ?Sized + Ord>(&self, value: &Q) -> super::result::Result<usize, usize>
+    where
+        T: super::borrow::Borrow<Q>,
+    {
+        let mut left = 0usize;
+        let mut right = self.items.len();
+        while left < right {
+            let middle = left + (right - left) / 2usize;
+            let stored: &Q = self.items.get_ref(middle).borrow();
+            match stored.cmp(value) {
+                Ordering::Less => left = middle + 1usize,
+                Ordering::Greater => right = middle,
+                Ordering::Equal => return super::result::Result::Ok(middle),
+            }
+        }
+        super::result::Result::Err(left)
+    }
+    pub fn contains<Q: ?Sized + Ord>(&self, value: &Q) -> bool
+    where
+        T: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(value) {
             super::result::Result::Ok(_) => true,
             super::result::Result::Err(_) => false,
         }
@@ -300,13 +322,34 @@ impl<T: Ord> BTreeSet<T> {
             }
         }
     }
-    pub fn remove(&mut self, value: &T) -> bool {
-        match self.search(value) {
+    pub fn remove<Q: ?Sized + Ord>(&mut self, value: &Q) -> bool
+    where
+        T: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(value) {
             super::result::Result::Ok(i) => {
                 let _v = self.items.remove(i);
                 true
             }
             super::result::Result::Err(_) => false,
+        }
+    }
+    pub fn get<Q: ?Sized + Ord>(&self, value: &Q) -> Option<&T>
+    where
+        T: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(value) {
+            super::result::Result::Ok(i) => Option::Some(self.items.get_ref(i)),
+            super::result::Result::Err(_) => Option::None,
+        }
+    }
+    pub fn take<Q: ?Sized + Ord>(&mut self, value: &Q) -> Option<T>
+    where
+        T: super::borrow::Borrow<Q>,
+    {
+        match self.search_borrowed(value) {
+            super::result::Result::Ok(i) => Option::Some(self.items.remove(i)),
+            super::result::Result::Err(_) => Option::None,
         }
     }
     pub fn first(&self) -> Option<&T> {
