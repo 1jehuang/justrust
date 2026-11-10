@@ -108,6 +108,21 @@ mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
 mod remote_resume;
+#[cfg(unix)]
+mod remote_session;
+#[cfg(windows)]
+mod remote_session {
+    pub const SOURCE_ID: &str = "JUSTRUST_SESSION_SOURCE_ID";
+    pub fn enabled() -> bool {
+        false
+    }
+    pub fn command(
+        _: &crate::remote_backend::Target,
+        _: &str,
+    ) -> anyhow::Result<std::process::Command> {
+        anyhow::bail!("durable hosted sessions currently require Unix")
+    }
+}
 mod remote_sync;
 // Windows has no watcher backend yet (see the module docs).
 #[cfg_attr(windows, allow(dead_code))]
@@ -845,6 +860,8 @@ pub fn main() -> anyhow::Result<()> {
             remote_agent::main(prefix)
         }
         Some(stock_verify::ARG) => stock_verify::main(std::env::args().nth(2)),
+        #[cfg(unix)]
+        Some(remote_session::ARG) => remote_session::main(),
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()

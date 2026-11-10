@@ -760,17 +760,22 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     crate::remote_build::ensure_remote_justrust(&target)?;
     let prefix = resolve_remote_prefix(&st.backend, &target)?;
     save_active_prefix(&prefix);
-    let agent_cmd = if prefix.is_empty() {
-        "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent".to_string()
+    let mut command = if st.backend == Backend::Hosted && crate::remote_session::enabled() {
+        crate::remote_session::command(&target, &prefix)?
     } else {
-        format!(
-            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent {}",
-            crate::remote_build::shell_quote(&prefix)
-        )
+        let agent_cmd = if prefix.is_empty() {
+            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent".to_string()
+        } else {
+            format!(
+                "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent {}",
+                crate::remote_build::shell_quote(&prefix)
+            )
+        };
+        let mut command = target.command();
+        command.arg(agent_cmd);
+        command
     };
-    let mut child = target
-        .command()
-        .arg(agent_cmd)
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1408,6 +1413,30 @@ fn oversized_note(st: &Sync, roots: &[PathBuf]) -> Result<String> {
     })
 }
 
+/// Bind a receipt to the same source manifests used for this submission.
+/// Reattachment does not rescan, remirror, or create a new invocation.
+fn source_receipt(st: &Sync, roots: &[PathBuf]) -> Result<String> {
+    let mut hash = crate::depcache::H128::new();
+    hash.field(b"hosted-session-manifest-v1");
+    for root in roots.iter().collect::<std::collections::BTreeSet<_>>() {
+        hash.field(root.as_os_str().as_encoded_bytes());
+        let source = st
+            .roots
+            .get(root)
+            .context("source root has no acknowledged mirror")?;
+        for (path, stamp) in &source.manifest {
+            hash.field(path.as_os_str().as_encoded_bytes());
+            hash.field(&stamp.mtime_ns.to_le_bytes());
+            hash.field(&stamp.size.to_le_bytes());
+            hash.field(&stamp.mode.to_le_bytes());
+        }
+        for path in &source.oversized {
+            hash.field(path.as_os_str().as_encoded_bytes());
+        }
+    }
+    Ok(hash.hex())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     d: &Daemon,
@@ -1415,7 +1444,7 @@ fn run(
     w: &mut BufWriter<UnixStream>,
     cwd: String,
     args: Vec<String>,
-    env: Vec<(String, String)>,
+    mut env: Vec<(String, String)>,
     roots: Vec<String>,
     start: bool,
     run_id: String,
@@ -1450,6 +1479,15 @@ fn run(
             let note = oversized_note(&st, &roots)?;
             if !pipeline {
                 barrier(d, &mut st, &link)?;
+            }
+            if st.backend == Backend::Hosted && crate::remote_session::enabled() {
+                // A correlation fingerprint of this acknowledged mirror, not
+                // an authenticated content hash or a new snapshot guarantee.
+                env.retain(|(key, _)| key != crate::remote_session::SOURCE_ID);
+                env.push((
+                    crate::remote_session::SOURCE_ID.into(),
+                    source_receipt(&st, &roots)?,
+                ));
             }
             let (barrier_tx, barrier_rx) = channel();
             {
