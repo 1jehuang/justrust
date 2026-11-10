@@ -643,6 +643,47 @@ fn accepts_let_else_pattern_with_original_empty_output() {
 }
 
 #[test]
+fn accepts_refutable_let_else_matching_stock_output() {
+    // Expected output is stock rustc's (edition 2024, panic=abort).
+    runs(
+        r#"struct Item { n: i32 }
+enum E { A(bool, Item), B }
+fn run(v: E) -> i32 { let E::A(true, item) = v else { return 0; }; item.n }
+fn opt(v: Option<Item>) -> i32 { let Some(item) = v else { return -1; }; item.n }
+fn annotated(v: Option<u8>) -> u64 { let Some(x): Option<u8> = v else { return 9; }; x as u64 + 1 }
+fn inferred() -> u64 { let (Some(a), b) = (Some(3), 4u64) else { return 0; }; a + b }
+fn looped(xs: &[Option<i32>]) -> i32 { let mut t = 0; for x in xs { let Some(n) = x else { continue; }; t += n; } t }
+fn shadow(v: Option<i32>) -> i32 { let n = 5; let Some(n) = v else { return n; }; n * 2 }
+fn main() {
+    println!("{} {} {}", run(E::A(true, Item { n: 7 })), run(E::A(false, Item { n: 8 })), run(E::B));
+    println!("{} {}", opt(Some(Item { n: 3 })), opt(None));
+    println!("{} {} {}", annotated(Some(250)), annotated(None), inferred());
+    println!("{} {} {}", looped(&[Some(1), None, Some(5)]), shadow(Some(4)), shadow(None));
+}"#,
+        "7 0 0\n3 -1\n251 9 7\n6 8 5\n",
+    );
+}
+
+#[test]
+fn rejects_invalid_let_else_even_when_unused() {
+    // Stock: E0308, the else block does not diverge.
+    rejects(
+        "let_else_non_diverging_else",
+        r#"fn unused(v: Option<i32>) -> i32 { let Some(n) = v else { 0 }; n } fn main() {}"#,
+    );
+    // Stock: E0425, the pattern's bindings are not in scope in the else block.
+    rejects(
+        "let_else_binding_used_in_else",
+        r#"fn unused(v: Option<i32>) -> i32 { let Some(n) = v else { return n; }; n } fn main() {}"#,
+    );
+    // Stock: E0308, the annotation disagrees with the initializer.
+    rejects(
+        "let_else_annotation_mismatch",
+        r#"fn unused(v: Option<i32>) -> u8 { let Some(n): Option<u8> = v else { return 0; }; n } fn main() {}"#,
+    );
+}
+
+#[test]
 fn accepts_parenthesized_wildcard_source_does_not_read_moved_value() {
     runs(
         r#"struct Item { n: i32 } fn consume(x: Item) -> i32 { x.n } fn run() -> i32 { let x = Item { n: 7 }; let n = consume(x); let _ = (x); n }

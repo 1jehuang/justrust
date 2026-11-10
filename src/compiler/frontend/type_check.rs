@@ -7997,7 +7997,16 @@ impl<'a> Checker<'a> {
                     ty,
                     value,
                     else_block,
-                } => self.let_else_statement(pattern, ty, value, else_block)?,
+                } => {
+                    // The solved initializer type is only an inferred
+                    // expectation, never a hard annotation.
+                    let inferred = if matches!(ty, Type::Infer) {
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
+                    } else {
+                        None
+                    };
+                    self.let_else_statement(pattern, ty, value, else_block, inferred.as_ref())?
+                }
                 Stmt::LetPattern { pattern, ty, value } => {
                     let partial = partial_annotation::has_nested_infer(ty);
                     let written = ty;
@@ -11740,13 +11749,20 @@ impl<'a> Checker<'a> {
         annotation: &Type,
         source: &Expr,
         else_block: &Block,
+        inferred: Option<&ir::Ty>,
     ) -> Result<(ir::TypedStmt, bool), String> {
         let annotation = if matches!(annotation, Type::Infer) {
             None
         } else {
-            Some(checked_local_ty(annotation, self.signatures)?)
+            Some(self.source_local_ty(annotation)?)
         };
-        let value = self.expr_expected(source, annotation.as_ref())?;
+        let value = match (&annotation, inferred) {
+            (Some(ty), _) => self.expr_expected(source, Some(ty))?,
+            (None, Some(hint)) => {
+                self.expr_with_expectation(source, Expectation::Inferred(hint))?
+            }
+            (None, None) => self.expr_expected(source, None)?,
+        };
         let flow = self.flow(value);
         if matches!(source, Expr::DynamicIndex { .. })
             && !matches!(pattern, Pattern::Wildcard)

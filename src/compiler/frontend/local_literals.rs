@@ -2657,6 +2657,30 @@ impl<'s> Solver<'_, '_, 's> {
                     self.sites.push((stmt as *const Stmt as usize, term));
                     self.pattern(pattern, term)?;
                 }
+                // `let PAT = value else { diverge };` binds exactly as a
+                // pattern let. The else block is solved first, in its own
+                // scope, because the pattern's names are not visible there.
+                Stmt::LetElse {
+                    pattern,
+                    ty,
+                    value,
+                    else_block,
+                } => {
+                    let mut term = self.expr(value, depth + 1)?;
+                    if !matches!(ty, Type::Infer) {
+                        let ty = self.source_ty(ty)?;
+                        self.coerce(term, ty)?;
+                        term = ty;
+                    }
+                    // Published like a pattern let, so literals inside the
+                    // initializer take the type the bindings' later uses fix.
+                    self.sites.push((stmt as *const Stmt as usize, term));
+                    self.scopes.push(HashMap::new());
+                    let diverging = self.block(else_block, depth + 1);
+                    self.scopes.pop();
+                    diverging?;
+                    self.pattern(pattern, term)?;
+                }
                 Stmt::Assign { name, value } => {
                     let target = self.lookup(name)?;
                     let value = self.expr(value, depth + 1)?;
