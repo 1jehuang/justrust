@@ -958,6 +958,15 @@ mod tests {
         ))
     }
 
+    fn env_has_const_slots(env: &ir::GenericEnv) -> bool {
+        env.ordered_params().any(|parameter| {
+            matches!(
+                env.parameter_kind(parameter),
+                Some(ir::GenericParamKind::Const(_))
+            )
+        })
+    }
+
     const CONST_SOURCE: &str = "fn identity<const N:usize>(x:[i32;N])->[i32;N]{x} fn other<const N:usize>(x:[i32;N])->[i32;N]{x} fn main(){}";
 
     #[test]
@@ -967,22 +976,31 @@ mod tests {
             let outputs = compute_standalone(inputs.clone(), &budget)?;
             let mut owners = Vec::new();
             for output in &outputs {
-                if output.schema.value.env.const_binders().is_empty() {
+                if !env_has_const_slots(&output.schema.value.env) {
                     continue;
                 }
                 let env = &output.schema.value.env;
-                let [binder] = env.const_binders() else {
-                    panic!("one declaration const binder")
+                let [scope] = env.scopes() else {
+                    panic!("one declaration generic scope")
                 };
-                assert_eq!(binder.owner().declaration, output.declaration);
-                assert_eq!(binder.parameters(), &[ir::ConstType::Int(ir::IntTy::Usize)]);
+                assert_eq!(scope.binder().declaration, output.declaration);
+                assert_eq!(scope.arity(), 1);
+                assert_eq!(
+                    scope.parameter_kind(ir::ParamId {
+                        owner: scope.binder(),
+                        index: 0,
+                    }),
+                    Some(ir::GenericParamKind::Const(ir::ConstType::Int(
+                        ir::IntTy::Usize
+                    )))
+                );
                 let ir::Ty::DependentArray { element, length } =
                     &output.schema.value.signature.result
                 else {
                     panic!("a symbolic array must not become a concrete placeholder")
                 };
                 assert_eq!(element.as_ref(), &ir::Ty::Int(ir::IntTy::I32));
-                assert_eq!(length.owner, binder.owner());
+                assert_eq!(length.owner, scope.binder());
                 assert_eq!(length.index, 0);
                 assert_eq!(
                     output.schema.value.signature.params.as_slice(),
@@ -1004,52 +1022,42 @@ mod tests {
             );
             let owner_output = outputs
                 .iter()
-                .find(|output| !output.schema.value.env.const_binders().is_empty())
+                .find(|output| env_has_const_slots(&output.schema.value.env))
                 .unwrap();
             let env = &owner_output.schema.value.env;
-            let binder = &env.const_binders()[0];
-            let boolean = ir::GenericArgument::Const(ir::ConstArgument::Bool(true));
+            let binder = env.scopes()[0].binder();
+            let boolean = ir::Ty::Const(ir::ConstArgument::Bool(true));
             assert!(
-                binder
-                    .validate_arguments(&[boolean], env, &budget)
+                env.validate_argument_kinds(&[boolean], Some(env), &budget)
                     .unwrap_err()
                     .contains("E0308")
             );
-            let scalar = ir::GenericArgument::Const(ir::ConstArgument::Integer {
+            let scalar = ir::Ty::Const(ir::ConstArgument::Integer {
                 ty: ir::IntTy::Usize,
                 bits: 3,
             });
-            binder.validate_arguments(&[scalar], env, &budget)?;
-            let parameter = ir::ConstParamId {
-                owner: binder.owner(),
+            env.validate_argument_kinds(&[scalar], Some(env), &budget)?;
+            let parameter = ir::ParamId {
+                owner: binder,
                 index: 0,
             };
-            binder.validate_arguments(
-                &[ir::GenericArgument::Const(ir::ConstArgument::Parameter(
-                    parameter,
-                ))],
-                env,
-                &budget,
-            )?;
+            env.validate_argument_kinds(&[ir::Ty::Param(parameter)], Some(env), &budget)?;
             let foreign_owner = owners
                 .iter()
                 .copied()
-                .find(|owner| *owner != binder.owner())
+                .find(|owner| *owner != binder)
                 .unwrap();
-            let foreign =
-                ir::GenericArgument::Const(ir::ConstArgument::Parameter(ir::ConstParamId {
-                    owner: foreign_owner,
-                    index: 0,
-                }));
+            let foreign = ir::Ty::Param(ir::ParamId {
+                owner: foreign_owner,
+                index: 0,
+            });
             assert!(
-                binder
-                    .validate_arguments(&[foreign], env, &budget)
+                env.validate_argument_kinds(&[foreign], Some(env), &budget)
                     .unwrap_err()
-                    .contains("declaration-owned binder")
+                    .contains("outside its authoritative binder")
             );
             assert!(
-                binder
-                    .validate_arguments(&[ir::GenericArgument::Type(ir::Ty::Bool)], env, &budget)
+                env.validate_argument_kinds(&[ir::Ty::Bool], Some(env), &budget)
                     .unwrap_err()
                     .contains("E0747")
             );
@@ -1060,15 +1068,7 @@ mod tests {
             .registry
             .function_ids
             .iter()
-            .filter(|id| {
-                !plan
-                    .registry
-                    .declaration(**id)
-                    .unwrap()
-                    .env
-                    .const_binders()
-                    .is_empty()
-            })
+            .filter(|id| env_has_const_slots(&plan.registry.declaration(**id).unwrap().env))
             .count();
         assert_eq!(declarations, 2);
     }
@@ -1081,7 +1081,7 @@ mod tests {
             let indices = outputs
                 .iter()
                 .enumerate()
-                .filter(|(_, output)| !output.schema.value.env.const_binders().is_empty())
+                .filter(|(_, output)| env_has_const_slots(&output.schema.value.env))
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();
             assert_eq!(indices.len(), 2);
@@ -1129,6 +1129,32 @@ mod tests {
             }
             let mut output = compute_callable_signature(inputs.clone(), index, &budget)?;
             let info = inputs.registry.declaration(output.declaration)?;
+            let [scope] = info.env.scopes() else {
+                panic!("one declaration generic scope")
+            };
+            let changed_scope = scope
+                .with_slot_kinds(&[ir::GenericParamKind::Const(ir::ConstType::Bool)], &budget)?;
+            output.schema.value.env =
+                Arc::new(ir::GenericEnv::new(&[Arc::new(changed_scope)], &budget)?);
+            assert_ne!(
+                output.schema.value.env.parameter_kind(ir::ParamId {
+                    owner: scope.binder(),
+                    index: 0,
+                }),
+                info.env.parameter_kind(ir::ParamId {
+                    owner: scope.binder(),
+                    index: 0,
+                })
+            );
+            let mut builder = SourceSchemasBuilder::default();
+            let mut state = PlanState::scratch(&inputs.nominal_schemas, &inputs.nominals);
+            assert!(
+                output
+                    .install(&inputs, index, &mut builder, &mut state, &budget)
+                    .unwrap_err()
+                    .contains("declaration environment")
+            );
+            let mut output = compute_callable_signature(inputs.clone(), index, &budget)?;
             let forged = Arc::new(ir::ConstBinder::new(
                 ir::BinderId {
                     declaration: info.id,
