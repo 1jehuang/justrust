@@ -132,6 +132,44 @@ fn function_and_method_parameters_destructure_like_let() {
 }
 
 #[test]
+fn struct_patterns_move_fields_with_destructors() {
+    oracle::check(
+        "drop_field_struct_patterns",
+        &[Case {
+            name: "let_and_parameter_struct_patterns",
+            source: "struct D(&'static str);impl Drop for D{fn drop(&mut self){println!(\"drop {}\",self.0);}}struct S{a:D,b:D}struct W(D,i32);fn f(S{a,..}:S,W(d,n):W){println!(\"{} {} {}\",a.0,d.0,n);}fn main(){let s=S{a:D(\"a\"),b:D(\"b\")};let S{b,..}=s;println!(\"{}\",b.0);let p=(S{a:D(\"c\"),b:D(\"d\")},D(\"e\"));let(S{a,..},c)=p;println!(\"{} {}\",c.0,a.0);f(S{a:D(\"f\"),b:D(\"g\")},W(D(\"w\"),3));println!(\"end\");}",
+            expect: Expect::Run(
+                "b\ne c\nf w 3\ndrop w\ndrop f\ndrop g\nend\ndrop e\ndrop c\ndrop d\ndrop b\ndrop a\n",
+            ),
+        }],
+    );
+}
+
+#[test]
+fn unused_invalid_refutable_enum_function_parameter() {
+    invalid(
+        "refutable_enum_function_parameter",
+        "fn unused(Some(x):Option<i32>)->i32{x}fn main(){}",
+        "E0005",
+    );
+}
+#[test]
+fn unused_invalid_refutable_nested_enum_parameter() {
+    invalid(
+        "refutable_nested_enum_parameter",
+        "enum E{A(i32),B}fn unused((E::A(x),_):(E,u8))->i32{x}fn main(){}",
+        "E0005",
+    );
+}
+#[test]
+fn unused_invalid_refutable_enum_let() {
+    invalid(
+        "refutable_enum_let",
+        "enum E{A(i32),B}fn unused(e:E)->i32{let E::A(x)=e;x}fn main(){}",
+        "E0005",
+    );
+}
+#[test]
 fn unused_invalid_refutable_function_parameter() {
     invalid(
         "refutable_function_parameter",

@@ -365,6 +365,10 @@ impl Solver<'_, '_, '_> {
         let arguments = match (arity, right) {
             (1, _) => Vec::new(),
             (2, Some(right)) => {
+                // `grid[(1, 0)]`: literals nested in the operand.
+                if matches!(kind, Kind::Index(_)) {
+                    self.hint_index_operand(&receiver, declaration, &method, right)?;
+                }
                 // `map[&7]`: a borrowed unsuffixed literal takes its type from
                 // the unique `Index<&Int>` impl of the receiver.
                 if matches!(kind, Kind::Index(_))

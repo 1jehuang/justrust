@@ -89,7 +89,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum E{A(bool,i32),B}fn main(){let E::A(true,n)=E::A(true,42);}"#,
             stdout: None,
             stock_diagnostic: Some("error[E0005]"),
-            outcome: Outcome::InvalidUnsupported,
+            outcome: Outcome::Invalid,
         },
         Case {
             name: "incomplete_nested_invalid",
@@ -405,7 +405,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (23, 7));
-    assert_eq!(partition, (20, 6, 3, 1));
+    assert_eq!(partition, (20, 7, 3, 0));
 }
 #[test]
 fn stock_nested_pattern_decisions_oracle_edition2024_actual_toolchain() {
@@ -664,7 +664,7 @@ fn nested_decisions_keep_actual_type_privacy_move_and_dead_arm_errors_invalid() 
         );
         count += 1;
     }
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
 }
 #[test]
 fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned() {
@@ -713,9 +713,6 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             let message = error.to_string();
             assert!(message.contains("unsupported:"), "{}:{message}", case.name);
             let expected = match case.name {
-                "plain_let_refutable_invalid" => {
-                    "refutable enum patterns in irrefutable positions are unsupported"
-                }
                 "array_noncopy_selection_boundary" => {
                     "non-Copy bindings through array patterns are unsupported"
                 }
@@ -732,7 +729,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             }
         }
     }
-    assert_eq!(counts, (1, 1, 1, 1));
+    assert_eq!(counts, (1, 1, 0, 1));
 }
 #[test]
 fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
@@ -824,7 +821,7 @@ fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 120);
-    assert_eq!(modes, (40, 40, 12, 12, 6, 6, 2, 2));
+    assert_eq!(modes, (40, 40, 14, 14, 6, 6, 0, 0));
     eprintln!(
         "NATIVE PATTERN DECISIONS:120 cells, modes{modes:?};38 nonempty-output main images;16 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );

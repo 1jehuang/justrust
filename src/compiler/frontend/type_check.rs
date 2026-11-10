@@ -47,6 +47,7 @@ pub(super) mod partial_annotation;
 mod primitive_actuals;
 #[path = "type_check/projected_formals.rs"]
 mod projected_formals;
+mod refutability;
 #[path = "type_check/shared_or_arms.rs"]
 mod shared_or_arms;
 mod slice_patterns;
@@ -6247,15 +6248,17 @@ impl<'a> Checker<'a> {
             Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Apply { .. }
         ) && let Some(facts) = self.facts().validated()
             && facts.has_normal_drop_impls()
-            && matches!(
-                facts
-                    .normal_drop_plan(ty)
-                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?,
-                super::super::traits::NormalDropPlan::Destructor(ref destructor)
-                    if destructor.own_target().is_some() || !matches!(ty, ir::Ty::Tuple(_))
-            )
+            && let super::super::traits::NormalDropPlan::Destructor(destructor) = facts
+                .normal_drop_plan(ty)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
         {
-            return Err("unsupported: destructuring a normal Drop owner".into());
+            // Fields that need drop glue move out individually, exactly as
+            // tuple fields do. Only the owner's own `Drop` impl forbids it.
+            if destructor.own_target().is_some()
+                || !matches!(ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+            {
+                return Err("unsupported: destructuring a normal Drop owner".into());
+            }
         }
         if Self::implicitly_dereferenced(pattern, ty) {
             self.implicit_deref(ty, &mut Vec::new(), |this, referent, _| {
@@ -6470,7 +6473,7 @@ impl<'a> Checker<'a> {
                 }
                 let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
                 if enumeration.def().variants.len() != 1 {
-                    return Err(Self::refutable_enum_let_unsupported());
+                    return Err(self.refutable_variant_error(&enumeration, variant)?);
                 }
                 for &(index, pattern) in fields.as_slice() {
                     path.push(ir::Projection::Downcast(ir::VariantId {
@@ -15245,11 +15248,7 @@ mod checked_identity_tests {
         assert!(!error.contains("unsupported:"));
         let program =
             parse("enum E{A(bool),B}fn value(v:E){let E::A(true)=v;}fn main(){}").unwrap();
-        assert!(
-            check(&program)
-                .unwrap_err()
-                .contains("unsupported: refutable enum patterns")
-        );
+        assert!(check(&program).unwrap_err().contains("E0005"));
         let program = parse("enum E{Only(i32)}struct Packet(E);fn value(v:Packet)->i32{match v{Packet(E::Only(x))=>x}}fn main(){}").unwrap();
         check(&program).unwrap();
     }
@@ -15567,11 +15566,7 @@ mod checked_identity_tests {
             "enum Item{A(i32,i32,i32),B}fn value(item:Item){let Item::A(a,..,z)=item;}fn main(){}",
         )
         .unwrap();
-        assert!(
-            check(&program)
-                .unwrap_err()
-                .contains("unsupported: refutable enum patterns")
-        );
+        assert!(check(&program).unwrap_err().contains("E0005"));
     }
 
     #[test]

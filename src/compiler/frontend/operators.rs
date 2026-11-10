@@ -186,14 +186,19 @@ impl type_check::Checker<'_> {
         }
         let (declaration, name) = self.operator_trait("ops", "Index", "index")?;
         let plan = self.signatures.plan()?;
-        let index_ty = self
-            .method_receiver_hint(index)?
-            .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
-        let candidates = if index_ty == ir::Ty::Int(ir::IntTy::I32) {
+        let index_ty = self.index_operand_hint(owner, index)?;
+        let fitted = self.defaulted_operand_formal(owner, declaration, &name, &index_ty)?;
+        let mut candidates = if index_ty == ir::Ty::Int(ir::IntTy::I32) {
             vec![index_ty, ir::Ty::Int(ir::IntTy::Usize)]
         } else {
             vec![index_ty]
         };
+        // `grid[(1, 0)] = x`: literals nested in the operand were defaulted.
+        if let Some(formal) = fitted
+            && !candidates.contains(&formal)
+        {
+            candidates.push(formal);
+        }
         for index_ty in candidates {
             let reference = ir::TraitRef {
                 declaration,
@@ -379,9 +384,7 @@ impl type_check::Checker<'_> {
         if !overloadable(&owner) {
             return Ok(None);
         }
-        let index_ty = self
-            .method_receiver_hint(index)?
-            .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
+        let index_ty = self.index_operand_hint(&owner, index)?;
         let spec = if kind == ir::BorrowKind::Mut {
             ("ops", "IndexMut", "index_mut")
         } else {
@@ -592,9 +595,7 @@ impl type_check::Checker<'_> {
             local: saved,
             value: rhs,
         });
-        let idx_ty = self
-            .method_receiver_hint(index)?
-            .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
+        let idx_ty = self.index_operand_hint(&owner, index)?;
         let call = self.operator_call(
             ("ops", "IndexMut", "index_mut"),
             owner,
@@ -914,6 +915,7 @@ impl type_check::Checker<'_> {
         };
         // A genuine numeric literal cannot have a nominal Self type. Keep its
         // final numeric fallback distinct from speculative nonliteral hints.
+        let hinted_rhs = rhs_ty.clone();
         let candidates: Vec<Vec<ir::Ty>> = match (arity, rhs_ty) {
             (1, _) => vec![Vec::new()],
             // An unsuffixed integer index variable infers from the selected
@@ -941,6 +943,16 @@ impl type_check::Checker<'_> {
         if arity == 2
             && module == "ops"
             && let Some(formal) = self.unique_operator_rhs_formal(&self_ty, declaration, &ident)?
+            && !candidates.iter().any(|c| c.first() == Some(&formal))
+        {
+            candidates.push(vec![formal]);
+        }
+        // `grid[(1, 0)]`: literals nested in the operand were defaulted.
+        if arity == 2
+            && matches!(name, "Index" | "IndexMut")
+            && let Some(hinted) = &hinted_rhs
+            && let Some(formal) =
+                self.defaulted_operand_formal(&self_ty, declaration, &ident, hinted)?
             && !candidates.iter().any(|c| c.first() == Some(&formal))
         {
             candidates.push(vec![formal]);
@@ -1160,9 +1172,7 @@ impl type_check::Checker<'_> {
                     first = First::Lowered(carrier);
                     ty = target;
                 }
-                let idx = self
-                    .method_receiver_hint(index)?
-                    .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
+                let idx = self.index_operand_hint(&ty, index)?;
                 let rest = std::slice::from_ref(index.as_ref());
                 let call =
                     self.operator_call(("ops", "Index", "index"), ty, Some(idx), first, rest)?;

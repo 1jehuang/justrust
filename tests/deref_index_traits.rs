@@ -212,3 +212,73 @@ fn inferred_string_local_deref_coerces_at_str_argument() {
     let source = "fn main(){let mut s=String::new();let t=5u32;s.push_str(&t);println!(\"{}\",s);}";
     assert!(compiler::compile(source.into(), 1, true).is_err());
 }
+
+#[test]
+fn user_index_with_tuple_struct_and_str_operands() {
+    run(
+        "use std::ops::{Index, IndexMut};
+struct Grid { w: usize, cells: Vec<char> }
+impl Index<(usize, usize)> for Grid { type Output = char; fn index(&self, (r, c): (usize, usize)) -> &char { &self.cells[r * self.w + c] } }
+impl IndexMut<(usize, usize)> for Grid { fn index_mut(&mut self, (r, c): (usize, usize)) -> &mut char { &mut self.cells[r * self.w + c] } }
+#[derive(Clone, Copy)] struct Pos { r: usize, c: usize }
+struct Board { w: usize, v: Vec<i64> }
+impl Index<Pos> for Board { type Output = i64; fn index(&self, p: Pos) -> &i64 { &self.v[p.r * self.w + p.c] } }
+impl IndexMut<Pos> for Board { fn index_mut(&mut self, p: Pos) -> &mut i64 { &mut self.v[p.r * self.w + p.c] } }
+struct Env { names: Vec<String>, vals: Vec<i32> }
+impl Index<&str> for Env { type Output = i32; fn index(&self, k: &str) -> &i32 { let mut i = 0; while self.names[i] != k { i += 1; } &self.vals[i] } }
+impl IndexMut<&str> for Env { fn index_mut(&mut self, k: &str) -> &mut i32 { let mut i = 0; while self.names[i] != k { i += 1; } &mut self.vals[i] } }
+struct Cube { v: Vec<u8> }
+impl Index<(usize, (usize, usize))> for Cube { type Output = u8; fn index(&self, (a, (b, c)): (usize, (usize, usize))) -> &u8 { &self.v[a * 4 + b * 2 + c] } }
+fn main() {
+    let mut g = Grid { w: 3, cells: vec!['.'; 9] };
+    g[(1, 1)] = '#'; g[(2, 0)] = '@';
+    for r in 0..3 { println!(\"{}\", (0..3).map(|c| g[(r, c)]).collect::<String>()); }
+    let mut b = Board { w: 2, v: vec![1, 2, 3, 4] };
+    b[Pos { r: 1, c: 0 }] += 10; b[Pos { r: 0, c: 1 }] *= 7; b[Pos { r: 1, c: 1 }] = -5;
+    let p = Pos { r: 1, c: 0 };
+    println!(\"{} {} {}\", b[p], b[Pos { r: 0, c: 1 }], b[Pos { r: 1, c: 1 }]);
+    let mut e = Env { names: vec![\"x\".to_string(), \"y\".to_string()], vals: vec![1, 2] };
+    e[\"y\"] += 40; e[\"x\"] = 9;
+    let k = String::from(\"y\");
+    println!(\"{} {}\", e[\"x\"], e[k.as_str()]);
+    let c = Cube { v: vec![0, 1, 2, 3, 4, 5, 6, 7] };
+    println!(\"{} {}\", c[(1, (0, 1))], c[(0, (1, 1))]);
+}",
+        "...\n.#.\n@..\n13 14 -5\n9 42\n5 3\n",
+    );
+}
+
+#[test]
+fn user_index_with_range_operand_and_unsized_output() {
+    run(
+        "use std::ops::{Index, Range};
+struct B { v: Vec<i64> }
+impl Index<Range<usize>> for B { type Output = [i64]; fn index(&self, r: Range<usize>) -> &[i64] { &self.v[r.start..r.end] } }
+impl Index<usize> for B { type Output = i64; fn index(&self, i: usize) -> &i64 { &self.v[i] } }
+fn main() { let b = B { v: vec![1, 2, 3, 4] }; let r = 1..3usize; let s = &b[r]; println!(\"{:?} {}\", s, b[3]); }",
+        "[2, 3] 4\n",
+    );
+}
+
+#[test]
+fn user_index_operand_mismatch_is_e0277() {
+    let head = "use std::ops::Index; struct G { w: usize, v: Vec<u8> }
+impl Index<(usize, usize)> for G { type Output = u8; fn index(&self, p: (usize, usize)) -> &u8 { &self.v[p.0 * self.w + p.1] } }
+fn g() -> G { G { w: 2, v: vec![1, 2, 3, 4] } }";
+    for body in [
+        "fn main() { let a = g(); let _ = a[(1u8, 2u8)]; }",
+        "fn main() { let a = g(); let _ = a[\"a\"]; }",
+        "fn main() { let a = g(); let _ = a[(1, 2, 3)]; }",
+        "fn main() { let a = g(); let _ = a[3]; }",
+        "fn main() { let mut a = g(); a[(0, 0)] = 2; }",
+        "fn main() { let mut a = g(); a[(0, 0)] += 2; }",
+        "struct N; fn main() { let n = N; let _ = n[(1, 2)]; }",
+    ] {
+        let source = format!("{head}\n{body}");
+        let error = match compiler::compile(source.clone(), 1, true) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("accepted {source}"),
+        };
+        assert!(error.contains("E0277"), "{error}\n{source}");
+    }
+}

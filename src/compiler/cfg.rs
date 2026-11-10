@@ -5418,7 +5418,8 @@ impl Lowerer<'_> {
                 } => {
                     if let Some(destructor) = drop_normal::descriptor(ty, self.facts)?
                         && !bindings.is_empty()
-                        && (destructor.own_target().is_some() || !matches!(ty, Ty::Tuple(_)))
+                        && (destructor.own_target().is_some()
+                            || !matches!(ty, Ty::Tuple(_) | Ty::Struct(_)))
                     {
                         return Err("unsupported: destructuring a normal Drop owner".into());
                     }

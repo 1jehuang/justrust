@@ -32,6 +32,8 @@ mod control_flow;
 #[path = "local_literals/opaque.rs"]
 mod opaque;
 
+#[path = "local_literals/index_operand.rs"]
+mod index_operand;
 #[path = "local_literals/operators.rs"]
 mod operators;
 #[path = "local_literals/receiver_assignment.rs"]

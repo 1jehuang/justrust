@@ -1255,10 +1255,11 @@ fn unsupported_patterns_and_pattern_nesting_are_explicit() {
         "struct S{x:i32} fn main(){let S{..,}=S{x:1};}",
         "struct S{x:i32} fn main(){let S{x,..,}=S{x:1};}",
         "struct S{x:i32} fn main(){let S{. .}=S{x:1};}",
-        "fn f((x,y):(i32,i32)){} fn main(){}",
     ] {
         assert!(parse(source).is_err(), "accepted {source}");
     }
+    // Parameter patterns destructure like the equivalent `let`.
+    check(&parse("fn f((x,y):(i32,i32)){} fn main(){}").unwrap()).unwrap();
     stock_native_reject("fn main(){let 1=1;}");
     let program = parse("fn main(){let(x,y)=(1,2) else {};}").unwrap();
     let error = check(&program).unwrap_err();

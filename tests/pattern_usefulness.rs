@@ -236,7 +236,7 @@ fn f(p:(bool,bool))->i32{match p{(true,_)=>1,(true,false)=>2,(false,_)=>3}}fn ma
             source: r#"enum E{A(bool),B}fn f(e:E){let E::A(true)=e;}fn main(){}"#,
             stdout: None,
             stock_diagnostic: Some("E0005"),
-            outcome: Outcome::InvalidUnsupported,
+            outcome: Outcome::Invalid,
         },
         Case {
             name: "or_boundary",
@@ -426,7 +426,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (24, 8));
-    assert_eq!(partition, (24, 6, 0, 2));
+    assert_eq!(partition, (24, 7, 0, 1));
 }
 #[test]
 fn stock_nested_pattern_usefulness_oracle_edition2024_actual_toolchain() {
@@ -636,11 +636,11 @@ fn actual_holes_and_dead_body_obligations_are_ordinary_invalid_not_capability_bo
         );
         count += 1;
     }
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
 }
 #[test]
 fn closed_parser_lint_and_plain_let_boundaries_keep_distinct_stock_classifications() {
-    let mut counts = (0, 0, 0);
+    let mut counts = (0, 0);
     for case in cases().into_iter().filter(|c| {
         matches!(
             c.outcome,
@@ -664,39 +664,15 @@ fn closed_parser_lint_and_plain_let_boundaries_keep_distinct_stock_classificatio
             continue;
         }
         let prepared = prepared.unwrap();
-        if case.name == "plainlet_boundary" {
-            assert_eq!(case.outcome, Outcome::InvalidUnsupported);
-            let parsed = frontend::parse_prepared(&prepared).unwrap();
-            let program = frontend::resolve(&parsed).unwrap();
-            let signatures = frontend::signature_table(&program).unwrap();
-            let mut rejected = false;
-            for index in 0..program.functions.len() {
-                if let Err(error) =
-                    frontend::check_function_with_signatures(&program, index, &signatures)
-                {
-                    assert!(error.contains("unsupported:"), "{error}");
-                    assert!(
-                        error.contains(
-                            "refutable enum patterns in irrefutable positions are unsupported"
-                        ),
-                        "{error}"
-                    );
-                    rejected = true;
-                }
-            }
-            assert!(rejected);
-            counts.1 += 1;
-        } else {
-            assert_eq!(case.outcome, Outcome::Unsupported);
-            let error = match frontend::parse_prepared(&prepared) {
-                Err(error) => error,
-                Ok(_) => panic!("{} parser boundary accepted", case.name),
-            };
-            assert_eq!(error.kind, source::SourceErrorKind::Unsupported);
-            counts.2 += 1;
-        }
+        assert_eq!(case.outcome, Outcome::Unsupported);
+        let error = match frontend::parse_prepared(&prepared) {
+            Err(error) => error,
+            Ok(_) => panic!("{} parser boundary accepted", case.name),
+        };
+        assert_eq!(error.kind, source::SourceErrorKind::Unsupported);
+        counts.1 += 1;
     }
-    assert_eq!(counts, (1, 1, 0));
+    assert_eq!(counts, (1, 0));
 }
 #[test]
 fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
@@ -787,7 +763,7 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, (48, 48, 12, 12, 0, 0, 4, 4));
+    assert_eq!(modes, (48, 48, 14, 14, 0, 0, 2, 2));
     eprintln!(
         "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};{nonempty_images} nonempty-output main images;0 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );

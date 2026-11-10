@@ -291,3 +291,175 @@ impl type_check::Checker<'_> {
         )
     }
 }
+
+impl type_check::Checker<'_> {
+    /// Every proved operand formal of the operator trait for this receiver,
+    /// without duplicates. `None` while selection is still open. These are
+    /// expectations for literal typing only; lowering selects again.
+    pub(in crate::compiler::frontend) fn operator_rhs_formals(
+        &self,
+        receiver: &ir::Ty,
+        declaration: ir::DeclId,
+        method: &AstIdent,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        let Some(facts) = self.facts().validated() else {
+            return Ok(None);
+        };
+        let plan = self.signatures.plan()?;
+        let (applications, deferred) =
+            plan.inferred_trait_applications(receiver, declaration, facts, &plan.budget)?;
+        if deferred {
+            return Ok(None);
+        }
+        let mut formals = Vec::new();
+        for application in applications.as_slice() {
+            plan.budget.charge_work(1)?;
+            let Some((_, signature, _)) = plan.select_trait_with_scratch(
+                application,
+                method,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
+            else {
+                continue;
+            };
+            if let Some(argument) = signature.params.get(1)
+                && !formals.contains(argument)
+            {
+                formals.push(argument.clone());
+            }
+        }
+        Ok(Some(formals))
+    }
+}
+
+/// Could a hinted operand type whose unsuffixed literals were defaulted
+/// (`i32`, `f64`) really be `formal`? Structure must otherwise agree.
+fn defaulted_literal_fits(hinted: &ir::Ty, formal: &ir::Ty) -> bool {
+    match (hinted, formal) {
+        (ir::Ty::Int(ir::IntTy::I32), ir::Ty::Int(_)) => true,
+        (ir::Ty::Float(ir::FloatTy::F64), ir::Ty::Float(_)) => true,
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(a, b)| defaulted_literal_fits(a, b))
+        }
+        (
+            ir::Ty::Ref { kind, referent },
+            ir::Ty::Ref {
+                kind: formal_kind,
+                referent: formal,
+            },
+        ) => kind == formal_kind && defaulted_literal_fits(referent, formal),
+        (
+            ir::Ty::Array { element, len },
+            ir::Ty::Array {
+                element: formal,
+                len: formal_len,
+            },
+        ) => len == formal_len && defaulted_literal_fits(element, formal),
+        // `Range<i32>` written as `(1..3)` against a `Range<usize>` formal.
+        _ => match (nominal_parts(hinted), nominal_parts(formal)) {
+            (Some((owner, actuals)), Some((formal_owner, formals))) => {
+                owner == formal_owner
+                    && actuals.len() == formals.len()
+                    && actuals
+                        .iter()
+                        .zip(formals)
+                        .all(|(a, b)| defaulted_literal_fits(a, b))
+            }
+            _ => hinted == formal,
+        },
+    }
+}
+
+impl type_check::Checker<'_> {
+    /// `grid[(1, 0)]`: the operand hint defaulted its literals to `i32`, but
+    /// exactly one proved operand formal has that shape. Only an expectation:
+    /// the operand is still checked against the selected signature.
+    pub(in crate::compiler::frontend) fn defaulted_operand_formal(
+        &self,
+        receiver: &ir::Ty,
+        declaration: ir::DeclId,
+        method: &AstIdent,
+        hinted: &ir::Ty,
+    ) -> Result<Option<ir::Ty>, String> {
+        let Some(formals) = self.operator_rhs_formals(receiver, declaration, method)? else {
+            return Ok(None);
+        };
+        let mut fitting = formals
+            .into_iter()
+            .filter(|formal| formal != hinted && defaulted_literal_fits(hinted, formal));
+        let first = fitting.next();
+        Ok(if fitting.next().is_some() {
+            None
+        } else {
+            first
+        })
+    }
+}
+
+impl type_check::Checker<'_> {
+    /// Could this written operand have type `formal`? Structure only: every
+    /// leaf is still checked against the selected signature.
+    fn operand_expr_fits(
+        &self,
+        operand: &Expr,
+        formal: &ir::Ty,
+        depth: usize,
+    ) -> Result<bool, String> {
+        self.infer_work(depth)?;
+        Ok(match (operand, formal) {
+            (Expr::Integer(_), _) => matches!(formal, ir::Ty::Int(_)),
+            (Expr::Float(_), _) => matches!(formal, ir::Ty::Float(_)),
+            (Expr::Tuple(fields), ir::Ty::Tuple(formals)) => {
+                if fields.len() != formals.len() {
+                    return Ok(false);
+                }
+                for (field, formal) in fields.iter().zip(formals.iter()) {
+                    if !self.operand_expr_fits(field, formal, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (Expr::Tuple(fields), _) if !fields.is_empty() => false,
+            _ => match self.method_receiver_hint(operand)? {
+                Some(hinted) => hinted == *formal || defaulted_literal_fits(&hinted, formal),
+                None => true,
+            },
+        })
+    }
+
+    /// Operand type expectation for `owner[index]`. An operand with no
+    /// independent type (a tuple of literals and locals) takes the unique
+    /// `Index` formal of `owner` that its written shape fits; otherwise the
+    /// builtin `usize` expectation stands. Never call authority.
+    pub(in crate::compiler::frontend) fn index_operand_hint(
+        &self,
+        owner: &ir::Ty,
+        index: &Expr,
+    ) -> Result<ir::Ty, String> {
+        if let Some(hinted) = self.method_receiver_hint(index)? {
+            return Ok(hinted);
+        }
+        let fallback = ir::Ty::Int(ir::IntTy::Usize);
+        let Ok((declaration, name)) = self.operator_trait("ops", "Index", "index") else {
+            return Ok(fallback);
+        };
+        let Some(formals) = self.operator_rhs_formals(owner, declaration, &name)? else {
+            return Ok(fallback);
+        };
+        let mut fitting = None;
+        for formal in formals {
+            if self.operand_expr_fits(index, &formal, 0)? && fitting.replace(formal).is_some() {
+                return Ok(fallback);
+            }
+        }
+        Ok(fitting.unwrap_or(fallback))
+    }
+}

@@ -80,7 +80,7 @@ pub trait ShrAssign<Rhs = Self> {
     fn shr_assign(&mut self, rhs: Rhs);
 }
 pub trait Index<Idx> {
-    type Output;
+    type Output: ?Sized;
     fn index(&self, index: Idx) -> &Self::Output;
 }
 pub trait IndexMut<Idx>: Index<Idx> {
