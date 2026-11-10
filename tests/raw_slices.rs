@@ -9,6 +9,36 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
+fn nested_slice_reference_reads_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "nested-slice-reference-reads",
+        &[
+            Case {
+                name: "nested_shared_slice_reads",
+                source: "fn read(p:&&[i32],i:usize)->i32{p[0]+p[i]}fn main(){let a=[2,5,9];let s:&[i32]=&a;println!(\"{}\",read(&s,2));}",
+                expect: Expect::Run("11\n"),
+            },
+            Case {
+                name: "window_predicate_keeps_original_slice_storage",
+                source: "fn main(){let v=vec![1i64,2,3,5];println!(\"{}\",v.windows(3).filter(|w|w[0]+w[2]==2*w[1]).count());}",
+                expect: Expect::Run("1\n"),
+            },
+            Case {
+                name: "shared_outer_slice_reference_cannot_write",
+                source: "fn bad(p:&&[i32]){p[0]=3;}fn main(){}",
+                expect: Expect::Invalid("E0594"),
+            },
+            Case {
+                name: "nested_slice_reference_cannot_escape_local_storage",
+                source: "fn bad<'a>()->&'a[i32]{let a=[1i32,2];let s:&[i32]=&a;let p=&s;*p}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn bare_slice_actuals_preserve_authoritative_sized_obligations() {
     use closure_oracle::{Case, Expect};
     // Exercise binder obligations without introducing &T-to-slice carrier

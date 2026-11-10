@@ -166,11 +166,12 @@ impl type_check::Checker<'_> {
 
     /// Static place of type `&mut [T]` that `expr` names (`s`, `self.buf`,
     /// `*r` for `r: &mut &mut [T]` is not admitted). Never evaluates.
-    fn mut_slice_place(&self, expr: &Expr) -> Result<Option<(ir::Place, ir::Ty)>, String> {
-        if !self
-            .scalar_hint(expr)?
-            .is_some_and(|ty| ty.mut_slice_element().is_some())
-        {
+    fn mut_slice_place(
+        &self,
+        expr: &Expr,
+        hint: Option<&ir::Ty>,
+    ) -> Result<Option<(ir::Place, ir::Ty)>, String> {
+        if !hint.is_some_and(|ty| ty.mut_slice_element().is_some()) {
             return Ok(None);
         }
         if !matches!(expr, Expr::Var(_) | Expr::Field { .. }) {
@@ -190,7 +191,42 @@ impl type_check::Checker<'_> {
     /// leaves the mutable carrier in place (stock reads through `&mut [T]`
     /// never move it). `None` when `expr` is not such a place.
     pub(super) fn shared_slice_view(&mut self, expr: &Expr) -> Result<Option<ir::ExprId>, String> {
-        let Some((mut place, _)) = self.mut_slice_place(expr)? else {
+        // A nested shared slice reference carries the same authenticated
+        // descriptor. Load only Copy reference layers, preserving every
+        // original Deref in IR instead of inventing an unsized place borrow.
+        let hint = self.scalar_hint(expr)?;
+        if let Some(ty) = hint.as_ref() {
+            let mut target = ty;
+            let mut layers = 0usize;
+            let mut copy_layers = true;
+            while let ir::Ty::Ref { referent, .. } = target {
+                self.signatures.plan()?.budget.check_depth(layers)?;
+                self.signatures.plan()?.budget.charge_work(1)?;
+                if !self.facts().must_copy(target)? {
+                    copy_layers = false;
+                }
+                layers += 1;
+                target = referent;
+            }
+            if layers > 1 && copy_layers && matches!(target, ir::Ty::Slice { .. }) {
+                let mut value = self.expr(expr)?;
+                if !self.flow(value).completes {
+                    return Ok(Some(value));
+                }
+                for _ in 1..layers {
+                    let ir::Ty::Ref { referent, .. } = &self.exprs[value.0].ty else {
+                        return Err("nested slice read changed original reference type".into());
+                    };
+                    let referent = referent.as_ref().clone();
+                    if !self.facts().must_copy(&referent)? {
+                        return Err("nested slice read cannot move a mutable reference".into());
+                    }
+                    value = self.for_expr(referent, ir::ExprKind::Deref { value })?;
+                }
+                return Ok(Some(value));
+            }
+        }
+        let Some((mut place, _)) = self.mut_slice_place(expr, hint.as_ref())? else {
             return Ok(None);
         };
         if place.projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
@@ -212,6 +248,19 @@ impl type_check::Checker<'_> {
         value: &Expr,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         let (mut place, ty, _) = self.checked_place(array)?;
+        let mut nested = &ty;
+        let mut shared = false;
+        let mut layers = 0usize;
+        while let ir::Ty::Ref { kind, referent } = nested {
+            self.signatures.plan()?.budget.check_depth(layers)?;
+            self.signatures.plan()?.budget.charge_work(1)?;
+            shared |= *kind == ir::BorrowKind::Shared;
+            layers += 1;
+            nested = referent;
+        }
+        if layers > 1 && shared && matches!(nested, ir::Ty::Slice { .. }) {
+            return Err("E0594: cannot assign through a shared slice reference layer".into());
+        }
         let Some(element) = ty.mut_slice_element() else {
             if ty.slice_ref_element().is_some() {
                 return Err(
