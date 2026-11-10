@@ -1,0 +1,56 @@
+From: Jeremy Huang <94247773+1jehuang@users.noreply.github.com>
+Subject: [benchmark fixture] Settle tab motion before asserting stable geometry
+
+Follow ae6a7d412e48af43870b3d9e6848301a9c6f1bf0's deterministic
+resize/click setup. run_until_parked does not advance wall-clock tab tweens.
+Keep all original geometry, click, and hint assertions and default threading.
+Only test setup and visibility of an existing cfg(test) helper change.
+
+diff --git a/crates/jcode-desktop-ui/src/live_tabs.rs b/crates/jcode-desktop-ui/src/live_tabs.rs
+--- a/crates/jcode-desktop-ui/src/live_tabs.rs
++++ b/crates/jcode-desktop-ui/src/live_tabs.rs
+@@ -349,7 +349,7 @@ impl TabMotion {
+     }
+ 
+     #[cfg(test)]
+-    fn settle(&mut self) {
++    pub(super) fn settle(&mut self) {
+         for tab in self.tabs.values_mut() {
+             tab.sample(Instant::now() + Duration::from_secs(1));
+         }
+@@ -1981,6 +1981,16 @@ mod tests {
+             workspace
+         });
+         vcx.run_until_parked();
++        // Sample settled hit targets, not a wall-clock tween that can move
++        // between debug_bounds and the mouse-down dispatched by simulate_click.
++        workspace.update(vcx, |workspace, cx| {
++            workspace.camera_x[workspace.active_row] =
++                workspace.camera_target[workspace.active_row];
++            workspace.camera_started[workspace.active_row] = None;
++            workspace.live_tabs.settle();
++            cx.notify();
++        });
++        vcx.run_until_parked();
+         let first = vcx.debug_bounds("live-session-tab-0").unwrap();
+         let other = vcx.debug_bounds("live-session-tab-2").unwrap();
+         assert_eq!(first.bottom(), other.bottom());
+diff --git a/crates/jcode-desktop-ui/src/workspace.rs b/crates/jcode-desktop-ui/src/workspace.rs
+--- a/crates/jcode-desktop-ui/src/workspace.rs
++++ b/crates/jcode-desktop-ui/src/workspace.rs
+@@ -13375,6 +13375,15 @@ mod tests {
+         });
+         cx.simulate_window_resize(handle, gpui::size(px(1600.), px(800.)));
+         cx.run_until_parked();
++        // The comparison is about hint layout, not elapsed resize animation.
++        workspace.update(cx, |workspace, cx| {
++            workspace.camera_x[workspace.active_row] =
++                workspace.camera_target[workspace.active_row];
++            workspace.camera_started[workspace.active_row] = None;
++            workspace.live_tabs.settle();
++            cx.notify();
++        });
++        cx.run_until_parked();
+         assert!(cx.debug_bounds("coach-toast").is_none());
+         let canvas_before = cx.debug_bounds("workspace-canvas").unwrap();
+         let tab_before = cx.debug_bounds("live-session-tab-0").unwrap();
