@@ -3,6 +3,19 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.23
+
+- **Dependency-cache misses explain their inputs.** Recorded units compare
+  toolchain, flags, environment, dependency artifacts and native libraries
+  against a bounded per-package ledger. `justrust cache --misses [DAYS]`
+  groups reasons, compile cost, packages and workspace commands. Historical
+  records without attribution remain explicitly unrecorded.
+- **More informative compiler phase and remote-status reporting.** Compiler
+  phase ledgers are available before early replies, and status tooltips
+  explain whether local builds require a reason.
+- Keep fake toolchain distribution tests independent of the public store,
+  and exercise atomic artifact replacement in the extern-hash regression.
+
 ## 0.1.0-alpha.22
 
 - **Hosted machines run the fleet version, not each client's build.** On
