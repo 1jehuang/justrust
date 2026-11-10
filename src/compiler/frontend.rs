@@ -8275,6 +8275,48 @@ pub(super) fn replay_source_body_with_scratch(
             )?;
             continue;
         }
+        // A by-value local consumed by the only parameter of a callable whose
+        // result carries no reference (`drop(guard)`) returns no loan, so no
+        // let context is needed. Authenticate the exact source local and the
+        // instantiated signature, as the borrowed case above does.
+        if site.direct_let.is_none()
+            && site.argument_borrow.is_none()
+            && args.len() == 1
+            && signature.params.len() == 1
+            && target.type_args.len() == 1
+            && signature.params[0] == target.type_args[0]
+            && ir::carrier_locations(&signature.result, budget)
+                .map_err(|e| source_error(budget, &e))?
+                .is_empty()
+            && let Some(binding) = site.argument_binding.as_ref()
+        {
+            let binding_index = source_binding_index(&original.bindings, binding, budget)?
+                .ok_or_else(|| FactsError::invalid(budget, "consumed argument source missing"))?;
+            let local = mapped_source_binding(original, binding_index, budget)?;
+            let source = checked.locals.get(local.0).ok_or_else(|| {
+                FactsError::invalid(budget, "consumed argument root outside checked locals")
+            })?;
+            let value = checked
+                .exprs
+                .get(args[0].0)
+                .ok_or_else(|| FactsError::invalid(budget, "consumed argument outside arena"))?;
+            if !matches!(value.kind, ir::ExprKind::Local(actual) if actual == local)
+                || !replay_type_equal(&source.ty, &target.type_args[0], budget)?
+                || !replay_type_equal(&value.ty, &target.type_args[0], budget)?
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "consumed argument changed source local or type",
+                ));
+            }
+            ir::validate_callee(
+                &ir::Callee::Direct(target.clone()),
+                signature,
+                ir::FactsCtx::Validated(facts),
+            )
+            .map_err(|e| source_error(budget, &e))?;
+            continue;
+        }
         let parent = site.direct_let.as_ref().ok_or_else(|| {
             FactsError::unsupported(
                 budget,

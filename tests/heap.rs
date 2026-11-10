@@ -1231,6 +1231,40 @@ fn source_drop_aggregate_positions_match_stock() {
 }
 
 #[test]
+fn generic_guard_drop_through_rc_needs_no_result_binding() {
+    heap_case(
+        "rc_guard_statement_drop",
+        r#"
+use std::cell::RefCell;
+use std::rc::Rc;
+fn main() {
+    let shared = Rc::new(RefCell::new(vec![1, 2]));
+    let a = Rc::clone(&shared);
+    let b = Rc::clone(&shared);
+    a.borrow_mut().push(3);
+    b.borrow_mut().push(4);
+    assert!(Rc::ptr_eq(&a, &b));
+    let guard = shared.borrow();
+    assert!(guard.len() == 4);
+    assert!(shared.try_borrow_mut().is_err());
+    drop(guard);
+    assert!(shared.try_borrow_mut().is_ok());
+    let guard = a.borrow_mut();
+    assert!(shared.try_borrow().is_err());
+    drop(guard);
+    assert!(shared.try_borrow().is_ok());
+    println!("ok");
+}
+"#,
+    );
+    rejects_source(
+        "rc_guard_reused_after_drop",
+        "use std::cell::RefCell; use std::rc::Rc; fn main(){let shared=Rc::new(RefCell::new(1));let guard=shared.borrow();drop(guard);println!(\"{}\",*guard);}",
+        "initialization/move analysis",
+    );
+}
+
+#[test]
 fn rc_weak_observes_without_owning_and_frees_counts_last() {
     runs("rc_weak");
     for (name, source, needle) in [
