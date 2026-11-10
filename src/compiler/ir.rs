@@ -3688,11 +3688,28 @@ pub struct CallRealizationSignatures<'a> {
 }
 
 pub trait SubstitutionCx {
-    /// Canonical ordered owner actuals are declaration coordinates, not
-    /// physical closure fields. Executable adapters retain metadata identity
-    /// here while still authenticating every original typed graph read.
+    /// Ordered owner actuals are declaration coordinates, not capture fields.
+    /// Their authenticated substitution is a distinct role from the closure's
+    /// parameters, result, and captures, including during executable replay.
     #[allow(clippy::too_many_arguments)]
     fn substitute_closure_owner_actual(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+        depth: usize,
+    ) -> Result<Ty, String>
+    where
+        Self: Sized,
+    {
+        substitute_closure_owner_actual_with_depth(ty, env, args, caller, self, budget, depth)
+    }
+    /// Parent-local receipt actuals are logical declaration inputs. Executable
+    /// storage is issued only after their complete canonical receipt replay.
+    #[allow(clippy::too_many_arguments)]
+    fn substitute_parent_local_actual(
         &mut self,
         ty: &Ty,
         env: &GenericEnv,
@@ -4427,12 +4444,11 @@ fn substitute_ty_walk(
                     .try_reserve_exact(value.def().type_args.len())
                     .map_err(|_| "parent-local substitution argument allocation failed")?;
                 for argument in value.def().type_args.iter() {
-                    arguments.push(substitute_ty_walk(
+                    arguments.push(cx.substitute_parent_local_actual(
                         argument,
                         env,
                         args,
                         caller,
-                        cx,
                         budget,
                         depth + 1,
                     )?);
@@ -4496,12 +4512,11 @@ fn substitute_ty_walk(
                     .try_reserve_exact(value.def().type_args.len())
                     .map_err(|_| "parent-local substitution argument allocation failed")?;
                 for argument in value.def().type_args.iter() {
-                    arguments.push(substitute_ty_walk(
+                    arguments.push(cx.substitute_parent_local_actual(
                         argument,
                         env,
                         args,
                         caller,
-                        cx,
                         budget,
                         depth + 1,
                     )?);
@@ -4977,6 +4992,18 @@ fn body_nominal_substitution_remains_single_valued() {
 }
 
 impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
+    fn substitute_parent_local_actual(
+        &mut self,
+        ty: &Ty,
+        env: &GenericEnv,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+        depth: usize,
+    ) -> Result<Ty, String> {
+        self.inner
+            .substitute_parent_local_actual(ty, env, args, caller, budget, depth)
+    }
     fn substitute_closure_owner_actual(
         &mut self,
         ty: &Ty,

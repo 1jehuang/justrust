@@ -914,6 +914,58 @@ mod tests {
     }
 
     #[test]
+    fn closure_owner_storage_and_parent_local_actuals_keep_distinct_roles() {
+        let budget = ir::PlanBudget::default();
+        let program = super::super::frontend::parse("struct Empty;fn main(){}").unwrap();
+        let mut plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let proof = plan.publish_nominal_declaration(declaration).unwrap();
+        let source = plan.nominal_realization_template(declaration).unwrap();
+        let world = plan.trait_world().unwrap();
+        let input = world.close_nominal_input(declaration, &proof, &[]).unwrap();
+        let key = RealizationKey::encode(world.nominal_realization_world(), declaration, &[], 32)
+            .unwrap();
+        let engine = crate::engine::Engine::new(FactProvider {
+            key,
+            source: source.clone(),
+            proof,
+            input,
+            stolen: None,
+            mutate: |_| {},
+            fields: Arc::from([]),
+        });
+        let demand = engine.request(crate::compiler::keys::params(998, 0, vec![]));
+        engine.run(1).unwrap();
+        demand.completion().unwrap();
+        let read = demand.fact::<ReadNominal>(0).unwrap();
+        let expected = read.definition().unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let (physical, logical) = substitution::replay_owner_argument_roles_for_test(
+            &mut plan,
+            &source,
+            read.as_ref().clone(),
+            engine.authority(),
+            owner,
+            &budget,
+        )
+        .unwrap();
+        assert!(ir::identical_type(&physical, &expected, &budget).unwrap());
+        assert!(ir::identical_type(&logical, &source, &budget).unwrap());
+        let ir::Ty::Struct(physical) = physical else {
+            unreachable!()
+        };
+        let ir::Ty::Struct(logical) = logical else {
+            unreachable!()
+        };
+        assert!(physical.id().index.is_graph());
+        assert!(matches!(
+            logical.id().index,
+            ir::NominalIndex::SourceSlot(_)
+        ));
+        read.check_definition(&ir::Ty::Struct(physical)).unwrap();
+    }
+
+    #[test]
     fn current_engine_substitution_replays_typed_read_and_rejects_foreign_engine() {
         let budget = ir::PlanBudget::default();
         let program = super::super::frontend::parse("struct Empty;fn main(){}").unwrap();

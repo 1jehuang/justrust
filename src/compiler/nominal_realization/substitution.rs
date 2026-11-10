@@ -527,8 +527,85 @@ struct ParentLocalRemint<'a> {
     destination_scratch: crate::compiler::traits::TraitScratch,
 }
 
+#[cfg(test)]
+pub(super) fn replay_owner_argument_roles_for_test(
+    context: &mut frontend::PlanCtx,
+    source: &ir::Ty,
+    read: super::ReadNominal,
+    engine: EngineAuthority,
+    owner: ir::DeclId,
+    budget: &ir::PlanBudget,
+) -> Result<(ir::Ty, ir::Ty), String> {
+    let source_facts = context.callable_facts(owner)?;
+    let target = ir::CallTarget {
+        declaration: owner,
+        type_args: std::sync::Arc::from([]),
+    };
+    let current = context.instance_facts(&target)?;
+    let mut inputs = ExecutableNominals {
+        reads: vec![read],
+        missing: Vec::new(),
+    };
+    let mut adapter = ReadSubstitution {
+        nominal_scratch: crate::compiler::traits::TraitScratch::default(),
+        context,
+        engine: Some(engine),
+        executable: Some(&mut inputs),
+        remint: Some(ParentLocalRemint {
+            source: &source_facts,
+            destination: &current,
+            environment: source_facts.env(),
+            parent_arguments: &[],
+            rows: Vec::new(),
+            source_scratch: crate::compiler::traits::TraitScratch::default(),
+            destination_scratch: crate::compiler::traits::TraitScratch::default(),
+        }),
+    };
+    let caller = ir::FactsCtx::Validated(&current);
+    let physical = ir::SubstitutionCx::substitute_closure_owner_actual(
+        &mut adapter,
+        source,
+        source_facts.env(),
+        &[],
+        caller,
+        budget,
+        0,
+    )?;
+    let logical = ir::SubstitutionCx::substitute_parent_local_actual(
+        &mut adapter,
+        source,
+        source_facts.env(),
+        &[],
+        caller,
+        budget,
+        0,
+    )?;
+    assert!(adapter.executable.is_some());
+    let invalid = ir::Ty::Param(ir::ParamId {
+        owner: ir::BinderId { declaration: owner },
+        index: 0,
+    });
+    assert!(
+        ir::SubstitutionCx::substitute_parent_local_actual(
+            &mut adapter,
+            &invalid,
+            source_facts.env(),
+            &[],
+            caller,
+            budget,
+            0,
+        )
+        .is_err()
+    );
+    assert!(
+        adapter.executable.is_some(),
+        "failed metadata replay lost physical role"
+    );
+    Ok((physical, logical))
+}
+
 impl ir::SubstitutionCx for ReadSubstitution<'_> {
-    fn substitute_closure_owner_actual(
+    fn substitute_parent_local_actual(
         &mut self,
         ty: &ir::Ty,
         env: &ir::GenericEnv,
@@ -537,9 +614,8 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
         budget: &ir::PlanBudget,
         depth: usize,
     ) -> Result<ir::Ty, String> {
-        // Reuse this exact source/current/engine adapter's metadata producer.
-        // Only physical nominal realization is suspended for the canonical
-        // declaration coordinates. Graph retain and receipt replay stay live.
+        // Receipt actuals remain logical until their complete producer replay.
+        // The same current-engine reads and source/current facts remain live.
         let executable = self.executable.take();
         let mapped = ir::substitute_closure_owner_actual_with_depth(
             ty, env, arguments, caller, self, budget, depth,
@@ -588,6 +664,7 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
+        let executable = self.executable.take();
         let logical = (|| {
             let Some(remint) = &mut self.remint else {
                 return ir::SubstitutionCx::substitute_parent_local_nominal(
@@ -704,7 +781,9 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
                 .rows
                 .push((source.clone(), arguments.into(), output.clone()));
             Ok(output)
-        })()?;
+        })();
+        self.executable = executable;
+        let logical = logical?;
         if self.executable.is_some() {
             ir::realize_parent_local_substitution(&logical, caller, self, budget)
         } else {
