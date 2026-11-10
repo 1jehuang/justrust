@@ -150,6 +150,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     replaying_pattern: bool,
     closure_terms: Vec<(PathKey, Term)>,
     local_context: Option<Option<super::super::super::semantic_scope::ScopeId>>,
+    stored_constants: Option<Option<closures::constant_inputs::StoredConstantAccess>>,
     return_terms: Vec<Term>,
     control_targets: Vec<control_flow::ControlTarget>,
     unit_defaults: Vec<Term>,
@@ -280,6 +281,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         replaying_pattern: false,
         closure_terms: Vec::new(),
         local_context: None,
+        stored_constants: None,
         return_terms: Vec::new(),
         control_targets: Vec::new(),
         unit_defaults: Vec::new(),
@@ -3036,13 +3038,14 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => self.fixed(ir::Ty::byte_string_ty(bytes.len())),
-            Expr::ConstItem(_) => {
-                let value = self
-                    .checker
-                    .canonical
-                    .ok_or("contract: constant constraints require sealed graph inputs")?
-                    .constant_value(expr)?;
-                self.fixed(const_inputs::scalar_ir_type(value.ty()))
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
+                let missing = "contract: constant constraints require sealed graph inputs";
+                let ty = match &self.stored_constants {
+                    Some(Some(source)) => source.constant_type(expr)?,
+                    Some(None) => return Err(missing.into()),
+                    None => self.checker.source_constant_type(expr, missing)?,
+                };
+                self.fixed(ty)
             }
             Expr::AssociatedFn(value) => {
                 if self.checker.fn_item_owner_inferred(value) {

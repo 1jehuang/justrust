@@ -167,6 +167,7 @@ fn inspect_with_opaque_hint(
         replaying_pattern: false,
         closure_terms: Vec::new(),
         local_context: None,
+        stored_constants: None,
         return_terms: Vec::new(),
         control_targets: Vec::new(),
         unit_defaults: Vec::new(),

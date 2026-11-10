@@ -15,8 +15,12 @@ pub(in crate::compiler) struct PreparedBodyConstants {
     declaration: ir::DeclId,
     inventory: Option<SourceInventory>,
     direct: Vec<ir::DeclId>,
+    stored: Vec<ir::DeclId>,
 }
 impl PreparedBodyConstants {
+    pub(in crate::compiler) fn stored(&self) -> &[ir::DeclId] {
+        &self.stored
+    }
     pub(in crate::compiler) fn associated_paths(&self) -> impl Iterator<Item = &[u32]> {
         self.inventory.iter().flat_map(|inventory| {
             inventory
@@ -34,6 +38,7 @@ pub(in crate::compiler) struct SealedBodyConstants {
     pub(super) inventory: Option<SourceInventory>,
     pub(super) uses: Vec<SourceConstantUse>,
     pub(super) symbolic: Vec<associated_constants::SourceSymbolicConstantUse>,
+    pub(super) stored_inputs: Vec<Arc<closures::constant_inputs::StoredConstantInputs>>,
 }
 impl PlanCtx {
     pub(in crate::compiler) fn prepare_body_constants(
@@ -62,8 +67,47 @@ impl PlanCtx {
             }
             _ => None,
         };
+        self.prepare_constant_inventory(declaration, inventory, budget)
+    }
+    pub(super) fn prepare_constant_inventory(
+        &self,
+        declaration: ir::DeclId,
+        inventory: Option<SourceInventory>,
+        budget: &ir::PlanBudget,
+    ) -> Result<PreparedBodyConstants, FactsError> {
+        let mut stored = Vec::new();
         let mut direct = Vec::new();
         if let Some(inventory) = &inventory {
+            for path in &inventory.value_paths {
+                sr::work(budget, 1)?;
+                let Some(syntax) = self
+                    .stored_closure_syntax(path)
+                    .map_err(|e| source_error(budget, &e))?
+                else {
+                    continue;
+                };
+                let key = name_scope::path_key(self.program.names.as_ref(), path, Namespace::Value)
+                    .map_err(|e| source_error(budget, &e))?;
+                let provider = *self.registry.functions.get(&key).ok_or_else(|| {
+                    FactsError::invalid(
+                        budget,
+                        "stored constant provider absent from source registry",
+                    )
+                })?;
+                if self
+                    .stored_closure_owner(provider)
+                    .map_err(|e| source_error(budget, &e))?
+                    != Some((declaration, syntax.site))
+                {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "stored constant prerequisite changed parent/provider/site",
+                    ));
+                }
+                if !stored.contains(&provider) {
+                    sr::push(&mut stored, provider, budget)?;
+                }
+            }
             for (_, key) in &inventory.constants {
                 sr::work(budget, 1)?;
                 let id = *self.registry.constants.get(key).ok_or_else(|| {
@@ -82,6 +126,7 @@ impl PlanCtx {
             declaration,
             inventory,
             direct,
+            stored,
         })
     }
     pub(in crate::compiler) fn seal_body_constants(
@@ -235,6 +280,7 @@ impl PlanCtx {
             inventory: prepared.inventory,
             uses,
             symbolic,
+            stored_inputs: Vec::new(),
         })
     }
 }

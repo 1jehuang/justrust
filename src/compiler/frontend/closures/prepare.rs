@@ -17,7 +17,6 @@ impl Checker<'_> {
         let Some(syntax) = plan.stored_closure_syntax(path)? else {
             return Ok(None);
         };
-        let syntax = syntax.clone();
         let key = name_scope::path_key(plan.program.names.as_ref(), path, Namespace::Value)?;
         let provider = *plan
             .registry
@@ -71,6 +70,23 @@ impl Checker<'_> {
             self.module,
         );
         child.declaration = Some(provider);
+        if let Some(inputs) = super::constant_inputs::StoredConstantInputs::find(
+            &self.stored_constant_inputs,
+            provider,
+        ) {
+            plan.budget.retain_bytes(
+                inputs.children.len()
+                    * std::mem::size_of::<Arc<super::constant_inputs::StoredConstantInputs>>(),
+            )?;
+            child.stored_constant_inputs = inputs.children.to_vec();
+            child.stored_constant_access = Some(super::constant_inputs::StoredConstantAccess::new(
+                plan,
+                inputs,
+                owner,
+                provider,
+                &syntax.body,
+            )?);
+        }
         child.inferred_closure_result = matches!(syntax.result, Type::Infer);
         child.closure_source_recipe = self.closure_source_recipe.clone();
         // The closure body is typed inside its parent's graph-realized call:
@@ -340,8 +356,14 @@ impl Checker<'_> {
                 body: Arc::new(checked),
             });
         }
-        let authority =
-            super::publication::CheckedClosureAuthority::capture(plan, &closure, &modes)?;
+        let constants = child
+            .stored_constant_access
+            .as_ref()
+            .map(|access| access.finish())
+            .transpose()?;
+        let authority = super::publication::CheckedClosureAuthority::capture(
+            plan, &closure, &modes, constants,
+        )?;
         let primary = modes
             .iter()
             .find(|checked| checked.mode == kind)

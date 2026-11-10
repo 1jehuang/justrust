@@ -294,6 +294,46 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn rigid_slice_reference_stride_does_not_authorize_element_layout() {
+        let program = super::super::frontend::parse("fn f<T>(value:T){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.callable_decl(0).unwrap();
+        let env = plan.callable_env(declaration).unwrap();
+        let parameter = ir::Ty::Param(env.ordered_params().next().unwrap());
+        let facts = plan.callable_facts(declaration).unwrap();
+        let slice = ir::Ty::Slice {
+            element: Arc::new(parameter.clone()),
+        };
+        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            let reference = ir::Ty::Ref {
+                kind,
+                referent: Arc::new(slice.clone()),
+            };
+            facts.validate_ty_with_budget(&reference, &budget).unwrap();
+            assert_eq!(
+                pointer::extent(&reference, Some(&facts), &budget, 0).unwrap(),
+                Some(16)
+            );
+            assert!(super::super::backend::array_element_stride(&reference, &budget).is_err());
+            let raw = ir::Ty::RawPtr {
+                kind,
+                pointee: Arc::new(parameter.clone()),
+            };
+            assert_eq!(
+                pointer::extent(&raw, Some(&facts), &budget, 0).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            pointer::extent(&parameter, Some(&facts), &budget, 0).unwrap(),
+            None
+        );
+        assert!(pointer::extent(&slice, Some(&facts), &budget, 0).is_err());
+        assert!(super::super::backend::array_element_stride(&parameter, &budget).is_err());
+    }
+
+    #[test]
     fn public_size_is_exact_for_scalars_and_recursive_fixed_arrays() {
         let budget = ir::PlanBudget::default();
         for (ty, size) in [

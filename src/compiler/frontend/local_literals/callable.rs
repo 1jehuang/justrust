@@ -145,22 +145,60 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             self.unify(result, expected)?;
         }
         self.closure_terms.push((key, term));
+        let provider = *plan
+            .registry
+            .functions
+            .get(&checker.path_key(path, Namespace::Value)?)
+            .ok_or("stored callable lost canonical provider")?;
+        let (parent, _) = plan
+            .stored_closure_owner(provider)?
+            .ok_or("stored callable lost original parent/site")?;
+        let (expected_parent, inputs) = match &self.stored_constants {
+            Some(Some(source)) => (Some(source.provider()), source.children()),
+            Some(None) => (None, &[][..]),
+            None => (
+                checker.declaration,
+                checker.stored_constant_inputs.as_slice(),
+            ),
+        };
+        if expected_parent.is_some_and(|expected| expected != parent) {
+            return Err("stored constant constraints changed canonical parent".into());
+        }
+        let constants = closures::constant_inputs::StoredConstantInputs::find(inputs, provider)
+            .map(|input| {
+                closures::constant_inputs::StoredConstantAccess::new(
+                    plan,
+                    input,
+                    parent,
+                    provider,
+                    &syntax.body,
+                )
+            })
+            .transpose()?;
         let previous_context = self.local_context;
+        let previous_constants = self.stored_constants.replace(constants);
+        let scope_depth = self.scopes.len();
+        let return_depth = self.return_terms.len();
         self.local_context = Some(syntax.lexical_scope);
-        self.return_terms.push(result);
-        self.scopes.push(HashMap::new());
-        for ((pattern, _), term) in syntax.params.iter().zip(&params) {
-            self.pattern(pattern, *term)?;
-        }
-        let body = self.block(&syntax.body, depth + 1)?;
-        if syntax.body.tail.is_some() {
-            self.coerce(body, result)?;
-        } else {
-            self.unit_defaults.push(result);
-        }
-        self.scopes.pop();
-        self.return_terms.pop();
+        let checked = (|| -> Result<(), String> {
+            self.return_terms.push(result);
+            self.scopes.push(HashMap::new());
+            for ((pattern, _), term) in syntax.params.iter().zip(&params) {
+                self.pattern(pattern, *term)?;
+            }
+            let body = self.block(&syntax.body, depth + 1)?;
+            if syntax.body.tail.is_some() {
+                self.coerce(body, result)?;
+            } else {
+                self.unit_defaults.push(result);
+            }
+            Ok(())
+        })();
+        self.scopes.truncate(scope_depth);
+        self.return_terms.truncate(return_depth);
         self.local_context = previous_context;
+        self.stored_constants = previous_constants;
+        checked?;
         Ok(Some(term))
     }
 

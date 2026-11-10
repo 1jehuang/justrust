@@ -5,6 +5,7 @@ mod borrow_authority;
 mod capture_rewrite;
 mod capture_use;
 pub(in crate::compiler) mod check;
+pub(in crate::compiler) mod constant_inputs;
 mod fn_sugar;
 mod owner_source;
 #[cfg(test)]

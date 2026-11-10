@@ -2770,6 +2770,7 @@ mod canonical_source_replay_tests {
             inventory,
             constants: Vec::new(),
             symbolic_constants: Vec::new(),
+            stored_constant_inputs: Vec::new(),
             symbolic_constant_emissions: Default::default(),
             constant_emissions: Default::default(),
             calls: Default::default(),
@@ -2934,6 +2935,7 @@ struct SourceInventory {
     associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
     associated_constant_pointers: HashMap<usize, usize>,
     constant_pointers: HashMap<usize, usize>,
+    value_paths: Vec<AstPath>,
     bindings: Vec<SourceBindingSite>,
     call_pointers: HashMap<usize, usize>,
     for_pointers: HashMap<usize, usize>,
@@ -3619,6 +3621,23 @@ impl SourceInventory {
         owner: sr::OriginalBodyId,
         budget: &ir::PlanBudget,
     ) -> Result<Self, FactsError> {
+        Self::build_body(
+            program,
+            function,
+            &function.body,
+            function.lexical_scope,
+            owner,
+            budget,
+        )
+    }
+    fn build_body(
+        program: &Program,
+        function: &Function,
+        body: &Block,
+        function_scope: Option<super::semantic_scope::ScopeId>,
+        owner: sr::OriginalBodyId,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, FactsError> {
         sr::retain(budget, 128)?;
         let mut scopes = Vec::new();
         scopes
@@ -3628,7 +3647,7 @@ impl SourceInventory {
         let mut this = Self {
             names: program.names.clone(),
             lexical: program.scopes.clone(),
-            function_scope: function.lexical_scope,
+            function_scope,
             owner: owner.clone(),
             calls: Vec::new(),
             literal_arguments: HashMap::new(),
@@ -3639,13 +3658,14 @@ impl SourceInventory {
             associated_constants: Vec::new(),
             associated_constant_pointers: HashMap::new(),
             constant_pointers: HashMap::new(),
+            value_paths: Vec::new(),
             bindings: Vec::new(),
             call_pointers: HashMap::new(),
             for_pointers: HashMap::new(),
             iterator_pointers: HashMap::new(),
             statement_pointers: HashMap::new(),
             scopes,
-            root_block_pointer: &function.body as *const Block as usize,
+            root_block_pointer: body as *const Block as usize,
         };
         let root = sr::SourceNode {
             owner,
@@ -3655,7 +3675,7 @@ impl SourceInventory {
             let node = root.child(0, index, budget)?;
             this.bind(name, node, Some(ty), Some(index), None, budget)?;
         }
-        this.block(&function.body, &root.child(1, 0, budget)?, true, budget, 0)?;
+        this.block(body, &root.child(1, 0, budget)?, true, budget, 0)?;
         Ok(this)
     }
     fn bind(
@@ -4325,6 +4345,9 @@ impl SourceInventory {
         budget: &ir::PlanBudget,
         depth: usize,
     ) -> Result<(), FactsError> {
+        if let Expr::Var(path) = expr {
+            sr::push(&mut self.value_paths, path.clone(), budget)?;
+        }
         let local = match expr {
             Expr::Var(path) if is_local_shaped_path(path) => self.lookup(path, budget)?,
             Expr::Borrow { place, .. } => self.lookup(place.local, budget)?,
@@ -5140,6 +5163,7 @@ pub(super) struct CanonicalSourceCapability {
     inventory: SourceInventory,
     constants: Vec<const_inputs::SourceConstantUse>,
     symbolic_constants: Vec<associated_constants::SourceSymbolicConstantUse>,
+    stored_constant_inputs: Vec<Arc<closures::constant_inputs::StoredConstantInputs>>,
     constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     symbolic_constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
@@ -9034,6 +9058,7 @@ impl PlanCtx {
                     inventory,
                     constants: constants.uses,
                     symbolic_constants: constants.symbolic,
+                    stored_constant_inputs: constants.stored_inputs,
                     symbolic_constant_emissions: Default::default(),
                     constant_emissions: Default::default(),
                     calls: Default::default(),
@@ -9089,6 +9114,7 @@ impl PlanCtx {
                             inventory: Some(cap.inventory),
                             uses: cap.constants,
                             symbolic: cap.symbolic_constants,
+                            stored_inputs: cap.stored_constant_inputs,
                         };
                         return Ok(NominalCallablePublication::Blocked {
                             preparation,
@@ -30650,6 +30676,7 @@ mod const_declaration_tests {
             inventory,
             constants: Vec::new(),
             symbolic_constants: Vec::new(),
+            stored_constant_inputs: Vec::new(),
             constant_emissions: Default::default(),
             symbolic_constant_emissions: Default::default(),
             calls: Default::default(),

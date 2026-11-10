@@ -59,8 +59,16 @@ pub(super) fn extent(
             let Some(size) = walk_size_authorized(ty, facts, budget, depth + 1)? else {
                 return Ok(None);
             };
-            let stride = usize::try_from(super::super::backend::array_element_stride(ty, budget)?)
-                .map_err(|_| "native pointer stride is negative")?;
+            let stride = if matches!(ty, ir::Ty::Ref { referent, .. } if matches!(referent.as_ref(), ir::Ty::Slice { .. }))
+            {
+                // This is the stride of references stored as elements, not
+                // the stride of their slice's elements. Metadata above has
+                // already established the exact two-word descriptor.
+                2 * usize::from(super::super::backend::SHARED_BYTE_SLICE_LAYOUT.word_bytes)
+            } else {
+                usize::try_from(super::super::backend::array_element_stride(ty, budget)?)
+                    .map_err(|_| "native pointer stride is negative")?
+            };
             if size != stride {
                 return Err("unsupported: public pointer stride requires exact semantic and physical representation agreement".into());
             }

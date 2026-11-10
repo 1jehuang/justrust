@@ -1313,10 +1313,10 @@ impl<'s> Checker<'s> {
                 self.infer_type_term(&ir::Ty::byte_string_ty(bytes.len()), None, depth + 1)?
             }
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
-                let ty = self
-                    .canonical
-                    .ok_or("contract: constant inference requires sealed graph inputs")?
-                    .constant_type(expr)?;
+                let ty = self.source_constant_type(
+                    expr,
+                    "contract: constant inference requires sealed graph inputs",
+                )?;
                 self.infer_node(InferKind::Rigid(ty))?
             }
             Expr::AssociatedFn(value) => match self.associated_fn_item_hint(value)? {
@@ -2258,6 +2258,8 @@ pub(super) struct Checker<'a> {
     pub(super) runtime_sites: Vec<(ir::ExprId, Arc<ir::RuntimeLocation>)>,
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
+    pub(super) stored_constant_inputs: Vec<Arc<closures::constant_inputs::StoredConstantInputs>>,
+    pub(super) stored_constant_access: Option<closures::constant_inputs::StoredConstantAccess>,
     // Borrowed only within this checking node. Child callable owners do not
     // inherit this capability adapter implicitly. Closure bodies are part of
     // the same checking node and share it (closures/prepare.rs).
@@ -4413,6 +4415,8 @@ impl<'a> Checker<'a> {
             extending_borrows: Vec::new(),
             direct_extending_borrow: None,
             canonical: None,
+            stored_constant_inputs: Vec::new(),
+            stored_constant_access: None,
         }
     }
     pub(super) fn charge_node(&self, bytes: usize) -> Result<(), String> {
@@ -5440,11 +5444,12 @@ impl<'a> Checker<'a> {
             Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => Some(ir::Ty::byte_string_ty(bytes.len())),
-            Expr::ConstItem(_) | Expr::AssociatedConst(_) => Some(
-                self.canonical
-                    .ok_or("contract: constant hint requires sealed graph inputs")?
-                    .constant_type(e)?,
-            ),
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
+                Some(self.source_constant_type(
+                    e,
+                    "contract: constant hint requires sealed graph inputs",
+                )?)
+            }
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self.callable_value_hint(name)?,
             Expr::AssociatedFn(value) => self.associated_fn_item_hint(value)?,
@@ -13290,15 +13295,16 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::shared_str_ty()),
                 )
             }
-            Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
-                let canonical = self
-                    .canonical
-                    .ok_or("contract: constant occurrence requires sealed graph inputs")?;
-                (
-                    canonical.constant_kind(e)?,
-                    Flow::value(canonical.constant_type(e)?),
-                )
-            }
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => (
+                self.source_constant_kind(
+                    e,
+                    "contract: constant occurrence requires sealed graph inputs",
+                )?,
+                Flow::value(self.source_constant_type(
+                    e,
+                    "contract: constant occurrence requires sealed graph inputs",
+                )?),
+            ),
             Expr::AssociatedFn(value) => {
                 let ty = self.associated_fn_item(value)?;
                 (ir::ExprKind::FnItem, Flow::value(ty))
@@ -13775,9 +13781,11 @@ impl<'a> Checker<'a> {
             kind,
         });
         if matches!(e, Expr::ConstItem(_) | Expr::AssociatedConst(_)) {
-            self.canonical
-                .ok_or("contract: constant emission requires sealed graph inputs")?
-                .record_constant(e, id)?;
+            self.record_source_constant(
+                e,
+                id,
+                "contract: constant emission requires sealed graph inputs",
+            )?;
         }
         Ok(id)
     }
@@ -14284,6 +14292,13 @@ fn type_callable_source_and_closures_inner(
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
+    if let Some(capability) = canonical {
+        budget.retain_bytes(
+            capability.stored_constant_inputs.len()
+                * std::mem::size_of::<Arc<closures::constant_inputs::StoredConstantInputs>>(),
+        )?;
+        c.stored_constant_inputs = capability.stored_constant_inputs.clone();
+    }
     c.closure_source_recipe = canonical.map(|cap| cap.inventory.owner.clone());
     c.unsafe_depth = usize::from(f.unsafety);
     let root_hints = if let Some((receiver, inputs)) = nominal {

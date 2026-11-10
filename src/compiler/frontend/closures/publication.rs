@@ -12,6 +12,7 @@ struct ModeShape {
 pub(super) struct CheckedClosureAuthority {
     seal: Arc<ClosureShapeSeal>,
     modes: Arc<[ModeShape]>,
+    constants: Option<super::constant_inputs::StoredConstantReceipt>,
 }
 impl CheckedClosureAuthority {
     /// Private to the parent checker implementation, after every mode is final.
@@ -19,6 +20,7 @@ impl CheckedClosureAuthority {
         plan: &PlanCtx,
         closure: &Arc<ir::ClosureTy>,
         modes: &[CheckedClosureBody],
+        constants: Option<super::constant_inputs::StoredConstantReceipt>,
     ) -> Result<Arc<Self>, String> {
         let seal = closure
             .shape_seal()
@@ -27,6 +29,9 @@ impl CheckedClosureAuthority {
         let world = plan.trait_world()?;
         let mut shapes = Vec::new();
         for mode in modes {
+            if let Some(constants) = &constants {
+                constants.validate_for(plan, closure, &mode.body)?;
+            }
             if shapes
                 .iter()
                 .any(|shape: &ModeShape| shape.mode == mode.mode)
@@ -51,6 +56,7 @@ impl CheckedClosureAuthority {
         Ok(Arc::new(Self {
             seal,
             modes: shapes.into(),
+            constants,
         }))
     }
     pub(super) fn validate(&self, plan: &PlanCtx, checked: &CheckedClosure) -> Result<(), String> {
@@ -79,6 +85,9 @@ impl CheckedClosureAuthority {
                 .find(|shape| shape.mode == mode)
                 .ok_or("closure receipt omits a supported receiver mode")?;
             let body = checked.body_for(mode)?;
+            if let Some(constants) = &self.constants {
+                constants.validate_for(plan, &checked.ty, &body)?;
+            }
             let facts = world
                 .closure_callable_facts_for(checked.ty.clone(), mode)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;

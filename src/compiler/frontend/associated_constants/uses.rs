@@ -95,12 +95,13 @@ impl PlanCtx {
         }
         let facts = self.instance_facts(target)?;
         let function = self.callable_body(&self.program, target.declaration)?;
-        let inventory = SourceInventory::build(
-            &self.program,
-            function,
-            sr::OriginalBodyId::new(budget).map_err(|e| e.into_legacy_diagnostic(budget))?,
-            budget,
-        )
+        let identity =
+            sr::OriginalBodyId::new(budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let inventory = if self.stored_closure_owner(target.declaration)?.is_some() {
+            self.stored_constant_inventory(target.declaration, identity, budget)
+        } else {
+            SourceInventory::build(&self.program, function, identity, budget)
+        }
         .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let original = inventory
             .associated_constants

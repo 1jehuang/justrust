@@ -5,6 +5,54 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn stored_closure_constant_inputs() {
+    oracle::check(
+        "stored_closure_constant_inputs",
+        &[
+            Case {
+                name: "generic_associated_zero_filter",
+                source: "trait Zero{const ZERO:Self;}impl Zero for i32{const ZERO:i32=0;}fn count_nonzero<T:Zero+PartialEq>(xs:&[T])->usize{xs.iter().filter(|x|**x!=T::ZERO).count()}fn main(){println!(\"{}\",count_nonzero(&[0i32,2,0,4]));}",
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "direct_constant_closure",
+                source: "const LIMIT:i32=3;fn main(){let f=|x:i32|x+LIMIT;println!(\"{}\",f(4));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "nested_constant_closure",
+                source: "const LIMIT:i32=3;fn main(){let outer=||{let inner=||LIMIT;inner()};println!(\"{}\",outer());}",
+                expect: Expect::Run("3\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn stored_closure_constant_inputs_reject_invalid_sources() {
+    oracle::check(
+        "stored_closure_constant_inputs_invalid",
+        &[
+            Case {
+                name: "unused_missing_constant_bound",
+                source: "fn unused<T:PartialEq>(xs:&[T])->usize{xs.iter().filter(|x|**x!=T::ZERO).count()}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "unused_wrong_constant_type",
+                source: "trait Zero{const ZERO:bool;}fn unused<T:Zero>(){let _f=||->i32{T::ZERO};}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_constant_does_not_authorize_escape",
+                source: "const LIMIT:i32=3;fn unused<'a>()->&'a i32{let local=LIMIT;let f=||&local;f()}fn main(){}",
+                expect: Expect::Invalid("E0373"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn closure_argument_call_aggregate_results() {
     oracle::check(
         "closure_argument_call_aggregate_results",

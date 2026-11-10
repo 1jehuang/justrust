@@ -63,6 +63,7 @@ mod source_macro;
 mod source_macro_binding;
 mod source_replay;
 pub mod ssa;
+mod stored_closure_constants_graph;
 mod summary_node;
 mod token;
 pub mod token_primitives;
@@ -304,6 +305,8 @@ const ITEM_COHERENCE: u32 = 146;
 const ITEM_INVENTORY: u32 = 141;
 /// Per-module canonical source declarations (keyed by module-path key bits).
 const MODULE_DECLS: u32 = 147;
+/// Original stored-body constant inputs, keyed by canonical provider callable index.
+const STORED_CLOSURE_CONSTANT_INPUTS: u32 = 152;
 
 enum Input {
     Text(String),
@@ -1163,6 +1166,9 @@ impl Provider for CompilerProvider {
             let sibling = |kind: u32| keys::words(kind, key.params.clone());
             match key.kind {
                 OPAQUE_CALL_DISPATCH => opaque_dispatch::produce(&this, &cx, &key).await,
+                STORED_CLOSURE_CONSTANT_INPUTS => {
+                    stored_closure_constants_graph::produce(&this, &cx, &key).await
+                }
                 CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
                 ASSOCIATED_CONST_HEADER => this.associated_constant_header_node(&cx, &key).await,
                 ASSOCIATED_CONST_SELECT | ASSOCIATED_CONST_VALUE => {
@@ -1912,6 +1918,15 @@ impl Provider for CompilerProvider {
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let (mut constant_handles, _constant_handles_storage) =
                         this.scratch_vec(prepared.direct().len())?;
+                    let (mut stored_constant_handles, _stored_constant_handles_storage) =
+                        this.scratch_vec(prepared.stored().len())?;
+                    for provider in prepared.stored() {
+                        let index = types.callable_index(*provider).map_err(Error::new)?;
+                        stored_constant_handles.push(
+                            cx.request(function(STORED_CLOSURE_CONSTANT_INPUTS, index))
+                                .get(0),
+                        );
+                    }
                     for declaration in prepared.direct() {
                         constant_handles.push(
                             cx.request(function(CONST_VALUE, declaration.index as usize))
@@ -1954,6 +1969,11 @@ impl Provider for CompilerProvider {
                     for handle in associated_value_handles {
                         associated_values.push(cx.read_fact(handle).await?);
                     }
+                    let (mut stored_inputs, _stored_inputs_storage) =
+                        this.scratch_vec(stored_constant_handles.len())?;
+                    for handle in stored_constant_handles {
+                        stored_inputs.push(cx.read_fact(handle).await?);
+                    }
                     let constants = types
                         .seal_body_constants_with_associated(
                             prepared,
@@ -1961,6 +1981,9 @@ impl Provider for CompilerProvider {
                             associated_values,
                             &this.0.budget,
                         )
+                        .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                    let constants = types
+                        .attach_stored_constant_inputs(constants, stored_inputs, &this.0.budget)
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let closed_source = !generic
                         && matches!(
