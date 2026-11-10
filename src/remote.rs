@@ -113,6 +113,8 @@ pub struct Status {
     pub daemon: Option<DaemonState>,
     /// JUSTRUST_REMOTE when set (auto, 0, 1).
     pub routing: Option<String>,
+    /// Requested local builds must give a reason (`--local=<why>`).
+    pub local_reason_required: bool,
     /// hosted backend: account, credits, server-side host state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosted: Option<crate::remote_hosted::HostedStatus>,
@@ -324,6 +326,7 @@ pub fn collect(probe: bool) -> Status {
     out.routing = std::env::var("JUSTRUST_REMOTE")
         .ok()
         .filter(|v| !v.is_empty());
+    out.local_reason_required = crate::route::require_local_reason();
     out
 }
 
@@ -908,6 +911,13 @@ fn render_daemon(o: &mut String, s: &Status) {
     }
     if let Some(r) = &s.routing {
         let _ = writeln!(o, "routing: JUSTRUST_REMOTE={r}");
+    }
+    if s.configured {
+        let _ = writeln!(
+            o,
+            "local builds require a reason: {}",
+            s.local_reason_required
+        );
     }
 }
 
@@ -1880,6 +1890,12 @@ mod tests {
         assert!(t.contains("i-123 c7i.8xlarge in us-west-2 (spot)"), "{t}");
         assert!(t.contains("sync daemon: idle to box"), "{t}");
         assert!(t.contains("routing: JUSTRUST_REMOTE=auto"), "{t}");
+        let r = Status {
+            configured: true,
+            local_reason_required: true,
+            ..Default::default()
+        };
+        assert!(render_text(&r).contains("local builds require a reason: true"));
     }
 
     #[test]
