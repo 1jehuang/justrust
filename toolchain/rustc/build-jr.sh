@@ -55,11 +55,11 @@ if [ -n "$pgo" ]; then printf '\n[pgo.rustc]\n%s\n' "$pgo" >> bootstrap.toml; fi
 # JR_STAGE=2: the compiler is compiled by our own stage 1 (as upstream's
 # dist), not by the stage 0 beta. Output dir gets a -stage2 suffix.
 stage=${JR_STAGE:-1}
-# JR_TOOLS=1 also builds rustdoc and clippy against this driver (what
+# JR_TOOLS=1 also builds rustdoc, clippy and rustfmt against this driver (what
 # `justrust toolchain jr-install` packages; they must come from the same
 # build as librustc_driver, which BOLT later rewrites in place).
 tools=()
-[ -n "${JR_TOOLS:-}" ] && tools=(src/tools/rustdoc src/tools/clippy)
+[ -n "${JR_TOOLS:-}" ] && tools=(src/tools/rustdoc src/tools/clippy src/tools/rustfmt)
 ./x build --stage "$stage" library compiler/rustc "${tools[@]}" "$@"
 # Keep a copy per mode. stage1 is a sysroot of real files plus symlinks into
 # the source tree (rust-src), so a copy that keeps symlinks is ~1 GB.
