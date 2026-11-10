@@ -5,6 +5,74 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+#[path = "support/closure_oracle.rs"]
+mod generic_index_oracle;
+
+#[test]
+fn generic_index_reference_origins_match_stock() {
+    use generic_index_oracle::{Case, Expect};
+    generic_index_oracle::check(
+        "generic-index-origins",
+        &[
+            Case {
+                name: "vec_reference_origins",
+                source: r#"use std::fmt::Display;
+fn first<K>(v: &Vec<K>) -> &K { &v[0] }
+fn first_mut<K>(v: &mut Vec<K>) -> &mut K { &mut v[0] }
+fn clone_first<K: Clone>(v: &Vec<K>) -> K { v[0].clone() }
+fn show<K: Display>(v: &Vec<K>) { println!("{}", &v[0]); }
+fn main() {
+    let mut v = vec![String::from("a"), String::from("b")];
+    println!("{} {}", first(&v), clone_first(&v));
+    first_mut(&mut v).push('!');
+    show(&v);
+    println!("{:?}", v);
+}"#,
+                expect: Expect::Run("a a\na!\n[\"a!\", \"b\"]\n"),
+            },
+            Case {
+                name: "slice_reference_and_method_receivers",
+                source: r#"fn slice_first<K>(v: &[K]) -> &K { &v[0] }
+fn slice_first_mut<K>(v: &mut [K]) -> &mut K { &mut v[0] }
+fn slice_set<K: Copy>(v: &mut [K], i: usize, x: K) { v[i] = x; }
+fn slice_clone<K: Clone>(v: &[K]) -> K { v[0].clone() }
+fn slice_push(v: &mut [String], i: usize) { v[i].push('!'); }
+fn main() {
+    let mut v = vec![String::from("a"), String::from("b")];
+    println!("{} {}", slice_first(&v), slice_clone(&v));
+    slice_first_mut(&mut v).push('?');
+    slice_push(&mut v, 1);
+    println!("{:?}", v);
+    let mut n = vec![2u32, 4];
+    slice_set(&mut n, 1, 9);
+    println!("{:?}", n);
+}"#,
+                expect: Expect::Run("a a\n[\"a?\", \"b!\"]\n[2, 9]\n"),
+            },
+            Case {
+                name: "unused_move_out_of_generic_vec",
+                source: r#"fn bad<K>(v: &Vec<K>) -> K { v[0] } fn main() {}"#,
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "unused_mut_index_from_shared_vec",
+                source: r#"fn bad<K>(v: &Vec<K>) -> &mut K { &mut v[0] } fn main() {}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_mut_method_on_shared_slice",
+                source: r#"fn bad(v: &[String]) { v[0].push('!'); } fn main() {}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_reference_outlives_vec",
+                source: r#"fn bad<K>(v: Vec<K>) -> &'static K { &v[0] } fn main() {}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
 fn run(source: &str, expected: &str) {
     for workers in [1, 8] {
         let compiled = compiler::compile(source.into(), workers, false)

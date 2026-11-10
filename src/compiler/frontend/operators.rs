@@ -73,7 +73,8 @@ pub(super) enum First<'e> {
 
 impl type_check::Checker<'_> {
     /// A method autoref borrows the indexed place without copying its element.
-    /// Retain the checked Index/IndexMut reference once before reborrowing.
+    /// Retain the checked Index/IndexMut or builtin indexed reference once
+    /// before reborrowing, including runtime-checked slice indexes.
     pub(super) fn indexed_method_receiver(
         &mut self,
         receiver: &Expr,
@@ -89,11 +90,17 @@ impl type_check::Checker<'_> {
             fields.push(field);
             root = base;
         }
-        let Some(carrier) =
-            self.overloaded_index_reference(kind, root, root as *const Expr as usize)?
-        else {
-            return Ok(None);
-        };
+        let carrier =
+            match self.overloaded_index_reference(kind, root, root as *const Expr as usize)? {
+                Some(carrier) => carrier,
+                None if matches!(root, Expr::Index { .. } | Expr::DynamicIndex { .. }) => {
+                    let Some(carrier) = self.borrow_indexed_place(kind, root)? else {
+                        return Ok(None);
+                    };
+                    carrier
+                }
+                None => return Ok(None),
+            };
         let carrier_ty = self.exprs[carrier.0].ty.clone();
         if !matches!(carrier_ty, ir::Ty::Ref { .. }) {
             return Err("overloaded index must return a reference".into());
