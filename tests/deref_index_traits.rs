@@ -73,6 +73,140 @@ fn main() {
     );
 }
 
+#[test]
+fn generic_indexed_assignment_match_stock() {
+    use generic_index_oracle::{Case, Expect};
+    generic_index_oracle::check(
+        "generic-indexed-assignment",
+        &[
+            Case {
+                name: "noncopy_vec_element_replacement",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn main() {
+    let mut v = vec![String::from("a"), String::from("b")];
+    set(&mut v, 1, String::from("c"));
+    println!("{:?}", v);
+}"#,
+                expect: Expect::Run("[\"a\", \"c\"]\n"),
+            },
+            Case {
+                name: "repeated_replacement_drops_selected_element_once",
+                source: r#"struct D(u32);
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn main() {
+    let mut v = vec![D(1), D(2)];
+    set(&mut v, 1, D(3));
+    set(&mut v, 1, D(4));
+    println!("live {} {}", v[0].0, v[1].0);
+    drop(v);
+}"#,
+                expect: Expect::Run("drop 2\ndrop 3\nlive 1 4\ndrop 1\ndrop 4\n"),
+            },
+            Case {
+                name: "mutable_reference_elements",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn main() {
+    let mut a = 1i32;
+    let mut b = 2i32;
+    let mut c = 3i32;
+    let mut d = 4i32;
+    let mut v = vec![&mut a];
+    let rb = &mut b;
+    v.push(rb);
+    let rc = &mut c;
+    set(&mut v, 0, rc);
+    let rd = &mut d;
+    set(&mut v, 1, rd);
+    *v[0] += 10;
+    *v[1] += 20;
+    drop(v);
+    println!("{} {} {} {}", a, b, c, d);
+}"#,
+                expect: Expect::Run("1 2 13 24\n"),
+            },
+            Case {
+                name: "aggregate_mutable_reference_elements",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn main() {
+    let mut a = 1i32;
+    let mut b = 2i32;
+    let mut c = 3i32;
+    let mut d = 4i32;
+    let ra = &mut a;
+    let rb = &mut b;
+    let old = (ra, rb);
+    let mut v = vec![old];
+    let rc = &mut c;
+    let rd = &mut d;
+    let replacement = (rc, rd);
+    set(&mut v, 0, replacement);
+    *v[0].0 += 10;
+    *v[0].1 += 20;
+    drop(v);
+    println!("{} {} {} {}", a, b, c, d);
+}"#,
+                expect: Expect::Run("1 2 13 24\n"),
+            },
+            Case {
+                name: "unused_replacement_reuses_moved_element",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn bad(v: &mut Vec<String>, x: String) { set(v, 0, x); println!("{}", x); }
+fn main() {}"#,
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "unused_replacement_aliases_live_element",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn bad(v: &mut Vec<String>, x: String) {
+    let old = &mut v[0]; set(v, 0, x); drop(old);
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "unused_replacement_does_not_unify_distinct_families",
+                source: r#"fn bad<A, B>(v: &mut Vec<A>, x: B) { v[0] = x; }
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_custom_index_mut_does_not_split_aliases",
+                source: r#"use std::ops::{Index, IndexMut};
+struct Slots<K> { value: K }
+impl<K> Index<usize> for Slots<K> {
+    type Output = K;
+    fn index(&self, _i: usize) -> &K { &self.value }
+}
+impl<K> IndexMut<usize> for Slots<K> {
+    fn index_mut(&mut self, _i: usize) -> &mut K { &mut self.value }
+}
+fn bad(v: &mut Slots<String>, x: String) {
+    let old = v.index_mut(0); *v.index_mut(1) = x; drop(old);
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "unused_assumed_index_mut_does_not_issue_native_role",
+                source: r#"use std::ops::IndexMut;
+fn bad<C: IndexMut<usize, Output = String>>(v: &mut C, x: String) {
+    let old = v.index_mut(0); *v.index_mut(1) = x; drop(old);
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "unused_replacement_escapes_short_reference",
+                source: r#"fn set<K>(v: &mut Vec<K>, i: usize, x: K) { v[i] = x; }
+fn bad<'a>(v: &mut Vec<&'a str>) { let s = String::from("short"); set(v, 0, &s); }
+fn main() {}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
 fn run(source: &str, expected: &str) {
     for workers in [1, 8] {
         let compiled = compiler::compile(source.into(), workers, false)

@@ -15,6 +15,7 @@ use std::sync::Arc;
 mod aggregate_reborrow;
 mod cell_access;
 mod correlation;
+mod indexed_write;
 mod native_exchange;
 mod native_storage;
 mod singleton_heap;
@@ -279,6 +280,22 @@ fn source_region_input(
         location: row.location.clone(),
     };
     Ok(view.contract().inputs.contains(&input).then_some(input))
+}
+
+// Family source rows may name only a component already issued by the original
+// input contract and its canonical substitution. A family term alone does not
+// associate every component region with every substituted source location.
+fn source_family_region_is_issued(
+    issued: &[(InputCarrier, AnalysisRegionId)],
+    input: &InputCarrier,
+    regions: &[(Option<CarrierLocation>, AnalysisRegionId)],
+) -> bool {
+    regions.iter().any(|(component, region)| {
+        component.is_some()
+            && issued
+                .iter()
+                .any(|(candidate, actual)| candidate == input && actual == region)
+    })
 }
 
 /// Read an authored writable referent region only from the exact sealed call
@@ -3323,6 +3340,7 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
+        let issued_input_regions = self.input_regions.len();
         for row in source.carriers.iter().filter(|row| {
             row.parameter.is_some() && row.location.path.0.contains(&CarrierStep::SliceElement)
         }) {
@@ -3330,7 +3348,33 @@ impl CarrierBuilder<'_, '_> {
                 param: row.parameter.ok_or(Exhausted)?,
                 location: row.location.clone(),
             };
-            for (_, region) in self.body_term_regions(&row.region)? {
+            let regions = self.body_term_regions(&row.region)?;
+            if matches!(
+                row.region,
+                ir::CarrierRegionTerm::Family { .. }
+                    | ir::CarrierRegionTerm::ProjectionFamily { .. }
+                    | ir::CarrierRegionTerm::OpaqueFamily { .. }
+            ) {
+                self.budget
+                    .spend(mul(issued_input_regions + 1, regions.len() + 1)?)?;
+                if !source_family_region_is_issued(
+                    &self.input_regions[..issued_input_regions],
+                    &input,
+                    &regions,
+                ) {
+                    self.problem(
+                        BlockId(0),
+                        None,
+                        Problem::Invalid(
+                            "source family region has no exact original component mapping".into(),
+                        ),
+                    )?;
+                }
+                // Exact family pairings were already emitted above. Repeating
+                // all regions here would collapse distinct component lifetimes.
+                continue;
+            }
+            for (_, region) in regions {
                 self.retain(4 * size_of::<(InputCarrier, AnalysisRegionId)>(), 1)?;
                 self.input_regions.push((input.clone(), region));
             }
@@ -4767,6 +4811,19 @@ impl CarrierBuilder<'_, '_> {
                     indices = covered;
                     weak_cover = true;
                 }
+            }
+            if !copy
+                && indices.len() != targets.len()
+                && let Some(summary) =
+                    self.indexed_summary_write(state, destination, location, &channel, &targets)?
+            {
+                // A source-issued element summary is one abstract cell, not
+                // one selected physical element. Preserve OLD, never record
+                // this write as overwriting the entire owner or as disjoint.
+                indices.clear();
+                checked_vec_growth(&mut indices, self.budget)?;
+                indices.push(summary.cell());
+                weak_cover = true;
             }
             if diagnose && !weak_cover && indices.len() != targets.len() {
                 self.problem(
@@ -7305,7 +7362,9 @@ impl CarrierBuilder<'_, '_> {
             || (affine_results <= 1 && write_channels == 0)
             || (affine_writes <= 1 && result_channels == 0)
             || independent_pair;
-        if bounded {
+        if bounded
+            || (result_channels == 0 && self.indexed_family_write_admitted(params, view)?)
+        {
             return Ok(true);
         }
         if affine_results == 1
@@ -10155,6 +10214,82 @@ impl Plan {
 mod parameter_equality_tests {
     use super::*;
     use crate::compiler::{frontend, ownership};
+
+    #[test]
+    fn source_family_regions_keep_exact_issued_component_pairings() {
+        let location = |field| CarrierLocation {
+            path: CarrierPath(Arc::from([
+                CarrierStep::Referent,
+                CarrierStep::SliceElement,
+                CarrierStep::Field(field),
+            ])),
+            channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+        };
+        let first = InputCarrier {
+            param: 0,
+            location: location(0),
+        };
+        let second = InputCarrier {
+            param: 0,
+            location: location(1),
+        };
+        let issued = [
+            (first.clone(), AnalysisRegionId(0)),
+            (second.clone(), AnalysisRegionId(1)),
+        ];
+        let regions = [
+            (Some(location(0)), AnalysisRegionId(0)),
+            (Some(location(1)), AnalysisRegionId(1)),
+        ];
+        assert!(source_family_region_is_issued(&issued, &first, &regions));
+        assert!(source_family_region_is_issued(&issued, &second, &regions));
+        assert!(!source_family_region_is_issued(&[], &first, &regions));
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &first,
+            &regions[1..]
+        ));
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &second,
+            &regions[..1]
+        ));
+        let foreign_parameter = InputCarrier {
+            param: 1,
+            ..first.clone()
+        };
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &foreign_parameter,
+            &regions
+        ));
+        let foreign_field = InputCarrier {
+            location: location(2),
+            ..first.clone()
+        };
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &foreign_field,
+            &regions
+        ));
+        let foreign_channel = InputCarrier {
+            location: CarrierLocation {
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 1 }),
+                ..first.location.clone()
+            },
+            ..first.clone()
+        };
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &foreign_channel,
+            &regions
+        ));
+        assert!(!source_family_region_is_issued(
+            &issued,
+            &first,
+            &[(None, AnalysisRegionId(0))]
+        ));
+    }
 
     fn body_receipt_fixture() -> (cfg::TemplateCfg, Plan) {
         let template = source_template("fn probe<T>(x:T)->T{x}fn main(){}", 0);

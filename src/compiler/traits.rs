@@ -38,6 +38,7 @@ mod impl_disjoint;
 mod owner_lifetimes;
 pub use impl_disjoint::CrateOrigin;
 mod inherent_constants;
+mod native_source_call;
 mod nominal_declarations;
 mod nominal_realization;
 fn nominal_fields(fields: &ir::NominalFields, budget: &PlanBudget) -> Result<Arc<[ir::FieldDef]>> {
