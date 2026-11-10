@@ -1816,6 +1816,33 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                     continue;
                 }
+                if let Domain::Cell(declaration, argument) = self.domain(receiver).clone() {
+                    let plan = self.checker.signatures.plan()?;
+                    if declaration != plan.catalog.id(tr::CatalogItem::Cell) {
+                        return Err("contract: foreign Cell inference owner".into());
+                    }
+                    let operation = cell::method_operation(&plan.program, method.name)?;
+                    if !method.actuals.is_empty() {
+                        return Err("E0107: Cell methods take no type arguments".into());
+                    }
+                    let result = match operation {
+                        Some(CellOperation::Get) if method.args.is_empty() => argument,
+                        Some(CellOperation::Set) if method.args.len() == 1 => {
+                            self.unify_at(argument, method.args[0], 0)?;
+                            self.fixed(ir::Ty::Unit)?
+                        }
+                        Some(_) => return Err("E0061: Cell method argument count mismatch".into()),
+                        None => {
+                            return Err(
+                                "unsupported: canonical Cell method has no executable provider"
+                                    .into(),
+                            );
+                        }
+                    };
+                    self.unify(result, method.result)?;
+                    progress = true;
+                    continue;
+                }
                 if let Some(candidate) = self.candidate_for_receiver(receiver, method.name)? {
                     let result = self.callable(
                         candidate,

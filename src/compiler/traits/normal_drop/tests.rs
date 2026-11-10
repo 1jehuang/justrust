@@ -60,7 +60,9 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
         else {
             panic!("warmed owner still requires destruction")
         };
-        warmed.validate(&owner, facts).unwrap();
+        warmed
+            .validate_with_scratch(&owner, facts, &mut scratch)
+            .unwrap();
     }
     let Ty::Struct(original) = &owner else {
         unreachable!()
@@ -77,12 +79,25 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
         panic!("destructor expected")
     };
     valid.validate(&owner, facts).unwrap();
+    valid
+        .validate_with_scratch(&owner, facts, &mut scratch)
+        .unwrap();
+    assert!(
+        valid
+            .validate_with_scratch(&changed, facts, &mut scratch)
+            .is_err()
+    );
     let mut forged = valid.as_ref().clone();
     forged.target = Some(CallTarget {
         declaration: context.function_decl(1).unwrap(),
         type_args: Arc::from([]),
     });
     assert!(forged.validate(&owner, facts).is_err());
+    assert!(
+        forged
+            .validate_with_scratch(&owner, facts, &mut scratch)
+            .is_err()
+    );
     let mut forged = valid.as_ref().clone();
     forged
         .signature
@@ -90,6 +105,11 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
         .expect("user Drop destructor has a canonical signature")
         .result = Ty::Bool;
     assert!(forged.validate(&owner, facts).is_err());
+    assert!(
+        forged
+            .validate_with_scratch(&owner, facts, &mut scratch)
+            .is_err()
+    );
 }
 
 #[test]

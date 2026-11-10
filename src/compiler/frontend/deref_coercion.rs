@@ -16,7 +16,9 @@ pub(super) fn candidate(e: &Expr) -> bool {
 }
 
 pub(super) fn receiver_candidate(e: &Expr) -> bool {
-    candidate(e) || type_check::genuine_call(e)
+    candidate(e)
+        || matches!(e, Expr::Index { .. } | Expr::DynamicIndex { .. })
+        || type_check::genuine_call(e)
 }
 
 /// Tagged source pointer for coercion step `step` (1-based) of an expression.

@@ -974,6 +974,14 @@ impl ValidatedTraitWorld {
     /// recursive pointer fields. Its term language excludes unsized, open and
     /// projected terms, so every admitted nominal is valid in each TypeUse.
     pub(super) fn closed_component_type_height(&self, ty: &Ty) -> Result<Option<usize>> {
+        self.closed_component_type_height_with_replays(ty, &mut NominalReplays::default())
+    }
+
+    pub(super) fn closed_component_type_height_with_replays(
+        &self,
+        ty: &Ty,
+        replays: &mut NominalReplays,
+    ) -> Result<Option<usize>> {
         let (capability, id, declaration) = match ty {
             Ty::Struct(n) => (n.realization(), n.def().id, n.def().source_decl),
             Ty::Enum(n) => (n.realization(), n.def().id, n.def().source_decl),
@@ -996,9 +1004,32 @@ impl ValidatedTraitWorld {
         }
         validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
         capability
-            .replay(ty, self)
+            .replay_with(ty, self, replays)
             .map_err(|error| FactsError::from_message(&self.budget, &error.to_string()))?;
         Ok(Some(height))
+    }
+
+    #[cfg(test)]
+    pub(in crate::compiler) fn component_type_walk_replays_for_tests(
+        &self,
+        roots: &[Ty],
+        caller: &ValidatedFacts,
+    ) -> Result<usize> {
+        let mut walk = TypeWalk::default();
+        for root in roots {
+            self.validate_ty_inner_with_facts(
+                root,
+                caller.env(),
+                0,
+                TypeUse::Root,
+                &mut walk,
+                Some(caller),
+            )?;
+        }
+        Ok(walk
+            .component_replays
+            .as_deref()
+            .map_or(0, |arena| arena.replay_counts().0))
     }
 
     pub(in crate::compiler) fn symbolic_nominal_requirements(
@@ -1007,7 +1038,22 @@ impl ValidatedTraitWorld {
         proof: &NominalDeclarationProof,
         source: &Ty,
     ) -> Result<Vec<Ty>> {
-        self.replay_nominal_declaration(declaration, proof)?;
+        self.symbolic_nominal_requirements_with(
+            declaration,
+            proof,
+            source,
+            &mut NominalReplays::default(),
+        )
+    }
+
+    pub(in crate::compiler) fn symbolic_nominal_requirements_with(
+        &self,
+        declaration: DeclId,
+        proof: &NominalDeclarationProof,
+        source: &Ty,
+        replays: &mut NominalReplays,
+    ) -> Result<Vec<Ty>> {
+        self.replay_nominal_declaration_with(replays, declaration, proof)?;
         let index = match source {
             Ty::Struct(n) => n.def().id.index,
             Ty::Enum(n) => n.def().id.index,
@@ -1026,8 +1072,23 @@ impl ValidatedTraitWorld {
         }
         // Authenticate the source allocation/shape in its own exact binder.
         // No closed recursive nominal is invented to make this validation pass.
-        self.schema
-            .validate_nominal(source, &proof.schema().env, &self.budget)?;
+        // Keep the canonical construction owner across sibling component
+        // proofs. validate_full still replays every recursive source payload,
+        // receipt and ordered actual. A node-only or metadata-only success
+        // cannot stand in for this full source authentication.
+        if replays.nominal_session.is_none() {
+            replays.nominal_session = self.schema.nominal_validation_session()?;
+        }
+        let replayed = match replays.nominal_session.as_mut() {
+            Some(session) => {
+                session.validate_full(source, &proof.schema().env, None, &self.budget)?
+            }
+            None => false,
+        };
+        if !replayed {
+            self.schema
+                .validate_nominal(source, &proof.schema().env, &self.budget)?;
+        }
         let (source_declaration, actuals) = match source {
             Ty::Struct(n) => (n.def().source_decl, &n.def().type_args),
             Ty::Enum(n) => (n.def().source_decl, &n.def().type_args),
@@ -1078,13 +1139,17 @@ impl ValidatedTraitWorld {
         Ok(requirements)
     }
 
-    pub(in crate::compiler) fn require_symbolic_external_sized(&self, ty: &Ty) -> Result<()> {
+    pub(in crate::compiler) fn require_symbolic_external_sized(
+        &self,
+        ty: &Ty,
+        replays: &mut NominalReplays,
+    ) -> Result<()> {
         let predicate = Predicate::Implements(TraitRef {
             declaration: self.catalog.id(CatalogItem::Sized),
             self_ty: ty.clone(),
             args: Arc::from([]),
         });
-        self.require_in(
+        self.require_sharing(
             &predicate,
             ProofContext {
                 transport: ParentLocalTransport::default(),
@@ -1094,7 +1159,7 @@ impl ValidatedTraitWorld {
                 executable_storage: true,
                 phase: FactsPhase::Closed,
             },
-            &mut ProofScratch::default(),
+            replays,
         )
         .map(|_| ())
     }
@@ -1222,6 +1287,85 @@ mod tests {
             .unwrap();
         crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
             .unwrap()
+    }
+
+    #[test]
+    fn symbolic_full_source_replay_retains_only_canonical_construction_session() {
+        let source = "struct Outer<T>{head:Inner<T>,tail:(T,T)}struct Inner<T>{value:T}fn main(){}";
+        let make_plan = || {
+            let program = crate::compiler::frontend::parse(source).unwrap();
+            crate::compiler::frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                .unwrap()
+        };
+        let plan = make_plan();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let proof = world.nominal_declaration_wellformed(declaration).unwrap();
+        let template = plan.nominal_realization_template(declaration).unwrap();
+        let mut replays = NominalReplays::default();
+        let expected = world
+            .symbolic_nominal_requirements_with(declaration, &proof, &template, &mut replays)
+            .unwrap();
+        let session = std::ptr::from_ref(replays.nominal_session.as_deref().unwrap());
+        let before = world.budget.usage_snapshot().work;
+        let actual = world
+            .symbolic_nominal_requirements_with(declaration, &proof, &template, &mut replays)
+            .unwrap();
+        let warm = world.budget.usage_snapshot().work - before;
+        assert_eq!(actual, expected);
+        assert!(std::ptr::addr_eq(
+            session,
+            std::ptr::from_ref(replays.nominal_session.as_deref().unwrap())
+        ));
+        let before = world.budget.usage_snapshot().work;
+        let cold = world
+            .symbolic_nominal_requirements_with(
+                declaration,
+                &proof,
+                &template,
+                &mut NominalReplays::default(),
+            )
+            .unwrap();
+        let cold_work = world.budget.usage_snapshot().work - before;
+        assert_eq!(cold, expected);
+        assert!(
+            warm < cold_work,
+            "full source reconstruction did not reuse its canonical session: {warm}/{cold_work}"
+        );
+
+        let Ty::Struct(original) = &template else {
+            panic!("struct template")
+        };
+        let mut forged = original.def().clone();
+        forged.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged = Ty::Struct(ir::StructTy::new_parent_local(forged));
+        assert!(
+            world
+                .symbolic_nominal_requirements_with(declaration, &proof, &forged, &mut replays,)
+                .is_err()
+        );
+        let foreign = make_plan();
+        let foreign_world = foreign.trait_world().unwrap();
+        assert!(
+            foreign_world
+                .symbolic_nominal_requirements_with(declaration, &proof, &template, &mut replays,)
+                .is_err()
+        );
+        assert_eq!(
+            world
+                .symbolic_nominal_requirements_with(declaration, &proof, &template, &mut replays,)
+                .unwrap(),
+            expected
+        );
+        assert!(world.budget.first_resource_failure().is_none());
+        world.budget.poison_ledger_for_tests();
+        let failure = world.budget.first_resource_failure();
+        assert!(
+            world
+                .symbolic_nominal_requirements_with(declaration, &proof, &template, &mut replays,)
+                .is_err()
+        );
+        assert_eq!(world.budget.first_resource_failure(), failure);
     }
 
     #[test]

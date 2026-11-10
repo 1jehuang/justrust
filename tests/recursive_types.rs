@@ -69,6 +69,70 @@ fn self_applied_pointer_wrappers_validate_and_run() {
     runs("self_pointer_holder");
 }
 
+/// A parent/child tree whose links sit behind `RefCell`, with scalar `Cell`
+/// fields in the same recursive type.
+#[test]
+fn recursive_types_with_interior_mutability_run() {
+    runs("refcell_tree");
+}
+
+#[test]
+fn recursive_cell_methods_reject_invalid_unused_bodies() {
+    for operation in ["first.marked.set(1)", "first.marked.set::<bool>(true)"] {
+        let source = format!(
+            "use std::cell::Cell; use std::rc::Rc; struct Node{{marked:Cell<bool>, next:Option<Rc<Node>>}} fn unused(nodes:Vec<Rc<Node>>){{let first=nodes[0].clone();{operation};}} fn main(){{}}"
+        );
+        for workers in [1, 8] {
+            let dir = scratch();
+            let input = dir.join("input.rs");
+            let exe = dir.join("program");
+            std::fs::write(&input, &source).unwrap();
+            for build in [false, true] {
+                let mut command = jr(&input, workers);
+                if build {
+                    command.arg("-o").arg(&exe);
+                } else {
+                    command.arg("--check");
+                }
+                let output = command.output().unwrap();
+                assert!(!output.status.success(), "accepted {operation}: {output:?}");
+                assert!(!exe.exists(), "published invalid executable");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+/// Only a primitive scalar `Cell` payload is supported. Inside a recursive
+/// type any other payload is an explicit diagnostic, never an executable.
+#[test]
+fn recursive_cell_requires_scalar_payload() {
+    let source = "use std::cell::Cell; use std::rc::Rc; struct S{next:Cell<Option<Rc<S>>>} fn main(){let s=S{next:Cell::new(None)};let _=s;}";
+    for workers in [1, 8] {
+        let dir = scratch();
+        let input = dir.join("input.rs");
+        std::fs::write(&input, source).unwrap();
+        let exe = dir.join("program");
+        for build in [false, true] {
+            let mut command = jr(&input, workers);
+            if build {
+                command.arg("-o").arg(&exe);
+            } else {
+                command.arg("--check");
+            }
+            let out = command.output().unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "accepted: {stderr}");
+            assert!(
+                stderr.contains("unsupported: Cell payload requires a concrete primitive scalar"),
+                "{stderr}"
+            );
+            assert!(!exe.exists(), "published executable");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn by_value_recursion_is_rejected() {
     for source in [
@@ -78,6 +142,9 @@ fn by_value_recursion_is_rejected() {
         "struct A{x:[A;0]} fn main(){}",
         "struct A{x:Option<A>} fn main(){}",
         "struct A{b:B} struct B{a:A} fn main(){}",
+        // Interior mutability is storage by value, not indirection.
+        "use std::cell::RefCell; struct A{x:RefCell<A>} fn main(){}",
+        "use std::cell::RefCell; struct A{x:RefCell<Option<A>>} fn main(){}",
     ] {
         let dir = scratch();
         let input = dir.join("input.rs");

@@ -16,7 +16,47 @@ pub(super) struct SourceMetadataCache {
 /// Mutable proof scratch belongs only to this reconstruction, never a fact.
 /// TraitScratch authenticates exact payloads and resets across caller contexts.
 #[derive(Default)]
-struct SourceMetadataValidation(std::cell::RefCell<tr::TraitScratch>);
+struct SourceMetadataValidation(std::cell::RefCell<Option<SourceMetadataScratch>>);
+
+struct SourceMetadataScratch {
+    value: Box<tr::TraitScratch>,
+    authority: ir::PlanAuthority,
+    // The allocation and its nested scratch are destroyed before this lease.
+    _storage: ir::PlanReservation,
+}
+
+impl SourceMetadataValidation {
+    fn with_scratch<R>(
+        &self,
+        budget: &ir::PlanBudget,
+        f: impl FnOnce(&mut tr::TraitScratch) -> Result<R, String>,
+    ) -> Result<R, String> {
+        budget.charge_work(0)?;
+        let mut owner = self
+            .0
+            .try_borrow_mut()
+            .map_err(|_| "source argument validation is already active")?;
+        if let Some(owner) = owner.as_ref() {
+            if !owner.authority.same_authority(budget.authority()) {
+                return Err("source argument scratch requires the same budget authority".into());
+            }
+        } else {
+            // Admit the heap value before allocating. The surrounding cache
+            // owns only this optional handle until a checked caller needs it.
+            let storage = budget.reserve_bytes(
+                std::mem::size_of::<tr::TraitScratch>()
+                    .checked_add(2 * std::mem::size_of::<usize>())
+                    .ok_or("source argument scratch allocation overflow")?,
+            )?;
+            *owner = Some(SourceMetadataScratch {
+                value: Box::new(tr::TraitScratch::default()),
+                authority: budget.authority().clone(),
+                _storage: storage,
+            });
+        }
+        f(&mut owner.as_mut().expect("source scratch installed").value)
+    }
+}
 
 impl std::fmt::Debug for SourceMetadataValidation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -79,6 +119,55 @@ impl<'a> SourceBindingMetadata<'a> {
 }
 
 impl SourceMetadataCache {
+    pub(super) fn with_checked_scratch<R>(
+        &self,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        operation: impl FnOnce(&mut tr::TraitScratch) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if !facts.budget().same_authority(budget) {
+            return Err("source metadata scratch requires the same budget authority".into());
+        }
+        self.validation.with_scratch(budget, operation)
+    }
+
+    pub(super) fn validate_argument(
+        &self,
+        actual: &ir::Ty,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        argument_height_with_validation(
+            actual,
+            caller,
+            budget,
+            depth,
+            &mut ArgumentMemo::new(),
+            self,
+        )
+        .map(|_| ())
+    }
+
+    pub(super) fn validate_formed_argument(
+        &self,
+        actual: &ir::Ty,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        if !facts.budget().same_authority(budget) {
+            return Err("component argument requires the same budget authority".into());
+        }
+        // This is strict formation, not source metadata admission. Successful
+        // roots and their completed subtrees belong to this reconstruction's
+        // exact caller context and cannot mint syntax receipts.
+        self.validation.with_scratch(budget, |scratch| {
+            facts
+                .validate_ty_scratch(actual, scratch)
+                .map_err(|error| error.into_legacy_diagnostic(budget))
+        })
+    }
+
     pub(super) fn validate_actual(
         &self,
         actual: &ir::Ty,
@@ -86,9 +175,11 @@ impl SourceMetadataCache {
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
         match caller {
-            ir::FactsCtx::Validated(facts) => facts
-                .validate_ty_metadata_scratch(actual, budget, &mut self.validation.0.borrow_mut())
-                .map_err(|error| error.into_legacy_diagnostic(budget)),
+            ir::FactsCtx::Validated(facts) => self.validation.with_scratch(budget, |scratch| {
+                facts
+                    .validate_ty_metadata_scratch(actual, budget, scratch)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))
+            }),
             _ => caller.validate_ty_metadata_with_budget(actual, budget),
         }
     }
@@ -1250,7 +1341,8 @@ impl PlanState {
                     self.probe_source_carriers(arg, budget)?;
                 }
             } else {
-                validate_argument(arg, caller, budget, depth + 1)?;
+                self.source_metadata
+                    .validate_argument(arg, caller, budget, depth + 1)?;
             }
         }
         let key_bytes = args
@@ -1645,7 +1737,8 @@ impl PlanState {
                     self.probe_source_carriers(&ty, budget)?;
                 }
             } else {
-                validate_argument(&ty, caller, budget, 0)?;
+                self.source_metadata
+                    .validate_argument(&ty, caller, budget, 0)?;
             }
             // A projection-free native application was rebuilt here from the
             // authenticated source schema, not copied from structural fields.
@@ -1657,7 +1750,8 @@ impl PlanState {
                 && matches!(&ty, ir::Ty::Struct(value) if value.native_sequence_binding().is_some())
                 && !raw_type_has_projection(&ty, budget, 0)?;
             if native_transport {
-                validate_argument(&ty, caller, budget, 0)?;
+                self.source_metadata
+                    .validate_argument(&ty, caller, budget, 0)?;
             }
             let ty = if transport.is_none() || native_transport {
                 native_sequence::bind_source_substitution(ty, caller, budget)?
@@ -1739,6 +1833,88 @@ fn source_elides_lifetime(ty: &Type) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_metadata_scratch_is_lazy_and_metered_by_its_exact_owner() {
+        let bytes = std::mem::size_of::<tr::TraitScratch>() + 2 * std::mem::size_of::<usize>();
+        assert!(
+            std::mem::size_of::<SourceMetadataValidation>()
+                < std::mem::size_of::<tr::TraitScratch>()
+        );
+        let budget = ir::PlanBudget::default();
+        let baseline = budget.usage_snapshot().bytes;
+        let validation = SourceMetadataValidation::default();
+        assert!(validation.0.borrow().is_none());
+        assert_eq!(budget.usage_snapshot().bytes, baseline);
+        let address = validation
+            .with_scratch(&budget, |scratch| {
+                Ok(scratch as *mut tr::TraitScratch as usize)
+            })
+            .unwrap();
+        assert_eq!(budget.usage_snapshot().bytes, baseline + bytes);
+        for _ in 0..8 {
+            assert_eq!(
+                validation
+                    .with_scratch(&budget, |scratch| {
+                        Ok(scratch as *mut tr::TraitScratch as usize)
+                    })
+                    .unwrap(),
+                address
+            );
+            assert_eq!(budget.usage_snapshot().bytes, baseline + bytes);
+        }
+        let foreign = ir::PlanBudget::default();
+        assert!(
+            validation
+                .with_scratch(&foreign, |_| -> Result<(), String> {
+                    panic!("foreign planning authority reached proof scratch")
+                })
+                .unwrap_err()
+                .contains("same budget authority")
+        );
+        assert_eq!(foreign.usage_snapshot().bytes, 0);
+        validation
+            .with_scratch(&budget, |_| {
+                assert!(
+                    validation
+                        .with_scratch(&budget, |_| Ok(()))
+                        .unwrap_err()
+                        .contains("already active")
+                );
+                Ok(())
+            })
+            .unwrap();
+        drop(validation);
+        assert_eq!(budget.usage_snapshot().bytes, baseline);
+
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes - 1,
+            ..ir::PlanLimits::default()
+        });
+        let denied = SourceMetadataValidation::default();
+        assert!(
+            denied
+                .with_scratch(&tiny, |_| -> Result<(), String> {
+                    panic!("unpaid scratch was allocated")
+                })
+                .is_err()
+        );
+        assert!(denied.0.borrow().is_none());
+        assert_eq!(tiny.usage_snapshot().bytes, 0);
+        let failure = tiny.first_resource_failure().unwrap();
+        assert_eq!(failure.requested, bytes);
+
+        let poisoned = ir::PlanBudget::default();
+        let live = SourceMetadataValidation::default();
+        live.with_scratch(&poisoned, |_| Ok(())).unwrap();
+        poisoned.poison_ledger_for_tests();
+        assert!(
+            live.with_scratch(&poisoned, |_| -> Result<(), String> {
+                panic!("poisoned ledger reached completed scratch")
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn source_carrier_deferral_requires_exact_active_handle_and_complete_late_fields() {

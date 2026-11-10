@@ -10,11 +10,26 @@ use super::*;
 pub(super) struct RawFormations {
     entries: Vec<RawFormation>,
     storage: Vec<ir::PlanReservation>,
-    nominal_session: Option<Box<dyn NominalValidationSession>>,
+    walks: Vec<RawWalk>,
+    walk_storage: Vec<ir::PlanReservation>,
+}
+
+struct RawWalk {
+    world: WorldId,
+    authority: ir::PlanAuthority,
+    registry: SnapshotId,
+    ready: bool,
+    finalized: bool,
+    limits: [usize; 6],
+    env: GenericEnv,
+    maybe_unsized: Option<ParamId>,
+    executable_storage: bool,
+    walk: TypeWalk,
 }
 
 struct RawFormation {
     world: WorldId,
+    authority: ir::PlanAuthority,
     registry: SnapshotId,
     ready: bool,
     finalized: bool,
@@ -35,8 +50,24 @@ impl RawFormations {
     }
 
     #[cfg(test)]
+    pub(super) fn retained_walks(&self) -> usize {
+        self.walks.len()
+    }
+
+    #[cfg(test)]
     pub(super) fn storage_bytes(&self) -> usize {
         self.storage.len() * scratch_row_bytes::<RawFormation>().unwrap()
+            + self.walk_storage.len() * scratch_row_bytes::<RawWalk>().unwrap()
+            + self
+                .walks
+                .iter()
+                .map(|row| {
+                    row.walk.reservations.len()
+                        * (2 * std::mem::size_of::<((TypeNode, TypeUse, bool), usize, Ty)>()
+                            + 2 * std::mem::size_of::<ir::PlanReservation>()
+                            + 32)
+                })
+                .sum::<usize>()
     }
 
     // Nonprojected raw roots still require complete physical formation.
@@ -85,6 +116,7 @@ impl RawFormations {
             for previous in &self.entries {
                 charged(&world.budget, world.budget.charge_work(1))?;
                 if previous.world == world.id
+                    && previous.authority.same_authority(world.budget.authority())
                     && previous.registry == world.registry
                     && previous.ready == world.owner_normalization_ready
                     && previous.finalized == world.owner_normalization_finalized
@@ -104,17 +136,73 @@ impl RawFormations {
                 }
             }
         }
-        // Reuse only canonical construction, not a full-validation answer.
-        // Each root still owns its own complete formation walk and flags.
-        let mut walk = TypeWalk {
-            maybe_unsized,
-            logical_nominals: !executable_storage,
-            nominal_session: self.nominal_session.take(),
-            ..TypeWalk::default()
+        // Distinct roots can share only completed immutable subtrees under
+        // this exact source world and formation policy. A new root has no
+        // active DFS ancestry, and a failed walk is discarded before reuse.
+        let mut selected = None;
+        for (index, row) in self.walks.iter().enumerate() {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if row.world == world.id
+                && row.authority.same_authority(world.budget.authority())
+                && row.registry == world.registry
+                && row.ready == world.owner_normalization_ready
+                && row.finalized == world.owner_normalization_finalized
+                && row.limits == limits(&world.budget)
+                && row.maybe_unsized == maybe_unsized
+                && row.executable_storage == executable_storage
+                && world.same_env(&row.env, env)?
+            {
+                selected = Some(index);
+                break;
+            }
+        }
+        if selected.is_none() && self.walks.len() < MAX_SCRATCH_OBLIGATIONS {
+            let row = RawWalk {
+                world: world.id,
+                authority: world.budget.authority().clone(),
+                registry: world.registry,
+                ready: world.owner_normalization_ready,
+                finalized: world.owner_normalization_finalized,
+                limits: limits(&world.budget),
+                env: env.clone(),
+                maybe_unsized,
+                executable_storage,
+                walk: TypeWalk {
+                    maybe_unsized,
+                    logical_nominals: !executable_storage,
+                    ..TypeWalk::default()
+                },
+            };
+            push_scratch_row(&world.budget, &mut self.walks, &mut self.walk_storage, row)?;
+            selected = Some(self.walks.len() - 1);
+        }
+        let height = if let Some(index) = selected {
+            let walk = &mut self.walks[index].walk;
+            match world.validate_ty_inner(ty, env, depth, usage, walk) {
+                Ok(height) => height,
+                Err(error) => {
+                    *walk = TypeWalk {
+                        maybe_unsized,
+                        logical_nominals: !executable_storage,
+                        ..TypeWalk::default()
+                    };
+                    return Err(error);
+                }
+            }
+        } else {
+            // A full local row inventory is only a miss, never authority.
+            world.validate_ty_inner(
+                ty,
+                env,
+                depth,
+                usage,
+                &mut TypeWalk {
+                    maybe_unsized,
+                    logical_nominals: !executable_storage,
+                    ..TypeWalk::default()
+                },
+            )?
         };
-        let result = world.validate_ty_inner(ty, env, depth, usage, &mut walk);
-        self.nominal_session = walk.nominal_session.take();
-        let height = result?;
         if let Some(key) = key
             && self.entries.len() < MAX_SCRATCH_OBLIGATIONS
         {
@@ -124,6 +212,7 @@ impl RawFormations {
                 &mut self.storage,
                 RawFormation {
                     world: world.id,
+                    authority: world.budget.authority().clone(),
                     registry: world.registry,
                     ready: world.owner_normalization_ready,
                     finalized: world.owner_normalization_finalized,
@@ -148,8 +237,8 @@ pub(super) struct Validated {
     // Signature roots always use maybe_unsized=None, unlike body roots.
     signature_roots: bool,
     entries: Vec<(TypeNode, Ty)>,
-    // Completed subtrees retain their exact inputs inside TypeWalk. This arena
-    // is reused only for signature roots in the same fully authenticated context.
+    // Completed subtrees retain their exact inputs inside TypeWalk. Body and
+    // signature roots remain separate, under one fully authenticated context.
     signature_walk: TypeWalk,
 }
 
@@ -191,6 +280,7 @@ impl SourceKey {
 #[derive(Debug)]
 pub(super) struct Context {
     world: WorldId,
+    authority: ir::PlanAuthority,
     registry: SnapshotId,
     predicates: Arc<PredicateEnv>,
     subject: FactsSubject,
@@ -263,6 +353,7 @@ impl Context {
     pub(super) fn matches_retained(&self, other: &Self, budget: &PlanBudget) -> Result<bool> {
         charged(budget, budget.charge_work(1))?;
         if self.world != other.world
+            || !self.authority.same_authority(&other.authority)
             || self.registry != other.registry
             || !Arc::ptr_eq(&self.predicates, &other.predicates)
             || !Self::same_requirements(&self.requirements, &other.requirements, budget)?
@@ -302,6 +393,7 @@ impl Context {
         let world = &facts.world;
         charged(&world.budget, world.budget.charge_work(1))?;
         if self.world != world.id
+            || !self.authority.same_authority(world.budget.authority())
             || self.registry != world.registry
             || !Arc::ptr_eq(&self.predicates, &facts.predicates)
             || !Self::same_requirements(&self.requirements, &facts.requirements, &world.budget)?
@@ -346,6 +438,7 @@ impl Context {
     pub(super) fn retain_in_reserved_arena(facts: &ValidatedFacts) -> Self {
         Self {
             world: facts.world.id,
+            authority: facts.budget().authority().clone(),
             registry: facts.world.registry,
             predicates: facts.predicates.clone(),
             subject: facts.subject.clone(),
@@ -425,25 +518,27 @@ impl Validated {
                 }
             }
         }
-        if signature_roots {
-            if self.signature_walk.complete.len() >= MAX_SCRATCH_OBLIGATIONS {
-                self.signature_walk = TypeWalk::default();
-            }
-            let result = world.validate_ty_inner_with_facts(
-                ty,
-                facts.env(),
-                0,
-                TypeUse::Root,
-                &mut self.signature_walk,
-                Some(facts),
-            );
-            if let Err(error) = result {
-                // Do not retain partial computations across failed roots.
-                self.signature_walk = TypeWalk::default();
-                return Err(error);
-            }
+        if self.signature_walk.complete.len() >= MAX_SCRATCH_OBLIGATIONS {
+            self.signature_walk = TypeWalk::default();
+        }
+        let result = if signature_roots {
+            world
+                .validate_ty_inner_with_facts(
+                    ty,
+                    facts.env(),
+                    0,
+                    TypeUse::Root,
+                    &mut self.signature_walk,
+                    Some(facts),
+                )
+                .map(|_| ())
         } else {
-            facts.validate_ty(ty)?;
+            facts.validate_ty_with_walk(ty, facts.budget(), &mut self.signature_walk)
+        };
+        if let Err(error) = result {
+            // Do not retain partial computations across failed roots.
+            self.signature_walk = TypeWalk::default();
+            return Err(error);
         }
         if let Some(key) = key
             && self.entries.len() < MAX_SCRATCH_OBLIGATIONS

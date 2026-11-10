@@ -347,6 +347,19 @@ fn checked_module<T>(
 }
 fn validate_nominal_modules(ty: &Ty, modules: &ModuleArena, budget: &PlanBudget) -> Result<()> {
     charged(budget, budget.charge_work(1))?;
+    let realization = match ty {
+        Ty::Struct(nominal) => nominal.realization(),
+        Ty::Enum(nominal) => nominal.realization(),
+        _ => None,
+    };
+    if let Some(result) = realization.and_then(|read| {
+        read.component_visit_source_module_visibility(ty, budget, &mut |module, visibility| {
+            checked_module(budget, visibility.validate_for(modules, module))
+                .map_err(|error| crate::engine::Error::new(error.into_legacy_diagnostic(budget)))
+        })
+    }) {
+        return result.map_err(|error| FactsError::from_message(budget, &error.to_string()));
+    }
     match ty {
         Ty::Struct(nominal) => {
             let definition = nominal.def();
@@ -1746,6 +1759,14 @@ impl ValidatedFacts {
         charged(self.budget(), ir::projected_ty(root, path, self.budget()))
     }
     pub fn validate_ty_with_budget(&self, ty: &Ty, budget: &PlanBudget) -> Result<()> {
+        self.validate_ty_with_walk(ty, budget, &mut TypeWalk::default())
+    }
+    fn validate_ty_with_walk(
+        &self,
+        ty: &Ty,
+        budget: &PlanBudget,
+        walk: &mut TypeWalk,
+    ) -> Result<()> {
         if !self.budget().same_authority(budget) {
             return Err(FactsError::invalid(
                 budget,
@@ -1778,18 +1799,12 @@ impl ValidatedFacts {
             other => other,
         };
         self.world.check_facts(self, false)?;
+        if walk.maybe_unsized != maybe_unsized {
+            *walk = TypeWalk::default();
+        }
+        walk.maybe_unsized = maybe_unsized;
         self.world
-            .validate_ty_inner_with_facts(
-                ty,
-                self.env(),
-                0,
-                TypeUse::Root,
-                &mut TypeWalk {
-                    maybe_unsized,
-                    ..TypeWalk::default()
-                },
-                Some(self),
-            )
+            .validate_ty_inner_with_facts(ty, self.env(), 0, TypeUse::Root, walk, Some(self))
             .map(|_| ())
     }
     /// Require a Sized value in this exact executable body's obligation
@@ -2501,7 +2516,16 @@ pub(in crate::compiler) struct NominalReplays {
     nominal_declaration_replay_storage: Vec<ir::PlanReservation>,
     // Clones pin each allocation for the memo's lifetime, so pointer
     // identity can never be reused by a different fact.
-    facts: MeteredReplayRows<super::nominal_realization::ReadNominal>,
+    // A successful replay at depth D also proves the same immutable payload
+    // at any shallower occurrence. Deeper occurrences must replay in full.
+    // The authority pins both the paying ledger identity and depth policy.
+    facts: MeteredReplayRows<(
+        super::nominal_realization::ReadNominal,
+        WorldId,
+        ir::PlanAuthority,
+        bool,
+        usize,
+    )>,
     inputs: MeteredReplayRows<Arc<[Predicate]>>,
     /// Types whose metadata walk already succeeded, with the environment and
     /// height. Clones pin the identities compared by `same_type_allocation`.
@@ -2842,28 +2866,61 @@ impl NominalReplays {
             self.type_index.len(),
         )
     }
+    #[cfg(test)]
     pub(in crate::compiler) fn contains_fact(
         &self,
         fact: &super::nominal_realization::ReadNominal,
         world: &ValidatedTraitWorld,
     ) -> Result<bool> {
+        self.contains_fact_at(fact, world, 0)
+    }
+    pub(in crate::compiler) fn contains_fact_at(
+        &self,
+        fact: &super::nominal_realization::ReadNominal,
+        world: &ValidatedTraitWorld,
+        depth: usize,
+    ) -> Result<bool> {
         world.check_nominal_replay_issuer()?;
-        for old in self.facts.iter() {
+        for (old, issuer, authority, finalized, completed_depth) in self.facts.iter() {
             charged(&world.budget, world.budget.charge_work(1))?;
-            if old.same_fact(fact) {
+            if *issuer == world.id
+                && authority.same_authority(world.budget.authority())
+                && *finalized == world.owner_normalization_finalized
+                && *completed_depth >= depth
+                && old.same_replay_fact(fact)
+            {
                 return Ok(true);
             }
         }
         Ok(false)
     }
-    pub(in crate::compiler) fn record_fact(
+    pub(in crate::compiler) fn record_fact_at(
         &mut self,
         fact: &super::nominal_realization::ReadNominal,
         world: &ValidatedTraitWorld,
+        depth: usize,
     ) -> Result<()> {
+        world.check_nominal_replay_issuer()?;
+        for (old, issuer, authority, finalized, completed_depth) in &mut self.facts.values {
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if *issuer == world.id
+                && authority.same_authority(world.budget.authority())
+                && *finalized == world.owner_normalization_finalized
+                && old.same_replay_fact(fact)
+            {
+                *completed_depth = (*completed_depth).max(depth);
+                return Ok(());
+            }
+        }
         self.admit(world)?;
         self.facts.prepare(world)?;
-        self.facts.values.push(fact.clone());
+        self.facts.values.push((
+            fact.clone(),
+            world.id,
+            world.budget.authority().clone(),
+            world.owner_normalization_finalized,
+            depth,
+        ));
         Ok(())
     }
     fn contains_input(
@@ -3721,6 +3778,11 @@ struct TypeWalk {
     // Logical predicate formation authenticates nominal source metadata without
     // demanding executable field layout. Its successes cannot serve full walks.
     logical_nominals: bool,
+    // This walk is already bound to one exact caller, world and formation
+    // policy. Keep only fully replayed immutable nominal facts here. The box
+    // breaks the recursive ownership through NominalReplays::predicate_formations.
+    component_replays: Option<Box<NominalReplays>>,
+    _component_replays_storage: Option<ir::PlanReservation>,
     complete: Vec<((TypeNode, TypeUse, bool), usize, Ty)>,
     reservations: Vec<ir::PlanReservation>,
     visits: usize,
@@ -3729,6 +3791,16 @@ struct TypeWalk {
     has_opaque: bool,
 }
 impl TypeWalk {
+    fn component_replays(&mut self, budget: &ir::PlanBudget) -> Result<&mut NominalReplays> {
+        if self.component_replays.is_none() {
+            self._component_replays_storage = Some(charged(
+                budget,
+                budget.reserve_bytes(std::mem::size_of::<NominalReplays>()),
+            )?);
+            self.component_replays = Some(Box::default());
+        }
+        Ok(self.component_replays.as_deref_mut().unwrap())
+    }
     fn growth_slots(len: usize, capacity: usize) -> Option<usize> {
         if len < capacity {
             Some(0)
@@ -5519,7 +5591,18 @@ impl ValidatedTraitWorld {
             )?;
             return Ok(height);
         }
-        if let Some(height) = self.closed_component_type_height(ty)? {
+        let component = match ty {
+            Ty::Struct(n) => n.realization(),
+            Ty::Enum(n) => n.realization(),
+            _ => None,
+        }
+        .is_some_and(|read| read.is_component());
+        if component
+            && let Some(height) = self.closed_component_type_height_with_replays(
+                ty,
+                walk.component_replays(&self.budget)?,
+            )?
+        {
             charged(
                 &self.budget,
                 self.budget.check_depth(depth.saturating_add(height)),
@@ -11511,14 +11594,16 @@ impl ValidatedTraitWorld {
                 "schema substitution lost authoritative Trait Self membership",
             ));
         }
-        self.validate_ty_inner_with_facts(
-            actual,
-            context.env(),
-            0,
-            TypeUse::Root,
-            &mut TypeWalk::default(),
-            context.metadata_facts(),
-        )?;
+        if let Some(caller) = context.metadata_facts()
+            && self.same_env(context.env(), caller.env())?
+        {
+            scratch.signature_formations.check_signature_root(caller, actual)?;
+        } else {
+            self.validate_ty_inner_with_facts(
+                actual, context.env(), 0, TypeUse::Root,
+                &mut TypeWalk::default(), context.metadata_facts(),
+            )?;
+        }
         // Non-Self arguments can also carry references (for example
         // PartialEq<&str>). Derive their positions from every original
         // parameter tail, just as for generic method instantiation.
@@ -11629,11 +11714,12 @@ impl ValidatedTraitWorld {
             ));
         }
         if !expands {
-            self.validate_signature_shape_with_facts(
+            self.validate_signature_shape_with_scratch(
                 &instantiated.signature,
                 context.env(),
                 None,
                 context.metadata_facts(),
+                Some(&mut scratch.signature_formations),
             )?;
             return Ok((instantiated, None));
         }
@@ -11822,11 +11908,12 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut fixed_regions, *region)?;
         }
         instantiated.signature.ref_contract = realized.clone();
-        self.validate_signature_shape_with_facts(
+        self.validate_signature_shape_with_scratch(
             &instantiated.signature,
             context.env(),
             None,
             context.metadata_facts(),
+            Some(&mut scratch.signature_formations),
         )?;
         self.validate_position_coverage(&instantiated.signature)?;
         retain::<Ty>(&self.budget, arguments.len())?;
@@ -19942,6 +20029,58 @@ mod tests {
     }
 
     #[test]
+    fn trait_item_formation_reuses_only_checked_signature_roots() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let item = world.item_header(c.item).unwrap();
+        let goal = c.call(c.boxed.clone()).trait_ref;
+        let mut scratch = ProofScratch::default();
+        let (first, _) = world
+            .instantiate_item_with_scratch(
+                item,
+                &goal,
+                ProofContext::from_facts(&facts),
+                &mut scratch,
+            )
+            .unwrap();
+        let roots = scratch.signature_formations.retained_roots();
+        let subtrees = scratch.signature_formations.retained_subtrees();
+        assert!(roots > 0);
+        assert!(subtrees > 0);
+        let (second, _) = world
+            .instantiate_item_with_scratch(
+                item,
+                &goal,
+                ProofContext::from_facts(&facts),
+                &mut scratch,
+            )
+            .unwrap();
+        assert!(
+            world
+                .eq_signature(&first.signature, &second.signature)
+                .unwrap()
+        );
+        assert_eq!(scratch.signature_formations.retained_roots(), roots);
+        assert_eq!(scratch.signature_formations.retained_subtrees(), subtrees);
+        let foreign = case();
+        let foreign_goal = TraitRef {
+            self_ty: foreign.boxed,
+            ..goal
+        };
+        assert!(
+            world
+                .instantiate_item_with_scratch(
+                    item,
+                    &foreign_goal,
+                    ProofContext::from_facts(&facts),
+                    &mut scratch,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn predicate_validation_keeps_duplicate_limit_and_foreign_row_checks() {
         let c = case();
         let world = c.build().unwrap();
@@ -21891,6 +22030,195 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn nominal_replay_sessions_preserve_caller_and_formation_policy() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let other = world.callable_facts(c.body).unwrap();
+        let mut raw = body_validation::RawFormations::default();
+        let first = Ty::Tuple(Arc::from([c.boxed.clone(), Ty::Bool]));
+        let second = Ty::Tuple(Arc::from([c.boxed.clone(), Ty::Char]));
+        let mut body = body_validation::Validated::default();
+        body.check(&facts, &first).unwrap();
+        let before = world.budget.usage_snapshot().work;
+        body.check(&facts, &second).unwrap();
+        let warm = world.budget.usage_snapshot().work - before;
+        let before = world.budget.usage_snapshot().work;
+        body_validation::Validated::default()
+            .check(&facts, &second)
+            .unwrap();
+        let cold = world.budget.usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "body roots lost their completed walk: {warm}/{cold}"
+        );
+        assert!(body.retained_subtrees() > 0);
+        let successful = body.retained_roots();
+        let Ty::Param(mut bad_parameter) = c.caller_parameter else {
+            panic!("caller parameter")
+        };
+        bad_parameter.index = u16::MAX;
+        let bad = Ty::Param(bad_parameter);
+        assert!(body.check(&facts, &bad).is_err());
+        assert_eq!(body.retained_roots(), successful);
+        assert_eq!(body.retained_subtrees(), 0);
+        body.check(&facts, &second).unwrap();
+        raw.check(&world, &first, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        let before = world.budget.usage_snapshot().work;
+        raw.check(&world, &second, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        let warm = world.budget.usage_snapshot().work - before;
+        let before = world.budget.usage_snapshot().work;
+        body_validation::RawFormations::default()
+            .check(&world, &second, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        let cold = world.budget.usage_snapshot().work - before;
+        assert!(
+            warm < cold,
+            "distinct roots lost their completed walk: {warm}/{cold}"
+        );
+        assert_eq!(raw.retained_walks(), 1);
+        raw.check_for_use(&world, &second, facts.env(), TypeUse::Root, None, 0, false)
+            .unwrap();
+        assert_eq!(raw.retained_walks(), 2);
+        let Ty::Param(parameter) = c.caller_parameter else {
+            panic!("caller parameter")
+        };
+        raw.check(
+            &world,
+            &second,
+            facts.env(),
+            TypeUse::Root,
+            Some(parameter),
+            0,
+        )
+        .unwrap();
+        assert_eq!(raw.retained_walks(), 3);
+        let scoped = Ty::Tuple(Arc::from([Ty::Param(parameter), c.boxed.clone()]));
+        raw.check(&world, &scoped, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert!(
+            raw.check(&world, &scoped, other.env(), TypeUse::Root, None, 0)
+                .is_err()
+        );
+        assert!(
+            raw.check(
+                &world,
+                &scoped,
+                facts.env(),
+                TypeUse::Root,
+                Some(parameter),
+                0
+            )
+            .is_err()
+        );
+        let foreign = case().build().unwrap();
+        assert!(
+            raw.check(&foreign, &second, facts.env(), TypeUse::Root, None, 0)
+                .is_err()
+        );
+        raw.check(&world, &second, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+
+        let mut checked = TypeWalk::default();
+        world
+            .validate_ty_inner_with_facts(
+                &first,
+                facts.env(),
+                0,
+                TypeUse::Root,
+                &mut checked,
+                Some(&facts),
+            )
+            .unwrap();
+        world
+            .validate_ty_inner_with_facts(
+                &second,
+                facts.env(),
+                0,
+                TypeUse::Root,
+                &mut checked,
+                Some(&facts),
+            )
+            .unwrap();
+        let complete = checked.complete.len();
+        world
+            .validate_ty_inner_with_facts(
+                &second,
+                other.env(),
+                0,
+                TypeUse::Root,
+                &mut checked,
+                Some(&other),
+            )
+            .unwrap();
+        assert_eq!(checked.complete.len(), complete);
+        assert_eq!(checked.contexts.len(), 1);
+        // A same-caller clone with different retained requirements must not
+        // borrow the original walk even when its environment is unchanged.
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &world.empty,
+            executable_storage: true,
+            phase: FactsPhase::Closed,
+        };
+        let ProofOutcome::Proved(requirement) = world
+            .prove_in(
+                &c.goal(c.boxed.clone()),
+                context,
+                &mut ProofScratch::default(),
+            )
+            .unwrap()
+        else {
+            panic!("closed requirement")
+        };
+        let mut changed = (*facts).clone();
+        changed.requirements = Arc::from([requirement]);
+        world
+            .validate_ty_inner_with_facts(
+                &second,
+                changed.env(),
+                0,
+                TypeUse::Root,
+                &mut checked,
+                Some(&changed),
+            )
+            .unwrap();
+        assert_eq!(checked.complete.len(), complete);
+        assert_eq!(checked.contexts.len(), 2);
+        assert!(world.budget.first_resource_failure().is_none());
+
+        // Even a test-forged world with the same ID and equal limits cannot
+        // reuse paid completion rows from an unrelated planning authority.
+        let rebound_case = case();
+        let mut rebound = rebound_case.build().unwrap();
+        let unit = Ty::Tuple(Arc::from([Ty::Unit]));
+        let mut isolated = body_validation::RawFormations::default();
+        isolated
+            .check(&rebound, &unit, rebound.empty.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert_eq!(isolated.retained_roots(), 1);
+        assert_eq!(isolated.retained_walks(), 1);
+        let original = rebound.budget.clone();
+        let original_facts = rebound.callable_facts(rebound_case.caller).unwrap();
+        let retained_context = body_validation::Context::retain(&original_facts).unwrap();
+        drop(original_facts);
+        let unrelated = PlanBudget::new(original.limits());
+        assert!(!original.same_authority(&unrelated));
+        Arc::get_mut(&mut rebound).unwrap().budget = unrelated;
+        let rebound_facts = rebound.callable_facts(rebound_case.caller).unwrap();
+        assert!(!retained_context.matches(&rebound_facts).unwrap());
+        isolated
+            .check(&rebound, &unit, rebound.empty.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        assert_eq!(isolated.retained_roots(), 2);
+        assert_eq!(isolated.retained_walks(), 2);
     }
 
     #[test]

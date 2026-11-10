@@ -2018,14 +2018,35 @@ mod tests {
         );
         let (_, template) = plan.nominal_schema(declaration, &budget).unwrap();
         let mut replay_memo = ParentLocalReplayMemo::default();
+        let reconstruction_metadata = nominal_schema::SourceMetadataCache::default();
+        let metadata_address = reconstruction_metadata
+            .with_checked_scratch(facts, &budget, |scratch| {
+                Ok(scratch as *mut tr::TraitScratch as usize)
+            })
+            .unwrap();
         let mut schema_metadata_scratch = tr::TraitScratch::default();
         for _ in 0..2 {
             facts
                 .validate_ty_metadata_scratch(&original, &budget, &mut schema_metadata_scratch)
                 .unwrap();
             replay_memo
-                .replay(&receipt, &original, &template, facts, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &template,
+                    facts,
+                    &budget,
+                )
                 .unwrap();
+            assert_eq!(
+                reconstruction_metadata
+                    .with_checked_scratch(facts, &budget, |scratch| Ok(scratch
+                        as *mut tr::TraitScratch
+                        as usize))
+                    .unwrap(),
+                metadata_address
+            );
             receipt
                 .replay_with_scratch(
                     &original,
@@ -2058,9 +2079,55 @@ mod tests {
         );
         assert!(
             replay_memo
-                .replay(&receipt, &original, &source, facts, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &source,
+                    facts,
+                    &budget
+                )
                 .is_err()
         );
+        let foreign_budget = ir::PlanBudget::default();
+        assert!(
+            reconstruction_metadata
+                .with_checked_scratch(facts, &foreign_budget, |_| -> Result<(), String> {
+                    panic!("foreign budget reached receipt scratch")
+                })
+                .unwrap_err()
+                .contains("same budget authority")
+        );
+        assert_eq!(foreign_budget.usage_snapshot().bytes, 0);
+        let mut cold_replay = ParentLocalReplayMemo::default();
+        reconstruction_metadata
+            .with_checked_scratch(facts, &budget, |_| {
+                assert!(
+                    cold_replay
+                        .replay(
+                            &reconstruction_metadata,
+                            &receipt,
+                            &original,
+                            &template,
+                            facts,
+                            &budget
+                        )
+                        .unwrap_err()
+                        .contains("already active")
+                );
+                Ok(())
+            })
+            .unwrap();
+        cold_replay
+            .replay(
+                &reconstruction_metadata,
+                &receipt,
+                &original,
+                &template,
+                facts,
+                &budget,
+            )
+            .unwrap();
         let rows = [original.clone()];
         let validation = std::cell::RefCell::default();
         let transport = tr::ParentLocalTransport::new(&rows).with_validation(&validation);
@@ -2152,7 +2219,14 @@ mod tests {
         );
         assert!(
             replay_memo
-                .replay(&receipt, &changed, &template, facts, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &changed,
+                    &template,
+                    facts,
+                    &budget
+                )
                 .is_err()
         );
         assert!(facts.validate_ty_metadata(&changed).is_err());
@@ -2228,6 +2302,7 @@ mod tests {
         assert!(
             replay_memo
                 .replay(
+                    &reconstruction_metadata,
                     &Arc::new(changed.clone()),
                     &original,
                     &template,
@@ -2244,7 +2319,14 @@ mod tests {
         let other = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
         assert!(
             replay_memo
-                .replay(&receipt, &original, &template, &other, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &template,
+                    &other,
+                    &budget
+                )
                 .is_err()
         );
         assert!(transport.select(facts.world(), &source, &other).is_err());
@@ -2294,7 +2376,14 @@ mod tests {
             .unwrap();
         assert!(
             replay_memo
-                .replay(&receipt, &original, &template, &closed, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &template,
+                    &closed,
+                    &budget
+                )
                 .is_err()
         );
         assert!(
@@ -2310,6 +2399,7 @@ mod tests {
         assert!(
             replay_memo
                 .replay(
+                    &reconstruction_metadata,
                     &receipt,
                     &original,
                     &template,
@@ -2320,7 +2410,14 @@ mod tests {
         );
         assert!(
             replay_memo
-                .replay(&receipt, &original, &template, facts, &foreign_budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &template,
+                    facts,
+                    &foreign_budget
+                )
                 .is_err()
         );
         assert!(
@@ -2374,7 +2471,14 @@ mod tests {
         );
         assert!(
             replay_memo
-                .replay(&receipt, &original, &template, facts, &budget)
+                .replay(
+                    &reconstruction_metadata,
+                    &receipt,
+                    &original,
+                    &template,
+                    facts,
+                    &budget
+                )
                 .is_err()
         );
         assert!(facts.parent_local_receiver_inputs(&original).is_err());

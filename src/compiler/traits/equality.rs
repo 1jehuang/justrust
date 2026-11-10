@@ -3,6 +3,7 @@
 use super::*;
 
 mod reduction_rows;
+mod shared_payload;
 use reduction_rows::ReductionRows;
 
 pub(super) struct AssignmentSource {
@@ -1166,66 +1167,6 @@ impl ValidatedTraitWorld {
             selected = true;
         }
         Ok(selected)
-    }
-
-    /// Closed shared payloads carried by a source-owned tuple substitution.
-    /// Mutable/slice and unresolved carriers keep their existing boundaries.
-    /// The enclosing metadata replay authenticates the full nominal definitions.
-    fn shared_assignment_payload(&self, ty: &Ty, depth: usize) -> Result<bool> {
-        charged(&self.budget, self.budget.check_depth(depth))?;
-        charged(&self.budget, self.budget.charge_work(1))?;
-        match ty {
-            Ty::Ref {
-                kind: ir::BorrowKind::Shared,
-                referent,
-            } => self.shared_assignment_payload(referent, depth + 1),
-            Ty::Ref { .. }
-            | Ty::Slice { .. }
-            | Ty::Param(_)
-            | Ty::AssociatedType(_)
-            | Ty::Closure(_)
-            | Ty::Dyn(_)
-            | Ty::Opaque(_) => Ok(false),
-            Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
-                self.shared_assignment_payload(element, depth + 1)
-            }
-            Ty::Struct(value) => {
-                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
-                    if !self.shared_assignment_payload(&field.ty, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                for argument in type_arguments(ty) {
-                    if !self.shared_assignment_payload(argument, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            Ty::Enum(value) => {
-                for variant in value.def().variants.iter() {
-                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
-                        if !self.shared_assignment_payload(&field.ty, depth + 1)? {
-                            return Ok(false);
-                        }
-                    }
-                }
-                for argument in type_arguments(ty) {
-                    if !self.shared_assignment_payload(argument, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            _ => {
-                for argument in type_arguments(ty) {
-                    if !self.shared_assignment_payload(argument, depth + 1)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-        }
     }
 
     pub(super) fn validate_equality_domain_in(

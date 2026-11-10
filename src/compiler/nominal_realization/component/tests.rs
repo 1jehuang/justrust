@@ -88,6 +88,715 @@ fn test_root() -> Key {
 }
 
 #[test]
+fn acyclic_function_item_container_keeps_recursive_child_in_its_own_component() {
+    for workers in [1, 8] {
+        let mut own = provider(
+            "struct Node{next:*mut Node}struct Wrapper<T>{value:T}fn identity(){}fn main(){}",
+            &[],
+            &[],
+        );
+        let world = own.plan.trait_world().unwrap();
+        let node = own.plan.nominal_declaration(0).unwrap();
+        let wrapper = own.plan.nominal_declaration(1).unwrap();
+        let function = own.plan.function_decl(0).unwrap();
+        let actual = Term::Tuple(vec![
+            Term::Nominal(node, vec![]),
+            Term::FnItem(function, vec![]),
+        ]);
+        own.roots = vec![
+            producer::key(
+                world.nominal_realization_world(),
+                wrapper,
+                &[actual],
+                world.budget(),
+            )
+            .unwrap(),
+            producer::key(world.nominal_realization_world(), node, &[], world.budget()).unwrap(),
+        ];
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        assert!(
+            !reads[0].is_component(),
+            "acyclic root was forced into its child's SCC"
+        );
+        assert!(
+            reads[1].is_component(),
+            "recursive child lost its typed component"
+        );
+        for read in reads.iter() {
+            let ty = read.definition().unwrap();
+            read.replay(&ty, &world).unwrap();
+        }
+    }
+}
+
+#[test]
+fn nominal_replay_sessions_preserve_completed_external_authority() {
+    for workers in [1, 8] {
+        let source = "struct Node{next:*mut Node,extra:Extra}struct Extra{n:i32}fn main(){}";
+        let own = provider(source, &[0], &[]);
+        let plan = own.plan.clone();
+        let world = own.plan.trait_world().unwrap();
+        let component_key = ComponentKey::encode(
+            world.nominal_realization_world(),
+            &own.roots,
+            world.budget(),
+        )
+        .unwrap();
+        let foreign = provider(source, &[0], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        let caller = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let roots = [
+            ir::Ty::Tuple(Arc::from([root.clone(), ir::Ty::Bool])),
+            ir::Ty::Tuple(Arc::from([root.clone(), ir::Ty::Char])),
+        ];
+        assert!(
+            world
+                .component_type_walk_replays_for_tests(&roots, &caller)
+                .unwrap()
+                >= 2
+        );
+        let mut replays = traits::NominalReplays::default();
+        let before = world.budget().usage_snapshot().work;
+        reads[0].replay_with(&root, &world, &mut replays).unwrap();
+        let cold = world.budget().usage_snapshot().work - before;
+        let completed = replays.replay_counts();
+        assert!(
+            completed.0 >= 2,
+            "external completed facts were lost: {completed:?}"
+        );
+        let before = world.budget().usage_snapshot().work;
+        for _ in 0..32 {
+            reads[0].replay_with(&root, &world, &mut replays).unwrap();
+        }
+        assert!(world.budget().usage_snapshot().work - before < cold);
+        assert_eq!(replays.replay_counts(), completed);
+        let ir::Ty::Struct(original) = &root else {
+            panic!("struct root")
+        };
+        let mut changed = original.def().clone();
+        changed.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(changed).with_realization(reads[0].clone()),
+        );
+        assert!(reads[0].replay_with(&forged, &world, &mut replays).is_err());
+        assert!(
+            reads[0]
+                .replay_with(&root, &foreign_world, &mut replays)
+                .is_err()
+        );
+        assert_eq!(replays.replay_counts(), completed);
+        reads[0].replay_with(&root, &world, &mut replays).unwrap();
+
+        crate::compiler::frontend::with_source_argument_session_for_tests(|validate| {
+            let before = world.budget().usage_snapshot().work;
+            validate(&roots[0], &caller, world.budget(), 0).unwrap();
+            let cold = world.budget().usage_snapshot().work - before;
+            let before = world.budget().usage_snapshot().work;
+            for _ in 0..8 {
+                validate(&roots[1], &caller, world.budget(), 0).unwrap();
+            }
+            let warm = world.budget().usage_snapshot().work - before;
+            assert!(
+                warm < cold,
+                "source strict session lost its completed roots: {warm}/{cold}"
+            );
+            assert!(validate(&forged, &caller, world.budget(), 0).is_err());
+            assert!(validate(&root, &caller, &ir::PlanBudget::default(), 0).is_err());
+            let foreign_caller = foreign
+                .plan
+                .callable_facts(foreign.plan.function_decl(0).unwrap())
+                .unwrap();
+            assert!(validate(&root, &foreign_caller, foreign_world.budget(), 0).is_err());
+            // Neither the forged root nor a different caller can publish a
+            // completed success into the original source session.
+            validate(&root, &caller, world.budget(), 0).unwrap();
+        });
+
+        // A changed immutable fact allocation with the same claimed key is
+        // never a hit. Its forged size witness must be replayed and rejected.
+        let fact = engine
+            .fact_of::<ComponentFact>(&component_key.0, 0)
+            .unwrap();
+        let mut forged_fact = fact.as_ref().clone();
+        forged_fact.metadata_heights = Arc::from([usize::MAX]);
+        let forged_read = ReadComponent {
+            fact: Arc::new(forged_fact),
+            cells: Arc::from([]),
+        };
+        let forged_capability =
+            ReadNominal::Component(forged_read.materialize(0, world.budget()).unwrap());
+        assert!(!replays.contains_fact(&forged_capability, &world).unwrap());
+        let forged_root = forged_capability.definition().unwrap();
+        assert!(
+            forged_capability
+                .replay_with(&forged_root, &world, &mut replays)
+                .is_err()
+        );
+        assert_eq!(replays.replay_counts(), completed);
+        assert!(world.budget().first_resource_failure().is_none());
+
+        let assert_cycle = |message: &str| {
+            assert!(
+                message.contains("has infinite size")
+                    || message.contains("infinite by-value layout"),
+                "cycle control failed for an unrelated reason: {message}",
+            );
+        };
+        let mut cycle_rejections = 0;
+        for source in [
+            "struct Node{next:Node}fn main(){}",
+            "struct Node{next:Other}struct Other{next:Node}fn main(){}",
+        ] {
+            let program = crate::compiler::frontend::parse(source).unwrap();
+            let plan = match crate::compiler::frontend::PlanCtx::from_program(
+                &program,
+                &ir::PlanBudget::default(),
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    assert_cycle(&error.to_string());
+                    cycle_rejections += 1;
+                    continue;
+                }
+            };
+            let world = match plan.trait_world() {
+                Ok(world) => world,
+                Err(error) => {
+                    assert_cycle(&error.to_string());
+                    cycle_rejections += 1;
+                    continue;
+                }
+            };
+            let key = producer::key(
+                world.nominal_realization_world(),
+                plan.nominal_declaration(0).unwrap(),
+                &[],
+                world.budget(),
+            )
+            .unwrap();
+            let cyclic = crate::engine::Engine::new(Provider {
+                plan: Arc::new(plan),
+                roots: vec![key],
+                forge: |_| {},
+            });
+            let rejected = cyclic.request(test_root());
+            cyclic.run(workers).unwrap();
+            assert_cycle(&rejected.completion().unwrap_err().to_string());
+            cycle_rejections += 1;
+            assert!(rejected.fact::<Vec<ReadNominal>>(0).is_err());
+        }
+        assert_eq!(cycle_rejections, 2);
+        crate::compiler::frontend::with_source_argument_session_for_tests(|validate| {
+            validate(&root, &caller, world.budget(), 0).unwrap();
+            assert!(
+                reads[0]
+                    .replay_component_dependency(
+                        &root,
+                        &world,
+                        world.budget().limits().depth,
+                        &mut replays,
+                    )
+                    .is_err()
+            );
+            let failure = world.budget().first_resource_failure();
+            assert!(failure.is_some());
+            assert!(validate(&root, &caller, world.budget(), 0).is_err());
+            assert_eq!(world.budget().first_resource_failure(), failure);
+        });
+        assert_eq!(replays.replay_counts(), completed);
+    }
+}
+
+#[test]
+fn completed_component_replay_shares_fact_not_rooted_type_identity() {
+    for workers in [1, 8] {
+        let source = "struct First{next:*mut Second,extra:Extra}struct Second{next:*mut First}struct Extra{value:i32}fn main(){}";
+        let own = provider(source, &[0, 1], &[]);
+        let world = own.plan.trait_world().unwrap();
+        let key = ComponentKey::encode(
+            world.nominal_realization_world(), &own.roots, world.budget(),
+        ).unwrap();
+        let foreign = provider(source, &[0, 1], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        assert_eq!(reads.len(), 2);
+        assert_eq!(reads[0].component_identity(), reads[1].component_identity());
+        assert!(!reads[0].same_fact(&reads[1]));
+        assert!(reads[0].same_replay_fact(&reads[1]));
+        let first = reads[0].definition().unwrap();
+        let second = reads[1].definition().unwrap();
+        // Recursive component children still replay their exact capability,
+        // but a completed type/environment row is retained only once.
+        let env = ir::GenericEnv::new(&[], world.budget()).unwrap();
+        let mut metadata = traits::NominalReplays::default();
+        world.validate_ty_metadata_with(&first, &env, 0, &mut metadata).unwrap();
+        let before_rows = metadata.replay_counts();
+        let pair = ir::Ty::Tuple(Arc::from([first.clone(), first.clone()]));
+        world.validate_ty_metadata_with(&pair, &env, 0, &mut metadata).unwrap();
+        let after_rows = metadata.replay_counts();
+        assert_eq!(after_rows.2, before_rows.2 + 1);
+        assert_eq!(after_rows.3, before_rows.3 + 1);
+        let mut replays = traits::NominalReplays::default();
+        let before = world.budget().usage_snapshot().work;
+        reads[0].replay_component_dependency(&first, &world, 2, &mut replays).unwrap();
+        let cold = world.budget().usage_snapshot().work - before;
+        let completed = replays.replay_counts();
+        assert!(completed.0 >= 2, "external receipt was not replayed");
+        assert!(replays.contains_fact_at(&reads[1], &world, 2).unwrap());
+        assert!(!replays.contains_fact_at(&reads[1], &world, 3).unwrap());
+        let before = world.budget().usage_snapshot().work;
+        for (read, ty) in [(&reads[1], &second), (&reads[0], &first)] {
+            read.replay_component_dependency(ty, &world, 1, &mut replays).unwrap();
+        }
+        assert!(world.budget().usage_snapshot().work - before < cold);
+        assert_eq!(replays.replay_counts(), completed);
+
+        // A whole-component proof does not equate two root selections or
+        // authorize a changed definition attached to a genuine selected read.
+        assert!(reads[1].replay_with(&first, &world, &mut replays).is_err());
+        let ir::Ty::Struct(original) = &second else { panic!("struct second") };
+        let mut changed = original.def().clone();
+        changed.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(changed).with_realization(reads[1].clone()),
+        );
+        assert!(reads[1].replay_with(&forged, &world, &mut replays).is_err());
+        assert!(reads[1].replay_with(&second, &foreign_world, &mut replays).is_err());
+        assert_eq!(replays.replay_counts(), completed);
+
+        let fact = engine.fact_of::<ComponentFact>(&key.0, 0).unwrap();
+        let mut changed_fact = fact.as_ref().clone();
+        let mut heights = changed_fact.metadata_heights.to_vec();
+        heights[0] = usize::MAX;
+        changed_fact.metadata_heights = heights.into();
+        let forged_read = ReadComponent { fact: Arc::new(changed_fact), cells: Arc::from([]) };
+        let member = forged_read.member_for(reads[1].application_key()).unwrap();
+        let forged_capability = ReadNominal::Component(
+            forged_read.materialize(member, world.budget()).unwrap(),
+        );
+        assert!(!reads[1].same_replay_fact(&forged_capability));
+        assert!(!replays.contains_fact_at(&forged_capability, &world, 1).unwrap());
+        let forged_root = forged_capability.definition().unwrap();
+        assert!(forged_capability.replay_with(&forged_root, &world, &mut replays).is_err());
+
+        reads[1].replay_component_dependency(&second, &world, 3, &mut replays).unwrap();
+        assert!(replays.contains_fact_at(&reads[0], &world, 3).unwrap());
+        assert!(!replays.contains_fact_at(&reads[0], &world, 4).unwrap());
+        assert_eq!(replays.replay_counts(), completed);
+        let limit = world.budget().limits().depth;
+        assert!(reads[1].replay_component_dependency(&second, &world, limit, &mut replays).is_err());
+        let failure = world.budget().first_resource_failure();
+        assert!(failure.is_some());
+        assert!(replays.contains_fact_at(&reads[0], &world, 0).is_err());
+        assert_eq!(world.budget().first_resource_failure(), failure);
+    }
+}
+
+#[test]
+fn completed_nominal_replay_depth_preserves_nested_authority_and_limits() {
+    for workers in [1, 8] {
+        let source = "struct Node{next:*mut Node,extra:Extra}struct Extra{n:i32}fn main(){}";
+        let own = provider(source, &[0], &[]);
+        let world = own.plan.trait_world().unwrap();
+        let foreign = provider(source, &[0], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let read = &reads[0];
+        let root = read.definition().unwrap();
+        let mut replays = traits::NominalReplays::default();
+        let before = world.budget().usage_snapshot().work;
+        read.replay_component_dependency(&root, &world, 2, &mut replays)
+            .unwrap();
+        let cold = world.budget().usage_snapshot().work - before;
+        let completed = replays.replay_counts();
+        assert!(replays.contains_fact_at(read, &world, 2).unwrap());
+        assert!(!replays.contains_fact_at(read, &world, 3).unwrap());
+        let before = world.budget().usage_snapshot().work;
+        for depth in [2, 1, 0, 2, 1, 0] {
+            read.replay_component_dependency(&root, &world, depth, &mut replays)
+                .unwrap();
+        }
+        assert!(world.budget().usage_snapshot().work - before < cold);
+        assert_eq!(replays.replay_counts(), completed);
+
+        // A deeper successful full traversal extends, rather than replaces,
+        // the exact fact's completion witness.
+        read.replay_component_dependency(&root, &world, 3, &mut replays)
+            .unwrap();
+        assert!(replays.contains_fact_at(read, &world, 3).unwrap());
+        assert!(!replays.contains_fact_at(read, &world, 4).unwrap());
+        assert_eq!(replays.replay_counts(), completed);
+        assert!(
+            read.replay_component_dependency(&root, &foreign_world, 1, &mut replays)
+                .is_err()
+        );
+        let ir::Ty::Struct(original) = &root else {
+            panic!("struct root")
+        };
+        let mut changed = original.def().clone();
+        changed.fields = Arc::<[ir::FieldDef]>::from([]).into();
+        let forged =
+            ir::Ty::Struct(ir::StructTy::new_parent_local(changed).with_realization(read.clone()));
+        assert!(
+            read.replay_component_dependency(&forged, &world, 1, &mut replays)
+                .is_err()
+        );
+        read.replay_component_dependency(&root, &world, 1, &mut replays)
+            .unwrap();
+
+        // Even a successful root just below the limit cannot authorize its
+        // external edge one level past that limit. Failed deeper traversals
+        // never publish a stronger witness or clear the issuer's failure.
+        let limit = world.budget().limits().depth;
+        read.replay_component_dependency(&root, &world, limit - 1, &mut replays)
+            .unwrap();
+        assert!(!replays.contains_fact_at(read, &world, limit).unwrap());
+        assert!(
+            read.replay_component_dependency(&root, &world, limit, &mut replays)
+                .is_err()
+        );
+        let failure = world.budget().first_resource_failure();
+        assert!(failure.is_some());
+        assert_eq!(replays.replay_counts(), completed);
+        assert!(
+            read.replay_component_dependency(&root, &world, 0, &mut replays)
+                .is_err()
+        );
+        assert_eq!(world.budget().first_resource_failure(), failure);
+    }
+}
+
+#[test]
+fn source_nominal_walk_reuses_only_completed_exact_component_allocations() {
+    for workers in [1, 8] {
+        let provider = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let plan = provider.plan.clone();
+        let engine = crate::engine::Engine::new(provider);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        assert!(reads[0].is_component());
+        let root = reads[0].definition().unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let budget = facts.budget();
+        let validate = crate::compiler::frontend::validate_nominal_tree_for_tests;
+        let before = budget.usage_snapshot();
+        validate(&plan, &root, &facts).unwrap();
+        let single = budget.usage_snapshot().work - before.work;
+        assert!(single > 0);
+        let repeated = ir::Ty::Tuple(vec![root.clone(); 32].into());
+        let before = budget.usage_snapshot();
+        validate(&plan, &repeated, &facts).unwrap();
+        let repeated_work = budget.usage_snapshot().work - before.work;
+        assert!(
+            repeated_work < single * 4,
+            "duplicate immutable components repeated source proof work: {repeated_work}/{single}"
+        );
+        let ir::Ty::Struct(nominal) = &root else {
+            panic!("struct root")
+        };
+        let mut changed = nominal.def().clone();
+        changed.fields = Vec::<ir::FieldDef>::new().into();
+        let forged = ir::Ty::Struct(
+            ir::StructTy::new_parent_local(changed).with_realization(reads[0].clone()),
+        );
+        let mixed = ir::Ty::Tuple(Arc::from([root.clone(), forged]));
+        assert!(validate(&plan, &mixed, &facts).is_err());
+        let foreign = self::provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let foreign_facts = foreign
+            .plan
+            .callable_facts(foreign.plan.function_decl(0).unwrap())
+            .unwrap();
+        assert!(validate(&plan, &repeated, &foreign_facts).is_err());
+        assert!(budget.first_resource_failure().is_none());
+    }
+}
+
+#[test]
+fn scoped_topology_storage_preserves_source_world_authority() {
+    for workers in [1, 8] {
+        let own = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let own_world = own.plan.trait_world().unwrap();
+        let foreign = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        reads[0].replay(&root, &own_world).unwrap();
+        assert!(reads[0].replay(&root, &foreign_world).is_err());
+        assert!(foreign_world.budget().first_resource_failure().is_none());
+        reads[0].replay(&root, &own_world).unwrap();
+    }
+}
+
+#[test]
+fn component_envelope_replay_compares_borrowed_canonical_members() {
+    let declaration = ir::DeclId {
+        snapshot: ir::SnapshotId::from_graph_word(37),
+        index: 9,
+    };
+    let encoding = ir::PlanBudget::default();
+    let first_actuals = [Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Bool))];
+    let second_actuals = [Term::Tuple(vec![Term::Char, Term::Int(ir::IntTy::I128)])];
+    let first = producer::key(19, declaration, &first_actuals, &encoding).unwrap();
+    let second = producer::key(19, declaration, &second_actuals, &encoding).unwrap();
+    let mut members = vec![second.clone(), first.clone()];
+    let encoded = ComponentKey::encode(19, &members, &encoding).unwrap();
+    members.sort_by(|a, b| a.0.params.cmp(&b.0.params));
+    let (decoded, world, decoded_members) = ComponentKey::decode(&encoded.0, &encoding).unwrap();
+    assert_eq!(world, 19);
+    assert_eq!(decoded, encoded);
+    assert_eq!(decoded_members, members);
+    let budget = ir::PlanBudget::new(ir::PlanLimits {
+        bytes: 0,
+        ..ir::PlanLimits::default()
+    });
+    for _ in 0..64 {
+        assert!(
+            encoded
+                .matches_members(19, members.iter(), &budget)
+                .unwrap()
+        );
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+    }
+    for index in 0..encoded.0.params.len() {
+        let mut changed = encoded.clone();
+        changed.0.params[index] ^= u64::MAX;
+        assert!(
+            !changed
+                .matches_members(19, members.iter(), &budget)
+                .unwrap()
+        );
+        let mut truncated = encoded.clone();
+        truncated.0.params.truncate(index);
+        assert!(
+            !truncated
+                .matches_members(19, members.iter(), &budget)
+                .unwrap()
+        );
+    }
+    let mut trailing = encoded.clone();
+    trailing.0.params.push(0);
+    assert!(
+        !trailing
+            .matches_members(19, members.iter(), &budget)
+            .unwrap()
+    );
+    let mut version = encoded.clone();
+    version.0.version += 1;
+    assert!(
+        !version
+            .matches_members(19, members.iter(), &budget)
+            .unwrap()
+    );
+    let mut kind = encoded.clone();
+    kind.0.kind += 1;
+    assert!(!kind.matches_members(19, members.iter(), &budget).unwrap());
+    assert!(
+        encoded
+            .matches_members(20, members.iter(), &budget)
+            .is_err()
+    );
+    assert!(
+        encoded
+            .matches_members(19, members.iter().rev(), &budget)
+            .is_err()
+    );
+    assert!(
+        encoded
+            .matches_members(19, [first.clone(), first.clone()].iter(), &budget)
+            .is_err()
+    );
+    assert!(encoded.matches_members(19, [].iter(), &budget).is_err());
+    for member in &members {
+        for index in [0, 1, 2] {
+            let mut foreign = member.clone();
+            foreign.0.params[index] ^= u64::MAX;
+            assert!(
+                encoded
+                    .matches_members(19, [foreign].iter(), &budget)
+                    .is_err()
+            );
+        }
+        let mut foreign_version = member.clone();
+        foreign_version.0.version += 1;
+        assert!(
+            encoded
+                .matches_members(19, [foreign_version].iter(), &budget)
+                .is_err()
+        );
+        let mut foreign_kind = member.clone();
+        foreign_kind.0.kind += 1;
+        assert!(
+            encoded
+                .matches_members(19, [foreign_kind].iter(), &budget)
+                .is_err()
+        );
+    }
+    // Envelopes are not term proofs. Exact source-bound authentication must
+    // still reject a changed actual after a structurally genuine envelope.
+    assert!(!producer::matches_key(&first.0, 19, declaration, &second_actuals, &budget).unwrap());
+    assert!(
+        !producer::matches_key(
+            &first.0,
+            19,
+            ir::DeclId {
+                index: 10,
+                ..declaration
+            },
+            &first_actuals,
+            &budget
+        )
+        .unwrap()
+    );
+    assert!(budget.first_resource_failure().is_none());
+    let denied = ir::PlanBudget::new(ir::PlanLimits {
+        work: 0,
+        ..ir::PlanLimits::default()
+    });
+    assert!(
+        encoded
+            .matches_members(19, members.iter(), &denied)
+            .is_err()
+    );
+    for workers in [1, 8] {
+        let own = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let own_world = own.plan.trait_world().unwrap();
+        let foreign = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        reads[0].replay(&root, &own_world).unwrap();
+        assert!(reads[0].replay(&root, &foreign_world).is_err());
+        assert!(foreign_world.budget().first_resource_failure().is_none());
+    }
+}
+
+#[test]
+fn canonical_key_replay_compares_borrowed_terms_without_retained_copies() {
+    let declaration = ir::DeclId {
+        snapshot: ir::SnapshotId::from_graph_word(37),
+        index: 9,
+    };
+    let actuals = vec![
+        Term::Int(ir::IntTy::I128),
+        Term::Float(ir::FloatTy::F32),
+        Term::Float(ir::FloatTy::F64),
+        Term::Bool,
+        Term::Unit,
+        Term::Never,
+        Term::Char,
+        Term::Str,
+        Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Bool)),
+        Term::RawPtr(ir::BorrowKind::Mut, Box::new(Term::Char)),
+        Term::Tuple(vec![Term::Bool, Term::Int(ir::IntTy::U64)]),
+        Term::Array(Box::new(Term::Bool), 7),
+        Term::Slice(Box::new(Term::Char)),
+        Term::Nominal(declaration, vec![Term::Bool]),
+        Term::FnPointer(vec![Term::Bool], Box::new(Term::Unit)),
+        Term::Cell(declaration, Box::new(Term::Bool)),
+        Term::ManuallyDrop(declaration, Box::new(Term::Bool)),
+        Term::PhantomData(declaration, Box::new(Term::Bool)),
+        Term::Closure(declaration, vec![Term::Bool]),
+        Term::FnItem(declaration, vec![Term::Bool]),
+        Term::Dyn(
+            declaration,
+            vec![Term::Bool],
+            vec![(declaration, Term::Char)],
+        ),
+        Term::Const(ir::ConstArgument::Integer {
+            ty: ir::IntTy::U128,
+            bits: u128::MAX,
+        }),
+    ];
+    let encoding_budget = ir::PlanBudget::default();
+    let encoded = producer::key(19, declaration, &actuals, &encoding_budget).unwrap();
+    let (decoded_world, decoded_declaration, decoded_actuals) =
+        producer::decode(&encoded.0, &encoding_budget).unwrap();
+    assert_eq!(decoded_world, 19);
+    assert_eq!(decoded_declaration, declaration);
+    assert_eq!(decoded_actuals, actuals);
+    let budget = ir::PlanBudget::new(ir::PlanLimits {
+        bytes: 0,
+        ..ir::PlanLimits::default()
+    });
+    for _ in 0..64 {
+        assert!(producer::matches_key(&encoded.0, 19, declaration, &actuals, &budget).unwrap());
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+    }
+    for index in 0..encoded.0.params.len() {
+        let mut changed = encoded.0.clone();
+        changed.params[index] ^= u64::MAX;
+        assert!(!producer::matches_key(&changed, 19, declaration, &actuals, &budget).unwrap());
+        let mut truncated = encoded.0.clone();
+        truncated.params.truncate(index);
+        assert!(!producer::matches_key(&truncated, 19, declaration, &actuals, &budget).unwrap());
+    }
+    let mut trailing = encoded.0.clone();
+    trailing.params.push(0);
+    assert!(!producer::matches_key(&trailing, 19, declaration, &actuals, &budget).unwrap());
+    let mut wrong_version = encoded.0.clone();
+    wrong_version.version += 1;
+    assert!(!producer::matches_key(&wrong_version, 19, declaration, &actuals, &budget).unwrap());
+    let mut wrong_kind = encoded.0.clone();
+    wrong_kind.kind += 1;
+    assert!(!producer::matches_key(&wrong_kind, 19, declaration, &actuals, &budget).unwrap());
+    assert!(!producer::matches_key(&encoded.0, 20, declaration, &actuals, &budget).unwrap());
+    assert!(
+        Term::Tuple(Vec::new())
+            .matches_encoding(&[10, 0], &budget)
+            .is_err()
+    );
+    assert!(budget.first_resource_failure().is_none());
+    let denied = ir::PlanBudget::new(ir::PlanLimits {
+        work: 0,
+        ..ir::PlanLimits::default()
+    });
+    assert!(producer::matches_key(&encoded.0, 19, declaration, &actuals, &denied).is_err());
+    for workers in [1, 8] {
+        let own = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let own_world = own.plan.trait_world().unwrap();
+        let foreign = provider("struct Node{next:*mut Node}fn main(){}", &[0], &[]);
+        let foreign_world = foreign.plan.trait_world().unwrap();
+        let engine = crate::engine::Engine::new(own);
+        let demand = engine.request(test_root());
+        engine.run(workers).unwrap();
+        demand.completion().unwrap();
+        let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+        let root = reads[0].definition().unwrap();
+        reads[0].replay(&root, &own_world).unwrap();
+        assert!(reads[0].replay(&root, &foreign_world).is_err());
+        assert!(foreign_world.budget().first_resource_failure().is_none());
+    }
+}
+
+#[test]
 fn retained_nominal_replay_rejects_foreign_world_cold_and_warm() {
     for (source, component) in [
         ("struct Empty;fn main(){}", false),
@@ -260,6 +969,14 @@ fn symbolic_component_metadata_preserves_schema_shape_limits() {
         .is_err()
     );
     assert!(metadata(&Term::Unit, &budget, 0).is_ok());
+    for unsized_term in [Term::Str, Term::Slice(Box::new(Term::Bool))] {
+        assert!(metadata(&unsized_term, &budget, 0).is_ok());
+        assert!(sized(&unsized_term, &budget, 0).is_err());
+        let borrowed = Term::Ref(ir::BorrowKind::Shared, Box::new(unsized_term));
+        assert!(metadata(&borrowed, &budget, 0).is_ok());
+        assert!(sized(&borrowed, &budget, 0).is_ok());
+    }
+    assert!(metadata(&Term::Slice(Box::new(Term::Str)), &budget, 0).is_err());
 }
 
 #[test]
@@ -279,9 +996,75 @@ fn finite_reference_inventory_preserves_raw_and_reference_term_policy() {
             fact: engine
                 .fact_of::<ComponentFact>(&component_key.0, 0)
                 .unwrap(),
+            cells: Arc::from(Vec::new()),
         };
+        let marker = ir::CellTy::new(world.canonical_catalog(), ir::Ty::Bool, &budget).unwrap();
+        let absent_cell = Term::Cell(marker.declaration(), Box::new(Term::Bool));
+        let error = component.resolve(&absent_cell, &budget, 0).unwrap_err();
+        assert!(error.0.contains("absent from its canonical read table"));
         let cases = [
             (Term::Bool, ir::Ty::Bool, false),
+            (Term::Str, ir::Ty::Str, true),
+            (
+                Term::Slice(Box::new(Term::Bool)),
+                ir::Ty::Slice {
+                    element: Arc::new(ir::Ty::Bool),
+                },
+                true,
+            ),
+            (
+                Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Str)),
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(ir::Ty::Str),
+                },
+                true,
+            ),
+            (
+                Term::Ref(
+                    ir::BorrowKind::Shared,
+                    Box::new(Term::Slice(Box::new(Term::Bool))),
+                ),
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(ir::Ty::Slice {
+                        element: Arc::new(ir::Ty::Bool),
+                    }),
+                },
+                true,
+            ),
+            (
+                Term::Ref(
+                    ir::BorrowKind::Mut,
+                    Box::new(Term::Slice(Box::new(Term::Bool))),
+                ),
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: Arc::new(ir::Ty::Slice {
+                        element: Arc::new(ir::Ty::Bool),
+                    }),
+                },
+                true,
+            ),
+            (
+                Term::Ref(
+                    ir::BorrowKind::Shared,
+                    Box::new(Term::Slice(Box::new(Term::Tuple(vec![Term::Ref(
+                        ir::BorrowKind::Shared,
+                        Box::new(Term::Bool),
+                    )])))),
+                ),
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(ir::Ty::Slice {
+                        element: Arc::new(ir::Ty::Tuple(Arc::from([ir::Ty::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            referent: Arc::new(ir::Ty::Bool),
+                        }]))),
+                    }),
+                },
+                true,
+            ),
             (
                 Term::Ref(ir::BorrowKind::Shared, Box::new(Term::Bool)),
                 ir::Ty::Ref {
@@ -306,6 +1089,7 @@ fn finite_reference_inventory_preserves_raw_and_reference_term_policy() {
             ),
         ];
         for (term, ty, opaque) in cases {
+            assert_eq!(component.resolve(&term, &budget, 0).unwrap(), ty);
             for allow_references in [false, true] {
                 let mut work = 0;
                 let mut slice_inventory = SliceInventory {
@@ -2245,6 +3029,202 @@ fn finite_drop_presence_follows_rc_pointee_backedge_without_borrowing_pending_su
 }
 
 #[test]
+fn component_module_visibility_visits_source_authorities_without_type_materialization() {
+    for workers in [1, 8] {
+        for source in [
+            "mod m{pub struct Node{pub next:*mut Node,hidden:bool}}fn main(){}",
+            "mod m{pub enum Node{Next{next:*mut Node},End}}fn main(){}",
+        ] {
+            let (source_provider, modules) = provider_with_modules(source, &[0], &[]);
+            let world = source_provider.plan.trait_world().unwrap();
+            let budget = world.budget().clone();
+            let engine = crate::engine::Engine::new(source_provider);
+            let demand = engine.request(test_root());
+            engine.run(workers).unwrap();
+            demand.completion().unwrap();
+            let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+            let root = reads[0].definition().unwrap();
+            reads[0].replay(&root, &world).unwrap();
+            let mut expected = Vec::new();
+            match &root {
+                ir::Ty::Struct(value) => {
+                    expected.push((value.def().module, value.def().visibility.clone()));
+                    for field in value.def().fields.read(&budget).unwrap().iter() {
+                        expected.push((value.def().module, field.visibility.clone()));
+                    }
+                }
+                ir::Ty::Enum(value) => {
+                    expected.push((value.def().module, value.def().visibility.clone()));
+                    for variant in value.def().variants.iter() {
+                        for field in variant.fields.read(&budget).unwrap().iter() {
+                            expected.push((value.def().module, field.visibility.clone()));
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let before = budget.usage_snapshot().bytes;
+            for _ in 0..64 {
+                let mut actual = Vec::new();
+                reads[0]
+                    .component_visit_source_module_visibility(
+                        &root,
+                        &budget,
+                        &mut |module, visibility| {
+                            visibility.validate_for(&modules, module).unwrap();
+                            actual.push((module, visibility.clone()));
+                            Ok(())
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(actual, expected);
+            }
+            assert_eq!(budget.usage_snapshot().bytes, before);
+            let (_, foreign_modules) = provider_with_modules(source, &[0], &[]);
+            assert!(
+                reads[0]
+                    .component_visit_source_module_visibility(
+                        &root,
+                        &budget,
+                        &mut |module, visibility| {
+                            visibility
+                                .validate_for(&foreign_modules, module)
+                                .map_err(|error| Error::new(error.to_string()))
+                        }
+                    )
+                    .unwrap()
+                    .is_err()
+            );
+            // Same display/source identities on another definition allocation
+            // cannot borrow this component's authenticated source authorities.
+            let forged = match &root {
+                ir::Ty::Struct(value) => ir::Ty::Struct(
+                    ir::StructTy::new(value.def().clone()).with_realization(reads[0].clone()),
+                ),
+                ir::Ty::Enum(value) => ir::Ty::Enum(
+                    ir::EnumTy::new(value.def().clone()).with_realization(reads[0].clone()),
+                ),
+                _ => unreachable!(),
+            };
+            let mut called = false;
+            assert!(
+                reads[0]
+                    .component_visit_source_module_visibility(&forged, &budget, &mut |_, _| {
+                        called = true;
+                        Ok(())
+                    })
+                    .unwrap()
+                    .is_err()
+            );
+            assert!(!called);
+        }
+    }
+}
+
+#[test]
+fn finite_shared_assignment_payload_handles_recursive_actuals_and_carrier_controls() {
+    for workers in [1, 8] {
+        for (marker, expected) in [
+            ("bool", true),
+            ("&'static bool", true),
+            ("&'static mut bool", false),
+            ("&'static [bool]", false),
+            ("(&'static bool,&'static mut bool)", false),
+            ("*mut &'static mut bool", true),
+        ] {
+            let source = format!(
+                "struct Holder{{link:Link<Holder>,marker:{marker}}}struct Link<T>{{ptr:*mut T}}fn main(){{}}"
+            );
+            let source_provider = provider(&source, &[0], &[]);
+            let world = source_provider.plan.trait_world().unwrap();
+            let budget = world.budget().clone();
+            let engine = crate::engine::Engine::new(source_provider);
+            let demand = engine.request(test_root());
+            engine.run(workers).unwrap();
+            demand.completion().unwrap();
+            let reads = demand.fact::<Vec<ReadNominal>>(0).unwrap();
+            let root = reads[0].definition().unwrap();
+            assert!(reads[0].is_component());
+            reads[0].replay(&root, &world).unwrap();
+            let mut external = |_: &ir::Ty, _: usize| -> Result<bool, Error> {
+                panic!("all nominal edges belong to this component")
+            };
+            assert_eq!(
+                reads[0]
+                    .component_shared_assignment_payload(&budget, 0, &mut external)
+                    .unwrap()
+                    .unwrap(),
+                expected,
+                "{marker}"
+            );
+            assert_eq!(
+                world.shared_assignment_payload_for_tests(&root).unwrap(),
+                expected
+            );
+            let ir::Ty::Struct(value) = &root else {
+                panic!("struct root")
+            };
+            // Removing only the root read handle retains the immutable symbolic
+            // fields and their ordinary nominal back edges. The finite query
+            // must not need a read handle on every recursive occurrence.
+            let ordinary = ir::Ty::Struct(ir::StructTy::new_parent_local(value.def().clone()));
+            assert_eq!(
+                world
+                    .shared_assignment_payload_for_tests(&ordinary)
+                    .unwrap(),
+                expected
+            );
+            if expected {
+                let mut changed = value.def().clone();
+                let mut fields = changed.fields.read(&budget).unwrap().to_vec();
+                fields.push(ir::FieldDef {
+                    name: "not_a_shared_payload".into(),
+                    ty: ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(ir::Ty::Bool),
+                    },
+                    visibility: value.def().visibility.clone(),
+                    lifetime_bound: true,
+                });
+                changed.fields = fields.into();
+                let forged = ir::Ty::Struct(ir::StructTy::new_parent_local(changed));
+                let siblings = ir::Ty::Tuple(Arc::from([ordinary.clone(), forged]));
+                assert!(
+                    !world
+                        .shared_assignment_payload_for_tests(&siblings)
+                        .unwrap()
+                );
+            }
+            let foreign = provider(&source, &[0], &[]);
+            let foreign_world = foreign.plan.trait_world().unwrap();
+            assert!(
+                foreign_world
+                    .shared_assignment_payload_for_tests(&root)
+                    .is_err()
+            );
+            assert!(world.budget().first_resource_failure().is_none());
+            let mut deep = ir::Ty::Bool;
+            for _ in 0..=budget.limits().depth {
+                deep = ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(deep),
+                };
+            }
+            assert!(world.shared_assignment_payload_for_tests(&deep).is_err());
+            let first_failure = budget.first_resource_failure();
+            assert!(first_failure.is_some());
+            assert!(
+                world
+                    .shared_assignment_payload_for_tests(&ordinary)
+                    .is_err()
+            );
+            assert_eq!(budget.first_resource_failure(), first_failure);
+        }
+    }
+}
+
+#[test]
 fn finite_ownership_preflight_keeps_equations_array_work_and_exact_root_authority() {
     use crate::compiler::ownership::component_preflight_for_tests as preflight;
     for workers in [1, 8] {
@@ -2293,6 +3273,7 @@ fn finite_ownership_preflight_keeps_equations_array_work_and_exact_root_authorit
             fact: scalar_engine
                 .fact_of::<ComponentFact>(&scalar_key.0, 0)
                 .unwrap(),
+            cells: Arc::from(Vec::new()),
         };
         for len in [0, 1, 3, ir::MAX_ARRAY_LEN + 1] {
             let term = Term::Array(Box::new(Term::Bool), len);

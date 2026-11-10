@@ -25,6 +25,73 @@ pub(super) fn copy_application(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ComponentKey(pub(super) Key);
 impl ComponentKey {
+    /// Traverse the canonical envelope only. Member term authentication is
+    /// still performed by the producer decoder or by matches_key at replay.
+    fn write_envelope<'a>(
+        world: u64,
+        members: impl ExactSizeIterator<Item = &'a RealizationKey> + Clone,
+        b: &ir::PlanBudget,
+        mut word: impl FnMut(u64) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if members.len() == 0 {
+            return Err(Error::new("empty nominal component"));
+        }
+        let mut previous: Option<&RealizationKey> = None;
+        for member in members.clone() {
+            b.charge_work(1).map_err(Error::new)?;
+            if member.0.kind != KIND
+                || member.0.version != 1
+                || member.0.params.len() < 6
+                || member.0.params[0] != VERSION
+                || member.0.params[1] != super::CLOSED_REALIZATION
+                || member.0.params[2] != world
+            {
+                return Err(Error::new("foreign or invalid component member envelope"));
+            }
+            if previous.is_some_and(|old| old.0.params >= member.0.params) {
+                return Err(Error::new("noncanonical component member order"));
+            }
+            previous = Some(member);
+        }
+        for value in [VERSION, DOMAIN, world, members.len() as u64] {
+            b.charge_work(1).map_err(Error::new)?;
+            word(value)?;
+        }
+        for member in members {
+            b.charge_work(1).map_err(Error::new)?;
+            word(member.0.params.len() as u64)?;
+            for &value in &member.0.params {
+                b.charge_work(1).map_err(Error::new)?;
+                word(value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare borrowed member envelopes without minting a key or validating
+    /// their term payloads. Successful callers must still authenticate each
+    /// member with the original source declaration and ordered actuals.
+    pub(super) fn matches_members<'a>(
+        &self,
+        world: u64,
+        members: impl ExactSizeIterator<Item = &'a RealizationKey> + Clone,
+        b: &ir::PlanBudget,
+    ) -> Result<bool, Error> {
+        if self.0.kind != KIND || self.0.version != 1 {
+            return Ok(false);
+        }
+        let mut at = 0usize;
+        let mut equal = true;
+        Self::write_envelope(world, members, b, |value| {
+            equal &= self.0.params.get(at) == Some(&value);
+            at = at
+                .checked_add(1)
+                .ok_or_else(|| Error::new("component envelope offset overflow"))?;
+            Ok(())
+        })?;
+        Ok(equal && at == self.0.params.len())
+    }
+
     pub(super) fn encode(
         world: u64,
         members: &[RealizationKey],
@@ -55,11 +122,10 @@ impl ComponentKey {
             }
         }
         let mut words = storage(count, b)?;
-        words.extend([VERSION, DOMAIN, world, ordered.len() as u64]);
-        for member in ordered {
-            words.push(member.0.params.len() as u64);
-            words.extend_from_slice(&member.0.params);
-        }
+        Self::write_envelope(world, ordered.iter().copied(), b, |value| {
+            words.push(value);
+            Ok(())
+        })?;
         Ok(Self(crate::compiler::keys::words(KIND, words)?))
     }
 

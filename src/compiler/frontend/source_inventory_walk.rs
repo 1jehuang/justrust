@@ -56,7 +56,8 @@ impl SourceInventory {
                     )?;
                 }
             }
-            if deref_coercion::candidate(expr)
+            if (deref_coercion::candidate(expr)
+                || matches!(expr, Expr::Index { .. } | Expr::DynamicIndex { .. }))
                 && !self
                     .call_pointers
                     .contains_key(&deref_coercion::site(expr as *const Expr as usize, 1))

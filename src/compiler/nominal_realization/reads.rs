@@ -98,6 +98,31 @@ impl ReadNominal {
             Self::Acyclic(_) => None,
         }
     }
+    pub(in crate::compiler) fn component_shared_assignment_payload(
+        &self,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        external: &mut impl FnMut(&ir::Ty, usize) -> Result<bool, Error>,
+    ) -> Option<Result<bool, Error>> {
+        match self {
+            Self::Component(read) => Some(read.shared_assignment_payload(budget, depth, external)),
+            Self::Acyclic(_) => None,
+        }
+    }
+    pub(in crate::compiler) fn component_visit_source_module_visibility(
+        &self,
+        ty: &ir::Ty,
+        budget: &ir::PlanBudget,
+        visit: &mut impl FnMut(
+            crate::compiler::module_identity::ModuleId,
+            &ir::Visibility,
+        ) -> Result<(), Error>,
+    ) -> Option<Result<(), Error>> {
+        match self {
+            Self::Component(read) => Some(read.visit_source_module_visibility(ty, budget, visit)),
+            Self::Acyclic(_) => None,
+        }
+    }
     pub(in crate::compiler) fn component_pointer_kind(&self) -> Option<ir::OwnedPointerKind> {
         match self {
             Self::Component(read) => read.pointer_kind(),
@@ -109,12 +134,10 @@ impl ReadNominal {
         ty: &ir::Ty,
         world: &traits::ValidatedTraitWorld,
         depth: usize,
+        replays: &mut traits::NominalReplays,
     ) -> Result<(), Error> {
         world.budget().check_depth(depth).map_err(Error::new)?;
-        match self {
-            Self::Component(read) => read.replay_at(ty, world, depth),
-            Self::Acyclic(_) => self.replay(ty, world),
-        }
+        self.replay_at_with(ty, world, depth, replays)
     }
     pub(in crate::compiler) fn engine_authority(&self) -> crate::engine::EngineAuthority {
         match self {
@@ -147,6 +170,15 @@ impl ReadNominal {
             _ => false,
         }
     }
+    /// Exact immutable payload whose *whole* source proof is replayed. Every
+    /// selected root still checks its own definition before consulting a memo.
+    pub(in crate::compiler) fn same_replay_fact(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Acyclic(a), Self::Acyclic(b)) => a.same_fact(b),
+            (Self::Component(a), Self::Component(b)) => a.same_replay_fact(b),
+            _ => false,
+        }
+    }
     pub(in crate::compiler) fn replay(
         &self,
         ty: &ir::Ty,
@@ -160,23 +192,38 @@ impl ReadNominal {
         world: &traits::ValidatedTraitWorld,
         replays: &mut traits::NominalReplays,
     ) -> Result<(), Error> {
+        self.replay_at_with(ty, world, 0, replays)
+    }
+    fn replay_at_with(
+        &self,
+        ty: &ir::Ty,
+        world: &traits::ValidatedTraitWorld,
+        depth: usize,
+        replays: &mut traits::NominalReplays,
+    ) -> Result<(), Error> {
+        world.budget().check_depth(depth).map_err(Error::new)?;
         self.check_definition(ty)?;
         self.application_key()
             .check_replay_world(world.nominal_realization_world(), world.budget())?;
-        if replays
-            .contains_fact(self, world)
-            .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))?
-        {
+        let completed = replays
+            .contains_fact_at(self, world, depth)
+            .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))?;
+        // All depth-sensitive checks succeeded at this depth or a deeper one
+        // for this exact immutable fact and planning authority. A deeper new
+        // occurrence is not a hit and still traverses every external edge.
+        // Replay is an assumption-free source proof with fixed obligation
+        // policies, not a caller-specific trait or formation verdict.
+        if completed {
             return Ok(());
         }
         match self {
             Self::Acyclic(read) => read.replay_uncached(world, replays)?,
-            Self::Component(read) => read.replay(ty, world)?,
+            Self::Component(read) => read.replay_at_with(ty, world, depth, replays)?,
         }
         // Only a COMPLETELY validated component is recorded. Internal members
         // never borrow success from an in-progress replay marker.
         replays
-            .record_fact(self, world)
+            .record_fact_at(self, world, depth)
             .map_err(|e| Error::new(e.into_legacy_diagnostic(world.budget())))
     }
     #[cfg(test)]

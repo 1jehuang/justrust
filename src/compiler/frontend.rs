@@ -27887,6 +27887,7 @@ impl SchemaAdapter {
                         return Err("parent-local source receipt changed declaration".into());
                     }
                     state.parent_local_replays.replay(
+                        &state.source_metadata,
                         receipt,
                         ty,
                         &original,
@@ -27927,13 +27928,19 @@ impl SchemaAdapter {
                     {
                         // The strict argument check replays every closed-world
                         // component obligation before using its finite height.
-                        return argument_height(
+                        let height = argument_height_with_validation(
                             ty,
                             ir::FactsCtx::Validated(facts),
                             b,
                             depth,
                             &mut ArgumentMemo::new(),
-                        );
+                            &state.source_metadata,
+                        )?;
+                        // This exact immutable component completed every source
+                        // obligation. Share its height only inside this walk,
+                        // just like other fully validated nominal allocations.
+                        memo.insert((id, pointer), height, b)?;
+                        return Ok(height);
                     }
                 } else {
                     // The slot is a canonical digest of the definition's own
@@ -29268,6 +29275,25 @@ impl ArgumentMemo {
 }
 
 #[cfg(test)]
+pub(in crate::compiler) fn validate_nominal_tree_for_tests(
+    plan: &PlanCtx,
+    ty: &ir::Ty,
+    facts: &tr::ValidatedFacts,
+) -> Result<(), tr::FactsError> {
+    let adapter = SchemaAdapter {
+        program: plan.program.clone(),
+        catalog: plan.catalog.clone(),
+        registry: plan.registry.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
+        contexts: plan.contexts.clone(),
+        source_schemas: plan.source_schemas.clone(),
+        budget: facts.budget().clone(),
+    };
+    adapter.validate_nominal_tree(ty, facts.env(), facts.budget(), true, Some(facts))
+}
+
+#[cfg(test)]
 pub(in crate::compiler) fn validate_argument_allocation_for_tests(
     ty: &ir::Ty,
     caller: ir::FactsCtx<'_>,
@@ -29279,12 +29305,42 @@ pub(in crate::compiler) fn validate_argument_allocation_for_tests(
     Ok((memo.entries.capacity() != 0, memo.len))
 }
 
+#[cfg(test)]
+pub(in crate::compiler) fn with_source_argument_session_for_tests<T>(
+    run: impl FnOnce(
+        &mut dyn FnMut(&ir::Ty, &tr::ValidatedFacts, &ir::PlanBudget, usize) -> Result<(), String>,
+    ) -> T,
+) -> T {
+    let validation = nominal_schema::SourceMetadataCache::default();
+    run(&mut |ty, caller, budget, depth| {
+        validation.validate_argument(ty, ir::FactsCtx::Validated(caller), budget, depth)
+    })
+}
+
 fn argument_height(
     ty: &ir::Ty,
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
     depth: usize,
     memo: &mut ArgumentMemo,
+) -> Result<usize, String> {
+    argument_height_with_validation(
+        ty,
+        caller,
+        budget,
+        depth,
+        memo,
+        &nominal_schema::SourceMetadataCache::default(),
+    )
+}
+
+fn argument_height_with_validation(
+    ty: &ir::Ty,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+    memo: &mut ArgumentMemo,
+    validation: &nominal_schema::SourceMetadataCache,
 ) -> Result<usize, String> {
     budget
         .check_depth(depth)
@@ -29319,7 +29375,7 @@ fn argument_height(
             return Err("component argument requires the same budget authority".into());
         }
         // Replay the complete closed-world proof before using its finite height.
-        caller.validate_ty_with_budget(ty, budget)?;
+        validation.validate_formed_argument(ty, facts, budget)?;
         let height = capability
             .component_metadata_height()
             .ok_or("component argument lacks verified metadata height")?;
@@ -29350,7 +29406,9 @@ fn argument_height(
     }
     let mut height = 0;
     let mut child = |ty: &ir::Ty| -> Result<(), String> {
-        height = height.max(argument_height(ty, caller, budget, depth + 1, memo)? + 1);
+        height = height.max(
+            argument_height_with_validation(ty, caller, budget, depth + 1, memo, validation)? + 1,
+        );
         Ok(())
     };
     match ty {

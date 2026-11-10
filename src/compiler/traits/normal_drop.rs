@@ -141,13 +141,21 @@ impl ValidatedDestructor {
         }
     }
     pub fn validate(&self, owner: &Ty, facts: &ValidatedFacts) -> Result<()> {
+        self.validate_with_scratch(owner, facts, &mut TraitScratch::default())
+    }
+    pub(in crate::compiler) fn validate_with_scratch(
+        &self,
+        owner: &Ty,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
         if !Arc::ptr_eq(&self.world, facts.world()) || !self.budget.same_authority(facts.budget()) {
             return Err(FactsError::invalid(
                 facts.budget(),
                 "cleanup has foreign world or budget",
             ));
         }
-        facts.validate_ty(owner)?;
+        facts.validate_ty_scratch(owner, scratch)?;
         if !ir::identical_type(owner, &self.owner, facts.budget())
             .map_err(|e| FactsError::from_message(facts.budget(), &e))?
         {
@@ -156,7 +164,9 @@ impl ValidatedDestructor {
                 "cleanup changed canonical owner",
             ));
         }
-        let NormalDropPlan::Destructor(canonical) = facts.normal_drop_plan(owner)? else {
+        let NormalDropPlan::Destructor(canonical) =
+            facts.normal_drop_plan_with_scratch(owner, scratch)?
+        else {
             return Err(FactsError::invalid(
                 facts.budget(),
                 "cleanup owner has no canonical destructor",
@@ -175,7 +185,7 @@ impl ValidatedDestructor {
             ));
         }
         if let Some(target) = &self.target {
-            let proof = self.world.discharge_direct(target, facts)?;
+            let proof = self.world.discharge_direct_with(target, facts, scratch)?;
             if Some(proof.signature()) != self.signature.as_ref() {
                 return Err(FactsError::invalid(
                     facts.budget(),
@@ -643,6 +653,13 @@ impl ValidatedFacts {
         })
     }
     fn normal_drop_own(&self, ty: &Ty) -> Result<OwnNormalDrop> {
+        self.normal_drop_own_with_scratch(ty, &mut TraitScratch::default())
+    }
+    fn normal_drop_own_with_scratch(
+        &self,
+        ty: &Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<OwnNormalDrop> {
         let nominal = match ty {
             Ty::Struct(t) => Some(t.def().source_decl),
             Ty::Enum(t) => Some(t.def().source_decl),
@@ -678,7 +695,7 @@ impl ValidatedFacts {
             item: self.world.catalog.id(CatalogItem::DropItem),
             method_args: Arc::from([]),
         };
-        let resolved = self.world.resolve_trait_call(&call, self)?;
+        let resolved = self.world.resolve_trait_call_with(&call, self, scratch)?;
         match resolved.callee() {
             Callee::Direct(target) => Ok(OwnNormalDrop::Resolved(
                 target.clone(),
@@ -726,7 +743,8 @@ impl ValidatedFacts {
         }
         // Recursive glue refers to this root's authenticated DFS ancestors.
         // Never reuse an active or partial subtree from another ancestry.
-        let plan = self.normal_drop_plan_inner(ty, 0, 0, &mut Vec::new())?;
+        let plan = self.normal_drop_plan_inner(ty, 0, 0, &mut Vec::new(), scratch)?;
+        let memo = &mut scratch.normal_drops;
         if !ty.is_nominal_back_edge() && memo.plans.len() < MAX_SCRATCH_OBLIGATIONS {
             push_scratch_row(
                 self.budget(),
@@ -753,6 +771,13 @@ impl ValidatedFacts {
         Ok(!closed.has_parameters && !closed.has_opaque)
     }
     pub(in crate::compiler) fn native_box_pointee<'a>(&self, ty: &'a Ty) -> Result<Option<&'a Ty>> {
+        self.native_box_pointee_with_scratch(ty, &mut TraitScratch::default())
+    }
+    fn native_box_pointee_with_scratch<'a>(
+        &self,
+        ty: &'a Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<Option<&'a Ty>> {
         charged(self.budget(), self.budget().charge_work(1))?;
         let Ty::Struct(owner) = ty else {
             return Ok(None);
@@ -760,8 +785,8 @@ impl ValidatedFacts {
         if let Some(read) = owner.realization() {
             read.check_definition(ty)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            read.replay(ty, self.world())
-                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            scratch.replay_nominal(read, ty, self)
+                .map_err(|error| FactsError::from_message(self.budget(), &error))?;
             if read.is_component() {
                 if read.component_pointer_kind() != Some(ir::OwnedPointerKind::Box) {
                     return Ok(None);
@@ -822,6 +847,14 @@ impl ValidatedFacts {
         left: &Ty,
         right: &Ty,
     ) -> Result<bool> {
+        self.same_normal_drop_owner_with_scratch(left, right, &mut TraitScratch::default())
+    }
+    fn same_normal_drop_owner_with_scratch(
+        &self,
+        left: &Ty,
+        right: &Ty,
+        scratch: &mut TraitScratch,
+    ) -> Result<bool> {
         charged(self.budget(), self.budget().charge_work(1))?;
         let ((left_id, left_read), (right_id, right_read)) = match (left, right) {
             (Ty::Struct(left), Ty::Struct(right)) => (
@@ -841,17 +874,15 @@ impl ValidatedFacts {
             left_read
                 .check_definition(left)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            left_read
-                .replay(left, self.world())
-                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            scratch.replay_nominal(left_read, left, self)
+                .map_err(|error| FactsError::from_message(self.budget(), &error))?;
             right_read
                 .check_definition(right)
                 .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            right_read
-                .replay(right, self.world())
-                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
-            self.validate_ty(left)?;
-            self.validate_ty(right)?;
+            scratch.replay_nominal(right_read, right, self)
+                .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+            self.validate_ty_scratch(left, scratch)?;
+            self.validate_ty_scratch(right, scratch)?;
             return self.world.eq_ty(left, right, 0);
         }
         if left_read.is_none()
@@ -869,8 +900,8 @@ impl ValidatedFacts {
             self.world
                 .schema
                 .validate_nominal_with_facts(right, self, self.budget())?;
-            self.validate_ty(left)?;
-            self.validate_ty(right)?;
+            self.validate_ty_scratch(left, scratch)?;
+            self.validate_ty_scratch(right, scratch)?;
             return self.world.eq_ty(left, right, 0);
         }
         // Other source representations may share only the exact definition
@@ -882,8 +913,8 @@ impl ValidatedFacts {
         )? {
             return Ok(false);
         }
-        self.validate_ty(left)?;
-        self.validate_ty(right)?;
+        self.validate_ty_scratch(left, scratch)?;
+        self.validate_ty_scratch(right, scratch)?;
         Ok(true)
     }
     fn normal_drop_plan_inner(
@@ -892,12 +923,13 @@ impl ValidatedFacts {
         depth: usize,
         owning_depth: usize,
         active: &mut Vec<NormalDropFrame>,
+        scratch: &mut TraitScratch,
     ) -> Result<NormalDropPlan> {
         charged(self.budget(), self.budget().check_depth(depth))?;
         charged(self.budget(), self.budget().charge_work(1))?;
         if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
             for frame in active.iter() {
-                if self.same_normal_drop_owner(ty, &frame.owner)? {
+                if self.same_normal_drop_owner_with_scratch(ty, &frame.owner, scratch)? {
                     if owning_depth <= frame.owning_depth {
                         return Err(FactsError::invalid(
                             self.budget(),
@@ -923,11 +955,11 @@ impl ValidatedFacts {
                     owning_depth,
                 },
             )?;
-            let result = self.normal_drop_plan_body(ty, depth, owning_depth, active);
+            let result = self.normal_drop_plan_body(ty, depth, owning_depth, active, scratch);
             active.pop();
             result
         } else {
-            self.normal_drop_plan_body(ty, depth, owning_depth, active)
+            self.normal_drop_plan_body(ty, depth, owning_depth, active, scratch)
         }
     }
     fn normal_drop_plan_body(
@@ -936,6 +968,7 @@ impl ValidatedFacts {
         depth: usize,
         owning_depth: usize,
         active: &mut Vec<NormalDropFrame>,
+        scratch: &mut TraitScratch,
     ) -> Result<NormalDropPlan> {
         // References and raw pointers never own their referent.
         if matches!(
@@ -958,18 +991,23 @@ impl ValidatedFacts {
         if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
             return Ok(NormalDropPlan::Unresolved);
         }
-        if let Some(pointee) = self.native_box_pointee(ty)?
+        if let Some(pointee) = self.native_box_pointee_with_scratch(ty, scratch)?
             && !matches!(pointee, Ty::Dyn(_))
         {
             let next_owning_depth = owning_depth.checked_add(1).ok_or_else(|| {
                 FactsError::resource(self.budget(), "owning drop edge depth overflow")
             })?;
-            let value =
-                match self.normal_drop_plan_inner(pointee, depth + 1, next_owning_depth, active)? {
-                    NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
-                    NormalDropPlan::Trivial => None,
-                    NormalDropPlan::Destructor(value) => Some(value),
-                };
+            let value = match self.normal_drop_plan_inner(
+                pointee,
+                depth + 1,
+                next_owning_depth,
+                active,
+                scratch,
+            )? {
+                NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                NormalDropPlan::Trivial => None,
+                NormalDropPlan::Destructor(value) => Some(value),
+            };
             charged(
                 self.budget(),
                 self.budget()
@@ -1015,12 +1053,17 @@ impl ValidatedFacts {
         if let Some((ir::OwnedPointerKind::Rc, pointee)) = ty.owned_pointer_pointee()
             && !matches!(pointee, Ty::Dyn(_))
         {
-            let value =
-                match self.normal_drop_plan_inner(pointee, depth + 1, owning_depth, active)? {
-                    NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
-                    NormalDropPlan::Trivial => None,
-                    NormalDropPlan::Destructor(value) => Some(value),
-                };
+            let value = match self.normal_drop_plan_inner(
+                pointee,
+                depth + 1,
+                owning_depth,
+                active,
+                scratch,
+            )? {
+                NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                NormalDropPlan::Trivial => None,
+                NormalDropPlan::Destructor(value) => Some(value),
+            };
             charged(
                 self.budget(),
                 self.budget()
@@ -1055,13 +1098,13 @@ impl ValidatedFacts {
                 budget: self.budget().clone(),
             })));
         }
-        let (own, mut unresolved) = match self.normal_drop_own(ty)? {
+        let (own, mut unresolved) = match self.normal_drop_own_with_scratch(ty, scratch)? {
             OwnNormalDrop::Trivial => (None, false),
             OwnNormalDrop::Unresolved => (None, true),
             OwnNormalDrop::Resolved(target, signature) => (Some((target, signature)), false),
         };
         let mut child = |child: &Ty| -> Result<Option<Arc<ValidatedDestructor>>> {
-            match self.normal_drop_plan_inner(child, depth + 1, owning_depth, active)? {
+            match self.normal_drop_plan_inner(child, depth + 1, owning_depth, active, scratch)? {
                 NormalDropPlan::Destructor(d) => Ok(Some(d)),
                 NormalDropPlan::Unresolved => {
                     unresolved = true;
@@ -1093,7 +1136,13 @@ impl ValidatedFacts {
                 // Entry validation authenticates the declaration-owned usize
                 // binder. No extent is guessed: trivial element drop proves
                 // trivial array drop for every admissible extent.
-                match self.normal_drop_plan_inner(element, depth + 1, owning_depth, active)? {
+                match self.normal_drop_plan_inner(
+                    element,
+                    depth + 1,
+                    owning_depth,
+                    active,
+                    scratch,
+                )? {
                     NormalDropPlan::Trivial => DropGlue::None,
                     NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
                     NormalDropPlan::Destructor(_) => {
@@ -1378,7 +1427,7 @@ mod owning_rc_authority_tests {
         .unwrap();
         assert_eq!(
             facts
-                .normal_drop_plan_inner(&owner, 0, 0, &mut direct)
+                .normal_drop_plan_inner(&owner, 0, 0, &mut direct, &mut TraitScratch::default())
                 .unwrap_err()
                 .kind(),
             FactsErrorKind::InvalidMetadata
@@ -1576,7 +1625,13 @@ mod owning_rc_authority_tests {
         assert!(facts.native_box_pointee(&forged).unwrap().is_none());
         assert_eq!(
             facts
-                .normal_drop_plan_inner(&forged, 0, 0, &mut Vec::new())
+                .normal_drop_plan_inner(
+                    &forged,
+                    0,
+                    0,
+                    &mut Vec::new(),
+                    &mut TraitScratch::default()
+                )
                 .unwrap_err()
                 .kind(),
             FactsErrorKind::Unsupported

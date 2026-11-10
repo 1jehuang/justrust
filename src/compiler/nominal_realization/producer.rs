@@ -110,6 +110,48 @@ pub(super) fn key(
     RealizationKey::encode(world, declaration, &encoded, words)
 }
 
+pub(super) fn matches_key(
+    key: &Key,
+    world: u64,
+    declaration: ir::DeclId,
+    actuals: &[Term],
+    b: &ir::PlanBudget,
+) -> Result<bool, Error> {
+    b.charge_work(key.params.len()).map_err(Error::new)?;
+    if key.kind != KIND
+        || key.version != 1
+        || key.params.len() < 6
+        || key.params[0] != VERSION
+        || key.params[1] != CLOSED_REALIZATION
+        || key.params[2] != world
+        || key.params[3] != declaration.snapshot.graph_word()
+        || key.params[4] != declaration.index
+        || usize::try_from(key.params[5]).ok() != Some(actuals.len())
+    {
+        return Ok(false);
+    }
+    let mut at = 6usize;
+    for actual in actuals {
+        let Some(length) = key.params.get(at).and_then(|n| usize::try_from(*n).ok()) else {
+            return Ok(false);
+        };
+        let Some(start) = at.checked_add(1) else {
+            return Ok(false);
+        };
+        let Some(end) = start.checked_add(length) else {
+            return Ok(false);
+        };
+        let Some(words) = key.params.get(start..end) else {
+            return Ok(false);
+        };
+        if !actual.matches_encoding(words, b)? {
+            return Ok(false);
+        }
+        at = end;
+    }
+    Ok(at == key.params.len())
+}
+
 pub(super) fn decode(key: &Key, b: &ir::PlanBudget) -> Result<(u64, ir::DeclId, Vec<Term>), Error> {
     if key.kind != KIND
         || key.params.len() < 6

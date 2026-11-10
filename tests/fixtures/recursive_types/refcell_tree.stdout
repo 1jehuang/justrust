@@ -1,0 +1,11 @@
+sum=20 strong=1 weak=3
+again=20
+parent of 2 is Some(1) marked true false
+leaf rc=2 visits=2
+drop node 1 visits 2
+drop node 3 visits 2
+drop node 4 visits 2
+orphan 2 parent None
+end
+drop node 2 visits 2
+drop node 10 visits 2

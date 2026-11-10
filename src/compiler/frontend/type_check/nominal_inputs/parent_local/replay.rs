@@ -6,7 +6,6 @@ use super::*;
 #[derive(Default)]
 pub(in crate::compiler::frontend) struct ParentLocalReplayMemo {
     entries: Vec<(Arc<ParentLocalReceipt>, ir::Ty, ir::Ty, ir::PlanReservation)>,
-    metadata: tr::TraitScratch,
 }
 
 impl std::fmt::Debug for ParentLocalReplayMemo {
@@ -29,6 +28,7 @@ fn same_allocation(left: &ir::Ty, right: &ir::Ty) -> bool {
 impl ParentLocalReplayMemo {
     pub(in crate::compiler::frontend) fn replay(
         &mut self,
+        metadata: &nominal_schema::SourceMetadataCache,
         receipt: &Arc<ParentLocalReceipt>,
         definition: &ir::Ty,
         original: &ir::Ty,
@@ -49,7 +49,9 @@ impl ParentLocalReplayMemo {
                 return Ok(());
             }
         }
-        receipt.replay_with_scratch(definition, original, facts, budget, &mut self.metadata)?;
+        metadata.with_checked_scratch(facts, budget, |scratch| {
+            receipt.replay_with_scratch(definition, original, facts, budget, scratch)
+        })?;
         let storage = budget.reserve_bytes(
             2 * std::mem::size_of::<(Arc<ParentLocalReceipt>, ir::Ty, ir::Ty, ir::PlanReservation)>(
             ),

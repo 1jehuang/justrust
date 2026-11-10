@@ -1,10 +1,13 @@
 use super::*;
 
-/// A source cycle selects the symbolic protocol, but never defines its
-/// identity. Only exact closed application discovery determines SCC members.
+/// Only a cycle returning to this root can require symbolic publication here.
+/// A recursive child of an acyclic container is a separate typed graph read.
+/// This syntax overapproximation never defines component membership: exact
+/// closed application discovery still determines every SCC member.
 fn source_cycle<'a>(
     cx: &'a Context,
     source: ReadSource,
+    root: ir::DeclId,
     mut path: Vec<ir::DeclId>,
     b: &'a ir::PlanBudget,
 ) -> Pending<'a, bool> {
@@ -12,7 +15,8 @@ fn source_cycle<'a>(
         b.check_depth(path.len()).map_err(Error::new)?;
         b.charge_work(1).map_err(Error::new)?;
         if path.contains(&source.declaration()) {
-            return Ok(true);
+            // An unrelated descendant SCC is resolved by its own producer.
+            return Ok(source.declaration() == root);
         }
         b.retain_bytes(std::mem::size_of::<ir::DeclId>())
             .map_err(Error::new)?;
@@ -28,7 +32,7 @@ fn source_cycle<'a>(
         for source in sources {
             let mut child_path = topology::storage(path.len(), b)?;
             child_path.extend_from_slice(&path);
-            branches.push(source_cycle(cx, source, child_path, b));
+            branches.push(source_cycle(cx, source, root, child_path, b));
         }
         Ok(all(branches).await?.into_iter().any(|cycle| cycle))
     })
@@ -131,9 +135,12 @@ pub(super) async fn needs_symbolic(
     }
     let sources = read_sources(cx, &declarations).await?;
     let mut branches = topology::storage(sources.len().saturating_add(1), b)?;
-    branches.push(source_cycle(cx, source, Vec::new(), b));
+    let root = source.declaration();
+    branches.push(source_cycle(cx, source, root, Vec::new(), b));
     for source in sources {
-        branches.push(source_cycle(cx, source, Vec::new(), b));
+        let mut path = topology::storage(1, b)?;
+        path.push(root);
+        branches.push(source_cycle(cx, source, root, path, b));
     }
     Ok(all(branches).await?.into_iter().any(|cycle| cycle))
 }

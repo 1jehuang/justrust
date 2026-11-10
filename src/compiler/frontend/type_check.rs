@@ -5613,11 +5613,36 @@ impl<'a> Checker<'a> {
                                 }
                                 _ => unreachable!(),
                             };
-                            match self.index_reference_hint(&ty, index)? {
-                                Some(ir::Ty::Ref { referent, .. }) => {
-                                    Some(referent.as_ref().clone())
+                            let mut owner = ty;
+                            let mut depth = 0usize;
+                            loop {
+                                self.signatures.plan()?.budget.check_depth(depth)?;
+                                self.signatures.plan()?.budget.charge_work(1)?;
+                                if let Some(ir::Ty::Ref { referent, .. }) =
+                                    self.index_reference_hint(&owner, index)?
+                                {
+                                    break Some(referent.as_ref().clone());
                                 }
-                                _ => None,
+                                let Some(target) = self.deref_target_hint(&owner)? else {
+                                    break None;
+                                };
+                                if let Some(element) = target
+                                    .shared_slice_element()
+                                    .or_else(|| target.mut_slice_element())
+                                    .or_else(|| target.shared_array_element_len().map(|(element, _)| element))
+                                {
+                                    ir::validate_shared_slice_element(
+                                        element,
+                                        self.facts(),
+                                        &self.signatures.plan()?.budget,
+                                    )?;
+                                    break Some(element.clone());
+                                }
+                                if let ir::Ty::Array { element, .. } = target {
+                                    break Some(element.as_ref().clone());
+                                }
+                                owner = target;
+                                depth += 1;
                             }
                         }
                     }
@@ -5780,7 +5805,7 @@ impl<'a> Checker<'a> {
                     .borrow()
                     .get(&ty.def().id)
                     .and_then(|fields| fields.get(&key))
-                    .ok_or("unknown nominal field")?;
+                    .ok_or_else(|| format!("unknown nominal field {name:?} in {}", ty.def().name))?;
                 let definitions = ty.def().fields.read(&self.signatures.plan()?.budget)?;
                 let field = &definitions[index];
                 if !self.visible(&field.visibility)? {
@@ -10221,7 +10246,11 @@ impl<'a> Checker<'a> {
             ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
         ) && let ReceiverKind::Borrowed { kind } = selected.mode
         {
-            self.indexed_method_receiver(receiver, kind, &selected)?
+            if let Some(adjusted) = self.deref_field_receiver(receiver, kind, &selected)? {
+                Some(adjusted)
+            } else {
+                self.indexed_method_receiver(receiver, kind, &selected)?
+            }
         } else {
             None
         };

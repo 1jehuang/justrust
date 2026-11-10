@@ -8,6 +8,8 @@ use super::{
 };
 use std::sync::Arc;
 
+mod shared_assignment;
+
 #[derive(Clone)]
 struct Member {
     key: RealizationKey,
@@ -36,6 +38,9 @@ mod tests;
 #[derive(Clone)]
 pub(in crate::compiler) struct ReadComponent {
     fact: Arc<ComponentFact>,
+    /// Every scalar Cell this component mentions, minted from the reading
+    /// world's canonical catalog. Materialization only looks entries up.
+    cells: Arc<[Arc<ir::CellTy>]>,
 }
 impl std::fmt::Debug for ReadComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -43,14 +48,6 @@ impl std::fmt::Debug for ReadComponent {
             .field(&self.fact.identity)
             .finish()
     }
-}
-
-fn member_keys(fact: &ComponentFact, b: &ir::PlanBudget) -> Result<Vec<RealizationKey>, Error> {
-    let mut keys = topology::storage(fact.members.len(), b)?;
-    for member in fact.members.iter() {
-        keys.push(copy_application(&member.key, b)?);
-    }
-    Ok(keys)
 }
 
 /// One fully paid edge buffer, with no growth or overlapping relocation.
@@ -90,14 +87,17 @@ fn validate(
     fact: &ComponentFact,
     world: &traits::ValidatedTraitWorld,
     depth: usize,
+    replays: &mut traits::NominalReplays,
 ) -> Result<(), Error> {
     let b = world.budget();
     b.check_depth(depth).map_err(Error::new)?;
     b.charge_work(1).map_err(Error::new)?;
     let error = |e: traits::FactsError| Error::new(e.into_legacy_diagnostic(b));
-    let keys = member_keys(fact, b)?;
-    let expected = ComponentKey::encode(world.nominal_realization_world(), &keys, b)?;
-    if fact.key != expected || keys.windows(2).any(|w| w[0].0.params >= w[1].0.params) {
+    if !fact.key.matches_members(
+        world.nominal_realization_world(),
+        fact.members.iter().map(|member| &member.key),
+        b,
+    )? {
         return Err(Error::new("component key, world or member order changed"));
     }
     let application_count = fact
@@ -113,7 +113,7 @@ fn validate(
         });
     }
     for (key, read) in fact.external.iter() {
-        if keys.contains(key)
+        if fact.members.iter().any(|member| &member.key == key)
             || read.application_key() != key
             || read.component_identity() == Some(fact.identity)
             || read.engine_authority() != fact.identity.authority()
@@ -123,8 +123,10 @@ fn validate(
             ));
         }
         let ty = read.definition()?;
-        read.replay_component_dependency(&ty, world, depth + 1)?;
-        world.require_symbolic_external_sized(&ty).map_err(error)?;
+        read.replay_component_dependency(&ty, world, depth + 1, replays)?;
+        world
+            .require_symbolic_external_sized(&ty, replays)
+            .map_err(error)?;
         apps.push(topology::Application {
             key: topology::ApplicationWords(application_words(key, b)?),
             edges: Vec::new(),
@@ -145,19 +147,20 @@ fn validate(
         return Err(Error::new("component metadata witness omitted members"));
     }
     for (index, member) in fact.members.iter().enumerate() {
-        let (member_world, declaration, actuals) = producer::decode(&member.key.0, b)?;
-        if member_world != world.nominal_realization_world()
+        let member_world = world.nominal_realization_world();
+        let declaration = member.source.declaration();
+        let actuals = member.actuals.as_ref();
+        if !producer::matches_key(&member.key.0, member_world, declaration, actuals, b)?
             || member.source.fact.identity.authority() != fact.identity.authority()
-            || actuals.as_slice() != member.actuals.as_ref()
-            || declaration != member.source.declaration()
         {
             return Err(Error::new("component member application changed"));
         }
         let requirements = world
-            .symbolic_nominal_requirements(
+            .symbolic_nominal_requirements_with(
                 declaration,
                 member.source.proof(),
                 member.source.template(),
+                replays,
             )
             .map_err(error)?;
         let env = &member.source.proof().schema().env;
@@ -169,8 +172,16 @@ fn validate(
         if actuals.len() != env.total_arity() {
             return Err(Error::new("component actual arity changed"));
         }
-        for actual in &actuals {
+        for actual in actuals {
             metadata(actual, b, 0)?;
+        }
+        let mut cells = Vec::new();
+        for term in member
+            .actuals
+            .iter()
+            .chain(member.fields.iter().map(|(_, term)| term))
+        {
+            canonical_cells(term, world.canonical_catalog(), b, 0, &mut cells)?;
         }
         // Only the edge inventory survives this replay. Borrow each exact
         // source actual list while encoding its key, never retain temporary
@@ -186,10 +197,10 @@ fn validate(
             Ok(())
         };
         for requirement in &requirements {
-            let term = symbolic::close_term(requirement, env, &actuals, b, 0)?;
+            let term = symbolic::close_term(requirement, env, actuals, b, 0)?;
             symbolic::visit_dependencies(&term, false, b, 0, &mut count)?;
         }
-        for actual in &actuals {
+        for actual in actuals {
             symbolic::visit_dependencies(actual, false, b, 0, &mut count)?;
         }
         for (_, retained) in member.fields.iter() {
@@ -198,7 +209,7 @@ fn validate(
         let mut edges = ReplayEdges::new(edge_count, b)?;
         let mut edge = |declaration, actuals: &[Term], by_value| -> Result<(), Error> {
             let key = producer::key(member_world, declaration, actuals, b)?;
-            let mut target = keys.iter().position(|k| k == &key);
+            let mut target = fact.members.iter().position(|member| member.key == key);
             if target.is_none()
                 && let Some(external) = fact.external.iter().position(|(k, _)| k == &key)
             {
@@ -210,7 +221,7 @@ fn validate(
             edges.push(topology::Edge { target, by_value }, b)
         };
         for requirement in &requirements {
-            let term = symbolic::close_term(requirement, env, &actuals, b, 0)?;
+            let term = symbolic::close_term(requirement, env, actuals, b, 0)?;
             metadata(&term, b, 0)?;
             sized(&term, b, 0)?;
             symbolic::visit_dependencies(&term, false, b, 0, &mut edge)?;
@@ -219,13 +230,13 @@ fn validate(
         if original.len() != member.fields.len() {
             return Err(Error::new("component field inventory changed"));
         }
-        for actual in &actuals {
+        for actual in actuals {
             symbolic::visit_dependencies(actual, false, b, 0, &mut edge)?;
         }
         for ((coordinate, source), (retained_coordinate, retained)) in
             original.iter().zip(member.fields.iter())
         {
-            let expected = symbolic::close_term(source, env, &actuals, b, 0)?;
+            let expected = symbolic::close_term(source, env, actuals, b, 0)?;
             if coordinate != retained_coordinate || &expected != retained {
                 return Err(Error::new("component symbolic source field changed"));
             }
@@ -238,7 +249,7 @@ fn validate(
     if used.iter().any(|used| !used) {
         return Err(Error::new("component includes unrelated external receipt"));
     }
-    let groups = topology::components(&apps, b)?;
+    let groups = topology::scoped_components(&apps, b)?;
     let own = groups
         .iter()
         .find(|group| group.members.contains(&0))
@@ -278,20 +289,26 @@ fn validate(
     Ok(())
 }
 
-/// Initial recursive scope has only Sized nominal applications. Unsized
-/// recursive equations remain explicit unsupported cases, never thin-pointer
-/// guesses. Nonrecursive producers retain their existing DST support.
+/// Component fields remain Sized, but references can carry ordinary str/slice
+/// metadata. Admitting a coordinate never grants by-value unsized storage.
 fn metadata(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> {
     b.check_depth(depth).map_err(Error::new)?;
     b.charge_work(1).map_err(Error::new)?;
     match term {
-        Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+        Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new(
                 "unsupported: recursive component unsized metadata equations",
             ));
         }
         Term::Ref(_, t) | Term::RawPtr(_, t) => metadata(t, b, depth + 1)?,
-        Term::Cell(_, t) | Term::ManuallyDrop(_, t) => {
+        Term::Slice(t) => {
+            metadata(t, b, depth + 1)?;
+            sized(t, b, depth + 1)?;
+        }
+        // Component validation authenticates every Cell declaration and its
+        // primitive scalar payload against the canonical catalog.
+        Term::Cell(_, t) => metadata(t, b, depth + 1)?,
+        Term::ManuallyDrop(_, t) => {
             metadata(t, b, depth + 1)?;
             return Err(Error::new(
                 "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
@@ -326,6 +343,83 @@ fn metadata(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> 
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+/// Mint every Cell coordinate of `term` from the canonical catalog, once per
+/// distinct declaration and scalar argument. A non-scalar payload or a
+/// foreign declaration is rejected here, where the Cell is admitted.
+fn canonical_cells(
+    term: &Term,
+    catalog: &traits::CoreCatalog,
+    b: &ir::PlanBudget,
+    depth: usize,
+    out: &mut Vec<Arc<ir::CellTy>>,
+) -> Result<(), Error> {
+    b.check_depth(depth).map_err(Error::new)?;
+    b.charge_work(1).map_err(Error::new)?;
+    match term {
+        Term::Cell(declaration, payload) => {
+            let argument = match payload.as_ref() {
+                Term::Int(ty) => ir::Ty::Int(*ty),
+                Term::Float(ty) => ir::Ty::Float(*ty),
+                Term::Bool => ir::Ty::Bool,
+                Term::Char => ir::Ty::Char,
+                _ => {
+                    return Err(Error::new(
+                        "unsupported: Cell payload requires a concrete primitive scalar",
+                    ));
+                }
+            };
+            b.charge_work(out.len()).map_err(Error::new)?;
+            if out
+                .iter()
+                .any(|known| known.declaration() == *declaration && known.argument() == &argument)
+            {
+                return Ok(());
+            }
+            let marker = ir::CellTy::new(catalog, argument, b).map_err(Error::new)?;
+            if marker.declaration() != *declaration {
+                return Err(Error::new(
+                    "nominal marker coordinate changed canonical catalog authority",
+                ));
+            }
+            b.retain_bytes(std::mem::size_of::<Arc<ir::CellTy>>())
+                .map_err(Error::new)?;
+            out.push(marker);
+        }
+        Term::Ref(_, t)
+        | Term::RawPtr(_, t)
+        | Term::Array(t, _)
+        | Term::Slice(t)
+        | Term::ManuallyDrop(_, t)
+        | Term::PhantomData(_, t) => canonical_cells(t, catalog, b, depth + 1, out)?,
+        Term::FnPointer(inputs, output) => {
+            for t in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                canonical_cells(t, catalog, b, depth + 1, out)?;
+            }
+        }
+        Term::Tuple(terms)
+        | Term::Nominal(_, terms)
+        | Term::Closure(_, terms)
+        | Term::FnItem(_, terms) => {
+            for t in terms {
+                canonical_cells(t, catalog, b, depth + 1, out)?;
+            }
+        }
+        Term::Dyn(_, terms, assignments) => {
+            for t in terms.iter().chain(assignments.iter().map(|(_, t)| t)) {
+                canonical_cells(t, catalog, b, depth + 1, out)?;
+            }
+        }
+        Term::Int(_)
+        | Term::Float(_)
+        | Term::Bool
+        | Term::Unit
+        | Term::Never
+        | Term::Char
+        | Term::Str
+        | Term::Const(_) => {}
     }
     Ok(())
 }
@@ -530,7 +624,7 @@ async fn produce(cx: &Context, raw: Key) -> Result<ComponentFact, Error> {
     };
     // Complete source, predicate, membership, pointer and size validation is
     // mandatory before publication. This is not an executable nominal read.
-    validate(&fact, &world, 0)?;
+    validate(&fact, &world, 0, &mut traits::NominalReplays::default())?;
     Ok(fact)
 }
 
@@ -545,8 +639,24 @@ pub(super) async fn read(
     if fact.key != *key || fact.identity != identity {
         return Err(Error::new("component typed read identity mismatch"));
     }
-    validate(&fact, world, 0)?;
-    Ok(ReadComponent { fact })
+    validate(&fact, world, 0, &mut traits::NominalReplays::default())?;
+    // The only construction of a component read. Its Cell table comes from
+    // this reading world's catalog, after the fact itself validated.
+    let b = world.budget();
+    let mut cells = Vec::new();
+    for member in fact.members.iter() {
+        for term in member
+            .actuals
+            .iter()
+            .chain(member.fields.iter().map(|(_, term)| term))
+        {
+            canonical_cells(term, world.canonical_catalog(), b, 0, &mut cells)?;
+        }
+    }
+    Ok(ReadComponent {
+        fact,
+        cells: cells.into(),
+    })
 }
 
 /// A complete finite carrier-policy traversal. Pending members are equations
@@ -557,10 +667,34 @@ struct SliceInventory<'a> {
     work: &'a mut usize,
     allow_references: bool,
     allow_universal_projections: bool,
-    queued: Vec<bool>,
-    pending: Vec<usize>,
+    queued: Vec<[bool; 2]>,
+    pending: Vec<(usize, bool)>,
 }
 impl SliceInventory<'_> {
+    /// Shared tuple leaves may borrow a reference-free value. A nominal
+    /// component still uses the ordinary walk's separate finite policy.
+    fn shared_element(&mut self, term: &Term, depth: usize) -> Result<usize, Error> {
+        self.budget.check_depth(depth).map_err(Error::new)?;
+        self.charge()?;
+        match term {
+            Term::Ref(ir::BorrowKind::Shared, child) => self
+                .term(child, depth + 1)?
+                .checked_add(1)
+                .ok_or_else(|| Error::new("slice type depth overflow")),
+            Term::Tuple(children) => {
+                let mut height = 0;
+                for child in children {
+                    height = height.max(
+                        self.shared_element(child, depth + 1)?
+                            .checked_add(1)
+                            .ok_or_else(|| Error::new("slice type depth overflow"))?,
+                    );
+                }
+                Ok(height)
+            }
+            _ => self.term(term, depth),
+        }
+    }
     fn charge(&mut self) -> Result<(), Error> {
         self.budget.charge_work(1).map_err(Error::new)?;
         *self.work = self
@@ -578,11 +712,22 @@ impl SliceInventory<'_> {
         self.charge()?;
         let mut height = 0usize;
         match term {
-            Term::Ref(_, child) => {
+            Term::Ref(kind, child) => {
                 if !self.allow_references {
                     return Err(Error::new(
                         "unsupported: slice elements containing references or slices, or nested slice carriers",
                     ));
+                }
+                if let Term::Slice(element) = child.as_ref() {
+                    if *kind != ir::BorrowKind::Shared {
+                        return Err(Error::new("unsupported: nested mutable slice carriers"));
+                    }
+                    self.allow_references = false;
+                    let element_height = self.shared_element(element, depth + 2);
+                    self.allow_references = true;
+                    return element_height?
+                        .checked_add(2)
+                        .ok_or_else(|| Error::new("slice type depth overflow"));
                 }
                 height = self
                     .term(child, depth + 1)?
@@ -626,9 +771,10 @@ impl SliceInventory<'_> {
                         }
                     }
                     if let Some(target) = target {
-                        if !self.queued[target] {
-                            self.queued[target] = true;
-                            self.pending.push(target);
+                        let mode = usize::from(self.allow_references);
+                        if !self.queued[target][mode] {
+                            self.queued[target][mode] = true;
+                            self.pending.push((target, self.allow_references));
                         }
                     } else {
                         b.charge_work(self.read.fact.external.len())
@@ -651,18 +797,26 @@ impl SliceInventory<'_> {
                     }
                 }
             }
-            // Such terms cannot occur in a successful closed component read.
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+            Term::Slice(_) => {
+                return Err(Error::new(
+                    "unsupported: slice elements containing references or slices, or nested slice carriers",
+                ));
+            }
+            Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::Cell(..) | Term::ManuallyDrop(..) => {
+            // An authenticated Cell stores one primitive scalar by value:
+            // no reference, slice, owner or destructor is reachable.
+            Term::Cell(..) => {}
+            Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
             }
             Term::PhantomData(..)
+            | Term::Str
             | Term::FnPointer(..)
             | Term::Int(_)
             | Term::Float(_)
@@ -691,10 +845,16 @@ impl ReadComponent {
             return Err(Error::new("component member ordinal out of bounds"));
         }
         let mut queued = topology::storage(self.fact.members.len(), b)?;
-        queued.resize(self.fact.members.len(), false);
-        let mut pending = topology::storage(self.fact.members.len(), b)?;
-        queued[root] = true;
-        pending.push(root);
+        queued.resize(self.fact.members.len(), [false; 2]);
+        let mode_count = self
+            .fact
+            .members
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| Error::new("slice inventory mode count overflow"))?;
+        let mut pending = topology::storage(mode_count, b)?;
+        queued[root][usize::from(allow_references)] = true;
+        pending.push((root, allow_references));
         let mut inventory = SliceInventory {
             read: self,
             budget: b,
@@ -705,7 +865,8 @@ impl ReadComponent {
             pending,
         };
         let mut height = 0usize;
-        while let Some(index) = inventory.pending.pop() {
+        while let Some((index, allow_references)) = inventory.pending.pop() {
+            inventory.allow_references = allow_references;
             inventory.charge()?;
             let member = &self.fact.members[index];
             for term in member
@@ -823,12 +984,23 @@ impl ReferenceInventory<'_> {
                     }
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+            Term::Slice(child) => {
+                self.opaque = true;
+                height = self
+                    .term(child, depth + 1, 0)?
+                    .checked_add(1)
+                    .ok_or_else(|| Error::new("reference type depth overflow"))?;
+            }
+            Term::Str => self.opaque = true,
+            Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::Cell(..) | Term::ManuallyDrop(..) => {
+            // An authenticated Cell stores one primitive scalar by value:
+            // no reference, slice, owner or destructor is reachable.
+            Term::Cell(..) => {}
+            Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
@@ -910,6 +1082,23 @@ impl ReadComponent {
     pub(super) fn world_word(&self) -> u64 {
         self.fact.key.0.params[2]
     }
+    /// The canonical Cell minted by this read for exactly this declaration
+    /// and argument. Absence is an error: nothing is constructed here.
+    pub(super) fn canonical_cell(
+        &self,
+        declaration: ir::DeclId,
+        argument: &ir::Ty,
+        b: &ir::PlanBudget,
+    ) -> Result<Arc<ir::CellTy>, Error> {
+        b.charge_work(self.cells.len()).map_err(Error::new)?;
+        self.cells
+            .iter()
+            .find(|cell| cell.declaration() == declaration && cell.argument() == argument)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new("recursive component Cell is absent from its canonical read table")
+            })
+    }
     pub(super) fn find_member(&self, key: &RealizationKey) -> Option<u32> {
         self.fact
             .members
@@ -966,15 +1155,13 @@ impl ReadComponent {
             .map(|member| &member.key)
             .ok_or_else(|| Error::new("component member ordinal out of bounds"))
     }
-    pub(super) fn replay(&self, world: &traits::ValidatedTraitWorld) -> Result<(), Error> {
-        validate(&self.fact, world, 0)
-    }
-    pub(super) fn replay_at(
+    pub(super) fn replay_at_with(
         &self,
         world: &traits::ValidatedTraitWorld,
         depth: usize,
+        replays: &mut traits::NominalReplays,
     ) -> Result<(), Error> {
-        validate(&self.fact, world, depth)
+        validate(&self.fact, world, depth, replays)
     }
     pub(super) fn same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.fact, &other.fact)
@@ -1039,17 +1226,21 @@ impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresence
                     self.unresolved |= unresolved;
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+            Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported recursive drop presence unsized equation",
                 ));
             }
-            Term::Cell(..) | Term::ManuallyDrop(..) => {
+            // An authenticated Cell stores one primitive scalar by value:
+            // no reference, slice, owner or destructor is reachable.
+            Term::Cell(..) => {}
+            Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
             }
             Term::PhantomData(..)
+            | Term::Str
             | Term::FnPointer(..)
             | Term::Int(_)
             | Term::Float(_)
@@ -1199,12 +1390,18 @@ impl<F: FnMut(usize, Option<(&ir::Ty, usize)>) -> Result<(), Error>> OwnershipIn
                     (self.event)(0, Some((&ty, depth)))?;
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+            // Ordinary ownership preflight does not expand a runtime slice.
+            // Borrowed envelopes and metadata validation retain its authority.
+            Term::Str | Term::Slice(_) => {}
+            Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported recursive ownership unsized equation",
                 ));
             }
-            Term::Cell(..) | Term::ManuallyDrop(..) => {
+            // An authenticated Cell stores one primitive scalar by value:
+            // no reference, slice, owner or destructor is reachable.
+            Term::Cell(..) => {}
+            Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));

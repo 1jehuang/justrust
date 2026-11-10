@@ -19,6 +19,7 @@ impl ValidatedCleanupCall {
         &self,
         function: &Function,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<(), String> {
         if self.owner.local == function.return_local {
             return Err("cleanup requires an unprotected owning root".into());
@@ -41,7 +42,7 @@ impl ValidatedCleanupCall {
             facts.budget(),
         )?;
         self.destructor
-            .validate(&owner, facts)
+            .validate_with_scratch(&owner, facts, scratch)
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))
     }
 }

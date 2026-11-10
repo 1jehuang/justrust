@@ -100,6 +100,51 @@ impl RootedNominal {
         self.read
             .ownership_preflight(self.member, budget, depth, event)
     }
+    pub(super) fn shared_assignment_payload(
+        &self,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        external: &mut impl FnMut(&ir::Ty, usize) -> Result<bool, Error>,
+    ) -> Result<bool, Error> {
+        self.read
+            .shared_assignment_payload(self.member, budget, depth, external)
+    }
+    pub(super) fn visit_source_module_visibility(
+        &self,
+        ty: &ir::Ty,
+        budget: &ir::PlanBudget,
+        visit: &mut impl FnMut(
+            crate::compiler::module_identity::ModuleId,
+            &ir::Visibility,
+        ) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.check(ty)?;
+        // shell and fields copy these exact immutable source authorities.
+        // Module-only validation must not materialize recursive field types.
+        match self.read.source(self.member)? {
+            ir::Ty::Struct(value) => {
+                let source = value.def();
+                visit(source.module, &source.visibility)?;
+                for field in source.fields.read(budget).map_err(Error::new)?.iter() {
+                    budget.charge_work(1).map_err(Error::new)?;
+                    visit(source.module, &field.visibility)?;
+                }
+            }
+            ir::Ty::Enum(value) => {
+                let source = value.def();
+                visit(source.module, &source.visibility)?;
+                for variant in source.variants.iter() {
+                    budget.charge_work(1).map_err(Error::new)?;
+                    for field in variant.fields.read(budget).map_err(Error::new)?.iter() {
+                        budget.charge_work(1).map_err(Error::new)?;
+                        visit(source.module, &field.visibility)?;
+                    }
+                }
+            }
+            _ => return Err(Error::new("component module source is not nominal")),
+        }
+        Ok(())
+    }
     pub(super) fn pointer_kind(&self) -> Option<ir::OwnedPointerKind> {
         self.read.pointer_kind(self.member)
     }
@@ -112,6 +157,11 @@ impl RootedNominal {
     }
     pub(super) fn same(&self, other: &Self) -> bool {
         self.member == other.member && self.read.same(&other.read)
+    }
+    /// Source replay authenticates the entire finite component, not just the
+    /// selected member. This identity must never replace rooted type identity.
+    pub(super) fn same_replay_fact(&self, other: &Self) -> bool {
+        self.read.same(&other.read)
     }
     pub(super) fn check(&self, ty: &ir::Ty) -> Result<(), Error> {
         let source = self.read.source(self.member)?;
@@ -152,22 +202,15 @@ impl RootedNominal {
             _ => return Err(Error::new("component root is not nominal")),
         })
     }
-    pub(super) fn replay(
-        &self,
-        ty: &ir::Ty,
-        world: &super::traits::ValidatedTraitWorld,
-    ) -> Result<(), Error> {
-        self.check(ty)?;
-        self.read.replay(world)
-    }
-    pub(super) fn replay_at(
+    pub(super) fn replay_at_with(
         &self,
         ty: &ir::Ty,
         world: &super::traits::ValidatedTraitWorld,
         depth: usize,
+        replays: &mut super::traits::NominalReplays,
     ) -> Result<(), Error> {
         self.check(ty)?;
-        self.read.replay_at(world, depth)
+        self.read.replay_at_with(world, depth, replays)
     }
 }
 
@@ -199,6 +242,10 @@ impl ReadComponent {
             Term::Never => ir::Ty::Never,
             Term::Const(value) => ir::Ty::Const(value.clone()),
             Term::Char => ir::Ty::Char,
+            Term::Str => ir::Ty::Str,
+            Term::Slice(t) => ir::Ty::Slice {
+                element: Arc::new(child(t)?),
+            },
             Term::Ref(kind, t) => ir::Ty::Ref {
                 kind: *kind,
                 referent: Arc::new(child(t)?),
@@ -211,10 +258,10 @@ impl ReadComponent {
                 element: Arc::new(child(t)?),
                 len: *len,
             },
-            Term::Cell(..) => {
-                return Err(Error::new(
-                    "unsupported: recursive Cell materialization requires sealed catalog construction authority",
-                ));
+            // Lookup only: the component read minted this Cell from the
+            // canonical catalog. A missing entry is an error.
+            Term::Cell(declaration, t) => {
+                ir::Ty::Cell(self.canonical_cell(*declaration, &child(t)?, b)?)
             }
             Term::ManuallyDrop(..) => {
                 return Err(Error::new(
@@ -254,7 +301,7 @@ impl ReadComponent {
                         .definition()?
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
+            Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized field materialization",
                 ));

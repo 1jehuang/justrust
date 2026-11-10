@@ -400,7 +400,16 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 self.budget.check_depth(depth.saturating_add(height)),
             )?;
-            replays.record_type(ty, env, height, self)?;
+            if let Some(previous) = replays.validated_type(self, ty, env)? {
+                if previous != height {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "completed component metadata height changed",
+                    ));
+                }
+            } else {
+                replays.record_type(ty, env, height, self)?;
+            }
             return Ok(height);
         }
 

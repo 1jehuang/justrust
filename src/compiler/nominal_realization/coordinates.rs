@@ -167,16 +167,38 @@ impl Term {
         Ok(out)
     }
     pub(super) fn encode(&self, b: &ir::PlanBudget) -> Result<Vec<u64>, Error> {
-        let mut words = Vec::new();
-        self.write(&mut words, b, 0)?;
-        Ok(words)
+        let mut output = CoordinateOutput::Owned(Vec::new());
+        self.write(&mut output, b, 0)?;
+        match output {
+            CoordinateOutput::Owned(words) => Ok(words),
+            CoordinateOutput::Compare { .. } => unreachable!(),
+        }
     }
-    fn write(&self, out: &mut Vec<u64>, b: &ir::PlanBudget, d: usize) -> Result<(), Error> {
+    pub(super) fn matches_encoding(
+        &self,
+        words: &[u64],
+        b: &ir::PlanBudget,
+    ) -> Result<bool, Error> {
+        let mut output = CoordinateOutput::Compare {
+            words,
+            at: 0,
+            equal: true,
+        };
+        self.write(&mut output, b, 0)?;
+        match output {
+            CoordinateOutput::Compare { at, equal, .. } => Ok(equal && at == words.len()),
+            CoordinateOutput::Owned(_) => unreachable!(),
+        }
+    }
+    fn write(
+        &self,
+        out: &mut CoordinateOutput<'_>,
+        b: &ir::PlanBudget,
+        d: usize,
+    ) -> Result<(), Error> {
         b.check_depth(d).map_err(Error::new)?;
         b.charge_work(1).map_err(Error::new)?;
-        b.retain_bytes(32).map_err(Error::new)?;
-        out.try_reserve(4)
-            .map_err(|_| Error::new("nominal coordinate allocation failed"))?;
+        out.reserve(b)?;
         match self {
             Self::Int(n) => out.extend([
                 1,
@@ -298,6 +320,46 @@ impl Term {
         Ok(term)
     }
 }
+/// Encoding and borrowed replay share one canonical word traversal. Comparing
+/// an existing immutable term never creates a second owned term or word buffer.
+enum CoordinateOutput<'a> {
+    Owned(Vec<u64>),
+    Compare {
+        words: &'a [u64],
+        at: usize,
+        equal: bool,
+    },
+}
+impl CoordinateOutput<'_> {
+    fn reserve(&mut self, budget: &ir::PlanBudget) -> Result<(), Error> {
+        if let Self::Owned(words) = self {
+            budget.retain_bytes(32).map_err(Error::new)?;
+            words
+                .try_reserve(4)
+                .map_err(|_| Error::new("nominal coordinate allocation failed"))?;
+        }
+        Ok(())
+    }
+    fn push(&mut self, word: u64) {
+        match self {
+            Self::Owned(words) => words.push(word),
+            Self::Compare { words, at, equal } => {
+                *equal &= words.get(*at) == Some(&word);
+                if let Some(next) = at.checked_add(1) {
+                    *at = next;
+                } else {
+                    *equal = false;
+                }
+            }
+        }
+    }
+    fn extend(&mut self, words: impl IntoIterator<Item = u64>) {
+        for word in words {
+            self.push(word);
+        }
+    }
+}
+
 struct Reader<'a> {
     words: &'a [u64],
     at: usize,

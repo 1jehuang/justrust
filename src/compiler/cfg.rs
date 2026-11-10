@@ -2763,7 +2763,7 @@ impl Function {
                     let authority = facts
                         .validated()
                         .ok_or("cleanup requires validated canonical facts")?;
-                    cleanup.validate(self, authority)?;
+                    cleanup.validate(self, authority, scratch)?;
                 }
                 Terminator::Switch { condition, .. } => operand(condition, budget, facts)?,
                 Terminator::SwitchVariant { place, .. } => path(place, budget)?,
@@ -4025,7 +4025,7 @@ impl Function {
                     if self.lowering_proof.is_none() {
                         return Err("cleanup requires exact canonical lowering proof".into());
                     }
-                    cleanup.validate(self, authority)?;
+                    cleanup.validate(self, authority, scratch)?;
                     block(*next)?;
                 }
                 Terminator::Goto(next) => block(*next)?,

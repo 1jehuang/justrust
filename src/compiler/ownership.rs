@@ -1546,6 +1546,22 @@ impl Budget {
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     preflight_with_plan(f, limits, None, FactsCtx::Concrete, false).map(|_| ())
 }
+fn validate_preflight_signature(
+    authority: &ValidatedFacts,
+    subject: super::ir::SignatureSubject<'_>,
+    signature: &super::ir::Signature,
+    source_signatures: bool,
+) -> Result<(), FactsError> {
+    // This owns nominal reconstruction sessions as well as proof rows. None
+    // may outlive this contract or its enclosing temporary storage allowance.
+    let mut scratch = super::traits::TraitScratch::default();
+    if source_signatures {
+        authority.validate_source_flow_signature_with_scratch(subject, signature, &mut scratch)
+    } else {
+        authority.validate_signature_with(subject, signature, &mut scratch)
+    }
+}
+
 fn preflight_with_plan(
     f: &cfg::Function,
     limits: Limits,
@@ -1819,15 +1835,7 @@ fn preflight_with_plan(
         }
     }
     preflight_ty(&f.result, 0, &mut budget)?;
-    let own_scratch = contract_scratch(
-        before_types - budget.remaining,
-        f.params.len(),
-        f.loan_sites.len(),
-        limits.state_bytes,
-        &f.ref_contract,
-        facts,
-        &mut budget,
-    )?;
+    let own_type_work = before_types - budget.remaining;
     let mut param_types = Vec::with_capacity(f.params.len());
     for param in &f.params {
         let Some(local) = f.locals.get(param.0) else {
@@ -1837,47 +1845,46 @@ fn preflight_with_plan(
     }
     // Use the same immutable source/storage selection as the full verifier.
     // Preflight may bound source contracts, never realize executable fields.
-    let mut signature_scratch = super::traits::TraitScratch::default();
-    let mut validate_signature =
-        |authority: &ValidatedFacts,
-         subject: super::ir::SignatureSubject<'_>,
-         signature: &super::ir::Signature| {
-            if source_signatures {
-                authority.validate_source_flow_signature_with_scratch(
-                    subject,
-                    signature,
-                    &mut signature_scratch,
-                )
-            } else {
-                authority.validate_signature_with(subject, signature, &mut signature_scratch)
-            }
-        };
-    let own_valid = if let FactsCtx::Validated(authority) = facts {
-        match validate_signature(
-            authority,
-            super::ir::SignatureSubject::Body,
-            &super::ir::Signature {
-                params: param_types,
-                result: f.result.clone(),
-                ref_contract: f.ref_contract.clone(),
-            },
-        ) {
-            Ok(()) => true,
-            Err(error) if error.is_resource() => return Err(Exhausted),
-            Err(_) => false,
-        }
-    } else {
-        let valid = charge_contract(
-            f.ref_contract.validation_work(&param_types, &f.result),
-            &mut budget,
+    // Validation scratch belongs to one contract, not to all contracts in the
+    // function. Keep its peak and cumulative work, but release its paid bytes
+    // before checking the next independent call.
+    let own_valid = budget.with_temporary_storage(|budget| {
+        let _scratch = contract_scratch(
+            own_type_work,
+            f.params.len(),
+            f.loan_sites.len(),
+            limits.state_bytes,
+            &f.ref_contract,
+            facts,
+            budget,
         )?;
-        drop(param_types);
-        valid
-    };
+        Ok(if let FactsCtx::Validated(authority) = facts {
+            match validate_preflight_signature(
+                authority,
+                super::ir::SignatureSubject::Body,
+                &super::ir::Signature {
+                    params: param_types,
+                    result: f.result.clone(),
+                    ref_contract: f.ref_contract.clone(),
+                },
+                source_signatures,
+            ) {
+                Ok(()) => true,
+                Err(error) if error.is_resource() => return Err(Exhausted),
+                Err(_) => false,
+            }
+        } else {
+            let valid = charge_contract(
+                f.ref_contract.validation_work(&param_types, &f.result),
+                budget,
+            )?;
+            drop(param_types);
+            valid
+        })
+    })?;
     if !own_valid {
         return Ok(budget.peak_scratch); // Full verifier owns malformed-contract diagnostics.
     }
-    drop(own_scratch);
     for site in &f.loan_sites {
         place_type(f, &site.place, &mut budget)?;
     }
@@ -2066,33 +2073,37 @@ fn preflight_with_plan(
                     preflight_ty(param, 0, &mut budget)?;
                 }
                 preflight_ty(&signature.result, 0, &mut budget)?;
-                let _call_scratch = contract_scratch(
-                    before_types - budget.remaining,
-                    signature.params.len(),
-                    f.loan_sites.len(),
-                    limits.state_bytes,
-                    &signature.ref_contract,
-                    facts,
-                    &mut budget,
-                )?;
-                let call_valid = if let FactsCtx::Validated(authority) = facts {
-                    match validate_signature(
-                        authority,
-                        super::ir::SignatureSubject::Call(target),
-                        signature,
-                    ) {
-                        Ok(()) => true,
-                        Err(error) if error.is_resource() => return Err(Exhausted),
-                        Err(_) => false,
-                    }
-                } else {
-                    charge_contract(
-                        signature
-                            .ref_contract
-                            .validation_work(&signature.params, &signature.result),
-                        &mut budget,
-                    )?
-                };
+                let call_type_work = before_types - budget.remaining;
+                let call_valid = budget.with_temporary_storage(|budget| {
+                    let _scratch = contract_scratch(
+                        call_type_work,
+                        signature.params.len(),
+                        f.loan_sites.len(),
+                        limits.state_bytes,
+                        &signature.ref_contract,
+                        facts,
+                        budget,
+                    )?;
+                    Ok(if let FactsCtx::Validated(authority) = facts {
+                        match validate_preflight_signature(
+                            authority,
+                            super::ir::SignatureSubject::Call(target),
+                            signature,
+                            source_signatures,
+                        ) {
+                            Ok(()) => true,
+                            Err(error) if error.is_resource() => return Err(Exhausted),
+                            Err(_) => false,
+                        }
+                    } else {
+                        charge_contract(
+                            signature
+                                .ref_contract
+                                .validation_work(&signature.params, &signature.result),
+                            budget,
+                        )?
+                    })
+                })?;
                 if !call_valid {
                     return Ok(budget.peak_scratch);
                 }
@@ -8559,6 +8570,80 @@ mod tests {
         let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         assert!(analyze(&f).passed());
+    }
+
+    #[test]
+    fn sequential_call_contract_scratch_is_scoped() {
+        let mut f = borrowed_source("fn f(p:&i32)->i32{*id(p)} fn id<'a>(x:&'a i32)->&'a i32{x}");
+        let call = f
+            .blocks
+            .iter()
+            .find(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+            .unwrap()
+            .clone();
+        f.blocks.extend(std::iter::repeat_n(call, 32));
+        let peak =
+            preflight_with_plan(&f, Limits::default(), None, FactsCtx::Concrete, false).unwrap();
+        assert!(peak > 0);
+        let plan = super::super::ir::PlanBudget::new(super::super::ir::PlanLimits {
+            bytes: peak * 2 + 4096,
+            ..super::super::ir::PlanLimits::default()
+        });
+        assert!(
+            preflight_with_plan(
+                &f,
+                Limits::default(),
+                Some(&plan),
+                FactsCtx::Concrete,
+                false
+            )
+            .is_ok()
+        );
+        let too_small = super::super::ir::PlanBudget::new(super::super::ir::PlanLimits {
+            bytes: peak - 1,
+            ..super::super::ir::PlanLimits::default()
+        });
+        assert!(
+            preflight_with_plan(
+                &f,
+                Limits::default(),
+                Some(&too_small),
+                FactsCtx::Concrete,
+                false,
+            )
+            .is_err()
+        );
+        // Exercise actual source nominal reconstruction, not just the paid
+        // conservative contract envelope used by the concrete fixture above.
+        let template = carrier_reference_template(
+            "struct Node{value:i32,next:*const Node} fn id<'a>(p:&'a Node)->&'a Node{p} fn f<'a>(p:&'a Node)->&'a Node{id(p)}",
+        );
+        let (target, signature) = template
+            .function()
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.value {
+                Terminator::Call {
+                    target, signature, ..
+                } => Some((target, signature)),
+                _ => None,
+            })
+            .unwrap();
+        let before = template.budget().usage_snapshot();
+        for _ in 0..32 {
+            validate_preflight_signature(
+                template.facts(),
+                super::super::ir::SignatureSubject::Call(target),
+                signature,
+                true,
+            )
+            .unwrap();
+            let after = template.budget().usage_snapshot();
+            assert_eq!(
+                after.reservations.current_reservations, before.reservations.current_reservations,
+                "nominal validation session storage must end with its signature"
+            );
+        }
     }
 
     #[test]
