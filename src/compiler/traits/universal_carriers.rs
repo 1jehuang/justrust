@@ -328,6 +328,18 @@ impl ValidatedTraitWorld {
                         scratch.for_world(self.id),
                     )?
                     || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    || (context.phase == FactsPhase::Universal
+                        && associated_types::implementation_application_self(
+                            &projection.trait_ref.self_ty,
+                        )
+                        && matches!(
+                            self.prove_implementation_in(
+                                &Predicate::Implements(projection.trait_ref.clone()),
+                                context,
+                                scratch.for_world(self.id),
+                            )?,
+                            ProofOutcome::Proved(_)
+                        ))
                 {
                     let evidence = self.normalize_closed_equality_projection_for_use(
                         projection,

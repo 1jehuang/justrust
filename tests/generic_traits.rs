@@ -12,6 +12,61 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod coherence_oracle;
 
 #[test]
+fn generic_parameter_projection_membership_can_follow_a_blanket_impl() {
+    let protocol = r#"
+trait MyInto {
+    type Item;
+    type IntoIter: Iterator<Item = Self::Item>;
+    fn into_it(self) -> Self::IntoIter;
+}
+impl<I: Iterator> MyInto for I {
+    type Item = I::Item;
+    type IntoIter = I;
+    fn into_it(self) -> I { self }
+}
+fn unused_identity<I: Iterator>(it: I) -> I { it.into_it() }
+"#;
+    coherence_oracle::stock_native(&format!(
+        r#"{protocol}
+fn total<I: Iterator<Item = i32>>(it: I) -> i32 {{
+    let mut a = 0;
+    let mut j = it.into_it();
+    while let Some(x) = j.next() {{ a += x; }}
+    a
+}}
+fn main() {{ println!("{{}}", total(vec![1, 2, 3].into_iter())); }}
+"#
+    ));
+    coherence_oracle::stock_native(
+        r#"
+trait Read { type Item; fn read(self) -> Self::Item; }
+impl<T: Copy> Read for &T {
+    type Item = T;
+    fn read(self) -> T { *self }
+}
+fn get<T: Copy>(value: &T) -> T { value.read() }
+fn main() { println!("{}", get(&7i32)); }
+"#,
+    );
+    coherence_oracle::stock_native(
+        r#"
+trait Echo { type Out; fn echo(self) -> Self::Out; }
+impl<T> Echo for T { type Out = T; fn echo(self) -> T { self } }
+fn identity<T>(value: T) -> T { value.echo() }
+fn main() { println!("{} {}", identity(7i32), identity(true)); }
+"#,
+    );
+    for body in [
+        // Blanket membership still requires the Iterator bound, even unused.
+        "fn unused<I>(it: I) -> I { it.into_it() }",
+        // Normalization must preserve the exact associated Item equality.
+        "fn unused<I: Iterator<Item = u8>>(it: I) -> i32 { let mut j = it.into_it(); j.next().unwrap() }",
+    ] {
+        coherence_oracle::stock_and_native_reject(&format!("{protocol}\n{body}\nfn main() {{}}"));
+    }
+}
+
+#[test]
 fn conditional_blanket_impls_use_orphan_aware_disjointness() {
     for source in [
         r#"

@@ -1598,13 +1598,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
-                if context.proof.phase == FactsPhase::Universal
-                    && matches!(projection.trait_ref.self_ty, Ty::Param(_))
-                    && !self.goal_is_closed(&projection.trait_ref, context.proof.env())?
-                {
-                    self.validate_universal_projection(projection, context.proof.env())?;
-                    return Ok(ty.clone());
-                }
+                // Try a genuine implementation assignment before retaining a
+                // rigid family. Blanket impls can normalize a parameter's
+                // projection from its bounds (for example IntoIter = I).
                 let evidence = match self.normalize_projection_in(projection, context, stack) {
                     Ok(evidence) => evidence,
                     // A concrete self type with open trait arguments (`<Unit as
@@ -1988,8 +1984,8 @@ impl ValidatedTraitWorld {
             context.proof.env(),
         )?;
         let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
-        let nominal_application = nominal_application_self(&selected_goal.self_ty);
-        if !closed_goal && !builtin_closure && !opaque_reference && !nominal_application {
+        let implementation_application = implementation_application_self(&selected_goal.self_ty);
+        if !closed_goal && !builtin_closure && !opaque_reference && !implementation_application {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: nonclosed associated projection application",
@@ -2646,7 +2642,7 @@ impl ValidatedTraitWorld {
             || ((matches!(
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-            ) || nominal_application_self(&evidence.selected_goal.self_ty))
+            ) || implementation_application_self(&evidence.selected_goal.self_ty))
                 && !self.goal_is_closed_in_for_use(
                     &evidence.selected_goal,
                     context.proof,
@@ -3006,6 +3002,15 @@ pub(super) fn nominal_application_self(ty: &Ty) -> bool {
         Ty::Ref { referent, .. } => matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)),
         _ => false,
     }
+}
+
+/// Applications whose implementation may depend on the exact caller's
+/// predicates. Parameters and references may select blanket impls. They are
+/// admitted only to implementation selection, not as guessed normal forms:
+/// selection must still produce a unique impl witness and validate its
+/// substituted associated assignment.
+pub(super) fn implementation_application_self(ty: &Ty) -> bool {
+    nominal_application_self(ty) || matches!(ty, Ty::Param(_) | Ty::Ref { .. })
 }
 
 #[cfg(test)]

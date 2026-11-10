@@ -258,6 +258,10 @@ impl ValidatedTraitWorld {
                     )?;
                     if closed
                         || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                        || (context.phase == FactsPhase::Universal
+                            && associated_types::implementation_application_self(
+                                &projection.trait_ref.self_ty,
+                            ))
                     {
                         let (normal, dependencies) = self.normalize_closed_projected_type_for_use(
                             &raw,

@@ -123,7 +123,12 @@ impl ValidatedFacts {
                     return self.world.normalize_equality_type(&raw, self);
                 }
                 if !self.world.raw_associated_ty_is_closed(&raw, 0)? {
-                    if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
+                    if associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                        || (context.phase == FactsPhase::Universal
+                            && associated_types::implementation_application_self(
+                                &projection.trait_ref.self_ty,
+                            ))
+                    {
                         let (normal, dependencies) =
                             self.world.normalize_closed_projected_type_for_use(
                                 &raw,
@@ -617,7 +622,11 @@ impl ValidatedTraitWorld {
                 }
                 if !self.raw_associated_ty_is_closed(&raw, 0)?
                     && !self.checked_closure_projection(projection, context.env())?
-                    && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    && !(associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                        || (context.phase == FactsPhase::Universal
+                            && associated_types::implementation_application_self(
+                                &projection.trait_ref.self_ty,
+                            )))
                 {
                     return Ok(raw);
                 }
@@ -690,7 +699,11 @@ impl ValidatedTraitWorld {
                 }
                 if !self.raw_associated_ty_is_closed(&raw, 0)?
                     && !self.checked_closure_projection(projection, context.env())?
-                    && !associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    && !(associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                        || (context.phase == FactsPhase::Universal
+                            && associated_types::implementation_application_self(
+                                &projection.trait_ref.self_ty,
+                            )))
                 {
                     return Ok(raw);
                 }
