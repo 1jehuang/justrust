@@ -34,12 +34,14 @@ impl ValidatedTraitWorld {
                 .opaque_associated_binding(projection, context.env())?
                 .is_none()
         {
-            if goal.declaration == self.catalog.id(CatalogItem::Sized) {
-                self.validate_universal_projection(projection, context.env())?;
-                return Ok(None);
-            }
-            // Other open-subject obligations still require exact contextual facts.
-            return Ok(Some(ProofOutcome::NotProven));
+            // A rigid projection is not a concrete normalization target, but
+            // it may still satisfy an ordinary blanket implementation. Keep
+            // its canonical owner and ordered arguments intact so the impl's
+            // substituted predicates must be proved in this exact caller.
+            // An assumption may discharge a blanket prerequisite without
+            // authorizing a concrete layout for the projected type.
+            self.validate_universal_projection_with(projection, context.env(), active)?;
+            return Ok(None);
         }
         let (normal, reductions) = self.normalize_closed_projected_type_for_use(
             &goal.self_ty,

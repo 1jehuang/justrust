@@ -4,6 +4,57 @@
 mod oracle;
 
 #[test]
+fn associated_subject_blanket_bounds_format_and_dispatch() {
+    oracle::stock_native(
+        r#"
+use std::fmt::Debug;
+trait C { type Item; }
+struct Number; struct Flag;
+impl C for Number { type Item = i32; }
+impl C for Flag { type Item = bool; }
+fn show<T:C>(x:&T::Item)->String where T::Item:Debug {
+    println!("{x:?}"); format!("{x:?}")
+}
+fn main() { println!("{} {}",show::<Number>(&7),show::<Flag>(&true)); }
+"#,
+    );
+    oracle::stock_native(
+        r#"
+use std::fmt::Debug;
+trait C { type Item: Debug; }
+struct Source<T> { value:T }
+impl<T:Debug> C for Source<T> { type Item=T; }
+fn show<T:C>(x:&T::Item)->String { format!("{x:?}") }
+fn main() { println!("{} {}",show::<Source<i32>>(&11),show::<Source<bool>>(&false)); }
+"#,
+    );
+    oracle::stock_native(
+        r#"
+trait C { type Item; }
+trait Read<A> { fn read(&self)->A; }
+trait Wrap<A> { fn wrapped(&self)->A; }
+impl<X:Read<A>,A> Wrap<A> for X { fn wrapped(&self)->A { <X as Read<A>>::read(self) } }
+struct Number; impl C for Number { type Item=i32; }
+impl Read<i32> for i32 { fn read(&self)->i32 { *self+1 } }
+fn show<T:C>(x:&T::Item)->i32 where T::Item:Read<i32> { <T::Item as Wrap<i32>>::wrapped(x) }
+fn main() { println!("{}",show::<Number>(&41)); }
+"#,
+    );
+}
+
+#[test]
+fn unused_associated_subject_blankets_require_exact_caller_bounds() {
+    for source in [
+        r#"trait C {type Item;} fn unused<T:C>(x:&T::Item)->String {format!("{x:?}")} fn main(){}"#,
+        r#"use std::fmt::Debug; trait C{type Item;type Other;} fn unused<T:C>(x:&T::Item)->String where T::Other:Debug {format!("{x:?}")} fn main(){}"#,
+        r#"trait C{type Item;} trait Read<A>{fn read(&self)->A;} trait Wrap{fn wrapped(&self)->i32;} impl<X:Read<i32>> Wrap for X{fn wrapped(&self)->i32{<X as Read<i32>>::read(self)}} fn unused<T:C>(x:&T::Item)->i32 where T::Item:Read<bool>{<T::Item as Wrap>::wrapped(x)} fn main(){}"#,
+        r#"trait C{type Item;} trait Read{fn read(&self)->i32;} trait Wrap{fn wrapped(&self)->i32;} impl<X:Read> Wrap for X{fn wrapped(&self)->i32{Read::read(self)}} fn unused<T:C>(x:&T::Item)->i32{Wrap::wrapped(x)} fn main(){}"#,
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn applied_bound_carries_ordered_arguments_and_associated_equalities() {
     oracle::stock_native(
         r#"
