@@ -163,6 +163,7 @@ SNAPSHOTS = {
             ("jcode-desktop", "bench/patches/desktop-portable-math-fonts.patch"),
             ("jcode-desktop", "bench/patches/desktop-settled-tab-assertions.patch"),
             ("jcode-desktop", "bench/patches/desktop-hint-updater-state.patch"),
+            ("jcode-desktop", "bench/patches/desktop-row-click-updater-state.patch"),
             ("jcode", "bench/patches/jcode-description-consent.patch"),
             ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
         ],

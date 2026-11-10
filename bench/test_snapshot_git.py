@@ -133,6 +133,21 @@ class SnapshotGitTests(unittest.TestCase):
         with patch.dict(suite.SNAPSHOTS, {"desktop": spec}):
             self.assertNotEqual(suite.snapshot_fingerprint("desktop"), original)
 
+    def test_row_click_updater_repair_is_fingerprinted_without_removing_assertions(self):
+        repair_name = "bench/patches/desktop-row-click-updater-state.patch"
+        self.assertIn(("jcode-desktop", repair_name), suite.SNAPSHOTS["desktop"]["patches"])
+        repair = (suite.ROOT / repair_name).read_text()
+        self.assertIn("live_tabs_switch_rows_and_stay_detached_from_panels", repair)
+        self.assertIn("+        let _update_guard = crate::updates::test_lock();", repair)
+        removed = [line for line in repair.splitlines()
+                   if line.startswith("-") and not line.startswith("---")]
+        self.assertEqual(removed, [], "the repair must preserve existing click assertions")
+        original = suite.snapshot_fingerprint("desktop")
+        spec = dict(suite.SNAPSHOTS["desktop"])
+        spec["patches"] = [entry for entry in spec["patches"] if entry[1] != repair_name]
+        with patch.dict(suite.SNAPSHOTS, {"desktop": spec}):
+            self.assertNotEqual(suite.snapshot_fingerprint("desktop"), original)
+
     def test_fixup_content_also_changes_snapshot_fingerprint(self):
         spec = {"repos": {"fixture": (self.source, self.rev)}, "cwd": "fixture", "fixups": []}
         with patch.object(suite, "SNAPSHOTS", {"fixture": spec}):

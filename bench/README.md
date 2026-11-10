@@ -72,8 +72,8 @@ The two tab-layout fixtures settle their existing camera/tab animation helpers
 before sampling geometry, following `ae6a7d4`. Their original assertions remain
 intact. This avoids measuring wall-clock tween progress as a layout regression.
 Animation settlement alone does not isolate header geometry: a concurrent global
-updater action can widen the version pill and shift centered tabs. The hint
-fixture also participates in the existing updater test mutex. An additive,
+updater action can widen the version pill and shift centered tabs. Both the hint
+and row-click fixtures also participate in the existing updater test mutex. An additive,
 state-restoring test demonstrates that independent width input, with the
 original hint assertions and default test threading preserved.
 For automation, synthetic `compare --require-valid` exits nonzero for incomplete,
