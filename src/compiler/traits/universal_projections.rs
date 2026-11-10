@@ -169,7 +169,14 @@ impl ValidatedTraitWorld {
                     return Ok(());
                 }
             }
-            if associated_types::nominal_application_self(&projection.trait_ref.self_ty) {
+            // Named applications and anonymous closure providers have
+            // implementation-owned membership, even when their enclosing
+            // function is generic. It need not appear as a written bound on
+            // that function. The builtin closure prover still checks the
+            // exact argument tuple, capability and owner predicates.
+            if associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                || matches!(&projection.trait_ref.self_ty, Ty::Closure(_))
+            {
                 let caller = self.predicate_env(declaration)?;
                 if matches!(
                     self.prove_in(

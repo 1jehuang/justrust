@@ -265,6 +265,11 @@ fn generic_parent_closures_preserve_owner_domains() {
                 expect: Expect::Run(""),
             },
             Case {
+                name: "generic_mutable_capture",
+                source: "fn outer<T>(value:T)->u32{let mut n=0u32;let mut f=||{let _r=&value;n+=1;n};f();f()}fn main(){println!(\"{}\",outer(String::from(\"owned\")));println!(\"{}\",outer(8u8));}",
+                expect: Expect::Run("2\n2\n"),
+            },
+            Case {
                 name: "generic_move_capture",
                 source: "fn outer<T>(value:T)->i32{let f=move||{let taken=value;7};f()}fn main(){assert_eq!(outer(String::from(\"owned\")),7);assert_eq!(outer(8u8),7);}",
                 expect: Expect::Run(""),
