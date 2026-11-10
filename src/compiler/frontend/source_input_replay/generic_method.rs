@@ -149,7 +149,52 @@ impl Replay<'_> {
         let argument = self.checked.exprs.get(args[0].0).ok_or_else(|| {
             FactsError::invalid(self.budget, "generic method receiver outside checked arena")
         })?;
-        let (owner, input, expectation) = if let Some(authored_owner) = authored_owner {
+        // Identity receivers already carry the shared reference required by
+        // the original header. Replay that authored value, rather than inventing
+        // an autoref place for a literal, call result, or reference local.
+        let shared_identity = authored_owner.is_none()
+            && closed_header
+            && matches!(
+                info.receiver,
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared
+                }
+            )
+            && match receiver {
+                Expr::Var(path) if is_local_shaped_path(path) => {
+                    let (_, source_ty) = self.operand(&receiver_node, depth + 1)?;
+                    self.equal(&source_ty, &view.signature().params[0])?
+                }
+                _ => true,
+            };
+        let (owner, input, expectation) = if shared_identity {
+            let input = self.expression(receiver, &receiver_node, args[0], None, depth + 1)?;
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &input
+            else {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "identity method receiver lost its source shared reference",
+                ));
+            };
+            if !self.equal(&input, &view.signature().params[0])?
+                || !self.equal(referent, &associated.self_pattern)?
+            {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "identity method receiver differs from its original source owner",
+                ));
+            }
+            (
+                referent.as_ref().clone(),
+                input,
+                ir::CallExpectation::FirmReference {
+                    kind: ir::BorrowKind::Shared,
+                },
+            )
+        } else if let Some(authored_owner) = authored_owner {
             let ReceiverKind::Borrowed {
                 kind: ir::BorrowKind::Shared,
             } = info.receiver
@@ -268,21 +313,23 @@ impl Replay<'_> {
                 }
             }
         };
-        let owner_decl = match &owner {
-            ir::Ty::Struct(value) => value.def().source_decl,
-            ir::Ty::Enum(value) => value.def().source_decl,
-            _ => {
-                return Err(FactsError::unsupported(
+        if !shared_identity {
+            let owner_decl = match &owner {
+                ir::Ty::Struct(value) => value.def().source_decl,
+                ir::Ty::Enum(value) => value.def().source_decl,
+                _ => {
+                    return Err(FactsError::unsupported(
+                        self.budget,
+                        "generic input method requires a nominal source owner",
+                    ));
+                }
+            };
+            if owner_decl != associated.nominal {
+                return Err(FactsError::invalid(
                     self.budget,
-                    "generic input method requires a nominal source owner",
+                    "generic method changed independently reconstructed owner",
                 ));
             }
-        };
-        if owner_decl != associated.nominal {
-            return Err(FactsError::invalid(
-                self.budget,
-                "generic method changed independently reconstructed owner",
-            ));
         }
         let mut state = sr::CallInferenceState::new(env, self.budget)?;
         if closed_header {

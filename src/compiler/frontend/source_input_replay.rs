@@ -1702,7 +1702,34 @@ impl Replay<'_> {
                 "input method requires a direct source declaration",
             ));
         };
-        if !source_args.is_empty()
+        // A reference local can be the receiver value itself, rather than an
+        // autoref of its local storage. Select that replay from the original
+        // lexical binding, never from the checked receiver's inferred type.
+        let shared_reference_local = if matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path))
+            && matches!(
+                self.original
+                    .plan
+                    .registry
+                    .declaration(direct.declaration)
+                    .map_err(|e| source_error(self.budget, &e))?
+                    .receiver,
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared
+                }
+            ) {
+            let receiver_node = node.child(10, 0, self.budget)?;
+            matches!(
+                self.operand(&receiver_node, depth + 1)?.1,
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                }
+            )
+        } else {
+            false
+        };
+        if shared_reference_local
+            || !source_args.is_empty()
             || matches!(
                 self.original
                     .plan
@@ -5137,6 +5164,116 @@ mod literal_context_tests {
             let error = replay_source_body(&forged, checked, publication.facts(), &budget)
                 .expect_err("missing original method receipt must fail");
             assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
+
+    #[test]
+    fn shared_identity_method_receiver_rejects_forged_source_evidence() {
+        for receiver in ["\"left\"", "left"] {
+            let source = format!(
+                "struct View<'a>{{text:&'a str}}trait Source{{fn view(&self)->View<'_>;}}impl Source for str{{fn view(&self)->View<'_>{{View{{text:self}}}}}}fn consume<T>(value:T){{}}fn main(){{let left=\"left\";let sibling=\"right\";let row={receiver}.view();consume(row);}}"
+            );
+            let program = parse(&source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected original shared identity method source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (method, receiver) = checked
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expression)| {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        args,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return None;
+                    };
+                    let info = plan.declaration(target.declaration).unwrap();
+                    (matches!(
+                        info.receiver,
+                        ReceiverKind::Borrowed {
+                            kind: ir::BorrowKind::Shared
+                        }
+                    ) && args.len() == 1)
+                        .then_some((ir::ExprId(index), args[0]))
+                })
+                .unwrap();
+            let sibling = ir::LocalId(
+                checked
+                    .locals
+                    .iter()
+                    .position(|local| local.name == "sibling")
+                    .unwrap(),
+            );
+            for mutation in 0..5 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0 => match &mut forged.exprs[receiver.0].kind {
+                        ir::ExprKind::Local(local) => *local = sibling,
+                        ir::ExprKind::Str(text) => *text = "right".into(),
+                        _ => panic!("expected original identity receiver value"),
+                    },
+                    1 => {
+                        forged.exprs[receiver.0].ty = ir::Ty::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            referent: Arc::new(ir::Ty::Bool),
+                        }
+                    }
+                    2 => {
+                        forged.exprs[receiver.0].kind = ir::ExprKind::Borrow {
+                            kind: ir::BorrowKind::Shared,
+                            place: ir::Place {
+                                local: sibling,
+                                projection: Vec::new(),
+                            },
+                            timing: ir::BorrowTiming::Immediate,
+                        }
+                    }
+                    3 => {
+                        let evidence = Arc::make_mut(&mut forged.call_evidence)
+                            .iter_mut()
+                            .find(|row| row.call == method)
+                            .unwrap();
+                        Arc::make_mut(&mut evidence.arguments)[0].expectation =
+                            ir::CallExpectation::NoFirmReference;
+                    }
+                    _ => {
+                        let ir::ExprKind::Call { args, .. } = &mut forged.exprs[method.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        args.clear();
+                    }
+                }
+                let error =
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err("forged shared identity receiver must fail");
+                assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+            }
+            let mut forged = original.clone();
+            forged
+                .call_mapping
+                .retain(|(_, expression, _)| *expression != method);
+            assert_eq!(
+                replay_source_body(&forged, checked, publication.facts(), &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata
+            );
         }
     }
 

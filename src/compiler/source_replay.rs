@@ -2410,7 +2410,23 @@ fn infer_original_equalities(
                 continue;
             }
             let actual = state.type_term(&normal, None, 0)?;
-            state.constrain(rhs, &actual, 0)?;
+            // Both sides are original predicate recipes. A resolved RHS may
+            // itself be a projection, so compare its canonical normal form in
+            // this same facts world, never against a checked call argument.
+            // Unresolved source slots retain the existing inference path.
+            let bound_rhs = state.bind_schema(rhs, &bindings, 0)?;
+            let resolved_rhs = state.resolve(&bound_rhs, false, 0, materialize)?;
+            let normalized_rhs = match resolved_rhs {
+                Some(raw)
+                    if ir::contains_associated_types(&raw, &state.budget)
+                        .map_err(|e| FactsError::invalid(&state.budget, &e))? =>
+                {
+                    let normal = normalize(&raw)?;
+                    Some(state.type_term(&normal, None, 0)?)
+                }
+                _ => None,
+            };
+            state.constrain(normalized_rhs.as_ref().unwrap_or(rhs), &actual, 0)?;
             *evidence = Some(normal);
             progress = true;
         }
@@ -3726,6 +3742,74 @@ mod call_input_trace_tests {
             ..Default::default()
         });
         assert!(run(&predicates, &tiny).unwrap_err().is_resource());
+    }
+
+    #[test]
+    fn original_projection_equalities_normalize_source_bound_rhs() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let trait_id = env(0).binder().declaration;
+        let left_item = env(0).binder().declaration;
+        let right_item = env(0).binder().declaration;
+        let projection = |owner, item| ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration: trait_id,
+                self_ty: owner,
+                args: Arc::from([]),
+            },
+            item,
+        };
+        for nested in [false, true] {
+            let wrap = |ty| if nested { array(ty, 2) } else { ty };
+            let rhs = wrap(ir::Ty::AssociatedType(Arc::new(projection(
+                param(&own, 0),
+                right_item,
+            ))));
+            let predicates = [ir::Predicate::ProjectionEq {
+                projection: projection(param(&own, 0), left_item),
+                ty: rhs,
+            }];
+            let left = ir::Ty::AssociatedType(Arc::new(projection(ir::Ty::Bool, left_item)));
+            let right = wrap(ir::Ty::AssociatedType(Arc::new(projection(
+                ir::Ty::Bool,
+                right_item,
+            ))));
+            let run = |wrong_rhs| {
+                infer_input_schema_trace_with_partial_context(
+                    Some((&predicates, &mut |raw| {
+                        if raw == &left {
+                            Ok(wrap(ir::Ty::Int(ir::IntTy::U8)))
+                        } else if raw == &right {
+                            Ok(wrap(ir::Ty::Int(if wrong_rhs {
+                                ir::IntTy::U16
+                            } else {
+                                ir::IntTy::U8
+                            })))
+                        } else {
+                            Err(FactsError::invalid(
+                                &budget,
+                                "normalization lost exact original projection owner or member",
+                            ))
+                        }
+                    })),
+                    Some(own.clone()),
+                    (&[param(&own, 0)], &ir::Ty::Unit),
+                    &[ir::Ty::Bool],
+                    None,
+                    &budget,
+                    &mut |_, _| unreachable!(),
+                )
+            };
+            let trace = run(false).unwrap();
+            assert_eq!(trace.actuals(), &[ir::Ty::Bool]);
+            trace
+                .validate_replayed(&run(false).unwrap(), &budget)
+                .unwrap();
+            assert!(
+                run(true).is_err(),
+                "different RHS normal form must not compare equal"
+            );
+        }
     }
 
     #[test]

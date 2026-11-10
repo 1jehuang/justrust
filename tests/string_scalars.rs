@@ -495,6 +495,84 @@ fn str_bytes_matches_stock() {
 }
 
 #[test]
+fn str_bytes_forwarding_inline() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-inline",
+        &[Case {
+            name: "inline",
+            source: r#"fn sum<I:IntoIterator<Item=u8>>(it:I)->u32{let mut n=0u32;for b in it{n+=b as u32;}n}fn main(){println!("{}",sum("é".bytes()));}"#,
+            expect: Expect::Run("364\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_forwarding_local() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-local",
+        &[Case {
+            name: "local",
+            source: r#"fn sum<I:IntoIterator<Item=u8>>(it:I)->u32{let mut n=0u32;for b in it{n+=b as u32;}n}fn main(){let text="é";let it=text.bytes();println!("{}",sum(it));}"#,
+            expect: Expect::Run("364\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_forwarding_owned() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-owned",
+        &[Case {
+            name: "owned",
+            source: r#"fn sum<I:IntoIterator<Item=u8>>(it:I)->u32{let mut n=0u32;for b in it{n+=b as u32;}n}fn main(){let owned=String::from("aé");println!("{}",sum(owned.as_str().bytes()));}"#,
+            expect: Expect::Run("461\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_forwarding_ordinary() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-ordinary",
+        &[Case {
+            name: "ordinary",
+            source: r#"struct View<'a>{text:&'a str}trait Source{fn view(&self)->View<'_>;}impl Source for str{fn view(&self)->View<'_>{View{text:self}}}fn size<T>(_:T)->usize{1usize}fn main(){let text="left";println!("{} {}",size("right".view()),size(text.view()));}"#,
+            expect: Expect::Run("1 1\n"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_forwarding_escape() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-escape",
+        &[Case {
+            name: "escape",
+            source: r#"fn sum<I:IntoIterator<Item=u8>>(it:I)->u32{let mut n=0u32;for b in it{n+=b as u32;}n}fn bad(){let it;{let s=String::from("é");it=s.as_str().bytes();}let _=sum(it);}fn main(){}"#,
+            expect: Expect::Invalid("E0597"),
+        }],
+    );
+}
+
+#[test]
+fn str_bytes_forwarding_mutation() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-bytes-forwarding-mutation",
+        &[Case {
+            name: "mutation",
+            source: r#"fn sum<I:IntoIterator<Item=u8>>(it:I)->u32{let mut n=0u32;for b in it{n+=b as u32;}n}fn bad(){let mut s=String::from("é");let it=s.as_str().bytes();s.push('x');let _=sum(it);}fn main(){}"#,
+            expect: Expect::Invalid("E0502"),
+        }],
+    );
+}
+
+#[test]
 fn str_bytes_named_lifetime() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(
