@@ -106,6 +106,87 @@ fn main() { let _ = f(Some(1)); }"#,
     );
 }
 
+#[test]
+fn result_sum_matches_stock() {
+    oracle::check(
+        "result-sum",
+        &[
+            Case {
+                name: "generic_success_and_first_error",
+                source: r#"use std::iter::Sum;
+struct Total(i32);
+impl Sum<i32> for Total {
+    fn sum<I: Iterator<Item = i32>>(mut iter: I) -> Total {
+        let mut total = 10;
+        while let Some(n) = iter.next() { total += n; }
+        Total(total)
+    }
+}
+struct Items { index: usize }
+impl Iterator for Items {
+    type Item = Result<i32, i32>;
+    fn next(&mut self) -> Option<Self::Item> {
+        println!("poll {}", self.index);
+        self.index += 1;
+        if self.index == 1 { Some(Ok(2)) }
+        else if self.index == 2 { Some(Err(7)) }
+        else { panic!("polled after error") }
+    }
+}
+impl Drop for Items { fn drop(&mut self) { println!("drop input"); } }
+fn parse(s: &str) -> Result<i64, std::num::ParseIntError> { s.parse() }
+fn sum_line(s: &str) -> Result<i64, std::num::ParseIntError> { s.split(',').map(parse).sum() }
+fn main() {
+    let success: Result<Total, i32> = vec![Ok(2), Ok(3)].into_iter().sum();
+    match success { Ok(Total(n)) => println!("total {}", n), Err(e) => println!("err {}", e) }
+    let empty: Vec<Result<i32, i32>> = Vec::new();
+    let empty_sum: Result<i32, i32> = empty.into_iter().sum();
+    println!("{:?}", empty_sum);
+    let failure: Result<Total, i32> = Items { index: 0 }.sum();
+    match failure { Ok(Total(n)) => println!("total {}", n), Err(e) => println!("err {}", e) }
+    println!("{} {}", sum_line("1,2,3").unwrap(), sum_line("1,x,3").is_err());
+}"#,
+                expect: Expect::Run("total 15\nOk(0)\npoll 0\npoll 1\ndrop input\nerr 7\n6 true\n"),
+            },
+            Case {
+                name: "generic_sum_bound_survives_unrelated_candidates",
+                source: r#"use std::iter::Sum;
+fn forward<T: Sum<U>, U, I: Iterator<Item = U>>(iter: I) -> T { T::sum(iter) }
+fn qualified<T: Sum<U>, U, I: Iterator<Item = U>>(iter: I) -> T { <T as Sum<U>>::sum(iter) }
+fn main() {
+    let left: Vec<i32> = vec![2, 3];
+    let right: Vec<i32> = vec![4, 5];
+    println!("{} {}", forward::<i32, i32, _>(left.into_iter()), qualified::<i32, i32, _>(right.into_iter()));
+}"#,
+                expect: Expect::Run("5 9\n"),
+            },
+            Case {
+                name: "unused_result_sum_without_success_sum",
+                source: r#"struct NoSum;
+fn unused(v: Vec<Result<NoSum, i32>>) -> Result<NoSum, i32> { v.into_iter().sum() }
+fn main() {}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_closed_item_wrong_payload",
+                source: r#"struct Bad;
+impl Iterator for Bad {
+    type Item = i32;
+    fn next(&mut self) -> Option<Self::Item> { Some(true) }
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_result_sum_changed_error_type",
+                source: r#"fn unused(v: Vec<Result<i32, u8>>) -> Result<i32, u16> { v.into_iter().sum() }
+fn main() {}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
 fn jr(source: &str, workers: usize, check: bool) -> (std::process::Output, Option<Vec<u8>>) {
     let dir = std::env::temp_dir().join(format!(
         "jr-try-{}-{workers}-{check}-{:x}",

@@ -22,6 +22,50 @@ impl<A, E> super::iter::FromIterator<Result<A, E>> for Result<super::vec::Vec<A>
     }
 }
 
+// Stop at the first residual without polling the input again, while letting
+// the requested success type own the ordinary Sum implementation.
+struct SumInput<'a, I, E> {
+    iterator: I,
+    error: &'a mut super::option::Option<E>,
+    failed: bool,
+}
+
+impl<'a, I: super::iter::Iterator<Item = Result<U, E>>, U, E> super::iter::Iterator
+    for SumInput<'a, I, E>
+{
+    type Item = U;
+
+    fn next(&mut self) -> super::option::Option<U> {
+        if self.failed {
+            return super::option::Option::None;
+        }
+        match self.iterator.next() {
+            super::option::Option::Some(Result::Ok(value)) => super::option::Option::Some(value),
+            super::option::Option::Some(Result::Err(error)) => {
+                self.failed = true;
+                *self.error = super::option::Option::Some(error);
+                super::option::Option::None
+            }
+            super::option::Option::None => super::option::Option::None,
+        }
+    }
+}
+
+impl<T: super::iter::Sum<U>, U, E> super::iter::Sum<Result<U, E>> for Result<T, E> {
+    fn sum<I: super::iter::Iterator<Item = Result<U, E>>>(iterator: I) -> Result<T, E> {
+        let mut error = super::option::Option::None;
+        let value = T::sum(SumInput {
+            iterator,
+            error: &mut error,
+            failed: false,
+        });
+        match error {
+            super::option::Option::Some(error) => Result::Err(error),
+            super::option::Option::None => Result::Ok(value),
+        }
+    }
+}
+
 impl<T, E> Result<T, E> {
     pub fn is_ok(&self) -> bool {
         match self {

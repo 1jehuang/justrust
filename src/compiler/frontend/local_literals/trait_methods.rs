@@ -243,7 +243,14 @@ impl Solver<'_, '_, '_> {
         depth: usize,
     ) -> Result<Option<Term>, String> {
         self.checker.infer_work(depth)?;
-        if !self.contains_callable(receiver, depth + 1)? {
+        // An open nominal can expose its source-owned associated assignment
+        // without first materializing all actuals. This links equations such
+        // as IntoIter<Result<T, ?E>>::Item = Result<T, ?E> so an independently
+        // known consumer may constrain ?E. The unique compatible source impl
+        // below is still only an equation, never a membership proof.
+        let open_nominal = matches!(self.domain(receiver), Domain::Nominal(..))
+            && self.resolve(receiver, depth + 1)?.is_none();
+        if !open_nominal && !self.contains_callable(receiver, depth + 1)? {
             return Ok(None);
         }
         let Some(header) = self.structural_impl(receiver, trait_id)? else {

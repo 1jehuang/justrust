@@ -114,6 +114,9 @@ impl Checker<'_> {
         let mut found: Option<Vec<ir::Ty>> = None;
         for (application, _item) in candidates.as_slice() {
             self.infer_work(0)?;
+            if !self.trait_method_application_is_proven(application)? {
+                continue;
+            }
             let Some(actuals) =
                 self.inferred_trait_method_actuals(application, name, &[], args, expected, false)?
             else {

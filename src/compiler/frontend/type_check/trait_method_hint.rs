@@ -3,6 +3,42 @@
 use super::*;
 
 impl Checker<'_> {
+    /// Candidate discovery is not membership. Inapplicable same-named traits
+    /// may be skipped, but metadata and source-nominal admission errors remain
+    /// hard failures in this exact caller and planning authority.
+    pub(super) fn trait_method_application_is_proven(
+        &self,
+        application: &ir::TraitRef,
+    ) -> Result<bool, String> {
+        let plan = self.signatures.plan()?;
+        let ir::FactsCtx::Validated(facts) = self.facts() else {
+            return Err("trait method inference requires canonical caller facts".into());
+        };
+        let mut nominals = Vec::new();
+        for actual in std::iter::once(&application.self_ty).chain(application.args.iter()) {
+            let inputs = facts
+                .parent_local_receiver_inputs(actual)
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+            self.infer_storage(inputs.len())?;
+            nominals
+                .try_reserve(inputs.len())
+                .map_err(|_| "trait inference nominal input allocation failed")?;
+            nominals.extend(inputs);
+        }
+        Ok(matches!(
+            facts
+                .service()
+                .prove_goal_with_nominals(
+                    &ir::Predicate::Implements(application.clone()),
+                    facts,
+                    &nominals,
+                    &mut tr::TraitScratch::default(),
+                )
+                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
+            tr::ProofOutcome::Proved(_)
+        ))
+    }
+
     pub(super) fn inferred_trait_method_actuals(
         &self,
         application: &ir::TraitRef,
@@ -26,32 +62,8 @@ impl Checker<'_> {
         if own.arity() == 0 {
             return Ok(Some(Vec::new()));
         }
-        let ir::FactsCtx::Validated(facts) = self.facts() else {
-            return Err("trait method inference requires canonical caller facts".into());
-        };
-        let mut nominals = Vec::new();
-        for actual in std::iter::once(&application.self_ty).chain(application.args.iter()) {
-            let inputs = facts
-                .parent_local_receiver_inputs(actual)
-                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
-            self.infer_storage(inputs.len())?;
-            nominals
-                .try_reserve(inputs.len())
-                .map_err(|_| "trait inference nominal input allocation failed")?;
-            nominals.extend(inputs);
-        }
-        match facts
-            .service()
-            .prove_goal_with_nominals(
-                &ir::Predicate::Implements(application.clone()),
-                facts,
-                &nominals,
-                &mut tr::TraitScratch::default(),
-            )
-            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
-        {
-            tr::ProofOutcome::Proved(_) => {}
-            tr::ProofOutcome::NotProven => return Err("trait obligation not proven".into()),
+        if !self.trait_method_application_is_proven(application)? {
+            return Err("trait obligation not proven".into());
         }
         let owner = plan.param_env(application.declaration)?;
         if owner.arity() != application.args.len() + 1 {

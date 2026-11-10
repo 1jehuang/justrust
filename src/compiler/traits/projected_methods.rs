@@ -93,13 +93,14 @@ impl ValidatedTraitWorld {
                 None,
             );
         }
-        self.validate_projected_value_schema(item.declaration, &item.schema)
+        self.validate_projected_value_schema(item.declaration, &item.schema, None)
     }
 
     fn validate_projected_value_schema(
         &self,
         declaration: DeclId,
         schema: &GenericSchema,
+        owner: Option<&OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
         self.projected_marker_predicates(schema)?;
         // Required declarations can still contain a deferred NoReference row
@@ -118,7 +119,17 @@ impl ValidatedTraitWorld {
             .map(|(index, ty)| (Some(index), ty))
             .chain(std::iter::once((None, &schema.signature.result)))
         {
-            self.validate_universal_projection_type(ty, &schema.env, 0)?;
+            // The exact implementation owns closed `Self::Item` assignments.
+            // They must reduce before rigid-family admission, never bypass its
+            // closed-projection guard. Source lifetime/carrier rows below still
+            // authenticate the original unnormalized declaration.
+            if let Some(owner) = owner {
+                let normal =
+                    self.normalize_owner_type_for_use(ty, owner, &mut Vec::new(), 0, false)?;
+                self.validate_universal_projection_type(&normal, &schema.env, 0)?;
+            } else {
+                self.validate_universal_projection_type(ty, &schema.env, 0)?;
+            }
             for location in charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.iter() {
                 if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
                     continue;
@@ -1035,7 +1046,7 @@ impl ValidatedTraitWorld {
                     "unsupported: generic projected implementation method",
                 ));
             }
-            self.validate_projected_value_schema(declaration, schema)?;
+            self.validate_projected_value_schema(declaration, schema, Some(&owner))?;
             let mut normalized = clone_schema(schema, &self.budget)?;
             for ty in &mut normalized.signature.params {
                 *ty = self.normalize_owner_type_for_use(ty, &owner, &mut Vec::new(), 0, false)?;
@@ -3310,6 +3321,62 @@ mod tests {
             let proof = world.discharge_direct(&target, &facts).unwrap();
             assert!(world.eq_ty(&proof.signature.result, &actual, 0).unwrap());
         }
+    }
+
+    #[test]
+    fn closed_owner_nested_item_normalization_preserves_authored_schema() {
+        let world = world(
+            "enum Maybe<T>{None,Some(T)}trait It{type Item;fn next(&mut self)->Maybe<Self::Item>;}struct Left;struct Right;impl It for Left{type Item=i32;fn next(&mut self)->Maybe<Self::Item>{Maybe::None}}impl It for Right{type Item=bool;fn next(&mut self)->Maybe<Self::Item>{Maybe::None}}fn main(){}",
+        );
+        let implementations = owners(&world);
+        assert_eq!(implementations.len(), 2);
+        let mut declarations = Vec::new();
+        for implementation in &implementations {
+            let callable = world
+                .headers
+                .callables
+                .iter()
+                .find(|callable| {
+                    world.info(callable.declaration).unwrap().owner
+                        == Some(implementation.declaration)
+                })
+                .unwrap();
+            let raw = &callable.schema;
+            assert!(
+                world
+                    .type_contains_projection(&raw.signature.result, 0)
+                    .unwrap()
+            );
+            let normalized = world
+                .normalize_owner_callable_schema(callable.declaration, raw)
+                .unwrap()
+                .unwrap();
+            assert!(
+                !world
+                    .type_contains_projection(&normalized.signature.result, 0)
+                    .unwrap()
+            );
+            // A normalized descriptor is not permission to replace the authored
+            // projection occurrence in the owning declaration.
+            let mut forged = clone_schema(raw, &world.budget).unwrap();
+            forged.signature.result = normalized.signature.result.clone();
+            assert!(
+                world
+                    .normalize_owner_callable_schema(callable.declaration, &forged)
+                    .is_err()
+            );
+            declarations.push((callable.declaration, raw));
+        }
+        assert!(
+            world
+                .normalize_owner_callable_schema(declarations[0].0, declarations[1].1)
+                .is_err()
+        );
+        assert!(
+            world
+                .normalize_owner_callable_schema(declarations[1].0, declarations[0].1)
+                .is_err()
+        );
     }
 
     #[test]
