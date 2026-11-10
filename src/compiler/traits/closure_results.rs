@@ -257,7 +257,10 @@ impl ValidatedTraitWorld {
                 "closure result lacks its parent-sealed source receipt",
             )
         })?;
-        if receipt.argument_origin().is_none() && receipt.capture_witness().is_none() {
+        if receipt.argument_origin().is_none()
+            && receipt.capture_witness().is_none()
+            && !receipt.is_static_str()
+        {
             let (required_call, _) = self.realize_closure_result_witness(&closure, receipt)?;
             let required_signature = self.instantiate_trait_signature(&required_call, facts)?;
             let original_call = Callee::TraitItem(required_call);

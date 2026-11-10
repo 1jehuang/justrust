@@ -157,7 +157,7 @@ impl ValidatedTraitWorld {
                     &self.budget,
                     receipt.projected_result(closure.params(), &self.budget),
                 )?
-            } else if receipt.argument_origin().is_some() {
+            } else if receipt.argument_origin().is_some() || receipt.is_static_str() {
                 charged(
                     &self.budget,
                     receipt.realize_result(
@@ -191,6 +191,7 @@ impl ValidatedTraitWorld {
                 && !matches!(closure.result(), Ty::Param(_))
                 && receipt.argument_origin().is_none()
                 && receipt.capture_witness().is_none()
+                && !receipt.is_static_str()
             {
                 return Err(FactsError::unsupported(
                     &self.budget,

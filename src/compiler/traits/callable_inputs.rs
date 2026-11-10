@@ -171,7 +171,7 @@ impl ValidatedTraitWorld {
             && !adapter
                 .closure
                 .result_receipt()
-                .is_some_and(|receipt| receipt.is_projected_input())
+                .is_some_and(|receipt| receipt.is_projected_input() || receipt.is_static_str())
         {
             return Ok(());
         }
@@ -232,7 +232,10 @@ impl ValidatedTraitWorld {
         let Some(receipt) = closure.result_receipt() else {
             return Ok(None);
         };
-        if receipt.argument_origin().is_none() && receipt.capture_witness().is_none() {
+        if receipt.argument_origin().is_none()
+            && receipt.capture_witness().is_none()
+            && !receipt.is_static_str()
+        {
             return Ok(None);
         }
         if self.closure_trait_kind(item.trait_decl)? != Some(*kind)
@@ -320,7 +323,7 @@ impl ValidatedTraitWorld {
                 facts,
             )?;
         }
-        if receipt.is_projected_input() {
+        if receipt.is_projected_input() || receipt.is_static_str() {
             canonicalize_empty_projected_result(&mut provider.signature, &self.budget)?;
         }
         Ok(Some(provider.signature))

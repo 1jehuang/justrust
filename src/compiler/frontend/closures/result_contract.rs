@@ -79,8 +79,9 @@ impl Checker<'_> {
         if locations.is_empty() {
             return Ok(None);
         }
-        // A string literal tail is `&'static str`: it carries no borrow from
-        // inputs or captures, so the result needs no origin contract.
+        // A string literal tail is `&'static str`: retain its original source
+        // occurrence so callable signature production can distinguish a
+        // storage-free result from a missing borrowed-result contract.
         if body.statements.is_empty()
             && matches!(result, ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent } if matches!(referent.as_ref(), ir::Ty::Str))
             && let Some(tail) = body.tail
@@ -89,7 +90,13 @@ impl Checker<'_> {
                 Some(ir::ExprKind::Str(_))
             )
         {
-            return Ok(None);
+            return Ok(Some(Arc::new(ir::ClosureResultReceipt::static_str(
+                owner,
+                provider,
+                site,
+                tail,
+                &plan.budget,
+            )?)));
         }
         if let Some(tail) = body.tail
             && matches!(
@@ -261,6 +268,29 @@ pub(in crate::compiler) fn validate_source(
     let budget = facts.budget();
     if source.params.len() != 2 || source.body.tail != Some(receipt.tail()) {
         return Err("closure result changed its original parameter or tail occurrence".into());
+    }
+    if receipt.is_static_str() {
+        let (closure, _) = facts
+            .closure_lowering_identity()
+            .ok_or("static closure result lacks actual closure body authority")?;
+        if closure.owner() != receipt.owner()
+            || closure.provider() != receipt.provider()
+            || closure.site() != receipt.site()
+            || closure
+                .result_receipt()
+                .is_none_or(|original| !original.same_source_shape(receipt))
+            || !source.exprs.get(receipt.tail().0).is_some_and(|expr| {
+                matches!(&expr.kind, ir::ExprKind::Str(_)) && expr.ty == source.result
+            })
+            || !matches!(
+                &source.result,
+                ir::Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+                    if matches!(referent.as_ref(), ir::Ty::Str)
+            )
+        {
+            return Err("static closure result changed its original literal occurrence".into());
+        }
+        return Ok(());
     }
     if receipt.capture_witness().is_some() {
         return captured_result::validate_source(receipt, source, facts);

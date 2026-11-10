@@ -4,6 +4,7 @@ use super::*;
 
 mod associated_method;
 mod borrow_coercion;
+mod closure_value;
 mod generic_method;
 mod projected_borrow;
 mod shared_deref;
@@ -369,7 +370,11 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
             source_clone::clone_vector(args, budget).map_err(|e| source_error(budget, &e))?;
             args.iter().collect()
         }
-        Expr::Var(path) => return Ok(is_local_shaped_path(path)),
+        // This only retains syntax. Rooted anonymous providers are authenticated
+        // by supported/replay before they may supply any inferred input type.
+        Expr::Var(path) => {
+            return Ok(is_local_shaped_path(path) || path.anchor() == PathAnchor::Crate);
+        }
         Expr::Borrow { .. } | Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => return Ok(true),
         Expr::BorrowValue { .. } => {
             return explicit_field_borrow::authored_static_borrow(source, budget)
@@ -590,6 +595,7 @@ fn original_nonstored_field(
 pub(super) fn supported(
     source: &Expr,
     node: &sr::SourceNode,
+    plan: &PlanCtx,
     function: &Function,
     inventory: &SourceInventory,
     original: Option<&OriginalSource>,
@@ -598,7 +604,9 @@ pub(super) fn supported(
 ) -> Result<bool, FactsError> {
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
-    if authored_float_width(source, budget, depth)?.is_some() {
+    if authored_float_width(source, budget, depth)?.is_some()
+        || closure_value::provider(plan, source, budget)?.is_some()
+    {
         return Ok(true);
     }
     if matches!(source, Expr::BorrowValue { .. }) {
@@ -650,6 +658,7 @@ pub(super) fn supported(
             supported(
                 value,
                 &site.node.child(3, 0, budget)?,
+                plan,
                 function,
                 inventory,
                 original,
@@ -662,6 +671,7 @@ pub(super) fn supported(
                 if !supported(
                     value,
                     &node.child(12, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -678,6 +688,7 @@ pub(super) fn supported(
                 if !supported(
                     value,
                     &node.child(14, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -694,6 +705,7 @@ pub(super) fn supported(
                 if !supported(
                     value,
                     &node.child(14, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -710,6 +722,7 @@ pub(super) fn supported(
                 if !supported(
                     value,
                     &node.child(14, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -724,6 +737,7 @@ pub(super) fn supported(
         Expr::Apply { value, .. } => supported(
             value,
             &node.child(7, 0, budget)?,
+            plan,
             function,
             inventory,
             original,
@@ -733,6 +747,7 @@ pub(super) fn supported(
         Expr::Repeat { value, .. } => supported(
             value,
             &node.child(11, 0, budget)?,
+            plan,
             function,
             inventory,
             original,
@@ -744,6 +759,7 @@ pub(super) fn supported(
                 if !supported(
                     value,
                     &node.child(9, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -762,6 +778,7 @@ pub(super) fn supported(
                 if !supported(
                     argument,
                     &node.child(9, index, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -852,6 +869,7 @@ pub(super) fn supported(
                     if !supported(
                         argument,
                         &node.child(9, index, budget)?,
+                        plan,
                         function,
                         inventory,
                         Some(original),
@@ -882,6 +900,7 @@ pub(super) fn supported(
                     return supported(
                         receiver,
                         &node.child(10, 0, budget)?,
+                        plan,
                         function,
                         inventory,
                         Some(original),
@@ -905,6 +924,7 @@ pub(super) fn supported(
                 supported(
                     receiver,
                     &node.child(10, 0, budget)?,
+                    plan,
                     function,
                     inventory,
                     original,
@@ -2633,6 +2653,11 @@ impl Replay<'_> {
             .get(id.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input expression missing"))?;
         let ty = match (source, &actual.kind) {
+            (Expr::Var(_), _)
+                if closure_value::provider(&self.original.plan, source, self.budget)?.is_some() =>
+            {
+                closure_value::replay(self.original, source, actual, self.checked, self.budget)?
+            }
             (Expr::Float(literal), ir::ExprKind::Float(value)) => {
                 let width = literal.suffix.ok_or_else(|| {
                     FactsError::unsupported(self.budget, "input float requires authored width")

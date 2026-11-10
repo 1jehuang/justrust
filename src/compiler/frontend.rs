@@ -7241,7 +7241,7 @@ fn recursive_argument_sources_supported_with_original(
     for (position, argument) in arguments.iter().enumerate() {
         let node = inventory.calls[index].node.child(9, position, budget)?;
         if !source_input_replay::supported(
-            argument, &node, function, inventory, original, budget, 0,
+            argument, &node, plan, function, inventory, original, budget, 0,
         )? {
             return Ok(false);
         }

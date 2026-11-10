@@ -76,6 +76,7 @@ pub struct ClosureResultReceipt {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ResultCallWitness {
+    StaticStr,
     Required {
         item: DeclId,
         trait_decl: DeclId,
@@ -100,6 +101,27 @@ pub struct ClosureArgumentOrigin {
     pub(in crate::compiler) depth: u8,
 }
 impl ClosureResultReceipt {
+    pub(in crate::compiler) fn static_str(
+        owner: DeclId,
+        provider: DeclId,
+        site: u32,
+        tail: ExprId,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        Ok(Self {
+            owner,
+            provider,
+            site,
+            tail,
+            call: ResultCallWitness::StaticStr,
+            result: ResultTypeWitness::SharedStr,
+            arguments: Arc::from([]),
+        })
+    }
+    pub(in crate::compiler) fn is_static_str(&self) -> bool {
+        matches!(self.call, ResultCallWitness::StaticStr)
+    }
     pub(in crate::compiler) fn captured(
         owner: DeclId,
         provider: DeclId,

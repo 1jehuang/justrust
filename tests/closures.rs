@@ -8,6 +8,36 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn static_literal_closure_results_match_stock() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "static-closure-results",
+        &[
+            Case {
+                name: "map_err_and_map_static_literal",
+                source: r#"fn main(){let x:Result<i32,i32>=Err(1);let y=x.map_err(|_|"bad number");println!("{y:?}");println!("{:?}",Some(2).map(|_|"literal"));}"#,
+                expect: Expect::Run("Err(\"bad number\")\nSome(\"literal\")\n"),
+            },
+            Case {
+                name: "stored_closure_and_required_fn_call",
+                source: r#"fn apply<T,F:FnOnce()->T>(f:F)->T{f()}fn main(){let f=||"direct";println!("{} {}",f(),apply(||"generic"));}"#,
+                expect: Expect::Run("direct generic\n"),
+            },
+            Case {
+                name: "local_reference_is_not_static_in_unused_fn",
+                source: "fn unused()->&'static str{let s=String::from(\"local\");let f=||s.as_str();f()}fn main(){}",
+                expect: Expect::Invalid("E0373"),
+            },
+            Case {
+                name: "wrong_static_output_type_in_unused_fn",
+                source: "fn unused(){let x:Result<i32,i32>=Err(1);let _:Result<i32,u8>=x.map_err(|_|\"bad\");}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn inherent_callable_output_infers_without_result_context() {
     use output_oracle::{Case, Expect};
     output_oracle::check(

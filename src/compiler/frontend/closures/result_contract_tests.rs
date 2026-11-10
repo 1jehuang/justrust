@@ -1,5 +1,35 @@
 use super::*;
 
+#[test]
+fn static_string_result_retains_empty_origins_and_replays_literal_source() {
+    let (plan, checked, _) =
+        fixture_graph_source("fn inspect(){let f=||\"static text\";}fn main(){}");
+    let world = plan.trait_world().unwrap();
+    let receipt = checked.ty.result_receipt().unwrap();
+    assert!(receipt.is_static_str());
+    for mode in [
+        ir::ClosureKind::Fn,
+        ir::ClosureKind::FnMut,
+        ir::ClosureKind::FnOnce,
+    ] {
+        let facts = world
+            .closure_callable_facts_for(checked.ty.clone(), mode)
+            .unwrap();
+        let body = checked.body_for(mode).unwrap();
+        validate_source(receipt, &body, &facts).unwrap();
+        let view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract().results.len(), 1);
+        assert!(view.contract().results[0].sources.is_empty());
+        let mut forged = body.as_ref().clone();
+        forged.exprs[receipt.tail().0].kind = ir::ExprKind::Local(forged.params[0]);
+        assert!(validate_source(receipt, &forged, &facts).is_err());
+        let mut forged = body.as_ref().clone();
+        forged.result = ir::Ty::Unit;
+        assert!(validate_source(receipt, &forged, &facts).is_err());
+    }
+}
+
 const ARGUMENT_STR_SOURCE: &str = "struct Item{name:String}fn inspect(items:Vec<&Item>){let _names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}";
 
 #[test]
