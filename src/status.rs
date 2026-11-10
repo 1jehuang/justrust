@@ -280,7 +280,8 @@ fn estimate(
     let to_compile = (live.total > 0).then(|| live.total - live.first_done.unwrap_or(0));
     let r = pick_reference(index, meta, to_compile)?;
     let rdir = runs.join(&r.id);
-    let summary = load_summary(&rdir)?;
+    let (summary, ref_units) = reference_run(&rdir)?;
+    let summary = &*summary;
     let elapsed = now - meta.start;
     let ref_build_end = build_end(&summary);
     let post = (summary.wall - ref_build_end).max(0.0);
@@ -297,7 +298,6 @@ fn estimate(
         out.method = "aligned";
         (post - (now - fin)).max(0.0)
     } else {
-        let ref_units = crate::summary::load_units(&rdir);
         let ref_end = |k: &str| {
             ref_units
                 .iter()
@@ -376,6 +376,29 @@ fn scan_run_ids(runs: &Path) -> Vec<String> {
             };
             let bytes = id.as_bytes();
             if bytes.len() > 8 && bytes[..8].iter().all(u8::is_ascii_digit) && bytes[8] == b'-' {
+/// A finished reference run's summary and units. Finished runs never change,
+/// and `status --watch` re-estimates every second in every watcher, so parse
+/// each reference once per process instead of once per tick.
+fn reference_run(dir: &Path) -> Option<(std::sync::Arc<Summary>, std::sync::Arc<Vec<Unit>>)> {
+    use std::sync::{Arc, Mutex};
+    type Entry = (std::path::PathBuf, Arc<Summary>, Arc<Vec<Unit>>);
+    static CACHE: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    if let Ok(cache) = CACHE.lock()
+        && let Some((_, s, u)) = cache.iter().find(|(p, _, _)| p == dir)
+    {
+        return Some((s.clone(), u.clone()));
+    }
+    let summary = Arc::new(load_summary(dir)?);
+    let units = Arc::new(crate::summary::load_units(dir));
+    if let Ok(mut cache) = CACHE.lock() {
+        if cache.len() >= 8 {
+            cache.remove(0);
+        }
+        cache.push((dir.to_path_buf(), summary.clone(), units.clone()));
+    }
+    Some((summary, units))
+}
+
                 ids.push(id);
             } else if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
                 overrides.push((modified, id));
