@@ -41,6 +41,7 @@ class Fleet(http.server.ThreadingHTTPServer):
         self.used = 1
         self.state = "stopped"
         self.errors = queue.Queue()
+        self.heartbeats = 0
 
     def snapshot(self):
         with self.lock:
@@ -81,9 +82,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with fleet.lock:
                 fleet.connections.append(self.connection)
             try:
-                while self.connection.recv(1024):
-                    pass
-            except OSError:
+                while True:
+                    head = Daemon.read_exact(self.connection, 2)
+                    opcode, length = head[0] & 15, head[1] & 127
+                    if length == 126:
+                        length = struct.unpack(">H", Daemon.read_exact(self.connection, 2))[0]
+                    elif length == 127:
+                        length = struct.unpack(">Q", Daemon.read_exact(self.connection, 8))[0]
+                    if length > 16384:
+                        fleet.errors.put("oversized client WebSocket frame")
+                        return
+                    mask = Daemon.read_exact(self.connection, 4) if head[1] & 128 else None
+                    body = Daemon.read_exact(self.connection, length)
+                    if mask:
+                        body = bytes(value ^ mask[i % 4] for i, value in enumerate(body))
+                    if opcode == 8:
+                        return
+                    if opcode == 1 and body == b"ping":
+                        # Production TenantHub answers text ping without waking
+                        # the DO or fetching status. A silent fake reconnects at
+                        # 120s, correctly causing a new authoritative snapshot.
+                        with fleet.lock:
+                            fleet.heartbeats += 1
+                            self.connection.sendall(b'\x81\x04pong')
+                    elif opcode == 9:
+                        self.connection.sendall(bytes([0x8A, len(body)]) + body)
+            except (EOFError, OSError):
                 pass
             return
         with fleet.lock:
@@ -220,8 +244,12 @@ def main():
             wait_for(lambda: fleet.snapshot()[1] >= 1 and has("99b"), "initial authenticated snapshot")
             time.sleep(0.5)  # Drain the initial ONLINE refresh debounce.
             before = fleet.snapshot()[0]
+            connections_before = fleet.snapshot()[1]
             time.sleep(max(3.2, args.idle_seconds))
             assert fleet.snapshot()[0] == before, "idle subscription polled hosted API"
+            assert fleet.snapshot()[1] == connections_before, "healthy idle subscription reconnected"
+            if args.idle_seconds >= 65:
+                assert fleet.heartbeats >= 1, "extended idle did not exercise transport keepalive"
             print(f"PASS idle: no API polling for {max(3.2, args.idle_seconds):g}s")
 
             with fleet.lock:
