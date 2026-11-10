@@ -347,14 +347,6 @@ impl<T> super::iter::DoubleEndedIterator for IntoIter<T> {
     }
 }
 
-impl<T> super::iter::IntoIterator for IntoIter<T> {
-    type Item = T;
-    type IntoIter = IntoIter<T>;
-    fn into_iter(self) -> IntoIter<T> {
-        self
-    }
-}
-
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
         while self.index < self.len {

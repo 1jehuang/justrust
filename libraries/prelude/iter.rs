@@ -457,76 +457,6 @@ impl<I: DoubleEndedIterator> DoubleEndedIterator for Rev<I> {
     }
 }
 
-impl<I: DoubleEndedIterator> IntoIterator for Rev<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<T> IntoIterator for super::ops::Range<T>
-where
-    super::ops::Range<T>: Iterator,
-{
-    type Item = <super::ops::Range<T> as Iterator>::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<T> IntoIterator for super::ops::RangeInclusive<T>
-where
-    super::ops::RangeInclusive<T>: Iterator,
-{
-    type Item = <super::ops::RangeInclusive<T> as Iterator>::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<A: Iterator, B: Iterator> IntoIterator for Zip<A, B> {
-    type Item = (A::Item, B::Item);
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<I: Iterator> IntoIterator for Skip<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<I: Iterator> IntoIterator for Take<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<I: Iterator> IntoIterator for StepBy<I> {
-    type Item = I::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
-impl<I: Iterator> IntoIterator for Enumerate<I> {
-    type Item = (usize, I::Item);
-    type IntoIter = Enumerate<I>;
-    fn into_iter(self) -> Enumerate<I> {
-        self
-    }
-}
-
 pub struct Zip<A, B> {
     left: A,
     right: B,
@@ -1294,6 +1224,31 @@ pub trait IntoIterator {
     fn into_iter(self) -> Self::IntoIter;
 }
 
+impl<I: Iterator> IntoIterator for I {
+    type Item = I::Item;
+    type IntoIter = I;
+    fn into_iter(self) -> I {
+        self
+    }
+}
+
+// Borrowing an iterator advances the same iterator, without taking ownership.
+impl<I: Iterator> Iterator for &mut I {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<I::Item> {
+        (**self).next()
+    }
+    fn nth(&mut self, n: usize) -> Option<I::Item> {
+        (**self).nth(n)
+    }
+}
+
+impl<I: DoubleEndedIterator> DoubleEndedIterator for &mut I {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        (**self).next_back()
+    }
+}
+
 pub trait Extend<A> {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T);
     fn extend_one(&mut self, item: A);
@@ -1365,14 +1320,6 @@ impl<'a, T: Clone, I: Iterator<Item = &'a T>> Iterator for Cloned<I> {
     }
 }
 
-impl<'a, T: Clone, I: Iterator<Item = &'a T>> IntoIterator for Cloned<I> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 pub struct Map<I, F> {
     iterator: I,
     f: F,
@@ -1435,16 +1382,6 @@ impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> Iterator for F
     }
 }
 
-impl<A, I: Iterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> IntoIterator
-    for FlatMap<I, U, F>
-{
-    type Item = U::Item;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 impl<A, I: DoubleEndedIterator<Item = A>, U: IntoIterator, F: FnMut(A) -> U> DoubleEndedIterator
     for FlatMap<I, U, F>
 where
@@ -1503,14 +1440,6 @@ impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> Iterator for FilterM
                 Option::None => return Option::None,
             }
         }
-    }
-}
-
-impl<A, B, I: Iterator<Item = A>, F: FnMut(A) -> Option<B>> IntoIterator for FilterMap<I, F> {
-    type Item = B;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
     }
 }
 
@@ -1734,16 +1663,6 @@ impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Itera
     }
 }
 
-impl<B, J: Iterator<Item = B>, U: IntoIterator<Item = B, IntoIter = J>, I: Iterator<Item = U>>
-    IntoIterator for Flatten<I, J>
-{
-    type Item = B;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 pub struct Peekable<I, T> {
     iterator: I,
     peeked: Option<T>,
@@ -1801,14 +1720,6 @@ impl<T, I: Iterator<Item = T>> Iterator for Peekable<I, T> {
     }
 }
 
-impl<T, I: Iterator<Item = T>> IntoIterator for Peekable<I, T> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 pub struct Chain<A, B> {
     first: Option<A>,
     second: B,
@@ -1824,14 +1735,6 @@ impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Chain<A, B> {
             }
         }
         self.second.next()
-    }
-}
-
-impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> IntoIterator for Chain<A, B> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
     }
 }
 
@@ -1861,14 +1764,6 @@ impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for TakeWhile<I, P
     }
 }
 
-impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for TakeWhile<I, P> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 pub struct SkipWhile<I, P> {
     iterator: I,
     predicate: P,
@@ -1892,14 +1787,6 @@ impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> Iterator for SkipWhile<I, P
     }
 }
 
-impl<T, I: Iterator<Item = T>, P: FnMut(&T) -> bool> IntoIterator for SkipWhile<I, P> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
-
 pub struct Inspect<I, F> {
     iterator: I,
     f: F,
@@ -1915,13 +1802,5 @@ impl<T, I: Iterator<Item = T>, F: FnMut(&T)> Iterator for Inspect<I, F> {
             }
             Option::None => Option::None,
         }
-    }
-}
-
-impl<T, I: Iterator<Item = T>, F: FnMut(&T)> IntoIterator for Inspect<I, F> {
-    type Item = T;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
     }
 }

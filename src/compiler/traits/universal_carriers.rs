@@ -417,6 +417,13 @@ impl ValidatedTraitWorld {
                     )?
                     || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
                     || (context.phase == FactsPhase::Universal
+                        && self
+                            .declared_equality_rhs(
+                                projection,
+                                &facts.predicates.predicates,
+                                facts.env(),
+                            )?
+                            .is_none()
                         && associated_types::implementation_application_self(
                             &projection.trait_ref.self_ty,
                         )
@@ -435,6 +442,14 @@ impl ValidatedTraitWorld {
                         scratch.for_world(self.id),
                         false,
                     )?;
+                    if context.phase == FactsPhase::Universal && !context.executable_storage {
+                        self.check_proof_context_caller(context)?;
+                        return facts.normalize_substituted_projection_type_for_use(
+                            evidence.ty(),
+                            &self.budget,
+                            false,
+                        );
+                    }
                     return Ok(evidence.ty().clone());
                 }
                 if self

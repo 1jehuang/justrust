@@ -1777,6 +1777,15 @@ impl ValidatedTraitWorld {
                 "projected owner changed exact selection context",
             ));
         }
+        self.selected_implementation_base(item, goal, selection)
+    }
+
+    fn selected_implementation_base(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        selection: &ProofEvidence,
+    ) -> Result<ProjectedCarrierBase> {
         let ProofOrigin::Implementation {
             declaration,
             arguments,
@@ -2006,6 +2015,52 @@ impl ValidatedTraitWorld {
         self.projected_implementation_result_contract(item, &goal, &selection, signature, context)
     }
 
+    pub(super) fn specialize_universal_required_source_result(
+        &self,
+        declaration: DeclId,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        signature: &Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<Option<Arc<ir::RefContract>>> {
+        if context.phase != FactsPhase::Universal
+            || context.executable_storage
+            || context.metadata_facts().is_none()
+            || charged(&self.budget, ir::root_reference_layers(&signature.result))?
+                <= signature.ref_contract.results.len()
+        {
+            return Ok(None);
+        }
+        self.check_proof_context_caller(context)?;
+        let Some(position) = self.item_header_index.get(&self.budget, declaration)? else {
+            return Ok(None);
+        };
+        let item = &self.headers.items[position];
+        let owner = self.trait_header(item.trait_decl)?;
+        if item.default.is_some()
+            || arguments.len() != owner.env.total_arity()
+            || self.info(declaration)?.own_env.arity() != 0
+            || !matches!(item.schema.signature.result, Ty::AssociatedType(_))
+        {
+            return Ok(None);
+        }
+        self.validate_declaration_schema(declaration, schema)?;
+        let self_ty = arguments.first().ok_or_else(|| {
+            FactsError::invalid(&self.budget, "universal source family lost Self actual")
+        })?;
+        let goal = TraitRef {
+            declaration: item.trait_decl,
+            self_ty: self_ty.clone(),
+            args: arguments[1..].into(),
+        };
+        let selection = self.require_in(&Predicate::Implements(goal.clone()), context, active)?;
+        if !matches!(selection.0.origin, ProofOrigin::Implementation { .. }) {
+            return Ok(None);
+        }
+        self.universal_implementation_result_contract(item, &goal, &selection, signature, context)
+    }
+
     fn specialize_projected_owner_base(
         &self,
         base: &ProjectedCarrierBase,
@@ -2190,6 +2245,54 @@ impl ValidatedTraitWorld {
             ..(*signature.ref_contract).clone()
         });
         Ok(())
+    }
+
+    /// A universal caller may select a concrete implementation head while its
+    /// arguments remain rigid. Only that exact implementation source can expose
+    /// reference layers hidden behind the required item's associated result.
+    pub(super) fn universal_implementation_result_contract(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        selection: &ProofEvidence,
+        signature: &Signature,
+        context: ProofContext<'_>,
+    ) -> Result<Option<Arc<ir::RefContract>>> {
+        self.check_proof_context_caller(context)?;
+        self.validate_projected_required_schema(item)?;
+        if context.phase != FactsPhase::Universal
+            || context.metadata_facts().is_none()
+            || selection.0.world != self.id
+            || selection.0.environment != context.predicates.index
+            || selection.0.phase != context.phase
+            || selection.0.executable_storage != context.executable_storage
+            || item.trait_decl != goal.declaration
+            || !self.eq_predicate(&selection.0.goal, &Predicate::Implements(goal.clone()))?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "universal result changed exact caller implementation selection",
+            ));
+        }
+        if !matches!(&selection.0.origin, ProofOrigin::Implementation { .. }) {
+            return Ok(None);
+        }
+        let base = self.selected_implementation_base(item, goal, selection)?;
+        if !matches!(base.schema.signature.result, Ty::Param(_))
+            || self.signature_contains_projection(&base.schema.signature)?
+        {
+            return Ok(None);
+        }
+        let original = self.specialize_projected_owner_base(&base, context)?;
+        if !self.eq_types(&original.params, &signature.params, 0)?
+            || !self.eq_ty(&original.result, &signature.result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "universal result differs from exact owner source signature",
+            ));
+        }
+        Ok(Some(original.ref_contract))
     }
 
     fn projected_implementation_result_contract(

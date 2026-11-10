@@ -674,6 +674,11 @@ pub struct InstantiatedSchema {
     pub signature: Signature,
     pub predicates: Arc<[Predicate]>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScratchInstantiationPurpose {
+    Callable,
+    ImplementationHead,
+}
 /// Private-to-the-computation canonical reconstruction scratch. It never
 /// supplies proof on its own: every node still authenticates its exact payload
 /// and caller. Keeping it across one walk avoids rebuilding every descendant
@@ -10807,6 +10812,60 @@ impl ValidatedTraitWorld {
         executable_storage: bool,
         owner_family: Option<&projected_methods::ProjectedCarrierBase>,
     ) -> Result<InstantiatedSchema> {
+        self.instantiate_scratch_for_purpose(
+            schema,
+            args,
+            facts,
+            declaration,
+            active,
+            caller,
+            executable_storage,
+            owner_family,
+            ScratchInstantiationPurpose::Callable,
+        )
+    }
+
+    // Membership uses a synthetic type vector, not a callable. A bare Self
+    // parameter may specialize to a reference without becoming a return loan.
+    fn instantiate_logical_implementation_head(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        facts: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<InstantiatedSchema> {
+        if !self.eq_contract(&schema.signature.ref_contract, &ir::RefContract::default())? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation head carries callable authority",
+            ));
+        }
+        self.instantiate_scratch_for_purpose(
+            schema,
+            args,
+            facts,
+            None,
+            active,
+            facts.original,
+            false,
+            None,
+            ScratchInstantiationPurpose::ImplementationHead,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_scratch_for_purpose(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        facts: ProofContext<'_>,
+        declaration: Option<DeclId>,
+        active: &mut ProofScratch,
+        caller: Option<&ValidatedFacts>,
+        executable_storage: bool,
+        owner_family: Option<&projected_methods::ProjectedCarrierBase>,
+        purpose: ScratchInstantiationPurpose,
+    ) -> Result<InstantiatedSchema> {
         let facts = facts.for_storage(executable_storage);
         self.check_proof_context_caller(facts)?;
         if let Some(caller) = caller {
@@ -10830,6 +10889,7 @@ impl ValidatedTraitWorld {
                 caller,
                 executable_storage,
                 owner_family,
+                purpose,
             )
         })
     }
@@ -10844,7 +10904,16 @@ impl ValidatedTraitWorld {
         caller: Option<&ValidatedFacts>,
         executable_storage: bool,
         owner_family: Option<&projected_methods::ProjectedCarrierBase>,
+        purpose: ScratchInstantiationPurpose,
     ) -> Result<InstantiatedSchema> {
+        if purpose == ScratchInstantiationPurpose::ImplementationHead
+            && (executable_storage || declaration.is_some() || owner_family.is_some())
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "logical implementation head used as a callable",
+            ));
+        }
         // Legacy const binders have no entries in args. Letting them pass
         // would silently erase unconstrained const parameters from a call.
         if !schema.env.const_binders().is_empty() {
@@ -10919,8 +10988,10 @@ impl ValidatedTraitWorld {
             active,
             executable_storage,
         )?;
-        result.signature.ref_contract =
-            self.realize_ref_contract(schema, args, &result.signature, declaration)?;
+        if purpose == ScratchInstantiationPurpose::Callable {
+            result.signature.ref_contract =
+                self.realize_ref_contract(schema, args, &result.signature, declaration)?;
+        }
         if result.predicates.len() != schema.predicates.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -10932,7 +11003,7 @@ impl ValidatedTraitWorld {
         }
         result.predicates =
             self.normalize_instantiated_projection_predicates(&result.predicates, facts, active)?;
-        if !executable_storage {
+        if !executable_storage && purpose == ScratchInstantiationPurpose::Callable {
             self.realize_source_closure_item_contract(
                 schema,
                 args,
@@ -10965,9 +11036,25 @@ impl ValidatedTraitWorld {
                 active,
             )? {
                 result.signature.ref_contract = contract;
+            } else if let Some(contract) = self.specialize_universal_required_source_result(
+                declaration,
+                schema,
+                args,
+                &result.signature,
+                facts,
+                active,
+            )? {
+                result.signature.ref_contract = contract;
             }
         }
-        self.complete_projected_contract(&mut result.signature)?;
+        if purpose == ScratchInstantiationPurpose::Callable {
+            self.complete_projected_contract(&mut result.signature)?;
+        } else if !self.eq_contract(&result.signature.ref_contract, &ir::RefContract::default())? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "logical implementation head issued callable authority",
+            ));
+        }
         if executable_storage {
             self.validate_signature_shape_with_scratch(
                 &result.signature,
@@ -11003,15 +11090,17 @@ impl ValidatedTraitWorld {
                     executable_storage,
                 )?;
             }
-            charged(
-                &self.budget,
-                ir::validate_stored_ref_contract(
-                    &result.signature.params,
-                    &result.signature.result,
-                    &result.signature.ref_contract,
+            if purpose == ScratchInstantiationPurpose::Callable {
+                charged(
                     &self.budget,
-                ),
-            )?;
+                    ir::validate_stored_ref_contract(
+                        &result.signature.params,
+                        &result.signature.result,
+                        &result.signature.ref_contract,
+                        &self.budget,
+                    ),
+                )?;
+            }
         }
         self.validate_predicates_with_active_for_use(
             &result.predicates,
@@ -12362,21 +12451,14 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated = match self.instantiate_scratch_for_use(
-                &schema,
-                &args,
-                facts,
-                None,
-                active,
-                facts.original,
-                false,
-            ) {
-                Ok(instantiated) => instantiated,
-                // An absent associated projection makes this candidate
-                // inapplicable, without invalidating other implementations.
-                Err(error) if error.kind == FactsErrorKind::Unproved => continue,
-                Err(error) => return Err(error),
-            };
+            let instantiated =
+                match self.instantiate_logical_implementation_head(&schema, &args, facts, active) {
+                    Ok(instantiated) => instantiated,
+                    // An absent associated projection makes this candidate
+                    // inapplicable, without invalidating other implementations.
+                    Err(error) if error.kind == FactsErrorKind::Unproved => continue,
+                    Err(error) => return Err(error),
+                };
             let head_self = match (
                 &implementation.trait_ref.self_ty,
                 &instantiated.signature.result,

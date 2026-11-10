@@ -281,14 +281,6 @@ impl<'a, K, V> super::iter::Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> super::iter::IntoIterator for Iter<'a, K, V> {
-    type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V>;
-    fn into_iter(self) -> Iter<'a, K, V> {
-        self
-    }
-}
-
 impl<'a, K: Hash + Eq, V, S: BuildHasher> super::iter::IntoIterator for &'a HashMap<K, V, S> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
@@ -630,14 +622,6 @@ impl<'a, K, V> super::iter::Iterator for BTreeIter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> super::iter::IntoIterator for BTreeIter<'a, K, V> {
-    type Item = (&'a K, &'a V);
-    type IntoIter = BTreeIter<'a, K, V>;
-    fn into_iter(self) -> BTreeIter<'a, K, V> {
-        self
-    }
-}
-
 impl<'a, K: super::cmp::Ord, V> super::iter::IntoIterator for &'a BTreeMap<K, V> {
     type Item = (&'a K, &'a V);
     type IntoIter = BTreeIter<'a, K, V>;
@@ -677,12 +661,6 @@ impl<'a, K, V> super::iter::DoubleEndedIterator for BTreeRange<'a, K, V> {
             Option::None
         }
     }
-}
-
-impl<'a, K, V> super::iter::IntoIterator for BTreeRange<'a, K, V> {
-    type Item = (&'a K, &'a V);
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
 }
 
 /// Owning HashMap iteration. Order is unspecified, as in std.

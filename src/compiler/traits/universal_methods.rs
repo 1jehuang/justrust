@@ -99,7 +99,7 @@ impl ValidatedFacts {
         self.normalize_substituted_projection_type_for_use(ty, budget, true)
     }
 
-    fn normalize_substituted_projection_type_for_use(
+    pub(super) fn normalize_substituted_projection_type_for_use(
         &self,
         ty: &Ty,
         budget: &PlanBudget,
@@ -647,6 +647,21 @@ impl ValidatedTraitWorld {
                     active,
                     executable_storage,
                 )?;
+                // A source implementation can expose another rigid family.
+                // Reduce it only with this exact caller's declared equations,
+                // after the selected implementation dependencies were replayed.
+                if !executable_storage
+                    && context.phase == FactsPhase::Universal
+                    && let Some(facts) = context.original
+                    && context.predicates.index == facts.predicates.index
+                {
+                    self.check_proof_context_caller(context)?;
+                    return facts.normalize_substituted_projection_type_for_use(
+                        &normal,
+                        &self.budget,
+                        false,
+                    );
+                }
                 Ok(normal)
             };
             for parameter in &mut signature.params {
@@ -719,6 +734,22 @@ impl ValidatedTraitWorld {
                 // dependency under this exact context before returning.
                 let (normal, _) = self
                     .normalize_closed_projected_type_for_use(&raw, context, false, active, false)?;
+                // Selected implementation predicates and signatures must use
+                // the same caller-normal RHS. The selected dependencies above
+                // remain authoritative, and only genuine caller equations
+                // may reduce a residual rigid family.
+                if !context.executable_storage
+                    && context.phase == FactsPhase::Universal
+                    && let Some(facts) = context.original
+                    && context.predicates.index == facts.predicates.index
+                {
+                    self.check_proof_context_caller(context)?;
+                    return facts.normalize_substituted_projection_type_for_use(
+                        &normal,
+                        &self.budget,
+                        false,
+                    );
+                }
                 Ok(normal)
             };
             let mut rows = Vec::new();
@@ -918,18 +949,29 @@ impl ValidatedTraitWorld {
                     &mut implementation_dependencies,
                     (projection.clone(), membership, ty.clone()),
                 )?;
-                return Ok(ty);
+                // Keep the selected source assignment as replay evidence. Its
+                // RHS may itself name an associated type fixed by this caller.
+                return facts.normalize_substituted_projection_type_for_use(
+                    &ty,
+                    &self.budget,
+                    false,
+                );
             }
             retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
             Ok(Ty::AssociatedType(Arc::new(projection.clone())))
         };
+        // This path is restricted above to rigid universal applications. Its
+        // signature operands identify source declarations and ordered actuals,
+        // not executable fields. Preserve caller metadata replay and selection
+        // proofs here. Closed applications still use the separate projected
+        // instantiation path and its canonical executable materialization.
         for parameter in &mut instantiated.signature.params {
             *parameter = self.map_universal_projection_type_for_use(
                 parameter,
                 facts.env(),
                 0,
                 Some((facts, context.transport)),
-                true,
+                false,
                 &mut reduce,
             )?;
         }
@@ -942,9 +984,29 @@ impl ValidatedTraitWorld {
             facts.env(),
             0,
             Some((facts, context.transport)),
-            true,
+            false,
             &mut reduce,
         )?;
+        // A selected implementation may expose a latent bare-parameter result
+        // whose exact source schema carries the substituted reference. Assumed
+        // equalities alone never grant these source-issued lifetime rows.
+        if projected_result
+            && call.method_args.is_empty()
+            && matches!(&selection.0.origin, ProofOrigin::Implementation { .. })
+            && charged(
+                &self.budget,
+                ir::root_reference_layers(&instantiated.signature.result),
+            )? > instantiated.signature.ref_contract.results.len()
+            && let Some(contract) = self.universal_implementation_result_contract(
+                item,
+                &call.trait_ref,
+                &selection,
+                &instantiated.signature,
+                context,
+            )?
+        {
+            instantiated.signature.ref_contract = contract;
+        }
         // A declaration result written as a projection has no reference
         // positions in its schema contract. A reference-valued equality RHS
         // would need region authority that the schema never declared.

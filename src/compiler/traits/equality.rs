@@ -1819,6 +1819,31 @@ impl ValidatedTraitWorld {
                 context,
                 active,
             )?;
+            // A source implementation can forward the caller's rigid family.
+            // Replay its exact declared equation in the same caller context;
+            // both proof issuance and evidence replay use this producer.
+            if !context.executable_storage
+                && context.phase == FactsPhase::Universal
+                && let Some(facts) = context.original
+                && context.predicates.index == facts.predicates.index
+            {
+                self.check_proof_context_caller(context)?;
+                if let Some(rhs) = self.declared_equality_rhs(
+                    nested,
+                    &context.predicates.predicates,
+                    context.env(),
+                )? {
+                    self.require_in(
+                        &Predicate::ProjectionEq {
+                            projection: nested.clone(),
+                            ty: rhs.clone(),
+                        },
+                        context,
+                        active,
+                    )?;
+                    return Ok(rhs);
+                }
+            }
             self.projection_type(nested)
         })?;
         self.validate_ty_metadata_in(&normal, context.env(), 0)?;
@@ -2246,6 +2271,54 @@ impl ValidatedTraitWorld {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn source_implementation_equality_replays_exact_caller_rhs() {
+        let source = frontend::parse(
+            "trait Source{type Item;}trait Forward{type Item;}impl<T:Source> Forward for &mut T{type Item=T::Item;}fn probe<T:Source<Item=i32>>(x:&mut T){}fn unbound<T:Source>(x:&mut T){}fn other<T:Source<Item=i32>,U:Source>(x:&mut U){}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_shared_program(Arc::new(source), &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = world
+            .headers
+            .impls
+            .iter()
+            .find(|owner| !owner.associated_types.is_empty())
+            .unwrap();
+        for index in 0..3 {
+            let declaration = plan.function_decl(index).unwrap();
+            let raw = world.schema.declaration_schema(declaration).unwrap();
+            let facts = world.callable_facts(declaration).unwrap();
+            let projection = ir::AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: owner.trait_ref.declaration,
+                    self_ty: raw.signature.params[0].clone(),
+                    args: Arc::from([]),
+                },
+                item: owner.associated_types[0].associated,
+            };
+            let context = ProofContext::from_facts(&facts).for_storage(false);
+            let goal = Predicate::ProjectionEq {
+                projection: projection.clone(),
+                ty: Ty::Int(ir::IntTy::I32),
+            };
+            let outcome = world
+                .prove_in(&goal, context, &mut ProofScratch::default())
+                .unwrap();
+            assert_eq!(matches!(outcome, ProofOutcome::Proved(_)), index == 0);
+            let wrong_rhs = Predicate::ProjectionEq {
+                projection,
+                ty: Ty::Bool,
+            };
+            assert!(matches!(
+                world
+                    .prove_in(&wrong_rhs, context, &mut ProofScratch::default())
+                    .unwrap(),
+                ProofOutcome::NotProven
+            ));
+        }
+    }
 
     #[test]
     fn relaxed_associated_equality_does_not_require_or_prove_rhs_sized() {

@@ -543,13 +543,6 @@ impl<'a, U> super::iter::DoubleEndedIterator for CharIndices<'a, U> {
     }
 }
 
-impl<'a, U> super::iter::IntoIterator for CharIndices<'a, U> {
-    type Item = (usize, char);
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
 
 /// `front..back` is the undecoded byte range of valid UTF-8 at `ptr`.
 pub struct Chars<'a, U> {
@@ -600,13 +593,6 @@ impl<'a, U> super::iter::DoubleEndedIterator for Chars<'a, U> {
     }
 }
 
-impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
-    type Item = char;
-    type IntoIter = Chars<'a, U>;
-    fn into_iter(self) -> Chars<'a, U> {
-        self
-    }
-}
 
 /// `str` methods that return borrowed iterators. A separate prelude trait,
 /// like `StrToString`, until inherent `impl str` blocks are supported.
@@ -995,13 +981,6 @@ impl<S: StrCarrier, P: StrPattern> super::iter::Iterator for Split<S, P> {
     }
 }
 
-impl<S: StrCarrier, P: StrPattern> super::iter::IntoIterator for Split<S, P> {
-    type Item = S;
-    type IntoIter = Self;
-    fn into_iter(self) -> Self {
-        self
-    }
-}
 
 /// Lines of a `str`: split at `\n`, with one trailing `\r` removed from each
 /// line and no final empty line after a trailing newline.
@@ -1031,13 +1010,6 @@ impl<S: StrCarrier> super::iter::Iterator for Lines<S> {
     }
 }
 
-impl<S: StrCarrier> super::iter::IntoIterator for Lines<S> {
-    type Item = S;
-    type IntoIter = Lines<S>;
-    fn into_iter(self) -> Lines<S> {
-        self
-    }
-}
 
 fn is_space(b: u8) -> bool {
     b == 32u8 || (b >= 9u8 && b <= 13u8)
@@ -1071,13 +1043,6 @@ impl<S: StrCarrier> super::iter::Iterator for SplitWhitespace<S> {
     }
 }
 
-impl<S: StrCarrier> super::iter::IntoIterator for SplitWhitespace<S> {
-    type Item = S;
-    type IntoIter = SplitWhitespace<S>;
-    fn into_iter(self) -> SplitWhitespace<S> {
-        self
-    }
-}
 
 /// Element views accepted by `join` (stock `Borrow<str>` for `String`/`&str`).
 pub trait JoinElement {

@@ -4,6 +4,130 @@
 mod oracle;
 
 #[test]
+fn blanket_into_iterator_for_user_generic_and_borrowed_iterators() {
+    oracle::stock_native(
+        r#"
+struct Counter { n: i32, end: i32 }
+impl Iterator for Counter {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        if self.n < self.end { self.n += 1; Some(self.n) } else { None }
+    }
+}
+fn total<I: Iterator<Item = i32>>(it: I) -> i32 {
+    let mut sum = 0;
+    for x in it { sum += x; }
+    sum
+}
+fn prefix<I: Iterator<Item = i32>>(it: &mut I) -> i32 {
+    let mut sum = 0;
+    for x in it { sum += x; if x == 2 { break; } }
+    sum
+}
+struct Bag { values: Vec<i32> }
+impl IntoIterator for Bag {
+    type Item = i32;
+    type IntoIter = std::vec::IntoIter<i32>;
+    fn into_iter(self) -> Self::IntoIter { self.values.into_iter() }
+}
+fn main() {
+    let mut sum = 0;
+    for x in (Counter { n: 0, end: 4 }) { sum += x; }
+    println!("{} {}", sum, total(Counter { n: 0, end: 5 }));
+    let mut c = Counter { n: 0, end: 5 };
+    println!("{} {}", prefix(&mut c), c.next().unwrap());
+    for x in &mut c { sum += x; }
+    println!("{} {}", sum, c.next().is_none());
+    for (i, x) in (Counter { n: 0, end: 4 }).enumerate() {
+        sum += i as i32 * x;
+    }
+    for x in (Counter { n: 0, end: 4 }).map(|x| x * 3).filter(|x| *x % 2 == 0) {
+        sum += x;
+    }
+    for x in (Bag { values: vec![7, 8] }) { sum += x; }
+    println!("{} {}", sum, total(vec![2, 3, 4].into_iter()));
+}
+"#,
+    );
+}
+
+#[test]
+fn user_sum_and_operators_milestone() {
+    oracle::stock_native(include_str!("milestones/m2/14_traits_operators.rs"));
+    oracle::stock_native(
+        r#"struct Total(i32);impl std::iter::Sum<i32> for Total{fn sum<I:Iterator<Item=i32>>(it:I)->Total{let mut n=0;for x in it{n+=x;}Total(n)}}impl<'a> std::iter::Sum<&'a i32> for Total{fn sum<I:Iterator<Item=&'a i32>>(it:I)->Total{let mut n=0;for x in it{n+=*x;}Total(n)}}fn total<I:Iterator<Item=i32>>(it:I)->Total{it.sum()}fn main(){let v=vec![2i32,3,4];let a:Total=v.iter().sum();let b=total(v.into_iter());println!("{} {}",a.0,b.0);}"#,
+    );
+    oracle::stock_native(
+        r#"struct Gather<T> { values: Vec<T> }
+impl<T> std::iter::Sum<T> for Gather<T> {
+    fn sum<I: Iterator<Item = T>>(mut input: I) -> Gather<T> {
+        let mut values = Vec::new();
+        for item in &mut input { values.push(item); }
+        Gather { values }
+    }
+}
+fn gather<T, I: Iterator<Item = T>>(input: I) -> Gather<T> { input.sum() }
+fn main() {
+    let numbers: Gather<i32> = gather(vec![2i32, 3, 4].into_iter());
+    println!("{} {}", numbers.values.len(), numbers.values[1]);
+    let words: Gather<String> = vec![String::from("a"), String::from("bb")].into_iter().sum();
+    println!("{} {}", words.values.len(), words.values[1]);
+}"#,
+    );
+    for source in [
+        "struct Total;impl std::iter::Sum for Total{fn sum<I:Iterator<Item=Total>+Clone>(_:I)->Total{Total}}fn main(){}",
+        "struct Total;impl std::iter::Sum<u8> for Total{fn sum<I:Iterator<Item=u8>>(_:I)->Total{Total}}fn unused(){let _:Total=(0i32..2).sum();}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn borrowed_iterator_forwards_nth_and_double_ended_state() {
+    oracle::stock_native(
+        r#"
+struct Steps { front: i32, back: i32 }
+impl Iterator for Steps {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        if self.front < self.back { let n = self.front; self.front += 1; Some(n) } else { None }
+    }
+    fn nth(&mut self, n: usize) -> Option<i32> {
+        println!("nth {n}");
+        self.next()
+    }
+}
+impl DoubleEndedIterator for Steps {
+    fn next_back(&mut self) -> Option<i32> {
+        if self.front < self.back { self.back -= 1; Some(self.back) } else { None }
+    }
+}
+fn select<I: Iterator<Item = i32>>(mut it: I) -> i32 { it.nth(2).unwrap() }
+fn main() {
+    let mut s = Steps { front: 1, back: 5 };
+    println!("{}", select(&mut s));
+    for x in (&mut s).rev() { println!("{x}"); }
+    println!("{} {}", s.front, s.back);
+}
+"#,
+    );
+}
+
+#[test]
+fn blanket_into_iterator_does_not_allow_conflicting_or_unproved_impls() {
+    for source in [
+        "struct C { n: i32 } impl Iterator for C { type Item = i32; fn next(&mut self) -> Option<i32> { None } } impl IntoIterator for C { type Item = i32; type IntoIter = C; fn into_iter(self) -> C { self } } fn main() {}",
+        "fn unused<I>(it: I) { for _ in it {} } fn main() {}",
+        "fn unused<I: Iterator<Item = u8>>(it: I) { for x in it { let _: bool = x; } } fn main() {}",
+        "fn unused<I: Iterator<Item = i32>>(it: &mut I) { for x in it { let _: bool = x; } } fn main() {}",
+        "fn unused<I: Iterator<Item = i32>, J: Iterator>(a: &mut I, b: &mut J) { for x in b { let _: i32 = x; } } fn main() {}",
+        "fn unused<I: Iterator<Item = i32>>(it: &mut I) -> &'static mut I { <&mut I as IntoIterator>::into_iter(it) } fn main() {}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn unchanged_iterator_adapters_program() {
     oracle::stock_native(include_str!("fixtures/full_programs/36_iter_adapters.rs"));
 }

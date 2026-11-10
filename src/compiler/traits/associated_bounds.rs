@@ -250,6 +250,26 @@ impl ValidatedTraitWorld {
                             false,
                         );
                     }
+                    // Assignment bounds can mention a different rigid family,
+                    // such as IntoIter::Item = Self::Item. Normalize that RHS
+                    // using only this caller's exact equation before asking
+                    // for the selected implementation equality. The equality
+                    // prover compares normal forms, never arbitrary aliases.
+                    if let Some(rhs) = self.declared_equality_rhs(
+                        projection,
+                        &context.predicates.predicates,
+                        context.env(),
+                    )? {
+                        self.require_in(
+                            &Predicate::ProjectionEq {
+                                projection: projection.clone(),
+                                ty: rhs.clone(),
+                            },
+                            context,
+                            active,
+                        )?;
+                        return Ok(rhs);
+                    }
                     let closed = self.goal_is_closed_in_for_use(
                         &projection.trait_ref,
                         context,
@@ -278,6 +298,23 @@ impl ValidatedTraitWorld {
                                 !self.owner_normalization_finalized,
                                 false,
                             )?;
+                        }
+                        // A selected assignment may itself forward a rigid
+                        // family. Compose its authenticated reduction with
+                        // the original caller equations, just as signature
+                        // normalization does, rather than proving an alias
+                        // against an already-normalized implementation RHS.
+                        if !context.executable_storage
+                            && context.phase == FactsPhase::Universal
+                            && let Some(facts) = context.original
+                            && context.predicates.index == facts.predicates.index
+                        {
+                            self.check_proof_context_caller(context)?;
+                            return facts.normalize_substituted_projection_type_for_use(
+                                &normal,
+                                &self.budget,
+                                false,
+                            );
                         }
                         return Ok(normal);
                     }

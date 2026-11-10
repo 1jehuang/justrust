@@ -18,14 +18,6 @@ impl<'a, T> Iter<'a, T> {
     }
 }
 
-impl<'a, T> super::iter::IntoIterator for Iter<'a, T> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
-    fn into_iter(self) -> Iter<'a, T> {
-        self
-    }
-}
-
 impl<'a, T> super::iter::Iterator for Iter<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> super::option::Option<&'a T> {
@@ -317,12 +309,6 @@ impl<'a, T> super::iter::DoubleEndedIterator for Chunks<'a, T> {
     }
 }
 
-impl<'a, T> super::iter::IntoIterator for Chunks<'a, T> {
-    type Item = &'a [T];
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
-}
-
 pub trait SliceChunks<'a, T> {
     fn chunks(self, size: usize) -> Chunks<'a, T>;
     fn chunks_exact(self, size: usize) -> ChunksExact<'a, T>;
@@ -369,12 +355,6 @@ impl<'a, T> super::iter::DoubleEndedIterator for Windows<'a, T> {
     }
 }
 
-impl<'a, T> super::iter::IntoIterator for Windows<'a, T> {
-    type Item = &'a [T];
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
-}
-
 /// Non-overlapping chunks of exactly `size` elements. The final
 /// `len % size` elements are never yielded; `remainder` returns them.
 pub struct ChunksExact<'a, T> {
@@ -413,12 +393,6 @@ impl<'a, T> super::iter::DoubleEndedIterator for ChunksExact<'a, T> {
         self.back -= self.size;
         super::option::Option::Some(&self.values[self.back..end])
     }
-}
-
-impl<'a, T> super::iter::IntoIterator for ChunksExact<'a, T> {
-    type Item = &'a [T];
-    type IntoIter = Self;
-    fn into_iter(self) -> Self { self }
 }
 
 /// `[T]::iter`: a shared element iterator over the borrowed slice.
@@ -488,14 +462,6 @@ impl<'a, T> super::iter::DoubleEndedIterator for IterMut<'a, T> {
         } else {
             super::option::Option::None
         }
-    }
-}
-
-impl<'a, T> super::iter::IntoIterator for IterMut<'a, T> {
-    type Item = &'a mut T;
-    type IntoIter = IterMut<'a, T>;
-    fn into_iter(self) -> IterMut<'a, T> {
-        self
     }
 }
 
