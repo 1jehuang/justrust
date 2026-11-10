@@ -140,6 +140,12 @@ impl<T> Default for super::vec::Vec<T> {
     }
 }
 
+impl<'a> Default for &'a str {
+    fn default() -> Self {
+        ""
+    }
+}
+
 impl Default for super::string::String {
     fn default() -> super::string::String {
         super::string::String::new()

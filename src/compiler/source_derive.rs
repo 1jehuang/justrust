@@ -755,8 +755,28 @@ fn gen_default(input: &Input) -> Result<String, String> {
     };
     let values: Vec<_> = types
         .iter()
-        .map(|t| format!("<{t} as core::default::Default>::default()"))
-        .collect();
+        .map(|t| {
+            // Keep declaration lifetimes on the field and impl result. The
+            // qualified owner is a body type use, whose leading reference
+            // lifetimes are inferred by ordinary result coercion instead.
+            // Do not erase lifetime arguments inside the referent nominal.
+            let mut owner = lex(t)?;
+            let mut index = 0;
+            while matches!(owner.get(index), Some(Tok::Punct('&'))) {
+                index += 1;
+                if matches!(owner.get(index), Some(Tok::Lifetime(_))) {
+                    owner.remove(index);
+                }
+                if matches!(owner.get(index), Some(Tok::Ident(name)) if name == "mut") {
+                    index += 1;
+                }
+            }
+            Ok(format!(
+                "<{} as core::default::Default>::default()",
+                text(&owner)
+            ))
+        })
+        .collect::<Result<_, String>>()?;
     Ok(format!(
         "{header} {{ fn default() -> {ty} {{ {} }} }}\n",
         construct(&path, fields, &values)

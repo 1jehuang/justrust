@@ -9,6 +9,45 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn borrowed_string_defaults_match_stock() {
+    oracle::check(
+        "borrowed-string-defaults",
+        &[
+            Case {
+                name: "direct_and_derived_borrowed_string_defaults",
+                source: r#"#[derive(Default,Debug)]struct Config{name:&'static str,nested:(i8,&'static str),owned:String}fn empty<'a>()->&'a str{<&str as Default>::default()}fn main(){let value=empty();println!("{:?} {:?}",value,Config::default());}"#,
+                expect: Expect::Run("\"\" Config { name: \"\", nested: (0, \"\"), owned: \"\" }\n"),
+            },
+            Case {
+                name: "derived_borrowed_default_retains_named_field_lifetime",
+                source: "#[derive(Default)]struct Borrowed<'a>{text:&'a str}fn make<'a>()->Borrowed<'a>{Borrowed::default()}fn main(){let value=make();println!(\"{:?}\",value.text);}",
+                expect: Expect::Run("\"\"\n"),
+            },
+            Case {
+                name: "source_self_reference_input_and_result_keep_impl_lifetime",
+                source: "trait Identity{fn same(value:Self)->Self;}impl<'a>Identity for &'a str{fn same(value:Self)->Self{value}}fn main(){let owned=String::from(\"borrowed\");let result=<&str as Identity>::same(owned.as_str());println!(\"{}\",result);}",
+                expect: Expect::Run("borrowed\n"),
+            },
+            Case {
+                name: "source_self_reference_result_cannot_escape_local",
+                source: "trait Bad{fn make()->Self;}impl<'a>Bad for &'a str{fn make()->Self{let owned=String::from(\"local\");owned.as_str()}}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_mutable_owned_string_reference_is_not_default",
+                source: "#[derive(Default)]struct Bad<'a>{value:&'a mut String}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_owned_string_reference_is_not_default",
+                source: "#[derive(Default)]struct Bad<'a>{value:&'a String}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn derived_reference_fields_keep_original_lifetime_authority() {
     oracle::check(
         "derive-reference-field-authority",

@@ -630,6 +630,47 @@ pub(super) fn validate_original_sequence_return(
     Ok(())
 }
 
+// Reference contracts describe root reference positions. Resolve source Self
+// at those positions from the original impl head, retaining its authored
+// lifetime names rather than recovering regions from the erased semantic type.
+fn reference_source_self(
+    source: &Type,
+    implementation: Option<&ImplDecl>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Option<Type>, String> {
+    budget.charge_work(1)?;
+    if depth > 128 {
+        return Err("reference source Self nesting exceeds supported limit128".into());
+    }
+    match source {
+        Type::SelfType => implementation
+            .map(|block| {
+                copy_source_type(&block.self_ty, budget, depth + 1)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose(),
+        Type::Ref {
+            kind,
+            region,
+            referent,
+        } => {
+            let Some(referent) =
+                reference_source_self(referent, implementation, budget, depth + 1)?
+            else {
+                return Ok(None);
+            };
+            budget.retain_bytes(std::mem::size_of::<Type>())?;
+            Ok(Some(Type::Ref {
+                kind: *kind,
+                region: *region,
+                referent: Box::new(referent),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub(crate) fn compute_callable_signature(
     inputs: Arc<CallableSignatureInputs>,
     index: usize,
@@ -713,10 +754,31 @@ pub(crate) fn compute_callable_signature(
         }
     }
     validate_original_sequence_return(program, f, &params, &result, budget)?;
+    let implementation = match registry.callable_sources[index] {
+        CallableSource::Associated { implementation, .. } => Some(&program.impls[implementation]),
+        _ => None,
+    };
+    let source_result = reference_source_self(&f.result, implementation, budget, 0)?;
+    let source_result = source_result.as_ref().unwrap_or(&f.result);
+    let mut source_params = Vec::new();
+    budget.retain_bytes(f.params.len() * std::mem::size_of::<(BindingName, Type)>())?;
+    source_params
+        .try_reserve_exact(f.params.len())
+        .map_err(|_| "reference source parameter allocation failed")?;
+    for (name, source) in &f.params {
+        let expanded = reference_source_self(source, implementation, budget, 0)?;
+        source_params.push((
+            *name,
+            match expanded {
+                Some(source) => source,
+                None => copy_source_type(source, budget, 0).map_err(|error| error.to_string())?,
+            },
+        ));
+    }
     let region_mode = source_region_mode(
         &f.regions,
-        &f.params,
-        &f.result,
+        &source_params,
+        source_result,
         matches!(registry.callable_sources[index], CallableSource::Free(_)),
         budget,
     )?;
@@ -725,8 +787,8 @@ pub(crate) fn compute_callable_signature(
         ref_contract: canonical_ref_contract(
             (program.names.as_ref(), budget),
             &f.regions,
-            &f.params,
-            &f.result,
+            &source_params,
+            source_result,
             (context.receiver, region_mode),
             &params,
             &result,
@@ -751,8 +813,8 @@ pub(crate) fn compute_callable_signature(
             (program.names.as_ref(), budget),
             id,
             &f.regions,
-            &f.params,
-            &f.result,
+            &source_params,
+            source_result,
             &signature.ref_contract,
             context.receiver,
         )?,
