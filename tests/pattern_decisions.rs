@@ -215,14 +215,14 @@ fn cases() -> Vec<Case> {
             source: r#"enum E{A(bool,i32),B}fn main(){let n=match E::A(true,42){E::A(true,n) if n==42=>n,_=>0};if n==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "or_boundary",
             source: r#"enum E{A(bool,i32),B}fn main(){let n=match E::A(true,42){E::A(true,n)|E::A(false,n)=>n,_=>0};if n==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "reference_binding_boundary",
@@ -405,7 +405,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (23, 7));
-    assert_eq!(partition, (20, 7, 3, 0));
+    assert_eq!(partition, (22, 7, 1, 0));
 }
 #[test]
 fn stock_nested_pattern_decisions_oracle_edition2024_actual_toolchain() {
@@ -502,13 +502,47 @@ fn check_decision(
     pattern: &ir::MatchPattern,
     case: &Case,
 ) -> usize {
-    let ir::MatchPattern::Decision {
-        ty,
-        tests,
-        bindings,
-    } = pattern
-    else {
-        return 0;
+    if let ir::MatchPattern::Or { ty, rows } = pattern {
+        assert!(!rows.is_empty());
+        return rows
+            .iter()
+            .map(|row| {
+                match row {
+                    ir::MatchPattern::Decision { ty: row_ty, .. }
+                    | ir::MatchPattern::Or { ty: row_ty, .. } => assert_eq!(row_ty, ty),
+                    ir::MatchPattern::EnumVariant { ty: row_ty, .. } => {
+                        assert_eq!(&ir::Ty::Enum(row_ty.clone()), ty);
+                    }
+                    _ => panic!("binding alternatives require checked predicate rows"),
+                }
+                check_decision(function, row, case)
+            })
+            .sum();
+    }
+    let variant_domain;
+    let variant_tests;
+    let (ty, tests, bindings) = match pattern {
+        ir::MatchPattern::Decision {
+            ty,
+            tests,
+            bindings,
+        } => (ty, tests.as_slice(), bindings),
+        ir::MatchPattern::EnumVariant {
+            ty,
+            variant,
+            bindings,
+        } => {
+            variant_domain = ir::Ty::Enum(ty.clone());
+            variant_tests = [ir::PatternTest {
+                projection: Vec::new(),
+                kind: ir::PatternTestKind::EnumVariant {
+                    ty: ty.clone(),
+                    variant: *variant,
+                },
+            }];
+            (&variant_domain, variant_tests.as_slice(), bindings)
+        }
+        _ => return 0,
     };
     assert!(!tests.is_empty());
     for (index, test) in tests.iter().enumerate() {
@@ -550,6 +584,11 @@ fn check_decision(
             binding.local_ty(&projected_type(ty, &binding.projection, tests)),
             function.locals[binding.local.0].ty
         );
+    }
+    // The following source-specific assertions concern nested decision rows,
+    // not a simple fallback variant in the same source arm list.
+    if !matches!(pattern, ir::MatchPattern::Decision { .. }) {
+        return 1;
     }
     if case.name == "noncopy_array_copyfield" || case.name == "noncopy_predicate_borrow_only" {
         assert!(
@@ -641,7 +680,7 @@ fn checked_decision_domains_scalar_atoms_tag_dominance_and_real_success_bindings
         decisions += own_decisions;
         count += 1;
     }
-    assert_eq!(count, 20);
+    assert_eq!(count, 22);
     assert!(decisions >= 19);
 }
 #[test]
@@ -683,28 +722,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
         )
         .unwrap();
         let parsed = frontend::parse_prepared(&prepared);
-        if case.name == "or_boundary" {
-            let parsed = parsed.expect("original root OR grammar must parse");
-            let error = match frontend::resolve(&parsed) {
-                Err(error) => error,
-                Ok(_) => panic!("{} binding OR must reject in resolver", case.name),
-            };
-            assert!(
-                error
-                    .to_string()
-                    .contains("unsupported: or-pattern bindings are unsupported"),
-                "{}:{error}",
-                case.name
-            );
-            counts.3 += 1;
-        } else if case.name == "guard_boundary" {
-            let error = match parsed {
-                Err(e) => e,
-                Ok(_) => panic!("{} parser boundary admitted", case.name),
-            };
-            assert_eq!(error.kind, source::SourceErrorKind::Unsupported);
-            counts.0 += 1;
-        } else {
+        {
             frontend::resolve(&parsed.unwrap()).unwrap();
             let error = match compiler::compile_observed(case.source.to_owned(), 1, true) {
                 Err(e) => e,
@@ -729,7 +747,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             }
         }
     }
-    assert_eq!(counts, (1, 1, 0, 1));
+    assert_eq!(counts, (0, 1, 0, 0));
 }
 #[test]
 fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
@@ -821,8 +839,6 @@ fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 120);
-    assert_eq!(modes, (40, 40, 14, 14, 6, 6, 0, 0));
-    eprintln!(
-        "NATIVE PATTERN DECISIONS:120 cells, modes{modes:?};38 nonempty-output main images;16 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
-    );
+    assert_eq!(modes, (44, 44, 14, 14, 2, 2, 0, 0));
+    eprintln!("NATIVE PATTERN DECISIONS:120 cells, modes{modes:?}");
 }
