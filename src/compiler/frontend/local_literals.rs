@@ -3345,8 +3345,14 @@ impl<'s> Solver<'_, '_, 's> {
                 let index = self.expr(index, depth + 1)?;
                 // `map[&7]`: the borrowed literal's type may come from the
                 // selected `Index` impl's where-clauses; publish the solved
-                // operand type so the checked call sees it.
-                if matches!(self.domain(index), Domain::Ref(..)) {
+                // operand type so the checked call sees it. The same holds
+                // for literals nested in an aggregate operand (`g[(1, 0)]`,
+                // `b[(1..3)]`): the checker must not re-derive and default
+                // them into a type no `Index` impl or graph input names.
+                if matches!(
+                    self.domain(index),
+                    Domain::Ref(..) | Domain::Tuple(_) | Domain::Nominal(..)
+                ) {
                     self.checker.infer_storage(1)?;
                     self.receiver_sites.push((index_site, index));
                 }

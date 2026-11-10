@@ -255,8 +255,11 @@ fn user_index_with_range_operand_and_unsized_output() {
 struct B { v: Vec<i64> }
 impl Index<Range<usize>> for B { type Output = [i64]; fn index(&self, r: Range<usize>) -> &[i64] { &self.v[r.start..r.end] } }
 impl Index<usize> for B { type Output = i64; fn index(&self, i: usize) -> &i64 { &self.v[i] } }
-fn main() { let b = B { v: vec![1, 2, 3, 4] }; let r = 1..3usize; let s = &b[r]; println!(\"{:?} {}\", s, b[3]); }",
-        "[2, 3] 4\n",
+struct S { v: Vec<i64> }
+impl Index<Range<usize>> for S { type Output = i64; fn index(&self, r: Range<usize>) -> &i64 { &self.v[r.start + r.end] } }
+fn main() { let b = B { v: vec![1, 2, 3, 4] }; let r = 1..3usize; let s = &b[r]; println!(\"{:?} {}\", s, b[3]);
+    let t = &b[(0..2)]; let s = S { v: vec![5, 6, 7, 8] }; let n = 1; println!(\"{:?} {} {}\", t, s[(1..2)], s[(n..n + 1)]); }",
+        "[2, 3] 4\n[1, 2] 8 8\n",
     );
 }
 
