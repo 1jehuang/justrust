@@ -20,10 +20,7 @@ pub(super) fn attach(
         implementation,
         signature,
         declaration: original.declaration,
-        // Trait headers previously retained only their positioned root
-        // contract. Add declared slice families without synthesizing named
-        // lifetime rows from nominal fields or changing that contract.
-        families_only: registry.declaration(original.declaration)?.kind == ir::DeclKind::TraitItem,
+        receiver,
         budget,
         rows: Vec::new(),
         next_region: original.region_count,
@@ -31,25 +28,26 @@ pub(super) fn attach(
         empty_nominal_storage: None,
     };
     let offset = usize::from(receiver != ReceiverKind::None);
-    if let Some(block) = implementation {
+    if offset != 0 {
+        let self_ty = implementation
+            .map(|block| block.self_ty.clone())
+            .unwrap_or(Type::SelfType);
         let source = match receiver {
             ReceiverKind::Borrowed { kind } => Type::Ref {
                 kind,
                 region: regions.receiver,
-                referent: Box::new(block.self_ty.clone()),
+                referent: Box::new(self_ty),
             },
-            _ => block.self_ty.clone(),
+            _ => self_ty,
         };
-        if offset != 0 {
-            collector.walk(
-                &source,
-                &signature.params[0],
-                Some(0),
-                &mut Vec::new(),
-                0,
-                0,
-            )?;
-        }
+        collector.walk(
+            &source,
+            &signature.params[0],
+            Some(0),
+            &mut Vec::new(),
+            0,
+            0,
+        )?;
     }
     for (index, (_, source)) in params.iter().enumerate() {
         collector.walk(
@@ -170,7 +168,7 @@ struct Collector<'a> {
     implementation: Option<&'a ImplDecl>,
     signature: &'a ir::Signature,
     declaration: ir::DeclId,
-    families_only: bool,
+    receiver: ReceiverKind,
     budget: &'a ir::PlanBudget,
     rows: Vec<ir::SourceCarrierRegion>,
     next_region: u16,
@@ -193,9 +191,6 @@ impl Collector<'_> {
         path: &[ir::CarrierStep],
         prefix: u8,
     ) -> Result<Option<ir::CarrierRegionTerm>, String> {
-        if self.families_only {
-            return Ok(None);
-        }
         if let Some(RegionName::Named(name)) = region {
             let key = self.lifetime_key(name)?;
             for (index, binder) in self.regions.params.iter().enumerate() {
@@ -252,7 +247,7 @@ impl Collector<'_> {
             } else {
                 None
             }
-        } else if self.implementation.is_some() {
+        } else if matches!(self.receiver, ReceiverKind::Borrowed { .. }) {
             self.signature
                 .ref_contract
                 .input_regions
@@ -694,6 +689,49 @@ fn substitute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trait_lifetime_binders_reach_methods_without_leaking_scope() {
+        let source = parse("enum Maybe<T>{Some(T),None}trait Named<'a,T>{fn get<'b>(&'b self)->Maybe<&'a T>;fn keep(&self)->Maybe<&'a T>{loop{}}}trait Plain{fn plain(&self);}fn main(){}").unwrap();
+        let inherited = source.traits[0].items[0].signature.regions.params[0];
+        let key = |name| {
+            source
+                .names
+                .key(name, LookupClass::LifetimeParameter)
+                .unwrap()
+        };
+        assert_eq!(source.traits[0].items[0].signature.regions.params.len(), 2);
+        assert_eq!(source.traits[0].items[1].signature.regions.params.len(), 1);
+        assert_eq!(
+            key(inherited),
+            key(source.traits[0].items[1].signature.regions.params[0])
+        );
+        assert_eq!(
+            key(inherited),
+            key(source.traits[0].items[1]
+                .default
+                .as_ref()
+                .unwrap()
+                .regions
+                .params[0])
+        );
+        assert!(
+            source.traits[1].items[0]
+                .signature
+                .regions
+                .params
+                .is_empty()
+        );
+        let invalid = parse("enum Maybe<T>{Some(T),None}trait Missing<T>{fn get(&self)->Maybe<&'missing T>;}fn main(){}").unwrap();
+        let error = match PlanCtx::from_program(&invalid, &ir::PlanBudget::default()) {
+            Ok(_) => panic!("undeclared trait carrier lifetime was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("undeclared source carrier lifetime"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn trait_self_slice_retains_declared_element_family() {

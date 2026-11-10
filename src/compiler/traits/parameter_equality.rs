@@ -935,7 +935,6 @@ impl ValidatedTraitWorld {
                 // validate_for replayed the mandatory selected required view.
                 return Ok(());
             }
-            let source = self.validate_source_regions(call.item, &raw.signature)?;
             let application = match required_application {
                 Some((original, application)) if std::ptr::eq(original, call) => application,
                 _ => {
@@ -946,6 +945,10 @@ impl ValidatedTraitWorld {
                 }
             };
             let signature = &application.signature;
+            // Match the producer: source rows retain canonical enum application
+            // identities and must be rebased through this exact authenticated
+            // application before comparing its independently derived topology.
+            let source = self.validate_source_regions(call.item, signature)?;
             let (contract, regions) = self.derive_universal_required_carriers(
                 call.item,
                 signature,
@@ -1692,6 +1695,56 @@ mod tests {
             FactsErrorKind::Resource
         );
         assert!(result_push(&tiny, &mut Vec::new(), ()).is_err());
+    }
+
+    #[test]
+    fn projected_reference_aggregates_replay_rejects_changed_application_and_rows() {
+        let program = frontend::parse("enum Maybe<T>{Some(T),None}trait C{type Item;fn get(&self)->Maybe<&Self::Item>;}fn caller<T:C<Item=i32>>(x:&T)->Maybe<&i32>{x.get()}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let facts = world
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap();
+        let goal = facts
+            .predicates
+            .predicates
+            .iter()
+            .find_map(|p| match p {
+                Predicate::Implements(goal)
+                    if world
+                        .headers
+                        .items
+                        .iter()
+                        .any(|item| item.trait_decl == goal.declaration) =>
+                {
+                    Some(goal.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let item = world
+            .headers
+            .items
+            .iter()
+            .find(|item| item.trait_decl == goal.declaration)
+            .unwrap()
+            .declaration;
+        let call = TraitCall {
+            trait_ref: goal,
+            item,
+            method_args: Arc::from([]),
+        };
+        let view = facts
+            .carrier_contract(SignatureSubject::Call(&Callee::TraitItem(call)))
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        let mut changed = (*view).clone();
+        changed.result_signature.result = Ty::Bool;
+        assert!(changed.validate_for(&facts).is_err());
+        let mut changed = (*view).clone();
+        assert!(!changed.source_regions.carriers.is_empty());
+        Arc::make_mut(&mut changed.source_regions).carriers = Arc::from([]);
+        assert!(changed.validate_for(&facts).is_err());
     }
 
     #[test]

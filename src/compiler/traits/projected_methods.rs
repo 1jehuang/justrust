@@ -93,29 +93,53 @@ impl ValidatedTraitWorld {
                 None,
             );
         }
-        self.validate_projected_value_schema(&item.schema, item.receiver)
+        self.validate_projected_value_schema(item.declaration, &item.schema)
     }
 
     fn validate_projected_value_schema(
         &self,
+        declaration: DeclId,
         schema: &GenericSchema,
-        receiver: ReceiverMode,
     ) -> Result<()> {
         self.projected_marker_predicates(schema)?;
-        for (index, ty) in schema.signature.params.iter().enumerate() {
-            self.validate_ty_metadata_in(ty, &schema.env, 0)?;
-            self.validate_projected_parameter_references(ty, index, receiver)?;
-        }
-        self.validate_ty_metadata_in(&schema.signature.result, &schema.env, 0)?;
-        // `&Self::Target` / `&mut Self::Output` (Deref, Index): one outer
-        // reference to a bare projection, borrowed from a borrowed receiver.
-        if let Ty::Ref { kind, referent } = &schema.signature.result
-            && matches!(referent.as_ref(), Ty::AssociatedType(_))
-            && matches!(receiver, ReceiverMode::Borrowed { kind: receiver_kind } if receiver_kind == *kind)
+        // Required declarations can still contain a deferred NoReference row
+        // for `&Self::Target`. Authenticate the exact raw schema here, not an
+        // executable stored contract before its projection is normalized.
+        self.validate_declaration_schema(declaration, schema)?;
+        let source = self.validate_source_regions(declaration, &schema.signature)?;
+        // Explicit reference layers, including layers inside an enum or tuple,
+        // need a declaration-owned lifetime row. Projection tails retain their
+        // separate origin authority and are never guessed from a normalized type.
+        for (parameter, ty) in schema
+            .signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| (Some(index), ty))
+            .chain(std::iter::once((None, &schema.signature.result)))
         {
-            return Ok(());
+            self.validate_universal_projection_type(ty, &schema.env, 0)?;
+            for location in charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.iter() {
+                if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                    continue;
+                }
+                let mut retained = false;
+                for row in source.carriers.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if row.parameter == parameter && self.same_location(&row.location, location)? {
+                        retained = true;
+                        break;
+                    }
+                }
+                if !retained {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: projected reference carrier has no declaration-owned lifetime",
+                    ));
+                }
+            }
         }
-        self.reject_projected_references(&schema.signature.result, 0)
+        Ok(())
     }
 
     /// Admit only source-authenticated marker obligations on one exact projection.
@@ -158,6 +182,7 @@ impl ValidatedTraitWorld {
         Ok(projected)
     }
 
+    #[cfg(test)]
     fn validate_projected_parameter_references(
         &self,
         ty: &Ty,
@@ -1010,7 +1035,7 @@ impl ValidatedTraitWorld {
                     "unsupported: generic projected implementation method",
                 ));
             }
-            self.validate_projected_value_schema(schema, self.info(declaration)?.receiver)?;
+            self.validate_projected_value_schema(declaration, schema)?;
             let mut normalized = clone_schema(schema, &self.budget)?;
             for ty in &mut normalized.signature.params {
                 *ty = self.normalize_owner_type_for_use(ty, &owner, &mut Vec::new(), 0, false)?;
@@ -1402,7 +1427,7 @@ impl ValidatedTraitWorld {
             &implementation.schema_env,
             None,
         )?;
-        let source = self.validate_source_regions(item.declaration, &value.signature)?;
+        let source = self.owner_applied_source_regions(item, implementation, &value.signature)?;
         charged(
             &self.budget,
             ir::derive_signature_origin_schema(
@@ -1418,10 +1443,11 @@ impl ValidatedTraitWorld {
     pub(super) fn validate_projected_carrier_refinement(
         &self,
         item: &TraitItemHeader,
+        implementation: &ImplHeader,
         required: &Signature,
         provided: &CallableHeader,
     ) -> Result<()> {
-        let source = self.validate_source_regions(item.declaration, required)?;
+        let source = self.owner_applied_source_regions(item, implementation, required)?;
         let (required, _) = self.derive_carriers(required, &source, &provided.schema.env)?;
         // The provided declaration was independently normalized and published
         // by build_origin_schemas. It cannot supply the required topology.
@@ -1643,7 +1669,11 @@ impl ValidatedTraitWorld {
                 // `Iter<'a, T>` receiver of `into_iter`) carries its loans
                 // through the ordinary contract derived from the closed
                 // signature above, exactly like a non-projected callable.
-                self.validate_projected_parameter_references(ty, index, item.receiver)?;
+                // The original signature's fixed layers were authenticated
+                // against source lifetime rows above. Retained projections use
+                // their canonical universal declaration, not the old value-only
+                // reference capability gate.
+                self.validate_universal_projection_type(ty, context.env(), 0)?;
             }
         }
         // A projection normalized to a reference-bearing value

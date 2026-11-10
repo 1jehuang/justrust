@@ -1959,6 +1959,7 @@ mod tests {
         );
         let parent = trait_application(&mut input, "crate::Parent", vec![Type::Param(parameter)]);
         input.traits.push(TraitDecl {
+            regions: RegionDecls::default(),
             unsafety: false,
             module,
             type_params: vec![parameter],

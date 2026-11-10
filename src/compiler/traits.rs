@@ -35,6 +35,7 @@ mod fn_items;
 mod generic_methods;
 mod impl_constraints;
 mod impl_disjoint;
+mod owner_lifetimes;
 pub use impl_disjoint::CrateOrigin;
 mod inherent_constants;
 mod nominal_declarations;
@@ -568,6 +569,8 @@ pub struct HeaderSet {
 }
 #[derive(Clone, Debug)]
 pub struct TraitHeader {
+    /// Ordered lifetime binders of this exact trait owner, separate from types.
+    pub region_count: u16,
     pub declaration: DeclId,
     pub self_param: ParamId,
     pub env: Arc<GenericEnv>,
@@ -587,12 +590,24 @@ pub struct TraitItemHeader {
 }
 #[derive(Clone, Debug)]
 pub struct ImplHeader {
+    pub region_application: Option<Arc<OwnerRegionApplication>>,
     pub declaration: DeclId,
     pub trait_ref: TraitRef,
     pub schema_env: Arc<GenericEnv>,
     pub predicates: Arc<[Predicate]>,
     pub items: Arc<[(DeclId, DeclId)]>,
     pub associated_types: Arc<[AssociatedTypeValue]>,
+}
+/// Original impl-head lifetime syntax, never inferred from a provided method.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnerRegionApplication {
+    pub implementation: DeclId,
+    pub trait_decl: DeclId,
+    /// Written impl binders only, excluding generated carrier lifetimes.
+    pub binder_count: u16,
+    pub actuals: Arc<[ir::CarrierRegionTerm]>,
+    pub self_signature: Signature,
+    pub self_regions: Arc<ir::SourceRegionEnv>,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedTypeHeader {
@@ -932,6 +947,16 @@ pub trait SchemaCx {
         ))
     }
     fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>>;
+    fn trait_region_count(&self, _id: DeclId) -> Result<u16> {
+        Ok(0)
+    }
+    fn owner_region_application(
+        &self,
+        _id: DeclId,
+        _self_ty: &Ty,
+    ) -> Result<Option<Arc<OwnerRegionApplication>>> {
+        Ok(None)
+    }
     fn instantiate_schema(
         &self,
         schema: &GenericSchema,
@@ -6674,6 +6699,12 @@ impl ValidatedTraitWorld {
         }
         for h in self.headers.traits.iter() {
             let info = self.info(h.declaration)?;
+            if h.region_count != self.schema.trait_region_count(h.declaration)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "trait lifetime binders changed original declaration",
+                ));
+            }
             if info.kind != DeclKind::Trait
                 || !self.same_env(&info.env, &h.env)?
                 || !h.env.contains(h.self_param)
@@ -7161,6 +7192,7 @@ impl ValidatedTraitWorld {
         Ok(())
     }
     fn validate_impl(&self, h: &ImplHeader) -> Result<()> {
+        self.validate_owner_region_application(h)?;
         let info = self.info(h.declaration)?;
         if info.kind != DeclKind::TraitImpl || !self.same_env(&info.env, &h.schema_env)? {
             return Err(FactsError::invalid(
@@ -7361,7 +7393,7 @@ impl ValidatedTraitWorld {
                 ));
             }
             if self.schema_contains_projection(&item.schema)? {
-                self.validate_projected_carrier_refinement(item, &expected.signature, target)?;
+                self.validate_projected_carrier_refinement(item, h, &expected.signature, target)?;
             }
             let owner_membership = Predicate::Implements(h.trait_ref.clone());
             for predicate in target.schema.predicates.iter() {
@@ -10717,10 +10749,6 @@ impl ValidatedTraitWorld {
         )?;
         result.signature.ref_contract =
             self.realize_ref_contract(schema, args, &result.signature, declaration)?;
-        // Projection normalization changes types, not the declaration's
-        // lifetime topology. Rebuild only deferred return candidates after
-        // realizing that exact topology, before stored-contract validation.
-        self.complete_projected_contract(&mut result.signature)?;
         if result.predicates.len() != schema.predicates.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -10742,6 +10770,10 @@ impl ValidatedTraitWorld {
                 active,
             )?;
         }
+        // Authenticate source callable result authority before consuming the
+        // normalized projection. Closure outputs may introduce reference layers
+        // whose exact lifetime topology is supplied by that source receipt.
+        self.complete_projected_contract(&mut result.signature)?;
         if executable_storage {
             self.validate_signature_shape_with_scratch(
                 &result.signature,
@@ -15122,6 +15154,73 @@ mod tests {
         }
     }
     #[test]
+    fn owner_lifetime_application_rejects_foreign_and_reordered_actuals() {
+        use crate::compiler::frontend::{PlanCtx, parse};
+        let source = parse("trait L<'a,'b>{} struct Pair<'x,'y>{a:&'x i32,b:&'y i32} impl<'x,'y> L<'y,'x> for Pair<'x,'y>{} fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let original = world
+            .impl_headers()
+            .iter()
+            .find(|h| {
+                h.region_application
+                    .as_ref()
+                    .is_some_and(|a| a.actuals.len() == 2)
+            })
+            .unwrap()
+            .clone();
+        world.validate_owner_region_application(&original).unwrap();
+        let application = original.region_application.as_ref().unwrap().clone();
+        assert_ne!(application.actuals[0], application.actuals[1]);
+        let mut changed = original.clone();
+        let mut app = application.as_ref().clone();
+        let mut actuals = app.actuals.to_vec();
+        actuals.swap(0, 1);
+        app.actuals = actuals.into();
+        changed.region_application = Some(Arc::new(app));
+        assert!(world.validate_owner_region_application(&changed).is_err());
+        let mut foreign = original.clone();
+        let mut app = application.as_ref().clone();
+        let mut actuals = app.actuals.to_vec();
+        let ir::CarrierRegionTerm::Named(mut id) = actuals[0] else {
+            panic!("missing source actual")
+        };
+        id.declaration = app.trait_decl;
+        actuals[0] = ir::CarrierRegionTerm::Named(id);
+        app.actuals = actuals.into();
+        foreign.region_application = Some(Arc::new(app));
+        assert!(world.validate_owner_region_application(&foreign).is_err());
+        let mut missing = original.clone();
+        missing.region_application = None;
+        assert!(world.validate_owner_region_application(&missing).is_err());
+        let mut arity = original;
+        let mut app = application.as_ref().clone();
+        app.actuals = Arc::from([]);
+        arity.region_application = Some(Arc::new(app));
+        assert!(world.validate_owner_region_application(&arity).is_err());
+        for invalid in [
+            "trait L<'a>{} struct S; impl L for S{} fn main(){}",
+            "trait L<'a>{} struct S; impl L<'static,'static> for S{} fn main(){}",
+            "trait L<'a>{} struct S; impl L<'missing> for S{} fn main(){}",
+            "trait L<'a>{} struct S; impl L<'_> for S{} fn main(){}",
+        ] {
+            let rejected = match parse(invalid) {
+                Ok(source) => PlanCtx::from_program(&source, &PlanBudget::default()).is_err(),
+                Err(error) => !error.is_empty(),
+            };
+            assert!(rejected, "{invalid}");
+        }
+        let source =
+            parse("trait L<'a>{} struct Static; impl L<'static> for Static{} fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        assert!(plan.trait_world().unwrap().impl_headers().iter().any(|h| {
+            h.region_application
+                .as_ref()
+                .is_some_and(|a| a.actuals.as_ref() == [ir::CarrierRegionTerm::Static])
+        }));
+    }
+
+    #[test]
     fn projected_item_result_keeps_inner_parameter_and_rejects_forged_sources() {
         use crate::compiler::{CompilerProvider, Input, Snapshot, TemplateBodyFact, keys};
         use crate::engine::Engine;
@@ -15726,6 +15825,7 @@ mod tests {
             associated_types: Arc::from([]),
             traits: Arc::from([
                 TraitHeader {
+                    region_count: 0,
                     declaration: id(0),
                     self_param: ParamId {
                         owner: marker_self.binder(),
@@ -15738,6 +15838,7 @@ mod tests {
                     supertrait_equalities: Arc::from([]),
                 },
                 TraitHeader {
+                    region_count: 0,
                     declaration: id(2),
                     self_param: ParamId {
                         owner: value_self.binder(),
@@ -15769,6 +15870,7 @@ mod tests {
             }]),
             impls: Arc::from([
                 ImplHeader {
+                    region_application: None,
                     declaration: id(5),
                     trait_ref: TraitRef {
                         declaration: id(2),
@@ -15785,6 +15887,7 @@ mod tests {
                     associated_types: Arc::from([]),
                 },
                 ImplHeader {
+                    region_application: None,
                     declaration: id(7),
                     trait_ref: TraitRef {
                         declaration: id(0),

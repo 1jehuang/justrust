@@ -39,6 +39,7 @@ mod char_literal;
 pub(super) mod closures;
 mod extern_crate;
 mod local_consts;
+mod owner_lifetimes;
 mod target_features;
 pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
@@ -9743,6 +9744,7 @@ pub struct TypeBound {
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
+    pub regions: RegionDecls,
     pub unsafety: bool,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
@@ -15701,6 +15703,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("trait") {
             let name = self.ident()?;
             let type_params = self.type_parameters(nominal_defaults::Owner::TraitSelf)?;
+            // Associated function heads inherit their owner's lifetime scope.
+            // Trait binders must reach that producer just as impl binders do,
+            // before nested reference carriers are assigned source identities.
+            let trait_regions = std::mem::take(&mut self.pending_regions);
+            let outer_regions = std::mem::replace(&mut self.impl_regions, trait_regions);
             let self_defaults = std::mem::take(&mut self.pending_self_defaults);
             if type_params.len() >= 32 {
                 return Err(self.limit("trait binder resource limit 32 includes Self"));
@@ -15856,6 +15863,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("}")?;
             let declaration = parsed.program.traits.len();
             parsed.program.traits.push(TraitDecl {
+                regions: self.impl_regions.clone(),
                 unsafety: declaration_unsafety,
                 module,
                 type_params,
@@ -15870,6 +15878,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 associated_constants,
                 self_defaults,
             });
+            self.impl_regions = outer_regions;
             (name, ItemKind::Trait(declaration))
         } else if self.eat("enum") {
             let name = self.ident()?;
@@ -25381,6 +25390,8 @@ impl PlanCtx {
                 (applications, equalities)
             };
             traits.push(tr::TraitHeader {
+                region_count: u16::try_from(t.regions.params.len())
+                    .map_err(|_| "trait lifetime arity overflow")?,
                 declaration: id,
                 self_param: ir::ParamId {
                     owner: info.param_env.binder(),
@@ -25483,6 +25494,7 @@ impl PlanCtx {
                 pairs.push((owner.trait_item.ok_or("missing required trait item")?, *id));
             }
             impls.push(tr::ImplHeader {
+                region_application: owner_lifetimes::application(self, declaration, &self_ty)?,
                 declaration,
                 trait_ref,
                 schema_env: info.env.clone(),
@@ -26889,6 +26901,22 @@ impl SchemaAdapter {
 }
 
 impl tr::SchemaCx for SchemaAdapter {
+    fn trait_region_count(&self, id: ir::DeclId) -> Result<u16, tr::FactsError> {
+        if self.catalog.declaration(id).is_some() {
+            return Ok(0);
+        }
+        let source = self.registry.source_trait(id).map_err(|e| self.error(e))?;
+        u16::try_from(source.regions.params.len())
+            .map_err(|_| self.error("trait lifetime arity overflow".into()))
+    }
+    fn owner_region_application(
+        &self,
+        id: ir::DeclId,
+        self_ty: &ir::Ty,
+    ) -> Result<Option<Arc<tr::OwnerRegionApplication>>, tr::FactsError> {
+        owner_lifetimes::application(&self.raw_plan().map_err(|e| self.error(e))?, id, self_ty)
+            .map_err(|e| self.error(e))
+    }
     fn native_box_application(
         &self,
         ty: &ir::Ty,

@@ -481,6 +481,7 @@ impl CoreCatalogBuilder {
                     budget,
                     &mut traits,
                     TraitHeader {
+                        region_count: 0,
                         declaration,
                         self_param,
                         env: env.clone(),
