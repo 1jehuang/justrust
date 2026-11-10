@@ -7362,9 +7362,7 @@ impl CarrierBuilder<'_, '_> {
             || (affine_results <= 1 && write_channels == 0)
             || (affine_writes <= 1 && result_channels == 0)
             || independent_pair;
-        if bounded
-            || (result_channels == 0 && self.indexed_family_write_admitted(params, view)?)
-        {
+        if bounded || (result_channels == 0 && self.indexed_family_write_admitted(params, view)?) {
             return Ok(true);
         }
         if affine_results == 1

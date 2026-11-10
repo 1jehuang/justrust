@@ -2021,11 +2021,7 @@ impl ValidatedTraitWorld {
         let Ty::Param(parameter) = &base.schema.signature.result else {
             return Ok(());
         };
-        if charged(
-            &self.budget,
-            ir::root_reference_layers(&signature.result),
-        )? == 0
-        {
+        if charged(&self.budget, ir::root_reference_layers(&signature.result))? == 0 {
             return Ok(());
         }
         // The root row is only region topology. The nonempty return authority
@@ -2105,10 +2101,7 @@ impl ValidatedTraitWorld {
         // method or a matching concrete input type, owns those hidden loans.
         // Materialize only the positions of this exact parameter actual here.
         // Carrier substitution retains the nonempty field-path sources.
-        let layers = charged(
-            &self.budget,
-            ir::root_reference_layers(&signature.result),
-        )?;
+        let layers = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
         let fixed = &signature.ref_contract;
         let mut positioned = Vec::new();
         let mut outlives = Vec::new();
@@ -2122,7 +2115,8 @@ impl ValidatedTraitWorld {
         for depth in 0..layers {
             charged(
                 &self.budget,
-                self.budget.charge_work(positioned.len().saturating_mul(2) + 1),
+                self.budget
+                    .charge_work(positioned.len().saturating_mul(2) + 1),
             )?;
             let position = ir::ReferencePosition { depth: depth as u8 };
             if positioned.iter().any(|row| row.position == position) {
@@ -2157,7 +2151,8 @@ impl ValidatedTraitWorld {
         }
         charged(
             &self.budget,
-            self.budget.charge_work(positioned.len().saturating_mul(positioned.len())),
+            self.budget
+                .charge_work(positioned.len().saturating_mul(positioned.len())),
         )?;
         positioned.sort_by_key(|row| row.position);
         let raw = ir::RefContract {
@@ -3619,10 +3614,10 @@ mod tests {
         assert_eq!(view.fixed.results.len(), 1);
         assert!(view.fixed.input_regions.is_empty());
         assert!(
-            view.fixed.results.iter().all(|row| !matches!(
-                row.returns,
-                ir::ReturnContract::NoReference
-            ))
+            view.fixed
+                .results
+                .iter()
+                .all(|row| !matches!(row.returns, ir::ReturnContract::NoReference))
         );
         let selected = world.resolve_trait_call(&call, &facts).unwrap();
         let Callee::Direct(provider) = &selected.callee else {

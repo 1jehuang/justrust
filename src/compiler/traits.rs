@@ -10645,7 +10645,14 @@ impl ValidatedTraitWorld {
         executable_storage: bool,
     ) -> Result<InstantiatedSchema> {
         self.instantiate_scratch_for_use_with_owner_family(
-            schema, args, facts, declaration, active, caller, executable_storage, None,
+            schema,
+            args,
+            facts,
+            declaration,
+            active,
+            caller,
+            executable_storage,
+            None,
         )
     }
 
@@ -10800,12 +10807,9 @@ impl ValidatedTraitWorld {
                 declaration,
                 type_args: args.into(),
             };
-            if let Some(signature) = self.specialize_owner_callable_result(
-                &target,
-                schema,
-                &result.signature,
-                facts,
-            )? {
+            if let Some(signature) =
+                self.specialize_owner_callable_result(&target, schema, &result.signature, facts)?
+            {
                 result.signature = signature;
             } else if let Some(contract) = self.specialize_required_owner_result(
                 declaration,
