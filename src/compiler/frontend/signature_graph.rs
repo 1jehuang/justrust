@@ -208,7 +208,12 @@ impl CallableSignatureOutput {
         if !Arc::ptr_eq(&self.schema.value.env, &original.env) {
             return Err("callable signature output changed declaration environment".into());
         }
-        if !original.env.const_binders().is_empty() {
+        if original.env.ordered_params().any(|parameter| {
+            matches!(
+                original.env.parameter_kind(parameter),
+                Some(ir::GenericParamKind::Const(_))
+            )
+        }) {
             // Const declarations retain their actual symbolic schema. Replay
             // only this declaration's source header, never a caller's extent
             // or the completion of any body or instantiated function.

@@ -50,7 +50,9 @@ impl<'s> Solver<'_, '_, 's> {
                 let value = self.expr(value, depth + 1)?;
                 let (base, borrowed) = self.pattern_referent(value);
                 let item = match self.domain(base) {
-                    Domain::Array(item, _) | Domain::Slice(item) => item,
+                    Domain::Array(item, _)
+                    | Domain::DependentArray(item, _)
+                    | Domain::Slice(item) => item,
                     _ if source.adapters.is_empty() => return self.iterator_item(value),
                     // Non-array adapters must be reconstructed as ordinary
                     // method expressions before projecting their actual Item.

@@ -387,6 +387,9 @@ fn family_region_term(family: &ir::CarrierFamily) -> ir::CarrierRegionTerm {
         ir::CarrierFamily::Projection(projection) => ir::CarrierRegionTerm::ProjectionFamily {
             projection: projection.clone(),
         },
+        ir::CarrierFamily::Array(array) => ir::CarrierRegionTerm::ArrayFamily {
+            array: array.clone(),
+        },
         ir::CarrierFamily::Opaque(opaque) => ir::CarrierRegionTerm::OpaqueFamily {
             opaque: opaque.clone(),
         },
@@ -400,6 +403,10 @@ fn family_channel(family: &ir::CarrierFamily, prefix: u8) -> CarrierChannel {
         },
         ir::CarrierFamily::Projection(projection) => CarrierChannel::ProjectionTail {
             projection: projection.clone(),
+            prefix,
+        },
+        ir::CarrierFamily::Array(array) => CarrierChannel::ArrayTail {
+            array: array.clone(),
             prefix,
         },
         ir::CarrierFamily::Opaque(opaque) => CarrierChannel::OpaqueTail {
@@ -427,6 +434,7 @@ fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
         CarrierChannel::Fixed(position) => position.depth,
         CarrierChannel::ParamTail { prefix, .. }
         | CarrierChannel::ProjectionTail { prefix, .. }
+        | CarrierChannel::ArrayTail { prefix, .. }
         | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
     };
     path.extend(std::iter::repeat_n(Projection::Deref, usize::from(depth)));
@@ -754,6 +762,7 @@ fn read_cell_cover(
             CarrierChannel::Fixed(position) => position.depth,
             CarrierChannel::ParamTail { prefix, .. }
             | CarrierChannel::ProjectionTail { prefix, .. }
+            | CarrierChannel::ArrayTail { prefix, .. }
             | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
         };
         let length = add(mul(location.path.0.len(), 2)?, usize::from(depth))?;
@@ -950,7 +959,7 @@ fn resolve_cells<'a>(
                     budget.plan_budget(),
                 )
                 .map_err(|_| Exhausted)?;
-                if matches!(&ty, Ty::Array { element, .. } if !matches!(element.as_ref(), Ty::Ref { kind: BorrowKind::Shared, .. }))
+                if matches!(&ty, Ty::Array { element, .. } | Ty::DependentArray { element, .. } if !matches!(element.as_ref(), Ty::Ref { kind: BorrowKind::Shared, .. }))
                     && *step != Projection::DynamicIndex(LocalId(usize::MAX))
                 {
                     let mut selected = candidate;
@@ -1051,6 +1060,7 @@ fn resolve_cells<'a>(
                     CarrierChannel::Fixed(position) => position.depth,
                     CarrierChannel::ParamTail { prefix, .. }
                     | CarrierChannel::ProjectionTail { prefix, .. }
+                    | CarrierChannel::ArrayTail { prefix, .. }
                     | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
                 };
                 let length = add(mul(location.path.0.len(), 2)?, usize::from(depth))?;
@@ -1211,6 +1221,9 @@ impl FlowState {
 fn key_channel(ty: &Ty) -> Option<CellChannel> {
     match ty {
         Ty::Ref { .. } => Some(CellChannel::ReferenceValue),
+        Ty::DependentArray { .. } => Some(CellChannel::Family(ir::CarrierFamily::Array(Arc::new(
+            ty.clone(),
+        )))),
         Ty::Param(parameter) => Some(CellChannel::Family(ir::CarrierFamily::Parameter(
             *parameter,
         ))),
@@ -2996,6 +3009,13 @@ impl CarrierBuilder<'_, '_> {
                     parameter,
                     prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
                 },
+                CarrierChannel::ArrayTail {
+                    array,
+                    prefix: inner,
+                } => CarrierChannel::ArrayTail {
+                    array,
+                    prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
+                },
                 CarrierChannel::OpaqueTail {
                     opaque,
                     prefix: inner,
@@ -3042,7 +3062,9 @@ impl CarrierBuilder<'_, '_> {
                 .parameter_actual(*parameter)
                 .map_err(|_| Exhausted)?
                 .is_none()),
-            ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_) => {
+            ir::CarrierFamily::Projection(_)
+            | ir::CarrierFamily::Opaque(_)
+            | ir::CarrierFamily::Array(_) => {
                 let facts = self.authority.as_ref().ok_or(Exhausted)?;
                 let actual = match replay {
                     Some(replay) => view.family_actual_with_replay(
@@ -3057,7 +3079,9 @@ impl CarrierBuilder<'_, '_> {
                 }
                 .map_err(|_| Exhausted)?;
                 match actual {
-                    Some(Ty::AssociatedType(_)) | Some(Ty::Opaque(_)) => Ok(true),
+                    Some(Ty::AssociatedType(_))
+                    | Some(Ty::Opaque(_))
+                    | Some(Ty::DependentArray { .. }) => Ok(true),
                     Some(_) => Ok(false),
                     None => Err(Exhausted),
                 }
@@ -3078,6 +3102,7 @@ impl CarrierBuilder<'_, '_> {
         match &input.location.channel {
             CarrierChannel::ParamTail { .. }
             | CarrierChannel::ProjectionTail { .. }
+            | CarrierChannel::ArrayTail { .. }
             | CarrierChannel::OpaqueTail { .. } => {
                 let family = input.location.channel.family().ok_or(Exhausted)?;
                 for mapping in view
@@ -3311,6 +3336,7 @@ impl CarrierBuilder<'_, '_> {
             CarrierChannel::Fixed(position) => usize::from(position.depth),
             CarrierChannel::ParamTail { prefix, .. }
             | CarrierChannel::ProjectionTail { prefix, .. }
+            | CarrierChannel::ArrayTail { prefix, .. }
             | CarrierChannel::OpaqueTail { prefix, .. } => usize::from(*prefix),
         };
         let inputs = self.input_regions.clone();
@@ -3354,6 +3380,7 @@ impl CarrierBuilder<'_, '_> {
                 row.region,
                 ir::CarrierRegionTerm::Family { .. }
                     | ir::CarrierRegionTerm::ProjectionFamily { .. }
+                    | ir::CarrierRegionTerm::ArrayFamily { .. }
                     | ir::CarrierRegionTerm::OpaqueFamily { .. }
             ) {
                 self.budget
@@ -3423,10 +3450,14 @@ impl CarrierBuilder<'_, '_> {
             }
             ir::CarrierRegionTerm::Family { .. }
             | ir::CarrierRegionTerm::ProjectionFamily { .. }
+            | ir::CarrierRegionTerm::ArrayFamily { .. }
             | ir::CarrierRegionTerm::OpaqueFamily { .. } => {
                 let family = match term {
                     ir::CarrierRegionTerm::Family { parameter } => {
                         ir::CarrierFamily::Parameter(*parameter)
+                    }
+                    ir::CarrierRegionTerm::ArrayFamily { array } => {
+                        ir::CarrierFamily::Array(array.clone())
                     }
                     ir::CarrierRegionTerm::OpaqueFamily { opaque } => {
                         ir::CarrierFamily::Opaque(opaque.clone())
@@ -4066,6 +4097,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     }
                     CarrierChannel::ParamTail { .. }
                     | CarrierChannel::ProjectionTail { .. }
+                    | CarrierChannel::ArrayTail { .. }
                     | CarrierChannel::OpaqueTail { .. } => {
                         ledger.charge_nodes(1).map_err(|_| Exhausted)?;
                         ledger
@@ -4336,6 +4368,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     }
                     CarrierChannel::ParamTail { .. }
                     | CarrierChannel::ProjectionTail { .. }
+                    | CarrierChannel::ArrayTail { .. }
                     | CarrierChannel::OpaqueTail { .. } => {
                         builder.budget.spend(1)?;
                         if builder
@@ -5538,6 +5571,7 @@ impl CarrierBuilder<'_, '_> {
                         matches!(
                             location.channel,
                             CarrierChannel::ProjectionTail { .. }
+                                | CarrierChannel::ArrayTail { .. }
                                 | CarrierChannel::OpaqueTail { .. }
                         )
                     });
@@ -7971,6 +8005,7 @@ impl CarrierBuilder<'_, '_> {
                                 region.schema,
                                 ir::CarrierRegionTerm::Family { .. }
                                     | ir::CarrierRegionTerm::ProjectionFamily { .. }
+                                    | ir::CarrierRegionTerm::ArrayFamily { .. }
                                     | ir::CarrierRegionTerm::OpaqueFamily { .. }
                             ));
                 }

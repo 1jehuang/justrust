@@ -16,6 +16,10 @@ fn channel_at_prefix(channel: &ir::CarrierChannel, prefix: u8) -> ir::CarrierCha
                 prefix,
             }
         }
+        ir::CarrierChannel::ArrayTail { array, .. } => ir::CarrierChannel::ArrayTail {
+            array: array.clone(),
+            prefix,
+        },
         ir::CarrierChannel::OpaqueTail { opaque, .. } => ir::CarrierChannel::OpaqueTail {
             opaque: opaque.clone(),
             prefix,

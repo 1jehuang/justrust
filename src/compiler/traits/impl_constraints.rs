@@ -17,6 +17,16 @@ impl ValidatedTraitWorld {
                     push(&self.budget, out, *p)?;
                 }
             }
+            Ty::DependentArray { element, length } => {
+                let parameter = ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                if !out.contains(&parameter) {
+                    push(&self.budget, out, parameter)?;
+                }
+                self.impl_parameters_in(element, projections, out, depth + 1)?;
+            }
             Ty::AssociatedType(p) if projections => {
                 self.impl_parameters_in(&p.trait_ref.self_ty, true, out, depth + 1)?;
                 for ty in p.trait_ref.args.iter() {
@@ -82,7 +92,7 @@ impl ValidatedTraitWorld {
             if !known.contains(&parameter) {
                 return Err(FactsError::invalid(
                     &self.budget,
-                    "unconstrained trait impl parameter",
+                    "E0207: unconstrained trait impl parameter",
                 ));
             }
         }

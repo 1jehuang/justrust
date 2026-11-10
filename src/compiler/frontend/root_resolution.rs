@@ -3109,11 +3109,57 @@ impl Resolver<'_> {
             Ok(Pattern::Path(name))
         }
     }
+    fn is_const_parameter_name(&self, name: AstIdent) -> Result<bool, String> {
+        let (function, inherited) = match self.current_callable {
+            Some(CallableSource::Free(index)) => (
+                self.program
+                    .functions
+                    .get(index)
+                    .ok_or("const value lost its source callable")?,
+                &[][..],
+            ),
+            Some(CallableSource::Associated {
+                implementation,
+                item,
+            }) => {
+                let block = self
+                    .program
+                    .impls
+                    .get(implementation)
+                    .ok_or("const value lost its source impl")?;
+                let member = block
+                    .items
+                    .get(item)
+                    .ok_or("const value lost its source member")?;
+                (&member.function, block.const_params.as_slice())
+            }
+            _ => return Ok(false),
+        };
+        let key = self
+            .names()
+            .key(name, LookupClass::TypeParameter)
+            .map_err(native_adapter::name_diagnostic)?;
+        for parameter in function.const_params.iter().chain(inherited) {
+            self.alias_budget.charge_work(1)?;
+            if self
+                .names()
+                .key(parameter.name, LookupClass::TypeParameter)
+                .map_err(native_adapter::name_diagnostic)?
+                == key
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn local_insert(
         &self,
         scope: &mut std::collections::HashSet<LocalKey>,
         name: AstIdent,
     ) -> Result<bool, String> {
+        if self.is_const_parameter_name(name)? {
+            return Err("E0158: constant parameters cannot be referenced in patterns".into());
+        }
         self.charge_entries::<LocalKey>(1)?;
         scope
             .try_reserve(1)
@@ -3943,6 +3989,13 @@ impl Resolver<'_> {
         module: ModuleId,
         locals: &mut Vec<std::collections::HashSet<LocalKey>>,
     ) -> Result<(), String> {
+        if let Expr::Var(path) = expr
+            && path.anchor() == PathAnchor::Relative
+            && let [name] = path.segments()
+            && self.is_const_parameter_name(*name)?
+        {
+            return Ok(());
+        }
         if self.resolve_cell_call(expr, module, locals)? {
             return Ok(());
         }

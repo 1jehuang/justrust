@@ -12,6 +12,152 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod coherence_oracle;
 
 #[test]
+fn const_impl_array_heads_keep_owned_element_and_extent_slots() {
+    coherence_oracle::stock_native(
+        r#"
+const KNOWN_LENGTH: usize = 2;
+fn const_value<const N: usize>() -> usize { N }
+fn forwarded_const<const M: usize>() -> usize { const_value::<M>() }
+trait ArrayExtent {
+    type Element;
+    fn extent(&self) -> usize;
+}
+impl<T, const N: usize> ArrayExtent for [T; N] {
+    type Element = T;
+    fn extent(&self) -> usize { N }
+}
+fn extent<A: ArrayExtent>(array: &A) -> usize { array.extent() }
+fn element<A: ArrayExtent>(_: &A, value: A::Element) -> A::Element { value }
+trait ArrayIdentity: Sized { fn identity(self) -> Self; }
+impl<T, const N: usize> ArrayIdentity for [T; N] { fn identity(self) -> Self { self } }
+fn identity<A: ArrayIdentity>(array: A) -> A { array.identity() }
+fn main() {
+    let numbers = [2i32, 4, 6];
+    let flags = [true, false];
+    let empty: [i32; 0] = [];
+    let owned = [String::from("a"), String::from("b")];
+    println!("{} {} {} {}", extent(&numbers), extent(&flags), extent(&empty), extent(&owned));
+    println!("{} {}", element(&numbers, 9i32), element(&owned, String::from("owned")));
+    let a = 17i32;
+    let b = 23i32;
+    let references = identity([(&a, &b), (&b, &a)]);
+    println!("{} {}", *references[0].0, *references[1].0);
+    let moved = identity([String::from("affine"), String::from("array")]);
+    println!("{} {}", moved[0], moved[1]);
+    let known: [i32; KNOWN_LENGTH] = [31, 32];
+    println!("{} {} {}", extent(&known), const_value::<4>(), forwarded_const::<5>());
+}
+"#,
+    );
+}
+
+#[test]
+fn const_impl_array_heads_reject_changed_scope_kind_and_unbound_slots() {
+    for source in [
+        "trait A{} impl<T,const N:bool>A for [T;N]{}fn main(){}",
+        "trait A{} impl<T,const N:usize>A for [T;M]{}fn main(){}",
+        "trait A{} impl<T,const N:usize>A for T{}fn main(){}",
+        "trait A{fn value(&self)->bool;}impl<T,const N:usize>A for [T;N]{fn value(&self)->bool{N}}fn main(){}",
+        "trait A{type Item;}impl<T,const N:usize>A for [T;N]{type Item=T;}fn take<X:A>(_:X,_:X::Item){}fn unused(){take([1i32,2],true);}fn main(){}",
+        "fn ping<const N:usize>(){}fn unused(){ping();}fn main(){}",
+        "fn ping<const N:usize>(){}fn unused(){ping::<true>();}fn main(){}",
+        "fn unused<const N:usize>(_: [i32;M]){}fn main(){}",
+        "trait A{}impl<T,N>A for[T;N]{}fn main(){}",
+        "trait A:Sized{fn identity(self)->Self;}impl<T,const N:usize>A for[T;N]{fn identity(self)->Self{self}}fn bad()->[&'static i32;1]{let local=1i32;[&local].identity()}fn main(){}",
+        r#"trait A:Sized{fn identity(self)->Self;}impl<T,const N:usize>A for[T;N]{fn identity(self)->Self{self}}fn unused(){let a=[String::from("a")];let b=a.identity();println!("{}",a[0]);}fn main(){}"#,
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn const_impl_direct_array_inputs_infer_element_and_extent_in_source_order() {
+    coherence_oracle::stock_native(
+        r#"
+fn const_first<const N: usize, T>(_: &[T; N]) -> usize { N }
+fn type_first<T, const N: usize>(_: &[T; N]) -> usize { N }
+fn same_extent<T, U, const N: usize>(_: &[T; N], _: &[U; N]) -> usize { N }
+fn first<T, const N: usize>(array: &[T; N]) -> &T { &array[0] }
+fn at<T, const N: usize>(array: &[T; N], index: usize) -> &T { &array[index] }
+fn at_mut<T, const N: usize>(array: &mut [T; N], index: usize) -> &mut T { &mut array[index] }
+fn nested<T, const N: usize, const M: usize>(array: &[[T; M]; N], row: usize, column: usize) -> &T { &array[row][column] }
+fn forwarded<T, const N: usize>(array: &[T; N]) -> usize { const_first(array) }
+fn main() {
+    let numbers = [3i32, 5, 7];
+    let flags = [true, false];
+    let empty: [u8; 0] = [];
+    let owned = [String::from("a"), String::from("b")];
+    println!("{} {} {} {}", const_first(&numbers), type_first(&flags), const_first(&empty), type_first(&owned));
+    println!("{} {} {}", const_first::<3, i32>(&numbers), type_first::<bool, 2>(&flags), same_extent(&flags, &owned));
+    println!("{} {}", first(&numbers), forwarded(&owned));
+    let mut changed = [11i32, 13];
+    *at_mut(&mut changed, 1) = 17;
+    println!("{} {}", at(&numbers, 2), at(&changed, 1));
+    let rows = [[19i32, 23], [29, 31]];
+    println!("{}", nested(&rows, 1, 0));
+    println!("{} {}", first(&owned), at(&owned, 1));
+}
+"#,
+    );
+    for source in [
+        "fn take<T,const N:usize>(_:&[T;N],_:&[T;N]){}fn unused(){take(&[1i32,2],&[3i32]);}fn main(){}",
+        "fn take<const N:usize,T>(_:&[T;N]){}fn unused(){take::<3,i32>(&[1i32,2]);}fn main(){}",
+        "fn take<const N:usize,T>(_:&[T;N]){}fn unused(){take::<true,i32>(&[1i32]);}fn main(){}",
+        "fn take<T,const N:usize>(_:&[T;N],_:&[T;N]){}fn unused(){take(&[1i32],&[true]);}fn main(){}",
+        "fn bad<T,const N:usize>(array:&[T;N],i:usize)->&mut T{&mut array[i]}fn main(){}",
+        "fn at<T,const N:usize>(a:&[T;N])->&T{&a[0]}fn bad()->&'static i32{let array=[1i32];at(&array)}fn main(){}",
+        "fn bad<T,const N:usize>(a:&mut[T;N]){let x=&mut a[0];let y=&a[1];let _pair=(x,y);}fn main(){}",
+        "fn bad<T,const N:usize>(a:&mut[T;N],i:usize,j:usize){let x=&mut a[i];let y=&mut a[j];let _pair=(x,y);}fn main(){}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+    // A symbolic extent is not proof that an element exists. Even an unused
+    // returned reference must perform the genuine runtime bounds check.
+    use std::os::unix::fs::PermissionsExt;
+    let trap_source = "fn at<T,const N:usize>(a:&[T;N],i:usize)->&T{&a[i]}fn main(){let a:[i32;0]=[];println!(\"before\");let _borrowed=at(&a,0);println!(\"after\");}";
+    let scratch = Scratch::new();
+    scratch.write("empty.rs", trap_source.as_bytes());
+    let stock = scratch.path("empty-stock");
+    let compiled = capture(
+        Command::new(coherence_oracle::closure_oracle::pinned_stock::stock_rustc())
+            .arg("--edition=2024")
+            .arg("-Cpanic=abort")
+            .arg(scratch.path("empty.rs"))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        30,
+    );
+    assert_eq!(compiled.code, 0, "{compiled:?}");
+    let expected = capture_with_signal(&mut Command::new(&stock), &scratch, 5, Some(6));
+    assert_eq!(expected.code, -6, "{expected:?}");
+    assert_eq!(expected.stdout, b"before\n");
+    for workers in [1, 8] {
+        let checked = compiler::compile(trap_source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| key.kind != 103)
+        );
+        let built = compiler::compile(trap_source.into(), workers, false).unwrap();
+        let path = scratch.path(&format!("empty-native-{workers}"));
+        fs::write(&path, built.executable.unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let actual = capture_with_signal(&mut Command::new(&path), &scratch, 5, Some(6));
+        assert_eq!(actual.code, expected.code, "{actual:?}");
+        assert!(
+            String::from_utf8_lossy(&actual.stderr)
+                .contains("index out of bounds: the len is 0 but the index is 0"),
+            "{actual:?}"
+        );
+        assert_eq!(actual.stdout, expected.stdout, "{actual:?}");
+    }
+}
+
+#[test]
 fn inherent_method_arguments_follow_unique_trait_applications() {
     coherence_oracle::stock_native(
         r#"
@@ -536,6 +682,14 @@ struct Captured {
     stderr: Vec<u8>,
 }
 fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
+    capture_with_signal(command, scratch, seconds, None)
+}
+fn capture_with_signal(
+    command: &mut Command,
+    scratch: &Scratch,
+    seconds: u64,
+    expected_signal: Option<i32>,
+) -> Captured {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let out = scratch.path(&format!("stdout-{id}"));
     let err = scratch.path(&format!("stderr-{id}"));
@@ -576,8 +730,17 @@ fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
     for path in [&out, &err] {
         assert!(fs::metadata(path).unwrap().len() <= 65536);
     }
+    let code = status.code().unwrap_or_else(|| {
+        use std::os::unix::process::ExitStatusExt;
+        let signal = status.signal();
+        assert_eq!(
+            signal, expected_signal,
+            "unexpected signal: {command:?}: {status:?}"
+        );
+        -signal.expect("missing termination signal")
+    });
     Captured {
-        code: status.code().expect("signal termination"),
+        code,
         stdout: fs::read(out).unwrap(),
         stderr: fs::read(err).unwrap(),
     }

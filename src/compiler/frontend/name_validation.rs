@@ -970,6 +970,9 @@ impl<'a> Validator<'a> {
                     self.push(Visit::TraitPath(path))?;
                 }
                 self.identifiers(&implementation.type_params, LookupClass::TypeParameter)?;
+                for parameter in &implementation.const_params {
+                    self.push(Visit::Ident(parameter.name, LookupClass::TypeParameter))?;
+                }
                 self.many(&implementation.bounds, Visit::Bound)?;
                 self.push(Visit::Type(&implementation.self_ty))?;
                 self.work(implementation.associated_types.len())?;

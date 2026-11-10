@@ -588,40 +588,10 @@ impl PlanState {
                 return Err("E0747: constant provided when a type was expected".into());
             }
             Type::DependentArray(element, name) => {
-                let context = self
-                    .source_context
-                    .ok_or("dependent array lacks source declaration context")?;
-                let info = registry.declaration(context.declaration)?;
-                if info.kind != ir::DeclKind::Function {
-                    return Err(
-                        "unsupported: dependent arrays outside free function declarations".into(),
-                    );
-                }
-                let source = registry
-                    .program
-                    .functions
-                    .get(info.source_index)
-                    .ok_or("missing const declaration source")?;
                 let key = registry.parameter_key(*name)?;
-                let mut found = None;
-                for (index, parameter) in source.const_params.iter().enumerate() {
-                    budget.charge_work(1)?;
-                    if registry.parameter_key(parameter.name)? == key {
-                        found = Some(ir::ConstParamId {
-                            owner: ir::BinderId {
-                                declaration: info.id,
-                            },
-                            index: index as u16,
-                        });
-                        break;
-                    }
-                }
-                let length = found.ok_or("unbound const array parameter")?;
-                if info.env.const_parameter_type(length)
-                    != Some(ir::ConstType::Int(ir::IntTy::Usize))
-                {
-                    return Err("E0308: array length const parameter must have type usize".into());
-                }
+                let argument = bindings
+                    .get(&key)
+                    .ok_or("E0425: cannot find const array parameter in this source scope")?;
                 let element = self.source_ty_with_transport(
                     registry,
                     element,
@@ -632,13 +602,7 @@ impl PlanState {
                     false,
                     transport,
                 )?;
-                budget.retain_bytes(
-                    std::mem::size_of::<ir::Ty>() + 2 * std::mem::size_of::<usize>(),
-                )?;
-                ir::Ty::DependentArray {
-                    element: Arc::new(element),
-                    length,
-                }
+                const_parameters::array_type(element, argument, caller, budget)?
             }
             Type::ManuallyDrop(source) => {
                 source.require_kind(SourceCatalogKind::ManuallyDrop)?;

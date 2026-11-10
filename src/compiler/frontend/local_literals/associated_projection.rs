@@ -220,6 +220,10 @@ impl<'s> Solver<'_, '_, 's> {
             | Domain::RawPtr(_, term)
             | Domain::Array(term, _)
             | Domain::Slice(term) => self.projection_input_ready(term, depth + 1)?,
+            Domain::DependentArray(element, length) => {
+                self.projection_input_ready(element, depth + 1)?
+                    && self.projection_input_ready(length, depth + 1)?
+            }
             Domain::AssociatedProjection(projection) => {
                 if !self.projection_input_ready(projection.receiver, depth + 1)? {
                     return Ok(false);
@@ -262,6 +266,10 @@ impl<'s> Solver<'_, '_, 's> {
             | Domain::RawPtr(_, term)
             | Domain::Array(term, _)
             | Domain::Slice(term) => self.projection_input_symbolic(term, depth + 1)?,
+            Domain::DependentArray(element, length) => {
+                self.projection_input_symbolic(element, depth + 1)?
+                    || self.projection_input_symbolic(length, depth + 1)?
+            }
             Domain::AssociatedProjection(projection) => {
                 if self.projection_input_symbolic(projection.receiver, depth + 1)? {
                     return Ok(true);

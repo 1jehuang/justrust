@@ -141,11 +141,11 @@ impl PlanCtx {
             Type::ConstArgument(_) => {
                 return Err("E0747: const argument is not a source type shape".into());
             }
-            Type::DependentArray(..) => {
+            Type::DependentArray(element, _) => {
                 let info = self.registry.declaration(declaration)?;
                 let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(declaration)?);
-                Shape::Leaf(state.source_ty(
+                let array = state.source_ty(
                     &self.registry,
                     ty,
                     bindings,
@@ -153,7 +153,18 @@ impl PlanCtx {
                     &self.budget,
                     depth + 1,
                     false,
-                )?)
+                )?;
+                match array {
+                    ir::Ty::DependentArray { length, .. } => {
+                        Shape::DependentArray(Arc::new(child(element)?), length)
+                    }
+                    ir::Ty::Array { len, .. } => Shape::Array(Arc::new(child(element)?), len),
+                    _ => {
+                        return Err(
+                            "source dependent array recipe changed its structural kind".into()
+                        );
+                    }
+                }
             }
             Type::Int(n) => Shape::Leaf(ir::Ty::Int(*n)),
             Type::Float(n) => Shape::Leaf(ir::Ty::Float(*n)),
@@ -447,7 +458,9 @@ fn reject_default_recipe_carriers(
                 }
                 visit(output, budget, depth + 1, false)?;
             }
-            Shape::Array(element, _) => visit(element, budget, depth + 1, owning)?,
+            Shape::Array(element, _) | Shape::DependentArray(element, _) => {
+                visit(element, budget, depth + 1, owning)?
+            }
             Shape::Ref(_, inner) | Shape::RawPtr(_, inner) | Shape::Slice(inner) if !owning => {
                 visit(inner, budget, depth + 1, false)?;
             }

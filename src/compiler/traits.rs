@@ -30,6 +30,7 @@ mod closure_projections;
 mod closure_provider_domain;
 mod closure_results;
 mod closures;
+mod const_patterns;
 mod constant_members;
 mod dynamic_objects;
 mod equality;
@@ -2650,6 +2651,9 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
             },
         ) => a == b && (Arc::ptr_eq(x, y) || same_type_allocation(x, y)),
         (Ty::Param(x), Ty::Param(y)) => x == y,
+        (Ty::Const(x), Ty::Const(y)) => {
+            matches!((x.closed_key(), y.closed_key()), (Ok(x), Ok(y)) if x == y)
+        }
         (Ty::Int(x), Ty::Int(y)) => x == y,
         (Ty::Float(x), Ty::Float(y)) => x == y,
         (Ty::Char, Ty::Char)
@@ -4485,7 +4489,7 @@ impl ValidatedTraitWorld {
         Ok(left.const_binders() == right.const_binders()
             && left.scopes().len() == right.scopes().len()
             && left.scopes().iter().zip(right.scopes()).all(|(a, b)| {
-                a.binder() == b.binder() && a.arity() == b.arity() && a.same_outlives_bounds(b)
+                a.binder() == b.binder() && a.same_slot_kinds(b) && a.same_outlives_bounds(b)
             }))
     }
     fn same_parameters(&self, left: &GenericEnv, right: &GenericEnv) -> Result<bool> {
@@ -4494,8 +4498,14 @@ impl ValidatedTraitWorld {
             self.budget
                 .charge_work(left.total_arity().saturating_add(right.total_arity())),
         )?;
+        // An implementation method adds its own declaration scope even
+        // without local parameters. Compare actual canonical slots, not that
+        // empty scope, while keeping ordered type/const kind authority exact.
         Ok(left.const_binders() == right.const_binders()
-            && left.ordered_params().eq(right.ordered_params()))
+            && left.ordered_params().eq(right.ordered_params())
+            && left
+                .ordered_params()
+                .all(|parameter| left.parameter_kind(parameter) == right.parameter_kind(parameter)))
     }
     fn trait_header(&self, id: DeclId) -> Result<&TraitHeader> {
         if let Some(position) = self.trait_header_index.get(&self.budget, id)? {
@@ -5613,7 +5623,22 @@ impl ValidatedTraitWorld {
             }
             Ty::FnItem(item) => {
                 self.info(item.declaration)?;
+                let declaration = self.schema.declaration_schema(item.declaration)?;
+                charged(
+                    &self.budget,
+                    declaration.env.validate_argument_kinds(
+                        &item.type_args,
+                        Some(env),
+                        &self.budget,
+                    ),
+                )?;
                 for ty in item.type_args.iter() {
+                    if matches!(ty, Ty::Const(_))
+                        || matches!(ty, Ty::Param(parameter)
+                            if matches!(env.parameter_kind(*parameter), Some(ir::GenericParamKind::Const(_))))
+                    {
+                        continue;
+                    }
                     child(ty, TypeUse::Root)?;
                 }
             }
@@ -5628,6 +5653,14 @@ impl ValidatedTraitWorld {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "type parameter outside authoritative environment",
+                    ));
+                }
+                if let Some(ir::GenericParamKind::Const(_)) = env.parameter_kind(*param)
+                    && (usage != TypeUse::Actual || depth != 0)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "const generic parameter used as a type",
                     ));
                 }
                 if Some(*param) == maybe_unsized
@@ -6495,6 +6528,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (left, right) {
+            (Ty::Const(a), Ty::Const(b)) => Ok(
+                charged(&self.budget, a.closed_key())? == charged(&self.budget, b.closed_key())?
+            ),
             (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Ok(a.item == b.item
                 && a.trait_ref.declaration == b.trait_ref.declaration
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
@@ -7583,6 +7619,9 @@ impl ValidatedTraitWorld {
     }
     fn implicit_sized(&self, env: &GenericEnv, predicates: &mut Vec<Predicate>) -> Result<()> {
         for p in env.ordered_params() {
+            if matches!(env.parameter_kind(p), Some(ir::GenericParamKind::Const(_))) {
+                continue;
+            }
             if (self.info(p.owner.declaration)?.kind == DeclKind::Trait && p.index == 0)
                 || env.relaxed_sized(p)
             {
@@ -7819,7 +7858,7 @@ impl ValidatedTraitWorld {
             .zip(&signature.params)
             .chain(std::iter::once((&raw.signature.result, &signature.result)))
         {
-            self.collect_nominal_mappings(old, new, &mut nominals, 0)?;
+            self.collect_nominal_mappings_with_actuals(old, new, &mut nominals, &actuals, 0)?;
         }
         let mut components = Vec::new();
         let mut component_regions = usize::from(raw.signature.ref_contract.region_count);
@@ -7833,6 +7872,12 @@ impl ValidatedTraitWorld {
         }
         let mut families = Vec::new();
         for parameter in raw.env.ordered_params() {
+            if !matches!(
+                raw.env.parameter_kind(parameter),
+                Some(ir::GenericParamKind::Type)
+            ) {
+                continue;
+            }
             push(
                 &self.budget,
                 &mut families,
@@ -7860,7 +7905,9 @@ impl ValidatedTraitWorld {
             )
         {
             if let Some(
-                family @ (ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_)),
+                family @ (ir::CarrierFamily::Projection(_)
+                | ir::CarrierFamily::Opaque(_)
+                | ir::CarrierFamily::Array(_)),
             ) = location.channel.family()
             {
                 charged(&self.budget, self.budget.charge_work(families.len()))?;
@@ -7871,6 +7918,9 @@ impl ValidatedTraitWorld {
         }
         for family in families {
             let actual = match &family {
+                ir::CarrierFamily::Array(array) => self.realize_array_family_with_scratch(
+                    array, &raw.env, &arguments, facts, scratch,
+                )?,
                 ir::CarrierFamily::Parameter(parameter) => {
                     let index = raw
                         .env
@@ -7915,6 +7965,10 @@ impl ValidatedTraitWorld {
                         original: ir::CarrierLocation {
                             path: relative.path.clone(),
                             channel: match &family {
+                                ir::CarrierFamily::Array(array) => ir::CarrierChannel::ArrayTail {
+                                    array: array.clone(),
+                                    prefix: relative.channel.prefix(),
+                                },
                                 ir::CarrierFamily::Parameter(parameter) => {
                                     ir::CarrierChannel::ParamTail {
                                         parameter: *parameter,
@@ -8637,9 +8691,13 @@ impl ValidatedTraitWorld {
             }
             ir::CarrierChannel::ParamTail { .. }
             | ir::CarrierChannel::ProjectionTail { .. }
-            | ir::CarrierChannel::OpaqueTail { .. } => {
+            | ir::CarrierChannel::OpaqueTail { .. }
+            | ir::CarrierChannel::ArrayTail { .. } => {
                 let prefix = location.channel.prefix();
                 let actual = match &location.channel {
+                    ir::CarrierChannel::ArrayTail { array, .. } => {
+                        self.realize_array_family_with_scratch(array, env, args, facts, scratch)?
+                    }
                     ir::CarrierChannel::OpaqueTail { opaque, .. } => {
                         self.realize_opaque_family_with_scratch(opaque, env, args, facts, scratch)?
                     }
@@ -8709,6 +8767,17 @@ impl ValidatedTraitWorld {
                                     )
                                 })?,
                             },
+                            ir::CarrierChannel::ArrayTail { array, prefix: p } => {
+                                ir::CarrierChannel::ArrayTail {
+                                    array: array.clone(),
+                                    prefix: prefix.checked_add(*p).ok_or_else(|| {
+                                        FactsError::resource(
+                                            &self.budget,
+                                            "array carrier prefix overflow",
+                                        )
+                                    })?,
+                                }
+                            }
                             ir::CarrierChannel::OpaqueTail { opaque, prefix: p } => {
                                 ir::CarrierChannel::OpaqueTail {
                                     opaque: opaque.clone(),
@@ -8765,12 +8834,29 @@ impl ValidatedTraitWorld {
         output: &mut Vec<ir::NominalCarrierMapping>,
         depth: usize,
     ) -> Result<()> {
+        self.collect_nominal_mappings_with_actuals(
+            original,
+            instantiated,
+            output,
+            &nominal_carriers::CarrierFamilyActuals::default(),
+            depth,
+        )
+    }
+
+    fn collect_nominal_mappings_with_actuals(
+        &self,
+        original: &Ty,
+        instantiated: &Ty,
+        output: &mut Vec<ir::NominalCarrierMapping>,
+        actuals: &nominal_carriers::CarrierFamilyActuals,
+        depth: usize,
+    ) -> Result<()> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
             (Ty::Cell(a), Ty::Cell(b)) => {
                 if !a.try_eq(b, |a, b| {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                     Ok::<bool, FactsError>(true)
                 })? {
                     return Err(FactsError::invalid(
@@ -8781,7 +8867,7 @@ impl ValidatedTraitWorld {
             }
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 if !a.try_eq(b, |a, b| {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                     Ok::<bool, FactsError>(true)
                 })? {
                     return Err(FactsError::invalid(
@@ -8792,7 +8878,7 @@ impl ValidatedTraitWorld {
             }
             (Ty::PhantomData(a), Ty::PhantomData(b)) => {
                 if !a.try_eq(b, |a, b| {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                     Ok::<bool, FactsError>(true)
                 })? {
                     return Err(FactsError::invalid(
@@ -8803,7 +8889,7 @@ impl ValidatedTraitWorld {
             }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 if !a.try_eq(b, |a, b| {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                     Ok::<bool, FactsError>(true)
                 })? {
                     return Err(FactsError::invalid(
@@ -8818,7 +8904,13 @@ impl ValidatedTraitWorld {
                 // bound topology and captured region family. Only their ordered
                 // type payloads follow the already authorized substitution.
                 if !original.try_eq(instantiated, |before, after| {
-                    self.collect_nominal_mappings(before, after, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(
+                        before,
+                        after,
+                        output,
+                        actuals,
+                        depth + 1,
+                    )?;
                     Ok::<bool, FactsError>(true)
                 })? {
                     return Err(FactsError::invalid(
@@ -8836,7 +8928,9 @@ impl ValidatedTraitWorld {
                     kind: b,
                     referent: b_ty,
                 },
-            ) if a == b => self.collect_nominal_mappings(a_ty, b_ty, output, depth + 1)?,
+            ) if a == b => {
+                self.collect_nominal_mappings_with_actuals(a_ty, b_ty, output, actuals, depth + 1)?
+            }
             (
                 Ty::RawPtr {
                     kind: a,
@@ -8846,11 +8940,19 @@ impl ValidatedTraitWorld {
                     kind: b,
                     pointee: b_ty,
                 },
-            ) if a == b => self.collect_nominal_mappings(a_ty, b_ty, output, depth + 1)?,
+            ) if a == b => {
+                self.collect_nominal_mappings_with_actuals(a_ty, b_ty, output, actuals, depth + 1)?
+            }
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 for (a, b) in a.iter().zip(b.iter()) {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                 }
+            }
+            (
+                Ty::DependentArray { element: a, .. },
+                Ty::Array { element: b, .. } | Ty::DependentArray { element: b, .. },
+            ) if actuals.has_array_correspondence(self, original, instantiated, depth + 1)? => {
+                self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
             }
             (
                 Ty::Array {
@@ -8861,9 +8963,11 @@ impl ValidatedTraitWorld {
                     element: b,
                     len: bl,
                 },
-            ) if al == bl => self.collect_nominal_mappings(a, b, output, depth + 1)?,
+            ) if al == bl => {
+                self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?
+            }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
-                self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
             }
             (Ty::Dyn(a), Ty::Dyn(b))
                 if a.principal == b.principal
@@ -8871,7 +8975,7 @@ impl ValidatedTraitWorld {
                     && a.associated_types.len() == b.associated_types.len() =>
             {
                 for (a, b) in a.args.iter().zip(b.args.iter()) {
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                 }
                 for ((a_item, a), (b_item, b)) in
                     a.associated_types.iter().zip(b.associated_types.iter())
@@ -8882,7 +8986,7 @@ impl ValidatedTraitWorld {
                             "dynamic carrier changed associated identity",
                         ));
                     }
-                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(a, b, output, actuals, depth + 1)?;
                 }
             }
             (Ty::Struct(a), Ty::Struct(b))
@@ -8908,7 +9012,13 @@ impl ValidatedTraitWorld {
                     .iter()
                     .zip(nominal_fields(&b.def().fields, &self.budget)?.iter())
                 {
-                    self.collect_nominal_mappings(&a.ty, &b.ty, output, depth + 1)?;
+                    self.collect_nominal_mappings_with_actuals(
+                        &a.ty,
+                        &b.ty,
+                        output,
+                        actuals,
+                        depth + 1,
+                    )?;
                 }
             }
             (Ty::Enum(a), Ty::Enum(b))
@@ -8941,7 +9051,13 @@ impl ValidatedTraitWorld {
                         .iter()
                         .zip(nominal_fields(&b.fields, &self.budget)?.iter())
                     {
-                        self.collect_nominal_mappings(&a.ty, &b.ty, output, depth + 1)?;
+                        self.collect_nominal_mappings_with_actuals(
+                            &a.ty,
+                            &b.ty,
+                            output,
+                            actuals,
+                            depth + 1,
+                        )?;
                     }
                 }
             }
@@ -9482,6 +9598,11 @@ impl ValidatedTraitWorld {
                             &mut constraints,
                             ir::CarrierRegionConstraint {
                                 longer: match &family {
+                                    ir::CarrierFamily::Array(array) => {
+                                        ir::CarrierRegionTerm::ArrayFamily {
+                                            array: array.clone(),
+                                        }
+                                    }
                                     ir::CarrierFamily::Parameter(parameter) => {
                                         ir::CarrierRegionTerm::Family {
                                             parameter: *parameter,
@@ -9537,6 +9658,14 @@ impl ValidatedTraitWorld {
             ),
         )?;
         match (&destination.channel, &input.location.channel) {
+            (
+                ir::CarrierChannel::ArrayTail { array: left, .. },
+                ir::CarrierChannel::ArrayTail { array: right, .. },
+            ) => {
+                // The complete canonical element and const coordinate must agree.
+                // Concrete transport preserves each indexed component separately.
+                Ok(left == right)
+            }
             (
                 ir::CarrierChannel::OpaqueTail { opaque, prefix: 0 },
                 ir::CarrierChannel::ParamTail {
@@ -10370,7 +10499,15 @@ impl ValidatedTraitWorld {
                         "original header read changed its closed caller subject or empty context",
                     ));
                 }
+                let env = &self.callable_header(target.declaration)?.schema.env;
+                charged(
+                    &self.budget,
+                    env.validate_argument_kinds(&target.type_args, None, &self.budget),
+                )?;
                 for ty in target.type_args.iter() {
+                    if matches!(ty, Ty::Const(_)) {
+                        continue;
+                    }
                     if executable_storage {
                         self.validate_ty(ty, self.empty.env(), None, true, 0)?;
                     } else {
@@ -10716,6 +10853,12 @@ impl ValidatedTraitWorld {
                 "unsupported: const generic calls require const instance realization",
             ));
         }
+        charged(
+            &self.budget,
+            schema
+                .env
+                .validate_argument_kinds(args, Some(facts.env()), &self.budget),
+        )?;
         // Source-only receipts do not turn the empty proof environment into a caller.
         let caller = caller.or(facts.source_metadata.map(|source| source.facts));
         for argument in args {
@@ -13273,6 +13416,22 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (
+                Ty::DependentArray { element, length },
+                Ty::Array {
+                    element: actual_element,
+                    ..
+                }
+                | Ty::DependentArray {
+                    element: actual_element,
+                    ..
+                },
+            ) => {
+                return Ok(
+                    self.match_const_extent(*length, actual, env, slots, depth + 1)?
+                        && self.match_head(element, actual_element, env, slots, depth + 1)?,
+                );
+            }
             (Ty::Cell(a), Ty::Cell(b)) => {
                 return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
             }

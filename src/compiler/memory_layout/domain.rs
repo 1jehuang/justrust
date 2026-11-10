@@ -924,6 +924,11 @@ impl Local {
             if original.generic_env().total_arity() != target.type_args.len() {
                 return Err("alignment call changed original generic arity".into());
             }
+            original.generic_env().validate_argument_kinds(
+                &target.type_args,
+                Some(facts.env()),
+                budget,
+            )?;
             budget.retain_bytes(
                 target
                     .type_args
@@ -935,7 +940,38 @@ impl Local {
             arguments
                 .try_reserve_exact(target.type_args.len())
                 .map_err(|_| "infrastructure: alignment argument allocation failed")?;
-            for actual in target.type_args.iter() {
+            for (parameter, actual) in original
+                .generic_env()
+                .ordered_params()
+                .zip(target.type_args.iter())
+            {
+                if matches!(
+                    original.generic_env().parameter_kind(parameter),
+                    Some(ir::GenericParamKind::Const(_))
+                ) {
+                    // Preserve the source-ordered coordinate, but never assign
+                    // alignment, size or destruction semantics to a const value.
+                    // Any forged demand for this slot must fail closed.
+                    let unsupported = || -> Result<Requirement, String> {
+                        let mut value = Requirement::empty(parameters.len(), budget)?;
+                        value.unsupported = Some("const generic argument has no value-type layout");
+                        Ok(value)
+                    };
+                    arguments.push((
+                        unsupported()?,
+                        unsupported()?,
+                        SizeArgument {
+                            arrays: Arc::from([]),
+                            leaf: SizeLeaf::Unsupported,
+                        },
+                        unsupported()?,
+                        unsupported()?,
+                        unsupported()?,
+                        unsupported()?,
+                        unsupported()?,
+                    ));
+                    continue;
+                }
                 let mut requirement = Requirement::empty(parameters.len(), budget)?;
                 normalize(actual, &parameters, &mut requirement, budget, 0)?;
                 let mut raw = Requirement::empty(parameters.len(), budget)?;
@@ -1707,6 +1743,48 @@ impl ClosedCalls {
 mod tests {
     use super::*;
     use crate::compiler::{frontend, source};
+
+    #[test]
+    fn const_impl_layout_edges_retain_const_coordinates_without_value_demands() {
+        let program = frontend::parse("fn value<const N:usize>()->usize{N}fn forward<const M:usize>()->usize{value::<M>()}fn main(){let _n=forward::<4>();}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let locals = fixture_locals(&plan, plan.function_decl(2).unwrap(), &budget);
+        assert_eq!(locals.len(), 3);
+        let mut transfers = 0;
+        for local in &locals {
+            local.validate(&budget).unwrap();
+            local.direct.admit().unwrap();
+            for edge in local.edges.iter() {
+                assert_eq!(edge.arguments.len(), 1);
+                let argument = &edge.arguments[0];
+                for demand in [
+                    &argument.0,
+                    &argument.1,
+                    &argument.3,
+                    &argument.4,
+                    &argument.5,
+                    &argument.6,
+                    &argument.7,
+                ] {
+                    assert!(
+                        demand
+                            .admit()
+                            .unwrap_err()
+                            .contains("const generic argument has no value-type layout")
+                    );
+                }
+                let mut demanded = Requirement::empty(local.parameters.len(), &budget).unwrap();
+                argument
+                    .2
+                    .apply(SEMANTIC_SIZE_LIMIT, &mut demanded, &budget)
+                    .unwrap();
+                assert!(demanded.admit().is_err());
+                transfers += 1;
+            }
+        }
+        assert_eq!(transfers, 2);
+    }
 
     #[test]
     fn semantic_and_physical_extents_preserve_each_array_layer() {

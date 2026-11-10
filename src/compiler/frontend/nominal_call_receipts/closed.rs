@@ -160,7 +160,25 @@ impl ClosedReceipt {
         // Selection proves only the canonical target/obligations. Executable
         // authority comes below from every mapped physical root and exact
         // current-engine graph capability, never from this entry proof.
+        for callee in [&selected, &self.receipt.target] {
+            facts
+                .validate_callee_metadata(callee)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        }
         validate_original_callee_with(&selected, &self.receipt.target, budget, |source, mapped| {
+            match (source, mapped) {
+                (ir::Ty::Const(source), ir::Ty::Const(mapped)) => {
+                    let source = source
+                        .closed_key()
+                        .map_err(|error| source_error(budget, &error))?;
+                    let mapped = mapped
+                        .closed_key()
+                        .map_err(|error| source_error(budget, &error))?;
+                    return Ok(source == mapped);
+                }
+                (ir::Ty::Const(_), _) | (_, ir::Ty::Const(_)) => return Ok(false),
+                _ => {}
+            }
             super::super::super::nominal_realization::substitution::replay_closed_type_mapping_with(
                 None,
                 self.engine,
@@ -397,6 +415,63 @@ mod tests {
             ir::Ty::Tuple(items) => items.iter().find_map(first_nominal),
             _ => None,
         }
+    }
+
+    #[test]
+    fn const_impl_closed_call_receipts_preserve_scalar_and_type_slot_authority() {
+        let source = "fn raw<U,const N:usize>()->usize{N}fn forward<T>(v:T)->T{let n=raw::<T,4>();v}fn main(){let n=forward(7u32);}";
+        let (body, engine) = issued_body_fixture(source);
+        let rows = issued_rows(&body);
+        assert_eq!(rows.len(), 1);
+        assert!(!reject_changed_rows(&body, engine, Some(rows.clone())));
+        let ir::Callee::Direct(target) = &rows[0].receipt.target else {
+            panic!("source const call is direct");
+        };
+        assert_eq!(target.type_args[0], ir::Ty::Int(ir::IntTy::U32));
+        assert_eq!(
+            target.type_args[1],
+            ir::Ty::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::Usize,
+                bits: 4,
+            })
+        );
+        for replacement in [
+            ir::Ty::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::Usize,
+                bits: 5,
+            }),
+            ir::Ty::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::U8,
+                bits: 4,
+            }),
+            ir::Ty::Const(ir::ConstArgument::Bool(true)),
+            ir::Ty::Int(ir::IntTy::Usize),
+        ] {
+            // Change both sides so equality alone cannot authenticate the row.
+            let mut changed = rows.to_vec();
+            let row = &mut changed[0];
+            for callee in [&mut row.receipt.target, &mut row.selection] {
+                let ir::Callee::Direct(target) = callee else {
+                    unreachable!()
+                };
+                target.type_args = Arc::from([target.type_args[0].clone(), replacement.clone()]);
+            }
+            assert!(reject_changed_rows(&body, engine, Some(changed.into())));
+        }
+        let mut changed = rows.to_vec();
+        let ir::Callee::Direct(target) = &mut changed[0].receipt.target else {
+            unreachable!()
+        };
+        target.type_args = Arc::from([target.type_args[0].clone()]);
+        assert!(reject_changed_rows(&body, engine, Some(changed.into())));
+        let mut changed = rows.to_vec();
+        let ir::Callee::Direct(target) = &mut changed[0].receipt.target else {
+            unreachable!()
+        };
+        target.declaration = body.facts.declaration();
+        assert!(reject_changed_rows(&body, engine, Some(changed.into())));
+        let (_, foreign_engine) = issued_body_fixture(source);
+        assert!(reject_changed_rows(&body, foreign_engine, Some(rows)));
     }
 
     #[test]

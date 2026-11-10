@@ -29,6 +29,7 @@ pub(in crate::compiler) enum Shape {
     Ref(ir::BorrowKind, Arc<Shape>),
     RawPtr(ir::BorrowKind, Arc<Shape>),
     Array(Arc<Shape>, usize),
+    DependentArray(Arc<Shape>, ir::ConstParamId),
     Slice(Arc<Shape>),
     Projection {
         declaration: ir::DeclId,
@@ -76,6 +77,9 @@ impl Shape {
                 a == b && left.same_with(right, depth + 1, meter)?
             }
             (Shape::Array(left, a), Shape::Array(right, b)) => {
+                a == b && left.same_with(right, depth + 1, meter)?
+            }
+            (Shape::DependentArray(left, a), Shape::DependentArray(right, b)) => {
                 a == b && left.same_with(right, depth + 1, meter)?
             }
             (Shape::Slice(left), Shape::Slice(right)) => left.same_with(right, depth + 1, meter)?,
@@ -851,6 +855,18 @@ impl<'s> Solver<'_, '_, 's> {
             Shape::Array(inner, length) => {
                 Domain::Array(self.manifest_term_in(inner, params, depth + 1)?, *length)
             }
+            Shape::DependentArray(inner, length) => {
+                let element = self.manifest_term_in(inner, params, depth + 1)?;
+                let parameter = ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                let length = match params.get(&parameter) {
+                    Some(length) => *length,
+                    None => self.fixed(ir::Ty::Param(parameter))?,
+                };
+                Domain::DependentArray(element, length)
+            }
             Shape::Slice(inner) => {
                 Domain::Slice(self.manifest_term_in(inner, params, depth + 1)?)
             }
@@ -936,6 +952,11 @@ impl<'s> Solver<'_, '_, 's> {
                         numeric_defaults,
                     )?
                 }
+                Domain::DependentArray(element, length) => self.manifest_ready_with_defaults(
+                    &[element, length],
+                    depth + 1,
+                    numeric_defaults,
+                )?,
             };
             if !ready {
                 return Ok(false);
@@ -1098,6 +1119,22 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Domain::Array(term, length) => {
                 Shape::Array(Arc::new(self.manifest_shape(term, depth + 1)?), length)
+            }
+            Domain::DependentArray(element, length) => {
+                let length = self
+                    .resolve(length, depth + 1)?
+                    .ok_or("E0282: unresolved dependent array extent in solved type manifest")?;
+                let element = Arc::new(self.manifest_shape(element, depth + 1)?);
+                match const_parameters::array_type(
+                    ir::Ty::Unit,
+                    &length,
+                    self.checker.facts(),
+                    &self.checker.signatures.plan()?.budget,
+                )? {
+                    ir::Ty::Array { len, .. } => Shape::Array(element, len),
+                    ir::Ty::DependentArray { length, .. } => Shape::DependentArray(element, length),
+                    _ => return Err("invalid dependent array extent recipe".into()),
+                }
             }
             Domain::Slice(term) => Shape::Slice(Arc::new(self.manifest_shape(term, depth + 1)?)),
             Domain::AssociatedProjection(projection) => Shape::Projection {

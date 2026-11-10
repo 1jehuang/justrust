@@ -45,11 +45,18 @@ pub(in crate::compiler) fn substitute_schema_metadata_ty_scratch(
             .map_err(|error| error.into_legacy_diagnostic(budget))?;
         if declaration.own_env.binder() != scope.binder()
             || declaration.own_env.arity() != scope.arity()
+            || !declaration.own_env.same_slot_kinds(scope)
         {
             return Err("schema metadata substitution changed canonical binder scope".into());
         }
     }
     FactsCtx::Universal(env).validate_ty_metadata_with_budget(ty, budget)?;
+    let caller_env = match caller {
+        FactsCtx::Concrete => None,
+        FactsCtx::Universal(env) => Some(env),
+        FactsCtx::Validated(facts) => Some(facts.env().as_ref()),
+    };
+    env.validate_argument_kinds(args, caller_env, budget)?;
     let mut validate = |root: &Ty| {
         if let Some(facts) = caller.validated() {
             facts
@@ -59,8 +66,10 @@ pub(in crate::compiler) fn substitute_schema_metadata_ty_scratch(
             caller.validate_ty_metadata_with_budget(root, budget)
         }
     };
-    for argument in args {
-        validate(argument)?;
+    for (parameter, argument) in env.ordered_params().zip(args) {
+        if env.parameter_kind(parameter) == Some(GenericParamKind::Type) {
+            validate(argument)?;
+        }
     }
     let result = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
     validate(&result)?;

@@ -110,6 +110,10 @@ impl Checker<'_> {
             InferKind::Array(element, len) => {
                 InferKind::Array(self.method_owner_term(element, bindings, depth + 1)?, *len)
             }
+            InferKind::DependentArray(element, length) => InferKind::DependentArray(
+                self.method_owner_term(element, bindings, depth + 1)?,
+                self.method_owner_term(length, bindings, depth + 1)?,
+            ),
             InferKind::Slice(element) => {
                 InferKind::Slice(self.method_owner_term(element, bindings, depth + 1)?)
             }

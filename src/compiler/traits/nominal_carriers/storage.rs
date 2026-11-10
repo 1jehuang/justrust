@@ -9,6 +9,28 @@ pub(in crate::compiler::traits) struct CarrierFamilyActuals {
 }
 
 impl CarrierFamilyActuals {
+    pub(in crate::compiler::traits) fn has_array_correspondence(
+        &self,
+        world: &ValidatedTraitWorld,
+        original: &Ty,
+        mapped: &Ty,
+        depth: usize,
+    ) -> Result<bool> {
+        charged(world.budget(), world.budget().check_depth(depth))?;
+        for (family, actual) in &self.values {
+            charged(world.budget(), world.budget().charge_work(1))?;
+            let ir::CarrierFamily::Array(source) = family else {
+                continue;
+            };
+            if world.eq_ty(source, original, depth + 1)?
+                && world.eq_ty(actual, mapped, depth + 1)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(in crate::compiler::traits) fn from_signature(
         world: &ValidatedTraitWorld,
         raw: &GenericSchema,
@@ -49,6 +71,9 @@ impl CarrierFamilyActuals {
                     let key = match original {
                         Ty::AssociatedType(value) => ir::CarrierFamily::Projection(value.clone()),
                         Ty::Opaque(value) => ir::CarrierFamily::Opaque(value.clone()),
+                        Ty::DependentArray { .. } => {
+                            ir::CarrierFamily::Array(Arc::new(original.clone()))
+                        }
                         _ => unreachable!(),
                     };
                     // Keep each typed occurrence until semantic realization.
@@ -105,7 +130,13 @@ impl CarrierFamilyActuals {
                     ));
                 }
                 let mut mappings = Vec::new();
-                world.collect_nominal_mappings(&logical, &mapped, &mut mappings, 0)?;
+                world.collect_nominal_mappings_with_actuals(
+                    &logical,
+                    &mapped,
+                    &mut mappings,
+                    self,
+                    0,
+                )?;
                 charged(world.budget(), world.budget().charge_work(mappings.len()))?;
                 let graph_nodes = mappings
                     .iter()
@@ -207,6 +238,232 @@ pub(super) fn storage_occurrences(
     )
 }
 
+fn mapped_array_extent(
+    env: &GenericEnv,
+    arguments: &[Ty],
+    length: ir::ConstParamId,
+    mapped: &Ty,
+    budget: &ir::PlanBudget,
+) -> Result<bool> {
+    let argument = env
+        .array_length_argument(length, arguments, budget)
+        .map_err(|error| FactsError::invalid(budget, &error))?;
+    match (argument, mapped) {
+        (Ty::Const(value), Ty::Array { len, .. }) => {
+            value
+                .closed_key()
+                .map_err(|error| FactsError::invalid(budget, &error))?;
+            Ok(
+                value.closed_type() == Some(ir::ConstType::Int(ir::IntTy::Usize))
+                    && value.as_usize() == Some(*len),
+            )
+        }
+        (Ty::Param(actual), Ty::DependentArray { length: mapped, .. }) => {
+            Ok(actual.owner == mapped.owner && actual.index == mapped.index)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn const_impl_storage_extents_keep_source_owner_kind_slot_and_mapped_length() {
+    let program = crate::compiler::frontend::parse("fn probe<T,const N:usize,const M:usize>(){}fn main(){}fn arrays<T,const N:usize>(x:[T;N])->[T;N]{x}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let context = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let scope = context
+        .param_env(context.callable_decl(0).unwrap())
+        .unwrap();
+    let env = GenericEnv::new(&[scope.clone()], &budget).unwrap();
+    let length = ir::ConstParamId {
+        owner: scope.binder(),
+        index: 1,
+    };
+    let value = |bits| {
+        Ty::Const(ir::ConstArgument::Integer {
+            ty: ir::IntTy::Usize,
+            bits,
+        })
+    };
+    let arguments = [Ty::Bool, value(2), value(3)];
+    let mapped = |len| Ty::Array {
+        element: Arc::new(Ty::Bool),
+        len,
+    };
+    assert!(mapped_array_extent(&env, &arguments, length, &mapped(2), &budget).unwrap());
+    assert!(!mapped_array_extent(&env, &arguments, length, &mapped(3), &budget).unwrap());
+    let mut wrong_kind = arguments.clone();
+    wrong_kind[1] = Ty::Const(ir::ConstArgument::Integer {
+        ty: ir::IntTy::U8,
+        bits: 2,
+    });
+    assert!(!mapped_array_extent(&env, &wrong_kind, length, &mapped(2), &budget).unwrap());
+    assert!(mapped_array_extent(&env, &arguments[..2], length, &mapped(2), &budget).is_err());
+    assert!(
+        mapped_array_extent(
+            &env,
+            &arguments,
+            ir::ConstParamId { index: 0, ..length },
+            &mapped(2),
+            &budget
+        )
+        .is_err()
+    );
+    let foreign = context
+        .param_env(context.callable_decl(1).unwrap())
+        .unwrap();
+    assert!(
+        mapped_array_extent(
+            &env,
+            &arguments,
+            ir::ConstParamId {
+                owner: foreign.binder(),
+                index: 0
+            },
+            &mapped(2),
+            &budget
+        )
+        .is_err()
+    );
+    let mut forwarded = arguments.clone();
+    forwarded[1] = Ty::Param(ir::ParamId {
+        owner: scope.binder(),
+        index: 2,
+    });
+    let symbolic = |index| Ty::DependentArray {
+        element: Arc::new(Ty::Bool),
+        length: ir::ConstParamId {
+            owner: scope.binder(),
+            index,
+        },
+    };
+    assert!(mapped_array_extent(&env, &forwarded, length, &symbolic(2), &budget).unwrap());
+    assert!(!mapped_array_extent(&env, &forwarded, length, &symbolic(1), &budget).unwrap());
+    let world = context.trait_world().unwrap();
+    let raw = world
+        .schema
+        .declaration_schema(context.function_decl(2).unwrap())
+        .unwrap();
+    let original = &raw.signature.params[0];
+    let mut signature = raw.signature.clone();
+    for len in [0, 2] {
+        signature.params[0] = mapped(len);
+        signature.result = mapped(len);
+        let actuals = CarrierFamilyActuals::from_signature(
+            &world,
+            &raw,
+            &[Ty::Bool, value(len as u128)],
+            &signature,
+        )
+        .unwrap();
+        assert!(
+            actuals
+                .has_array_correspondence(&world, original, &mapped(len), 0)
+                .unwrap()
+        );
+        world
+            .collect_nominal_mappings_with_actuals(
+                original,
+                &mapped(len),
+                &mut Vec::new(),
+                &actuals,
+                0,
+            )
+            .unwrap();
+        assert!(
+            world
+                .collect_nominal_mappings(original, &mapped(len), &mut Vec::new(), 0)
+                .is_err()
+        );
+        for changed in [
+            mapped(len + 1),
+            Ty::Array {
+                element: Arc::new(Ty::Int(ir::IntTy::I32)),
+                len,
+            },
+        ] {
+            assert!(
+                !actuals
+                    .has_array_correspondence(&world, original, &changed, 0)
+                    .unwrap()
+            );
+            assert!(
+                world
+                    .collect_nominal_mappings_with_actuals(
+                        original,
+                        &changed,
+                        &mut Vec::new(),
+                        &actuals,
+                        0,
+                    )
+                    .is_err()
+            );
+        }
+        let Ty::DependentArray { element, length } = original else {
+            panic!("expected source array")
+        };
+        for changed in [
+            ir::ConstParamId {
+                owner: scope.binder(),
+                index: length.index,
+            },
+            ir::ConstParamId {
+                index: 0,
+                ..*length
+            },
+        ] {
+            let changed = Ty::DependentArray {
+                element: element.clone(),
+                length: changed,
+            };
+            assert!(
+                !actuals
+                    .has_array_correspondence(&world, &changed, &mapped(len), 0)
+                    .unwrap()
+            );
+            assert!(
+                world
+                    .collect_nominal_mappings_with_actuals(
+                        &changed,
+                        &mapped(len),
+                        &mut Vec::new(),
+                        &actuals,
+                        0,
+                    )
+                    .is_err()
+            );
+        }
+    }
+    signature.params[0] = symbolic(2);
+    signature.result = symbolic(2);
+    let actuals = CarrierFamilyActuals::from_signature(
+        &world,
+        &raw,
+        &[
+            Ty::Bool,
+            Ty::Param(ir::ParamId {
+                owner: scope.binder(),
+                index: 2,
+            }),
+        ],
+        &signature,
+    )
+    .unwrap();
+    assert!(
+        actuals
+            .has_array_correspondence(&world, original, &symbolic(2), 0)
+            .unwrap()
+    );
+    assert!(
+        !actuals
+            .has_array_correspondence(&world, original, &symbolic(1), 0)
+            .unwrap()
+    );
+    world
+        .collect_nominal_mappings_with_actuals(original, &symbolic(2), &mut Vec::new(), &actuals, 0)
+        .unwrap();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn storage_occurrences_in(
     world: &ValidatedTraitWorld,
@@ -221,7 +478,10 @@ fn storage_occurrences_in(
 ) -> Result<()> {
     charged(world.budget(), world.budget().check_depth(depth))?;
     charged(world.budget(), world.budget().charge_work(1))?;
-    if matches!(original, Ty::AssociatedType(_) | Ty::Opaque(_)) {
+    if matches!(
+        original,
+        Ty::AssociatedType(_) | Ty::Opaque(_) | Ty::DependentArray { .. }
+    ) {
         family(original, mapped)?;
     }
     if let Ty::Param(parameter) = original {
@@ -496,16 +756,16 @@ fn storage_occurrences_in(
                 recurse(a, b)?;
             }
         }
-        (
-            Ty::DependentArray {
-                element: a,
-                length: x,
-            },
-            Ty::DependentArray {
-                element: b,
-                length: y,
-            },
-        ) if x == y => recurse(a, b)?,
+        (Ty::DependentArray { element: a, length }, Ty::Array { element: b, .. })
+            if mapped_array_extent(env, arguments, *length, mapped, world.budget())? =>
+        {
+            recurse(a, b)?;
+        }
+        (Ty::DependentArray { element: a, length }, Ty::DependentArray { element: b, .. })
+            if mapped_array_extent(env, arguments, *length, mapped, world.budget())? =>
+        {
+            recurse(a, b)?
+        }
         // Projection normalization is authenticated by the mapped signature.
         // It provides no invertible occurrence of an original binder parameter.
         (Ty::AssociatedType(_), _) => {}

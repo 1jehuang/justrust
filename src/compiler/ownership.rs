@@ -1775,7 +1775,9 @@ fn preflight_with_plan(
                     element.as_ref().clone()
                 }
                 Projection::DynamicIndex(_) => match ty {
-                    Ty::Array { element, .. } | Ty::Slice { element } => element.as_ref().clone(),
+                    Ty::Array { element, .. }
+                    | Ty::DependentArray { element, .. }
+                    | Ty::Slice { element } => element.as_ref().clone(),
                     _ => return Ok(()),
                 },
                 Projection::Downcast(variant) => {

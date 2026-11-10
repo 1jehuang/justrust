@@ -2981,6 +2981,22 @@ impl Replay<'_> {
             ) => {
                 self.concrete_method_result(source, node, id, target, signature, args, depth + 1)?
             }
+            (Expr::Var(path), ir::ExprKind::ConstParameter(actual_operand)) => {
+                let expected = super::const_parameters::parameter_path_value(
+                    self.signatures,
+                    path,
+                    self.budget,
+                )
+                .map_err(|error| source_error(self.budget, &error))?
+                .ok_or_else(|| FactsError::invalid(self.budget, "const value source changed"))?;
+                if &expected != actual_operand {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "const value declaration changed",
+                    ));
+                }
+                expected.value_type()
+            }
             (Expr::Var(path), ir::ExprKind::Local(local)) if is_local_shaped_path(path) => {
                 let (root, ty) = self.operand(node, depth)?;
                 if root != *local {

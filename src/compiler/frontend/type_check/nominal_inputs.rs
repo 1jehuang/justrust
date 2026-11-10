@@ -470,6 +470,9 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
         ir::Ty::Ref { kind, referent } => NominalShape::Ref(*kind, Arc::new(type_shape(checker, referent, depth + 1)?)),
         ir::Ty::RawPtr { kind, pointee } => NominalShape::RawPtr(*kind, Arc::new(type_shape(checker, pointee, depth + 1)?)),
         ir::Ty::Array { element, len } => NominalShape::Array(Arc::new(type_shape(checker, element, depth + 1)?), *len),
+        ir::Ty::DependentArray { element, length } => NominalShape::DependentArray(
+            Arc::new(type_shape(checker, element, depth + 1)?), *length,
+        ),
         ir::Ty::Slice { element } => NominalShape::Slice(Arc::new(type_shape(checker, element, depth + 1)?)),
         ir::Ty::AssociatedType(p) => NominalShape::Projection {
             declaration: p.trait_ref.declaration, item: p.item,
@@ -665,6 +668,20 @@ fn recipe_type(
                 element: Arc::new(element),
                 len: *len,
             }
+        }
+        NominalShape::DependentArray(inner, length) => {
+            let Some(element) = recipe_type(checker, inputs, inner, missing, depth + 1)? else {
+                return Ok(None);
+            };
+            super::super::const_parameters::array_type(
+                element,
+                &ir::Ty::Param(ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                }),
+                checker.facts(),
+                &checker.signatures.plan()?.budget,
+            )?
         }
         NominalShape::Slice(inner) => {
             let Some(element) = recipe_type(checker, inputs, inner, missing, depth + 1)? else {

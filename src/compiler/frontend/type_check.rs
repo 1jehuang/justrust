@@ -1048,9 +1048,48 @@ impl<'c, 's> Inference<'c, 's> {
             .finish(fallback, &mut |decl, args| self.materialize(decl, args))
             .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
         else {
+            if fallback && let Some(scope) = self.core.parameter_env() {
+                for (index, slot) in self.core.slots().iter().enumerate() {
+                    let parameter = ir::ParamId {
+                        owner: scope.binder(),
+                        index: index as u16,
+                    };
+                    if matches!(
+                        scope.parameter_kind(parameter),
+                        Some(ir::GenericParamKind::Const(_))
+                    ) && match slot {
+                        None => true,
+                        Some(term) => self.resolve(term, false, 0)?.is_none(),
+                    } {
+                        return Err(
+                            "E0284: type annotations needed: cannot infer const parameter".into(),
+                        );
+                    }
+                }
+            }
             return Ok(None);
         };
-        for ty in &args {
+        let scope = self.core.parameter_env();
+        if let Some(scope) = scope {
+            let caller = match self.checker.facts() {
+                ir::FactsCtx::Universal(env) => Some(env),
+                ir::FactsCtx::Validated(facts) => Some(facts.env().as_ref()),
+                ir::FactsCtx::Concrete => None,
+            };
+            scope.validate_argument_kinds(&args, caller, &plan.budget)?;
+        }
+        for (index, ty) in args.iter().enumerate() {
+            if scope.is_some_and(|scope| {
+                matches!(
+                    scope.parameter_kind(ir::ParamId {
+                        owner: scope.binder(),
+                        index: index as u16,
+                    }),
+                    Some(ir::GenericParamKind::Const(_))
+                )
+            }) {
+                continue;
+            }
             // Only the canonical (replayed) checker carries inferred reference
             // actuals with origins. Legacy cloned-Program adapters cannot.
             if self.checker.canonical.is_none()
@@ -1284,10 +1323,20 @@ impl<'s> Checker<'s> {
                 Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
             },
-            Expr::Var(name) => match self.callable_value_hint(name)? {
-                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
-                None => self.infer_node(InferKind::Unknown(false))?,
-            },
+            Expr::Var(name) => {
+                if let Some(value) = super::const_parameters::parameter_path_value(
+                    self.signatures,
+                    name,
+                    &plan.budget,
+                )? {
+                    self.infer_node(InferKind::Rigid(value.value_type()))?
+                } else {
+                    match self.callable_value_hint(name)? {
+                        Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                        None => self.infer_node(InferKind::Unknown(false))?,
+                    }
+                }
+            }
             Expr::Borrow { kind, place } => {
                 plan.budget.charge_work(place.fields.len() + 1)?;
                 self.infer_storage(place.fields.len() + 1)?;
@@ -9525,6 +9574,18 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if let Expr::Var(path) = e {
+            let plan = self.signatures.plan()?;
+            if let Some(value) =
+                super::const_parameters::parameter_path_value(self.signatures, path, &plan.budget)?
+            {
+                return self.finish_checked_expression(
+                    e,
+                    ir::ExprKind::ConstParameter(value),
+                    Flow::value(value.value_type()),
+                );
+            }
+        }
         if let Expr::Apply { path, value } = e {
             if let Some(ty) = self.applied_fn_item(path, value)? {
                 return self.finish_checked_expression(e, ir::ExprKind::FnItem, Flow::value(ty));

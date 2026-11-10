@@ -650,6 +650,7 @@ pub enum Statement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constant {
+    ConstParameter(ir::ConstOperand),
     AssociatedConst(std::sync::Arc<ir::AssociatedConstOperand>),
     PhantomData(std::sync::Arc<ir::PhantomDataTy>),
     Enum { ty: ir::EnumTy, variant: usize },
@@ -2567,6 +2568,9 @@ impl Function {
         ) -> Result<(), String> {
             budget.charge_work(1)?;
             match value {
+                Operand::Constant(Constant::ConstParameter(operand)) => {
+                    operand.validate(facts, budget)?
+                }
                 Operand::Constant(Constant::AssociatedConst(operand)) => {
                     operand.validate_context(facts, budget)?
                 }
@@ -2739,9 +2743,12 @@ impl Function {
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
-                    for ty in target
-                        .metadata_types()
-                        .chain(signature.params.iter())
+                    target.for_each_value_metadata(facts, |ty| {
+                        facts.validate_ty_with_budget_scratch(ty, budget, scratch)
+                    })?;
+                    for ty in signature
+                        .params
+                        .iter()
                         .chain(std::iter::once(&signature.result))
                     {
                         facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
@@ -2824,6 +2831,13 @@ impl Function {
     ) -> Result<Ty, String> {
         let budget = self.query_budget(facts);
         match operand {
+            Operand::Constant(Constant::ConstParameter(operand)) => {
+                operand.validate(
+                    facts,
+                    budget.ok_or("const parameter operand requires a planning budget")?,
+                )?;
+                Ok(operand.value_type())
+            }
             Operand::Constant(Constant::AssociatedConst(operand)) => Ok(operand.ty().clone()),
             Operand::Constant(Constant::Int(value)) => {
                 value.validate()?;
@@ -3035,7 +3049,7 @@ impl Function {
             validate_type_with_budget(&array_ty, 0, budget)?;
         }
         facts.validate_ty_scratch(&array_ty, scratch)?;
-        let Ty::Array { element, .. } = array_ty else {
+        let (Ty::Array { element, .. } | Ty::DependentArray { element, .. }) = array_ty else {
             return Err("dynamic indexing requires array place".into());
         };
         Ok(element.as_ref().clone())
@@ -4053,9 +4067,12 @@ impl Function {
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
-                    for ty in target
-                        .metadata_types()
-                        .chain(signature.params.iter())
+                    target.for_each_value_metadata(facts, |ty| {
+                        facts.validate_ty_scratch(ty, scratch)
+                    })?;
+                    for ty in signature
+                        .params
+                        .iter()
                         .chain(std::iter::once(&signature.result))
                     {
                         facts.validate_ty_scratch(ty, scratch)?;
@@ -6022,6 +6039,11 @@ impl Lowerer<'_> {
             } => {
                 self.match_expression(id, *scrutinee, arms, *scrutinee_scope, destination.clone())?;
             }
+            ir::ExprKind::ConstParameter(value) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::ConstParameter(*value))),
+                origin,
+            ),
             ir::ExprKind::AssociatedConst(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::AssociatedConst(value.clone()))),

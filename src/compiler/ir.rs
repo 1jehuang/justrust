@@ -7,7 +7,14 @@
 use super::frontend::{BinaryOp, UnaryOp};
 #[path = "ir/const_generics.rs"]
 mod const_generics;
-pub use const_generics::{ConstArgument, ConstBinder, ConstParamId, ConstType, GenericArgument};
+pub use const_generics::{
+    ConstArgument, ConstBinder, ConstParamId, ConstType, GenericArgument, GenericParamKind,
+};
+#[path = "ir/const_calls.rs"]
+mod const_calls;
+#[path = "ir/const_operands.rs"]
+mod const_operands;
+pub use const_operands::{ConstOperand, ConstValue, RepeatLength};
 #[path = "ir/associated_const.rs"]
 mod associated_const;
 #[path = "ir/promotion.rs"]
@@ -215,6 +222,8 @@ pub struct ParamId {
 pub struct ParamEnv {
     binder: BinderId,
     arity: usize,
+    /// Source-ordered slot kinds. Type-only binders avoid an allocation.
+    kinds: Option<Arc<[GenericParamKind]>>,
     /// Parameters declared `?Sized` at this binder (bit per index). Immutable
     /// declaration metadata: the implicit `Sized` row is omitted only here.
     relaxed_sized: u32,
@@ -251,6 +260,7 @@ impl ParamEnv {
         Ok(Self {
             binder,
             arity,
+            kinds: None,
             relaxed_sized,
             outlives_static,
         })
@@ -315,6 +325,8 @@ impl GenericEnv {
             const_binders: None,
         })
     }
+    // Legacy environment construction remains only for negative regression fixtures.
+    #[cfg(test)]
     pub(in crate::compiler) fn with_const_binder(
         &self,
         binder: Arc<ConstBinder>,
@@ -353,6 +365,12 @@ impl GenericEnv {
             .map_or(&[], |scopes| scopes.binders.as_ref())
     }
     pub fn const_parameter_type(&self, parameter: ConstParamId) -> Option<ConstType> {
+        if let Some(GenericParamKind::Const(ty)) = self.parameter_kind(ParamId {
+            owner: parameter.owner,
+            index: parameter.index,
+        }) {
+            return Some(ty);
+        }
         self.const_binders()
             .iter()
             .find_map(|binder| binder.parameter_type(parameter))
@@ -578,7 +596,7 @@ pub(super) fn validate_callee_for_use_scratch(
     {
         return Err("trait argument limit exceeded".into());
     }
-    for ty in target.metadata_types() {
+    target.for_each_value_metadata(facts, |ty| {
         if !executable_storage && let Some(authority) = facts.validated() {
             authority
                 .validate_ty_metadata_scratch(ty, authority.budget(), scratch)
@@ -586,7 +604,8 @@ pub(super) fn validate_callee_for_use_scratch(
         } else {
             facts.validate_ty_scratch(ty, scratch)?;
         }
-    }
+        Ok(())
+    })?;
     if let Some(authority) = facts.validated() {
         if authority.phase() == super::traits::FactsPhase::Closed
             && matches!(target, Callee::TraitItem(_))
@@ -798,6 +817,11 @@ pub enum CarrierChannel {
         projection: Arc<AssociatedTypeProjection>,
         prefix: u8,
     },
+    /// A source array family retains its exact element and owner-bound extent.
+    ArrayTail {
+        array: Arc<Ty>,
+        prefix: u8,
+    },
     /// One declaration-owned opaque capture family, never a hidden field path.
     OpaqueTail {
         opaque: Arc<OpaqueTy>,
@@ -807,6 +831,7 @@ pub enum CarrierChannel {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierFamily {
     Parameter(ParamId),
+    Array(Arc<Ty>),
     Projection(Arc<AssociatedTypeProjection>),
     Opaque(Arc<OpaqueTy>),
 }
@@ -814,6 +839,7 @@ impl CarrierChannel {
     pub fn family(&self) -> Option<CarrierFamily> {
         match self {
             Self::Fixed(_) => None,
+            Self::ArrayTail { array, .. } => Some(CarrierFamily::Array(array.clone())),
             Self::ParamTail { parameter, .. } => Some(CarrierFamily::Parameter(*parameter)),
             Self::ProjectionTail { projection, .. } => {
                 Some(CarrierFamily::Projection(projection.clone()))
@@ -826,7 +852,8 @@ impl CarrierChannel {
             Self::Fixed(position) => position.depth,
             Self::ParamTail { prefix, .. }
             | Self::ProjectionTail { prefix, .. }
-            | Self::OpaqueTail { prefix, .. } => *prefix,
+            | Self::OpaqueTail { prefix, .. }
+            | Self::ArrayTail { prefix, .. } => *prefix,
         }
     }
 }
@@ -1070,7 +1097,15 @@ pub(super) fn source_carrier_inventory(
         }
         match ty {
             Ty::DependentArray { .. } => {
-                return Err("unsupported: reference carriers in dependent arrays".into());
+                emit(
+                    CarrierChannel::ArrayTail {
+                        array: Arc::new(ty.clone()),
+                        prefix,
+                    },
+                    path,
+                    output,
+                    budget,
+                )?;
             }
             Ty::Ref { referent, .. } => {
                 emit(
@@ -1286,7 +1321,8 @@ pub fn carrier_at(
         CarrierChannel::Fixed(position) => position.depth,
         CarrierChannel::ParamTail { prefix, .. }
         | CarrierChannel::ProjectionTail { prefix, .. }
-        | CarrierChannel::OpaqueTail { prefix, .. } => *prefix,
+        | CarrierChannel::OpaqueTail { prefix, .. }
+        | CarrierChannel::ArrayTail { prefix, .. } => *prefix,
     };
     for _ in 0..count {
         budget.charge_work(1)?;
@@ -1297,6 +1333,11 @@ pub fn carrier_at(
     }
     match (&location.channel, &ty) {
         (CarrierChannel::Fixed(_), Ty::Ref { .. }) => Ok(ty),
+        (CarrierChannel::ArrayTail { array, .. }, Ty::DependentArray { .. })
+            if array.as_ref() == &ty =>
+        {
+            Ok(ty)
+        }
         (CarrierChannel::ProjectionTail { projection, .. }, Ty::AssociatedType(actual))
             if projection == actual =>
         {
@@ -1346,6 +1387,9 @@ pub enum CarrierRegionTerm {
     },
     OpaqueFamily {
         opaque: Arc<OpaqueTy>,
+    },
+    ArrayFamily {
+        array: Arc<Ty>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1938,6 +1982,9 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Enum(a), Ty::Enum(b)) => std::ptr::eq(a.def(), b.def()),
         (Ty::Dyn(a), Ty::Dyn(b)) => a == b,
         (Ty::Param(a), Ty::Param(b)) => a == b,
+        (Ty::Const(a), Ty::Const(b)) => {
+            matches!((a.closed_key(), b.closed_key()), (Ok(a), Ok(b)) if a == b)
+        }
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
         (Ty::Char, Ty::Char)
@@ -3821,12 +3868,17 @@ pub(super) fn substitute_ty_with_scratch(
     budget: &PlanBudget,
     scratch: &mut super::traits::TraitScratch,
 ) -> Result<Ty, String> {
-    if args.len() != env.total_arity() {
-        return Err("generic argument arity mismatch".into());
-    }
-    for argument in args {
-        validate_substitution_actual(argument, caller, cx, budget, scratch)?;
-        validate_root_reference_actual(argument, budget)?;
+    let caller_env = match caller {
+        FactsCtx::Concrete => None,
+        FactsCtx::Universal(env) => Some(env),
+        FactsCtx::Validated(facts) => Some(facts.env().as_ref()),
+    };
+    env.validate_argument_kinds(args, caller_env, budget)?;
+    for (parameter, argument) in env.ordered_params().zip(args) {
+        if env.parameter_kind(parameter) == Some(GenericParamKind::Type) {
+            validate_substitution_actual(argument, caller, cx, budget, scratch)?;
+            validate_root_reference_actual(argument, budget)?;
+        }
     }
     let substituted = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
     let normalized = if let Some(facts) = caller.validated() {
@@ -3901,7 +3953,11 @@ pub(super) fn substitute_source_ty_with_scratch(
         .validate_ty_metadata_scratch(ty, budget, source_scratch)
         .map_err(|error| error.into_legacy_diagnostic(budget))?;
     let caller = FactsCtx::Validated(destination);
-    for argument in args {
+    env.validate_argument_kinds(args, Some(destination.env()), budget)?;
+    for (parameter, argument) in env.ordered_params().zip(args) {
+        if env.parameter_kind(parameter) != Some(GenericParamKind::Type) {
+            continue;
+        }
         destination
             .validate_ty_metadata_scratch(argument, budget, scratch)
             .map_err(|error| error.into_legacy_diagnostic(budget))?;
@@ -4011,13 +4067,19 @@ fn substitute_ty_walk(
     Ok(match ty {
         Ty::DependentArray { element, length } => {
             let actual = substitute_ty_walk(element, env, args, caller, cx, budget, depth + 1)?;
-            let mapped = if identical_type(element, &actual, budget)? {
-                ty.clone()
-            } else {
-                Ty::DependentArray {
+            let mapped = match env.substitute_array_length(*length, args, caller, budget)? {
+                ConstArgument::Integer {
+                    ty: IntTy::Usize,
+                    bits,
+                } => Ty::Array {
                     element: Arc::new(actual),
-                    length: *length,
-                }
+                    len: usize::try_from(bits).map_err(|_| "array length exceeds usize")?,
+                },
+                ConstArgument::Parameter(length) => Ty::DependentArray {
+                    element: Arc::new(actual),
+                    length,
+                },
+                _ => return Err("E0308: array length requires a usize const argument".into()),
             };
             caller.validate_ty_metadata_with_budget(&mapped, budget)?;
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
@@ -4478,8 +4540,13 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
     if args.len() != env.total_arity() {
         return Err("generic instance argument arity mismatch".into());
     }
+    env.validate_argument_kinds(args, None, budget)?;
     let mut actual_scratch = super::traits::TraitScratch::default();
     for ty in args {
+        if let Ty::Const(argument) = ty {
+            argument.closed_key()?;
+            continue;
+        }
         validate_substitution_actual(
             ty,
             FactsCtx::from_validated(closed_facts),
@@ -4560,6 +4627,16 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                     return Err("PhantomData substitution changed expression descriptor".into());
                 }
                 *marker = mapped;
+            }
+            ExprKind::ConstParameter(operand) => {
+                operand.validate(FactsCtx::from_validated(template.facts()), budget)?;
+                let value = operand
+                    .substitute(env, args, FactsCtx::from_validated(closed_facts), budget)?
+                    .closed_expression()?;
+                if expression.ty != value.ty {
+                    return Err("const parameter substitution changed scalar value type".into());
+                }
+                expression.kind = value.kind;
             }
             ExprKind::AssociatedConst(operand) => {
                 operand.validate(template.facts(), budget)?;
@@ -4988,7 +5065,26 @@ fn substitute_callee_metadata(
     {
         return Err("callee substitution requires exact closed planning authority".into());
     }
-    map_callee_metadata(callee, budget, |ty| {
+    env.validate_argument_kinds(args, Some(closed_facts.env()), budget)?;
+    let substituted = map_callee_metadata(callee, budget, |ty| {
+        if ty.is_const_argument_leaf(Some(FactsCtx::Universal(env)))? {
+            let actual = match ty {
+                Ty::Const(_) => ty,
+                Ty::Param(parameter) => {
+                    let index = env
+                        .argument_index(*parameter)
+                        .ok_or("const callee actual has no source-owned ordered slot")?;
+                    args.get(index)
+                        .ok_or("const callee actual changed source arity")?
+                }
+                _ => return Err("const callee metadata changed its source kind".into()),
+            };
+            let Ty::Const(value) = actual else {
+                return Err("native callee const actual did not close".into());
+            };
+            value.closed_key()?;
+            return Ok(actual.clone());
+        }
         substitute_ty_with_scratch(
             ty,
             env,
@@ -4998,7 +5094,11 @@ fn substitute_callee_metadata(
             budget,
             scratch,
         )
-    })
+    })?;
+    closed_facts
+        .validate_callee_metadata(&substituted)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    Ok(substituted)
 }
 
 fn map_callee_metadata(
@@ -6668,6 +6768,14 @@ pub(super) fn indexed_array_ty_optional(
             {
                 Ok(element.as_ref().clone())
             }
+            Ty::DependentArray { element, .. }
+                if matches!(
+                    element.as_ref(),
+                    Ty::Array { .. } | Ty::DependentArray { .. }
+                ) =>
+            {
+                Ok(element.as_ref().clone())
+            }
             _ => Err("runtime place index requires array or slice type".into()),
         };
     }
@@ -6722,7 +6830,9 @@ fn projected_ty_inner(
             }
             Projection::DynamicIndex(index) => match &ty {
                 Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element.as_ref().clone(),
-                Ty::Slice { element } => element.as_ref().clone(),
+                Ty::Slice { element } | Ty::DependentArray { element, .. } => {
+                    element.as_ref().clone()
+                }
                 _ if index == LocalId(usize::MAX) && ty.owned_sequence_element().is_some() => {
                     ty.owned_sequence_element().unwrap().clone()
                 }
@@ -8047,8 +8157,14 @@ fn type_metadata_walk(
                     for _ in env.scopes() {
                         charge(budget, work)?;
                     }
-                    if !env.contains(*parameter) {
-                        return Err("type parameter is outside its authoritative binder".into());
+                    match env.parameter_kind(*parameter) {
+                        Some(GenericParamKind::Type) => {}
+                        Some(GenericParamKind::Const(_)) => {
+                            return Err("const generic parameter used as a type".into());
+                        }
+                        None => {
+                            return Err("type parameter is outside its authoritative binder".into());
+                        }
                     }
                 }
                 return Ok((false, 0));
@@ -8056,7 +8172,13 @@ fn type_metadata_walk(
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
                 return Ok((false, 0));
             }
-            Ty::Const(_) => return Ok((false, 0)),
+            Ty::Const(value) => {
+                value.closed_key()?;
+                if facts.is_some() {
+                    return Err("const generic argument used as a type".into());
+                }
+                return Ok((false, 0));
+            }
         };
         for (candidate, result) in &memo.entries {
             charge(budget, work)?;
@@ -8114,7 +8236,9 @@ fn type_metadata_walk(
             }
             Ty::FnItem(item) => {
                 for ty in item.type_args.iter() {
-                    child(ty)?;
+                    if !ty.is_const_argument_leaf(facts)? {
+                        child(ty)?;
+                    }
                 }
             }
             Ty::AssociatedType(projection) => {
@@ -8123,7 +8247,9 @@ fn type_metadata_walk(
                 }
                 child(&projection.trait_ref.self_ty)?;
                 for argument in projection.trait_ref.args.iter() {
-                    child(argument)?;
+                    if !argument.is_const_argument_leaf(facts)? {
+                        child(argument)?;
+                    }
                 }
                 found = true;
             }
@@ -8145,7 +8271,9 @@ fn type_metadata_walk(
                     return Err("nominal argument limit exceeded".into());
                 }
                 for argument in value.def().type_args.iter() {
-                    child(argument)?;
+                    if !argument.is_const_argument_leaf(facts)? {
+                        child(argument)?;
+                    }
                 }
                 for field in value.def().fields.read_optional(budget)?.iter() {
                     child(&field.ty)?;
@@ -8158,7 +8286,9 @@ fn type_metadata_walk(
                     return Err("nominal metadata limit exceeded".into());
                 }
                 for argument in value.def().type_args.iter() {
-                    child(argument)?;
+                    if !argument.is_const_argument_leaf(facts)? {
+                        child(argument)?;
+                    }
                 }
                 for variant in value.def().variants.iter() {
                     for field in variant.fields.read_optional(budget)?.iter() {
@@ -11321,6 +11451,8 @@ pub enum ExprKind {
     PhantomData(Arc<PhantomDataTy>),
     /// Universally typed member use, replaced only by graph-sealed closed CTFE.
     AssociatedConst(Arc<AssociatedConstOperand>),
+    /// A declaration-owned scalar value, closed by its exact generic instance.
+    ConstParameter(ConstOperand),
     /// A defining return seals a value behind its canonical opaque identity.
     /// Physical lowering requires the matching immutable defining-body fact.
     OpaqueWrap {
@@ -11920,9 +12052,10 @@ impl CheckedFunction {
                                 error.into_legacy_diagnostic(budget.unwrap_or(authority.budget()))
                             })?;
                     }
-                    for ty in target
-                        .metadata_types()
-                        .chain(signature.params.iter())
+                    target.for_each_value_metadata(facts, &mut visit)?;
+                    for ty in signature
+                        .params
+                        .iter()
                         .chain(std::iter::once(&signature.result))
                     {
                         visit(ty)?;
@@ -12240,9 +12373,12 @@ impl CheckedFunction {
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
-                    for ty in target
-                        .metadata_types()
-                        .chain(signature.params.iter())
+                    target.for_each_value_metadata(facts, |ty| {
+                        facts.validate_ty_with_budget_scratch(ty, budget, scratch)
+                    })?;
+                    for ty in signature
+                        .params
+                        .iter()
                         .chain(std::iter::once(&signature.result))
                     {
                         facts.validate_ty_with_budget_scratch(ty, budget, scratch)?;
@@ -12292,6 +12428,7 @@ impl CheckedFunction {
                 ExprKind::PromotedArray(array) => storage(budget, array.values().len(), 32)?,
                 ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
+                ExprKind::ConstParameter(operand) => operand.validate(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -13546,7 +13683,7 @@ impl CheckedFunction {
                     }
                     if !matches!(
                         indexed_array_ty(root, &array.projection, false, conditional_budget)?,
-                        Ty::Array { .. } | Ty::Slice { .. }
+                        Ty::Array { .. } | Ty::DependentArray { .. } | Ty::Slice { .. }
                     ) {
                         return Err("bounds check requires array or slice storage".into());
                     }
@@ -14143,9 +14280,20 @@ impl CheckedFunction {
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
-                    for ty in target
-                        .metadata_types()
-                        .chain(signature.params.iter())
+                    target.for_each_value_metadata(facts, |ty| {
+                        if policy.source_metadata()
+                            && let Some(authority) = facts.validated()
+                        {
+                            authority
+                                .validate_ty_metadata_scratch(ty, authority.budget(), scratch)
+                                .map_err(|error| error.into_legacy_diagnostic(authority.budget()))
+                        } else {
+                            facts.validate_ty_scratch(ty, scratch)
+                        }
+                    })?;
+                    for ty in signature
+                        .params
+                        .iter()
                         .chain(std::iter::once(&signature.result))
                     {
                         if policy.source_metadata()
@@ -14272,6 +14420,15 @@ impl CheckedFunction {
                     character.validate()?;
                     if value.ty != Ty::Char || value.completion != Completion::Returns {
                         return Err("character expression type mismatch".into());
+                    }
+                }
+                ExprKind::ConstParameter(operand) => {
+                    let FactsCtx::Validated(validated) = facts else {
+                        return Err("const parameter value lacks validated source authority".into());
+                    };
+                    operand.validate(facts, validated.budget())?;
+                    if value.ty != operand.value_type() || value.completion != Completion::Returns {
+                        return Err("const parameter scalar type/completion changed".into());
                     }
                 }
                 ExprKind::AssociatedConst(operand) => {
@@ -16114,6 +16271,62 @@ mod tests {
     }
 
     #[test]
+    fn const_impl_array_carriers_keep_exact_extent_owner_and_element() {
+        let budget = PlanBudget::default();
+        let owner = BinderId {
+            declaration: test_decl(),
+        };
+        let array = Ty::DependentArray {
+            element: Arc::new(Ty::Param(ParamId { owner, index: 0 })),
+            length: ConstParamId { owner, index: 1 },
+        };
+        let locations = carrier_locations(&array, &budget).unwrap();
+        assert_eq!(locations.len(), 1);
+        assert_eq!(carrier_at(&array, &locations[0], &budget).unwrap(), array);
+        assert!(matches!(
+            locations[0].channel.family(),
+            Some(CarrierFamily::Array(_))
+        ));
+        let mut changed = array.clone();
+        let Ty::DependentArray { length, .. } = &mut changed else {
+            unreachable!()
+        };
+        length.index = 2;
+        assert!(carrier_at(&changed, &locations[0], &budget).is_err());
+        let mut changed = array.clone();
+        let Ty::DependentArray { length, .. } = &mut changed else {
+            unreachable!()
+        };
+        length.owner.declaration.index += 1;
+        assert!(carrier_at(&changed, &locations[0], &budget).is_err());
+        let mut changed = array.clone();
+        let Ty::DependentArray { element, .. } = &mut changed else {
+            unreachable!()
+        };
+        *element = Arc::new(Ty::Bool);
+        assert!(carrier_at(&changed, &locations[0], &budget).is_err());
+        let concrete = Ty::Array {
+            element: Arc::new(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Bool),
+            }),
+            len: 2,
+        };
+        let expanded = carrier_locations(&concrete, &budget).unwrap();
+        assert_eq!(expanded.len(), 2);
+        assert_ne!(expanded[0], expanded[1]);
+        assert_eq!(
+            expanded[0].path.0.as_ref(),
+            &[CarrierStep::ConstantIndex(0)]
+        );
+        assert_eq!(
+            expanded[1].path.0.as_ref(),
+            &[CarrierStep::ConstantIndex(1)]
+        );
+        assert!(carrier_at(&concrete, &locations[0], &budget).is_err());
+    }
+
+    #[test]
     fn generic_carrier_layouts_preserve_component_identity_and_shape_limits() {
         let budget = PlanBudget::default();
         let scope = Arc::new(
@@ -16243,6 +16456,118 @@ mod tests {
             denied.first_resource_failure().unwrap().kind,
             ResourceBudgetKind::Bytes
         );
+    }
+
+    #[test]
+    fn const_impl_native_callee_closing_preserves_ordered_owner_and_scalar_kind() {
+        use crate::compiler::frontend;
+        let budget = PlanBudget::default();
+        let program = frontend::parse(
+            "fn target<const N:usize>(){} fn forward<const M:usize>(){} fn type_only<T>(){} fn main(){}",
+        ).unwrap();
+        let mut plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let target = plan.function_decl(0).unwrap();
+        let forward = plan.function_decl(1).unwrap();
+        let type_only = plan.function_decl(2).unwrap();
+        let main = plan.function_decl(3).unwrap();
+        let env = GenericEnv::new(&[plan.param_env(forward).unwrap()], &budget).unwrap();
+        let parameter = env.ordered_params().next().unwrap();
+        let facts = plan
+            .instance_facts(&CallTarget {
+                declaration: main,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let callee = |declaration, actual| {
+            Callee::Direct(CallTarget {
+                declaration,
+                type_args: Arc::from([actual]),
+            })
+        };
+        let extent = |bits| {
+            Ty::Const(ConstArgument::Integer {
+                ty: IntTy::Usize,
+                bits,
+            })
+        };
+        let source = callee(target, Ty::Param(parameter));
+        let mut scratch = super::super::traits::TraitScratch::default();
+        for bits in [0, 4, 7] {
+            let closed = substitute_callee_metadata(
+                &source,
+                &env,
+                &[extent(bits)],
+                &facts,
+                &mut plan,
+                &budget,
+                &mut scratch,
+            )
+            .unwrap();
+            let Callee::Direct(closed) = closed else {
+                panic!("direct source callee");
+            };
+            assert_eq!(closed.declaration, target);
+            assert_eq!(&*closed.type_args, &[extent(bits)]);
+        }
+        for invalid in [
+            Ty::Bool,
+            Ty::Const(ConstArgument::Integer {
+                ty: IntTy::U8,
+                bits: 4,
+            }),
+        ] {
+            assert!(
+                substitute_callee_metadata(
+                    &source,
+                    &env,
+                    &[invalid],
+                    &facts,
+                    &mut plan,
+                    &budget,
+                    &mut scratch,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            substitute_callee_metadata(
+                &source,
+                &env,
+                &[],
+                &facts,
+                &mut plan,
+                &budget,
+                &mut scratch,
+            )
+            .is_err()
+        );
+        assert!(
+            substitute_callee_metadata(
+                &callee(type_only, Ty::Param(parameter)),
+                &env,
+                &[extent(4)],
+                &facts,
+                &mut plan,
+                &budget,
+                &mut scratch,
+            )
+            .is_err()
+        );
+        let foreign_env = GenericEnv::new(&[plan.param_env(target).unwrap()], &budget).unwrap();
+        let foreign = foreign_env.ordered_params().next().unwrap();
+        assert!(
+            substitute_callee_metadata(
+                &callee(target, Ty::Param(foreign)),
+                &env,
+                &[extent(4)],
+                &facts,
+                &mut plan,
+                &budget,
+                &mut scratch,
+            )
+            .is_err()
+        );
+        assert!(FactsCtx::Validated(&facts).validate_ty(&extent(4)).is_err());
     }
 
     #[test]

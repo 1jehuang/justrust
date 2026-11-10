@@ -13,9 +13,9 @@ impl Solver<'_, '_, '_> {
         Ok(match self.domain(term) {
             Domain::Integer | Domain::Float => nested,
             Domain::Ref(_, inner) => self.nested_open_numeric(inner, nested, depth + 1)?,
-            Domain::Array(element, _) | Domain::Slice(element) => {
-                self.nested_open_numeric(element, true, depth + 1)?
-            }
+            Domain::Array(element, _)
+            | Domain::DependentArray(element, _)
+            | Domain::Slice(element) => self.nested_open_numeric(element, true, depth + 1)?,
             Domain::Tuple(fields) | Domain::Nominal(_, fields) => {
                 for field in fields {
                     if self.nested_open_numeric(field, true, depth + 1)? {

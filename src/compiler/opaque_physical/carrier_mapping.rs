@@ -61,7 +61,9 @@ pub(super) fn expand(
         path.extend_from_slice(&location.path.0);
         if matches!(
             carrier.channel,
-            ir::CarrierChannel::ProjectionTail { .. } | ir::CarrierChannel::OpaqueTail { .. }
+            ir::CarrierChannel::ProjectionTail { .. }
+                | ir::CarrierChannel::OpaqueTail { .. }
+                | ir::CarrierChannel::ArrayTail { .. }
         ) {
             return Err(
                 "unsupported: physical opaque representation retains an unresolved family".into(),
@@ -80,7 +82,8 @@ pub(super) fn expand(
                     prefix: depth,
                 },
                 ir::CarrierChannel::ProjectionTail { .. }
-                | ir::CarrierChannel::OpaqueTail { .. } => {
+                | ir::CarrierChannel::OpaqueTail { .. }
+                | ir::CarrierChannel::ArrayTail { .. } => {
                     return Err(
                         "unsupported: physical opaque representation retains an unresolved family"
                             .into(),
@@ -304,6 +307,10 @@ impl Mapping {
                 } else {
                     let prefix = substituted.channel.prefix();
                     let channel = match &row.original_family {
+                        ir::CarrierFamily::Array(array) => ir::CarrierChannel::ArrayTail {
+                            array: array.clone(),
+                            prefix,
+                        },
                         ir::CarrierFamily::Parameter(parameter) => ir::CarrierChannel::ParamTail {
                             parameter: *parameter,
                             prefix,
@@ -489,6 +496,10 @@ fn compose(
                     prefix: depth,
                 }
             }
+            ir::CarrierChannel::ArrayTail { array, .. } => ir::CarrierChannel::ArrayTail {
+                array: array.clone(),
+                prefix: depth,
+            },
             ir::CarrierChannel::OpaqueTail { opaque, .. } => ir::CarrierChannel::OpaqueTail {
                 opaque: opaque.clone(),
                 prefix: depth,

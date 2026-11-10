@@ -197,7 +197,9 @@ impl Solver<'_, '_, '_> {
         if !overloaded {
             if matches!(kind, Kind::Index(_)) {
                 let element = match self.domain(left) {
-                    Domain::Array(element, _) | Domain::Slice(element) => element,
+                    Domain::Array(element, _)
+                    | Domain::DependentArray(element, _)
+                    | Domain::Slice(element) => element,
                     // `w[1]` with `w: &'a [T]` from a resolved projection
                     // (`windows(2).map(|w| ..)`): the fixed carrier peels too.
                     Domain::Fixed(ty) => {

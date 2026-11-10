@@ -103,6 +103,55 @@ impl CarrierContractView {
             nominal_carriers::CarrierFamilyActuals::default()
         };
         match family {
+            ir::CarrierFamily::Array(array) => {
+                let mut found = false;
+                for location in self
+                    .original_contract
+                    .inputs
+                    .iter()
+                    .map(|input| &input.location)
+                    .chain(
+                        self.original_contract
+                            .results
+                            .iter()
+                            .map(|result| &result.location),
+                    )
+                    .chain(
+                        self.original_contract
+                            .writes
+                            .iter()
+                            .map(|write| &write.destination.location),
+                    )
+                {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if let Some(ir::CarrierFamily::Array(candidate)) = location.channel.family()
+                        && candidate == *array
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "array family is absent from exact original carrier contract",
+                    ));
+                }
+                let logical = facts.world.realize_array_family_with_scratch(
+                    array,
+                    &self.original_env,
+                    &self.arguments,
+                    facts,
+                    scratch,
+                )?;
+                Ok(Some(actuals.actual(
+                    &facts.world,
+                    family,
+                    logical,
+                    facts,
+                    scratch,
+                )?))
+            }
             ir::CarrierFamily::Parameter(parameter) => {
                 if self.source_schema.is_some() || self.nominal.is_some() {
                     let arguments = facts.world.carrier_storage_arguments(
@@ -222,6 +271,45 @@ impl CarrierContractView {
 }
 
 impl ValidatedTraitWorld {
+    pub(super) fn realize_array_family_with_scratch(
+        &self,
+        array: &Arc<Ty>,
+        env: &GenericEnv,
+        args: &[Ty],
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
+        self.check_facts(facts, false)?;
+        scratch.for_facts(facts);
+        if !matches!(array.as_ref(), Ty::DependentArray { .. }) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "array family lost its source-dependent extent",
+            ));
+        }
+        let schema = GenericSchema {
+            env: Arc::new(env.clone()),
+            signature: Signature {
+                params: Vec::new(),
+                result: array.as_ref().clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates: Arc::from([]),
+        };
+        let value =
+            self.substitute_carrier_schema(&schema, args, facts, scratch.for_world(self.id))?;
+        if !matches!(
+            value.signature.result,
+            Ty::Array { .. } | Ty::DependentArray { .. }
+        ) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "array family substitution changed its shape",
+            ));
+        }
+        self.normalize_carrier_equality_type_with_scratch(&value.signature.result, facts, scratch)
+    }
+
     pub(super) fn realize_projection_family_with_scratch(
         &self,
         projection: &Arc<ir::AssociatedTypeProjection>,

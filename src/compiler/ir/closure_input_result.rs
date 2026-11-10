@@ -80,7 +80,8 @@ impl ClosureInputValueOrigin {
                             CarrierChannel::Fixed(position) => position.depth = next,
                             CarrierChannel::ParamTail { prefix, .. }
                             | CarrierChannel::ProjectionTail { prefix, .. }
-                            | CarrierChannel::OpaqueTail { prefix, .. } => *prefix = next,
+                            | CarrierChannel::OpaqueTail { prefix, .. }
+                            | CarrierChannel::ArrayTail { prefix, .. } => *prefix = next,
                         }
                     }
                     _ => return Err("unsupported: closure input result carrier projection".into()),

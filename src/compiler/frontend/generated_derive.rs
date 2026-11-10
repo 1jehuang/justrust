@@ -200,6 +200,7 @@ pub(super) fn unit_copy(declaration: &StructDecl) -> Result<ImplDecl, &'static s
         return Err("generated Copy currently requires a nongeneric unit struct");
     }
     Ok(ImplDecl {
+        const_params: Vec::new(),
         unsafety: false,
         regions: RegionDecls::default(),
         original_source: None,

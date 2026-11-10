@@ -529,13 +529,15 @@ impl type_check::Checker<'_> {
                     }
                     IndexedBorrowStep::Const(index, _) => match &eligibility {
                         ir::Ty::Array { .. } => self.index_type(&eligibility, *index)?,
-                        ir::Ty::Slice { element } => element.as_ref().clone(),
+                        ir::Ty::DependentArray { element, .. } | ir::Ty::Slice { element } => {
+                            element.as_ref().clone()
+                        }
                         _ => return Ok(None),
                     },
                     IndexedBorrowStep::Runtime(..) => match &eligibility {
-                        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
-                            element.as_ref().clone()
-                        }
+                        ir::Ty::Array { element, .. }
+                        | ir::Ty::DependentArray { element, .. }
+                        | ir::Ty::Slice { element } => element.as_ref().clone(),
                         _ => return Ok(None),
                     },
                     IndexedBorrowStep::Deref => unreachable!(),
@@ -588,7 +590,8 @@ impl type_check::Checker<'_> {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
-                    if let ir::Ty::Slice { element } = &ty {
+                    if let ir::Ty::Slice { element } | ir::Ty::DependentArray { element, .. } = &ty
+                    {
                         let element = element.as_ref().clone();
                         let literal = Expr::Integer(IntegerLiteral {
                             magnitude: index as u128,
@@ -631,7 +634,9 @@ impl type_check::Checker<'_> {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
                     let element = match &ty {
-                        ir::Ty::Array { element, .. } => element.as_ref().clone(),
+                        ir::Ty::Array { element, .. } | ir::Ty::DependentArray { element, .. } => {
+                            element.as_ref().clone()
+                        }
                         ir::Ty::Slice { element }
                             if matches!(projection.last(), Some(ir::Projection::Deref)) =>
                         {

@@ -34,10 +34,10 @@ pub(super) fn realize(
     for ty in mapped.params.iter().chain(std::iter::once(&mapped.result)) {
         caller.validate_ty_with_budget_scratch(ty, budget, scratch)?;
     }
-    for ty in target.metadata_types() {
+    target.for_each_value_metadata(caller, |ty| {
         caller.validate_ty_with_budget_scratch(ty, budget, scratch)?;
-        pair(context, engine, ty, ty, caller, budget, scratch, 0)?;
-    }
+        pair(context, engine, ty, ty, caller, budget, scratch, 0)
+    })?;
     if canonical.params.len() != mapped.params.len()
         || canonical.ref_contract != mapped.ref_contract
     {

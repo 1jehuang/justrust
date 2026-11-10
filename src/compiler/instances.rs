@@ -268,8 +268,23 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
-            ir::Ty::DependentArray { .. } => {
-                Err("unsupported: const-dependent instance pattern identity".into())
+            ir::Ty::DependentArray { element, length } => {
+                let parameter = ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                if env.parameter_kind(parameter)
+                    != Some(ir::GenericParamKind::Const(ir::ConstType::Int(
+                        ir::IntTy::Usize,
+                    )))
+                {
+                    return Err(
+                        "dependent array instance pattern has foreign or non-usize extent".into(),
+                    );
+                }
+                self.append(b"A")?;
+                self.pattern(element, env, depth + 1)?;
+                self.pattern(&ir::Ty::Param(parameter), env, depth + 1)
             }
             ir::Ty::Opaque(opaque) => {
                 self.append(b"O")?;
@@ -331,7 +346,21 @@ impl Encoder<'_> {
                 if !env.contains(*param) {
                     return Err("associated instance pattern has foreign parameter".into());
                 }
-                self.append(b"p")?;
+                match env.parameter_kind(*param) {
+                    Some(ir::GenericParamKind::Type) => self.append(b"p")?,
+                    Some(ir::GenericParamKind::Const(kind)) => {
+                        self.append(b"q")?;
+                        match kind {
+                            ir::ConstType::Int(integer) => {
+                                self.append(b"i")?;
+                                self.text(integer.name())?;
+                            }
+                            ir::ConstType::Bool => self.append(b"b")?,
+                            ir::ConstType::Char => self.append(b"c")?,
+                        }
+                    }
+                    None => return Err("instance pattern parameter lost its source kind".into()),
+                }
                 self.count(usize::from(param.index))
             }
             ir::Ty::Int(integer) => {
@@ -739,6 +768,13 @@ pub(super) fn admit_representation_alias(
     for facts in [&previous_facts, &next_facts] {
         for ty in previous.type_args.iter().chain(next.type_args.iter()) {
             budget.charge_work(1)?;
+            // instance_facts has already checked every ordered slot against
+            // its declaration kind. A closed const coordinate is not a value
+            // type and must never be admitted through validate_ty.
+            if let ir::Ty::Const(value) = ty {
+                value.closed_key()?;
+                continue;
+            }
             facts
                 .validate_ty(ty)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -2020,6 +2056,70 @@ mod tests {
         );
         assert_eq!(shared, renamed);
         assert_ne!(shared, mutable);
+    }
+
+    #[test]
+    fn const_impl_array_pattern_keys_keep_source_kind_owner_and_extent_ordinal() {
+        fn setup(source: &str) -> (frontend::PlanCtx, ir::PlanBudget, Arc<ir::ParamEnv>) {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = (0..context.callable_count())
+                .map(|index| context.callable_decl(index).unwrap())
+                .find(|declaration| named(&context, *declaration, "probe"))
+                .unwrap();
+            let env = context.param_env(declaration).unwrap();
+            (context, budget, env)
+        }
+        let (context, budget, env) =
+            setup("fn probe<T,const N:usize,const M:usize>(){}fn main(){}");
+        let (renamed, other_budget, other) =
+            setup("fn probe<U,const A:usize,const B:usize>(){}fn main(){}");
+        let pattern = |env: &ir::ParamEnv, index| ir::Ty::DependentArray {
+            element: Arc::new(ir::Ty::Param(ir::ParamId {
+                owner: env.binder(),
+                index: 0,
+            })),
+            length: ir::ConstParamId {
+                owner: env.binder(),
+                index,
+            },
+        };
+        let encode = |context: &frontend::PlanCtx,
+                      budget: &ir::PlanBudget,
+                      env: &ir::ParamEnv,
+                      ty: &ir::Ty| {
+            let mut encoder = Encoder {
+                bytes: Vec::new(),
+                reservations: Vec::new(),
+                budget,
+                context,
+            };
+            encoder.pattern(ty, env, 0)?;
+            Ok::<_, String>(encoder.bytes)
+        };
+        let key = encode(&context, &budget, &env, &pattern(&env, 1)).unwrap();
+        assert_eq!(
+            key,
+            encode(&renamed, &other_budget, &other, &pattern(&other, 1)).unwrap()
+        );
+        assert_ne!(
+            key,
+            encode(&context, &budget, &env, &pattern(&env, 2)).unwrap()
+        );
+        assert!(encode(&context, &budget, &env, &pattern(&other, 1)).is_err());
+        assert!(encode(&context, &budget, &env, &pattern(&env, 0)).is_err());
+        let (boolean_context, boolean_budget, boolean) =
+            setup("fn probe<T,const N:bool>(){}fn main(){}");
+        assert!(
+            encode(
+                &boolean_context,
+                &boolean_budget,
+                &boolean,
+                &pattern(&boolean, 1)
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -363,6 +363,10 @@ impl ValidatedTraitWorld {
                         prefix: depth,
                     }
                 }
+                ir::CarrierChannel::ArrayTail { array, .. } => ir::CarrierChannel::ArrayTail {
+                    array: array.clone(),
+                    prefix: depth,
+                },
                 ir::CarrierChannel::OpaqueTail { opaque, .. } => ir::CarrierChannel::OpaqueTail {
                     opaque: opaque.clone(),
                     prefix: depth,

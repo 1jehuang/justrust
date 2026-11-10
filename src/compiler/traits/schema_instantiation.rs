@@ -368,6 +368,9 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::Dyn(a), Ty::Dyn(b)) => Arc::ptr_eq(a, b),
         (Ty::Param(a), Ty::Param(b)) => a == b,
+        (Ty::Const(a), Ty::Const(b)) => {
+            matches!((a.closed_key(), b.closed_key()), (Ok(a), Ok(b)) if a == b)
+        }
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
         (Ty::Char, Ty::Char)

@@ -162,6 +162,30 @@ pub(super) fn attach(
     }))
 }
 
+fn explicit_array_reference(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    for location in ir::carrier_locations(ty, budget)?.iter() {
+        budget.charge_work(1)?;
+        match &location.channel {
+            ir::CarrierChannel::Fixed(_) => return Ok(true),
+            ir::CarrierChannel::ArrayTail { array, .. } => {
+                let ir::Ty::DependentArray { element, .. } = array.as_ref() else {
+                    return Err("dependent array carrier lost its canonical shape".into());
+                };
+                if explicit_array_reference(element, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
 struct Collector<'a> {
     registry: &'a DeclRegistry,
     regions: &'a RegionDecls,
@@ -399,6 +423,15 @@ impl Collector<'_> {
                             path.push(ir::CarrierStep::Field(index));
                             self.walk(field, actual, parameter, path, 0, depth + 1)?;
                             path.pop();
+                        }
+                    }
+                    (Type::DependentArray(_, _), ir::Ty::DependentArray { element, .. }) => {
+                        // A generic element family retains each caller component on
+                        // substitution. Explicit element lifetimes instead need
+                        // per-element source-region selectors, not one erased
+                        // lifetime for the entire array family.
+                        if explicit_array_reference(element, self.budget, depth + 1)? {
+                            return Err("unsupported: explicit source reference regions in dependent array elements".into());
                         }
                     }
                     (Type::Array(field, _), ir::Ty::Array { element, len }) => {

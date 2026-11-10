@@ -5,6 +5,8 @@ use super::{
 };
 use std::sync::Arc;
 
+mod projected_inputs;
+
 pub(super) type InferTerm = Arc<InferKind>;
 #[derive(Clone, Debug)]
 pub(super) enum InferKind {
@@ -20,6 +22,7 @@ pub(super) enum InferKind {
     Cell(ir::DeclId, InferTerm),
     ManuallyDrop(ir::DeclId, InferTerm),
     Array(InferTerm, usize),
+    DependentArray(InferTerm, InferTerm),
     Slice(InferTerm),
     Ref(ir::BorrowKind, InferTerm),
     RawPtr(ir::BorrowKind, InferTerm),
@@ -127,6 +130,20 @@ fn source_context_bindings(
         (InferKind::Ref(kind, child), InferKind::Ref(actual, value)) if kind == actual => {
             source_context_bindings(state, env, child, value, bindings, at + 1)
         }
+        (InferKind::DependentArray(element, length), InferKind::Array(actual, len)) => {
+            let extent = state.node(InferKind::Rigid(ir::Ty::Const(
+                ir::ConstArgument::Integer {
+                    ty: ir::IntTy::Usize,
+                    bits: *len as u128,
+                },
+            )))?;
+            source_context_bindings(state, env, length, &extent, bindings, at + 1)?;
+            source_context_bindings(state, env, element, actual, bindings, at + 1)
+        }
+        (InferKind::DependentArray(element, length), InferKind::DependentArray(actual, extent)) => {
+            source_context_bindings(state, env, length, extent, bindings, at + 1)?;
+            source_context_bindings(state, env, element, actual, bindings, at + 1)
+        }
         // Never invert a projection family, even if its checked value happens
         // to equal the authored type. It supplies no receiver constraints.
         (InferKind::Projection(..), _) => Err(FactsError::unsupported(
@@ -179,6 +196,10 @@ fn source_context_receiver(
             *kind,
             source_context_receiver(state, env, child, bindings, at + 1)?,
         ),
+        InferKind::DependentArray(element, length) => InferKind::DependentArray(
+            source_context_receiver(state, env, element, bindings, at + 1)?,
+            source_context_receiver(state, env, length, bindings, at + 1)?,
+        ),
         // A receiver projection cannot be resolved using a checked actual.
         InferKind::Projection(..) => InferKind::Unknown(false),
         InferKind::Rigid(_) => return Ok(schema.clone()),
@@ -220,6 +241,9 @@ impl CallInferenceState {
     }
     pub(super) fn slots(&self) -> &[Option<InferTerm>] {
         &self.slots
+    }
+    pub(super) fn parameter_env(&self) -> Option<&ir::ParamEnv> {
+        self.env.as_deref()
     }
     pub(super) fn resolve(
         &self,
@@ -448,6 +472,45 @@ impl CallInferenceState {
                     None
                 }
             }
+            InferKind::DependentArray(element, length) => {
+                let Some(element) = self.resolve(element, fallback, depth + 1, materialize)? else {
+                    return Ok(None);
+                };
+                let Some(length) = self.resolve(length, false, depth + 1, materialize)? else {
+                    return Ok(None);
+                };
+                self.storage(1)?;
+                Some(match length {
+                    ir::Ty::Const(value) => {
+                        let len = value
+                            .as_usize()
+                            .filter(|len| *len <= ir::MAX_ARRAY_TYPE_LEN)
+                            .ok_or_else(|| {
+                                FactsError::invalid(
+                                    &self.budget,
+                                    "E0308: invalid usize array extent",
+                                )
+                            })?;
+                        ir::Ty::Array {
+                            element: Arc::new(element),
+                            len,
+                        }
+                    }
+                    ir::Ty::Param(parameter) => ir::Ty::DependentArray {
+                        element: Arc::new(element),
+                        length: ir::ConstParamId {
+                            owner: parameter.owner,
+                            index: parameter.index,
+                        },
+                    },
+                    _ => {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "E0747: array extent requires a const parameter",
+                        ));
+                    }
+                })
+            }
             InferKind::Nominal(declaration, terms) => {
                 self.storage(terms.len())?;
                 let mut actuals = Vec::new();
@@ -610,6 +673,10 @@ impl CallInferenceState {
             InferKind::Array(inner, len) => {
                 InferKind::Array(self.bind_schema(inner, slots, depth + 1)?, *len)
             }
+            InferKind::DependentArray(element, length) => InferKind::DependentArray(
+                self.bind_schema(element, slots, depth + 1)?,
+                self.bind_schema(length, slots, depth + 1)?,
+            ),
             InferKind::Slice(inner) => {
                 InferKind::Slice(self.bind_schema(inner, slots, depth + 1)?)
             }
@@ -762,6 +829,10 @@ impl CallInferenceState {
             InferKind::Array(element, len) => {
                 InferKind::Array(self.taint(element, depth + 1)?, *len)
             }
+            InferKind::DependentArray(element, length) => InferKind::DependentArray(
+                self.taint(element, depth + 1)?,
+                self.taint(length, depth + 1)?,
+            ),
             InferKind::Slice(element) => InferKind::Slice(self.taint(element, depth + 1)?),
             InferKind::Nominal(decl, args) => {
                 self.storage(args.len())?;
@@ -881,6 +952,12 @@ impl CallInferenceState {
             (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => {
                 self.node(InferKind::Array(self.merge(x, y, depth + 1)?, *n))
             }
+            (InferKind::DependentArray(x, n), InferKind::DependentArray(y, m)) => {
+                self.node(InferKind::DependentArray(
+                    self.merge(x, y, depth + 1)?,
+                    self.merge(n, m, depth + 1)?,
+                ))
+            }
             (InferKind::Slice(x), InferKind::Slice(y)) => {
                 self.node(InferKind::Slice(self.merge(x, y, depth + 1)?))
             }
@@ -941,6 +1018,10 @@ impl CallInferenceState {
                     &self.budget,
                     "cyclic generic inference constraint",
                 ));
+            }
+            InferKind::DependentArray(element, length) => {
+                self.occurs(slot, element, depth + 1)?;
+                self.occurs(slot, length, depth + 1)?;
             }
             InferKind::FnPointer(inputs, output) => {
                 for t in inputs.iter().chain(std::iter::once(output)) {
@@ -1083,6 +1164,27 @@ impl CallInferenceState {
                 _ => Err(FactsError::invalid(
                     &self.budget,
                     "generic raw pointer inference kind or shape mismatch",
+                )),
+            },
+            InferKind::DependentArray(element, length) => match evidence.as_ref() {
+                InferKind::Array(actual, len) => {
+                    let extent = self.node(InferKind::Rigid(ir::Ty::Const(
+                        ir::ConstArgument::Integer {
+                            ty: ir::IntTy::Usize,
+                            bits: *len as u128,
+                        },
+                    )))?;
+                    self.constrain(length, &extent, depth + 1)?;
+                    self.constrain(element, actual, depth + 1)
+                }
+                InferKind::DependentArray(actual, extent) => {
+                    self.constrain(length, extent, depth + 1)?;
+                    self.constrain(element, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(element, evidence, depth + 1),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic dependent array inference shape mismatch",
                 )),
             },
             InferKind::Array(element, len) => match evidence.as_ref() {
@@ -1251,6 +1353,17 @@ impl CallInferenceState {
             ir::Ty::Array { element, len } => {
                 InferKind::Array(self.type_term(element, schema, depth + 1)?, *len)
             }
+            ir::Ty::DependentArray { element, length } => InferKind::DependentArray(
+                self.type_term(element, schema, depth + 1)?,
+                self.type_term(
+                    &ir::Ty::Param(ir::ParamId {
+                        owner: length.owner,
+                        index: length.index,
+                    }),
+                    schema,
+                    depth + 1,
+                )?,
+            ),
             ir::Ty::Slice { element } => {
                 InferKind::Slice(self.type_term(element, schema, depth + 1)?)
             }
@@ -1937,6 +2050,7 @@ pub(super) struct CallInputTrace {
     // Exact original projection schema, composite RHS, and normalized source evidence.
     #[cfg_attr(not(test), allow(dead_code))]
     equalities: Arc<[OriginalEqualityTrace]>,
+    input_normals: Arc<[ir::Ty]>,
     slots: Arc<[InferTerm]>,
     actuals: Arc<[ir::Ty]>,
 }
@@ -2042,6 +2156,7 @@ impl CallInputTrace {
             || self.evidence.len() != other.evidence.len()
             || self.slots.len() != other.slots.len()
             || self.equalities.len() != other.equalities.len()
+            || self.input_normals.len() != other.input_normals.len()
             || !terms_equal(&self.result_schema, &other.result_schema, budget, 0)?
         {
             return Err(FactsError::invalid(budget, "source input frontier changed"));
@@ -2067,6 +2182,14 @@ impl CallInputTrace {
                 return Err(FactsError::invalid(
                     budget,
                     "source input constraint changed",
+                ));
+            }
+        }
+        for (left, right) in self.input_normals.iter().zip(other.input_normals.iter()) {
+            if !replay_types_equal(left, right, budget)? {
+                return Err(FactsError::invalid(
+                    budget,
+                    "source input projection normal changed",
                 ));
             }
         }
@@ -2318,18 +2441,31 @@ fn infer_input_schema_trace_with_partial_context(
     if let Some(expected) = &expected {
         state.constrain(&result_schema, expected, 0)?;
     }
+    let mut pending_inputs = Vec::new();
     for (parameter, input) in parameters.iter().zip(inputs) {
         let schema = state.type_term(parameter, binder, 0)?;
         let actual = state.type_term(input, None, 0)?;
-        state.constrain_call_input(&schema, &actual)?;
+        for pending in state.constrain_input_frontier(parameter, input)? {
+            push(&mut pending_inputs, pending, budget)?;
+        }
         schemas.push(schema);
         evidence.push(actual);
     }
-    let equalities = match equalities {
+    let (equalities, input_normals) = match equalities {
         Some((predicates, normalize)) => {
-            infer_original_equalities(&mut state, predicates, binder, materialize, normalize)?
+            let equalities =
+                infer_original_equalities(&mut state, predicates, binder, materialize, normalize)?;
+            let normals =
+                state.validate_input_projections(pending_inputs, materialize, normalize)?;
+            (equalities, normals)
         }
-        None => Vec::new(),
+        None if pending_inputs.is_empty() => (Vec::new(), Vec::new()),
+        None => {
+            return Err(FactsError::unsupported(
+                budget,
+                "source projection input requires canonical normalization",
+            ));
+        }
     };
     let actuals = state.finish(false, materialize)?.ok_or_else(|| {
         FactsError::unsupported(budget, "source evidence leaves generic slots unresolved")
@@ -2354,6 +2490,7 @@ fn infer_input_schema_trace_with_partial_context(
         expected,
         evidence: evidence.into(),
         equalities: equalities.into(),
+        input_normals: input_normals.into(),
         slots: slots.into(),
         actuals: actuals.into(),
     }))
@@ -2422,6 +2559,9 @@ fn terms_equal(
         }
         (InferKind::Array(x, a), InferKind::Array(y, b)) => {
             a == b && terms_equal(x, y, budget, at + 1)?
+        }
+        (InferKind::DependentArray(x, a), InferKind::DependentArray(y, b)) => {
+            terms_equal(x, y, budget, at + 1)? && terms_equal(a, b, budget, at + 1)?
         }
         (InferKind::Slice(x), InferKind::Slice(y)) => terms_equal(x, y, budget, at + 1)?,
         (InferKind::Opaque(a, x), InferKind::Opaque(b, y)) => {
@@ -2887,6 +3027,58 @@ mod call_input_trace_tests {
     use super::*;
 
     #[test]
+    fn const_impl_array_input_trace_keeps_type_and_length_coordinates() {
+        let budget = ir::PlanBudget::default();
+        let own = Arc::new(
+            env(2)
+                .with_slot_kinds(
+                    &[
+                        ir::GenericParamKind::Type,
+                        ir::GenericParamKind::Const(ir::ConstType::Int(ir::IntTy::Usize)),
+                    ],
+                    &budget,
+                )
+                .unwrap(),
+        );
+        let formal = ir::Ty::DependentArray {
+            element: Arc::new(param(&own, 0)),
+            length: ir::ConstParamId {
+                owner: own.binder(),
+                index: 1,
+            },
+        };
+        let actual = array(ir::Ty::Int(ir::IntTy::U16), 3);
+        let trace = infer(own.clone(), &[formal.clone()], &[actual.clone()], &budget).unwrap();
+        assert_eq!(
+            trace.actuals(),
+            &[
+                ir::Ty::Int(ir::IntTy::U16),
+                ir::Ty::Const(ir::ConstArgument::Integer {
+                    ty: ir::IntTy::Usize,
+                    bits: 3
+                })
+            ]
+        );
+        let changed = infer(
+            own.clone(),
+            &[formal.clone()],
+            &[array(ir::Ty::Int(ir::IntTy::U16), 4)],
+            &budget,
+        )
+        .unwrap();
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        assert!(
+            infer(
+                own,
+                &[formal.clone(), formal],
+                &[actual, array(ir::Ty::Int(ir::IntTy::U16), 4)],
+                &budget
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn borrowed_array_call_unsizing_preserves_evidence_and_nested_invariance() {
         let budget = ir::PlanBudget::default();
         let own = env(1);
@@ -3292,6 +3484,99 @@ mod call_input_trace_tests {
                 &mut |_, _| unreachable!()
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn const_impl_projected_source_inputs_wait_for_exact_owner_evidence() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        let trait_id = env(0).binder().declaration;
+        let item = env(0).binder().declaration;
+        let projection = |self_ty| {
+            ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: ir::TraitRef {
+                    declaration: trait_id,
+                    self_ty,
+                    args: Arc::from([]),
+                },
+                item,
+            }))
+        };
+        let parameters = [
+            ir::Ty::Tuple(Arc::from([projection(param(&own, 0)), param(&own, 1)])),
+            param(&own, 0),
+        ];
+        let run = |input: ir::Ty| {
+            infer_input_schema_trace_with_partial_context(
+                Some((&[], &mut |raw| {
+                    if raw == &projection(ir::Ty::Bool) {
+                        Ok(ir::Ty::Char)
+                    } else {
+                        Err(FactsError::invalid(&budget, "projection owner changed"))
+                    }
+                })),
+                Some(own.clone()),
+                (&parameters, &ir::Ty::Unit),
+                &[
+                    ir::Ty::Tuple(Arc::from([input, ir::Ty::Int(ir::IntTy::I32)])),
+                    ir::Ty::Bool,
+                ],
+                None,
+                &budget,
+                &mut |_, _| unreachable!(),
+            )
+        };
+        let trace = run(ir::Ty::Char).unwrap();
+        assert_eq!(
+            trace.actuals(),
+            &[ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]
+        );
+        trace
+            .validate_replayed(&run(ir::Ty::Char).unwrap(), &budget)
+            .unwrap();
+        assert!(run(ir::Ty::Bool).is_err());
+        let mut changed = (*trace).clone();
+        changed.input_normals = Arc::from([ir::Ty::Bool]);
+        assert!(trace.validate_replayed(&changed, &budget).is_err());
+        let mut unbound = CallInferenceState::new(Some(own), &budget).unwrap();
+        let pending = unbound
+            .constrain_input_frontier(
+                &parameters[0],
+                &ir::Ty::Tuple(Arc::from([ir::Ty::Char, ir::Ty::Int(ir::IntTy::I32)])),
+            )
+            .unwrap();
+        assert!(
+            unbound
+                .validate_input_projections(pending, &mut |_, _| unreachable!(), &mut |_| {
+                    panic!("an associated output must not infer its unbound owner")
+                })
+                .is_err()
+        );
+        let extent = |bits, ty| ir::Ty::Const(ir::ConstArgument::Integer { ty, bits });
+        assert!(
+            ir::identical_type(
+                &extent(2, ir::IntTy::Usize),
+                &extent(2, ir::IntTy::Usize),
+                &budget
+            )
+            .unwrap()
+        );
+        assert!(
+            !ir::identical_type(
+                &extent(2, ir::IntTy::Usize),
+                &extent(3, ir::IntTy::Usize),
+                &budget
+            )
+            .unwrap()
+        );
+        assert!(
+            !ir::identical_type(
+                &extent(2, ir::IntTy::Usize),
+                &extent(2, ir::IntTy::U8),
+                &budget
+            )
+            .unwrap()
         );
     }
 

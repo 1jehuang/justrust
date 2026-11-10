@@ -228,6 +228,19 @@ impl Capabilities {
                     len: *len,
                 }
             }
+            Shape::DependentArray(value, length) => {
+                let Some(element) = child(value)? else {
+                    return Ok(None);
+                };
+                let ty = ir::Ty::DependentArray {
+                    element: Arc::new(element),
+                    length: *length,
+                };
+                caller
+                    .validate_ty_with_budget(&ty, budget)
+                    .map_err(|error| Error::new(error.to_string()))?;
+                ty
+            }
             Shape::Slice(value) => {
                 let Some(ty) = child(value)? else {
                     return Ok(None);
@@ -560,10 +573,8 @@ pub(in crate::compiler) fn shape(
             Shape::RawPtr(*kind, Arc::new(shape(pointee, budget, depth + 1)?))
         }
         ir::Ty::Slice { element } => Shape::Slice(Arc::new(shape(element, budget, depth + 1)?)),
-        ir::Ty::DependentArray { .. } => {
-            return Err(Error::new(
-                "unsupported: const-dependent nominal realization",
-            ));
+        ir::Ty::DependentArray { element, length } => {
+            Shape::DependentArray(Arc::new(shape(element, budget, depth + 1)?), *length)
         }
         ir::Ty::Array { element, len } => {
             Shape::Array(Arc::new(shape(element, budget, depth + 1)?), *len)

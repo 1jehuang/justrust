@@ -37,9 +37,13 @@ mod c_abi;
 mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
+mod const_arguments;
+mod const_impl;
+mod const_parameters;
 mod extern_crate;
 mod local_consts;
 mod owner_lifetimes;
+pub use const_arguments::SourceConstArgument;
 mod target_features;
 pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
@@ -7703,6 +7707,10 @@ fn replay_shared_local_inputs(
                 .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
                 .map_err(|e| source_error(budget, &e))
         })?;
+        let hint = hint
+            .as_ref()
+            .map(|ty| facts.normalize_substituted_projection_type(ty, budget))
+            .transpose()?;
         let expectation = match &view.signature().params[index] {
             ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
             _ => ir::CallExpectation::NoFirmReference,
@@ -7728,7 +7736,10 @@ fn replay_shared_local_inputs(
         // before a later unsuffixed integer is replayed. Never infer this from
         // the retained target actuals or instantiated signature.
         if binder.is_some() {
-            context.constrain_input(&view.signature().params[index], &input)?;
+            // This state provides context only. The complete original input
+            // trace below validates every deferred projection after source
+            // arguments, rather than retained checked actuals, fix its owner.
+            let _ = context.constrain_input_frontier(&view.signature().params[index], &input)?;
         }
         sr::push(&mut input_types, input, budget)?;
     }
@@ -9844,6 +9855,7 @@ pub enum ReceiverKind {
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
+    pub const_params: Vec<SourceConstParameter>,
     pub unsafety: bool,
     pub regions: RegionDecls,
     pub(super) original_source: Option<super::token_session::OriginalSpan>,
@@ -10175,7 +10187,7 @@ pub struct SourceManuallyDropCall {
 #[derive(Clone, Debug)]
 pub enum Type {
     DependentArray(Box<Type>, AstIdent),
-    ConstArgument(ir::ConstArgument),
+    ConstArgument(SourceConstArgument),
     ManuallyDrop(Box<SourceManuallyDrop>),
     Cell(Box<SourceCell>),
     PhantomData(Box<SourcePhantomData>),
@@ -10223,6 +10235,8 @@ pub enum Type {
 pub struct SourceConstParameter {
     pub name: AstIdent,
     pub ty: ir::ConstType,
+    /// Position among all type and const parameters of this declaration.
+    pub slot: u16,
 }
 /// Source spelling determines whether supertrait associated lookup is legal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11956,6 +11970,7 @@ struct Parser<'input, 'names> {
     pending_regions: RegionDecls,
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
     impl_regions: RegionDecls,
+    impl_const_params: Vec<SourceConstParameter>,
     /// While parsing an impl header, `'_` introduces a fresh impl lifetime.
     impl_header_anonymous: Option<()>,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
@@ -12151,6 +12166,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_const_params: Vec::new(),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
@@ -13683,6 +13699,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_const_params: std::mem::take(&mut self.impl_const_params),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
@@ -13708,6 +13725,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         });
         self.type_params = std::mem::take(&mut child.type_params);
         self.const_params = std::mem::take(&mut child.const_params);
+        self.impl_const_params = std::mem::take(&mut child.impl_const_params);
         self.local_consts = std::mem::take(&mut child.local_consts);
         result
     }
@@ -14123,6 +14141,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            impl_const_params: Vec::new(),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             impl_trait_params: None,
@@ -14563,12 +14582,22 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             self.expect(";")?;
             if self.token().is_ident() {
+                let token = self.input.mint_name(&self.token(), self.names)?;
                 let mut parameter = None;
-                for declared in &self.const_params {
-                    let token = self.input.mint_name(&self.token(), self.names)?;
+                for declared in self.const_params.iter().chain(&self.impl_const_params) {
                     if self.contains_name(&[declared.name], token, LookupClass::TypeParameter)? {
                         parameter = Some(token);
                         break;
+                    }
+                }
+                // A bare unresolved name is syntax, not an unsupported const
+                // expression. Retain it for semantic binding and slot-kind
+                // validation. Existing source const items still use CTFE.
+                if parameter.is_none() && self.cursor.peek(1).is_some_and(|next| next.matches("]"))
+                {
+                    let tokens: &[Token] = self.input;
+                    if !array_len::scan(tokens).contains_key(self.token().text) {
+                        parameter = Some(token);
                     }
                 }
                 if let Some(parameter) = parameter {
@@ -14803,20 +14832,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.error("positional type arguments must precede associated equalities")
                     );
                 }
-                let value = if self.eat("true") {
-                    Type::ConstArgument(ir::ConstArgument::Bool(true))
-                } else if self.eat("false") {
-                    Type::ConstArgument(ir::ConstArgument::Bool(false))
-                } else if self
-                    .token()
-                    .text
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_digit)
-                    || self.is("{")
-                    || self.is("-")
-                {
-                    return Err(self.unsupported("numeric and expression const generic arguments require const instantiation"));
+                let value = if let Some(value) = self.const_generic_argument()? {
+                    Type::ConstArgument(value)
                 } else {
                     self.ty()?
                 };
@@ -16242,7 +16259,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if explicit_visibility {
                 return Err(self.error("pub impl is invalid"));
             }
-            let type_params = self.type_parameters(nominal_defaults::Owner::Forbidden)?;
+            let type_params = self.impl_parameters()?;
             self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
@@ -16349,6 +16366,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let original_source = primitive_constants::original_impl_range(self, original_start);
             self.expect("}")?;
             let mut block = ImplDecl {
+                const_params: std::mem::take(&mut self.impl_const_params),
                 unsafety: declaration_unsafety,
                 regions: self.impl_regions.clone(),
                 original_source,
@@ -16853,6 +16871,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(params);
         }
         let mut seen_type = false;
+        let mut type_index = 0;
         loop {
             if self.eat("const") {
                 seen_type = true;
@@ -16874,9 +16893,19 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is("=") {
                     return Err(self.unsupported("const parameter defaults are unsupported"));
                 }
-                if self.const_params.len() >= 32 {
-                    return Err(self.limit("const parameter resource limit32"));
+                if params.len() >= 32 {
+                    return Err(self.limit("generic parameter resource limit32"));
                 }
+                if self.contains_name(&params, name, LookupClass::TypeParameter)? {
+                    return Err(self.error("duplicate generic parameter"));
+                }
+                let slot = params.len() as u16;
+                self.reserve_parser_items(&mut params, 1)?;
+                params.push(name);
+                let mut visible = std::mem::take(&mut self.type_params);
+                self.reserve_parser_items(&mut visible, 1)?;
+                visible.push(name);
+                self.type_params = visible;
                 let mut values = std::mem::take(&mut self.const_params);
                 for prior in &values {
                     if self.contains_name(&[prior.name], name, LookupClass::TypeParameter)? {
@@ -16884,7 +16913,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                 }
                 self.reserve_parser_items(&mut values, 1)?;
-                values.push(SourceConstParameter { name, ty });
+                values.push(SourceConstParameter { name, ty, slot });
                 self.const_params = values;
             } else if self.token().is_lifetime() {
                 if seen_type {
@@ -16904,7 +16933,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if params.len() >= 32 {
                     return Err(self.limit("generic parameter resource limit32"));
                 }
-                let name = self.predeclared_parameter(&declarations, params.len())?;
+                let name = self.predeclared_parameter(&declarations, type_index)?;
+                type_index += 1;
                 if self.contains_name(&params, name, LookupClass::TypeParameter)? {
                     return Err(self.error("duplicate type parameter"));
                 }
@@ -16950,11 +16980,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         }
         self.close_angle()?;
-        if !params.is_empty() && !self.const_params.is_empty() {
-            return Err(
-                self.unsupported("mixed type and const parameter declarations are unsupported")
-            );
-        }
         Ok(params)
     }
     fn function_head(
@@ -24625,22 +24650,45 @@ impl PlanCtx {
             decl_mut(&registry.slots, &mut registry.declarations, id)?.visibility =
                 function.visibility.clone();
             if !function.const_params.is_empty() {
-                budget.charge_work(function.const_params.len() + 1)?;
+                budget.charge_work(function.type_params.len() + 1)?;
                 let info = decl_mut(&registry.slots, &mut registry.declarations, id)?;
-                let mut kinds = Vec::new();
                 budget.retain_bytes(
-                    function.const_params.len() * std::mem::size_of::<ir::ConstType>(),
+                    function.type_params.len() * std::mem::size_of::<ir::GenericParamKind>(),
                 )?;
+                let mut kinds = Vec::new();
                 kinds
-                    .try_reserve_exact(function.const_params.len())
-                    .map_err(|_| "const binder allocation failed")?;
-                kinds.extend(function.const_params.iter().map(|parameter| parameter.ty));
-                let binder = Arc::new(ir::ConstBinder::new(
-                    ir::BinderId { declaration: id },
-                    &kinds,
+                    .try_reserve_exact(function.type_params.len())
+                    .map_err(|_| "const slot kind allocation failed")?;
+                kinds.resize(function.type_params.len(), ir::GenericParamKind::Type);
+                for parameter in &function.const_params {
+                    let written = function
+                        .type_params
+                        .get(usize::from(parameter.slot))
+                        .ok_or("const parameter slot is outside its source declaration")?;
+                    if program
+                        .names
+                        .key(*written, LookupClass::TypeParameter)
+                        .map_err(native_adapter::name_diagnostic)?
+                        != program
+                            .names
+                            .key(parameter.name, LookupClass::TypeParameter)
+                            .map_err(native_adapter::name_diagnostic)?
+                    {
+                        return Err("const parameter slot changed source declaration order".into());
+                    }
+                    let kind = kinds
+                        .get_mut(usize::from(parameter.slot))
+                        .ok_or("const parameter slot is outside its source declaration")?;
+                    if *kind != ir::GenericParamKind::Type {
+                        return Err("duplicate const parameter slot".into());
+                    }
+                    *kind = ir::GenericParamKind::Const(parameter.ty);
+                }
+                info.param_env = Arc::new(info.param_env.with_slot_kinds(&kinds, budget)?);
+                info.env = Arc::new(ir::GenericEnv::new(
+                    std::slice::from_ref(&info.param_env),
                     budget,
                 )?);
-                info.env = Arc::new(info.env.with_const_binder(binder, budget)?);
             }
             if let Some(receipt) = &function.embedded_source {
                 let bound = function_source::bind_registration(
@@ -24654,6 +24702,13 @@ impl PlanCtx {
                 decl_mut(&registry.slots, &mut registry.declarations, id)?.embedded_function =
                     Some(bound);
             }
+        }
+        for (implementation, block) in program.impls.iter().enumerate() {
+            let id = registry.impl_ids[implementation];
+            const_impl::install(&mut registry, program, implementation, budget)?;
+            decl_mut(&registry.slots, &mut registry.declarations, id)?
+                .path
+                .module = block.module;
         }
         associated_constants::seal_registry_owners(&mut registry, program, budget)?;
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -24681,12 +24736,6 @@ impl PlanCtx {
                     budget,
                 )?);
             }
-        }
-        for (implementation, block) in program.impls.iter().enumerate() {
-            let id = registry.impl_ids[implementation];
-            decl_mut(&registry.slots, &mut registry.declarations, id)?
-                .path
-                .module = block.module;
         }
         for (index, source) in registry.callable_sources.iter().enumerate() {
             let CallableSource::TraitDefault { trait_index, item } = *source else {
@@ -26118,15 +26167,16 @@ impl PlanCtx {
             return Ok(());
         };
         let schema = self.function_schema(*declaration)?;
-        let [binder] = schema.env.const_binders() else {
-            return if schema.env.const_binders().is_empty() {
-                Ok(())
-            } else {
-                Err("unsupported: multiple const declaration binders".into())
-            };
-        };
-        if binder.owner().declaration != *declaration {
-            return Err("const call schema changed declaration owner".into());
+        if !schema.env.const_binders().is_empty() {
+            return Err("unsupported: legacy const calls require ordered instance slots".into());
+        }
+        if !schema.env.ordered_params().any(|parameter| {
+            matches!(
+                schema.env.parameter_kind(parameter),
+                Some(ir::GenericParamKind::Const(_))
+            )
+        }) {
+            return Ok(());
         }
         let source = source.ok_or("const application requires original source authority")?;
         if source.declaration != caller.declaration()
@@ -26159,23 +26209,17 @@ impl PlanCtx {
         {
             return Err("const application changed original source arguments or occurrence".into());
         }
-        let (_, source_args) = path.application()?;
-        budget.charge_work(source_args.len())?;
-        budget.retain_bytes(source_args.len() * std::mem::size_of::<ir::GenericArgument>())?;
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(source_args.len())
-            .map_err(|_| "const argument allocation failed")?;
-        for argument in source_args {
-            match argument {
-                Type::ConstArgument(value) => {
-                    arguments.push(ir::GenericArgument::Const(value.clone()))
-                }
-                _ => return Err("E0747: type provided when a constant was expected".into()),
-            }
-        }
-        binder.validate_arguments(&arguments, caller.env(), budget)?;
-        Err("unsupported: valid const call requires const instance realization".into())
+        let bindings = generic_bindings(&self.registry, caller.env(), budget)?;
+        let (_, arguments) = self.application(
+            path,
+            Namespace::Value,
+            &bindings,
+            ir::FactsCtx::Validated(caller),
+            budget,
+        )?;
+        schema
+            .env
+            .validate_argument_kinds(&arguments, Some(caller.env()), budget)
     }
     fn application(
         &self,
@@ -26201,10 +26245,43 @@ impl PlanCtx {
             .semantic_slice(self.program.names.as_ref(), 0..at + 1, full.anchor())
             .map_err(native_adapter::name_diagnostic)?;
         let name = name_scope::path_key(self.program.names.as_ref(), &base, namespace)?;
+        let declaration = match namespace {
+            Namespace::Value => self.registry.functions.get(&name),
+            Namespace::Type => self.registry.nominals.get(&name),
+            _ => None,
+        };
+        let scope = declaration
+            .map(|declaration| self.registry.declaration(*declaration))
+            .transpose()?
+            .map(|info| &info.param_env);
+        if namespace == Namespace::Value
+            && let Some(function) =
+                declaration.and_then(|decl| self.registry.source_callable(*decl))
+            && !function.const_params.is_empty()
+        {
+            let written = function.type_params.len() - function.impl_params;
+            if segment.args.len() != written {
+                return Err(format!(
+                    "E0107: function takes {written} generic arguments but {} were supplied",
+                    segment.args.len()
+                ));
+            }
+        }
         let mut args = segment
             .args
             .iter()
-            .map(|t| self.source_ty(t, bindings, caller, budget))
+            .enumerate()
+            .map(|(index, argument)| {
+                let kind = scope
+                    .and_then(|scope| {
+                        scope.parameter_kind(ir::ParamId {
+                            owner: scope.binder(),
+                            index: index as u16,
+                        })
+                    })
+                    .unwrap_or(ir::GenericParamKind::Type);
+                self.source_generic_argument(argument, kind, bindings, caller, budget)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         if namespace == Namespace::Type
             && let Some(declaration) = self.registry.nominals.get(&name)
@@ -26299,9 +26376,18 @@ impl PlanCtx {
         if info.env.total_arity() != target.type_args.len() {
             return Err("wrong callable generic arity".into());
         }
-        for arg in target.type_args.iter() {
-            caller.validate_ty_with_budget(arg, budget)?;
-            ir::validate_root_reference_actual(arg, budget)?;
+        let caller_env = match caller {
+            ir::FactsCtx::Concrete => None,
+            ir::FactsCtx::Universal(env) => Some(env),
+            ir::FactsCtx::Validated(facts) => Some(facts.env().as_ref()),
+        };
+        info.env
+            .validate_argument_kinds(&target.type_args, caller_env, budget)?;
+        for (parameter, arg) in info.env.ordered_params().zip(target.type_args.iter()) {
+            if info.env.parameter_kind(parameter) == Some(ir::GenericParamKind::Type) {
+                caller.validate_ty_with_budget(arg, budget)?;
+                ir::validate_root_reference_actual(arg, budget)?;
+            }
         }
         let mut cx = self.clone();
         let params = schema
@@ -28800,10 +28886,13 @@ fn append_implicit_sized(
         let first = usize::from(declaration.kind == ir::DeclKind::Trait);
         for index in first..scope.arity() {
             budget.charge_work(1)?;
-            if scope.relaxed_sized(ir::ParamId {
+            let parameter = ir::ParamId {
                 owner: scope.binder(),
                 index: index as u16,
-            }) {
+            };
+            if scope.parameter_kind(parameter) != Some(ir::GenericParamKind::Type)
+                || scope.relaxed_sized(parameter)
+            {
                 continue;
             }
             if rows.len() >= 256 {
@@ -29360,8 +29449,15 @@ fn collect_source_params(
                 collect_source_params(names, f, used, budget, depth + 1)?;
             }
         }
-        Type::DependentArray(t, _)
-        | Type::Array(t, _)
+        Type::DependentArray(t, extent) => {
+            used.insert(
+                names
+                    .key(*extent, LookupClass::TypeParameter)
+                    .map_err(native_adapter::name_diagnostic)?,
+            );
+            collect_source_params(names, t, used, budget, depth + 1)?;
+        }
+        Type::Array(t, _)
         | Type::Slice(t)
         | Type::RawPtr { pointee: t, .. }
         | Type::Ref { referent: t, .. } => {
@@ -30579,7 +30675,7 @@ mod const_declaration_tests {
         assert!(check(path, &facts, value).contains("E0308"));
         let mut changed = path.clone();
         changed.segments.last_mut().unwrap().args[0] =
-            Type::ConstArgument(ir::ConstArgument::Bool(false));
+            Type::ConstArgument(ir::ConstArgument::Bool(false).into());
         assert!(
             !exact_source_generic_path(plan.program.names.as_ref(), path, &changed, &budget, 0)
                 .unwrap()

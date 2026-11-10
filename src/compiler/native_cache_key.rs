@@ -178,6 +178,7 @@ impl Encoder<'_, '_> {
             cfg::Constant::Unit => self.n(4),
             cfg::Constant::PhantomData(_)
             | cfg::Constant::AssociatedConst(_)
+            | cfg::Constant::ConstParameter(_)
             | cfg::Constant::Enum { .. } => Err(Failure::Unsupported),
         }
     }

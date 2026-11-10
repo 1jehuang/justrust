@@ -2084,6 +2084,7 @@ impl<'a> Emitter<'a> {
                 self.word(value.bits);
             }
             cfg::Operand::Constant(value) => self.immediate(match value {
+                cfg::Constant::ConstParameter(_) => return Err("unsupported: unspecialized const parameter reached physical code generation".into()),
                 cfg::Constant::AssociatedConst(_) => return Err("symbolic associated constant reached physical code generation without graph CTFE".into()),
                 cfg::Constant::Int(_) | cfg::Constant::Float(_) | cfg::Constant::Char(_) => {
                     unreachable!("numeric constants use typed full-width immediates")

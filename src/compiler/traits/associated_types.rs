@@ -21,6 +21,14 @@ impl ValidatedFacts {
                         "direct call metadata changed declaration kind or binder arity",
                     ));
                 }
+                charged(
+                    self.budget(),
+                    header.schema.env.validate_argument_kinds(
+                        &target.type_args,
+                        Some(self.env()),
+                        self.budget(),
+                    ),
+                )?;
             }
             Callee::TraitItem(call)
             | Callee::Virtual(ir::VirtualCall { call })
@@ -42,6 +50,21 @@ impl ValidatedFacts {
                         "trait call metadata changed exact item/trait owner or argument arity",
                     ));
                 }
+                let arguments = self.world.trait_arguments(&call.trait_ref)?;
+                charged(
+                    self.budget(),
+                    owner
+                        .env
+                        .validate_argument_kinds(&arguments, Some(self.env()), self.budget()),
+                )?;
+                charged(
+                    self.budget(),
+                    info.own_env.validate_argument_kinds(
+                        &call.method_args,
+                        Some(self.env()),
+                        self.budget(),
+                    ),
+                )?;
             }
         }
         Ok(())
@@ -474,7 +497,22 @@ impl ValidatedTraitWorld {
             }
             Ty::FnItem(item) => {
                 self.info(item.declaration)?;
+                let declaration = self.schema.declaration_schema(item.declaration)?;
+                charged(
+                    &self.budget,
+                    declaration.env.validate_argument_kinds(
+                        &item.type_args,
+                        Some(env),
+                        &self.budget,
+                    ),
+                )?;
                 for ty in item.type_args.iter() {
+                    if matches!(ty, Ty::Const(_))
+                        || matches!(ty, Ty::Param(parameter)
+                            if matches!(env.parameter_kind(*parameter), Some(ir::GenericParamKind::Const(_))))
+                    {
+                        continue;
+                    }
                     child(ty, replays)?;
                 }
             }
@@ -2253,6 +2291,43 @@ impl ValidatedTraitWorld {
         let child = |left: &Ty, right: &Ty| {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
+        if let Ty::DependentArray { element, length } = raw {
+            let expected = charged(
+                &self.budget,
+                env.array_length_argument(*length, arguments, &self.budget),
+            )?;
+            let actual_element = match (expected, actual) {
+                (Ty::Const(value), Ty::Array { element, len })
+                    if value.as_usize() == Some(*len) && *len <= ir::MAX_ARRAY_TYPE_LEN =>
+                {
+                    charged(&self.budget, value.closed_key())?;
+                    element
+                }
+                (Ty::Param(parameter), Ty::DependentArray { element, length })
+                    if parameter.owner == length.owner && parameter.index == length.index =>
+                {
+                    let source = self.info(parameter.owner.declaration)?;
+                    if source.env.parameter_kind(*parameter)
+                        != Some(ir::GenericParamKind::Const(ir::ConstType::Int(
+                            ir::IntTy::Usize,
+                        )))
+                    {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "dependent array RHS changed forwarded const parameter kind",
+                        ));
+                    }
+                    element
+                }
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dependent array RHS changed its source extent coordinate",
+                    ));
+                }
+            };
+            return child(element, actual_element);
+        }
         match (raw, actual) {
             (Ty::Cell(left), Ty::Cell(right)) => {
                 if !left.try_eq(right, |left, right| {
@@ -3020,6 +3095,177 @@ pub(super) fn implementation_application_self(ty: &Ty) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn const_impl_call_metadata_and_rhs_keep_exact_ordered_extent_authority() {
+        let program = frontend::parse("fn source<T,const N:usize>(x:[T;N])->[T;N]{x}fn forward<U,const M:usize>(){}fn type_only<V>(){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let schema = world.schema.declaration_schema(declaration).unwrap();
+        let caller = world
+            .callable_facts(plan.function_decl(3).unwrap())
+            .unwrap();
+        let length = |n| {
+            Ty::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::Usize,
+                bits: n,
+            })
+        };
+        let integer = Ty::Int(ir::IntTy::I32);
+        let arguments = vec![integer.clone(), length(2)];
+        let target = Callee::Direct(CallTarget {
+            declaration,
+            type_args: arguments.clone().into(),
+        });
+        caller.validate_callee_metadata(&target).unwrap();
+        let mut visited = 0;
+        target
+            .for_each_value_metadata(ir::FactsCtx::Validated(&caller), |ty| {
+                assert_eq!(ty, &integer);
+                visited += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(visited, 1);
+        assert_eq!(target.metadata_types().count(), 2);
+        if let Callee::Direct(direct) = &target {
+            let mut scratch = TraitScratch::default();
+            let proof = caller
+                .source_header_call_entry_with_nominals(direct, &[], &mut scratch)
+                .unwrap();
+            proof.validate(direct, &caller, &mut scratch).unwrap();
+            let copied = CallTarget {
+                declaration,
+                type_args: direct.type_args.to_vec().into(),
+            };
+            proof.entry.validate_binding(&copied, &caller).unwrap();
+            for value in [
+                length(3),
+                Ty::Const(ir::ConstArgument::Integer {
+                    ty: ir::IntTy::U8,
+                    bits: 2,
+                }),
+                Ty::Const(ir::ConstArgument::Bool(true)),
+            ] {
+                let changed = CallTarget {
+                    declaration,
+                    type_args: vec![integer.clone(), value].into(),
+                };
+                assert!(proof.entry.validate_binding(&changed, &caller).is_err());
+            }
+            let changed = CallTarget {
+                declaration: plan.function_decl(1).unwrap(),
+                type_args: direct.type_args.clone(),
+            };
+            assert!(proof.entry.validate_binding(&changed, &caller).is_err());
+            let foreign = world
+                .callable_facts(plan.function_decl(2).unwrap())
+                .unwrap();
+            assert!(proof.entry.validate_binding(direct, &foreign).is_err());
+        }
+        assert!(caller.validate_ty(&length(2)).is_err());
+        for arguments in [
+            vec![length(2), integer.clone()],
+            vec![integer.clone(), Ty::Const(ir::ConstArgument::Bool(true))],
+        ] {
+            let changed = Callee::Direct(CallTarget {
+                declaration,
+                type_args: arguments.into(),
+            });
+            assert!(
+                changed
+                    .for_each_value_metadata(ir::FactsCtx::Validated(&caller), |_| Ok(()))
+                    .is_err()
+            );
+        }
+        let missing = Callee::Direct(CallTarget {
+            declaration,
+            type_args: vec![integer.clone()].into(),
+        });
+        assert!(caller.validate_callee_metadata(&missing).is_err());
+        let array = |element, len| Ty::Array {
+            element: Arc::new(element),
+            len,
+        };
+        let actual = array(integer.clone(), 2);
+        let raw = &schema.signature.params[0];
+        world
+            .validate_rhs_substitution(raw, &actual, &schema.env, &arguments, 0)
+            .unwrap();
+        for changed in [array(integer.clone(), 3), array(Ty::Bool, 2)] {
+            assert!(
+                world
+                    .validate_rhs_substitution(raw, &changed, &schema.env, &arguments, 0)
+                    .is_err()
+            );
+        }
+        let Ty::DependentArray {
+            element,
+            length: original,
+        } = raw
+        else {
+            panic!("source array lost its canonical extent")
+        };
+        let foreign = ir::ConstParamId {
+            owner: ir::BinderId {
+                declaration: plan.function_decl(1).unwrap(),
+            },
+            index: original.index,
+        };
+        for changed in [
+            ir::ConstParamId {
+                index: 0,
+                ..*original
+            },
+            foreign,
+        ] {
+            let changed = Ty::DependentArray {
+                element: element.clone(),
+                length: changed,
+            };
+            assert!(
+                world
+                    .validate_rhs_substitution(&changed, &actual, &schema.env, &arguments, 0)
+                    .is_err()
+            );
+        }
+        let forward = world
+            .schema
+            .declaration_schema(plan.function_decl(1).unwrap())
+            .unwrap();
+        let coordinates: Vec<_> = forward.env.ordered_params().collect();
+        let forwarded = Ty::DependentArray {
+            element: Arc::new(Ty::Param(coordinates[0])),
+            length: ir::ConstParamId {
+                owner: coordinates[1].owner,
+                index: coordinates[1].index,
+            },
+        };
+        let arguments = [Ty::Param(coordinates[0]), Ty::Param(coordinates[1])];
+        world
+            .validate_rhs_substitution(raw, &forwarded, &schema.env, &arguments, 0)
+            .unwrap();
+        let type_only = world
+            .schema
+            .declaration_schema(plan.function_decl(2).unwrap())
+            .unwrap();
+        let parameter = type_only.env.ordered_params().next().unwrap();
+        let changed = Ty::DependentArray {
+            element: Arc::new(Ty::Param(coordinates[0])),
+            length: ir::ConstParamId {
+                owner: parameter.owner,
+                index: parameter.index,
+            },
+        };
+        let arguments = [Ty::Param(coordinates[0]), Ty::Param(parameter)];
+        assert!(
+            world
+                .validate_rhs_substitution(raw, &changed, &schema.env, &arguments, 0)
+                .is_err()
+        );
+    }
     use crate::compiler::frontend::{self, PlanCtx};
 
     #[test]

@@ -56,6 +56,7 @@ enum Domain {
     Ref(ir::BorrowKind, Term),
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
+    DependentArray(Term, Term),
     Slice(Term),
     Callable(callable::CallableTerm),
     AssociatedProjection(associated_projection::ProjectionTerm),
@@ -432,6 +433,32 @@ impl<'s> Solver<'_, '_, 's> {
             ir::Ty::Array { element, len } => {
                 Domain::Array(self.schema(element, params, depth + 1)?, *len)
             }
+            ir::Ty::DependentArray { element, length } => {
+                let parameter = ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                let actual = params
+                    .get(&parameter)
+                    .map(|term| self.resolve(*term, depth + 1))
+                    .transpose()?
+                    .flatten();
+                if let Some(ir::Ty::Const(value)) = actual {
+                    let len = value
+                        .as_usize()
+                        .ok_or("E0308: array extent must be usize")?;
+                    if len > ir::MAX_ARRAY_TYPE_LEN {
+                        return Err("array length limit exceeded".into());
+                    }
+                    Domain::Array(self.schema(element, params, depth + 1)?, len)
+                } else if let Some(length) = params.get(&parameter) {
+                    Domain::DependentArray(self.schema(element, params, depth + 1)?, *length)
+                } else {
+                    let element = self.schema(element, params, depth + 1)?;
+                    let length = self.fixed(ir::Ty::Param(parameter))?;
+                    Domain::DependentArray(element, length)
+                }
+            }
             ir::Ty::Slice { element } => Domain::Slice(self.schema(element, params, depth + 1)?),
             ir::Ty::PhantomData(marker) => Domain::PhantomData(
                 marker.declaration(),
@@ -720,6 +747,10 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Ref(_, t) | Domain::RawPtr(_, t) | Domain::Array(t, _) | Domain::Slice(t) => {
                 self.occurs(needle, *t, depth + 1)
             }
+            Domain::DependentArray(element, length) => {
+                Ok(self.occurs(needle, *element, depth + 1)?
+                    || self.occurs(needle, *length, depth + 1)?)
+            }
             _ => Ok(false),
         }
     }
@@ -831,6 +862,21 @@ impl<'s> Solver<'_, '_, 's> {
                 self.unify_at(*x, *y, depth + 1)?;
                 Domain::Array(*x, *n)
             }
+            (Domain::DependentArray(x, n), Domain::DependentArray(y, m)) => {
+                self.unify_at(*x, *y, depth + 1)?;
+                self.unify_at(*n, *m, depth + 1)?;
+                Domain::DependentArray(*x, *n)
+            }
+            (Domain::Array(x, n), Domain::DependentArray(y, m))
+            | (Domain::DependentArray(y, m), Domain::Array(x, n)) => {
+                self.unify_at(*x, *y, depth + 1)?;
+                let extent = self.fixed(ir::Ty::Const(ir::ConstArgument::Integer {
+                    ty: ir::IntTy::Usize,
+                    bits: *n as u128,
+                }))?;
+                self.unify_at(*m, extent, depth + 1)?;
+                Domain::Array(*x, *n)
+            }
             (Domain::Callable(x), Domain::Callable(y)) if x.key == y.key => {
                 for (x, y) in x.params.iter().zip(&y.params) {
                     self.unify_at(*x, *y, depth + 1)?;
@@ -886,6 +932,7 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Ref(_, inner)
             | Domain::RawPtr(_, inner)
             | Domain::Array(inner, _)
+            | Domain::DependentArray(inner, _)
             | Domain::Slice(inner) => self.contains_callable(inner, depth + 1)?,
             // A finalized closure (or a parent-local application holding one)
             // is realized by the parent, never through a graph demand.
@@ -1056,6 +1103,20 @@ impl<'s> Solver<'_, '_, 's> {
                     element: Arc::new(ty),
                     len,
                 }
+            }
+            Domain::DependentArray(element, length) => {
+                let Some(element) = self.resolve(element, depth + 1)? else {
+                    return Ok(None);
+                };
+                let Some(length) = self.resolve(length, depth + 1)? else {
+                    return Ok(None);
+                };
+                const_parameters::array_type(
+                    element,
+                    &length,
+                    self.checker.facts(),
+                    &self.checker.signatures.plan()?.budget,
+                )?
             }
             Domain::Slice(term) => {
                 let Some(ty) = self.resolve(term, depth + 1)? else {
@@ -1280,7 +1341,9 @@ impl<'s> Solver<'_, '_, 's> {
                 self.dyn_callable_hint(xs[0], ys[0])
             }
             (Domain::Array(a, n), Domain::Array(b, m)) if n == m => self.coerce(a, b),
-            (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
+            (Domain::Array(a, _) | Domain::DependentArray(a, _), Domain::Slice(b)) => {
+                self.unify(a, b)
+            }
             _ => self.unify(actual, expected),
         }
     }
@@ -1437,6 +1500,10 @@ impl<'s> Solver<'_, '_, 's> {
             | Domain::RawPtr(_, child)
             | Domain::Array(child, _)
             | Domain::Slice(child) => self.lazy_input_frontier(child, targets, depth + 1)?,
+            Domain::DependentArray(element, length) => {
+                self.lazy_input_frontier(element, targets, depth + 1)?
+                    && self.lazy_input_frontier(length, targets, depth + 1)?
+            }
             Domain::AssociatedProjection(projection) => {
                 if !self.lazy_input_frontier(projection.receiver, targets, depth + 1)? {
                     return Ok(false);
@@ -2214,7 +2281,9 @@ impl<'s> Solver<'_, '_, 's> {
             ) => Ok(Some(element)),
             (Domain::Tuple(fields), FieldSelector::Tuple(i)) => Ok(fields.get(*i).copied()),
             (
-                Domain::Array(element, _) | Domain::Slice(element),
+                Domain::Array(element, _)
+                | Domain::DependentArray(element, _)
+                | Domain::Slice(element),
                 FieldSelector::ConstantIndex(_),
             ) => Ok(Some(element)),
             (Domain::Nominal(decl, args), FieldSelector::Tuple(_) | FieldSelector::Named(_)) => {
@@ -2494,7 +2563,9 @@ impl<'s> Solver<'_, '_, 's> {
                 // rest patterns leave the container shape to the checker.
                 let (term, mode) = self.pattern_referent(term);
                 let element = match self.domain(term) {
-                    Domain::Array(element, _) | Domain::Slice(element) => element,
+                    Domain::Array(element, _)
+                    | Domain::DependentArray(element, _)
+                    | Domain::Slice(element) => element,
                     _ => {
                         let element = self.fresh()?;
                         if let Pattern::Array(fields) = pattern
@@ -2887,12 +2958,53 @@ impl<'s> Solver<'_, '_, 's> {
                         &plan.budget,
                     )?;
                 }
-                let actuals = path
-                    .segments
-                    .iter()
-                    .flat_map(|s| &s.args)
-                    .map(|a| self.source_ty(a))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let typed_const_args = {
+                    let plan = self.checker.signatures.plan()?;
+                    let declaration = if let Expr::Call { name, .. } = value.as_ref() {
+                        plan.registry
+                            .functions
+                            .get(&self.checker.path_key(name, Namespace::Value)?)
+                    } else {
+                        None
+                    };
+                    let const_slots = if let Some(declaration) = declaration {
+                        let info = plan.declaration(*declaration)?;
+                        info.env.ordered_params().any(|parameter| {
+                            matches!(
+                                info.env.parameter_kind(parameter),
+                                Some(ir::GenericParamKind::Const(_))
+                            )
+                        })
+                    } else {
+                        false
+                    };
+                    if const_slots {
+                        Some(
+                            plan.application(
+                                path,
+                                Namespace::Value,
+                                &self.checker.signatures.params,
+                                self.checker.facts(),
+                                &plan.budget,
+                            )?
+                            .1,
+                        )
+                    } else {
+                        None
+                    }
+                };
+                let actuals = if let Some(arguments) = typed_const_args {
+                    arguments
+                        .into_iter()
+                        .map(|argument| self.fixed(argument))
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    path.segments
+                        .iter()
+                        .flat_map(|s| &s.args)
+                        .map(|a| self.source_ty(a))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
                 if let Expr::Call { name, args } = value.as_ref() {
                     let args = args
                         .iter()
@@ -3013,6 +3125,13 @@ impl<'s> Solver<'_, '_, 's> {
                 ))
             }
             Expr::Var(path) => {
+                if let Some(operand) = const_parameters::parameter_path_value(
+                    self.checker.signatures,
+                    path,
+                    &self.checker.signatures.plan()?.budget,
+                )? {
+                    return self.fixed(operand.value_type());
+                }
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);
                 }
@@ -3402,9 +3521,9 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 let base = self.peel_refs(base);
                 match self.domain(base) {
-                    Domain::Array(element, _) | Domain::Slice(element) => {
-                        self.node(Domain::Slice(element))
-                    }
+                    Domain::Array(element, _)
+                    | Domain::DependentArray(element, _)
+                    | Domain::Slice(element) => self.node(Domain::Slice(element)),
                     Domain::Nominal(decl, args) if self.is_prelude_vec(decl)? => {
                         match args.first() {
                             Some(&element) => self.node(Domain::Slice(element)),

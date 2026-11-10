@@ -373,6 +373,7 @@ pub(super) fn preflight_program_clone(
             clone_trait_path(path, budget)?;
         }
         clone_names(&implementation.type_params, budget)?;
+        clone_vector(&implementation.const_params, budget)?;
         clone_bounds(&implementation.bounds, budget)?;
         walk_depth(DepthNode::Type(&implementation.self_ty), Some(budget))?;
         clone_vector(&implementation.associated_types, budget)?;
