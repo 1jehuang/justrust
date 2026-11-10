@@ -104,12 +104,15 @@ fn exec(real: &PathBuf, args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
-/// Experimental `-Zcache-proc-macros` for incremental units on our compiler.
-/// Disabled by default: derive/attribute cache hits can reuse stale expansion
-/// output after environment or file changes, including tracked inputs. Keep
-/// this behind explicit expert opt-in until native dependency tracking is safe.
-/// `JUSTRUST_CACHE_PROC_MACROS=1/on/true/yes` enables the experiment. The flag
-/// remains part of rustc's incremental key, independent of recording.
+/// `-Zcache-proc-macros` for incremental units on our compiler.
+/// On by default when the compiler tracks proc-macro environment and file
+/// inputs (jr-rustc 6374f2b9b and later, see `proc_macro_inputs_tracked`),
+/// which makes derive/attribute cache hits invalidate when an input changes
+/// (gate: `bench/reuse-macro-input-accept.py`). Older jr compilers can serve
+/// stale expansions, so there it stays an explicit opt-in.
+/// `JUSTRUST_CACHE_PROC_MACROS=0/off/false/no` disables it,
+/// `1/on/true/yes` forces it. The flag is part of rustc's incremental key,
+/// independent of recording.
 fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<OsString> {
     // The variable is inherited by nested cargo invocations (build scripts,
     // xtasks) that may run another rustc: also require that the compiler
@@ -119,13 +122,18 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
         .and_then(|b| b.parent())
         .and_then(|d| d.file_name())
         .is_some_and(|n| n.to_string_lossy().starts_with("jr-"));
-    if !is_jr
-        || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
-        || !matches!(
-            std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
-    {
+    if !is_jr || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none() {
+        return None;
+    }
+    let enabled = match std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref() {
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes") => true,
+        Ok("0") | Ok("off") | Ok("false") | Ok("no") => false,
+        _ => real
+            .parent()
+            .and_then(|b| b.parent())
+            .is_some_and(proc_macro_inputs_tracked),
+    };
+    if !enabled {
         return None;
     }
     let s = |a: &OsString| a.to_string_lossy().into_owned();
@@ -135,6 +143,34 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
         || args.iter().any(|a| s(a).starts_with("-Cincremental="));
     let already = args.iter().any(|a| s(a).contains("cache-proc-macros"));
     (incremental && !already).then(|| OsString::from("-Zcache-proc-macros"))
+}
+
+/// Whether the toolchain's compiler driver tracks proc-macro inputs: it
+/// defines the `jr_proc_macro_inputs` query. Scanned once per toolchain and
+/// remembered in `<toolchain>/.jr-pm-inputs` (toolchains are immutable).
+fn proc_macro_inputs_tracked(toolchain: &std::path::Path) -> bool {
+    let marker = toolchain.join(".jr-pm-inputs");
+    if let Ok(v) = std::fs::read_to_string(&marker) {
+        return v.trim() == "yes";
+    }
+    let found = std::fs::read_dir(toolchain.join("lib"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            n.starts_with("librustc_driver") && n.ends_with(".so")
+        })
+        .any(|e| {
+            std::fs::read(e.path())
+                .is_ok_and(|b| memchr::memmem::find(&b, b"jr_proc_macro_inputs").is_some())
+        });
+    let tmp = toolchain.join(format!(".jr-pm-inputs.{}", std::process::id()));
+    if std::fs::write(&tmp, if found { "yes\n" } else { "no\n" }).is_ok() {
+        let _ = std::fs::rename(&tmp, &marker);
+    }
+    found
 }
 
 /// Parallel front end for optimized workspace crates. rustc runs its front
@@ -719,6 +755,28 @@ mod tests {
     }
 
     #[test]
+    fn proc_macro_input_tracking_detected_from_driver() {
+        let dir = std::env::temp_dir().join(format!("jr-pmi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/librustc_driver-x.so"), b"old driver").unwrap();
+        assert!(!proc_macro_inputs_tracked(&dir));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".jr-pm-inputs")).unwrap(),
+            "no\n"
+        );
+        std::fs::remove_file(dir.join(".jr-pm-inputs")).unwrap();
+        std::fs::write(
+            dir.join("lib/librustc_driver-x.so"),
+            b"..jr_proc_macro_inputs..",
+        )
+        .unwrap();
+        assert!(proc_macro_inputs_tracked(&dir));
+        assert!(proc_macro_inputs_tracked(&dir), "cached");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn cache_proc_macros_only_for_incremental_units_on_jr() {
         let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
         let jr = std::path::Path::new("/h/.justrust/toolchains/jr-ac20de5e7921/bin/rustc");
@@ -738,9 +796,9 @@ mod tests {
         assert_eq!(
             cache_proc_macro_args(jr, &incr),
             None,
-            "unsafe cache stays off by default"
+            "untracked (missing) toolchain stays off by default"
         );
-        for value in ["", "0", "off", "false", "no", "unexpected"] {
+        for value in ["0", "off", "false", "no"] {
             unsafe { std::env::set_var("JUSTRUST_CACHE_PROC_MACROS", value) };
             assert_eq!(
                 cache_proc_macro_args(jr, &incr),
