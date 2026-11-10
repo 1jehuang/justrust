@@ -6543,6 +6543,54 @@ impl CarrierBuilder<'_, '_> {
         };
         Ok(locations.is_empty() && self.copy_permission_in(leaf, authority)?)
     }
+    /// The authored envelope of a generic declaration may add the carrier
+    /// family of a type parameter to an otherwise identity row. A family whose
+    /// sealed actual stores no carrier is empty, so the row is still identity.
+    fn original_identity_write_rows(
+        &mut self,
+        view: &super::traits::CarrierContractView,
+    ) -> Result<bool, Exhausted> {
+        let contract = view.original_contract();
+        if exact_identity_write_rows(contract, self.budget)? {
+            return Ok(true);
+        }
+        if contract.writes.is_empty() {
+            return Ok(false);
+        }
+        for (index, row) in contract.writes.iter().enumerate() {
+            self.budget
+                .spend(add(contract.inputs.len(), add(index, row.sources.len())?)?)?;
+            if !contract.inputs.contains(&row.destination)
+                || !row.sources.contains(&row.destination)
+                || contract.writes[..index]
+                    .iter()
+                    .any(|prior| prior.destination == row.destination)
+            {
+                return Ok(false);
+            }
+            for source in row.sources.iter() {
+                if *source == row.destination {
+                    continue;
+                }
+                let CarrierChannel::ParamTail { parameter, .. } = source.location.channel else {
+                    return Ok(false);
+                };
+                let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)?
+                else {
+                    return Ok(false);
+                };
+                let Some(locations) =
+                    self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
+                else {
+                    return Ok(false);
+                };
+                if !locations.is_empty() {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
     /// A single mutable reborrow may coexist with unchanged Copy referent
     /// cells. This is not the general identity-effect fallback: both authored
     /// and instantiated envelopes must be exact identities, every expanded
@@ -6554,13 +6602,42 @@ impl CarrierBuilder<'_, '_> {
         view: &super::traits::CarrierContractView,
         authority: Option<&super::traits::ValidatedFacts>,
     ) -> Result<bool, Exhausted> {
-        let Ty::Ref {
-            kind: BorrowKind::Mut,
-            referent,
-        } = result
+        // The one affine result may be the root reference or one mutable
+        // reference stored by value in the result (`Option<&mut T>`): the
+        // caller has already counted exactly one owned result channel.
+        let Some(locations) = self.metadata_value(ir::carrier_locations(result, &self.ledger))?
         else {
             return Ok(false);
         };
+        let mut owned = None;
+        for location in locations.iter() {
+            self.budget.spend(location.path.0.len() + 1)?;
+            if value_projection(location).contains(&Projection::Deref) {
+                continue;
+            }
+            if owned.is_some()
+                || !location.path.0.iter().all(|step| {
+                    matches!(
+                        step,
+                        CarrierStep::Field(_) | CarrierStep::VariantField { .. }
+                    )
+                })
+            {
+                return Ok(false);
+            }
+            owned = Some(location.clone());
+        }
+        let Some(owned) = owned else {
+            return Ok(false);
+        };
+        let Some(Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent,
+        }) = self.metadata_value(ir::carrier_at(result, &owned, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        let referent = &*referent;
         let referent_copy = self.copy_permission_in(referent, authority)?;
         let slice_copy = !referent_copy
             && self.identity_copy_slice_reborrow_admitted(params, referent, view, authority)?;
@@ -6581,7 +6658,7 @@ impl CarrierBuilder<'_, '_> {
             }
         };
         if !(referent_copy || slice_copy || reference_free)
-            || !exact_identity_write_rows(view.original_contract(), self.budget)?
+            || !self.original_identity_write_rows(view)?
             || !exact_identity_write_rows(view.contract(), self.budget)?
         {
             return Ok(false);

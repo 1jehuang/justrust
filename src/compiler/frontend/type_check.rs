@@ -2846,6 +2846,26 @@ pub(super) fn array_unsize_carrier(ty: &ir::Ty) -> Option<ir::Ty> {
     })
 }
 
+/// The mutable counterpart of `array_unsize_carrier`, tried only after the
+/// shared carrier selects nothing. A shared array reference never yields it.
+pub(super) fn array_unsize_mut_carrier(ty: &ir::Ty) -> Option<ir::Ty> {
+    let element = match ty {
+        ir::Ty::Array { element, .. } => element.clone(),
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent,
+        } => match referent.as_ref() {
+            ir::Ty::Array { element, .. } => element.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(ir::Ty::Ref {
+        kind: ir::BorrowKind::Mut,
+        referent: Arc::new(ir::Ty::Slice { element }),
+    })
+}
+
 /// A slice carrier is admitted only as an exact shared or mutable root reference.
 fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
     if matches!(ty, ir::Ty::Slice { .. }) {

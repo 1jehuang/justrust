@@ -19,14 +19,6 @@ impl<T> Box<T> {
         Box { ptr: p }
     }
 
-    pub fn as_ref(&self) -> &T {
-        unsafe { &*self.ptr }
-    }
-
-    pub fn as_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.ptr }
-    }
-
     pub fn into_inner(b: Box<T>) -> T {
         let p = b.ptr;
         let value = unsafe { *p };
@@ -36,6 +28,17 @@ impl<T> Box<T> {
         let mut b = b;
         b.ptr = 0usize as *mut T;
         value
+    }
+}
+
+// Borrowing the pointee needs no size: `Box<dyn Trait>::as_mut` is `&mut dyn Trait`.
+impl<T: ?Sized> Box<T> {
+    pub fn as_ref(&self) -> &T {
+        unsafe { &*self.ptr }
+    }
+
+    pub fn as_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.ptr }
     }
 }
 

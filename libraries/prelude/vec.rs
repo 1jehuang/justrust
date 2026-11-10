@@ -64,6 +64,12 @@ impl<T> Vec<T> {
         super::slice::Iter::new(self.as_slice())
     }
 
+    pub fn iter_mut<'a>(&'a mut self) -> super::slice::IterMut<'a, T> {
+        let len = self.len;
+        let data = self.as_mut_ptr();
+        super::slice::IterMut::from_parts(data, len, self.as_slice())
+    }
+
     /// Borrow element `index` (panics when out of bounds).
     pub fn get_ref(&self, index: usize) -> &T {
         if index >= self.len {
@@ -283,6 +289,14 @@ impl<'a, T> super::iter::IntoIterator for &'a Vec<T> {
     type IntoIter = super::slice::Iter<'a, T>;
     fn into_iter(self) -> super::slice::Iter<'a, T> {
         self.iter()
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for &'a mut Vec<T> {
+    type Item = &'a mut T;
+    type IntoIter = super::slice::IterMut<'a, T>;
+    fn into_iter(self) -> super::slice::IterMut<'a, T> {
+        self.iter_mut()
     }
 }
 

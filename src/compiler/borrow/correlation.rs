@@ -60,6 +60,30 @@ impl Plan {
                 }
             }
         }
+        // Results of different calls are distinct by-value mutable carriers
+        // too. A returned reference is not a loan of its referent: only the
+        // argument loans it depends on are, and those stay live and are
+        // checked at each call. Two unrelated results (neither an ancestor of
+        // the other) therefore never conflict through their shared ancestry.
+        for &first in &target.authority {
+            budget.spend(borrowed.authority.len() + 1)?;
+            if self.kinds[first] != BorrowKind::Mut
+                || self.call_issuers[first].is_none()
+                || first == loan
+                || borrowed.authority.contains(&first)
+            {
+                continue;
+            }
+            for second in std::iter::once(loan).chain(borrowed.authority.iter().copied()) {
+                budget.spend(target.authority.len() + 1)?;
+                if self.kinds[second] == BorrowKind::Mut
+                    && self.call_issuers[second].is_some()
+                    && !target.authority.contains(&second)
+                {
+                    return Ok(true);
+                }
+            }
+        }
         Ok(false)
     }
 

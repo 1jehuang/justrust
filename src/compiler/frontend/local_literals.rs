@@ -1874,10 +1874,17 @@ impl<'s> Solver<'_, '_, 's> {
                             }
                             Err(error) => {
                                 // Stock's final probe step unsizes `[T; N]` to
-                                // `[T]`. Checked lowering admits only the shared
-                                // `&[T]` carrier and reselects the same method.
-                                if let Some(carrier) = type_check::array_unsize_carrier(&ty)
-                                    && let Ok(selected) = plan.select_method(
+                                // `[T]`. Mirror checked lowering's shared-then-
+                                // mutable carrier probes so inferred results
+                                // agree with the selected receiver reborrow.
+                                let unsized_selection = [
+                                    type_check::array_unsize_carrier(&ty),
+                                    type_check::array_unsize_mut_carrier(&ty),
+                                ]
+                                .into_iter()
+                                .flatten()
+                                .find_map(|carrier| {
+                                    plan.select_method(
                                         &carrier,
                                         &method.name,
                                         &[],
@@ -1885,7 +1892,9 @@ impl<'s> Solver<'_, '_, 's> {
                                         &self.checker.module,
                                         &plan.budget,
                                     )
-                                {
+                                    .ok()
+                                });
+                                if let Some(selected) = unsized_selection {
                                     for (arg, param) in method
                                         .args
                                         .iter()

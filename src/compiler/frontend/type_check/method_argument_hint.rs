@@ -33,7 +33,13 @@ impl Checker<'_> {
                 .map(|selected| selected.signature.result)
                 .or(partial_result));
         }
-        if let Some(carrier) = array_unsize_carrier(receiver) {
+        for carrier in [
+            array_unsize_carrier(receiver),
+            array_unsize_mut_carrier(receiver),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let (selection, deferred, partial_result) = self.method_selection_with_inference_mode(
                 &carrier, name, explicit, arguments, None, true,
             )?;

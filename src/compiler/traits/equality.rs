@@ -808,6 +808,16 @@ impl ValidatedTraitWorld {
                 };
                 self.reject_projected_references(referent, depth + 1)
             }
+            // `Item = &'a mut T` is likewise a type row, not a loan. The value
+            // stays affine: Copy is decided by exact facts, never by this row,
+            // and its origin still comes from the callable carrier proof.
+            // Mutable slice descriptors and nested references remain outside.
+            Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            } if !matches!(referent.as_ref(), Ty::Slice { .. } | Ty::Ref { .. }) => {
+                self.reject_projected_references(referent, depth + 1)
+            }
             Ty::Ref { .. } | Ty::Slice { .. } => Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: mutable or nested reference associated equality",

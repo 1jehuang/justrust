@@ -93,6 +93,20 @@ impl ValidatedTraitWorld {
                 kind: ir::BorrowKind::Shared,
                 referent,
             } if allow_native_owner => referent.owned_sequence_element(),
+            // A shared slice returned out of an exclusive descriptor
+            // (`&'a mut [T]` or `&'a mut Vec<T>` to `&'a [T]`) retains the same
+            // stored element origins. This only adds a return dependency.
+            Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            } if allow_native_owner => {
+                referent
+                    .owned_sequence_element()
+                    .or(match referent.as_ref() {
+                        Ty::Slice { element } => Some(element.as_ref()),
+                        _ => None,
+                    })
+            }
             _ => None,
         };
         Ok(

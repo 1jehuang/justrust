@@ -14,7 +14,7 @@ pub mod core_v1 {
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
-    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
 }
 
 pub mod v1 {
@@ -26,7 +26,7 @@ pub mod v1 {
     pub use super::super::vec::Vec;
     pub use super::super::boxed::Box;
     pub use super::super::string::{SliceJoin, StrChars, StrMethods, StrToString, String, ToString};
-    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};
     pub use super::super::ptr::{ConstPtr, MutPtr};
     pub use super::super::ops::{Fn, FnMut, FnOnce};
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
@@ -52,7 +52,7 @@ pub mod core_v1_2018 {
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
-    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
 }
 
 // Editions 2015/2018: the 2021 additions (FromIterator) are absent.
@@ -65,7 +65,7 @@ pub mod v1_2018 {
     pub use super::super::vec::Vec;
     pub use super::super::boxed::Box;
     pub use super::super::string::{SliceJoin, StrChars, StrMethods, StrToString, String, ToString};
-    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};
+    pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};
     pub use super::super::ptr::{ConstPtr, MutPtr};
     pub use super::super::ops::{Fn, FnMut, FnOnce};
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};

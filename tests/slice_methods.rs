@@ -1036,3 +1036,272 @@ fn unpromoted_large_arrays_remain_explicitly_unsupported() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn slice_and_vec_iter_mut_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    let invalid = |name, source, code| Case {
+        name,
+        source,
+        expect: Expect::Invalid(code),
+    };
+    closure_oracle::check(
+        "slice-vec-iter-mut",
+        &[
+            Case {
+                name: "vec_and_slice_parameter_loops_two_live_items",
+                source: r#"fn bump(s: &mut [i32]) { for x in s.iter_mut() { *x += 1; } }
+fn scale(s: &mut [i32]) { for x in s { *x *= 2; } }
+fn main() {
+    let mut v: Vec<i32> = vec![1, 2, 3, 4];
+    for x in v.iter_mut() { *x *= 10; }
+    for x in &mut v { *x += 1; }
+    bump(&mut v);
+    scale(&mut v);
+    println!("{:?}", v);
+    let mut it = v.iter_mut();
+    let a = it.next().unwrap();
+    let b = it.next().unwrap();
+    *a += 100;
+    *b += 200;
+    println!("{:?}", v);
+}"#,
+                expect: Expect::Run("[24, 44, 64, 84]\n[124, 244, 64, 84]\n"),
+            },
+            Case {
+                name: "struct_elements_and_if_let_next",
+                source: r#"struct Counter { n: u32 }
+fn main() {
+    let mut cs = vec![Counter { n: 0 }, Counter { n: 5 }];
+    for c in cs.iter_mut() { c.n += 2; }
+    if let Some(first) = cs.iter_mut().next() { first.n = 100; }
+    println!("{} {}", cs[0].n, cs[1].n);
+}"#,
+                expect: Expect::Run("100 7\n"),
+            },
+            Case {
+                name: "boxed_dyn_trait_elements",
+                source: r#"trait S { fn go(&mut self) -> u32; }
+struct A { n: u32 }
+impl S for A { fn go(&mut self) -> u32 { self.n += 1; self.n } }
+fn run(s: &mut dyn S) -> u32 { s.go() }
+fn main() {
+    let mut v: Vec<Box<dyn S>> = vec![Box::new(A { n: 1 })];
+    for s in v.iter_mut() { println!("{}", run(s.as_mut())); }
+}"#,
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "string_elements_and_for_each",
+                source: r#"fn main() {
+    let mut names = vec![String::from("a"), String::from("b")];
+    for s in names.iter_mut() { s.push('!'); }
+    names.iter_mut().for_each(|s| s.push('?'));
+    println!("{:?}", names);
+}"#,
+                expect: Expect::Run("[\"a!?\", \"b!?\"]\n"),
+            },
+            Case {
+                name: "array_reference_enumerate_and_rev",
+                source: r#"fn main() {
+    let mut a: [u8; 3] = [5, 6, 7];
+    for x in &mut a { *x += 1; }
+    let s: &mut [u8] = &mut a;
+    for (i, x) in s.iter_mut().enumerate() { *x += i as u8; }
+    for x in s.iter_mut().rev() { *x += 1; }
+    println!("{:?}", a);
+}"#,
+                expect: Expect::Run("[7, 9, 11]\n"),
+            },
+            Case {
+                name: "direct_array_receiver_iter_mut",
+                source: r#"fn main() {
+    let mut a: [u8; 3] = [5, 6, 7];
+    for x in a.iter_mut() { *x += 1; }
+    println!("{:?}", a);
+}"#,
+                expect: Expect::Run("[6, 7, 8]\n"),
+            },
+            Case {
+                name: "map_sum_and_nested_rows",
+                source: r#"fn main() {
+    let mut v: Vec<i32> = vec![1, 2, 3];
+    let total: i32 = v.iter_mut().map(|x| { *x += 1; *x }).sum();
+    println!("{} {:?}", total, v);
+    let mut g: Vec<Vec<usize>> = vec![vec![0, 0, 0], vec![0, 0, 0]];
+    for (r, row) in g.iter_mut().enumerate() {
+        for (c, cell) in row.iter_mut().enumerate() { *cell = r * 3 + c; }
+    }
+    println!("{:?}", g);
+}"#,
+                expect: Expect::Run("9 [2, 3, 4]\n[[0, 1, 2], [3, 4, 5]]\n"),
+            },
+            invalid(
+                "second_iter_mut_while_item_live",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let a=v.iter_mut().next().unwrap();let b=v.iter_mut().next().unwrap();*a+=1;*b+=1;}",
+                "E0499",
+            ),
+            invalid(
+                "item_kept_across_push",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();let a=it.next().unwrap();v.push(3);*a+=1;}",
+                "E0499",
+            ),
+            invalid(
+                "two_iterators_over_one_vec",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut i1=v.iter_mut();let mut i2=v.iter_mut();let a=i1.next().unwrap();let b=i2.next().unwrap();*a+=1;*b+=1;}",
+                "E0499",
+            ),
+            // Stock reports E0515. We reject the same return as E0499.
+            invalid(
+                "item_returned_from_local_vec",
+                "fn first()->&'static mut i32{let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();it.next().unwrap()} fn main(){*first()+=1;}",
+                "E0515",
+            ),
+            invalid(
+                "owner_read_while_item_live",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();let a=it.next().unwrap();let n=v.len();*a+=n as i32;}",
+                "E0502",
+            ),
+            invalid(
+                "shared_borrow_while_item_live",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();let a=it.next().unwrap();let s=&v;*a+=1;println!(\"{:?}\",s);}",
+                "E0502",
+            ),
+            invalid(
+                "owner_moved_while_item_live",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();let a=it.next().unwrap();drop(v);*a+=1;}",
+                "E0505",
+            ),
+            // Stock reports E0597. We reject the same escape as E0499.
+            invalid(
+                "item_outlives_owner",
+                "fn main(){let r;{let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();r=it.next().unwrap();}*r+=1;}",
+                "E0597",
+            ),
+            invalid(
+                "nested_iter_mut_inside_loop",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];for x in v.iter_mut(){let y=v.iter_mut().next().unwrap();*x+=*y;}}",
+                "E0499",
+            ),
+            // Stock reports E0503. We reject the same write as E0502.
+            invalid(
+                "slice_write_while_item_live",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let s:&mut[i32]=&mut v;let mut it=s.iter_mut();let a=it.next().unwrap();s[0]=9;*a+=1;}",
+                "E0503",
+            ),
+            invalid(
+                "immutable_owner",
+                "fn main(){let v:Vec<i32>=vec![1,2];for x in v.iter_mut(){*x+=1;}}",
+                "E0596",
+            ),
+            // The fragment is matched against stock only. Our own rejection of
+            // the next case comes from move analysis without a printed code.
+            invalid(
+                "item_moved_then_used",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];let mut it=v.iter_mut();let a:&mut i32=it.next().unwrap();let b=a;*a=1;*b=2;}",
+                "E0382",
+            ),
+            invalid(
+                "push_inside_iter_mut_loop",
+                "fn main(){let mut v:Vec<i32>=vec![1,2];for x in v.iter_mut(){v.push(*x);}}",
+                "E0499",
+            ),
+            // A user iterator must not hand out the same element twice, and its
+            // `next` body is rejected even when the iterator is never used.
+            invalid(
+                "unused_generic_iterator_repeats_its_item",
+                "struct Twice<'a,T>{item:&'a mut T} impl<'a,T> Iterator for Twice<'a,T>{type Item=&'a mut T;fn next(&mut self)->Option<&'a mut T>{Some(&mut *self.item)}} fn main(){}",
+                "lifetime may not live long enough",
+            ),
+            invalid(
+                "concrete_iterator_repeats_its_item",
+                "struct Twice<'a>{item:&'a mut i32} impl<'a> Iterator for Twice<'a>{type Item=&'a mut i32;fn next(&mut self)->Option<&'a mut i32>{Some(&mut *self.item)}} fn main(){let mut x:i32=1;let mut t=Twice{item:&mut x};let a:&mut i32=t.next().unwrap();let b:&mut i32=t.next().unwrap();*a+=1;*b+=1;}",
+                "lifetime may not live long enough",
+            ),
+            invalid(
+                "unused_iterator_restarts_vec_iter_mut",
+                "struct Same<'a,T>{items:&'a mut Vec<T>} impl<'a,T> Iterator for Same<'a,T>{type Item=&'a mut T;fn next(&mut self)->Option<&'a mut T>{self.items.iter_mut().next()}} fn main(){}",
+                "lifetime may not live long enough",
+            ),
+            invalid(
+                "unused_iterator_restarts_slice_iter_mut",
+                "struct Slot<'a,T>{items:&'a mut [T]} impl<'a,T> Iterator for Slot<'a,T>{type Item=&'a mut T;fn next(&mut self)->Option<&'a mut T>{self.items.iter_mut().next()}} fn main(){}",
+                "lifetime may not live long enough",
+            ),
+            // A shared slice returned out of an exclusive borrow keeps that
+            // borrow exclusive for as long as the result is live.
+            invalid(
+                "shared_result_of_mut_vec_blocks_push",
+                "fn f<'a,T>(v:&'a mut Vec<T>)->&'a [T]{v.as_slice()} fn main(){let mut v=vec![1,2,3];let s=f(&mut v);v.push(4);println!(\"{}\",s.len());}",
+                "E0499",
+            ),
+            invalid(
+                "shared_result_of_mut_vec_blocks_len",
+                "fn f<'a,T>(v:&'a mut Vec<T>)->&'a [T]{v.as_slice()} fn main(){let mut v=vec![1,2,3];let s=f(&mut v);let n=v.len();println!(\"{} {}\",s.len(),n);}",
+                "E0502",
+            ),
+            // Stock reports E0506 here. We reject the same write as E0502.
+            invalid(
+                "shared_result_of_mut_slice_blocks_write",
+                "fn g<'a,T>(v:&'a mut [T])->&'a [T]{v} fn main(){let mut a=[1,2,3];let s=g(&mut a);a[0]=9;println!(\"{}\",s.len());}",
+                "E0506",
+            ),
+            Case {
+                name: "wrapped_mut_vec_blocks_len",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut v:Vec<i32>=vec![1,2];let w=vec_view(&mut v);let n=v.len();println!("{} {}",w.s.len(),n);}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "wrapped_mut_vec_blocks_push",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut v:Vec<i32>=vec![1,2];let w=vec_view(&mut v);v.push(3);println!("{}",w.s.len());}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "wrapped_mut_slice_blocks_len",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut a:[i32;2]=[1,2];let s:&mut[i32]=&mut a;let w=slice_view(s);let n=s.len();println!("{} {}",w.s.len(),n);}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            // Stock reports E0503/E0506 for this write. We report E0502.
+            Case {
+                name: "wrapped_mut_slice_blocks_write",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut a:[i32;2]=[1,2];let s:&mut[i32]=&mut a;let w=slice_view(s);s[0]=3;println!("{}",w.s.len());}"#,
+                expect: Expect::Invalid("E0503"),
+            },
+            Case {
+                name: "wrapped_mut_vec_released_after_last_use",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut v:Vec<i32>=vec![1,2];let w=vec_view(&mut v);println!("{}",w.s.len());v.push(3);println!("{:?}",v);}"#,
+                expect: Expect::Run("2\n[1, 2, 3]\n"),
+            },
+            Case {
+                name: "wrapped_mut_slice_released_after_last_use",
+                source: r#"struct View<'a,T>{s:&'a[T]}
+fn vec_view<'a,T>(v:&'a mut Vec<T>)->View<'a,T>{View{s:v.as_slice()}}
+fn slice_view<'a,T>(v:&'a mut[T])->View<'a,T>{View{s:&*v}}
+fn main(){let mut a:[i32;2]=[1,2];let s:&mut[i32]=&mut a;let w=slice_view(s);println!("{}",w.s.len());s[0]=3;println!("{}",s[0]);}"#,
+                expect: Expect::Run("2\n3\n"),
+            },
+            invalid(
+                "shared_result_of_mut_slice_blocks_len",
+                "fn g<'a,T>(v:&'a mut [T])->&'a [T]{v} fn main(){let mut a=[1,2,3];let s=g(&mut a);let n=a.len();println!(\"{} {}\",s.len(),n);}",
+                "E0502",
+            ),
+        ],
+    );
+}

@@ -426,6 +426,98 @@ pub trait SliceIter<'a, T> {
     fn iter(self) -> Iter<'a, T>;
 }
 
+/// Exclusive iteration: each element is handed out exactly once, so the
+/// returned `&'a mut T` loans never overlap. `marker` retains the owner's
+/// exclusive borrow for `'a`: the slice stays borrowed while the iterator or
+/// any yielded element is live.
+pub struct IterMut<'a, T> {
+    data: *mut T,
+    len: usize,
+    index: usize,
+    marker: &'a [T],
+}
+
+/// Element address by physical storage stride, as `Vec` computes its slots.
+fn iter_mut_slot<T>(base: *mut T, index: usize) -> *mut T {
+    (base as usize + index * super::mem::element_stride::<T>()) as *mut T
+}
+
+impl<'a, T> IterMut<'a, T> {
+    pub(super) fn new(values: &'a mut [T]) -> IterMut<'a, T> {
+        let len = values.len();
+        // The pointer primitive consumes the exclusive descriptor. The shared
+        // view is rebuilt from it, as `Vec::as_slice` does, and the declared
+        // `'a` keeps the caller's exclusive borrow live.
+        let data = __justrust_slice_as_mut_ptr!(values);
+        let marker = unsafe { from_raw_parts::<T>(data as *const T, len) };
+        IterMut { data, len, index: 0usize, marker }
+    }
+
+    /// An owner that already holds its buffer pointer and length (`Vec`)
+    /// supplies them with the shared view that retains its exclusive borrow.
+    pub(super) fn from_parts(data: *mut T, len: usize, marker: &'a [T]) -> IterMut<'a, T> {
+        IterMut { data, len, index: 0usize, marker }
+    }
+}
+
+impl<'a, T> super::iter::Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+    fn next(&mut self) -> super::option::Option<&'a mut T> {
+        if self.index < self.len {
+            let index = self.index;
+            self.index += 1usize;
+            unsafe {
+                let element = iter_mut_slot(self.data, index);
+                super::option::Option::Some(&mut *element)
+            }
+        } else {
+            super::option::Option::None
+        }
+    }
+}
+
+impl<'a, T> super::iter::DoubleEndedIterator for IterMut<'a, T> {
+    fn next_back(&mut self) -> super::option::Option<&'a mut T> {
+        if self.index < self.len {
+            self.len -= 1usize;
+            let index = self.len;
+            unsafe {
+                let element = iter_mut_slot(self.data, index);
+                super::option::Option::Some(&mut *element)
+            }
+        } else {
+            super::option::Option::None
+        }
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+    fn into_iter(self) -> IterMut<'a, T> {
+        self
+    }
+}
+
+/// `[T]::iter_mut`.
+pub trait SliceIterMut<T> {
+    fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T>;
+}
+
+impl<T> SliceIterMut<T> for [T] {
+    fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+        IterMut::new(self)
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for &'a mut [T] {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+    fn into_iter(self) -> IterMut<'a, T> {
+        IterMut::new(self)
+    }
+}
+
 impl<'a, T> SliceIter<'a, T> for &'a [T] {
     fn iter(self) -> Iter<'a, T> {
         Iter::new(self)
