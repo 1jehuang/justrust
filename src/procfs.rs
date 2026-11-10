@@ -108,6 +108,84 @@ fn ancestors_of_self() -> Vec<u32> {
     out
 }
 
+/// A running executable or an mmap remains live after its original file
+/// descriptor closes. Retain outputs on any unreadable same-principal probe.
+#[cfg(target_os = "linux")]
+fn executable_or_mapping_in_use(
+    base: &std::path::Path,
+    path: &std::path::Path,
+    same_principal: bool,
+) -> bool {
+    match std::fs::read_link(base.join("exe")) {
+        Ok(exe) if exe.starts_with(path) => return true,
+        Err(e) if same_principal && e.kind() != std::io::ErrorKind::NotFound => return true,
+        _ => (),
+    }
+    match std::fs::read(base.join("maps")) {
+        Ok(maps) => maps_in_use(&maps, path).unwrap_or(true),
+        Err(e) => same_principal && e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// Parse kernel maps as bytes: pathname fields can contain spaces, non-UTF8,
+/// and escaped newlines. Match path components, never string prefixes.
+#[cfg(target_os = "linux")]
+fn maps_in_use(maps: &[u8], path: &std::path::Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStringExt;
+    for line in maps.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+        let mut rest = line;
+        let mut inode = &b""[..];
+        for index in 0..5 {
+            let end = rest
+                .iter()
+                .position(u8::is_ascii_whitespace)
+                .unwrap_or(rest.len());
+            if end == 0 {
+                return None;
+            }
+            if index == 4 {
+                inode = &rest[..end];
+            }
+            rest = &rest[end..];
+            while rest.first().is_some_and(u8::is_ascii_whitespace) {
+                rest = &rest[1..];
+            }
+        }
+        let inode = std::str::from_utf8(inode).ok()?.parse::<u64>().ok()?;
+        if inode == 0 || rest.first() != Some(&b'/') {
+            continue;
+        }
+        // The kernel escapes newline bytes but literal backslash-octal names
+        // are ambiguous. Accept both spellings conservatively.
+        if std::path::PathBuf::from(std::ffi::OsString::from_vec(rest.to_vec())).starts_with(path) {
+            return Some(true);
+        }
+        let mut decoded = Vec::with_capacity(rest.len());
+        let mut i = 0;
+        while i < rest.len() {
+            if rest[i] == b'\\'
+                && rest
+                    .get(i + 1..i + 4)
+                    .is_some_and(|s| s.iter().all(|b| (b'0'..=b'7').contains(b)))
+            {
+                let value = u16::from(rest[i + 1] - b'0') * 64
+                    + u16::from(rest[i + 2] - b'0') * 8
+                    + u16::from(rest[i + 3] - b'0');
+                decoded.push(u8::try_from(value).ok()?);
+                i += 4;
+            } else {
+                decoded.push(rest[i]);
+                i += 1;
+            }
+        }
+        let mapped = std::path::PathBuf::from(std::ffi::OsString::from_vec(decoded));
+        if mapped.starts_with(path) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 /// Conservative live-use exclusion for native target GC. Non-Linux hosts
 /// cannot prove inactivity here and must retain targets.
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -137,9 +215,18 @@ pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
             // principal are uncertainty, not proof of inactivity. Foreign
             // private /proc entries cannot disable the whole account's GC.
             use std::os::unix::fs::MetadataExt;
-            let meta = match std::fs::metadata(&base) {
-                Ok(meta) => meta,
+            // Pin this proc directory before reading its children. A recycled
+            // numeric PID must not splice observations from two processes.
+            // /proc/self/fd resolves through the held inode, not /proc/PID again.
+            use std::os::fd::AsRawFd;
+            let process = match std::fs::File::open(&base) {
+                Ok(process) => process,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return true,
+            };
+            let base = std::path::PathBuf::from(format!("/proc/self/fd/{}", process.as_raw_fd()));
+            let meta = match process.metadata() {
+                Ok(meta) => meta,
                 Err(_) => return true,
             };
             let same_principal = meta.uid() == unsafe { libc::geteuid() };
@@ -152,6 +239,9 @@ pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
             // registered roots skipped as InUse at 99% disk). Every other
             // unreadable process of this principal still fails closed.
             let same_principal = same_principal && !is_session_plumbing(&base, pid);
+            if executable_or_mapping_in_use(&base, path, same_principal) {
+                return true;
+            }
             match std::fs::read_link(base.join("cwd")) {
                 Ok(cwd) if cwd.starts_with(path) => return true,
                 Err(e) if same_principal && e.kind() != std::io::ErrorKind::NotFound => {
@@ -922,6 +1012,10 @@ fn join_args(b: &[u8]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "procfs_output_tests.rs"]
+mod output_consumer_tests;
 
 #[cfg(test)]
 mod tests {

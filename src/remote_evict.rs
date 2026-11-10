@@ -30,6 +30,10 @@ mod durable;
 #[path = "remote_evict_orphans.rs"]
 pub mod orphans;
 
+#[cfg(unix)]
+#[path = "remote_evict_outputs.rs"]
+mod outputs;
+
 #[cfg(all(test, unix))]
 #[path = "remote_evict_lock_tests.rs"]
 mod lock_tests;
@@ -694,6 +698,19 @@ fn collect_report(
                 log(format!("evict: failed {}: {err}", e.target.display()));
             }
         }
+    }
+    // Recent roots cannot lose their whole target, but old build-script
+    // generations can be reclaimed under the same root exclusion authority.
+    let remaining = need.saturating_sub(freed);
+    if remaining > 0 {
+        freed = freed.saturating_add(outputs::collect(
+            registry,
+            &roots,
+            remaining,
+            mode == Mode::Dry,
+            probe,
+            log,
+        ));
     }
     // Second pass: unregistered cargo build dirs, if still short.
     let still = probe
