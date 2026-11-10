@@ -330,9 +330,72 @@ struct Info {
     last_client: Option<Instant>,
 }
 
+impl Info {
+    /// Only fields displayed by `remote status` invalidate its snapshot.
+    fn update(&mut self, f: impl FnOnce(&mut Self)) -> bool {
+        let before = (
+            self.roots.clone(),
+            self.machine.clone(),
+            self.pushed,
+            self.connected,
+        );
+        f(self);
+        before.0 != self.roots
+            || before.1 != self.machine
+            || before.2 != self.pushed
+            || before.3 != self.connected
+    }
+}
+
+/// A lossy wakeup, not persisted state. Never wait on a subscriber or perform
+/// filesystem IO on the build/sync thread. One pending wakeup is sufficient.
+fn status_hints(path: PathBuf) -> std::sync::mpsc::SyncSender<()> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let _ = std::thread::Builder::new()
+        .name("daemon-status".into())
+        .spawn(move || {
+            while rx.recv().is_ok() {
+                write_status_hint(&path);
+            }
+        });
+    tx
+}
+
+fn write_status_hint(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        // Do not follow symlinks, block on a FIFO, or modify an unrelated inode.
+        // Reuse the inode so directory watchers receive CLOSE_WRITE each time.
+        let write = || -> std::io::Result<()> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.nlink() != 1
+            {
+                return Ok(());
+            }
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            file.set_len(0)?;
+            file.write_all(b"1\n")
+        };
+        let _ = write();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 struct Daemon {
     sync: Mutex<Sync>,
     info: Mutex<Info>,
+    status_hint: Option<std::sync::mpsc::SyncSender<()>>,
     next_id: AtomicU64,
     watcher: Watcher,
     /// Device and inode of our socket, to remove it on exit only if it is
@@ -354,8 +417,9 @@ impl Daemon {
     }
 
     fn set_info(&self, f: impl FnOnce(&mut Info)) {
-        if let Ok(mut i) = self.info.lock() {
-            f(&mut i);
+        let changed = self.info.lock().is_ok_and(|mut i| i.update(f));
+        if changed && let Some(tx) = &self.status_hint {
+            let _ = tx.try_send(());
         }
     }
 
@@ -467,6 +531,7 @@ fn daemon() -> Result<()> {
     ));
     let (wtx, wrx) = channel::<PathBuf>();
     let d = Arc::new(Daemon {
+        status_hint: Some(status_hints(sock.with_file_name("daemon-status"))),
         info: Mutex::new(Info {
             machine: backend.label(),
             last_client: Some(Instant::now()),
@@ -835,7 +900,8 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     });
     {
         let link = link.clone();
-        std::thread::spawn(move || read_agent(&link, stdout));
+        let hint = d.status_hint.clone();
+        std::thread::spawn(move || read_agent(&link, stdout, hint));
     }
     log(&format!("connected to {}", target.dest));
     peer.prefetch_keys();
@@ -853,7 +919,11 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     Ok(link)
 }
 
-fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
+fn read_agent(
+    link: &Link,
+    mut stdout: BufReader<std::process::ChildStdout>,
+    status_hint: Option<std::sync::mpsc::SyncSender<()>>,
+) {
     while let Ok(Some((msg, payload))) = read_frame(&mut stdout) {
         if link.peer.on_frame(&msg, &payload) {
             continue;
@@ -891,6 +961,12 @@ fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
     link.peer.close();
     let mut r = link.routes.lock().unwrap();
     r.dead = true;
+    // Ping derives connectivity from Link::alive even before Info is updated.
+    // An old draining link may wake a replacement's watcher, which simply
+    // recollects the current socket's state rather than trusting this marker.
+    if let Some(tx) = status_hint {
+        let _ = tx.try_send(());
+    }
     r.barriers.clear();
     for (id, tx) in r.runs.drain() {
         let _ = tx.send((
@@ -1727,6 +1803,57 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_hint_tracks_only_displayed_changes() {
+        let mut info = Info::default();
+        assert!(!info.update(|_| {}));
+        assert!(!info.update(|i| {
+            i.last_client = Some(Instant::now());
+            i.active += 1;
+            i.skipped += 1;
+        }));
+        assert!(info.update(|i| i.roots.push("/workspace".into())));
+        assert!(!info.update(|i| i.roots = vec!["/workspace".into()]));
+        assert!(info.update(|i| i.machine = "hosted".into()));
+        assert!(!info.update(|i| i.machine = "hosted".into()));
+        assert!(info.update(|i| i.pushed += 1));
+        assert!(info.update(|i| i.connected = true));
+        assert!(!info.update(|i| i.connected = true));
+        assert!(info.update(|i| i.connected = false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_hint_is_private_and_rejects_links() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let base = std::env::temp_dir().join(format!("jr-status-hint-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("daemon-status");
+        write_status_hint(&path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"1\n");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        write_status_hint(&path);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let target = base.join("target");
+        std::fs::write(&target, b"untouched").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        symlink(&target, &path).unwrap();
+        write_status_hint(&path);
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::hard_link(&target, &path).unwrap();
+        write_status_hint(&path);
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     use super::*;
 
     /// A file rewritten after the scan, even to the same size and with its
@@ -1901,6 +2028,7 @@ mod tests {
             },
         });
         let d = Daemon {
+            status_hint: None,
             sync: Mutex::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -1998,7 +2126,8 @@ mod tests {
             },
         });
         let reader = link.clone();
-        let reader = std::thread::spawn(move || read_agent(&reader, stdout));
+        let (hint_tx, hint_rx) = std::sync::mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || read_agent(&reader, stdout, Some(hint_tx)));
         let (run_tx, run_rx) = channel();
         link.routes.lock().unwrap().runs.insert(77, run_tx);
         let (watch_tx, watch_rx) = channel();
@@ -2012,6 +2141,7 @@ mod tests {
         };
         let other = base.join("unrelated");
         let d = Daemon {
+            status_hint: None,
             sync: Mutex::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -2042,6 +2172,7 @@ mod tests {
         assert!(matches!(msg, Msg::Exit { id: 77, code: 0 }));
         link.kill();
         reader.join().unwrap();
+        hint_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         std::fs::remove_dir_all(base).unwrap();
     }
 
