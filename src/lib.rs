@@ -671,7 +671,12 @@ enum RemoteCmd {
     /// JR_REMOTE_KIND, JR_REMOTE_DEST, JR_REMOTE_SSH (ssh with the shared
     /// connection's options, also usable as `rsync -e`). Starts the machine
     /// if needed.
-    Env,
+    Env {
+        /// Renew the authenticated hosted lease even when SSH is already connected.
+        /// For bounded, active remote work, not an idle-machine pin.
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 #[derive(clap::Args)]
@@ -1153,7 +1158,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             RemoteCmd::Build(a) => remote_build::run("build", a.args)?,
             RemoteCmd::Clippy(a) => remote_build::run("clippy", a.args)?,
             RemoteCmd::Use { kind, args } => remote_backend::use_command(&kind, &args)?,
-            RemoteCmd::Env => remote_backend::env_command()?,
+            RemoteCmd::Env { refresh } => remote_backend::env_command(refresh)?,
         },
         Command::Records { args } => remote_hosted::records_command(&args)?,
         Command::Export { .. } => export::command()?,

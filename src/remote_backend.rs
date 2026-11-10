@@ -209,11 +209,15 @@ fn fits_sun_path(len: usize) -> bool {
 /// `justrust remote env`: the ssh destination of the current backend as
 /// shell assignments, so scripts (bench/on-remote.sh) reach whichever
 /// machine remote builds use without knowing keys or addresses.
-pub fn env_command() -> Result<()> {
+pub fn env_command(refresh: bool) -> Result<()> {
     let Some(b) = load() else {
         bail!("no remote machine configured. Sign in to hosted builds: `justrust login`");
     };
-    let t = b.ensure_ready()?;
+    let t = if refresh && matches!(b, Backend::Hosted) {
+        crate::remote_hosted::ensure_ready_with_refresh(true)?
+    } else {
+        b.ensure_ready()?
+    };
     print!("{}", env_lines(&b, &t));
     Ok(())
 }

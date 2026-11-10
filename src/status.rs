@@ -283,7 +283,7 @@ fn estimate(
     let (summary, ref_units) = reference_run(&rdir)?;
     let summary = &*summary;
     let elapsed = now - meta.start;
-    let ref_build_end = build_end(&summary);
+    let ref_build_end = build_end(summary);
     let post = (summary.wall - ref_build_end).max(0.0);
 
     let mut out = Estimate {

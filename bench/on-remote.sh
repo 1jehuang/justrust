@@ -33,6 +33,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 JR=${JUSTRUST:-justrust}
 NAME=bench
+RUN_TIMEOUT=${JUSTRUST_BENCH_TIMEOUT:-21600}
+[[ $RUN_TIMEOUT =~ ^[0-9]+$ ]] && (( RUN_TIMEOUT > 0 && RUN_TIMEOUT <= 86400 )) || { echo 'on-remote: timeout must be 1..86400 seconds' >&2; exit 2; }
 
 KIND="" DEST="" SSH=()
 # The current backend's ssh destination (starts the machine if needed). One
@@ -54,9 +56,9 @@ rsync_t() {
   local e; printf -v e '%q ' "${SSH[@]}"
   rsync -az -e "$e" "${@/#R:/$DEST:}"
 }
-# Keeps the machine's idle stop from firing: the aws watchdog reads
-# /var/lib/justrust/last-active, hosted machines a marker in the home dir.
-MARK_ACTIVE='if [ -d /var/lib/justrust ]; then date +%s | sudo -n tee /var/lib/justrust/last-active >/dev/null; else touch ~/.jcode-build-active; fi'
+# The legacy AWS watchdog reads this file. Hosted leases require an
+# authenticated API renewal, not a guest-local activity marker.
+MARK_ACTIVE='if [ -d /var/lib/justrust ]; then date +%s | sudo -n tee /var/lib/justrust/last-active >/dev/null; fi'
 
 cmd=${1:-}; shift || true
 if [[ ${1:-} == --name ]]; then NAME=$2; shift 2; fi
@@ -69,6 +71,10 @@ start)
   [[ ${1:-} == -- ]] && shift
   (( $# )) || { echo "usage: $0 start [--name N] -- <bench command>" >&2; exit 2; }
   resolve
+  if [[ $KIND == hosted ]]; then
+    # Refuse an old client before launching work its cached env cannot protect.
+    "$JR" remote env --refresh >/dev/null
+  fi
   ssh_n 'test -x ~/.cargo/bin/justrust'
   # The idle stop ignores uploads and quiet benchmark phases. Mark the
   # machine active now, and from the run script every minute while the
@@ -126,6 +132,7 @@ PY
     echo "unset JUSTRUST_BENCH_REV"
     echo "export JUSTRUST_BENCH_REPO_REV=$rev JUSTRUST_BENCH_DIRTY=$dirty"
     echo 'date'
+    printf 'timeout --kill-after=10s %ss ' "$RUN_TIMEOUT"
     printf '%q ' "$@"; echo
     # Logging the finish time must not turn a failed payload into script success.
     echo 'status=$?'
@@ -136,17 +143,20 @@ PY
   # setsid, not tmux: hosted machines do not ship tmux. The pidfile is the
   # session handle for status and the keepalive.
   # This marker is written by the detached shell itself, before the payload.
+  if [[ $KIND == hosted ]]; then
+    boot=$(ssh_n 'cat /proc/sys/kernel/random/boot_id')
+    [[ $boot =~ ^[0-9a-f-]{36}$ ]] || { echo 'on-remote: invalid guest boot identity' >&2; exit 1; }
+  fi
   ssh_t "setsid nohup bash -c 'echo \$\$ >~/bench-$NAME.pid; exec bash ~/bench-$NAME.sh' >~/bench-$NAME.log 2>&1 </dev/null &"
   echo "on-remote: started session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"
   echo "  $0 status $NAME    $0 fetch $NAME"
   if [[ $KIND == hosted ]]; then
-    # Hosted machines are stopped by the control plane's cron after
-    # BUILD_IDLE_STOP_MINUTES with no connect, charge or run event; the
-    # in-machine marker above does not count. Keep connecting from here
-    # (an authenticated connect is activity) while the session runs.
-    nohup bash -c 'while '"${SSH[*]@Q}"' '"$DEST"' "kill -0 \$(cat ~/bench-'"$NAME"'.pid 2>/dev/null) 2>/dev/null"; do '"$JR"' remote env >/dev/null 2>&1; sleep 240; done' \
+    # A multiplexed `remote env` is cached and does not renew a pool lease.
+    # Explicit authenticated renewals are bounded by the guest timeout and
+    # stop if this guest boots again or its payload exits. Billing is unchanged.
+    nohup bash bench/hosted-keepalive.sh "$JR" "$DEST" "bench-$NAME.pid" "$boot" "$RUN_TIMEOUT" "${SSH[@]}" \
       >"${TMPDIR:-/tmp}/on-remote-keepalive-$NAME.log" 2>&1 &
-    echo "on-remote: hosted keepalive pid $! (connects every 4 min until the session ends)"
+    echo "on-remote: hosted keepalive pid $! (authenticated renewal, at most ${RUN_TIMEOUT}s)"
   fi
   ;;
 status)

@@ -1562,45 +1562,63 @@ fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
 
 /// Make the hosted machine reachable and return its ssh destination.
 pub fn ensure_ready() -> Result<Target> {
-    let d = dir()?;
-    let _lock = Lock::take(&d)?;
-    if master_alive()
-        && let Some(t) = cached_target()
-    {
+    ensure_ready_with_refresh(false)
+}
+
+// A live multiplexed transport proves reachability, not a control-plane lease.
+// Explicit renewal must reach authenticated connect even when the master lives.
+fn cached_or_refresh<T>(
+    refresh: bool,
+    cached: impl FnOnce() -> Option<T>,
+    connect: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if !refresh && let Some(t) = cached() {
         return Ok(t);
     }
-    let c = creds()?;
-    let pubkey = new_key(&d)?;
-    eprintln!("hosted: connecting to a build machine...");
-    let r = connect_with(&c, &pubkey, POLL, CONNECT_TIMEOUT, |m| {
-        eprintln!("hosted: {m}")
-    })?;
-    write_private(&d.join("known_hosts"), known_hosts(&r).as_bytes())?;
-    let t = target(&d, &r.user, &r.address, r.port);
-    // A stale master for another address must not shadow the new one.
-    let _ = std::fs::remove_file(d.join("state.json"));
-    let _ = std::fs::remove_file(d.join("status.json"));
-    open_master(&t, &d, Duration::from_secs(45))?;
-    let st = State {
-        address: r.address.clone(),
-        user: r.user.clone(),
-        port: r.port,
-        ready_at: now(),
-    };
-    write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
-    let _ = std::fs::remove_file(d.join("fleet-version"));
-    if let Some(v) = &r.fleet_version {
-        let _ = std::fs::write(d.join("fleet-version"), v);
-        crate::update::fleet_advertised(v);
-    }
-    if let Some(b) = &r.builds {
-        eprintln!("hosted: ready at {} ({})", t.dest, b.describe());
-    } else if let Some(h) = r.credits.hours_left() {
-        eprintln!("hosted: ready at {} ({h:.1} h of credits left)", t.dest);
-    } else {
-        eprintln!("hosted: ready at {}", t.dest);
-    }
-    Ok(t)
+    connect()
+}
+
+pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
+    let d = dir()?;
+    let _lock = Lock::take(&d)?;
+    cached_or_refresh(
+        refresh,
+        || master_alive().then(cached_target).flatten(),
+        || {
+            let c = creds()?;
+            let pubkey = new_key(&d)?;
+            eprintln!("hosted: connecting to a build machine...");
+            let r = connect_with(&c, &pubkey, POLL, CONNECT_TIMEOUT, |m| {
+                eprintln!("hosted: {m}")
+            })?;
+            write_private(&d.join("known_hosts"), known_hosts(&r).as_bytes())?;
+            let t = target(&d, &r.user, &r.address, r.port);
+            // A stale master for another address must not shadow the new one.
+            let _ = std::fs::remove_file(d.join("state.json"));
+            let _ = std::fs::remove_file(d.join("status.json"));
+            open_master(&t, &d, Duration::from_secs(45))?;
+            let st = State {
+                address: r.address.clone(),
+                user: r.user.clone(),
+                port: r.port,
+                ready_at: now(),
+            };
+            write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
+            let _ = std::fs::remove_file(d.join("fleet-version"));
+            if let Some(v) = &r.fleet_version {
+                let _ = std::fs::write(d.join("fleet-version"), v);
+                crate::update::fleet_advertised(v);
+            }
+            if let Some(b) = &r.builds {
+                eprintln!("hosted: ready at {} ({})", t.dest, b.describe());
+            } else if let Some(h) = r.credits.hours_left() {
+                eprintln!("hosted: ready at {} ({h:.1} h of credits left)", t.dest);
+            } else {
+                eprintln!("hosted: ready at {}", t.dest);
+            }
+            Ok(t)
+        },
+    )
 }
 
 /// `remote up` for hosted.
@@ -1853,6 +1871,43 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("did not become ready"), "{e}");
+    }
+
+    #[test]
+    fn lease_refresh_connects_even_with_live_cached_transport() {
+        let (c, seen) = mock(vec![(200, READY)]);
+        let ready = cached_or_refresh(
+            true,
+            || Some(parse_ready(&serde_json::from_str(READY).unwrap()).unwrap()),
+            || {
+                connect_with(
+                    &c,
+                    "ssh-ed25519 AAAA renew",
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    |_| {},
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(ready.address, "203.0.113.7");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/v1/build/host/connect");
+        assert_eq!(seen[0].auth.as_deref(), Some("Bearer sk-secret-123"));
+    }
+
+    #[test]
+    fn ordinary_readiness_still_reuses_transport_without_renewal() {
+        let result = cached_or_refresh(
+            false,
+            || Some(42),
+            || -> Result<i32> {
+                panic!("ordinary readiness must not add authenticated requests");
+            },
+        )
+        .unwrap();
+        assert_eq!(result, 42);
     }
 
     #[test]
