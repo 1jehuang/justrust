@@ -775,16 +775,23 @@ fn install_at(
 }
 
 /// Install a jr-rustc build (a stage sysroot such as
-/// `~/justrust/toolchain/rustc/build/host/stage2`, with rustc, rustdoc and clippy) as the
+/// `~/justrust/toolchain/rustc/build/host/stage2`, with rustc, rustdoc, clippy and rustfmt) as the
 /// toolchain `jr-<commit>`. Cargo comes from `cargo_from` (an installed
 /// official toolchain, the one the fork is based on). Copied, not linked:
 /// rebuilding the fork never changes an installed toolchain under a build.
 pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain, activate: bool) -> Result<Toolchain> {
     let rustc = sysroot.join("bin").join(crate::sys::exe_name("rustc"));
-    for b in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {
+    for b in [
+        "rustc",
+        "rustdoc",
+        "clippy-driver",
+        "cargo-clippy",
+        "rustfmt",
+        "cargo-fmt",
+    ] {
         if !is_executable(&sysroot.join("bin").join(crate::sys::exe_name(b))) {
             bail!(
-                "{} has no bin/{b}: build it (`./x build --stage 2 compiler/rustc src/tools/rustdoc src/tools/clippy`)",
+                "{} has no bin/{b}: rebuild the owned sysroot (`./x build --stage 2 compiler/rustc src/tools/rustdoc src/tools/clippy src/tools/rustfmt`); inherited stock helpers are not supported",
                 sysroot.display()
             );
         }
@@ -839,11 +846,22 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain, activate: bool) -> Res
         }
     }
     let _ = std::fs::remove_file(prefix.join("lib/rustlib/rustc-src/rust"));
-    for b in ["cargo", "rustfmt", "cargo-fmt", JR_CARGO] {
+    // Helpers must come from this compiler build. Stock rustfmt may depend on
+    // a different librustc_driver, and must never overwrite the owned binary.
+    for b in ["cargo", JR_CARGO] {
         let from = cargo_from.bin(b);
         if is_executable(&from) {
             std::fs::copy(&from, prefix.join("bin").join(crate::sys::exe_name(b)))?;
         }
+    }
+    if let Err(error) = bundle::verify_helpers(
+        &prefix,
+        &["clippy-preview".into(), "rustfmt-preview".into()],
+    ) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error).context(
+            "owned sysroot helpers are not runnable after copying; rebuild the complete owned sysroot before installing",
+        );
     }
     let info = Installed {
         id: spec.id(),

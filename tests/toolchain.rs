@@ -175,7 +175,14 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
     std::fs::write(project.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
     let official = home.join("toolchains").join(format!("nightly-{DATE}"));
     write_exe(&official.join("bin/cargo"), &files_of("cargo")[0].1);
-    write_exe(&official.join("bin/rustfmt"), "#!/bin/sh\nexit 0\n");
+    // Stock helpers require a driver which is deliberately absent from the
+    // owned sysroot. They must never replace the same-build formatters.
+    for tool in ["rustfmt", "cargo-fmt"] {
+        write_exe(
+            &official.join("bin").join(tool),
+            "#!/bin/sh\necho 'missing stock librustc_driver' >&2\nexit 127\n",
+        );
+    }
     write_exe(&official.join("bin/rustc"), &files_of("rustc")[0].1);
     std::fs::write(
         official.join("justrust-toolchain.json"),
@@ -195,6 +202,10 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
             &sysroot.join("bin").join(tool),
             "#!/bin/sh\necho 'rustc 1.101.0-nightly (123456789 2026-10-13)'\necho 'commit-hash: 123456789abcdef0123456789abcdef0123456789a'\necho 'host: x86_64-unknown-linux-gnu'\n",
         );
+    }
+    let owned_formatter = "#!/bin/sh\necho 'owned same-build formatter'\n";
+    for tool in ["rustfmt", "cargo-fmt"] {
+        write_exe(&sysroot.join("bin").join(tool), owned_formatter);
     }
     let install = |stage: bool| {
         let mut cmd = justrust(&home, "file:///unused", &project);
@@ -220,6 +231,13 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
     );
     let info: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
     assert_eq!(info["installed_at"], 0.0);
+    for tool in ["rustfmt", "cargo-fmt"] {
+        assert_eq!(
+            std::fs::read_to_string(marker.parent().unwrap().join("bin").join(tool)).unwrap(),
+            owned_formatter,
+            "same-build {tool} must not be overwritten by cargo_from"
+        );
+    }
     let log = dir.join("cargo.log");
     let check = |pin: bool| {
         let mut cmd = justrust(&home, "file:///unused", &project);
@@ -270,6 +288,39 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
         String::from_utf8_lossy(&refused.stderr).contains("cannot stage over activated toolchain")
     );
     assert_eq!(std::fs::read(&active_marker).unwrap(), before);
+    let active_formatter = active_marker.parent().unwrap().join("bin/rustfmt");
+    // Missing owned helpers must request a rebuild, not inherit incompatible
+    // stock helpers, silently drop formatting, or disturb the active default.
+    std::fs::remove_file(sysroot.join("bin/rustfmt")).unwrap();
+    let missing = install(false);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("rebuild the owned sysroot"));
+    assert_eq!(std::fs::read(&active_marker).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(&active_formatter).unwrap(),
+        owned_formatter
+    );
+    assert!(check(false).contains(&format!("ACTIVE={id}")));
+    // Even an executable helper must load from the copied prefix without an
+    // inherited loader environment. Model a missing driver with exit 127.
+    for tool in ["rustfmt", "cargo-fmt"] {
+        write_exe(
+            &sysroot.join("bin").join(tool),
+            "#!/bin/sh\necho 'missing librustc_driver' >&2\nexit 127\n",
+        );
+        let incompatible = install(false);
+        assert!(!incompatible.status.success());
+        assert!(
+            String::from_utf8_lossy(&incompatible.stderr).contains("not runnable after copying")
+        );
+        assert_eq!(std::fs::read(&active_marker).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(&active_formatter).unwrap(),
+            owned_formatter
+        );
+        assert!(check(false).contains(&format!("ACTIVE={id}")));
+        write_exe(&sysroot.join("bin").join(tool), owned_formatter);
+    }
     let removed = justrust(&home, "file:///unused", &project)
         .args(["toolchain", "remove", id])
         .output()
