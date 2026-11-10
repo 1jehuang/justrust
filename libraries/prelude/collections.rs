@@ -465,10 +465,10 @@ pub struct BTreeIter<'a, K, V> {
 impl<'a, K, V> super::iter::Iterator for BTreeIter<'a, K, V> {
     type Item = (&'a K, &'a V);
     fn next(&mut self) -> Option<(&'a K, &'a V)> {
-        if self.index < self.keys.len() {
+        if self.index < self.map.keys.len() {
             let i = self.index;
             self.index += 1usize;
-            Option::Some((&self.keys[i], &self.values[i]))
+            Option::Some((self.map.keys.get_ref(i), self.map.values.get_ref(i)))
         } else {
             Option::None
         }
