@@ -589,11 +589,11 @@ fn accepts_positional_tuple_rest_pattern() {
 }
 
 #[test]
-fn rejects_legal_unsupported_at_binding_pattern() {
-    // Legal stock Rust, deliberately outside this let-pattern milestone.
-    rejects(
-        "at_binding_pattern",
-        r#"fn run() -> i32 { let whole @ (a, b) = (1, 2); whole.0 + whole.1 + a + b } fn main() { run(); }"#,
+fn accepts_at_binding_pattern_over_copy_tuple() {
+    // Stock prints 6. Copy `@` patterns have been supported since they landed.
+    runs(
+        r#"fn run() -> i32 { let whole @ (a, b) = (1, 2); whole.0 + whole.1 + a + b } fn main() { println!("{}", run()); }"#,
+        "6\n",
     );
 }
 
