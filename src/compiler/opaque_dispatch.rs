@@ -1,6 +1,7 @@
 //! Authorization-specific late dispatch for original opaque bound calls.
 //! No hidden representation is read while source CHECK is being admitted.
 use super::*;
+mod target_transport;
 
 const VERSION: u64 = 4;
 
@@ -49,7 +50,7 @@ pub(super) struct OpaqueCallAuthorization {
     public_signature: ir::Signature,
     receiver: ir::Ty,
     hidden: ir::Ty,
-    physical: ir::CallTarget,
+    transport: target_transport::Transport,
     physical_signature: ir::Signature,
 }
 
@@ -61,7 +62,7 @@ impl OpaqueCallAuthorization {
         &self.physical_signature
     }
     pub(super) fn target(&self) -> &ir::CallTarget {
-        &self.physical
+        self.transport.execution()
     }
 
     /// Consumers must supply graph-read authority again. An identity token or
@@ -158,13 +159,15 @@ impl OpaqueCallAuthorization {
             .service()
             .resolve_trait_call(&physical_call, &closed)
             .map_err(|error| Error::new(error.to_string()))?;
-        if resolved.callee() != &ir::Callee::Direct(self.physical.clone())
+        if resolved.callee() != &ir::Callee::Direct(self.transport.selected().clone())
             || resolved.signature() != &self.physical_signature
         {
             return Err(Error::new(
                 "opaque physical target or signature failed canonical replay",
             ));
         }
+        self.transport
+            .replay(&resolved, &closed, representations.engine(), budget)?;
         opaque_physical::require_preserved_boundary(
             &specialized_signature,
             &self.physical_signature,
@@ -541,7 +544,20 @@ pub(super) async fn produce(
         ));
     }
     let world = types.trait_world().map_err(Error::new)?;
-    let physical = physical.clone();
+    let transport = target_transport::Transport::from_selection(
+        &resolved,
+        &facts,
+        &types,
+        &closed,
+        &provider.0.budget,
+    )
+    .await?;
+    let physical = transport.execution().clone();
+    if physical == caller {
+        return Err(Error::new(
+            "unsupported: recursive canonical opaque physical dispatch",
+        ));
+    }
     let proof = OpaqueCallAuthorization {
         publication: publication.identity().clone(),
         caller,
@@ -550,7 +566,7 @@ pub(super) async fn produce(
         public_signature: signature.clone(),
         receiver: specialized.trait_ref.self_ty.clone(),
         hidden,
-        physical: physical.clone(),
+        transport,
         physical_signature: resolved.signature().clone(),
     };
     let physical_signature = proof.physical_signature.clone();
@@ -568,6 +584,7 @@ pub(super) async fn produce(
         instances::graph_key::encode(&physical, &provider.0.budget).map_err(Error::new)?,
     )?;
     let body: Arc<InstanceBodyFact> = facts.get(body_key).await?;
+    body.validate_current_engine(cx.authority())?;
     if body.facts.phase() != traits::FactsPhase::Closed || body.facts.target() != Some(&physical) {
         return Err(Error::new(
             "opaque physical body does not carry the selected closed target",

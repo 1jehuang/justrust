@@ -1,6 +1,8 @@
 //! Abstract return-position `impl Trait` identities and declaration-owned bounds.
 //! Hidden representations are separate immutable body outputs, never slots here.
 use super::*;
+#[path = "opaque/aggregate_captures.rs"]
+mod aggregate_captures;
 
 /// A self-free trait application. Its `Self` is supplied only when proving a
 /// declared bound for this opaque type, avoiding recursive Arc metadata.
@@ -200,6 +202,16 @@ fn pack_capture_sources(
     hidden: &Ty,
     budget: &PlanBudget,
 ) -> Result<Arc<[CarrierLocation]>, String> {
+    pack_capture_sources_at(opaque, hidden, budget, 0)
+}
+
+fn pack_capture_sources_at(
+    opaque: &OpaqueTy,
+    hidden: &Ty,
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<Arc<[CarrierLocation]>, String> {
+    budget.check_depth(depth)?;
     let locations = carrier_locations(hidden, budget)?;
     if locations.is_empty() {
         return Ok(locations);
@@ -211,7 +223,11 @@ fn pack_capture_sources(
         let mut payload = hidden;
         let mut prefix = 0usize;
         while let Ty::ManuallyDrop(wrapper) = payload {
-            budget.check_depth(prefix)?;
+            budget.check_depth(
+                depth
+                    .checked_add(prefix)
+                    .ok_or("opaque wrapper depth overflow")?,
+            )?;
             budget.charge_work(1)?;
             prefix = prefix
                 .checked_add(1)
@@ -227,7 +243,14 @@ fn pack_capture_sources(
             }
             carrier_locations(payload, budget)?
         } else if matches!(payload, Ty::Closure(_)) {
-            pack_capture_sources(opaque, payload, budget)?
+            pack_capture_sources_at(
+                opaque,
+                payload,
+                budget,
+                depth
+                    .checked_add(prefix)
+                    .ok_or("opaque wrapper depth overflow")?,
+            )?
         } else {
             return Err("unsupported: opaque stored-wrapper payload requires an exact defining parameter or closure capture contract".into());
         };
@@ -275,6 +298,9 @@ fn pack_capture_sources(
         return Ok(locations);
     }
     let Ty::Closure(closure) = hidden else {
+        if aggregate_captures::validate(opaque, hidden, &locations, budget, depth)? {
+            return Ok(locations);
+        }
         return Err("unsupported: opaque pack requires explicit captured carrier mapping for non-closure hidden types".into());
     };
     if closure.owner() != opaque.owner() || closure.owner_args() != opaque.owner_args() {
@@ -883,11 +909,23 @@ mod captured_pack_tests {
         );
     }
 
-    #[test]
-    fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {
+    fn assert_captured_pack_rejects_forgery(source: &str) {
+        let root = std::path::PathBuf::from("/opaque-aggregate-authority");
+        let source_snapshot = c::source::SourceSnapshot::new(
+            root.clone(),
+            [(
+                std::path::PathBuf::from("main.rs"),
+                source.as_bytes().to_vec(),
+            )],
+        )
+        .unwrap();
         let snapshot = Arc::new(c::Snapshot {
-            input: c::Input::Text("fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}".into()),
-            source_options: c::source::SourceOptions::default(),
+            input: c::Input::File(root.join("main.rs")),
+            source_options: c::source::SourceOptions {
+                source_snapshot: Some(source_snapshot),
+                compiler_image: Some(c::procfs::CompilerImage::current().unwrap()),
+                ..Default::default()
+            },
             budget: PlanBudget::default(),
         });
         let budget = snapshot.budget.clone();
@@ -1044,5 +1082,18 @@ mod captured_pack_tests {
         }
         let template = c::cfg::lower_source_template(publication, &budget).unwrap();
         c::ownership::verify_template(template).unwrap();
+    }
+
+    #[test]
+    fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {
+        for source in [
+            "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Fn(A)->C{move |x:A|g(f(x))}fn main(){}",
+            "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Sized{let closure=move |x:A|g(f(x));(closure,1i32)}fn main(){}",
+            "struct Pair<T>{value:T}fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Sized{let closure=move |x:A|g(f(x));Pair{value:closure}}fn main(){}",
+            "enum Pair<T>{Only(T)}fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Sized{let closure=move |x:A|g(f(x));Pair::Only(closure)}fn main(){}",
+            "fn compose<A,B,C>(f:impl Fn(A)->B,g:impl Fn(B)->C)->impl Sized{let closure=move |x:A|g(f(x));[closure]}fn main(){}",
+        ] {
+            assert_captured_pack_rejects_forgery(source);
+        }
     }
 }

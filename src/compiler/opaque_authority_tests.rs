@@ -103,11 +103,33 @@ fn opaque_pack_rejects_foreign_identity_and_changed_hidden_operand() {
 
 #[test]
 fn opaque_pack_does_not_erase_reference_carriers() {
+    for source in [
+        "fn make<'a>(value: &'a i32) -> impl Sized { value } fn main() {}",
+        "fn make<'a>(value: &'a i32) -> impl Sized { (value, 1i32) } fn main() {}",
+        "fn make<'a>(value: &'a i32) -> impl Sized { [value] } fn main() {}",
+        "fn make<'a>(value: &'a i32) -> impl Sized { let closure = move || -> i32 { *value }; (closure, value) } fn main() {}",
+    ] {
+        assert_opaque_reference_pack_rejected(source);
+    }
+}
+
+fn assert_opaque_reference_pack_rejected(source: &str) {
+    let root = std::path::PathBuf::from("/opaque-reference-authority");
+    let source_snapshot = source::SourceSnapshot::new(
+        root.clone(),
+        [(
+            std::path::PathBuf::from("main.rs"),
+            source.as_bytes().to_vec(),
+        )],
+    )
+    .unwrap();
     let snapshot = Arc::new(Snapshot {
-        input: Input::Text(
-            "fn make<'a>(value: &'a i32) -> impl Sized { value } fn main() {}".into(),
-        ),
-        source_options: source::SourceOptions::default(),
+        input: Input::File(root.join("main.rs")),
+        source_options: source::SourceOptions {
+            source_snapshot: Some(source_snapshot),
+            compiler_image: Some(procfs::CompilerImage::current().unwrap()),
+            ..Default::default()
+        },
         budget: ir::PlanBudget::default(),
     });
     let budget = snapshot.budget.clone();

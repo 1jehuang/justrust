@@ -18,6 +18,70 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn unchanged_grid_bfs_matches_stock() {
+    parse_oracle(
+        "unchanged-grid-bfs",
+        &[closure_oracle::Case {
+            name: "04_aoc_grid_bfs",
+            source: include_str!("milestones/m3/04_aoc_grid_bfs.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "milestones/m3/04_aoc_grid_bfs.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn opaque_iterator_aggregate_preserves_capture_authority() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "opaque-iterator-aggregate",
+        &[Case {
+            name: "borrowed_capture_inside_owned_adapter",
+            source: r#"fn selected(values:&[i32])->impl Iterator<Item=i32>+'_ {
+    [0usize,1usize,2usize,3usize].into_iter().filter_map(move |i| {
+        if i < values.len() { Some(values[i]) } else { None }
+    })
+}
+fn main(){let values=[4i32,5,6];println!("{:?}",selected(&values).collect::<Vec<i32>>());}"#,
+            expect: Expect::Run("[4, 5, 6]\n"),
+        }],
+    );
+}
+
+#[test]
+fn opaque_iterator_aggregate_rejects_unused_escape() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "opaque-iterator-unused-escape",
+        &[Case {
+            name: "unused_aggregate_capture_cannot_escape_input",
+            source: r#"fn selected(values:&[i32])->impl Iterator<Item=i32>+'_ {
+    [0usize,1usize,2usize,3usize].into_iter().filter_map(move |i| {
+        if i < values.len() { Some(values[i]) } else { None }
+    })
+}
+fn unused()->impl Iterator<Item=i32>{let values=[4i32,5,6];selected(&values)}
+fn main(){}"#,
+            expect: Expect::Invalid("E0597"),
+        }],
+    );
+}
+
+#[test]
+fn opaque_iterator_aggregate_rejects_hidden_capability() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "opaque-iterator-hidden-capability",
+        &[Case {
+            name: "unused_opaque_cannot_reveal_hidden_iterator",
+            source: "fn hidden()->impl Sized{vec![1i32]}fn unused(){for _ in hidden(){}}fn main(){}",
+            expect: Expect::Invalid("E0277"),
+        }],
+    );
+}
+
+#[test]
 fn primitive_inherent_then_some_is_generic_and_eager() {
     use closure_oracle::{Case, Expect};
     parse_oracle(

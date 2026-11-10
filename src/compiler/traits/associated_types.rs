@@ -3105,7 +3105,12 @@ pub(super) fn implementation_application_self(ty: &Ty) -> bool {
     nominal_application_self(ty)
         || matches!(
             ty,
-            Ty::Param(_) | Ty::Ref { .. } | Ty::Slice { .. } | Ty::Array { .. } | Ty::Tuple(_)
+            Ty::Param(_)
+                | Ty::Ref { .. }
+                | Ty::Slice { .. }
+                | Ty::Array { .. }
+                | Ty::Tuple(_)
+                | Ty::Opaque(_)
         )
 }
 
