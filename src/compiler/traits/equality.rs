@@ -330,7 +330,6 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            self.validate_declaration_nominal_membership(&env)?;
             context.reductions.check(&self.budget)?;
             for reduction in &context.reductions.values {
                 if reduction.world != self.id

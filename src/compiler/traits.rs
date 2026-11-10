@@ -32,7 +32,6 @@ mod closure_results;
 mod closures;
 mod const_patterns;
 mod constant_members;
-mod declaration_predicates;
 mod dynamic_objects;
 mod equality;
 mod fn_items;
@@ -4778,15 +4777,17 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
-        _executable_storage: bool,
+        executable_storage: bool,
     ) -> Result<()> {
         if caller.is_none() {
-            return self.validate_declaration_predicate_formation(
+            return replays.raw_formations.check_for_use(
+                self,
                 ty,
                 env,
                 usage,
                 maybe_unsized,
-                replays,
+                0,
+                executable_storage,
             );
         }
         replays.predicate_formations.logical_nominals = true;
@@ -22249,26 +22250,21 @@ mod tests {
                 .unwrap();
             assert_eq!(replays.raw_formations.retained_roots(), roots);
         }
-        // Both predicate entry points use logical formation. Neither grants a
-        // later physical root authority, which needs its own complete walk.
+        // Logical formation must not borrow physical answers or grant a later
+        // physical root authority. Both policies retain their own complete walk.
         world
             .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
             .unwrap();
-        assert_eq!(replays.raw_formations.retained_roots(), roots);
-        replays
-            .raw_formations
-            .check(&world, &goal.self_ty, facts.env(), TypeUse::Root, None, 0)
-            .unwrap();
-        let physical_roots = replays.raw_formations.retained_roots();
-        assert!(physical_roots > roots);
+        let logical_roots = replays.raw_formations.retained_roots();
+        assert!(logical_roots > roots);
         world
             .validate_ref_with(&goal, facts.env(), None, &mut replays)
             .unwrap();
-        assert_eq!(replays.raw_formations.retained_roots(), physical_roots);
+        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
         world
             .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
             .unwrap();
-        assert_eq!(replays.raw_formations.retained_roots(), physical_roots);
+        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
         let Ty::Struct(original) = &c.leaf else {
             panic!("nominal fixture")
         };
