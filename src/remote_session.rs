@@ -150,6 +150,27 @@ fn receive(r: &mut impl Read) -> Result<(Packet, Vec<u8>)> {
     Ok((serde_json::from_slice(&header)?, data))
 }
 
+// Binary agent frames need not contain newlines. Stdout is line buffered even
+// when piped, so every live chunk must be flushed before awaiting more input.
+fn publish(output: &mut impl Write, bytes: &[u8]) -> std::io::Result<()> {
+    output.write_all(bytes)?;
+    output.flush()
+}
+
+fn copy_live(input: &mut impl Read, output: &mut impl Write) -> std::io::Result<()> {
+    let mut bytes = [0; 64 << 10];
+    loop {
+        let count = match input.read(&mut bytes) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            return Ok(());
+        }
+        publish(output, &bytes[..count])?;
+    }
+}
+
 fn encode(msg: &Msg, data: &[u8]) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     write_frame(&mut bytes, msg, data)?;
@@ -785,7 +806,7 @@ fn relay(session: &str, prefix: &str, create: bool) -> Result<()> {
         let _ = std::io::copy(&mut std::io::stdin().lock(), &mut input_socket);
         let _ = input_socket.shutdown(std::net::Shutdown::Write);
     });
-    let result = std::io::copy(&mut socket, &mut std::io::stdout().lock());
+    let result = copy_live(&mut socket, &mut std::io::stdout().lock());
     let _ = socket.shutdown(std::net::Shutdown::Both);
     // stdin is an SSH channel, closed by its local owner when stdout ends.
     // Do not wait forever on a blocked stdin reader after transport loss.
@@ -1047,7 +1068,7 @@ fn bridge(target: Target, prefix: String) -> Result<()> {
                 }
                 match packet {
                     Ok((Packet::Output { offset: at }, data)) if at == offset => {
-                        if let Err(e) = std::io::stdout().lock().write_all(&data) {
+                        if let Err(e) = publish(&mut std::io::stdout().lock(), &data) {
                             break Err(anyhow::anyhow!("local daemon output closed: {e}"));
                         }
                         offset += data.len() as u64;

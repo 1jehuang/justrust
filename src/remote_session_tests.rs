@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+fn binary_hello_is_flushed_before_waiting_for_more_transport_input() {
+    let hello = encode(&Msg::Hello { version: 1 }, &[]).unwrap();
+    assert!(!hello.contains(&b'\n'));
+    let mut buffered = std::io::BufWriter::new(Vec::new());
+    publish(&mut buffered, &hello).unwrap();
+    assert_eq!(buffered.get_ref(), &hello);
+
+    struct FlushGate {
+        flushed: Arc<AtomicBool>,
+        bytes: Vec<u8>,
+    }
+    impl Write for FlushGate {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    struct AwaitingPeer {
+        flushed: Arc<AtomicBool>,
+        hello: Option<Vec<u8>>,
+    }
+    impl Read for AwaitingPeer {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if let Some(hello) = self.hello.take() {
+                bytes[..hello.len()].copy_from_slice(&hello);
+                return Ok(hello.len());
+            }
+            assert!(
+                self.flushed.load(Ordering::SeqCst),
+                "peer awaits Hello before producing another packet"
+            );
+            Ok(0)
+        }
+    }
+    let flushed = Arc::new(AtomicBool::new(false));
+    let mut peer = AwaitingPeer {
+        flushed: flushed.clone(),
+        hello: Some(hello.clone()),
+    };
+    let mut output = std::io::BufWriter::new(FlushGate {
+        flushed,
+        bytes: Vec::new(),
+    });
+    copy_live(&mut peer, &mut output).unwrap();
+    assert_eq!(output.get_ref().bytes, hello);
+
+    struct FailedFlush;
+    impl Write for FailedFlush {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+    assert_eq!(
+        publish(&mut FailedFlush, &hello).unwrap_err().kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
+}
+
+#[test]
 fn exact_prefix_is_preserved_in_agent_bridge_and_identity() {
     let prefix = "/private/mirror with 'quotes'/../exact";
     let target = Target {
