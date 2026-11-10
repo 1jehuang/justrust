@@ -10851,11 +10851,11 @@ pub enum PatternTestKind {
     Bool(bool),
     Int(IntValue),
     Char(CharValue),
+    /// Content equality of a shared `&str` place with this literal.
+    Str(Arc<str>),
     /// Inclusive `lo..=hi` over one integer type, `lo <= hi` in its signedness.
     IntRange {
         lo: IntValue,
-    /// Content equality of a shared `&str` place with this literal.
-    Str(Arc<str>),
         hi: IntValue,
     },
     /// Inclusive `lo..=hi` over Unicode scalars, `lo <= hi`.
@@ -12541,10 +12541,10 @@ impl CheckedFunction {
                     test.kind.scalar_interval()?;
                     test.kind.scalar_ty().as_ref() == Some(&actual)
                 }
+                PatternTestKind::Str(_) => actual.is_shared_str(),
                 PatternTestKind::EnumVariant { ty, variant } => {
                     ty.validate()?;
                     *variant < ty.def().variants.len()
-                PatternTestKind::Str(_) => actual.is_shared_str(),
                         && pattern_types_equal_with_facts(
                             &actual,
                             &Ty::Enum(ty.clone()),

@@ -9953,6 +9953,8 @@ pub enum Pattern {
         negative: bool,
     },
     Char(char),
+    /// String literal compared by contents against a `&str` place.
+    Str(String),
     /// Scalar range pattern. Missing bounds are the domain extreme; `inclusive`
     /// applies to the upper bound only and requires one when set.
     Range {
@@ -9973,8 +9975,6 @@ pub enum Pattern {
         name: AstIdent,
         mutable: bool,
         by_ref: Option<ir::BorrowKind>,
-    /// String literal compared by contents against a `&str` place.
-    Str(String),
         pattern: Box<Pattern>,
     },
     /// Explicit `&pat` / `&mut pat` reference pattern.

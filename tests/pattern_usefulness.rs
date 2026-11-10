@@ -537,6 +537,7 @@ fn check_decision(
                 kind.scalar_interval().unwrap().unwrap();
                 assert_eq!(Some(projected), kind.scalar_ty());
             }
+            ir::PatternTestKind::Str(_) => assert!(projected.is_shared_str()),
             ir::PatternTestKind::EnumVariant {
                 ty: enumeration,
                 variant,

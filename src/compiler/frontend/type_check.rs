@@ -3474,6 +3474,7 @@ impl<'a> Checker<'a> {
             | Pattern::Bool(_)
             | Pattern::Int { .. }
             | Pattern::Char(_)
+            | Pattern::Str(_)
             | Pattern::Range { .. } => Err("unsupported: refutable aggregate match leaf".into()),
             Pattern::Apply { .. } => Err("pattern application normalization invariant".into()),
             Pattern::Alternatives(_) => Err("unsupported: nested or-patterns".into()),
@@ -3485,7 +3486,6 @@ impl<'a> Checker<'a> {
                 self.names()?.budget(),
                 super::super::expansion_budget::Storage::Temporary,
             )
-            | Pattern::Str(_)
             .map_err(pattern_token_error)?,
         })
     }
@@ -3709,6 +3709,19 @@ impl<'a> Checker<'a> {
                     }),
                 )?;
             }
+            Pattern::Str(text) => {
+                if !ty.is_shared_str() {
+                    return Err(format!(
+                        "E0308: string literal pattern requires a `&str` value, found {ty:?}"
+                    ));
+                }
+                pending.refutable_payload = true;
+                self.decision_test(
+                    pending,
+                    path,
+                    ir::PatternTestKind::Str(std::sync::Arc::from(text.as_str())),
+                )?;
+            }
             Pattern::Range { lo, hi, inclusive } => {
                 let kind = range_pattern_test(lo.as_ref(), hi.as_ref(), *inclusive, ty)?;
                 pending.refutable_payload = true;
@@ -3726,19 +3739,6 @@ impl<'a> Checker<'a> {
                 }
                 for (index, (pattern, ty)) in fields.iter().zip(types.iter()).enumerate() {
                     path.push(ir::Projection::Field(index));
-            Pattern::Str(text) => {
-                if !ty.is_shared_str() {
-                    return Err(format!(
-                        "E0308: string literal pattern requires a `&str` value, found {ty:?}"
-                    ));
-                }
-                pending.refutable_payload = true;
-                self.decision_test(
-                    pending,
-                    path,
-                    ir::PatternTestKind::Str(std::sync::Arc::from(text.as_str())),
-                )?;
-            }
                     self.collect_decision(pattern, ty, path, pending, depth + 1)?;
                     path.pop();
                 }
@@ -5726,6 +5726,8 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn implicitly_dereferenced(pattern: &Pattern, ty: &ir::Ty) -> bool {
         matches!(ty, ir::Ty::Ref { .. })
+            // A string literal pattern has type `&str`: it tests that
+            // reference itself and never peels an outer reference (E0308).
             && !matches!(
                 pattern,
                 Pattern::Wildcard
@@ -5747,8 +5749,6 @@ impl<'a> Checker<'a> {
         };
         if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
             return Err("pattern projection depth exceeds limit".into());
-            // A string literal pattern has type `&str`: it tests that
-            // reference itself and never peels an outer reference (E0308).
         }
         let previous = self.binding_mode.get();
         let mode = match (previous, kind) {
@@ -11708,6 +11708,7 @@ impl<'a> Checker<'a> {
             Pattern::Bool(_) => ir::Ty::Bool,
             Pattern::Int { literal, .. } => ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)),
             Pattern::Char(_) => ir::Ty::Char,
+            Pattern::Str(_) => ir::Ty::shared_str_ty(),
             Pattern::Range { lo, hi, .. } => range_pattern_hint(lo.as_ref().or(hi.as_ref())),
             Pattern::Tuple(fields) if fields.is_empty() => ir::Ty::Unit,
             Pattern::Struct { .. } | Pattern::Tuple(_) => self.pattern_ty(pattern, ty)?,
@@ -11739,7 +11740,6 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         self.require(&flow, &ty)?;
         let plan = self.collect_pattern(pattern, &ty)?;
-            Pattern::Str(_) => ir::Ty::shared_str_ty(),
         let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
             ty.clone(),
             self.facts(),
@@ -11884,6 +11884,7 @@ impl<'a> Checker<'a> {
                         Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
                     }
                     Pattern::Char(_) => Some(ir::Ty::Char),
+                    Pattern::Str(_) => Some(ir::Ty::shared_str_ty()),
                     Pattern::Range { lo, hi, .. } => {
                         Some(range_pattern_hint(lo.as_ref().or(hi.as_ref())))
                     }
@@ -11919,7 +11920,6 @@ impl<'a> Checker<'a> {
         let mut completes = false;
         let mut unsupported_alternative = false;
         for (arm_index, arm) in arms.clone().enumerate() {
-                    Pattern::Str(_) => Some(ir::Ty::shared_str_ty()),
             let group = expanded_groups[arm_index];
             let previous = shared[group].as_ref();
             let scope_depth = self.scopes.len();

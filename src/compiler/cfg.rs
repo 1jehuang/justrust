@@ -4422,17 +4422,17 @@ impl Lowerer<'_> {
                     ir::PatternTestKind::IntRange { .. }
                     | ir::PatternTestKind::CharRange { .. } => 2,
                     ir::PatternTestKind::EnumVariant { .. } => 0,
-                };
-                for _ in 0..comparisons {
-                    self.temporary(Ty::Bool, Some(id));
-                    self.check_resource()?;
-                }
                     ir::PatternTestKind::Str(_) => {
                         // The literal's `&'static str` carrier, then its verdict.
                         self.temporary(Ty::shared_str_ty(), Some(id));
                         self.check_resource()?;
                         1
                     }
+                };
+                for _ in 0..comparisons {
+                    self.temporary(Ty::Bool, Some(id));
+                    self.check_resource()?;
+                }
             }
             let mut scalar = 0;
             for (index, test) in tests.iter().enumerate() {
@@ -4462,11 +4462,6 @@ impl Lowerer<'_> {
                         Some((BinaryOp::Ge, Constant::Char(*lo))),
                         Some((BinaryOp::Le, Constant::Char(*hi))),
                     ],
-                    ir::PatternTestKind::EnumVariant { ty, variant } => {
-                        // Retain singleton tag edges too: the true edge proves
-                        // the exact downcast prerequisite for subsequent tests.
-                        self.terminate(
-                            Terminator::SwitchVariant {
                     ir::PatternTestKind::Str(text) => {
                         let literal = self.scopes.last().unwrap()[scalar];
                         let verdict = self.scopes.last().unwrap()[scalar + 1];
@@ -4492,6 +4487,11 @@ impl Lowerer<'_> {
                         self.current = target;
                         continue;
                     }
+                    ir::PatternTestKind::EnumVariant { ty, variant } => {
+                        // Retain singleton tag edges too: the true edge proves
+                        // the exact downcast prerequisite for subsequent tests.
+                        self.terminate(
+                            Terminator::SwitchVariant {
                                 place: inspected,
                                 variant: ir::VariantId {
                                     owner: ty.def().id,

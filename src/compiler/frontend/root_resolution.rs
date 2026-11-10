@@ -3384,8 +3384,8 @@ impl Resolver<'_> {
             | Pattern::Bool(_)
             | Pattern::Int { .. }
             | Pattern::Char(_)
-            | Pattern::Range { .. } => {}
             | Pattern::Str(_)
+            | Pattern::Range { .. } => {}
             Pattern::Path(name) if name.anchor() == PathAnchor::SelfType && self.self_allowed => {}
             Pattern::Path(name) => {
                 if let Some(literal) = self.const_pattern(name, module)? {
