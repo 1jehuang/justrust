@@ -606,11 +606,10 @@ fn accepts_reference_binding_pattern() {
 }
 
 #[test]
-fn rejects_legal_unsupported_function_parameter_pattern() {
-    // Legal stock Rust, deliberately outside this let-pattern milestone.
-    rejects(
-        "function_parameter_pattern",
-        r#"fn add((a, b): (i32, i32)) -> i32 { a + b } fn run() -> i32 { add((1, 2)) } fn main() { run(); }"#,
+fn accepts_function_parameter_pattern() {
+    runs(
+        r#"fn add((a, b): (i32, i32)) -> i32 { a + b } fn run() -> i32 { add((1, 2)) } fn main() { if run() == 3 { println!("ok"); } }"#,
+        "ok\n",
     );
 }
 
