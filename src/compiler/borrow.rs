@@ -16,6 +16,7 @@ mod aggregate_reborrow;
 mod cell_access;
 mod correlation;
 mod indexed_write;
+mod linear_family;
 mod native_exchange;
 mod native_storage;
 mod singleton_heap;
@@ -7362,7 +7363,10 @@ impl CarrierBuilder<'_, '_> {
             || (affine_results <= 1 && write_channels == 0)
             || (affine_writes <= 1 && result_channels == 0)
             || independent_pair;
-        if bounded || (result_channels == 0 && self.indexed_family_write_admitted(params, view)?) {
+        if bounded
+            || self.linear_owned_family_result_admitted(result, view, authority)?
+            || (result_channels == 0 && self.indexed_family_write_admitted(params, view)?)
+        {
             return Ok(true);
         }
         if affine_results == 1

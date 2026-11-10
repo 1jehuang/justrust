@@ -582,9 +582,9 @@ fn frozen_generic_carriers_invalid12() {
 fn frozen_generic_carriers_legal_excluded3() {
     for fixture in group("legal-excluded", 3) {
         // Preserve the frozen historical group and exact source bytes. Shared
-        // generic-call inference now admits X29, which must execute rather than
-        // merely avoid an unsupported diagnostic.
-        if fixture.id == "X29" {
+        // generic-call inference admits X29, and exact whole-family transport
+        // admits X30. Both must execute, not merely avoid a diagnostic.
+        if matches!(fixture.id, "X29" | "X30") {
             differential::stock_native(fixture.full_source);
             runs(fixture.full_source, fixture.expected_stdout);
         } else {

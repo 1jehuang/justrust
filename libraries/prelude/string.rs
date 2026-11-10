@@ -215,8 +215,8 @@ impl String {
         str_eq(self.as_str(), other)
     }
 
-    pub fn contains(&self, pattern: &str) -> bool {
-        str_find(self.as_str(), pattern).is_some()
+    pub fn contains<P: StrPattern>(&self, pattern: P) -> bool {
+        pattern.is_contained_in(self.as_str())
     }
 
     pub fn starts_with(&self, pattern: &str) -> bool {
@@ -227,8 +227,8 @@ impl String {
         str_ends_with(self.as_str(), pattern)
     }
 
-    pub fn find(&self, pattern: &str) -> Option<usize> {
-        str_find(self.as_str(), pattern)
+    pub fn find<P: StrPattern>(&self, pattern: P) -> Option<usize> {
+        pattern.find_in(self.as_str())
     }
 
     pub fn replace(&self, from: &str, to: &str) -> String {
@@ -568,9 +568,19 @@ impl<'a, U> super::iter::IntoIterator for Chars<'a, U> {
 pub trait StrPattern {
     fn is_contained_in(self, text: &str) -> bool;
     fn find_in(self, text: &str) -> Option<usize>;
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize>;
 }
 
 impl StrPattern for char {
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        if at < len && (read_u8(ptr + at) & 192u8) != 128u8 && decode_utf8_at(ptr, at) == *self {
+            Option::Some(utf8_width(read_u8(ptr + at)))
+        } else {
+            Option::None
+        }
+    }
+
     fn is_contained_in(self, text: &str) -> bool {
         let (ptr, len) = str_parts(text);
         let mut at = 0usize;
@@ -597,12 +607,71 @@ impl StrPattern for char {
 }
 
 impl StrPattern for &str {
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        let (pattern, count) = str_parts(*self);
+        if at > len || count > len - at {
+            return Option::None;
+        }
+        let mut offset = 0usize;
+        while offset < count {
+            if read_u8(ptr + at + offset) != read_u8(pattern + offset) {
+                return Option::None;
+            }
+            offset += 1usize;
+        }
+        Option::Some(count)
+    }
+
     fn is_contained_in(self, text: &str) -> bool {
         str_find(text, self).is_some()
     }
 
     fn find_in(self, text: &str) -> Option<usize> {
         str_find(text, self)
+    }
+}
+
+impl<F: FnMut(char) -> bool> StrPattern for F {
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        if at < len && (read_u8(ptr + at) & 192u8) != 128u8 && self(decode_utf8_at(ptr, at)) {
+            Option::Some(utf8_width(read_u8(ptr + at)))
+        } else {
+            Option::None
+        }
+    }
+
+    fn is_contained_in(self, text: &str) -> bool {
+        self.find_in(text).is_some()
+    }
+
+    fn find_in(mut self, text: &str) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        let mut at = 0usize;
+        while at < len {
+            if self(decode_utf8_at(ptr, at)) {
+                return Option::Some(at);
+            }
+            at += utf8_width(read_u8(ptr + at));
+        }
+        Option::None
+    }
+}
+
+pub trait StrTrimPattern {
+    fn matches_scalar(&mut self, value: char) -> bool;
+}
+
+impl StrTrimPattern for char {
+    fn matches_scalar(&mut self, value: char) -> bool {
+        *self == value
+    }
+}
+
+impl<F: FnMut(char) -> bool> StrTrimPattern for F {
+    fn matches_scalar(&mut self, value: char) -> bool {
+        self(value)
     }
 }
 
@@ -614,12 +683,15 @@ pub trait StrMethods {
     fn to_uppercase(&self) -> String;
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
-    fn split<'a>(&'a self, separator: char) -> Split<&'a str>;
+    fn split<'a, P: StrPattern>(&'a self, separator: P) -> Split<&'a str, P>;
+    fn split_once<'a, P: StrPattern>(&'a self, separator: P) -> Option<(&'a str, &'a str)>;
     fn lines<'a>(&'a self) -> Lines<&'a str>;
     fn starts_with(&self, pattern: &str) -> bool;
     fn ends_with(&self, pattern: &str) -> bool;
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize>;
+    fn rfind<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn trim(&self) -> &str;
+    fn trim_matches<P: StrTrimPattern>(&self, pattern: P) -> &str;
     fn trim_start(&self) -> &str;
     fn trim_end(&self) -> &str;
     fn to_lowercase(&self) -> String;
@@ -656,9 +728,29 @@ impl StrMethods for str {
         pattern.is_contained_in(self)
     }
 
-    fn split<'a>(&'a self, separator: char) -> Split<&'a str> {
+    fn split<'a, P: StrPattern>(&'a self, separator: P) -> Split<&'a str, P> {
         let (ptr, len) = str_parts(self);
-        Split { ptr, len, at: 0usize, separator, finished: false, marker: self }
+        Split { ptr, len, at: 0usize, search: 0usize, separator, finished: false, marker: self }
+    }
+
+    fn split_once<'a, P: StrPattern>(&'a self, mut separator: P) -> Option<(&'a str, &'a str)> {
+        let (ptr, len) = str_parts(self);
+        let mut at = 0usize;
+        loop {
+            if let Option::Some(width) = separator.match_at(self, at) {
+                if width > len - at {
+                    panic!("string pattern match exceeds the input");
+                }
+                if at + width < len && (read_u8(ptr + at + width) & 192u8) == 128u8 {
+                    panic!("string pattern match ends inside a UTF-8 scalar");
+                }
+                return Option::Some((str_from_raw_parts(ptr, at), str_from_raw_parts(ptr + at + width, len - at - width)));
+            }
+            if at == len {
+                return Option::None;
+            }
+            at += utf8_width(read_u8(ptr + at));
+        }
     }
 
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str> {
@@ -683,8 +775,54 @@ impl StrMethods for str {
         pattern.find_in(self)
     }
 
+    fn rfind<P: StrPattern>(&self, mut pattern: P) -> Option<usize> {
+        let (ptr, len) = str_parts(self);
+        let mut at = len;
+        loop {
+            if pattern.match_at(self, at).is_some() {
+                return Option::Some(at);
+            }
+            if at == 0usize {
+                return Option::None;
+            }
+            at -= 1usize;
+            while at > 0usize && (read_u8(ptr + at) & 192u8) == 128u8 {
+                at -= 1usize;
+            }
+        }
+    }
+
     fn trim(&self) -> &str {
         str_trim(self)
+    }
+
+    fn trim_matches<P: StrTrimPattern>(&self, mut pattern: P) -> &str {
+        let (ptr, len) = str_parts(self);
+        let mut start = 0usize;
+        while start < len {
+            if !pattern.matches_scalar(decode_utf8_at(ptr, start)) {
+                break;
+            }
+            start += utf8_width(read_u8(ptr + start));
+        }
+        if start == len {
+            return str_from_raw_parts(ptr + len, 0usize);
+        }
+        // The front search already tested this nonmatching scalar. Exclude it
+        // from the reverse search so stateful predicates see each scalar once.
+        let front_end = start + utf8_width(read_u8(ptr + start));
+        let mut end = len;
+        while end > front_end {
+            let mut at = end - 1usize;
+            while at > start && (read_u8(ptr + at) & 192u8) == 128u8 {
+                at -= 1usize;
+            }
+            if !pattern.matches_scalar(decode_utf8_at(ptr, at)) {
+                break;
+            }
+            end = at;
+        }
+        str_from_raw_parts(ptr + start, end - start)
     }
 
     fn trim_start(&self) -> &str {
@@ -768,36 +906,51 @@ pub struct SplitWhitespace<S> {
     marker: S,
 }
 
-pub struct Split<S> {
+pub struct Split<S, P> {
     ptr: usize,
     len: usize,
     at: usize,
-    separator: char,
+    search: usize,
+    separator: P,
     finished: bool,
     marker: S,
 }
 
-impl<S: StrCarrier> super::iter::Iterator for Split<S> {
+impl<S: StrCarrier, P: StrPattern> super::iter::Iterator for Split<S, P> {
     type Item = S;
     fn next(&mut self) -> Option<S> {
         if self.finished {
             return Option::None;
         }
         let start = self.at;
-        while self.at < self.len {
-            let at = self.at;
-            let character = decode_utf8_at(self.ptr, at);
-            self.at += utf8_width(read_u8(self.ptr + at));
-            if character == self.separator {
+        while self.search <= self.len {
+            let at = self.search;
+            if let Option::Some(width) = self.separator.match_at(str_from_raw_parts(self.ptr, self.len), at) {
+                if width > self.len - at {
+                    panic!("string pattern match exceeds the input");
+                }
+                if at + width < self.len && (read_u8(self.ptr + at + width) & 192u8) == 128u8 {
+                    panic!("string pattern match ends inside a UTF-8 scalar");
+                }
+                self.at = at + width;
+                if width == 0usize {
+                    // An empty string matches at each UTF-8 boundary, including
+                    // both ends. Advance only the search cursor, not the start
+                    // of the next returned slice.
+                    self.search = if at < self.len { at + utf8_width(read_u8(self.ptr + at)) } else { self.len + 1usize };
+                } else {
+                    self.search = self.at;
+                }
                 return Option::Some(S::from_parts(self.ptr + start, at - start));
             }
+            self.search = if at < self.len { at + utf8_width(read_u8(self.ptr + at)) } else { self.len + 1usize };
         }
         self.finished = true;
         Option::Some(S::from_parts(self.ptr + start, self.len - start))
     }
 }
 
-impl<S: StrCarrier> super::iter::IntoIterator for Split<S> {
+impl<S: StrCarrier, P: StrPattern> super::iter::IntoIterator for Split<S, P> {
     type Item = S;
     type IntoIter = Self;
     fn into_iter(self) -> Self {

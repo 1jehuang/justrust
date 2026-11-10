@@ -5,6 +5,123 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
+fn string_split_patterns_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "string-split-patterns",
+        &[
+            Case {
+                name: "owned_generic_aggregate_preserves_mutable_capture_components",
+                source: r#"struct Wrap<'a,F>{text:&'a str,f:F}fn wrap<'a,F:FnMut()->i32>(text:&'a str,f:F)->Wrap<'a,F>{Wrap{text,f}}fn main(){let mut a=0;let mut b=0;{let mut w=wrap("ok",||{a+=1;b+=2;a+b});println!("{} {} {}",(w.f)(),(w.f)(),w.text);}println!("{} {}",a,b);}"#,
+                expect: Expect::Run("3 6 ok\n2 4\n"),
+            },
+            Case {
+                name: "unused_owned_family_duplication",
+                source: "struct Wrap<T>{value:T}fn bad<T>(value:T)->(Wrap<T>,Wrap<T>){(Wrap{value},Wrap{value})}fn main(){}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "owned_generic_aggregate_keeps_captured_borrow_live",
+                source: "struct Wrap<F>{f:F}fn wrap<F:FnMut()->i32>(f:F)->Wrap<F>{Wrap{f}}fn main(){let mut a=0;let mut b=0;let mut w=wrap(||{a+=1;b+=2;a+b});a=9;println!(\"{}\",(w.f)());}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "unicode_char_substring_and_empty_patterns",
+                source: r#"fn main(){
+    println!("{:?}", "é,日,,🦀,".split(',').collect::<Vec<_>>());
+    println!("{:?}", "é::日::🦀::".split("::").collect::<Vec<_>>());
+    println!("{:?}", "é日🦀".split("").collect::<Vec<_>>());
+    println!("{:?}", "".split("").collect::<Vec<_>>());
+    println!("{:?}", "".split(',').collect::<Vec<_>>());
+    println!("{:?}", "aaaaa".split("aa").collect::<Vec<_>>());
+    println!("{:?}", "é日é".split("é").collect::<Vec<_>>());
+}"#,
+                expect: Expect::Run(
+                    "[\"é\", \"日\", \"\", \"🦀\", \"\"]\n[\"é\", \"日\", \"🦀\", \"\"]\n[\"\", \"é\", \"日\", \"🦀\", \"\"]\n[\"\", \"\"]\n[\"\"]\n[\"\", \"\", \"a\"]\n[\"\", \"日\", \"\"]\n",
+                ),
+            },
+            Case {
+                name: "stateful_predicate_and_generic_forwarding",
+                source: r#"fn pieces<P:FnMut(char)->bool>(text:&str,p:P)->usize{text.split(p).count()}
+fn main(){
+    let mut seen=String::new();
+    let mut calls=0usize;
+    {
+        let mut it="é,!日".split(|c:char|{calls+=1;seen.push(c);c==','||c=='!'});
+        println!("{:?} {:?} {:?}",it.next(),it.next(),it.next());
+        println!("{:?} {:?}",it.next(),it.next());
+    }
+    println!("{} {}",calls,seen);
+    println!("{}",pieces("a!b,c",|c:char|c=='!'||c==','));
+    println!("{:?}","é日🦀".find(|c:char|c=='日'));
+    println!("{}","é日🦀".contains(|c:char|c=='🦀'));
+    let owned=String::from("é日🦀");
+    println!("{} {:?}",owned.contains('日'),owned.find(|c:char|c=='🦀'));
+}"#,
+                expect: Expect::Run(
+                    "Some(\"é\") Some(\"\") Some(\"日\")\nNone None\n4 é,!日\n3\nSome(2)\ntrue\ntrue Some(5)\n",
+                ),
+            },
+            Case {
+                name: "reverse_and_first_match_patterns",
+                source: r#"fn main(){
+    println!("{:?} {:?}","é::日::🦀".split_once("::"),"é日".split_once(""));
+    println!("{:?} {:?}","é,日".split_once(','),"é日".split_once('!'));
+    println!("{:?} {:?} {:?}","é日é".rfind('é'),"é::日::🦀".rfind("::"),"é日".rfind(""));
+    let mut seen=String::new();
+    let found="é!日,🦀".rfind(|c:char|{seen.push(c);c=='!'||c==','});
+    println!("{:?} {}",found,seen);
+    let mut calls=0usize;
+    let pair="é!日,🦀".split_once(|c:char|{calls+=1;c=='!'||c==','});
+    println!("{:?} {}",pair,calls);
+}"#,
+                expect: Expect::Run(
+                    "Some((\"é\", \"日::🦀\")) Some((\"\", \"é日\"))\nSome((\"é\", \"日\")) None\nSome(5) Some(7) Some(5)\nSome(6) 🦀,\nSome((\"é\", \"日,🦀\")) 2\n",
+                ),
+            },
+            Case {
+                name: "unused_split_once_borrow_escape",
+                source: "fn bad()->&'static str{let text=String::from(\"a,b\");text.split_once(',').unwrap().1}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "scalar_trim_patterns_preserve_predicate_order",
+                source: r#"fn main(){
+    println!("{:?} {:?} {:?}","éé日é".trim_matches('é'),"éé".trim_matches('é'),"".trim_matches('é'));
+    let mut seen=String::new();
+    let trimmed="!!é日??".trim_matches(|c:char|{seen.push(c);c=='!'||c=='?'});
+    println!("{} {}",trimmed,seen);
+    let mut calls=0usize;
+    let one="é".trim_matches(|_:char|{calls+=1;false});
+    println!("{} {}",one,calls);
+}"#,
+                expect: Expect::Run("\"日\" \"\" \"\"\né日 !!é??日\né 1\n"),
+            },
+            Case {
+                name: "unused_substring_is_not_double_ended_trim_pattern",
+                source: "fn bad(s:&str){let _=s.trim_matches(\"xx\");}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_predicate_wrong_result",
+                source: "fn bad(s:&str){let _=s.split(|_:char|1u8);}fn main(){}",
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "unused_predicate_wrong_parameter",
+                source: "fn bad(s:&str){let _=s.split(|_:u8|true);}fn main(){}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "unused_split_borrow_escape",
+                source: "fn bad()->&'static str{let text=String::from(\"a,b\");text.split(',').next().unwrap()}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn uppercase_mappings_match_stock() {
     let text: String = (0..=0x10ffff)
         .filter_map(char::from_u32)
