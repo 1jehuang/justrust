@@ -713,7 +713,9 @@ pub(crate) fn plan_with(
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
     if let Some(l) = &local {
-        h.field(b"local");
+        // Older local entries could pair generated inputs changed during
+        // rustc with stale outputs. Do not restore their admission namespace.
+        h.field(b"local-generated-input-admission-v2");
         for v in &l.salt {
             h.field(norm.norm(v).as_bytes());
         }

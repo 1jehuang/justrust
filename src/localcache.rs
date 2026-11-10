@@ -190,15 +190,17 @@ fn stage_with(
         // hosted sync push landing mid-build) may differ from what rustc
         // read: hashing it now would pair new content with old outputs, and
         // every later build of the new content would restore stale code.
-        // Target-dir inputs (OUT_DIR) are written by this build: exempt.
-        if !abs.starts_with(&plan.norm.target)
-            && std::fs::metadata(&abs)
-                .ok()
-                .is_some_and(|m| crate::sys::mtime_f64(&m) >= start)
-        {
+        // Generated OUT_DIR inputs are no exception: Cargo completes their
+        // build script before this rustc invocation starts. A later mutation
+        // can otherwise publish new input hashes with already-compiled output.
+        let before = std::fs::metadata(&abs).ok()?;
+        if crate::sys::mtime_f64(&before) >= start {
             return None;
         }
         let hash = depcache::file_hash(&abs, false)?;
+        if stamp(&before) != stamp(&std::fs::metadata(&abs).ok()?) {
+            return None;
+        }
         let np = plan.norm.norm(abs.to_str()?);
         h.field(np.as_bytes());
         h.field(hash.as_bytes());
@@ -541,6 +543,60 @@ fn maybe_gc(root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_inputs_must_predate_the_rustc_invocation() {
+        let base = std::env::temp_dir().join(format!(
+            "justrust-localcache-generated-race-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        for (name, modified, cacheable) in [("stable", 1000, true), ("changed", 2000, false)] {
+            let ws = base.join(name);
+            let profile = ws.join("target/debug");
+            let out_dir = profile.join("deps");
+            let input = profile.join("build/generator/out/generated.rs");
+            std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(&out_dir).unwrap();
+            std::fs::write(&input, "pub const VALUE: u8 = 2;").unwrap();
+            // Controlled timestamps avoid sleeps and filesystem clock resolution
+            // assumptions. Build scripts finish before this rustc starts at 1500.
+            std::fs::File::open(&input)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified),
+                    ),
+                )
+                .unwrap();
+            std::fs::write(
+                out_dir.join("fixture-123.d"),
+                format!("fixture: {}\n", input.display()),
+            )
+            .unwrap();
+            std::fs::write(out_dir.join("libfixture-123.rmeta"), b"compiled metadata").unwrap();
+            let plan = Plan {
+                base: "base-key".into(),
+                out_dir,
+                extra: "-123".into(),
+                crate_name: "fixture".into(),
+                cwd: ws.clone(),
+                norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
+                root: ws.join("cache"),
+                extra_args: vec![],
+            };
+            assert_eq!(
+                stage_with(&plan, 1500.0, 1.0, &[], true, true).is_some(),
+                cacheable,
+                "{name}: generated inputs written after rustc started must not pair new content with old output"
+            );
+            if !cacheable {
+                assert!(!plan.manifest().exists());
+                assert!(!target_bound_plan(&plan).manifest().exists());
+            }
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[test]
     fn build_time_stamps_are_volatile() {
