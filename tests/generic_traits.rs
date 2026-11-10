@@ -193,6 +193,36 @@ fn main() { let mut value = Value { n: 9 }; let mut it = &mut value; println!("{
 }
 
 #[test]
+fn builtin_callable_bounds_are_disjoint_from_non_callable_constructors() {
+    for source in [
+        r#"trait Pattern{fn matches(&mut self,c:char)->bool;}
+impl Pattern for char{fn matches(&mut self,c:char)->bool{*self==c}}
+impl<F:FnMut(char)->bool> Pattern for F{fn matches(&mut self,c:char)->bool{self(c)}}
+fn main(){let mut p=|c:char|c=='!';println!("{} {}",p.matches('!'),p.matches('x'));let mut q=',';println!("{}",q.matches(','));}"#,
+        r#"trait Tag{fn tag(&self)->i32;}
+impl<F:FnOnce()> Tag for F{fn tag(&self)->i32{1}}
+impl Tag for char{fn tag(&self)->i32{2}}
+impl Tag for &str{fn tag(&self)->i32{3}}
+impl<T> Tag for (T,){fn tag(&self)->i32{4}}
+impl<T> Tag for [T;2]{fn tag(&self)->i32{5}}
+impl<T> Tag for *const T{fn tag(&self)->i32{6}}
+fn show<T:Tag>(x:T)->i32{x.tag()}
+fn main(){let p=0usize as *const i32;println!("{} {} {} {} {} {}",show(||{}),show('x'),show("é"),show((true,)),show([1,2]),show(p));}"#,
+    ] {
+        coherence_oracle::stock_native(source);
+    }
+    for source in [
+        "trait Tag{}impl<F:FnMut(char)->bool> Tag for F{}impl Tag for fn(char)->bool{}fn main(){}",
+        "trait Tag{}impl<F:FnMut(char)->bool> Tag for F{}impl<T> Tag for &T{}fn main(){}",
+        "trait Tag{}impl<F:FnOnce()> Tag for F{}impl<F:FnMut()> Tag for F{}fn main(){}",
+        // A user trait with the same spelling is not a builtin call capability.
+        "trait FnMut{}impl FnMut for char{}trait Tag{}impl<F:FnMut> Tag for F{}impl Tag for char{}fn main(){}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn conditional_blanket_impls_use_orphan_aware_disjointness() {
     for source in [
         r#"

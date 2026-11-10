@@ -7,7 +7,8 @@
 //!
 //! "Can never hold" is deliberately one-sided. A goal is refuted only when
 //! every way of proving it is visible here and absent:
-//! - builtin memberships (catalog and closure traits) are never refuted,
+//! - catalog memberships are never refuted; builtin callable memberships are
+//!   refuted only for intrinsically non-callable type constructors,
 //! - a type that is, or hides, a parameter, projection, opaque, object or
 //!   callable type is never refuted,
 //! - a type a downstream crate could make its own (`&T`, `Box<T>` over an
@@ -87,16 +88,19 @@ impl ValidatedTraitWorld {
     ) -> Result<bool> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
-        if depth >= MAX_NESTING
-            || self.catalog.declaration(goal.declaration).is_some()
-            || self.closure_trait_kind(goal.declaration)?.is_some()
-        {
+        if depth >= MAX_NESTING {
             return Ok(true);
         }
         let subject = Term {
             side,
             ty: &goal.self_ty,
         };
+        if self.closure_trait_kind(goal.declaration)?.is_some() {
+            return Ok(!self.intrinsically_non_callable(subject, bindings, 0)?);
+        }
+        if self.catalog.declaration(goal.declaration).is_some() {
+            return Ok(true);
+        }
         if !self.decidable_subject(subject, bindings, 0)? {
             return Ok(true);
         }
@@ -185,6 +189,44 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(false)
+    }
+
+    /// These constructors cannot acquire a builtin Fn/FnMut/FnOnce call
+    /// implementation. References only forward a referent's call capability.
+    /// In particular this is not absence-of-impl reasoning for a nominal,
+    /// parameter, projection, opaque type, function pointer or closure.
+    fn intrinsically_non_callable<'a>(
+        &self,
+        term: Term<'a>,
+        bindings: &[Binding<'a>],
+        depth: usize,
+    ) -> Result<bool> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let term = self.dereference(term, bindings, depth)?;
+        match term.ty {
+            Ty::Ref { referent, .. } => self.intrinsically_non_callable(
+                Term {
+                    side: term.side,
+                    ty: referent,
+                },
+                bindings,
+                depth + 1,
+            ),
+            Ty::Int(_)
+            | Ty::Char
+            | Ty::Str
+            | Ty::Float(_)
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Tuple(_)
+            | Ty::Array { .. }
+            | Ty::Slice { .. }
+            | Ty::DependentArray { .. }
+            | Ty::RawPtr { .. }
+            | Ty::Never => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     /// `&T`, `&mut T` and `Box<T>` are local to whichever crate owns `T`.

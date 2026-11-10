@@ -12217,7 +12217,7 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated = self.instantiate_scratch_for_use(
+            let instantiated = match self.instantiate_scratch_for_use(
                 &schema,
                 &args,
                 facts,
@@ -12225,7 +12225,13 @@ impl ValidatedTraitWorld {
                 active,
                 facts.original,
                 false,
-            )?;
+            ) {
+                Ok(instantiated) => instantiated,
+                // An absent associated projection makes this candidate
+                // inapplicable, without invalidating other implementations.
+                Err(error) if error.kind == FactsErrorKind::Unproved => continue,
+                Err(error) => return Err(error),
+            };
             let head_self = match (
                 &implementation.trait_ref.self_ty,
                 &instantiated.signature.result,
