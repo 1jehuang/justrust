@@ -21,6 +21,7 @@ mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
 mod depcache_remote;
+mod depcache_why;
 mod e2e;
 mod early;
 mod execution_graph;
@@ -349,6 +350,10 @@ enum Command {
         /// `JUSTRUST_PREBUILT`). For the prebuild fleet.
         #[arg(long, value_name = "DIR")]
         publish: Option<PathBuf>,
+        /// Why dependency units missed over the last DAYS days: reasons,
+        /// then the costliest packages with the key part that moved.
+        #[arg(long, value_name = "DAYS", num_args = 0..=1, default_missing_value = "7")]
+        misses: Option<f64>,
     },
     /// Early type errors from a resident rust-analyzer (opt-in with
     /// JUSTRUST_EARLY=1): start, stop, or status of this workspace's daemon.
@@ -1063,7 +1068,11 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             auto,
             sync,
             publish,
-        } => depcache_gc::command(prune, clear, auto, sync, publish)?,
+            misses,
+        } => match misses {
+            Some(days) => depcache_gc::misses(days),
+            None => depcache_gc::command(prune, clear, auto, sync, publish)?,
+        },
         Command::SignRelease { args } => platform_config::sign_release(args)?,
         Command::Setup { command } => platform_config::command(command)?,
         Command::Early { action } => early::command(&action)?,

@@ -642,7 +642,22 @@ pub(crate) fn needed_glibc(path: &Path) -> Option<(u32, u32)> {
     Some(best)
 }
 
+/// `rustc -vV`, asked once per process: the shim needs it for the key, the
+/// miss reason and the peer journal of the same unit.
 pub(crate) fn rustc_version(real: &Path) -> Option<String> {
+    static MEMO: std::sync::Mutex<Option<(PathBuf, Option<String>)>> = std::sync::Mutex::new(None);
+    let mut memo = MEMO.lock().ok()?;
+    if let Some((p, v)) = memo.as_ref()
+        && p == real
+    {
+        return v.clone();
+    }
+    let v = rustc_version_uncached(real);
+    *memo = Some((real.to_path_buf(), v.clone()));
+    v
+}
+
+fn rustc_version_uncached(real: &Path) -> Option<String> {
     let out = std::process::Command::new(real)
         .arg("-vV")
         .stdin(std::process::Stdio::null())
@@ -1149,7 +1164,7 @@ fn key_codegen(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
 
 /// Native library dirs inside the target dir (build-script output such as a
 /// `cc`-built `libfoo.a`) get bundled into rlibs, so their content is keyed.
-fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
+pub(crate) fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
     h.field(norm.norm(v).as_bytes());
     let (kind, path) = v.split_once('=').unwrap_or(("all", v));
     if kind == "dependency" {

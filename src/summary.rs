@@ -186,6 +186,10 @@ pub struct UnitStats {
     /// splits keys from the prebuilt store and other machines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depcache_miss_env: Vec<String>,
+    /// Misses by reason category (`depcache_why.rs`): (category, units,
+    /// rustc seconds), costliest first. Categories only, never the detail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depcache_miss_why: Vec<(String, usize, f64)>,
     /// Hits served by the remote cache (shared tier or the account's own
     /// uploads), included in `depcache_hits`.
     #[serde(default)]
@@ -978,6 +982,25 @@ pub fn build(
                 .collect();
             v.sort();
             v.dedup();
+            v
+        },
+        depcache_miss_why: {
+            let mut m: std::collections::BTreeMap<&str, (usize, f64)> = Default::default();
+            for u in units
+                .iter()
+                .filter(|u| u.depcache == "miss" && !u.depcache_why.is_empty())
+            {
+                let e = m
+                    .entry(crate::depcache_why::category(&u.depcache_why))
+                    .or_default();
+                e.0 += 1;
+                e.1 += u.wall;
+            }
+            let mut v: Vec<(String, usize, f64)> = m
+                .into_iter()
+                .map(|(k, (n, s))| (k.to_owned(), n, (s * 10.0).round() / 10.0))
+                .collect();
+            v.sort_by(|a, b| b.2.total_cmp(&a.2));
             v
         },
     };

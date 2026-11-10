@@ -68,6 +68,10 @@ pub struct Unit {
     /// cargo `[env]`), which keep this unit's key from matching the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keyed_env: Vec<String>,
+    /// On a miss: which part of the key moved (`depcache_why.rs`), e.g.
+    /// `dependency: serde`, `evicted`, `first-seen: package`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub depcache_why: String,
 }
 
 #[derive(Debug, Serialize, serde::Deserialize, Clone)]
@@ -471,6 +475,11 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             return Some(0);
         }
     }
+    // Every tier missed: name the key part that moved, while the unit's
+    // inputs are still the ones the key was computed from.
+    let why = plan
+        .as_ref()
+        .map(|p| crate::depcache_why::diagnose(p, real, args));
     let (passes_on, force_bootstrap) = want_passes(args, described.local);
     let mut cmd = Command::new(real);
     cmd.args(args).stderr(Stdio::piped());
@@ -551,9 +560,17 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         unit.depcache = "miss".into();
         let env: Vec<(String, String)> = std::env::vars().collect();
         unit.keyed_env = crate::depcache::user_keyed_env(&env);
+        let (reason, ticket) = why.unwrap_or_default();
+        unit.depcache_why = match exit {
+            0 => reason,
+            _ => "compile-failed".into(),
+        };
         if exit == 0 && !passes_on {
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             if let Some(line) = plan.store(start, end - start, &lines) {
+                if let Some(t) = &ticket {
+                    crate::depcache_why::remember(t);
+                }
                 crate::depcache_remote::enqueue(plan, &line);
                 if crate::depcache::enabled()
                     && let Some(vv) = crate::depcache::rustc_version(real)

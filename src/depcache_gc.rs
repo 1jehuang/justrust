@@ -363,6 +363,84 @@ fn hit_rate(days: f64) -> (usize, usize, f64, usize) {
     (hits, misses, saved, n)
 }
 
+/// `justrust cache --misses [DAYS]`: every missed dependency unit of the
+/// recorded runs, by reason (`depcache_why.rs`), then by package.
+pub fn misses(days: f64) {
+    let cutoff = paths::now() - days * 86400.0;
+    let Ok(runs) = paths::runs_dir() else {
+        return;
+    };
+    // category -> (units, secs), (package, reason) -> (units, secs)
+    let mut by_why: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
+    let mut by_pkg: std::collections::HashMap<(String, String), (usize, f64)> = Default::default();
+    let (mut hits, mut total, mut secs) = (0usize, 0usize, 0.0);
+    for e in crate::runs::load_index() {
+        if e.start < cutoff {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(runs.join(&e.id).join("units.jsonl")) else {
+            continue;
+        };
+        for u in text
+            .lines()
+            .filter(|l| l.contains("\"depcache\""))
+            .filter_map(|l| serde_json::from_str::<crate::shim::Unit>(l).ok())
+        {
+            match u.depcache.as_str() {
+                "hit" | "prebuilt" | "remote" | "peer" => hits += 1,
+                "miss" => {
+                    total += 1;
+                    secs += u.wall;
+                    let c = crate::depcache_why::category(&u.depcache_why).to_owned();
+                    let w = by_why.entry(c).or_default();
+                    w.0 += 1;
+                    w.1 += u.wall;
+                    let reason = match u.depcache_why.is_empty() {
+                        true => "unrecorded".to_owned(),
+                        false => u.depcache_why,
+                    };
+                    let p = by_pkg
+                        .entry((format!("{} {}", u.package, u.version), reason))
+                        .or_default();
+                    p.0 += 1;
+                    p.1 += u.wall;
+                }
+                _ => {}
+            }
+        }
+    }
+    if total == 0 {
+        println!("no dependency cache misses in the last {days} days");
+        return;
+    }
+    println!(
+        "{total} misses, {hits} hits ({:.1}% hit rate) in the last {days} days, {:.0}s of rustc on misses",
+        100.0 * hits as f64 / (hits + total) as f64,
+        secs
+    );
+    let mut why: Vec<_> = by_why.into_iter().collect();
+    why.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+    println!("\nreason                 units   share   rustc");
+    for (c, (n, s)) in &why {
+        println!(
+            "{c:<22} {n:>5}  {:>5.1}%  {s:>6.0}s",
+            100.0 * *n as f64 / total as f64
+        );
+    }
+    if why.iter().any(|(c, _)| c == "unrecorded") {
+        println!(
+            "\nunrecorded: built by a justrust without miss reasons, or on a build host \
+             whose client does not report them yet"
+        );
+    }
+    let mut pkg: Vec<_> = by_pkg.into_iter().collect();
+    pkg.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+    println!("\ncostliest misses (package, units, rustc, reason)");
+    for ((p, r), (n, s)) in pkg.iter().take(25) {
+        println!("{p:<34} {n:>4} {s:>7.1}s  {r}");
+    }
+}
+
 /// `justrust cache [--prune] [--clear]`.
 pub fn command(
     prune_now: bool,
@@ -441,6 +519,7 @@ pub fn command(
             100.0 * h as f64 / (h + m) as f64,
             saved / 60.0
         );
+        println!("          `justrust cache --misses` explains the misses");
     }
     let log = std::fs::read_to_string(root.join("gc.jsonl")).unwrap_or_default();
     if let Some(last) = log
