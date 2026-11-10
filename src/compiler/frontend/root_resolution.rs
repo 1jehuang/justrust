@@ -6573,8 +6573,31 @@ mod associated_projection_tests {
             "trait Call<A>{type Out;}trait Apply<F:Call<i32,Out=i32>>{}fn main(){}",
             "trait Call<A>{type Out;}trait Apply:Call<i32,Out=i32>{}fn main(){}",
         ] {
-            let error = parse(source).expect_err("trait header equality was admitted");
-            assert!(error.contains("associated equalities"), "{error}");
+            let program = parse(source).unwrap();
+            let owner = &program.traits[1];
+            let bound = owner
+                .bounds
+                .first()
+                .map(|bound| &bound.traits[0])
+                .or_else(|| owner.supertraits.first())
+                .unwrap();
+            let TraitPath::Source(path) = bound else {
+                panic!("trait header bound lost its canonical source path");
+            };
+            let segment = path.segments.last().unwrap();
+            assert_eq!(segment.args.len(), 1);
+            assert_eq!(segment.associated_types.len(), 1);
+            assert!(matches!(
+                segment.associated_types[0].value,
+                Type::Int(ir::IntTy::I32)
+            ));
+        }
+        for source in [
+            "trait Call<A>{type Out;}trait Apply<F:Call<i32,Missing=i32>>{}fn main(){}",
+            "trait Call<A>{type Out;}trait Apply:Call<i32,Missing=i32>{}fn main(){}",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains("no associated type"), "{error}");
         }
     }
 

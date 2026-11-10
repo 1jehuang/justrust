@@ -596,19 +596,21 @@ mod tests {
             )
             .unwrap()
         };
-        for extra in [
-            (".cargo/config.toml", "[build]\nrustflags=['bad']"),
-            ("build.rs", "fn main() {}"),
-        ] {
-            assert!(
-                manifest::load_snapshot(
-                    make(Some(extra)),
-                    &root.join("Cargo.toml"),
-                    BTreeMap::new()
-                )
-                .is_err()
-            );
-        }
+        assert!(
+            manifest::load_snapshot(
+                make(Some((".cargo/config.toml", "[build]\nrustflags=['bad']"))),
+                &root.join("Cargo.toml"),
+                BTreeMap::new()
+            )
+            .is_err()
+        );
+        let workspace = manifest::load_snapshot(
+            make(Some(("build.rs", "fn main() {}"))),
+            &root.join("Cargo.toml"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(workspace.packages[0].build_script);
         assert!(
             manifest::load_snapshot(
                 make(None),

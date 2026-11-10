@@ -3667,8 +3667,10 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         assert!(tree.load().unwrap_err().contains("ambiguous"));
         tree.put("main.rs", "#[path = \"other.rs\"] mod child;");
         let error = prepare_file(&tree.0.join("main.rs"), &SourceOptions::default()).unwrap_err();
-        assert_eq!(error.kind, SourceErrorKind::Unsupported, "{error}");
-        assert!(error.message.contains("path"), "{error}");
+        assert_eq!(error.kind, SourceErrorKind::Module, "{error}");
+        assert!(error.message.contains("other.rs"), "{error}");
+        tree.put("other.rs", "fn leaf(){}");
+        assert_eq!(tree.load().unwrap().files, 2);
         tree.put(
             "main.rs",
             "#[cfg_attr(any(), path = \"other.rs\")] mod child;",

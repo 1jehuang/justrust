@@ -93,10 +93,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_input_precedes_deferred_equality_boundary() {
+    fn malformed_input_rejects_with_supported_header_equality() {
         let source = "trait Call<A>{type Out;}trait Apply:Call<i32,Out=i32>{}fn main(){}";
-        let boundary = parse(source).unwrap_err();
-        assert!(boundary.contains("associated equalities"), "{boundary}");
+        parse(source).unwrap();
         let mut parsed = parse_unresolved(source).unwrap();
         parsed.program.functions[0].module = parsed.program.modules.core_root();
         let error = prepare_resolution_owned(Arc::new(parsed)).unwrap_err();
