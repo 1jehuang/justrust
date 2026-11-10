@@ -3474,6 +3474,7 @@ impl<'a> Checker<'a> {
                 self.names()?.budget(),
                 super::super::expansion_budget::Storage::Temporary,
             )
+            | Pattern::Str(_)
             .map_err(pattern_token_error)?,
         })
     }
@@ -3708,6 +3709,19 @@ impl<'a> Checker<'a> {
                 }
                 for (index, (pattern, ty)) in fields.iter().zip(types.iter()).enumerate() {
                     path.push(ir::Projection::Field(index));
+            Pattern::Str(text) => {
+                if !ty.is_shared_str() {
+                    return Err(format!(
+                        "E0308: string literal pattern requires a `&str` value, found {ty:?}"
+                    ));
+                }
+                pending.refutable_payload = true;
+                self.decision_test(
+                    pending,
+                    path,
+                    ir::PatternTestKind::Str(std::sync::Arc::from(text.as_str())),
+                )?;
+            }
                     self.collect_decision(pattern, ty, path, pending, depth + 1)?;
                     path.pop();
                 }
@@ -5696,7 +5710,10 @@ impl<'a> Checker<'a> {
         matches!(ty, ir::Ty::Ref { .. })
             && !matches!(
                 pattern,
-                Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Ref { .. }
+                Pattern::Wildcard
+                    | Pattern::Binding { .. }
+                    | Pattern::Ref { .. }
+                    | Pattern::Str(_)
             )
     }
     /// Check `pattern` against the referent of `ty` with the default binding
@@ -5712,6 +5729,8 @@ impl<'a> Checker<'a> {
         };
         if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
             return Err("pattern projection depth exceeds limit".into());
+            // A string literal pattern has type `&str`: it tests that
+            // reference itself and never peels an outer reference (E0308).
         }
         let previous = self.binding_mode.get();
         let mode = match (previous, kind) {
@@ -6235,7 +6254,11 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             Pattern::TupleRest(_) => self.positional_pattern_type(pattern, ty),
-            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
+            Pattern::Bool(_)
+            | Pattern::Int { .. }
+            | Pattern::Char(_)
+            | Pattern::Str(_)
+            | Pattern::Range { .. } => {
                 Err("refutable literal pattern in let binding".into())
             }
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
@@ -6422,7 +6445,11 @@ impl<'a> Checker<'a> {
                     path.pop();
                 }
             }
-            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
+            Pattern::Bool(_)
+            | Pattern::Int { .. }
+            | Pattern::Char(_)
+            | Pattern::Str(_)
+            | Pattern::Range { .. } => {
                 return Err(Self::nested_refutable_literal_unsupported());
             }
             Pattern::Binding {
@@ -11681,6 +11708,7 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         self.require(&flow, &ty)?;
         let plan = self.collect_pattern(pattern, &ty)?;
+            Pattern::Str(_) => ir::Ty::shared_str_ty(),
         let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
             ty.clone(),
             self.facts(),
@@ -11856,6 +11884,7 @@ impl<'a> Checker<'a> {
         let mut completes = false;
         let mut unsupported_alternative = false;
         for (arm_index, arm) in arms.clone().enumerate() {
+                    Pattern::Str(_) => Some(ir::Ty::shared_str_ty()),
             let group = expanded_groups[arm_index];
             let previous = shared[group].as_ref();
             let scope_depth = self.scopes.len();

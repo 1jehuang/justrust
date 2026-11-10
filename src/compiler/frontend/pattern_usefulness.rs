@@ -54,7 +54,9 @@ fn push<T>(values: &mut BudgetVec<T>, value: T) -> Result<(), String> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cell {
+enum Cell<'a> {
+    /// One literal written on the split path, or None for every other string.
+    Str(Option<&'a str>),
     Bool(bool),
     /// First ordinal of one elementary scalar segment. Every test interval on
     /// the split path either contains the whole segment or is disjoint from it.
@@ -63,7 +65,7 @@ enum Cell {
 }
 struct Assignment<'a> {
     test: &'a Test,
-    value: Cell,
+    value: Cell<'a>,
 }
 enum State<'a> {
     False,
@@ -74,18 +76,24 @@ enum ChoiceKind {
     Bool,
     Enum(usize),
     Scalar,
+    Str,
 }
 struct Frame<'a> {
     // Segment starts, ascending. Backing is released before its lease by BudgetVec.
     integers: BudgetVec<u128>,
+    /// Distinct literals on the split path, ascending.
+    strings: BudgetVec<&'a str>,
     test: &'a Test,
     kind: ChoiceKind,
     next: usize,
     base: usize,
 }
-impl Frame<'_> {
-    fn next_cell(&mut self) -> Option<Cell> {
+impl<'a> Frame<'a> {
+    fn next_cell(&mut self) -> Option<Cell<'a>> {
         let result = match self.kind {
+            ChoiceKind::Str if self.next <= self.strings.len() => {
+                Some(Cell::Str(self.strings.as_slice().get(self.next).copied()))
+            }
             ChoiceKind::Bool if self.next < 2 => Some(Cell::Bool(self.next != 0)),
             ChoiceKind::Enum(count) if self.next < count => Some(Cell::Variant(self.next)),
             ChoiceKind::Scalar if self.next < self.integers.len() => {
@@ -302,6 +310,7 @@ impl<'facts> CoverageMatrix<'facts> {
             let actual = ir::projected_ty(&self.domain, source.projection, &self.plan)?;
             match source.kind {
                 PatternTestKind::Bool(_) if matches!(actual, Ty::Bool) => {}
+                PatternTestKind::Str(_) if actual.is_shared_str() => {}
                 PatternTestKind::Int(_)
                 | PatternTestKind::Char(_)
                 | PatternTestKind::IntRange { .. }
@@ -451,6 +460,7 @@ impl<'facts> CoverageMatrix<'facts> {
             };
             let matches = match (&test.kind, value) {
                 (PatternTestKind::Bool(a), Cell::Bool(b)) => *a == b,
+                (PatternTestKind::Str(a), Cell::Str(b)) => b == Some(a.as_ref()),
                 (kind, Cell::Scalar(point)) if kind.scalar_ty().is_some() => {
                     let (lo, hi) = kind
                         .scalar_interval()?
@@ -500,8 +510,31 @@ impl<'facts> CoverageMatrix<'facts> {
         base: usize,
     ) -> Result<Frame<'a>, String> {
         let mut integers = temporary(&self.expansion)?;
+        let mut strings = temporary(&self.expansion)?;
         let kind = match &test.kind {
             PatternTestKind::Bool(_) => ChoiceKind::Bool,
+            PatternTestKind::Str(_) => {
+                for row in self.rows.as_slice().iter().chain(std::iter::once(query)) {
+                    for candidate in row.tests.as_slice() {
+                        if self.same_path(
+                            candidate.projection.as_slice(),
+                            test.projection.as_slice(),
+                        )? && let PatternTestKind::Str(text) = &candidate.kind
+                        {
+                            self.work(text.len().checked_add(1).ok_or_else(overflow)?)?;
+                            push(&mut strings, text.as_ref())?;
+                        }
+                    }
+                }
+                self.work(
+                    strings
+                        .len()
+                        .checked_mul(usize::BITS as usize)
+                        .ok_or_else(overflow)?,
+                )?;
+                strings.sort_unstable_dedup();
+                ChoiceKind::Str
+            }
             PatternTestKind::EnumVariant { ty, .. } => ChoiceKind::Enum(ty.def().variants.len()),
             kind => {
                 let domain = kind.scalar_ty().ok_or("coverage scalar domain invariant")?;
@@ -550,6 +583,7 @@ impl<'facts> CoverageMatrix<'facts> {
         };
         Ok(Frame {
             integers,
+            strings,
             test,
             kind,
             next: 0,
@@ -591,6 +625,7 @@ impl<'facts> CoverageMatrix<'facts> {
             self.check_runtime_path(test, trail.as_slice())?;
             let value = match &test.kind {
                 PatternTestKind::Bool(value) => Cell::Bool(*value),
+                PatternTestKind::Str(text) => Cell::Str(Some(text.as_ref())),
                 PatternTestKind::EnumVariant { variant, .. } => Cell::Variant(*variant),
                 // A scalar constraint may straddle other rows' segments. It
                 // stays open, so the search splits on it and prunes outside cells.

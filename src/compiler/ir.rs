@@ -10851,6 +10851,8 @@ pub enum PatternTestKind {
     /// Inclusive `lo..=hi` over one integer type, `lo <= hi` in its signedness.
     IntRange {
         lo: IntValue,
+    /// Content equality of a shared `&str` place with this literal.
+    Str(Arc<str>),
         hi: IntValue,
     },
     /// Inclusive `lo..=hi` over Unicode scalars, `lo <= hi`.
@@ -10893,7 +10895,7 @@ impl PatternTestKind {
                 }
                 (u128::from(lo.value), u128::from(hi.value))
             }
-            Self::Bool(_) | Self::EnumVariant { .. } => return Ok(None),
+            Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => return Ok(None),
         };
         Ok(Some(interval))
     }
@@ -10902,7 +10904,7 @@ impl PatternTestKind {
         match self {
             Self::Int(value) | Self::IntRange { lo: value, .. } => Some(Ty::Int(value.ty)),
             Self::Char(_) | Self::CharRange { .. } => Some(Ty::Char),
-            Self::Bool(_) | Self::EnumVariant { .. } => None,
+            Self::Bool(_) | Self::Str(_) | Self::EnumVariant { .. } => None,
         }
     }
 }
@@ -12539,6 +12541,7 @@ impl CheckedFunction {
                 PatternTestKind::EnumVariant { ty, variant } => {
                     ty.validate()?;
                     *variant < ty.def().variants.len()
+                PatternTestKind::Str(_) => actual.is_shared_str(),
                         && pattern_types_equal_with_facts(
                             &actual,
                             &Ty::Enum(ty.clone()),

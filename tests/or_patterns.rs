@@ -202,3 +202,72 @@ fn main() { println!("{} {} {}", f(T::A(3)), f(T::B(4)), f(T::C)); }"#,
         ],
     );
 }
+
+/// String literal patterns compare `&str` contents at any depth.
+#[test]
+fn string_literal_patterns_match_stock() {
+    oracle::check(
+        "str-patterns",
+        &[
+            Case {
+                name: "contents_nested_or_guard",
+                source: r#"#[derive(Debug)] enum Dir { N, S }
+#[derive(Debug)] enum Cmd { Go(Dir), Take(String), Look }
+fn parse(s: &str) -> Option<Cmd> {
+    let mut w = s.split_whitespace();
+    Some(match (w.next()?, w.next()) {
+        ("go", Some(d)) => Cmd::Go(match d { "n" | "north" => Dir::N, "s" => Dir::S, _ => return None }),
+        ("take", Some(x)) => Cmd::Take(x.into()),
+        ("look", None) => Cmd::Look,
+        _ => return None,
+    })
+}
+fn kind(s: &str) -> u8 { match s { "" => 0, "a" => 1, "ab" => 2, "é" => 3, other => other.len() as u8 } }
+fn opt(o: Option<&str>) -> i32 { match o { Some("hi") => 1, Some("") => 4, Some(_) => 2, None => 3 } }
+fn rr(s: &&str) -> bool { match *s { "x" => true, _ => false } }
+fn owned(s: &String) -> i32 { match s.as_str() { "one" => 1, "two" => 2, _ => 0 } }
+fn guard(s: &str, n: i32) -> i32 { match s { "k" if n > 0 => n, "k" => -1, _ => 0 } }
+fn main() {
+    for l in ["go n", "go north", "go s", "go q", "take key", "look", "look x", ""] { println!("{:?}", parse(l)); }
+    println!("{} {} {} {} {}", kind(""), kind("a"), kind("ab"), kind("é"), kind("abcd"));
+    println!("{} {} {} {}", opt(Some("hi")), opt(Some("")), opt(Some("x")), opt(None));
+    println!("{} {}", rr(&"x"), rr(&"y"));
+    println!("{} {} {}", owned(&String::from("one")), owned(&"two".to_string()), owned(&String::new()));
+    println!("{} {} {}", guard("k", 5), guard("k", 0), guard("z", 1));
+    let p = ("a", 3);
+    if let ("a", n) = p { println!("{n}"); }
+    let v = "yes";
+    println!("{}", matches!(v, "yes" | "y"));
+    let Some("q") = Some("q") else { return };
+    while let "never" = v { break; }
+    println!("done");
+}"#,
+                expect: Expect::Run(
+                    "Some(Go(N))\nSome(Go(N))\nSome(Go(S))\nNone\nSome(Take(\"key\"))\nSome(Look)\nNone\nNone\n0 1 2 3 4\n1 4 2 3\ntrue false\n1 2 0\n5 -1 0\n3\ntrue\ndone\n",
+                ),
+            },
+            Case {
+                name: "non_exhaustive",
+                source: r#"fn main() { let s = "a"; let n = match s { "a" => 1, "b" => 2 }; println!("{n}"); }"#,
+                expect: Expect::Invalid("E0004"),
+            },
+            Case {
+                name: "non_str_scrutinee",
+                source: r#"fn main() { let n = 3; let r = match n { "a" => 1, _ => 2 }; println!("{r}"); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "string_scrutinee",
+                source: r#"fn f(s: String) -> i32 { match s { "a" => 1, _ => 2 } }
+fn main() { println!("{}", f(String::new())); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "no_reference_peeling",
+                source: r#"fn f(s: &&str) -> bool { match s { "x" => true, _ => false } }
+fn main() { println!("{}", f(&"x")); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

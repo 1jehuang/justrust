@@ -4422,6 +4422,12 @@ impl Lowerer<'_> {
                     self.temporary(Ty::Bool, Some(id));
                     self.check_resource()?;
                 }
+                    ir::PatternTestKind::Str(_) => {
+                        // The literal's `&'static str` carrier, then its verdict.
+                        self.temporary(Ty::shared_str_ty(), Some(id));
+                        self.check_resource()?;
+                        1
+                    }
             }
             let mut scalar = 0;
             for (index, test) in tests.iter().enumerate() {
@@ -4456,6 +4462,31 @@ impl Lowerer<'_> {
                         // the exact downcast prerequisite for subsequent tests.
                         self.terminate(
                             Terminator::SwitchVariant {
+                    ir::PatternTestKind::Str(text) => {
+                        let literal = self.scopes.last().unwrap()[scalar];
+                        let verdict = self.scopes.last().unwrap()[scalar + 1];
+                        scalar += 2;
+                        self.assign(place(literal), Rvalue::Str(text.clone()), Some(id));
+                        self.assign(
+                            place(verdict),
+                            Rvalue::Binary {
+                                op: BinaryOp::Eq,
+                                left: Operand::Copy(inspected),
+                                right: Operand::Copy(place(literal)),
+                            },
+                            Some(id),
+                        );
+                        self.terminate(
+                            Terminator::Switch {
+                                condition: Operand::Copy(place(verdict)),
+                                then_block: target,
+                                else_block: rejected,
+                            },
+                            Some(id),
+                        )?;
+                        self.current = target;
+                        continue;
+                    }
                                 place: inspected,
                                 variant: ir::VariantId {
                                     owner: ty.def().id,

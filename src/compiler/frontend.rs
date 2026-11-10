@@ -9953,6 +9953,8 @@ pub enum Pattern {
         name: AstIdent,
         mutable: bool,
         by_ref: Option<ir::BorrowKind>,
+    /// String literal compared by contents against a `&str` place.
+    Str(String),
         pattern: Box<Pattern>,
     },
     /// Explicit `&pat` / `&mut pat` reference pattern.
@@ -17127,7 +17129,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.scalar_pattern();
         }
         if self.token().string {
-            return Err(self.unsupported("string literal patterns are unsupported"));
+            let text = self.string_literal_value(self.token().text)?;
+            self.cursor.bump();
+            return Ok(Pattern::Str(text));
+        }
+        if self.token().is_byte_string() {
+            return Err(self.unsupported("byte string literal patterns are unsupported"));
         }
         if self.is("ref") || self.is("&") || self.is("&&") {
             return self.reference_pattern();

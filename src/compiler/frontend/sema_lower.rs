@@ -708,6 +708,7 @@ impl<'a> Lower<'a> {
             }
             Pattern::Bool(_) => h::HirPat::Lit(h::HirLit::Bool),
             Pattern::Char(_) => h::HirPat::Lit(h::HirLit::Char),
+            Pattern::Str(_) => h::HirPat::Lit(h::HirLit::Str),
             Pattern::Int { literal, .. } => {
                 h::HirPat::Lit(h::HirLit::Int(literal.magnitude, literal.suffix))
             }

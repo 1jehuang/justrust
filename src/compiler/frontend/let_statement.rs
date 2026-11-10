@@ -39,7 +39,11 @@ impl<'input> Parser<'input, '_> {
     ) -> Result<Stmt, ParseError> {
         if matches!(
             pattern,
-            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. }
+            Pattern::Bool(_)
+                | Pattern::Int { .. }
+                | Pattern::Char(_)
+                | Pattern::Str(_)
+                | Pattern::Range { .. }
         ) {
             return Err(self.error("refutable literal pattern in let binding"));
         }
@@ -92,7 +96,11 @@ impl<'input> Parser<'input, '_> {
         }
         if matches!(
             pattern,
-            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. }
+            Pattern::Bool(_)
+                | Pattern::Int { .. }
+                | Pattern::Char(_)
+                | Pattern::Str(_)
+                | Pattern::Range { .. }
         ) {
             return Err(self.error("refutable literal pattern in let binding"));
         }

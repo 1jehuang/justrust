@@ -1747,6 +1747,11 @@ impl<'a> Checker<'a> {
                 self.unify_at(cause_e, ty, &reference(*m, i.clone()));
                 self.pat(inner, &i, cause);
             }
+            HirPat::Lit(HirLit::Str) => {
+                // The literal is exactly `&str`: no reference is peeled.
+                let lt = self.lit(&HirLit::Str, Some(ty));
+                self.unify_at(cause_e, ty, &lt);
+            }
             HirPat::Lit(l) | HirPat::Range(l) => {
                 let lt = self.lit(l, Some(ty));
                 let t = self.peel_for_pattern(ty);

@@ -1567,6 +1567,7 @@ impl<'a> Validator<'a> {
                 Pattern::Bool(_)
                 | Pattern::Int { .. }
                 | Pattern::Char(_)
+                | Pattern::Str(_)
                 | Pattern::Range { .. }
                 | Pattern::Wildcard => (),
             },
