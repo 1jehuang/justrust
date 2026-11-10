@@ -38,6 +38,7 @@ pub(in crate::compiler) use local_literals::nominal_manifest::{
 };
 #[path = "type_check/method_argument_hint.rs"]
 mod method_argument_hint;
+mod owning_object_context;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
 mod nominal_calls;
@@ -8607,10 +8608,12 @@ impl<'a> Checker<'a> {
             && expected.owned_pointer_object().is_some()
             && !matches!(e, Expr::Var(_))
         {
-            // An owning dyn coercion site: infer the source sized pointee
-            // independently, then unsize with the exact ownership protocol.
+            // A concrete source result retains independent sized-payload
+            // inference. Deferred trait outputs still need this exact target
+            // to choose their authored application before object coercion.
             let expected = expected.clone();
-            let value = self.expr_with_expectation(e, Expectation::None)?;
+            let source_expectation = self.owning_object_source_expectation(e, &expected)?;
+            let value = self.expr_with_expectation(e, source_expectation)?;
             return self.coerce_ref_to_dyn(value, &expected);
         }
         if let Expr::Var(path) = e {

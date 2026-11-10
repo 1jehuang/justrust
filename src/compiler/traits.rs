@@ -9,6 +9,8 @@ use super::ir::{
 };
 use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::Arc;
+#[path = "traits/outlives.rs"]
+mod outlives;
 
 pub(super) mod alignment_provider;
 mod associated_bounds;
@@ -12290,6 +12292,20 @@ impl ValidatedTraitWorld {
             }
             if !satisfied {
                 continue;
+            }
+            // Static requirements belong to an otherwise applicable exact
+            // implementation. An unrelated candidate cannot fail selection
+            // before its written trait predicates have been proved.
+            match self.static_arguments_hold(
+                &implementation.schema_env,
+                &args,
+                facts.env(),
+                &facts.predicates.predicates,
+            ) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) if error.kind == FactsErrorKind::Unproved => continue,
+                Err(error) => return Err(error),
             }
             self.require_impl_wf(implementation, goal, &args, facts, active)?;
             if selected.is_some() {

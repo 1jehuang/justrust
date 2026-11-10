@@ -5,6 +5,139 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn static_boxed_errors_match_stock() {
+    oracle::check(
+        "static-boxed-errors",
+        &[
+            Case {
+                name: "concrete_generic_method_keeps_sized_payload",
+                source: r#"#[derive(Debug)] struct E;
+impl std::fmt::Display for E { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "sized payload") } }
+impl std::error::Error for E {}
+struct Maker; impl Maker { fn boxed<T>(&self, value: T) -> Box<T> { Box::new(value) } }
+fn main() { let error: Box<dyn std::error::Error> = Maker.boxed(E); println!("{}", error); }"#,
+                expect: Expect::Run("sized payload\n"),
+            },
+            Case {
+                name: "generic_error_preserves_static_bound",
+                source: r#"#[derive(Debug)] struct E;
+impl std::fmt::Display for E { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "generic error") } }
+impl std::error::Error for E {}
+fn erase<E: std::error::Error + 'static>(error: E) -> Box<dyn std::error::Error> { error.into() }
+fn main() { println!("{}", erase(E)); }"#,
+                expect: Expect::Run("generic error\n"),
+            },
+            Case {
+                name: "unused_generic_error_requires_static",
+                source: "fn unused<E: std::error::Error>(error: E) -> Box<dyn std::error::Error> { error.into() } fn main() {}",
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "owned_messages_and_residual_error",
+                source: r#"#[derive(Debug)] struct E(i32);
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "custom {}", self.0) }
+}
+impl std::error::Error for E {}
+impl Drop for E { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn fail() -> Result<i32, E> { Err(E(7)) }
+fn forwarded() -> Result<i32, Box<dyn std::error::Error>> { Ok(fail()?) }
+fn main() {
+    let message: Box<dyn std::error::Error>;
+    { let local = String::from("borrowed message"); message = local.as_str().into(); }
+    println!("{} {:?}", message, message);
+    let owned: Box<dyn std::error::Error> = String::from("owned message").into();
+    println!("{} {:?}", owned, owned);
+    match forwarded() { Ok(v) => println!("ok {}", v), Err(e) => println!("{} {:?}", e, e) }
+}"#,
+                expect: Expect::Run(
+                    "borrowed message \"borrowed message\"\nowned message \"owned message\"\ncustom 7 E(7)\ndrop 7\n",
+                ),
+            },
+            Case {
+                name: "unused_missing_error_implementation",
+                source: "struct NotError; fn unused() -> Box<dyn std::error::Error> { NotError.into() } fn main() {}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_borrowed_error_cannot_escape",
+                source: r#"#[derive(Debug)] struct Borrowed<'a>(&'a str);
+impl std::fmt::Display for Borrowed<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::error::Error for Borrowed<'_> {}
+fn unused<'a>(text: &'a str) -> Box<dyn std::error::Error> { Borrowed(text).into() }
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+        ],
+    );
+}
+
+#[test]
+#[ignore = "non-static dyn object lifetime representation and payload source-carrier transport are not implemented"]
+fn boxed_errors_match_stock() {
+    oracle::check(
+        "boxed-errors",
+        &[
+            Case {
+                name: "owned_messages_and_residual_error",
+                source: r#"#[derive(Debug)] struct E(i32);
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "custom {}", self.0) }
+}
+impl std::error::Error for E {}
+impl Drop for E { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn fail() -> Result<i32, E> { Err(E(7)) }
+fn forwarded() -> Result<i32, Box<dyn std::error::Error>> { Ok(fail()?) }
+fn main() {
+    let message: Box<dyn std::error::Error>;
+    { let local = String::from("borrowed message"); message = local.as_str().into(); }
+    println!("{} {:?}", message, message);
+    let owned: Box<dyn std::error::Error> = String::from("owned message").into();
+    println!("{} {:?}", owned, owned);
+    match forwarded() { Ok(v) => println!("ok {}", v), Err(e) => println!("{} {:?}", e, e) }
+}"#,
+                expect: Expect::Run(
+                    "borrowed message \"borrowed message\"\nowned message \"owned message\"\ncustom 7 E(7)\ndrop 7\n",
+                ),
+            },
+            Case {
+                name: "borrowed_error_retains_object_lifetime",
+                source: r#"#[derive(Debug)] struct Borrowed<'a>(&'a str);
+impl std::fmt::Display for Borrowed<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::error::Error for Borrowed<'_> {}
+fn borrowed<'a>(text: &'a str) -> Box<dyn std::error::Error + 'a> { Borrowed(text).into() }
+fn main() {
+    let text = String::from("borrowed error");
+    let error = borrowed(text.as_str());
+    println!("{} {:?}", error, error);
+}"#,
+                expect: Expect::Run("borrowed error Borrowed(\"borrowed error\")\n"),
+            },
+            Case {
+                name: "unused_missing_error_implementation",
+                source: "struct NotError; fn unused() -> Box<dyn std::error::Error> { NotError.into() } fn main() {}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_borrowed_error_cannot_escape",
+                source: r#"#[derive(Debug)] struct Borrowed<'a>(&'a str);
+impl std::fmt::Display for Borrowed<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::error::Error for Borrowed<'_> {}
+fn unused<'a>(text: &'a str) -> Box<dyn std::error::Error> { Borrowed(text).into() }
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn try_operator_matches_stock() {
     oracle::check(
         "try-operator",

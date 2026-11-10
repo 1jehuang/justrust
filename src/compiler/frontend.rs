@@ -24211,7 +24211,10 @@ impl PlanCtx {
             if outlives_static != 0
                 && !matches!(
                     kind,
-                    ir::DeclKind::Function | ir::DeclKind::AssociatedFunction
+                    ir::DeclKind::Function
+                        | ir::DeclKind::AssociatedFunction
+                        | ir::DeclKind::TraitImpl
+                        | ir::DeclKind::Impl
                 )
             {
                 return Err(
