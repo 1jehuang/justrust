@@ -12,6 +12,7 @@ pub mod core_v1 {
     pub use super::super::mem::drop;
     pub use super::super::convert::{From, Into};
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
+    pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
     pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
 }
@@ -33,6 +34,7 @@ pub mod v1 {
     pub use super::super::mem::drop;
     pub use super::super::convert::{From, Into};
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
+    pub use super::super::float_math::{FloatMath, FloatTrig};
 }
 
 // Editions 2015/2018: the 2021 additions (FromIterator) are absent.
@@ -48,6 +50,7 @@ pub mod core_v1_2018 {
     pub use super::super::mem::drop;
     pub use super::super::convert::{From, Into};
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
+    pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
     pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods};
 }
@@ -70,4 +73,5 @@ pub mod v1_2018 {
     pub use super::super::mem::drop;
     pub use super::super::convert::{From, Into};
     pub use super::super::primitive::{CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
+    pub use super::super::float_math::{FloatMath, FloatTrig};
 }

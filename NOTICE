@@ -37,4 +37,10 @@ This distribution uses the MIT alternative and retains both the upstream MIT
 and Unicode data notices in THIRD-PARTY-LICENSES.md. The utility is not a
 vendored compiler or parser implementation.
 
+libraries/prelude/float_math.rs: floating-point math routines and tables
+adapted to Rust from Arm Optimized Routines v20.02 (math/), Copyright (c)
+2017-2018, Arm Limited, licensed MIT, and from fdlibm (e_hypot.c, e_log10.c),
+Copyright (C) 1993 by Sun Microsystems, Inc. The file keeps its attribution
+header and both license texts are retained in THIRD-PARTY-LICENSES.md.
+
 Other dependencies are obtained under their own licenses.

@@ -393,6 +393,74 @@ fn aggregates_generic_copy_and_projected_updates() {
     );
 }
 
+// Expected bits are stock rustc results on Linux x86-64 (glibc libm).
+#[test]
+fn f64_math_methods_and_constants_match_stock_bits() {
+    for checks in [
+        "if (2.0f64.powf(0.5)).to_bits()!=0x3ff6a09e667f3bcdu64{return false;}if (2.0f64.powf(10.0)).to_bits()!=0x4090000000000000u64{return false;}if ((-8.0f64).powf(3.0)).to_bits()!=0xc080000000000000u64{return false;}if ((-8.0f64).powf(0.5)).to_bits()!=0xfff8000000000000u64{return false;}if (0.0f64.powf(-1.0)).to_bits()!=0x7ff0000000000000u64{return false;}if (1.5f64.powf(-700.25)).to_bits()!=0x2654d2543a1eb14du64{return false;}if (1e-310f64.powf(0.75)).to_bits()!=0x0fa922f895935598u64{return false;}if (10.0f64.powf(308.5)).to_bits()!=0x7ff0000000000000u64{return false;}if (0.999f64.powf(1e9)).to_bits()!=0x0000000000000000u64{return false;}if (3.0f64.powf(-0.0)).to_bits()!=0x3ff0000000000000u64{return false;}if (1.0f64.exp()).to_bits()!=0x4005bf0a8b145769u64{return false;}if ((-745.2f64).exp()).to_bits()!=0x0000000000000000u64{return false;}if (709.9f64.exp()).to_bits()!=0x7ff0000000000000u64{return false;}if (0.1f64.exp()).to_bits()!=0x3ff1aec7b35a00d4u64{return false;}if ((-0.0f64).exp()).to_bits()!=0x3ff0000000000000u64{return false;}if (3.5f64.exp2()).to_bits()!=0x4026a09e667f3bcdu64{return false;}if ((-1074.5f64).exp2()).to_bits()!=0x0000000000000001u64{return false;}if (1023.99f64.exp2()).to_bits()!=0x7fefc769e9b9c396u64{return false;}if (10.0f64.ln()).to_bits()!=0x40026bb1bbb55516u64{return false;}if (0.5f64.ln()).to_bits()!=0xbfe62e42fefa39efu64{return false;}if (1.0000001f64.ln()).to_bits()!=0x3e7ad7f2847b6492u64{return false;}if (0.0f64.ln()).to_bits()!=0xfff0000000000000u64{return false;}if ((-1.0f64).ln()).to_bits()!=0xfff8000000000000u64{return false;}if (5e-324f64.ln()).to_bits()!=0xc0874385446d71c3u64{return false;}",
+        "if (8.0f64.log2()).to_bits()!=0x4008000000000000u64{return false;}if (0.3f64.log2()).to_bits()!=0xbffbca9c6f53897bu64{return false;}if (1.01f64.log2()).to_bits()!=0x3f8d664ecee35b7fu64{return false;}if (1000.0f64.log10()).to_bits()!=0x4008000000000000u64{return false;}if (0.007f64.log10()).to_bits()!=0xc0013d3d3d21ccf0u64{return false;}if ((-3.0f64).log10()).to_bits()!=0x7ff8000000000000u64{return false;}if (81.0f64.log(3.0)).to_bits()!=0x4010000000000000u64{return false;}if (3.0f64.hypot(4.0)).to_bits()!=0x4014000000000000u64{return false;}if (1e200f64.hypot(1e200)).to_bits()!=0x697d8f9811335b57u64{return false;}if (1e-200f64.hypot(3e-200)).to_bits()!=0x16835d5244b69495u64{return false;}if (1.5f64.hypot(-2.25)).to_bits()!=0x4005a22073490377u64{return false;}if (0.1f64.mul_add(10.0,-1.0)).to_bits()!=0x3c90000000000000u64{return false;}if (1e308f64.mul_add(10.0,-1e308)).to_bits()!=0x7ff0000000000000u64{return false;}if (3.0f64.mul_add(-0.0,0.0)).to_bits()!=0x0000000000000000u64{return false;}if (5e-324f64.mul_add(0.5,5e-324)).to_bits()!=0x0000000000000002u64{return false;}if (2.5f64.floor()).to_bits()!=0x4000000000000000u64{return false;}if ((-2.5f64).floor()).to_bits()!=0xc008000000000000u64{return false;}if (2.5f64.ceil()).to_bits()!=0x4008000000000000u64{return false;}if ((-2.5f64).ceil()).to_bits()!=0xc000000000000000u64{return false;}if (2.5f64.round()).to_bits()!=0x4008000000000000u64{return false;}if ((-2.5f64).round()).to_bits()!=0xc008000000000000u64{return false;}if (0.49999999999999994f64.round()).to_bits()!=0x0000000000000000u64{return false;}if (2.5f64.round_ties_even()).to_bits()!=0x4000000000000000u64{return false;}if ((-0.3f64).trunc()).to_bits()!=0x8000000000000000u64{return false;}",
+        "if ((-0.3f64).ceil()).to_bits()!=0x8000000000000000u64{return false;}if (1e300f64.floor()).to_bits()!=0x7e37e43c8800759cu64{return false;}if ((-7.75f64).fract()).to_bits()!=0xbfe8000000000000u64{return false;}if ((-0.0f64).signum()).to_bits()!=0xbff0000000000000u64{return false;}if (3.0f64.signum()).to_bits()!=0x3ff0000000000000u64{return false;}if (2.0f64.copysign(-0.0)).to_bits()!=0xc000000000000000u64{return false;}if (7.5f64.clamp(0.0,3.0)).to_bits()!=0x4008000000000000u64{return false;}if ((-7.5f64).clamp(-1.0,3.0)).to_bits()!=0xbff0000000000000u64{return false;}if (4.0f64.recip()).to_bits()!=0x3fd0000000000000u64{return false;}if (1.1f64.powi(7)).to_bits()!=0x3fff2df1fb5a7ed7u64{return false;}if (2.0f64.powi(-3)).to_bits()!=0x3fc0000000000000u64{return false;}if (0.0f64.powi(0)).to_bits()!=0x3ff0000000000000u64{return false;}if ((-1.5f64).powi(31)).to_bits()!=0xc1118e2a5afb5158u64{return false;}if (180.0f64.to_radians()).to_bits()!=0x400921fb54442d18u64{return false;}if (1.0f64.to_degrees()).to_bits()!=0x404ca5dc1a63c1f8u64{return false;}if ((-7.5f64).div_euclid(2.0)).to_bits()!=0xc010000000000000u64{return false;}if ((-7.5f64).rem_euclid(2.0)).to_bits()!=0x3fe0000000000000u64{return false;}if (7.5f64.rem_euclid(-2.0)).to_bits()!=0x3ff8000000000000u64{return false;}if (f64::MAX).to_bits()!=0x7fefffffffffffffu64{return false;}if (f64::MIN).to_bits()!=0xffefffffffffffffu64{return false;}if (f64::EPSILON).to_bits()!=0x3cb0000000000000u64{return false;}if (f64::MIN_POSITIVE).to_bits()!=0x0010000000000000u64{return false;}if (f64::INFINITY).to_bits()!=0x7ff0000000000000u64{return false;}if (f64::NEG_INFINITY).to_bits()!=0xfff0000000000000u64{return false;}",
+        "if (f64::NAN).to_bits()!=0x7ff8000000000000u64{return false;}if (std::f64::consts::PI).to_bits()!=0x400921fb54442d18u64{return false;}if (std::f64::consts::E).to_bits()!=0x4005bf0a8b145769u64{return false;}if (core::f64::consts::LN_2).to_bits()!=0x3fe62e42fefa39efu64{return false;}if (std::f64::consts::SQRT_2).to_bits()!=0x3ff6a09e667f3bcdu64{return false;}if (std::f64::consts::TAU).to_bits()!=0x401921fb54442d18u64{return false;}if (std::f64::MAX).to_bits()!=0x7fefffffffffffffu64{return false;}if ((f64::NAN).max(1.0)).to_bits()!=0x3ff0000000000000u64{return false;}if (f64::NAN.powf(0.0)).to_bits()!=0x3ff0000000000000u64{return false;}if (f64::sqrt(2.0)).to_bits()!=0x3ff6a09e667f3bcdu64{return false;}if (f64::powf(2.0,0.5)).to_bits()!=0x3ff6a09e667f3bcdu64{return false;}if (f64::max(1.0,2.0)).to_bits()!=0x4000000000000000u64{return false;}if (f64::abs(-3.5)).to_bits()!=0x400c000000000000u64{return false;}if (f64::floor(2.5)).to_bits()!=0x4000000000000000u64{return false;}if (f64::hypot(3.0,4.0)).to_bits()!=0x4014000000000000u64{return false;}",
+    ] {
+        runs(&body(checks));
+    }
+}
+
+#[test]
+fn f32_math_methods_and_constants_match_stock_bits() {
+    for checks in [
+        "if (2.0f32.powf(0.5)).to_bits()!=0x3fb504f3u32{return false;}if ((-8.0f32).powf(3.0)).to_bits()!=0xc4000000u32{return false;}if ((-8.0f32).powf(0.5)).to_bits()!=0xffc00000u32{return false;}if (1.5f32.powf(-200.25)).to_bits()!=0x04e8871cu32{return false;}if (10.0f32.powf(38.4)).to_bits()!=0x7f3cf958u32{return false;}if (1e-40f32.powf(0.75)).to_bits()!=0x0da24235u32{return false;}if (0.0f32.powf(-3.0)).to_bits()!=0x7f800000u32{return false;}if (1.0f32.exp()).to_bits()!=0x402df854u32{return false;}if ((-103.5f32).exp()).to_bits()!=0x00000001u32{return false;}if (88.7f32.exp()).to_bits()!=0x7f7a37fcu32{return false;}if (3.5f32.exp2()).to_bits()!=0x413504f3u32{return false;}if ((-149.5f32).exp2()).to_bits()!=0x00000001u32{return false;}if (10.0f32.ln()).to_bits()!=0x40135d8eu32{return false;}if (1.0001f32.ln()).to_bits()!=0x38d1bd51u32{return false;}if (0.0f32.ln()).to_bits()!=0xff800000u32{return false;}if ((-1.0f32).ln()).to_bits()!=0xffc00000u32{return false;}if (8.0f32.log2()).to_bits()!=0x40400000u32{return false;}if (0.3f32.log2()).to_bits()!=0xbfde54e3u32{return false;}if (1000.0f32.log10()).to_bits()!=0x40400000u32{return false;}if (81.0f32.log(3.0)).to_bits()!=0x40800000u32{return false;}if (0.5f32.sin()).to_bits()!=0x3ef57744u32{return false;}if (0.5f32.cos()).to_bits()!=0x3f60a940u32{return false;}if (3.0f32.sin()).to_bits()!=0x3e1081c3u32{return false;}if (100.0f32.cos()).to_bits()!=0x3f5cc0eeu32{return false;}",
+        "if (1e10f32.sin()).to_bits()!=0xbef99a64u32{return false;}if ((-1e30f32).cos()).to_bits()!=0xbf1c9222u32{return false;}if (1e-5f32.sin()).to_bits()!=0x3727c5acu32{return false;}if ((1.0f32/0.0).sin()).to_bits()!=0xffc00000u32{return false;}if (2.0f32.sin_cos().0).to_bits()!=0x3f68c7b7u32{return false;}if (2.0f32.sin_cos().1).to_bits()!=0xbed51133u32{return false;}if (3.0f32.hypot(4.0)).to_bits()!=0x40a00000u32{return false;}if (1e30f32.hypot(1e30)).to_bits()!=0x718ecc90u32{return false;}if (0.1f32.mul_add(10.0,-1.0)).to_bits()!=0x32800000u32{return false;}if (1e38f32.mul_add(10.0,-1e38)).to_bits()!=0x7f800000u32{return false;}if (2.5f32.floor()).to_bits()!=0x40000000u32{return false;}if ((-2.5f32).ceil()).to_bits()!=0xc0000000u32{return false;}if (2.5f32.round()).to_bits()!=0x40400000u32{return false;}if (0.49999997f32.round()).to_bits()!=0x00000000u32{return false;}if (3.5f32.round_ties_even()).to_bits()!=0x40800000u32{return false;}if ((-0.3f32).trunc()).to_bits()!=0x80000000u32{return false;}if ((-7.75f32).fract()).to_bits()!=0xbf400000u32{return false;}if ((-0.0f32).signum()).to_bits()!=0xbf800000u32{return false;}if (2.0f32.copysign(-1.0)).to_bits()!=0xc0000000u32{return false;}if (7.5f32.clamp(0.0,3.0)).to_bits()!=0x40400000u32{return false;}if (1.1f32.powi(7)).to_bits()!=0x3ff96f92u32{return false;}if (2.0f32.powi(-3)).to_bits()!=0x3e000000u32{return false;}if (180.0f32.to_radians()).to_bits()!=0x40490fdbu32{return false;}if (1.0f32.to_degrees()).to_bits()!=0x42652ee1u32{return false;}",
+        "if ((-7.5f32).rem_euclid(2.0)).to_bits()!=0x3f000000u32{return false;}if ((-7.5f32).div_euclid(2.0)).to_bits()!=0xc0800000u32{return false;}if (f32::MAX).to_bits()!=0x7f7fffffu32{return false;}if (f32::MIN).to_bits()!=0xff7fffffu32{return false;}if (f32::EPSILON).to_bits()!=0x34000000u32{return false;}if (f32::MIN_POSITIVE).to_bits()!=0x00800000u32{return false;}if (f32::INFINITY).to_bits()!=0x7f800000u32{return false;}if (f32::NEG_INFINITY).to_bits()!=0xff800000u32{return false;}if (f32::NAN).to_bits()!=0x7fc00000u32{return false;}if (std::f32::consts::PI).to_bits()!=0x40490fdbu32{return false;}if (std::f32::consts::E).to_bits()!=0x402df854u32{return false;}if (core::f32::consts::FRAC_1_SQRT_2).to_bits()!=0x3f3504f3u32{return false;}if (std::f32::EPSILON).to_bits()!=0x34000000u32{return false;}if (f32::sqrt(2.0)).to_bits()!=0x3fb504f3u32{return false;}if (f32::powf(2.0,0.5)).to_bits()!=0x3fb504f3u32{return false;}if (f32::sin(1.0)).to_bits()!=0x3f576aa4u32{return false;}",
+    ] {
+        runs(&body(checks));
+    }
+}
+
+#[test]
+fn float_math_in_generic_closure_and_function_value_positions() {
+    runs(
+        "fn area(r:f64)->f64{std::f64::consts::PI*r.powi(2)} \
+         fn norm(v:&[f64])->f64{v.iter().map(|x|x.powf(2.0)).sum::<f64>().sqrt()} \
+         fn run()->bool{ \
+         let v=vec![3.0f64,-4.0,12.0]; \
+         if norm(&v)!=13.0{return false;} \
+         if v.iter().cloned().fold(f64::NEG_INFINITY,f64::max)!=12.0{return false;} \
+         if v.iter().map(|x|x.abs().sqrt().floor()).sum::<f64>()!=6.0{return false;} \
+         if area(2.0).to_bits()!=0x402921fb54442d18u64{return false;} \
+         let x:f64=2.0; let y=x.powf(0.5); if y.to_bits()!=0x3ff6a09e667f3bcdu64{return false;} \
+         let z:f32=9.0; if z.ln().exp().round()!=9.0{return false;} \
+         if 7.clamp(0,3)!=3||5i32.max(9)!=9||(-7i32).rem_euclid(4)!=1{return false;} \
+         if !(f64::NAN.is_nan()&&f32::NAN.is_nan()&&f64::INFINITY.is_infinite()){return false;} \
+         if f64::MANTISSA_DIGITS!=53||f32::MAX_EXP!=128||f64::MIN_10_EXP!=-307{return false;} \
+         true} fn main(){if run(){println!(\"float oracle ok\");}}",
+    );
+}
+
+#[test]
+fn rejects_invalid_float_math_uses() {
+    for (label, expression) in [
+        ("powf arity", "2.0f64.powf()"),
+        ("powf mixed width", "2.0f64.powf(1.0f32)"),
+        ("powi float exponent", "2.0f64.powi(2.0)"),
+        ("floor argument", "2.5f32.floor(1.0)"),
+        ("float method on integer", "2i32.powf(2.0)"),
+        ("float method on bool", "true.sqrt()"),
+        ("unknown float method", "2.0f64.cube_root_of_doom()"),
+        ("f64 sin stays unsupported", "1.0f64.sin()"),
+        ("f64 atan2 stays unsupported", "1.0f64.atan2(2.0)"),
+        ("unknown float constant", "f64::NOT_A_CONSTANT"),
+        ("unknown consts item", "std::f64::consts::NOPE"),
+        (
+            "constant width mismatch",
+            "{let x:f32=std::f64::consts::PI;x}",
+        ),
+        ("clamp mixed width", "1.0f64.clamp(0.0f32,1.0f32)"),
+    ] {
+        rejects(label, &format!("fn main(){{let x={expression};}}"));
+    }
+}
+
 #[test]
 fn rejects_invalid_float_operators_and_mixed_types() {
     for (label, expression) in [

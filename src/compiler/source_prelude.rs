@@ -73,6 +73,10 @@ const PRELUDE_FILES: &[(&str, &str)] = &[
         include_str!("../../libraries/prelude/primitive.rs"),
     ),
     (
+        "__justrust_std/float_math.rs",
+        include_str!("../../libraries/prelude/float_math.rs"),
+    ),
+    (
         "__justrust_std/primitive_constants.rs",
         include_str!("../../libraries/prelude/primitive_constants.rs"),
     ),

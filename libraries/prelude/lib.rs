@@ -23,6 +23,8 @@ pub mod core_surface {
     pub use super::convert;
     pub use super::str;
     pub use super::num;
+    pub use super::f32;
+    pub use super::f64;
     pub use super::char;
     pub mod hash {
         pub use super::super::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
@@ -80,6 +82,19 @@ pub mod num {
     pub use super::primitive::{IntErrorKind, ParseFloatError, ParseIntError};
 }
 pub mod primitive_constants;
+pub mod float_math;
+pub mod f64 {
+    pub use super::float_math::f64_items::{RADIX, MANTISSA_DIGITS, DIGITS, EPSILON, MIN, MIN_POSITIVE, MAX, MIN_EXP, MAX_EXP, MIN_10_EXP, MAX_10_EXP};
+    pub mod consts {
+        pub use super::super::float_math::f64_consts::{PI, TAU, FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_8, FRAC_1_PI, FRAC_2_PI, FRAC_2_SQRT_PI, SQRT_2, FRAC_1_SQRT_2, E, LOG2_E, LOG2_10, LOG10_E, LOG10_2, LN_2, LN_10};
+    }
+}
+pub mod f32 {
+    pub use super::float_math::f32_items::{RADIX, MANTISSA_DIGITS, DIGITS, EPSILON, MIN, MIN_POSITIVE, MAX, MIN_EXP, MAX_EXP, MIN_10_EXP, MAX_10_EXP};
+    pub mod consts {
+        pub use super::super::float_math::f32_consts::{PI, TAU, FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_8, FRAC_1_PI, FRAC_2_PI, FRAC_2_SQRT_PI, SQRT_2, FRAC_1_SQRT_2, E, LOG2_E, LOG2_10, LOG10_E, LOG10_2, LN_2, LN_10};
+    }
+}
 pub mod ptr;
 pub mod slice;
 pub mod iter;
