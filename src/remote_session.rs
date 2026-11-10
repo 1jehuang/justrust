@@ -20,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::remote_backend::Target;
+use crate::remote_build::PinnedSessionExecutable;
 use crate::remote_proto::{Msg, read_frame, write_frame};
 use crate::sys::Detach;
 
@@ -91,6 +92,7 @@ struct Identity {
     boot: String,
     binary: String,
     prefix: String,
+    executable: PinnedSessionExecutable,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -390,6 +392,42 @@ fn check_prefix(prefix: &str) -> Result<()> {
     Ok(())
 }
 
+fn current_executable() -> Result<PinnedSessionExecutable> {
+    use std::os::unix::fs::MetadataExt;
+    let path = std::env::current_exe()?;
+    let meta = std::fs::symlink_metadata(&path)?;
+    let parent = path
+        .parent()
+        .context("session executable has no private parent")?;
+    for dir in [
+        parent,
+        parent
+            .parent()
+            .context("session executable has no private root")?,
+    ] {
+        let meta = std::fs::symlink_metadata(dir)?;
+        anyhow::ensure!(
+            meta.is_dir()
+                && meta.uid() == unsafe { libc::geteuid() }
+                && meta.mode() & 0o777 == 0o700,
+            "hosted session executable directory is not private and owned"
+        );
+    }
+    anyhow::ensure!(
+        meta.is_file() && meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o777 == 0o500,
+        "hosted session executable is not a private immutable regular file"
+    );
+    let executable = PinnedSessionExecutable {
+        path: path
+            .to_str()
+            .context("session executable path is not UTF-8")?
+            .into(),
+        sha256: crate::toolchain::sha256(&path)?,
+    };
+    executable.validate()?;
+    Ok(executable)
+}
+
 fn agent_command(prefix: &str) -> Result<Command> {
     check_prefix(prefix)?;
     let mut command = Command::new(std::env::current_exe()?);
@@ -400,15 +438,22 @@ fn agent_command(prefix: &str) -> Result<Command> {
     Ok(command)
 }
 
-fn session_script(mode: &str, session: &str, prefix: &str) -> String {
+fn session_script(
+    mode: &str,
+    session: &str,
+    prefix: &str,
+    executable: &PinnedSessionExecutable,
+) -> String {
     format!(
-        "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust {ARG} {mode} {session} {}",
+        "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec {} {ARG} {mode} {session} {}",
+        crate::remote_build::shell_quote(&executable.path),
         crate::remote_build::shell_quote(prefix)
     )
 }
 
 fn broker(session: &str, prefix: &str) -> Result<()> {
     check_prefix(prefix)?;
+    let executable = current_executable()?;
     let dir = session_dir(session)?;
     // create_new ownership is established by the one-shot create operation.
     let listener = UnixListener::bind(dir.join("sock"))?;
@@ -424,6 +469,7 @@ fn broker(session: &str, prefix: &str) -> Result<()> {
         ),
         binary: crate::remote_daemon::build_id(),
         prefix: prefix.into(),
+        executable,
     };
     save(&dir.join("session.json"), &identity)?;
     let journal = OpenOptions::new()
@@ -758,6 +804,7 @@ fn attachment(broker: &Arc<Broker>, mut stream: UnixStream) -> Result<bool> {
 
 fn relay(session: &str, prefix: &str, create: bool) -> Result<()> {
     check_prefix(prefix)?;
+    let _executable = current_executable()?;
     let dir = session_dir(session)?;
     if create {
         let parent = dir.parent().unwrap();
@@ -875,8 +922,9 @@ impl RecoveryBudget {
     }
 }
 
-fn bridge(target: Target, prefix: String) -> Result<()> {
+fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -> Result<()> {
     check_prefix(&prefix)?;
+    executable.validate()?;
     let session = token()?;
     let pending = Arc::new((
         Mutex::new(Pending {
@@ -944,7 +992,7 @@ fn bridge(target: Target, prefix: String) -> Result<()> {
         // Creation is one-shot even when its response is lost. All later
         // attempts MUST attach, never attach-or-start.
         create = false;
-        let script = session_script(mode, &session, &prefix);
+        let script = session_script(mode, &session, &prefix, &executable);
         let mut child = target
             .command()
             .arg(script)
@@ -998,6 +1046,7 @@ fn bridge(target: Target, prefix: String) -> Result<()> {
                 } if data.is_empty() => {
                     if got.session != session
                         || got.prefix != prefix
+                        || got.executable != executable
                         || got.version != 1
                         || identity.as_ref().is_some_and(|old| old != &got)
                     {
@@ -1131,7 +1180,18 @@ pub fn enabled() -> bool {
 
 pub fn command(target: &Target, prefix: &str) -> Result<Command> {
     check_prefix(prefix)?;
-    let config = serde_json::json!({ "dest": target.dest, "opts": target.opts, "prefix": prefix });
+    let executable = crate::remote_build::ensure_session_executable(target)?;
+    command_with_executable(target, prefix, &executable)
+}
+
+fn command_with_executable(
+    target: &Target,
+    prefix: &str,
+    executable: &PinnedSessionExecutable,
+) -> Result<Command> {
+    check_prefix(prefix)?;
+    executable.validate()?;
+    let config = serde_json::json!({ "dest": target.dest, "opts": target.opts, "prefix": prefix, "executable": executable });
     let mut command = Command::new(std::env::current_exe()?);
     command.args([ARG, "client", &config.to_string()]);
     Ok(command)
@@ -1153,6 +1213,7 @@ pub fn main() -> ! {
                         opts: serde_json::from_value(config["opts"].clone())?,
                     },
                     serde_json::from_value(config["prefix"].clone())?,
+                    serde_json::from_value(config["executable"].clone())?,
                 )
             }
             [mode, session, prefix] if mode == "create" => relay(session, prefix, true),

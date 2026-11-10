@@ -432,14 +432,175 @@ fn ensure_wild(t: &Target) {
     }
 }
 
+// Fleet semver alone does not establish support for the private durable-session
+// protocol. Those sessions must use the existing exact-client install path.
+fn fleet_policy_allows(hosted: bool, dev_mode: bool, durable_session: bool) -> bool {
+    hosted && !dev_mode && !durable_session
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct PinnedSessionExecutable {
+    pub path: String,
+    pub sha256: String,
+}
+
+impl PinnedSessionExecutable {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.sha256.len() == 64
+                && self
+                    .sha256
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                && Path::new(&self.path).is_absolute()
+                && !Path::new(&self.path).components().any(|c| matches!(
+                    c,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                ))
+                && !self.path.contains(['\0', '\n', '\r'])
+                && self.path.ends_with(&format!(
+                    "/.justrust/remote/session-executables/{}/justrust",
+                    self.sha256
+                )),
+            "invalid immutable hosted session executable identity"
+        );
+        Ok(())
+    }
+}
+
+fn session_executable_prepare_script(digest: &str) -> String {
+    format!(
+        r#"set -eu; umask 077
+sha() {{ sha256sum "$1" | cut -d' ' -f1; }}
+owned_dir() {{
+  [ ! -L "$1" ]; if [ ! -e "$1" ]; then mkdir "$1"; fi
+  [ -d "$1" ] && [ -O "$1" ]
+}}
+private_dir() {{ owned_dir "$1"; [ "$(stat -c %a "$1")" = 700 ]; }}
+owned_dir "$HOME/.justrust"; owned_dir "$HOME/.justrust/remote"
+private_dir "$HOME/.justrust/remote/session-executables"
+d="$HOME/.justrust/remote/session-executables/{digest}"; private_dir "$d"
+f="$d/justrust"
+valid() {{ [ ! -L "$f" ] && [ -f "$f" ] && [ -O "$f" ] && [ -x "$f" ] && [ "$(stat -c %a "$f")" = 500 ] && [ "$(sha "$f")" = '{digest}' ]; }}
+if [ -e "$f" ] || [ -L "$f" ]; then valid; printf 'READY\n%s\n' "$f"; exit; fi
+tmp=$(mktemp "$d/.upload.XXXXXXXXXX"); trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
+if cp "$HOME/.cargo/bin/justrust" "$tmp" 2>/dev/null && [ "$(sha "$tmp")" = '{digest}' ]; then
+  chmod 500 "$tmp"; ln "$tmp" "$f" 2>/dev/null || valid
+  valid; printf 'READY\n%s\n' "$f"
+else
+  printf 'UPLOAD\n%s\n%s\n' "$f" "$tmp"; trap - EXIT HUP INT TERM
+fi"#
+    )
+}
+
+fn session_executable_publish_script(pin: &PinnedSessionExecutable, temp: &str) -> Result<String> {
+    pin.validate()?;
+    let parent = Path::new(&pin.path).parent().unwrap();
+    anyhow::ensure!(
+        Path::new(temp).parent() == Some(parent)
+            && Path::new(temp)
+                .file_name()
+                .and_then(|v| v.to_str())
+                .is_some_and(|v| v.starts_with(".upload.")
+                    && v.len() == 18
+                    && v.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.')),
+        "invalid private executable upload receipt"
+    );
+    Ok(format!(
+        r#"set -eu; umask 077
+f={path}; tmp={temp}; d={parent}
+trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
+[ ! -L "$d" ] && [ -d "$d" ] && [ -O "$d" ] && [ "$(stat -c %a "$d")" = 700 ]
+[ ! -L "$tmp" ] && [ -f "$tmp" ] && [ -O "$tmp" ]
+sha() {{ sha256sum "$1" | cut -d' ' -f1; }}
+[ "$(sha "$tmp")" = '{digest}' ]; chmod 500 "$tmp"
+valid() {{ [ ! -L "$f" ] && [ -f "$f" ] && [ -O "$f" ] && [ -x "$f" ] && [ "$(stat -c %a "$f")" = 500 ] && [ "$(sha "$f")" = '{digest}' ]; }}
+ln "$tmp" "$f" 2>/dev/null || valid
+valid"#,
+        path = shell_quote(&pin.path),
+        temp = shell_quote(temp),
+        parent = shell_quote(&parent.to_string_lossy()),
+        digest = pin.sha256
+    ))
+}
+
+/// Unlike the mutable fleet launcher, this exact-byte executable survives other
+/// clients replacing ~/.cargo/bin/justrust between create and reattachment.
+pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSessionExecutable> {
+    let arch = target
+        .command()
+        .arg("uname -sm")
+        .stdin(Stdio::null())
+        .output()?;
+    let remote = String::from_utf8_lossy(&arch.stdout).trim().to_owned();
+    let local = crate::remote::local_platform();
+    anyhow::ensure!(
+        arch.status.success() && remote == local && remote.starts_with("Linux "),
+        "durable hosted sessions require an exact matching Linux executable (local {local}, remote {remote}); JUSTRUST_HOSTED_SESSION=0 selects legacy transport"
+    );
+    let exe = std::env::current_exe()?;
+    let digest = crate::toolchain::sha256(&exe)?;
+    let result = target
+        .command()
+        .arg(session_executable_prepare_script(&digest))
+        .stdin(Stdio::null())
+        .output()?;
+    anyhow::ensure!(
+        result.status.success(),
+        "private hosted session executable preparation failed"
+    );
+    let output = std::str::from_utf8(&result.stdout).context("invalid executable receipt")?;
+    let fields: Vec<_> = output.lines().collect();
+    anyhow::ensure!(
+        matches!(fields.as_slice(), ["READY", _] | ["UPLOAD", _, _]),
+        "invalid executable receipt"
+    );
+    let pin = PinnedSessionExecutable {
+        path: fields[1].into(),
+        sha256: digest,
+    };
+    pin.validate()?;
+    if fields[0] == "UPLOAD" {
+        let publish = session_executable_publish_script(&pin, fields[2])?;
+        let status = Command::new("rsync")
+            .args(["-z", "-e", &target.rsync_shell()])
+            .arg(&exe)
+            .arg(format!("{}:{}", target.dest, shell_quote(fields[2])))
+            .stdin(Stdio::null())
+            .status();
+        if !status.is_ok_and(|status| status.success()) {
+            // Only our random private temporary receipt may be removed.
+            let _ = target
+                .command()
+                .arg(format!("rm -f -- {}", shell_quote(fields[2])))
+                .stdin(Stdio::null())
+                .status();
+            bail!("uploading exact hosted session executable failed");
+        }
+        anyhow::ensure!(
+            target
+                .command()
+                .arg(publish)
+                .stdin(Stdio::null())
+                .status()?
+                .success(),
+            "publishing verified hosted session executable failed"
+        );
+    }
+    Ok(pin)
+}
+
 /// The fleet version a hosted machine should run, or `None` to install this
-/// client's own build (other backends, dev mode, no advertised version).
+/// client's own build (other backends, dev mode, durable session, no version).
 fn fleet_target_version() -> Option<String> {
-    if !matches!(
-        crate::remote_backend::load(),
-        Some(crate::remote_backend::Backend::Hosted)
-    ) || crate::remote_hosted::dev_mode()
-    {
+    if !fleet_policy_allows(
+        matches!(
+            crate::remote_backend::load(),
+            Some(crate::remote_backend::Backend::Hosted)
+        ),
+        crate::remote_hosted::dev_mode(),
+        crate::remote_session::enabled(),
+    ) {
         return None;
     }
     let v = crate::remote_hosted::fleet_version()?;
@@ -2059,6 +2220,217 @@ mod tests {
         }
         let unique: BTreeSet<_> = FORWARDED_ENV.iter().collect();
         assert_eq!(unique.len(), FORWARDED_ENV.len());
+    }
+
+    #[test]
+    fn durable_hosted_sessions_never_trust_fleet_semver_as_capability() {
+        for hosted in [false, true] {
+            for dev_mode in [false, true] {
+                assert!(!fleet_policy_allows(hosted, dev_mode, true));
+                assert_eq!(
+                    fleet_policy_allows(hosted, dev_mode, false),
+                    hosted && !dev_mode
+                );
+            }
+        }
+        // An equal advertised release can predate the private session command.
+        assert!(fleet_usable("0.1.0-alpha.23", "0.1.0-alpha.23"));
+        assert!(!fleet_policy_allows(true, false, true));
+        assert!(fleet_policy_allows(true, false, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_session_executable_receipts_reject_identity_and_temp_tampering() {
+        let digest = "a".repeat(64);
+        let pin = PinnedSessionExecutable {
+            path: format!("/home/test/.justrust/remote/session-executables/{digest}/justrust"),
+            sha256: digest.clone(),
+        };
+        pin.validate().unwrap();
+        let parent = Path::new(&pin.path).parent().unwrap().display();
+        let temp = format!("{parent}/.upload.Abc1234567");
+        let script = session_executable_publish_script(&pin, &temp).unwrap();
+        assert!(script.contains("ln \"$tmp\" \"$f\""));
+        assert!(!script.contains("mv "));
+        assert!(script.contains("[ ! -L \"$tmp\" ]"));
+        assert!(script.contains("[ -O \"$f\" ]"));
+        assert!(script.contains(&format!("= '{digest}'")));
+        for path in [
+            "/tmp/.upload.Abc1234567".into(),
+            format!("{parent}/../.upload.Abc1234567"),
+            format!("{parent}/justrust"),
+        ] {
+            assert!(session_executable_publish_script(&pin, &path).is_err());
+        }
+        for path in [
+            "/home/test/.cargo/bin/justrust".into(),
+            pin.path.replace(&digest, &"b".repeat(64)),
+            format!("/tmp/../{}", pin.path),
+        ] {
+            assert!(
+                PinnedSessionExecutable {
+                    path,
+                    sha256: digest.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct SessionExecutableFixture(PathBuf);
+
+    #[cfg(target_os = "linux")]
+    impl SessionExecutableFixture {
+        fn new() -> Self {
+            use std::os::unix::fs::DirBuilderExt;
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "jr-session-executable-{}-{nonce}",
+                std::process::id()
+            ));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for SessionExecutableFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn private_session_executable_survives_shared_replacement_and_refuses_corruption() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let home = SessionExecutableFixture::new();
+        let bin = home.path().join(".cargo/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let shared = bin.join("justrust");
+        std::fs::write(&shared, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let digest = crate::toolchain::sha256(&shared).unwrap();
+        let script = session_executable_prepare_script(&digest);
+        let run = || {
+            Command::new("sh")
+                .args(["-c", &script])
+                .env("HOME", home.path())
+                .output()
+                .unwrap()
+        };
+        let first = run();
+        assert!(
+            first.status.success(),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let receipt = String::from_utf8(first.stdout).unwrap();
+        let fields: Vec<_> = receipt.lines().collect();
+        assert_eq!(fields[0], "READY");
+        let pinned = Path::new(fields[1]);
+        let parent = pinned.parent().unwrap();
+        assert_eq!(
+            std::fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(pinned).unwrap().permissions().mode() & 0o777,
+            0o500
+        );
+        std::fs::write(&shared, "legacy replacement").unwrap();
+        assert!(run().status.success());
+        assert_eq!(crate::toolchain::sha256(pinned).unwrap(), digest);
+        assert_eq!(std::fs::read_dir(parent).unwrap().count(), 1);
+        std::fs::remove_file(pinned).unwrap();
+        symlink(&shared, pinned).unwrap();
+        assert!(!run().status.success());
+        std::fs::remove_file(pinned).unwrap();
+        std::fs::write(pinned, "corrupt").unwrap();
+        std::fs::set_permissions(pinned, std::fs::Permissions::from_mode(0o500)).unwrap();
+        assert!(!run().status.success());
+        std::fs::remove_file(pinned).unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!run().status.success());
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir(parent).unwrap();
+        let unrelated = home.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        symlink(&unrelated, parent).unwrap();
+        assert!(!run().status.success());
+        assert_eq!(std::fs::read_dir(unrelated).unwrap().count(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn private_session_executable_upload_is_verified_and_temp_is_consumed() {
+        let home = SessionExecutableFixture::new();
+        let source = home.path().join("exact-client");
+        std::fs::write(&source, "exact immutable executable bytes").unwrap();
+        let digest = crate::toolchain::sha256(&source).unwrap();
+        let result = Command::new("sh")
+            .args(["-c", &session_executable_prepare_script(&digest)])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let receipt = String::from_utf8(result.stdout).unwrap();
+        let fields: Vec<_> = receipt.lines().collect();
+        assert_eq!(fields[0], "UPLOAD");
+        let pin = PinnedSessionExecutable {
+            path: fields[1].into(),
+            sha256: digest,
+        };
+        let publish = session_executable_publish_script(&pin, fields[2]).unwrap();
+        std::fs::copy(&source, fields[2]).unwrap();
+        assert!(
+            Command::new("sh")
+                .args(["-c", &publish])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!Path::new(fields[2]).exists());
+        assert_eq!(
+            crate::toolchain::sha256(Path::new(&pin.path)).unwrap(),
+            pin.sha256
+        );
+        let wrong_digest = "b".repeat(64);
+        let result = Command::new("sh")
+            .args(["-c", &session_executable_prepare_script(&wrong_digest)])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let receipt = String::from_utf8(result.stdout).unwrap();
+        let fields: Vec<_> = receipt.lines().collect();
+        let wrong_pin = PinnedSessionExecutable {
+            path: fields[1].into(),
+            sha256: wrong_digest,
+        };
+        std::fs::copy(&source, fields[2]).unwrap();
+        let script = session_executable_publish_script(&wrong_pin, fields[2]).unwrap();
+        assert!(
+            !Command::new("sh")
+                .args(["-c", &script])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!Path::new(fields[2]).exists());
+        assert!(!Path::new(&wrong_pin.path).exists());
     }
 
     #[test]

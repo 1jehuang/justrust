@@ -1,5 +1,27 @@
 use super::*;
 
+fn pinned_executable() -> PinnedSessionExecutable {
+    let sha256 = "a".repeat(64);
+    PinnedSessionExecutable {
+        path: format!("/home/test/.justrust/remote/session-executables/{sha256}/justrust"),
+        sha256,
+    }
+}
+
+#[test]
+fn pinned_launcher_rejects_changed_executable_path_or_digest_before_connecting() {
+    let target = Target {
+        dest: "not-contacted".into(),
+        opts: Vec::new(),
+    };
+    let mut pin = pinned_executable();
+    pin.sha256 = "b".repeat(64);
+    assert!(command_with_executable(&target, "", &pin).is_err());
+    pin = pinned_executable();
+    pin.path = "/home/test/.cargo/bin/justrust".into();
+    assert!(command_with_executable(&target, "", &pin).is_err());
+}
+
 #[test]
 fn hosted_transport_defaults_on_with_strict_explicit_rollback_policy() {
     use std::ffi::OsStr;
@@ -86,18 +108,25 @@ fn exact_prefix_is_preserved_in_agent_bridge_and_identity() {
         dest: "host".into(),
         opts: Vec::new(),
     };
-    let command = command(&target, prefix).unwrap();
+    let executable = pinned_executable();
+    let command = command_with_executable(&target, prefix, &executable).unwrap();
     let args: Vec<_> = command.get_args().collect();
     let config: serde_json::Value = serde_json::from_str(args[2].to_str().unwrap()).unwrap();
     assert_eq!(config["prefix"], prefix);
+    assert_eq!(
+        config["executable"],
+        serde_json::to_value(&executable).unwrap()
+    );
     let agent = agent_command(prefix).unwrap();
     let args: Vec<_> = agent.get_args().map(|arg| arg.to_str().unwrap()).collect();
     assert_eq!(args, ["__agent", "--prefix", prefix]);
     let default_agent = agent_command("").unwrap();
     assert_eq!(default_agent.get_args().collect::<Vec<_>>(), ["__agent"]);
     for mode in ["create", "attach"] {
-        let script = session_script(mode, &"a".repeat(64), prefix);
-        assert!(script.starts_with("export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust "));
+        let script = session_script(mode, &"a".repeat(64), prefix, &executable);
+        assert!(script.starts_with("export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec "));
+        assert!(script.contains(&crate::remote_build::shell_quote(&executable.path)));
+        assert!(!script.contains("exec ~/.cargo/bin/justrust"));
         assert!(script.ends_with(&format!(" {}", crate::remote_build::shell_quote(prefix))));
     }
     assert!(command_prefix_rejected(&target, "relative/mirror"));
@@ -168,6 +197,7 @@ impl Fixture {
                 boot: "boot-1".into(),
                 binary: "binary-1".into(),
                 prefix: String::new(),
+                executable: pinned_executable(),
             },
             dir,
             input: Mutex::new(Some(input)),
@@ -344,6 +374,8 @@ fn changed_machine_boot_binary_or_session_and_future_cursor_are_refused() {
         "session",
         "incarnation",
         "prefix",
+        "executable-path",
+        "executable-digest",
     ] {
         let mut identity = f.broker.identity.clone();
         match field {
@@ -352,6 +384,8 @@ fn changed_machine_boot_binary_or_session_and_future_cursor_are_refused() {
             "binary" => identity.binary = "binary-2".into(),
             "incarnation" => identity.incarnation = "instance-2".into(),
             "prefix" => identity.prefix = "/another/mirror".into(),
+            "executable-path" => identity.executable.path = "/another/executable".into(),
+            "executable-digest" => identity.executable.sha256 = "b".repeat(64),
             _ => identity.session = "b".repeat(64),
         }
         let (mut stream, worker) = f.attach(Some(identity), 0);
