@@ -10022,9 +10022,12 @@ impl<'a> Checker<'a> {
                 expectation: expectations[argument],
             })
             .collect::<Vec<_>>();
-        if let ir::Callee::Direct(direct) = &target {
-            self.require_safe_callable(direct.declaration)?;
-        }
+        let callable = match &target {
+            ir::Callee::Direct(direct) => direct.declaration,
+            ir::Callee::TraitItem(call) | ir::Callee::Untupled(call) => call.item,
+            ir::Callee::Virtual(call) => call.call.item,
+        };
+        self.require_safe_callable(callable)?;
         self.charge_node(4 * std::mem::size_of::<ir::CallEvidence>() + 64)?;
         self.call_evidence.push(ir::CallEvidence {
             call: id,

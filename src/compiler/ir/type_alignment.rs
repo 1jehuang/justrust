@@ -8,7 +8,8 @@ pub enum TypeQueryKind {
     SemanticSize,
     /// Physical Vec element spacing, separate from owning storage.
     PrivateElementStride,
-    /// Public pointer spacing only where semantic and physical extents agree.
+    /// Typed native pointer spacing, authenticated against array and field
+    /// storage. Does not grant aggregate size_of or external ABI authority.
     SupportedPointerStride,
     PrivateStorageStride,
     PrivateStorageAlignment,

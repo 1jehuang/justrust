@@ -3010,7 +3010,11 @@ pub(super) fn nominal_application_self(ty: &Ty) -> bool {
 /// selection must still produce a unique impl witness and validate its
 /// substituted associated assignment.
 pub(super) fn implementation_application_self(ty: &Ty) -> bool {
-    nominal_application_self(ty) || matches!(ty, Ty::Param(_) | Ty::Ref { .. })
+    nominal_application_self(ty)
+        || matches!(
+            ty,
+            Ty::Param(_) | Ty::Ref { .. } | Ty::Slice { .. } | Ty::Array { .. } | Ty::Tuple(_)
+        )
 }
 
 #[cfg(test)]

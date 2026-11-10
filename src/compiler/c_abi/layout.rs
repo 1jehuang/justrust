@@ -215,6 +215,16 @@ fn build(
             .ok_or("C private carrier overflow")?;
     }
     result.size = align_up(result.size, result.align)?;
+    if matches!(ty, ir::Ty::Struct(_))
+        && super::super::memory_layout::compact::layout(ty, budget, depth + 1)?.is_some()
+    {
+        // A compact nominal's fields are actual memory, not scalar owning
+        // carriers. In particular an array of one-byte wrappers has no word
+        // available at its final field, even though each local reserves eight.
+        for leaf in &mut result.leaves {
+            leaf.private_bytes = leaf.bytes;
+        }
+    }
     Ok(result)
 }
 

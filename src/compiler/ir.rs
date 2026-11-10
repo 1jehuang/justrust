@@ -13336,6 +13336,11 @@ impl CheckedFunction {
                         .get(place.local.0)
                         .ok_or("invalid borrow local")?
                         .ty;
+                    super::memory_layout::compact::validate_address_path(
+                        root,
+                        &place.projection,
+                        conditional_budget,
+                    )?;
                     for projection in &place.projection {
                         if let Projection::DynamicIndex(index) = projection
                             && self.locals.get(index.0).map(|local| &local.ty)

@@ -399,6 +399,14 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
         }
         ir::Ty::Cell(wrapper) => element_extent(wrapper.argument(), budget, depth + 1),
         ir::Ty::ManuallyDrop(wrapper) => element_extent(wrapper.argument(), budget, depth + 1),
+        ir::Ty::Tuple(_) | ir::Ty::Struct(_) => {
+            if let Some(layout) = super::memory_layout::compact::layout(ty, budget, depth + 1)? {
+                i32::try_from(layout.size)
+                    .map_err(|_| "compact aggregate extent exceeds native memory limit".into())
+            } else {
+                value_size(ty, budget)
+            }
+        }
         ir::Ty::Unit | ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Float(_) => {
@@ -439,6 +447,14 @@ fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, Strin
     match ty {
         ir::Ty::Cell(wrapper) => copied_value_bytes(wrapper.argument(), budget),
         ir::Ty::ManuallyDrop(wrapper) => copied_value_bytes(wrapper.argument(), budget),
+        ir::Ty::Tuple(_) | ir::Ty::Struct(_) => {
+            if let Some(layout) = super::memory_layout::compact::layout(ty, budget, 0)? {
+                i32::try_from(layout.size)
+                    .map_err(|_| "compact aggregate copy exceeds native memory limit".into())
+            } else {
+                value_size(ty, budget)
+            }
+        }
         ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Array { .. } => {
@@ -469,6 +485,15 @@ pub(super) fn field_offset(
     let field = ty
         .field_ty(index, budget)?
         .ok_or("invalid checked aggregate field")?;
+    if matches!(ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+        && let Some(layout) = super::memory_layout::compact::layout(ty, budget, 0)?
+    {
+        let field_layout = super::memory_layout::compact::layout(&field, budget, 0)?
+            .ok_or("compact aggregate lost its field layout")?;
+        let offset = i32::try_from(layout.field_offset(index, field_layout.align)?)
+            .map_err(|_| "compact aggregate field offset exceeds native memory limit")?;
+        return Ok((offset, field));
+    }
     let offset = (0..index).try_fold(0_i32, |offset, index| {
         let ty = ty
             .field_ty(index, budget)?
@@ -531,6 +556,8 @@ fn private_alignment(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Resu
         return Ok(16);
     }
     match ty {
+        ir::Ty::Cell(wrapper) => private_alignment(wrapper.argument(), budget, depth + 1),
+        ir::Ty::ManuallyDrop(wrapper) => private_alignment(wrapper.argument(), budget, depth + 1),
         ir::Ty::Array { element, .. } => private_alignment(element, budget, depth + 1),
         ir::Ty::Enum(enumeration) => {
             let mut alignment = 8;
@@ -3801,8 +3828,16 @@ impl Emitter<'_> {
                         .aggregate_scratch
                         .checked_add(field)
                         .ok_or("aggregate offset too large")?;
-                    if matches!(ty, ir::Ty::Array { .. }) {
-                        self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = exact element destination
+                    if matches!(ty, ir::Ty::Array { .. })
+                        || matches!(ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+                            && super::memory_layout::compact::layout(
+                                ty,
+                                self.concrete.facts().budget(),
+                                0,
+                            )?
+                            .is_some()
+                    {
+                        self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = exact memory field destination
                         self.i32(offset);
                         self.store_element_value(&field_ty)?;
                     } else {

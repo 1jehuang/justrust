@@ -13,7 +13,8 @@ pub(super) fn element_stride<T>() -> usize {
     __justrust_element_stride!(T)
 }
 
-// Public stepping requires exact agreement with physical backend storage.
+// Typed pointer stepping uses the same canonical native memory as indexing.
+// It does not expose a private aggregate carrier as public size_of or C layout.
 pub(super) fn pointer_stride<T>() -> usize {
     __justrust_pointer_stride!(T)
 }

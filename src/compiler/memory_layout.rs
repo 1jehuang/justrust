@@ -2,7 +2,9 @@
 //! Callers must authenticate the source intrinsic and validate the queried type
 //! against their own immutable caller facts before admitting a query.
 use super::ir;
+pub(super) mod compact;
 pub(super) mod domain;
+mod pointer;
 
 /// Compiler-private carrier extent. This does not authorize public native
 /// pointer offsets, Rust size_of, external ABI layout, or allocation effects.
@@ -20,26 +22,18 @@ pub(super) fn query_value(
     if query.is_semantic_size() {
         return semantic_size(query.queried_type(), facts, budget);
     }
-    if query.is_private_element_stride() || query.is_supported_pointer_stride() {
+    if query.is_supported_pointer_stride() {
+        return pointer::extent(query.queried_type(), facts.validated(), budget, 0);
+    }
+    if query.is_private_element_stride() {
         if matches!(query.queried_type(), ir::Ty::Param(_)) {
             return Ok(None);
         }
-        let semantic = if query.is_supported_pointer_stride() {
-            let Some(size) = semantic_size(query.queried_type(), facts, budget)? else {
-                return Ok(None);
-            };
-            Some(size)
-        } else {
-            None
-        };
         let stride = usize::try_from(super::backend::array_element_stride(
             query.queried_type(),
             budget,
         )?)
         .map_err(|_| "private element stride is negative")?;
-        if semantic.is_some_and(|size| size != stride) {
-            return Err("unsupported: public pointer stride requires exact semantic and physical representation agreement".into());
-        }
         return Ok(Some(stride));
     }
     if query.is_private_storage_alignment() {

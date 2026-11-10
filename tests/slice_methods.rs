@@ -239,6 +239,191 @@ fn main() {
 }
 
 #[test]
+fn slice_mut_pointer_generic_aggregate_layout_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer-aggregate-layout",
+        &[Case {
+            name: "generic_nominal_nested_arrays_and_nominal_zsts",
+            source: r#"
+struct Value<T> { n: T }
+struct Empty;
+struct Zero { unit: (), empty: Empty }
+struct AlignedZero { zero: [u128; 0] }
+struct Padded<T> { before: [u128; 0], n: T, after: () }
+fn advance<T>(s: &mut [T], n: usize) -> *mut T {
+    unsafe { s.as_mut_ptr().add(n) }
+}
+fn replace<T>(s: &mut [T], n: usize, value: T) {
+    unsafe { *advance(s, n) = value; }
+}
+fn main() {
+    let mut values = [Value { n: 4u16 }, Value { n: 5u16 }];
+    let p = advance(&mut values, 1);
+    let base = advance(&mut values, 0);
+    println!("{}", p as usize - base as usize);
+    unsafe { (*p).n = 9; }
+    replace(&mut values, 0, Value { n: 7u16 });
+    println!("{} {}", values[0].n, values[1].n);
+    let mut rows = [[Value { n: 10i64 }], [Value { n: 20i64 }]];
+    replace(&mut rows, 1, [Value { n: 30i64 }]);
+    println!("{} {}", rows[0][0].n, rows[1][0].n);
+    let mut empty: [Value<u32>; 0] = [];
+    let p = advance(&mut empty, 0);
+    println!("{}", p as usize != 0);
+    let mut zsts = [Empty, Empty];
+    let p = advance(&mut zsts, 0);
+    let q = advance(&mut zsts, 1);
+    unsafe { *q = Empty; }
+    println!("{} {}", p as usize != 0, p as usize == q as usize);
+    let mut nested = [Zero { unit: (), empty: Empty }, Zero { unit: (), empty: Empty }];
+    let p = advance(&mut nested, 0);
+    let q = advance(&mut nested, 1);
+    unsafe { *q = Zero { unit: (), empty: Empty }; }
+    println!("{} {}", p as usize != 0, p as usize == q as usize);
+    let mut aligned = [AlignedZero { zero: [] }, AlignedZero { zero: [] }];
+    let p = advance(&mut aligned, 0);
+    let q = advance(&mut aligned, 1);
+    unsafe { *q = AlignedZero { zero: [] }; }
+    println!("{} {}", p as usize % 16 == 0, p as usize == q as usize);
+    let mut padded = [Padded { before: [], n: 3u8, after: () }, Padded { before: [], n: 4u8, after: () }];
+    let p = advance(&mut padded, 0);
+    let q = advance(&mut padded, 1);
+    unsafe { (*q).n = 8; }
+    println!("{} {} {}", q as usize - p as usize, p as usize % 16 == 0, padded[1].n);
+}
+"#,
+            expect: Expect::Run(
+                "2\n7 9\n10 30\ntrue\ntrue true\ntrue true\ntrue true\n16 true 8\n",
+            ),
+        }],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_public_field_offsets_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "slice-mut-pointer-public-offsets",
+        &[Case {
+            name: "aligned_owning_bases_and_unambiguous_zst_addresses",
+            source: r#"
+struct Before<T> { z: [u128; 0], n: T, tail: () }
+#[repr(C)] struct CBefore { z: [u128; 0], n: u8, tail: () }
+fn identity(v: Before<u8>) -> Before<u8> { v }
+fn observe(v: &Before<u8>) {
+    let base = v as *const Before<u8> as usize;
+    println!("{} {} {} {}", base % 16 == 0,
+        &v.z as *const [u128; 0] as usize - base,
+        &v.n as *const u8 as usize - base,
+        &v.tail as *const () as usize - base);
+}
+fn main() {
+    let v = Before { z: [], n: 3u8, tail: () };
+    observe(&v);
+    let v = identity(v);
+    observe(&v);
+    let mut a = [Before { z: [], n: 4u8, tail: () }, Before { z: [], n: 5u8, tail: () }];
+    let p = a.as_mut_ptr();
+    unsafe { observe(&*p); observe(&*p.add(1)); }
+    let v = CBefore { z: [], n: 6u8, tail: () };
+    let base = &v as *const CBefore as usize;
+    println!("{} {} {} {}", base % 16 == 0,
+        &v.z as *const [u128; 0] as usize - base,
+        &v.n as *const u8 as usize - base,
+        &v.tail as *const () as usize - base);
+}
+"#,
+            expect: Expect::Run("true 0 0 1\ntrue 0 0 1\ntrue 0 0 1\ntrue 0 0 1\ntrue 0 0 1\n"),
+        }],
+    );
+}
+
+#[test]
+fn slice_mut_pointer_unproved_physical_layout_is_rejected() {
+    for (name, source, diagnostic) in [
+        (
+            "ambiguous_trailing_high_alignment_zst_address",
+            "struct V{n:u8,z:[u128;0]}fn main(){let v=V{n:1,z:[]};let p=&v.z as *const [u128;0];println!(\"{}\",p as usize);}",
+            "ZST field address",
+        ),
+        (
+            "mutable_nested_trailing_high_alignment_zst_address",
+            "struct V{n:u8,z:[u128;0]}struct Outer{value:V}fn pointer(s:&mut[Outer])->*mut[u128;0]{&mut s[0].value.z as *mut[u128;0]}fn main(){let mut a=[Outer{value:V{n:1,z:[]}}];let p=pointer(&mut a);println!(\"{}\",p as usize);}",
+            "ZST field address",
+        ),
+        (
+            "ambiguous_leading_low_alignment_zst_address",
+            "struct V{z:(),n:u32}fn main(){let v=V{z:(),n:1};let p=&v.z as *const ();println!(\"{}\",p as usize);}",
+            "ZST field address",
+        ),
+        (
+            "multiple_storage_fields",
+            "struct V{a:i32,b:i32}fn main(){let mut a=[V{a:1,b:2},V{a:3,b:4}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
+            "public target memory representation",
+        ),
+        (
+            "niche_enum",
+            "enum V{None,Some(i32)}fn main(){let mut a=[V::None,V::Some(1)];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
+            "target aggregate size",
+        ),
+        (
+            "explicit_alignment",
+            "#[repr(align(16))]struct V{n:u32}fn main(){let mut a=[V{n:1},V{n:2}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
+            "repr(align) layout is not implemented",
+        ),
+        (
+            "packed_layout",
+            "#[repr(packed)]struct V{n:u32}fn main(){let mut a=[V{n:1},V{n:2}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
+            "repr(C)/repr(align(N)) structs",
+        ),
+    ] {
+        let root = scratch(&format!("pointer-layout-{name}"));
+        let path = root.join("main.rs");
+        std::fs::write(&path, source).unwrap();
+        let stock = Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "--emit=metadata"])
+            .arg(&path)
+            .arg("-o")
+            .arg(root.join("stock.rmeta"))
+            .output()
+            .unwrap();
+        assert!(stock.status.success(), "{name}: {stock:?}");
+        for workers in ["1", "8"] {
+            for check in [true, false] {
+                let image = root.join(format!("native-{workers}-{check}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command.arg(&path).args(["--workers", workers]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = command.output().unwrap();
+                let error = String::from_utf8_lossy(&result.stderr);
+                assert!(
+                    !result.status.success(),
+                    "{name}: unsupported layout compiled"
+                );
+                assert!(
+                    error.contains("unsupported") && error.contains(diagnostic),
+                    "{name}: {error}"
+                );
+                assert!(
+                    !image.exists(),
+                    "{name}: unsupported layout emitted an image"
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn slice_mut_pointer_empty_vec() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;
@@ -270,6 +455,31 @@ fn slice_mut_pointer_invalid_boundaries() {
                 name: "dereference_requires_unsafe",
                 source: "fn bad(s:&mut[i32]){let p=s.as_mut_ptr();*p=2;}fn main(){}",
                 expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "generic_shared_receiver",
+                source: "fn bad<T>(s:&[T]){let _=s.as_mut_ptr();}fn main(){}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "generic_add_requires_unsafe",
+                source: "fn bad<T>(s:&mut[T]){let _=s.as_mut_ptr().add(1);}fn main(){}",
+                expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "raw_call_reborrow_requires_unsafe",
+                source: "fn identity<T>(p:*mut T)->*mut T{p}fn bad<T>(p:*mut T){let _=&*identity(p);}fn main(){}",
+                expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "raw_const_call_reborrow_cannot_mutate",
+                source: "fn identity<T>(p:*const T)->*const T{p}fn bad<T>(p:*const T){unsafe{let _=&mut *identity(p);}}fn main(){}",
+                expect: Expect::Invalid("cannot borrow as mutable"),
+            },
+            Case {
+                name: "generic_wrong_element_type",
+                source: "fn bad<T>(s:&mut[T])->*mut u8{s.as_mut_ptr()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
             },
             Case {
                 name: "wrong_element_type",

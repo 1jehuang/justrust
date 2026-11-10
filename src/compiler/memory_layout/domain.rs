@@ -255,6 +255,7 @@ enum SizeLeaf {
     Parameter(usize),
     PointerParameter(usize),
     Bytes(usize),
+    NativeAggregate(ir::Ty),
     Unsupported,
     Deferred,
 }
@@ -335,6 +336,10 @@ impl SizeArgument {
             ir::Ty::PhantomData(_) => SizeLeaf::Bytes(0),
             ir::Ty::Char => SizeLeaf::Bytes(4),
             ir::Ty::AssociatedType(_) => SizeLeaf::Deferred,
+            ir::Ty::Tuple(_) | ir::Ty::Struct(_) => {
+                budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
+                SizeLeaf::NativeAggregate(leaf_ty.clone())
+            }
             _ => match super::super::c_abi::layout::scalar_size_align(leaf_ty) {
                 Some((size, _)) => SizeLeaf::Bytes(size),
                 None => SizeLeaf::Unsupported,
@@ -387,14 +392,14 @@ impl SizeArgument {
         }
         budget.check_depth(self.arrays.len())?;
         budget.charge_work(1)?;
-        match self.leaf {
+        match &self.leaf {
             SizeLeaf::Parameter(slot) => {
                 let limits = match domain {
                     SizeDomain::Semantic => &mut out.semantic_limits,
                     SizeDomain::Physical => &mut out.physical_limits,
                 };
                 let old = limits
-                    .get_mut(slot)
+                    .get_mut(*slot)
                     .ok_or("semantic size changed canonical caller arity")?;
                 *old = Some(old.map_or(limit, |bound| bound.min(limit)));
             }
@@ -402,17 +407,31 @@ impl SizeArgument {
                 // Both supported metadata shapes fit. No pointee value-layout
                 // obligation follows from observing a pointer's size.
                 *out.metadata_pointees
-                    .get_mut(slot)
+                    .get_mut(*slot)
                     .ok_or("pointer size changed canonical caller arity")? = true;
             }
             SizeLeaf::PointerParameter(slot) if limit >= 8 => {
                 *out.thin_pointees
-                    .get_mut(slot)
+                    .get_mut(*slot)
                     .ok_or("pointer size changed canonical caller arity")? = true;
             }
             SizeLeaf::PointerParameter(_) => out.unsupported = Some(domain.overflow()),
-            SizeLeaf::Bytes(size) if size > limit => out.unsupported = Some(domain.overflow()),
+            SizeLeaf::Bytes(size) if *size > limit => out.unsupported = Some(domain.overflow()),
             SizeLeaf::Bytes(_) => {}
+            SizeLeaf::NativeAggregate(ty) => match domain {
+                SizeDomain::Semantic => out.unsupported = Some(SEMANTIC_SIZE_UNSUPPORTED),
+                SizeDomain::Physical => match super::pointer::extent(ty, None, budget, 0) {
+                    Ok(Some(size)) if size > limit => out.unsupported = Some(domain.overflow()),
+                    Ok(Some(_)) => {}
+                    Ok(None) => out.deferred_dispatch = true,
+                    Err(error) if error.starts_with("unsupported:") => {
+                        out.unsupported = Some(
+                            "unsupported: pointer element requires an exact public target memory representation",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                },
+            },
             SizeLeaf::Unsupported => out.unsupported = Some(SEMANTIC_SIZE_UNSUPPORTED),
             SizeLeaf::Deferred => out.deferred_dispatch = true,
         }
@@ -524,6 +543,31 @@ fn normalize_mut_ref_pointee(
     }
     Ok(())
 }
+// Argument transfers capture all possible demands before the callee summary
+// chooses one. Unsupported pointer memory is a dormant requirement here, not
+// an eager rejection of an unrelated generic call.
+fn retain_pointer_extent(
+    ty: &ir::Ty,
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    match super::pointer::extent(ty, None, budget, depth) {
+        Ok(_) => Ok(()),
+        Err(error) if error.starts_with("unsupported:") => {
+            out.unsupported.get_or_insert(
+                "unsupported: pointer element requires an exact public target memory representation",
+            );
+            Ok(())
+        }
+        Err(error) if error == "array extent exceeds native memory limit" => {
+            out.unsupported
+                .get_or_insert("array extent exceeds native memory limit");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
 fn normalize_pointer_stride(
     ty: &ir::Ty,
     parameters: &[ir::ParamId],
@@ -542,14 +586,33 @@ fn normalize_pointer_stride(
             out.pointer_strides[slot] = true;
         }
         ir::Ty::Array { element, .. } => {
-            normalize_physical_size(
-                ty,
-                parameters,
-                super::super::backend::MAX_FRAME_BYTES as usize,
-                out,
-                budget,
-            )?;
-            normalize_pointer_stride(element, parameters, out, budget, depth + 1)?
+            let size = SizeArgument::capture(ty, parameters, budget)?;
+            // Preserve the finite multiplicative bound for scalar/parameter
+            // arrays. Native nominal fields have a separate representation,
+            // checked from the exact closed query rather than public size_of.
+            if size.leaf != SizeLeaf::Unsupported {
+                size.apply_physical(super::super::backend::MAX_FRAME_BYTES as usize, out, budget)?;
+            }
+            normalize_pointer_stride(element, parameters, out, budget, depth + 1)?;
+            retain_pointer_extent(ty, out, budget, depth)?;
+        }
+        ir::Ty::Tuple(_) | ir::Ty::Struct(_) => {
+            let count = ty
+                .field_count()
+                .ok_or("pointer aggregate has no canonical fields")?;
+            for index in 0..count {
+                let field = ty
+                    .field_ty(index, budget)?
+                    .ok_or("pointer aggregate field is absent")?;
+                normalize_pointer_stride(&field, parameters, out, budget, depth + 1)?;
+            }
+            retain_pointer_extent(ty, out, budget, depth)?;
+        }
+        ir::Ty::Cell(wrapper) => {
+            normalize_pointer_stride(wrapper.argument(), parameters, out, budget, depth + 1)?;
+        }
+        ir::Ty::ManuallyDrop(wrapper) => {
+            normalize_pointer_stride(wrapper.argument(), parameters, out, budget, depth + 1)?;
         }
         ir::Ty::RawPtr { pointee, .. } => normalize_raw_pointee(pointee, parameters, out, budget)?,
         ir::Ty::Ref {
@@ -557,7 +620,10 @@ fn normalize_pointer_stride(
             referent,
         } => normalize_mut_ref_pointee(referent, parameters, out, budget)?,
         ir::Ty::AssociatedType(_) => out.deferred_dispatch = true,
-        _ => {}
+        ir::Ty::Enum(_) | ir::Ty::Closure(_) | ir::Ty::FnItem(_) => {
+            out.unsupported.get_or_insert(SEMANTIC_SIZE_UNSUPPORTED);
+        }
+        _ => retain_pointer_extent(ty, out, budget, depth)?,
     }
     Ok(())
 }
@@ -569,15 +635,18 @@ fn normalize_query(
     out: &mut Requirement,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    if query.is_semantic_size() || query.is_supported_pointer_stride() {
+    if query.is_supported_pointer_stride() {
+        normalize_pointer_stride(ty, parameters, out, budget, 0)?;
+        if super::pointer::extent(ty, Some(facts), budget, 0)?.is_none() && parameters.is_empty() {
+            out.deferred_dispatch = true;
+        }
+        Ok(())
+    } else if query.is_semantic_size() {
         SizeArgument::capture_authorized(ty, parameters, Some(facts), budget)?.apply(
             SEMANTIC_SIZE_LIMIT,
             out,
             budget,
         )?;
-        if query.is_supported_pointer_stride() {
-            normalize_pointer_stride(ty, parameters, out, budget, 0)?;
-        }
         Ok(())
     } else {
         normalize(ty, parameters, out, budget, 0)

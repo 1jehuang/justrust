@@ -21,11 +21,24 @@ impl<'a> Checker<'a> {
         if self.unsafe_depth > 0 {
             return Ok(());
         }
-        if plan
+        let mut unsafety = plan
             .registry
             .source_callable(declaration)
-            .is_some_and(|f| f.unsafety)
-        {
+            .is_some_and(|f| f.unsafety);
+        if !unsafety {
+            if let Ok(info) = plan.registry.declaration(declaration)
+                && info.kind == ir::DeclKind::TraitItem
+            {
+                let owner = info.owner.ok_or("trait callable missing canonical owner")?;
+                let source = plan.registry.source_trait(owner)?;
+                let item = source
+                    .items
+                    .get(info.source_index)
+                    .ok_or("trait callable missing canonical source item")?;
+                unsafety = item.signature.unsafety;
+            }
+        }
+        if unsafety {
             return Err(
                 "E0133: call to unsafe function is unsafe and requires unsafe block".into(),
             );

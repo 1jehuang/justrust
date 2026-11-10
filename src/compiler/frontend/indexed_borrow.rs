@@ -379,10 +379,22 @@ impl type_check::Checker<'_> {
         if self.exprs[value.0].completion == ir::Completion::Never {
             return Ok(value);
         }
-        let ir::Ty::Ref { kind: original, .. } = &ty else {
-            return Err("unsupported: reborrowing a call result requires a reference".into());
+        let original = match &ty {
+            ir::Ty::Ref { kind, .. } => *kind,
+            ir::Ty::RawPtr { kind, .. } => {
+                if self.unsafe_depth == 0 {
+                    return Err("E0133: dereference of raw pointer requires unsafe block".into());
+                }
+                *kind
+            }
+            _ => {
+                return Err(
+                    "unsupported: reborrowing a call result requires a reference or raw pointer"
+                        .into(),
+                );
+            }
         };
-        if kind == ir::BorrowKind::Mut && *original == ir::BorrowKind::Shared {
+        if kind == ir::BorrowKind::Mut && original == ir::BorrowKind::Shared {
             return Err("cannot borrow as mutable through a shared reference".into());
         }
         let local = self.temporary("$reborrow_call", ty, true)?;
