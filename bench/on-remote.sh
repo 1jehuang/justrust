@@ -5,6 +5,7 @@
 #   bench/on-remote.sh start [--name NAME] -- <bench command...>
 #       e.g. bench/on-remote.sh start -- bench/suite.py run --synth 1 -n 1
 #            bench/on-remote.sh start -- bench/versus.py run --synth 1
+#   bench/on-remote.sh stop [NAME]       bounded verified session cancellation
 #   bench/on-remote.sh status [NAME]     is it running, last progress lines
 #   bench/on-remote.sh fetch [NAME]      copy new bench/results/*.json back here
 #   bench/on-remote.sh attach [NAME]     follow the log (C-c to stop following)
@@ -80,7 +81,7 @@ start)
   # machine active now, and from the run script every minute while the
   # benchmark runs.
   ssh_t "$MARK_ACTIVE"
-  if ssh_t "kill -0 \$(cat ~/bench-$NAME.pid 2>/dev/null) 2>/dev/null"; then
+  if ssh_t "test -e ~/bench-$NAME.pid"; then
     echo "on-remote: session $NAME is already running (status/attach, or --name)" >&2; exit 1
   fi
   echo "on-remote: syncing justrust binary and repo" >&2
@@ -90,6 +91,7 @@ start)
   # agent, and replacing it under the running agent broke every remote
   # build until the agent restarted.
   ssh_t "mkdir -p ~/bench-bin/$NAME"
+  rsync_t bench/remote_session.py "R:bench-bin/$NAME/remote_session.py"
   rsync_t "$(readlink -f "$(command -v "$JR")")" "R:bench-bin/$NAME/.justrust.upload"
   ssh_t "chmod +x ~/bench-bin/$NAME/.justrust.upload && mv -f ~/bench-bin/$NAME/.justrust.upload ~/bench-bin/$NAME/justrust"
   # Results include raw profiles and nested evidence, not only top-level
@@ -132,7 +134,7 @@ PY
     echo '#!/bin/bash'
     echo 'cd ~/bench-justrust'
     printf '( while sleep 60; do %s; done ) &\n' "$MARK_ACTIVE"
-    printf 'trap '\''kill $! 2>/dev/null; rm -f "$HOME/bench-%s.pid"'\'' EXIT\n' "$NAME"
+    # The guardian cleans this activity loop too, using verified pidfds.
     printf 'export PATH="$HOME/bench-bin/%s:$HOME/.cargo/bin:$PATH" JUSTRUST_BIN="$HOME/bench-bin/%s/justrust" JUSTRUST_NO_UPDATE=1 JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0 JUSTRUST_LOCAL_REASON="benchmark on the build machine itself"\n' "$NAME" "$NAME"
     # The machine has rustup's stable, not a distro cargo: that is "stock" there.
     echo '[ -x /usr/bin/cargo ] || export VERSUS_STOCK_CARGO=$HOME/.cargo/bin/cargo'
@@ -141,7 +143,7 @@ PY
     echo "unset JUSTRUST_BENCH_REV"
     echo "export JUSTRUST_BENCH_REPO_REV=$rev JUSTRUST_BENCH_DIRTY=$dirty"
     echo 'date'
-    printf 'timeout --kill-after=10s %ss ' "$RUN_TIMEOUT"
+    # The guardian owns the timeout and every process group in its session.
     printf '%q ' "$@"; echo
     # Logging the finish time must not turn a failed payload into script success.
     echo 'status=$?'
@@ -149,14 +151,12 @@ PY
     echo 'date'
     echo 'exit "$status"'
   } | ssh_t "cat >~/bench-$NAME.sh && chmod +x ~/bench-$NAME.sh"
-  # setsid, not tmux: hosted machines do not ship tmux. The pidfile is the
-  # session handle for status and the keepalive.
-  # This marker is written by the detached shell itself, before the payload.
+  # The guardian pins SID identity until all nested groups have been cleaned.
   if [[ $KIND == hosted ]]; then
     boot=$(ssh_n 'cat /proc/sys/kernel/random/boot_id')
     [[ $boot =~ ^[0-9a-f-]{36}$ ]] || { echo 'on-remote: invalid guest boot identity' >&2; exit 1; }
   fi
-  ssh_t "setsid nohup bash -c 'echo \$\$ >~/bench-$NAME.pid; exec bash ~/bench-$NAME.sh' >~/bench-$NAME.log 2>&1 </dev/null &"
+  ssh_t "python3 ~/bench-bin/$NAME/remote_session.py start --record ~/bench-$NAME.session.json --pidfile ~/bench-$NAME.pid --log ~/bench-$NAME.log --timeout $RUN_TIMEOUT -- bash ~/bench-$NAME.sh"
   echo "on-remote: started session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"
   echo "  $0 status $NAME    $0 fetch $NAME"
   if [[ $KIND == hosted ]]; then
@@ -168,8 +168,12 @@ PY
     echo "on-remote: hosted keepalive pid $! (authenticated renewal, at most ${RUN_TIMEOUT}s)"
   fi
   ;;
+stop)
+  # No legacy numeric pidfile fallback: unverified sessions need manual review.
+  ssh_t "python3 ~/bench-bin/$NAME/remote_session.py stop --record ~/bench-$NAME.session.json"
+  ;;
 status)
-  if ssh_t "kill -0 \$(cat ~/bench-$NAME.pid 2>/dev/null) 2>/dev/null"; then echo "running"; else echo "finished (or not started)"; fi
+  ssh_t "python3 ~/bench-bin/$NAME/remote_session.py status --record ~/bench-$NAME.session.json"
   ssh_t "grep -v '^JCODE_PROGRESS' ~/bench-$NAME.log 2>/dev/null | tail -15; grep '^JCODE_PROGRESS' ~/bench-$NAME.log 2>/dev/null | tail -1"
   ;;
 fetch)
