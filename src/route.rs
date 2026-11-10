@@ -71,7 +71,8 @@ pub fn mode() -> Mode {
 }
 
 fn remote_required() -> bool {
-    matches!(
+    crate::nolocal::disabled()
+        || matches!(
         std::env::var("JUSTRUST_REMOTE_REQUIRED").as_deref(),
         Ok("1" | "true" | "yes")
     )
@@ -585,8 +586,12 @@ pub fn local_reason() -> Option<String> {
 static ROUTED_CMD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn say_local(why: &str) {
-    if remote_required() {
-        eprintln!("justrust: remote required, refusing local build ({why})");
+    if remote_required() && compiles() {
+        if crate::nolocal::disabled() {
+            eprintln!("{}", crate::nolocal::refusal(&format!("local build ({why})")));
+        } else {
+            eprintln!("justrust: remote required, refusing local build ({why})");
+        }
         std::process::exit(1);
     }
     let _ = LOCAL_REASON.set(why.to_string());
@@ -596,6 +601,26 @@ fn say_local(why: &str) {
     if reportable(why) {
         crate::remote_hosted::report_local_build(why, ROUTED_CMD.get().map(String::as_str));
     }
+}
+
+/// The routed subcommand compiles Rust (so refusing it locally matters).
+/// `cargo metadata`, `fmt`, `tree` and friends never reach rustc.
+fn compiles() -> bool {
+    let sub = ROUTED_CMD
+        .get()
+        .and_then(|c| c.split_whitespace().next().map(str::to_string));
+    match sub.as_deref() {
+        None => true,
+        Some(s) => is_compiling_sub(s),
+    }
+}
+
+fn is_compiling_sub(s: &str) -> bool {
+    matches!(
+        s,
+        "build" | "b" | "check" | "c" | "clippy" | "test" | "t" | "bench" | "run" | "r"
+            | "rustc" | "rustdoc" | "doc" | "d" | "zigbuild" | "install" | "fix"
+    )
 }
 
 /// Local by design (`build`, `run`): not worth telling the operator about.

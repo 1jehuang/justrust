@@ -110,6 +110,10 @@ pub fn enabled() -> bool {
     if std::env::var_os("CI").is_some() && std::env::var_os("JUSTRUST_BUILDD").is_none() {
         return false;
     }
+    // No resident local prebuilds while local compiles are switched off.
+    if crate::nolocal::disabled() {
+        return false;
+    }
     !matches!(
         std::env::var("JUSTRUST_BUILDD").as_deref(),
         Ok("0") | Ok("off") | Ok("false")

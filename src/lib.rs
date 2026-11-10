@@ -47,6 +47,7 @@ mod history;
 mod hotpatch;
 mod msvc_tools;
 mod native;
+mod nolocal;
 mod platform_config;
 mod stock_verify;
 mod test_reuse;
@@ -436,6 +437,16 @@ enum Command {
     },
     /// Remove the Jcode API key (keeps other settings in the file).
     Logout,
+    /// Allow or forbid local compiles: `off` sends every build to hosted
+    /// machines with no local fallback until `on`. `status` shows it.
+    Local {
+        /// off, on, or status
+        #[arg(default_value = "status")]
+        action: String,
+        /// Why (recorded with `off`)
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// MCP server on stdio for the Jcode account: status, sign-in, API keys,
     /// billing links. `claude mcp add justrust -- justrust mcp`.
     Mcp,
@@ -867,7 +878,7 @@ pub fn main() -> anyhow::Result<()> {
         // local-vs-hosted routing as `justrust check|test|build`, so hosted
         // machines do the heavy compiles instead of the laptop battery.
         if cargo_shim_routes(
-            std::env::var_os("JCODE_SESSION_ID").is_some(),
+            std::env::var_os("JCODE_SESSION_ID").is_some() || nolocal::disabled(),
             std::env::var_os("JUSTRUST_RUN_DIR").is_some(),
             std::env::var("JUSTRUST_CARGO_ROUTE").ok().as_deref(),
         ) {
@@ -961,6 +972,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Login { .. } => "login",
         Command::Graph { .. } => "graph",
         Command::Logout => "logout",
+        Command::Local { .. } => "local",
         Command::Mcp => "mcp",
         Command::Agents { .. } => "agents",
         Command::Upgrade { .. } => "upgrade",
@@ -1119,6 +1131,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::Login { no_wait } => account::login(no_wait)?,
         Command::Logout => account::logout()?,
+        Command::Local { action, reason } => nolocal::command(&action, reason)?,
         Command::Mcp => mcp::serve()?,
         Command::Agents {
             remove,

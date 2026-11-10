@@ -109,8 +109,16 @@ pub fn main() -> ! {
     let is_unit =
         std::env::var_os("CARGO_CRATE_NAME").is_some() && args.iter().any(|a| a == "--crate-name");
     let Some(run_dir) = run_dir.filter(|_| is_unit) else {
+        if is_unit && crate::nolocal::disabled() {
+            eprintln!("{}", crate::nolocal::refusal("a local rustc"));
+            std::process::exit(1);
+        }
         exec(&real, &args);
     };
+    if crate::nolocal::disabled() {
+        eprintln!("{}", crate::nolocal::refusal("a local rustc"));
+        std::process::exit(1);
+    }
     match run_unit(&real, &args, &run_dir) {
         Some(code) => std::process::exit(code),
         None => exec(&real, &args),
