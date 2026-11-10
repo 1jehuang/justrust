@@ -38,6 +38,8 @@ pub(super) enum Term {
     Nominal(ir::DeclId, Vec<Term>),
     /// Coordinates only. Metadata is replayed from the parent-published template.
     Closure(ir::DeclId, Vec<Term>),
+    /// Zero-sized function item: exact declaration and ordered actuals.
+    FnItem(ir::DeclId, Vec<Term>),
     /// Closed trait object: principal, ordered actuals, ordered assignments.
     Dyn(ir::DeclId, Vec<Term>, Vec<(ir::DeclId, Term)>),
     /// Closed const generic argument of a nominal application.
@@ -117,11 +119,10 @@ impl Term {
                     "nominal realization key requires normalized closed actuals",
                 ));
             }
-            ir::Ty::FnItem(_) => {
-                return Err(Error::new(
-                    "unsupported: function item types as nominal generic arguments",
-                ));
-            }
+            ir::Ty::FnItem(item) => Self::FnItem(
+                item.declaration,
+                Self::from_types(&item.type_args, b, depth + 1)?,
+            ),
             ir::Ty::Closure(closure) => Self::Closure(
                 closure.provider(),
                 Self::from_types(closure.owner_args(), b, depth + 1)?,
@@ -254,6 +255,17 @@ impl Term {
                     19,
                     provider.snapshot.graph_word(),
                     provider.index,
+                    args.len() as u64,
+                ]);
+                for argument in args {
+                    argument.write(out, b, d + 1)?;
+                }
+            }
+            Self::FnItem(declaration, args) => {
+                out.extend([
+                    20,
+                    declaration.snapshot.graph_word(),
+                    declaration.index,
                     args.len() as u64,
                 ]);
                 for argument in args {
@@ -409,6 +421,13 @@ impl Reader<'_> {
                     index: self.word()?,
                 };
                 Term::Closure(provider, self.terms(d + 1)?)
+            }
+            20 => {
+                let declaration = ir::DeclId {
+                    snapshot: ir::SnapshotId::from_graph_word(self.word()?),
+                    index: self.word()?,
+                };
+                Term::FnItem(declaration, self.terms(d + 1)?)
             }
             18 => {
                 let declaration = ir::DeclId {

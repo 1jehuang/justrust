@@ -4,28 +4,17 @@
 use super::*;
 
 impl ValidatedTraitWorld {
-    /// The instantiated signature of a function item. Unsafe functions and
-    /// reference-bearing signatures are not admitted as callable values yet.
+    /// The instantiated signature of a function item, with its reference
+    /// contract. Reference-bearing parameters are admitted; a result that
+    /// borrows from an input is still rejected downstream with an explicit
+    /// diagnostic.
     pub(super) fn fn_item_signature(
         &self,
         item: &CallTarget,
         context: ProofContext<'_>,
     ) -> Result<Signature> {
         let proof = self.discharge_in(item, context, &mut ProofScratch::default())?;
-        let signature = proof.signature().clone();
-        for ty in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            if !charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.is_empty() {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: function items with reference-bearing signatures as callable values",
-                ));
-            }
-        }
-        Ok(signature)
+        Ok(proof.signature().clone())
     }
 
     pub(super) fn fn_item_arguments(&self, signature: &Signature) -> Result<Ty> {
@@ -126,7 +115,7 @@ impl ValidatedTraitWorld {
 
 impl ValidatedTraitWorld {
     /// The callable tuple input of a function item is exactly its ordered
-    /// parameter tuple; it carries no references (rejected at proof time).
+    /// parameter tuple, references included.
     pub(super) fn closed_fn_item_tuple_input(
         &self,
         goal: &TraitRef,

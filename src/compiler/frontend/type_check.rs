@@ -1497,6 +1497,9 @@ impl<'s> Checker<'s> {
                 }
             }
             Expr::Apply { path, value } => {
+                if let Some(ty) = self.applied_fn_item(path, value)? {
+                    return self.infer_type_term(&ty, None, depth + 1);
+                }
                 let (_, args) = if let Some(application) =
                     self.partial_call_application(path, value, None, true)?
                 {
@@ -9469,6 +9472,9 @@ impl<'a> Checker<'a> {
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
         if let Expr::Apply { path, value } = e {
+            if let Some(ty) = self.applied_fn_item(path, value)? {
+                return self.finish_checked_expression(e, ir::ExprKind::FnItem, Flow::value(ty));
+            }
             if let Expr::Call { .. } = value.as_ref() {
                 let plan = self.signatures.plan()?;
                 let facts = self

@@ -16,7 +16,7 @@ impl Checker<'_> {
             return self.prepared_closure_type(path);
         }
         if !is_local_shaped_path(path) {
-            return self.fn_item_value(path);
+            return self.fn_item_value_hint(path);
         }
         Ok(self
             .lookup_optional(path)?

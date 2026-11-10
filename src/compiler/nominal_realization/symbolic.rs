@@ -133,7 +133,7 @@ pub(super) fn visit_dependencies(
                 visit_dependencies(child, by_value, b, depth + 1, visit)?;
             }
         }
-        Term::Dyn(..) | Term::Closure(..) => {
+        Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new(
                 "unsupported: recursive symbolic dynamic metadata equations",
             ));
@@ -184,7 +184,7 @@ pub(super) fn dependencies(
                 dependencies(child, by_value, out, b, depth + 1)?;
             }
         }
-        Term::Dyn(..) | Term::Closure(..) => {
+        Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new(
                 "unsupported: recursive symbolic dynamic metadata equations",
             ));

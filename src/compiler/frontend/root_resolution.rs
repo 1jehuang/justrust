@@ -4125,6 +4125,35 @@ impl Resolver<'_> {
                 if matches!(value.as_ref(), Expr::Var(_))
                     && let Some((owner, name, actuals)) = self.associated_path(path, module)?
                 {
+                    // `str::parse::<i32>` / `Vec::<i32>::new` as a value: an
+                    // associated function item. Method generic arguments stay
+                    // on the application path's last segment.
+                    if self.names_associated_function(name)? {
+                        let mut function = Expr::AssociatedFn(Box::new(AssociatedConstUse {
+                            owner,
+                            trait_path: None,
+                            name,
+                        }));
+                        self.expr(&mut function, module, locals)?;
+                        if actuals.is_empty() {
+                            *expr = function;
+                            return Ok(());
+                        }
+                        let member = path
+                            .segments
+                            .last_mut()
+                            .ok_or("associated function value lost its member segment")?;
+                        if !member.region_args.is_empty() || !member.associated_types.is_empty() {
+                            return Err(Self::unsupported(
+                                "region or binding arguments on function item values",
+                            ));
+                        }
+                        for argument in &mut member.args {
+                            self.ty(argument, module)?;
+                        }
+                        **value = function;
+                        return Ok(());
+                    }
                     if !actuals.is_empty() {
                         return Err(
                             "associated constants cannot take method generic arguments".into()

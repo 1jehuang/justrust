@@ -45,6 +45,26 @@ fn local_callable_signatures_match_stock() {
             "owner_inferred_fn_item",
             "use std::collections::BTreeMap;fn main(){let mut m=BTreeMap::new();m.entry(7u8).or_insert_with(Vec::new).push(3usize);m.entry(7u8).or_insert_with(Vec::new).push(4usize);let f=String::new;let s:String=f();let v:Vec<Vec<i32>>=(0..3).map(|_|Vec::new()).collect();println!(\"{} {:?} {:?} {:?}\",m.len(),m.get(&7u8),s,v);}",
         ),
+        // Function items as values through generic adapters.
+        (
+            "fn_item_adapter",
+            "fn inc(x:i32)->i32{x+1} fn main(){let v:Vec<i32>=vec![1,2].into_iter().map(inc).collect();let f=inc;println!(\"{:?} {}\",v,f(1));}",
+        ),
+        // Items whose parameters are references.
+        (
+            "fn_item_reference_parameter",
+            "fn slen(s:&str)->usize{s.len()} fn neg(x:&i32)->bool{*x<0} fn dbl(x:&i32)->i32{*x*2} fn ap<F:Fn(&str)->usize>(f:F)->usize{f(\"abc\")} fn main(){let v=vec![1,-2,3];let d:Vec<i32>=v.iter().map(dbl).collect();let m=v.into_iter().filter(neg).count();let r:Vec<Result<i32,String>>=vec![Ok(1),Err(\"e\".to_string()),Ok(3)];let k=r.into_iter().filter(Result::is_ok).count();println!(\"{} {:?} {} {} {}\",ap(slen),d,m,k,\"ab1\".chars().all(char::is_alphanumeric));}",
+        ),
+        // Explicit generic arguments on a function value.
+        (
+            "fn_item_explicit_arguments",
+            "fn id<T>(x:T)->T{x} fn main(){let f=id::<u8>;let g=Vec::<i32>::new;let w=g();println!(\"{} {:?}\",f(3),w);}",
+        ),
+        // Generic items whose arguments are inferred from the callable bound.
+        (
+            "fn_item_inferred_arguments",
+            "fn id<T>(x:T)->T{x} fn main(){let a:Vec<i32>=vec![1,2].into_iter().map(id).collect();let b:Vec<Box<i32>>=vec![1,2].into_iter().map(Box::new).collect();let c:Vec<String>=vec![\"a\",\"b\"].into_iter().map(String::from).collect();vec![String::new()].into_iter().for_each(drop);println!(\"{:?} {:?} {:?}\",a,b,c);}",
+        ),
     ];
     for (name, text) in programs {
         // The native compiler captures its source directory; keep each
@@ -105,6 +125,16 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
         ("unresolved", "fn main(){let f=|x|x;}", "E0282"),
         ("unresolved_owner", "fn main(){let f=Vec::new;}", "E0282"),
         ("arity", "fn main(){let f=|x|x+1;f();}", "E0057"),
+        (
+            "fn_item_unresolved_arguments",
+            "fn id<T>(x:T)->T{x} fn main(){let f=id;}",
+            "E0282",
+        ),
+        (
+            "fn_item_argument_count",
+            "fn id<T>(x:T)->T{x} fn main(){let f=id::<u8,u8>;}",
+            "E0107",
+        ),
         (
             "conflict",
             "fn main(){let f=|x|x;f(1i32);f(true);}",

@@ -1520,7 +1520,10 @@ impl<'a> Emitter<'a> {
         let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
             return Err("trait object operand requires a local carrier".into());
         };
-        if !place.projection.is_empty()
+        if !place
+            .projection
+            .iter()
+            .all(|step| matches!(step, ir::Projection::Field(_)))
             || trait_object_ref(&self.function().place_ty(place)?).is_none()
         {
             return Err("trait object operand requires a whole `&dyn` local".into());
@@ -1531,7 +1534,12 @@ impl<'a> Emitter<'a> {
         let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
             return Err("slice operand requires a local carrier".into());
         };
-        if !place.projection.is_empty()
+        // A field of an aggregate local (an untupled argument tuple) holds
+        // the same two-word carrier in place; its address is the operand.
+        if !place
+            .projection
+            .iter()
+            .all(|step| matches!(step, ir::Projection::Field(_)))
             || self
                 .function()
                 .place_ty(place)?

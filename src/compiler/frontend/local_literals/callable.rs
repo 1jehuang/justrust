@@ -61,6 +61,49 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         .map(Some)
     }
 
+    /// `id` as a value: the generic free function's signature over fresh
+    /// actuals, so a callable bound or a call solves them. The solved ordered
+    /// actuals are published as one tuple for this occurrence. The checker
+    /// builds the exact function item from them and the trait world proves
+    /// the item's predicates.
+    pub(super) fn inferred_generic_fn_item(
+        &mut self,
+        path: &'s AstPath,
+    ) -> Result<Option<Term>, String> {
+        let Some(declaration) = self.checker.generic_fn_item_declaration(path)? else {
+            return Ok(None);
+        };
+        let plan = self.checker.signatures.plan()?;
+        let schema = plan.function_schema(declaration)?;
+        let params = self.parameters(&schema.env)?;
+        let mut actuals = Vec::new();
+        for param in schema.env.ordered_params() {
+            self.checker.infer_storage(1)?;
+            actuals.push(
+                *params
+                    .get(&param)
+                    .ok_or("generic function value lost a parameter term")?,
+            );
+        }
+        let site = path as *const AstPath as usize;
+        let published = self.node(Domain::Tuple(actuals))?;
+        self.checker.infer_storage(1)?;
+        self.associated_owner_sites.push((site, published));
+        let mut inputs = Vec::new();
+        for input in schema.signature.params.iter() {
+            self.checker.infer_storage(1)?;
+            inputs.push(self.schema(input, &params, 0)?);
+        }
+        let result = self.schema(&schema.signature.result, &params, 0)?;
+        self.callable_bounds(declaration, &params)?;
+        self.node(Domain::Callable(CallableTerm {
+            key: CallableKey::FnItem(site),
+            params: inputs,
+            result,
+        }))
+        .map(Some)
+    }
+
     pub(super) fn stored_callable(
         &mut self,
         path: &AstPath,

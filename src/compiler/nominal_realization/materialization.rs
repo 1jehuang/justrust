@@ -254,7 +254,7 @@ impl ReadComponent {
                         .definition()?
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized field materialization",
                 ));

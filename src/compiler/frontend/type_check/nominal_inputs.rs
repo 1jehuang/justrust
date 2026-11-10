@@ -493,6 +493,7 @@ fn recipe_type(
                 return Err("unsupported: const-dependent nominal realization".into());
             }
             ir::Ty::Dyn(object) if object.is_closed_leaf() => ty.clone(),
+            ir::Ty::FnItem(item) if item.type_args.is_empty() => ty.clone(),
             _ => return Err("invalid metadata: non-leaf nominal ingress recipe".into()),
         },
         NominalShape::Nominal(declaration, arguments) => {

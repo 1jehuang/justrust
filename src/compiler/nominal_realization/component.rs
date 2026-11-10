@@ -285,7 +285,7 @@ fn metadata(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> 
     b.check_depth(depth).map_err(Error::new)?;
     b.charge_work(1).map_err(Error::new)?;
     match term {
-        Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+        Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new(
                 "unsupported: recursive component unsized metadata equations",
             ));
@@ -333,7 +333,7 @@ fn sized(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> {
     b.check_depth(depth).map_err(Error::new)?;
     b.charge_work(1).map_err(Error::new)?;
     match term {
-        Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+        Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new(
                 "invalid: unsized component field or Sized obligation",
             ));
@@ -426,7 +426,7 @@ fn term_height(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<usize, E
             }
             height
         }
-        Term::Dyn(..) | Term::Closure(..) => {
+        Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
             return Err(Error::new("unsupported: recursive dynamic metadata height"));
         }
         _ => 0,
@@ -652,7 +652,7 @@ impl SliceInventory<'_> {
                 }
             }
             // Such terms cannot occur in a successful closed component read.
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized metadata equations",
                 ));
@@ -823,7 +823,7 @@ impl ReferenceInventory<'_> {
                     }
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported: recursive component unsized metadata equations",
                 ));
@@ -1039,7 +1039,7 @@ impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresence
                     self.unresolved |= unresolved;
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported recursive drop presence unsized equation",
                 ));
@@ -1199,7 +1199,7 @@ impl<F: FnMut(usize, Option<(&ir::Ty, usize)>) -> Result<(), Error>> OwnershipIn
                     (self.event)(0, Some((&ty, depth)))?;
                 }
             }
-            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) => {
+            Term::Str | Term::Slice(_) | Term::Dyn(..) | Term::Closure(..) | Term::FnItem(..) => {
                 return Err(Error::new(
                     "unsupported recursive ownership unsized equation",
                 ));

@@ -382,6 +382,17 @@ fn resolve<'a>(
                 }
                 ir::Ty::Dyn(Arc::new(object))
             }
+            Term::FnItem(declaration, args) => {
+                let type_args = all(args
+                    .into_iter()
+                    .map(|t| resolve(cx, t, world, catalog, b, depth + 1))
+                    .collect())
+                .await?;
+                ir::Ty::FnItem(Arc::new(ir::CallTarget {
+                    declaration,
+                    type_args: type_args.into(),
+                }))
+            }
             Term::Closure(provider, args) => {
                 closure_actual::resolve_actual(cx, provider, args, world, catalog, b, depth + 1)
                     .await?

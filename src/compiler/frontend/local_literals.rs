@@ -2859,6 +2859,9 @@ impl<'s> Solver<'_, '_, 's> {
                 self.constructor(&owner, Some(variant), &fields, depth)
             }
             Expr::Apply { path, value } => {
+                if let Some(ty) = self.checker.applied_fn_item(path, value)? {
+                    return self.fixed(ty);
+                }
                 if let Expr::Call { .. } = value.as_ref() {
                     let plan = self.checker.signatures.plan()?;
                     let facts = self
@@ -3002,6 +3005,9 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Expr::Var(path) => {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
+                    return Ok(term);
+                }
+                if let Some(term) = self.inferred_generic_fn_item(path)? {
                     return Ok(term);
                 }
                 if !is_local_shaped_path(path)

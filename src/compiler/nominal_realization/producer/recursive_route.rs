@@ -109,7 +109,7 @@ fn probe_declarations(
         | Term::Slice(child) => {
             probe_declarations(child, out, b, depth + 1)?;
         }
-        Term::Tuple(children) | Term::Closure(_, children) => {
+        Term::Tuple(children) | Term::Closure(_, children) | Term::FnItem(_, children) => {
             for child in children {
                 probe_declarations(child, out, b, depth + 1)?;
             }

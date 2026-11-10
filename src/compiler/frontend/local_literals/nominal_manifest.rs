@@ -114,6 +114,7 @@ fn primitive_leaf(ty: &ir::Ty) -> bool {
             | ir::Ty::Param(_)
     ) || matches!(ty, ir::Ty::Dyn(object)
         if object.is_closed_leaf())
+        || matches!(ty, ir::Ty::FnItem(item) if item.type_args.is_empty())
 }
 
 fn same_children(
@@ -756,6 +757,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Param(_) => Domain::Fixed(ty.clone()),
                 // Closed nongeneric object principal (nominal_source_shapes).
                 ir::Ty::Dyn(object) if object.is_closed_leaf() => Domain::Fixed(ty.clone()),
+                ir::Ty::FnItem(item) if item.type_args.is_empty() => Domain::Fixed(ty.clone()),
                 _ => return Err("invalid metadata: non-leaf source recipe".into()),
             },
             Shape::Nominal(declaration, arguments) => Domain::Nominal(
@@ -1018,6 +1020,9 @@ impl<'s> Solver<'_, '_, 's> {
                 // Closed nongeneric object principal: a rigid leaf with no
                 // inference-bearing children (nominal_source_shapes).
                 ir::Ty::Dyn(ref object) if object.is_closed_leaf() => Shape::Leaf(ty),
+                // A nongeneric function item is a zero-sized rigid identity:
+                // its exact declaration, with no inference-bearing children.
+                ir::Ty::FnItem(ref item) if item.type_args.is_empty() => Shape::Leaf(ty),
                 _ => {
                     return Err(
                         "unsupported: compound fixed type needs an explicit manifest recipe".into(),
