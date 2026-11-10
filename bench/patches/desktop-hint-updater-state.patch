@@ -1,0 +1,54 @@
+Subject: [benchmark fixture] Isolate updater state in coaching geometry test
+
+The version pill reads process-global updater state. A concurrent Restart
+state adds about 50 pixels to the pill and moves a centered tab about 25
+pixels, independently of coaching or animation settlement. Participate in
+the existing updater test mutex rather than serializing the whole suite.
+Keep every original hint assertion. Add a state-restoring deterministic
+proof that updater actions are an independent header-width input.
+
+diff --git a/crates/jcode-desktop-ui/src/workspace.rs b/crates/jcode-desktop-ui/src/workspace.rs
+--- a/crates/jcode-desktop-ui/src/workspace.rs
++++ b/crates/jcode-desktop-ui/src/workspace.rs
+@@ -13363,6 +13363,9 @@ mod tests {
+     /// The hint lives in spare header space without changing panel geometry.
+     #[gpui::test]
+     fn the_hint_chip_uses_only_spare_tab_space(cx: &mut gpui::TestAppContext) {
++        // Header width includes the global updater action. Keep that independent
++        // input stable while checking that a coaching hint cannot move tabs.
++        let _update_guard = updates::test_lock();
+         cx.update(|cx| crate::bind_workspace_keys(cx));
+         let (workspace, cx) = cx.add_window_view(|_, cx| {
+             let mut workspace = Workspace::for_test(learning::Coach::new(), cx);
+diff --git a/crates/jcode-desktop-ui/src/workspace_version.rs b/crates/jcode-desktop-ui/src/workspace_version.rs
+--- a/crates/jcode-desktop-ui/src/workspace_version.rs
++++ b/crates/jcode-desktop-ui/src/workspace_version.rs
+@@ -141,6 +141,28 @@ mod tests {
+     use super::*;
+ 
+     #[test]
++    fn restart_action_changes_header_width_independently_of_coaching() {
++        let _guard = updates::test_lock();
++        let previous = updates::current();
++        let release = updates::release_status();
++        updates::set_release_status(ReleaseStatus::Source);
++        updates::set(UpdateState::Idle);
++        let idle = pill_width();
++        updates::set(UpdateState::ReadyToRestart {
++            version: "fixture".into(),
++        });
++        let ready = pill_width();
++        updates::set(previous);
++        updates::set_release_status(release);
++        let action_width = "Restart".len() as f32 * 5.4 + 12.0;
++        let base = ((crate::build_info::VERSION.len() + 1) as f32 * 5.4 + 16.0)
++            .clamp(64.0, 132.0);
++        assert_eq!(idle, base.ceil());
++        assert_eq!(ready, (base + action_width).ceil());
++        assert!(ready > idle, "updater state is an independent layout input");
++    }
++
++    #[test]
+     fn version_status_never_calls_an_unchecked_build_latest() {
+         for release in [
+             ReleaseStatus::Unknown,
