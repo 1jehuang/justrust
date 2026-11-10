@@ -62,7 +62,10 @@ fn missing_constructor_nominal_is_demanded_before_native_match() {
 fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
     let budget = ir::PlanBudget::default();
     let snapshot = Arc::new(Snapshot {
-        input: Input::Text("struct Ingress;struct Other;fn main(){}".into()),
+        input: Input::Text(
+            "struct Ingress;struct Other;trait DynMeta<A>{type First;type Second;}fn main(){}"
+                .into(),
+        ),
         source_options: crate::compiler::source::SourceOptions::default(),
         budget: budget.clone(),
     });
@@ -164,7 +167,27 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
     );
     // Source-to-graph transport recurses through structural actuals, but must
     // never replace an already graph-owned child with a current-engine lookup.
-    for shape in 0..5 {
+    let principal = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|d| d.name.rsplit("::").next() == Some("DynMeta"))
+        .unwrap()
+        .id;
+    let mut items: Vec<_> = plan
+        .registry
+        .declarations
+        .iter()
+        .filter(|d| {
+            d.owner == Some(principal)
+                && (d.name.rsplit("::").next() == Some("First")
+                    || d.name.rsplit("::").next() == Some("Second"))
+        })
+        .map(|d| d.id)
+        .collect();
+    items.sort_by_key(|id| id.index);
+    assert_eq!(items.len(), 2);
+    for shape in 0..7 {
         let wrap = |ty: ir::Ty| match shape {
             0 => ir::Ty::Tuple(vec![ty].into()),
             1 => ir::Ty::Array {
@@ -178,10 +201,26 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
                 kind: ir::BorrowKind::Shared,
                 referent: Arc::new(ty),
             },
-            _ => ir::Ty::RawPtr {
+            4 => ir::Ty::RawPtr {
                 kind: ir::BorrowKind::Shared,
                 pointee: Arc::new(ty),
             },
+            5 => ir::Ty::Dyn(Arc::new(ir::DynTy {
+                principal,
+                args: Arc::from([ty]),
+                associated_types: Arc::from([
+                    (items[0], ir::Ty::Bool),
+                    (items[1], ir::Ty::Int(ir::IntTy::I32)),
+                ]),
+            })),
+            _ => ir::Ty::Dyn(Arc::new(ir::DynTy {
+                principal,
+                args: Arc::from([ir::Ty::Bool]),
+                associated_types: Arc::from([
+                    (items[0], ty),
+                    (items[1], ir::Ty::Int(ir::IntTy::I32)),
+                ]),
+            })),
         };
         assert_eq!(
             checker
@@ -204,6 +243,78 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
             "foreign-engine graph actual laundered under shape {shape}"
         );
     }
+    let dynamic_recipe = NominalShape::Dyn(
+        principal,
+        Arc::from([NominalShape::Leaf(ir::Ty::Bool)]),
+        Arc::from([
+            (items[0], NominalShape::Leaf(ir::Ty::Bool)),
+            (items[1], NominalShape::Leaf(ir::Ty::Int(ir::IntTy::I32))),
+        ]),
+    );
+    let mut missing = Vec::new();
+    assert!(
+        recipe_type(&checker, &inputs, &dynamic_recipe, &mut missing, 0)
+            .unwrap()
+            .is_some()
+    );
+    for forgery in 0..3 {
+        let mut forged = dynamic_recipe.clone();
+        let NominalShape::Dyn(owner, _, assignments) = &mut forged else {
+            unreachable!()
+        };
+        match forgery {
+            0 => *owner = *declaration,
+            1 => {
+                let mut rows = assignments.to_vec();
+                rows[0].0 = principal;
+                *assignments = rows.into();
+            }
+            _ => {
+                let mut rows = assignments.to_vec();
+                rows.reverse();
+                *assignments = rows.into();
+            }
+        }
+        assert!(
+            recipe_type(&checker, &inputs, &forged, &mut missing, 0).is_err(),
+            "forged dynamic metadata {forgery} was admitted"
+        );
+        assert!(
+            !dynamic_recipe
+                .same_with(&forged, 0, &mut |depth| checker.infer_work(depth))
+                .unwrap()
+        );
+    }
+    let absent = |_: &NominalDemand| Ok(None);
+    let absent_inputs = NominalPreparationInputs::new(&declaration_schema, &source_type, &absent);
+    let other_declaration = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|d| d.kind == ir::DeclKind::Struct && d.name.rsplit("::").next() == Some("Other"))
+        .unwrap()
+        .id;
+    let independent = NominalShape::Dyn(
+        principal,
+        Arc::from([NominalShape::Nominal(*declaration, Arc::from([]))]),
+        Arc::from([
+            (
+                items[0],
+                NominalShape::Nominal(other_declaration, Arc::from([])),
+            ),
+            (items[1], NominalShape::Leaf(ir::Ty::Bool)),
+        ]),
+    );
+    assert!(
+        recipe_type(&checker, &absent_inputs, &independent, &mut missing, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(missing.len(), 2);
+    assert_eq!(
+        (missing[0].declaration, missing[1].declaration),
+        (*declaration, other_declaration)
+    );
     let ir::Ty::Struct(original) = &source else {
         panic!("struct source")
     };
@@ -230,6 +341,27 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
         .find(|d| d.kind == ir::DeclKind::Struct && d.name.rsplit("::").next() == Some("Ingress"))
         .unwrap()
         .id;
+    let mut foreign_dynamic = dynamic_recipe.clone();
+    let NominalShape::Dyn(owner, _, _) = &mut foreign_dynamic else {
+        unreachable!()
+    };
+    owner.snapshot = foreign_declaration.snapshot;
+    assert!(recipe_type(&checker, &inputs, &foreign_dynamic, &mut Vec::new(), 0).is_err());
+    let tiny = ir::PlanBudget::new(ir::PlanLimits {
+        bytes: 0,
+        ..ir::PlanLimits::default()
+    });
+    assert!(ir::DynTy::recipe(principal, Vec::new(), Vec::new(), &tiny).is_err());
+    let shallow = ir::PlanBudget::new(ir::PlanLimits {
+        depth: 0,
+        ..ir::PlanLimits::default()
+    });
+    let deep = ir::Ty::Dyn(Arc::new(ir::DynTy {
+        principal,
+        args: Arc::from([source.clone()]),
+        associated_types: Arc::from([]),
+    }));
+    assert!(crate::compiler::nominal_realization::source_shape(&deep, &shallow, 0).is_err());
     let (_, foreign_source) = foreign
         .nominal_schema(foreign_declaration, &foreign.budget)
         .unwrap();

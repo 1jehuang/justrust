@@ -8057,6 +8057,38 @@ pub struct DynTy {
     pub associated_types: Arc<[(DeclId, Ty)]>,
 }
 impl DynTy {
+    /// Budget structural transport only. This does not authenticate principal,
+    /// ordered actuals or associated owners, which require caller/world checks.
+    pub(in crate::compiler) fn recipe(
+        principal: DeclId,
+        args: Vec<Ty>,
+        associated_types: Vec<(DeclId, Ty)>,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let payload = args
+            .len()
+            .checked_mul(std::mem::size_of::<Ty>())
+            .and_then(|n| {
+                associated_types
+                    .len()
+                    .checked_mul(std::mem::size_of::<(DeclId, Ty)>())
+                    .and_then(|m| n.checked_add(m))
+            })
+            .ok_or("resource limit: dynamic recipe payload overflow")?;
+        // Both scratch Vec backings and their immutable Arc transfers coexist.
+        let bytes = payload
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|n| n.checked_add(6 * std::mem::size_of::<usize>()))
+            .ok_or("resource limit: dynamic recipe backing overflow")?;
+        budget.retain_bytes(bytes)?;
+        Ok(Arc::new(Self {
+            principal,
+            args: args.into(),
+            associated_types: associated_types.into(),
+        }))
+    }
+
     /// Rigid closed object: actuals and associated assignments are built only
     /// from primitive types and references/tuples/arrays/slices of them, so no
     /// parameter, projection or inference can hide inside a recipe leaf.

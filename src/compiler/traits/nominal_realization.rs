@@ -458,6 +458,42 @@ impl ValidatedTraitWorld {
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 self.replay_nominal_field_arguments(replays, input, a, b, depth + 1)?
             }
+            (Ty::Dyn(source), Ty::Dyn(realized)) => {
+                if source.principal != realized.principal
+                    || source.associated_types.len() != realized.associated_types.len()
+                {
+                    false
+                } else {
+                    let mut same = self.replay_nominal_field_arguments(
+                        replays,
+                        input,
+                        &source.args,
+                        &realized.args,
+                        depth + 1,
+                    )?;
+                    for ((source_item, source_ty), (realized_item, realized_ty)) in source
+                        .associated_types
+                        .iter()
+                        .zip(realized.associated_types.iter())
+                    {
+                        self.budget
+                            .charge_work(1)
+                            .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                        if source_item != realized_item {
+                            same = false;
+                        } else {
+                            self.replay_nominal_field_term(
+                                replays,
+                                input,
+                                source_ty,
+                                realized_ty,
+                                depth + 1,
+                            )?;
+                        }
+                    }
+                    same
+                }
+            }
             (Ty::Closure(_), _) => {
                 return Err(FactsError::unsupported(
                     &self.budget,

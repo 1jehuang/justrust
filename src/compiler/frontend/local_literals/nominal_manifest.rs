@@ -21,6 +21,8 @@ pub(in crate::compiler) enum Shape {
     Nominal(ir::DeclId, Arc<[Shape]>),
     /// Exact function declaration and ordered type actual recipes, not a call proof.
     FnItem(ir::DeclId, Arc<[Shape]>),
+    /// Dynamic metadata is structural, never an unchecked compound leaf.
+    Dyn(ir::DeclId, Arc<[Shape]>, Arc<[(ir::DeclId, Shape)]>),
     Tuple(Arc<[Shape]>),
     FnPointer(Arc<[Shape]>, Arc<Shape>),
     PhantomData(ir::DeclId, Arc<Shape>),
@@ -68,6 +70,15 @@ impl Shape {
             (Shape::FnPointer(left, lo), Shape::FnPointer(right, ro)) => {
                 same_children(left, right, depth + 1, meter)
                     .and_then(|same| Ok(same && lo.same_with(ro, depth + 1, meter)?))?
+            }
+            (Shape::Dyn(a, aa, ax), Shape::Dyn(b, ba, bx)) => {
+                let mut same =
+                    a == b && same_children(aa, ba, depth + 1, meter)? && ax.len() == bx.len();
+                for ((ai, av), (bi, bv)) in ax.iter().zip(bx.iter()) {
+                    meter(depth + 1)?;
+                    same &= ai == bi && av.same_with(bv, depth + 1, meter)?;
+                }
+                same
             }
             (Shape::Tuple(left), Shape::Tuple(right)) => {
                 same_children(left, right, depth + 1, meter)?
@@ -767,6 +778,49 @@ impl<'s> Solver<'_, '_, 's> {
                 ir::Ty::FnItem(item) if item.type_args.is_empty() => Domain::Fixed(ty.clone()),
                 _ => return Err("invalid metadata: non-leaf source recipe".into()),
             },
+            Shape::Dyn(principal, arguments, assignments) => {
+                let terms = self.manifest_terms(arguments, params, depth + 1)?;
+                let mut assigned_terms = Vec::new();
+                self.checker.infer_storage(assignments.len())?;
+                for (item, value) in assignments.iter() {
+                    assigned_terms.push((*item, self.manifest_term_in(value, params, depth + 1)?));
+                }
+                let mut ready = true;
+                let mut args = Vec::new();
+                let mut associated_types = Vec::new();
+                self.checker
+                    .infer_storage(terms.len() + assigned_terms.len())?;
+                for term in terms {
+                    if let Some(ty) = self.resolve(term, depth + 1)? {
+                        args.push(ty);
+                    } else {
+                        ready = false;
+                    }
+                }
+                for (item, term) in assigned_terms {
+                    if let Some(ty) = self.resolve(term, depth + 1)? {
+                        associated_types.push((item, ty));
+                    } else {
+                        ready = false;
+                    }
+                }
+                if ready {
+                    let ty = ir::Ty::Dyn(ir::DynTy::recipe(
+                        *principal,
+                        args,
+                        associated_types,
+                        &self.checker.signatures.plan()?.budget,
+                    )?);
+                    self.checker.facts().validate_ty_metadata_with_budget(
+                        &ty,
+                        &self.checker.signatures.plan()?.budget,
+                    )?;
+                    Domain::Fixed(ty)
+                } else {
+                    self.preparation_needs_actuals.set(true);
+                    Domain::Unknown
+                }
+            }
             Shape::FnItem(declaration, arguments) => {
                 let terms = self.manifest_terms(arguments, params, depth + 1)?;
                 let mut actuals = Vec::new();
@@ -1057,7 +1111,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Param(_) => Shape::Leaf(ty),
                 // Closed nongeneric object principal: a rigid leaf with no
                 // inference-bearing children (nominal_source_shapes).
-                ir::Ty::Dyn(ref object) if object.is_closed_leaf() => Shape::Leaf(ty),
+                ir::Ty::Dyn(_) => self.checker.nominal_recipe_shape(&ty, depth + 1)?,
                 ir::Ty::FnItem(_) => self.checker.nominal_recipe_shape(&ty, depth + 1)?,
                 _ => {
                     return Err(

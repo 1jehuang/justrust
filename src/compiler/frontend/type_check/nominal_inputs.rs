@@ -357,6 +357,28 @@ impl Checker<'_> {
             ir::Ty::Slice { element } => ir::Ty::Slice {
                 element: Arc::new(self.realize_constructor_actual(element, depth + 1)?),
             },
+            ir::Ty::Dyn(object) => {
+                self.infer_storage(object.args.len() + object.associated_types.len())?;
+                let args = object
+                    .args
+                    .iter()
+                    .map(|ty| self.realize_constructor_actual(ty, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let associated_types = object
+                    .associated_types
+                    .iter()
+                    .map(|(item, ty)| Ok((*item, self.realize_constructor_actual(ty, depth + 1)?)))
+                    .collect::<Result<Vec<_>, String>>()?;
+                let ty = ir::Ty::Dyn(ir::DynTy::recipe(
+                    object.principal,
+                    args,
+                    associated_types,
+                    &self.signatures.plan()?.budget,
+                )?);
+                self.facts()
+                    .validate_ty_metadata_with_budget(&ty, &self.signatures.plan()?.budget)?;
+                ty
+            }
             _ => ty.clone(),
         })
     }
@@ -480,7 +502,8 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
             arguments: children(&p.trait_ref.args)?,
         },
         ir::Ty::Dyn(object) if object.is_closed_leaf() => NominalShape::Leaf(ty.clone()),
-        ir::Ty::Closure(_) | ir::Ty::Dyn(_) => return Err("unsupported: nominal ingress requires independently authenticated closure or dynamic metadata".into()),
+        ir::Ty::Dyn(_) => super::super::super::nominal_realization::source_shape(ty, &checker.signatures.plan()?.budget, depth + 1).map_err(|error| error.to_string())?,
+        ir::Ty::Closure(_) => return Err("unsupported: nominal ingress requires independently authenticated closure or dynamic metadata".into()),
         leaf => NominalShape::Leaf(leaf.clone()),
     })
 }
@@ -510,6 +533,39 @@ fn recipe_type(
             ir::Ty::FnItem(item) if item.type_args.is_empty() => ty.clone(),
             _ => return Err("invalid metadata: non-leaf nominal ingress recipe".into()),
         },
+        NominalShape::Dyn(principal, arguments, assignments) => {
+            let mut ready = true;
+            let mut args = Vec::new();
+            let mut associated_types = Vec::new();
+            checker.infer_storage(arguments.len() + assignments.len())?;
+            for value in arguments.iter() {
+                if let Some(ty) = recipe_type(checker, inputs, value, missing, depth + 1)? {
+                    args.push(ty);
+                } else {
+                    ready = false;
+                }
+            }
+            for (item, value) in assignments.iter() {
+                if let Some(ty) = recipe_type(checker, inputs, value, missing, depth + 1)? {
+                    associated_types.push((*item, ty));
+                } else {
+                    ready = false;
+                }
+            }
+            if !ready {
+                return Ok(None);
+            }
+            let ty = ir::Ty::Dyn(ir::DynTy::recipe(
+                *principal,
+                args,
+                associated_types,
+                &checker.signatures.plan()?.budget,
+            )?);
+            checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &checker.signatures.plan()?.budget)?;
+            ty
+        }
         NominalShape::Nominal(declaration, arguments) => {
             let demand = NominalDemand {
                 declaration: *declaration,

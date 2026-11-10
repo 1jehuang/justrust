@@ -404,25 +404,37 @@ fn resolve<'a>(
             // Decoding grants no trait authority: the realized definition is
             // still validated (metadata, dyn compatibility) by its consumers.
             Term::Dyn(principal, args, assigned) => {
-                let args = all(args
-                    .into_iter()
-                    .map(|t| resolve(cx, t, world, catalog, b, depth + 1))
-                    .collect())
-                .await?;
-                let mut associated_types = Vec::new();
-                for (item, t) in assigned {
-                    associated_types
-                        .push((item, resolve(cx, t, world, catalog, b, depth + 1).await?));
+                let arity = args.len();
+                let count = arity
+                    .checked_add(assigned.len())
+                    .ok_or_else(|| Error::new("dynamic coordinate branch count overflow"))?;
+                let mut pending = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
+                for term in args {
+                    pending.push(resolve(cx, term, world, catalog, b, depth + 1));
                 }
-                let object = ir::DynTy {
-                    principal,
-                    args: args.into(),
-                    associated_types: associated_types.into(),
-                };
-                if !object.is_closed_leaf() {
-                    return Err(Error::new("invalid dynamic nominal coordinate"));
+                let mut items = ir::FnPointerTy::storage(assigned.len(), b).map_err(Error::new)?;
+                for (item, term) in assigned {
+                    items.push(item);
+                    pending.push(resolve(cx, term, world, catalog, b, depth + 1));
                 }
-                ir::Ty::Dyn(Arc::new(object))
+                let values = all_pointer(pending, b).await?;
+                let mut args = ir::FnPointerTy::storage(arity, b).map_err(Error::new)?;
+                let mut associated_types =
+                    ir::FnPointerTy::storage(items.len(), b).map_err(Error::new)?;
+                for (index, ty) in values.into_iter().enumerate() {
+                    if index < arity {
+                        args.push(ty);
+                    } else {
+                        associated_types.push((items[index - arity], ty));
+                    }
+                }
+                let object =
+                    ir::DynTy::recipe(principal, args, associated_types, b).map_err(Error::new)?;
+                // This is a structural decode, not authority. Every child is a
+                // closed coordinate resolved through current-engine reads. The
+                // enclosing close_nominal_input authenticates principal, exact
+                // ordered actuals and associated-owner equalities in this world.
+                ir::Ty::Dyn(object)
             }
             Term::FnItem(declaration, args) => {
                 let type_args = all(args
@@ -498,6 +510,42 @@ fn field<'a>(
                     field(cx, marker.argument().clone(), input, world, depth + 1).await?;
                 dependencies = proofs;
                 ir::Ty::PhantomData(marker.try_map(b, Error::new, |_| Ok(argument))?)
+            }
+            ir::Ty::Dyn(object) => {
+                let count = object
+                    .args
+                    .len()
+                    .checked_add(object.associated_types.len())
+                    .ok_or_else(|| Error::new("dynamic field branch count overflow"))?;
+                let mut pending = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
+                for ty in object.types() {
+                    pending.push(field(cx, ty.clone(), input, world, depth + 1));
+                }
+                let values = all_pointer(pending, b).await?;
+                let proof_count = values.iter().try_fold(0usize, |count, (_, proofs)| {
+                    count
+                        .checked_add(proofs.len())
+                        .ok_or_else(|| Error::new("dynamic field proof count overflow"))
+                })?;
+                dependencies = ir::FnPointerTy::storage(proof_count, b).map_err(Error::new)?;
+                let mut args =
+                    ir::FnPointerTy::storage(object.args.len(), b).map_err(Error::new)?;
+                let mut associated_types =
+                    ir::FnPointerTy::storage(object.associated_types.len(), b)
+                        .map_err(Error::new)?;
+                for (index, (ty, proofs)) in values.into_iter().enumerate() {
+                    dependencies.extend(proofs);
+                    if index < object.args.len() {
+                        args.push(ty);
+                    } else {
+                        associated_types
+                            .push((object.associated_types[index - object.args.len()].0, ty));
+                    }
+                }
+                ir::Ty::Dyn(
+                    ir::DynTy::recipe(object.principal, args, associated_types, b)
+                        .map_err(Error::new)?,
+                )
             }
             ir::Ty::FnPointer(pointer) => {
                 let count = pointer.inputs.len().checked_add(1).ok_or_else(|| {

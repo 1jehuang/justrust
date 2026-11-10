@@ -383,7 +383,13 @@ impl PlanCtx {
                     ir::Ty::Dyn(object) if object.is_closed_leaf() => {
                         Shape::Leaf(ir::Ty::Dyn(object))
                     }
-                    _ => return Err("unsupported: generic dynamic source nominal recipe".into()),
+                    ir::Ty::Dyn(object) => super::super::nominal_realization::source_shape(
+                        &ir::Ty::Dyn(object),
+                        &self.budget,
+                        depth + 1,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    _ => return Err("invalid metadata: dynamic source recipe changed kind".into()),
                 }
             }
             Type::Opaque(_) => return Err("unsupported: opaque source nominal recipe".into()),
@@ -441,6 +447,14 @@ fn reject_default_recipe_carriers(
             Shape::PhantomData(_, argument) => visit(argument, budget, depth + 1, false)?,
             Shape::ManuallyDrop(_, argument) | Shape::Cell(_, argument) => {
                 visit(argument, budget, depth + 1, owning)?
+            }
+            Shape::Dyn(_, arguments, assignments) => {
+                for argument in arguments.iter() {
+                    visit(argument, budget, depth + 1, false)?;
+                }
+                for (_, value) in assignments.iter() {
+                    visit(value, budget, depth + 1, false)?;
+                }
             }
             Shape::FnItem(_, arguments) => {
                 // Function items store no actual values. Type actuals remain

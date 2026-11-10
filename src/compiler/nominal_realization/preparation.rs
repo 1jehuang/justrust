@@ -177,6 +177,50 @@ impl Capabilities {
                 coordinates::Term::from_ty(ty, budget, depth + 1)?;
                 ty.clone()
             }
+            Shape::Dyn(principal, arguments, assignments) => {
+                let mut ready = true;
+                let mut args = Vec::new();
+                let mut associated_types = Vec::new();
+                budget
+                    .retain_bytes(
+                        arguments
+                            .len()
+                            .checked_mul(std::mem::size_of::<ir::Ty>())
+                            .and_then(|n| {
+                                assignments
+                                    .len()
+                                    .checked_mul(std::mem::size_of::<(ir::DeclId, ir::Ty)>())
+                                    .and_then(|m| n.checked_add(m))
+                            })
+                            .ok_or_else(|| Error::new("dynamic recipe storage overflow"))?,
+                    )
+                    .map_err(Error::new)?;
+                for value in arguments.iter() {
+                    if let Some(ty) = child(value)? {
+                        args.push(ty);
+                    } else {
+                        ready = false;
+                    }
+                }
+                for (item, value) in assignments.iter() {
+                    if let Some(ty) = child(value)? {
+                        associated_types.push((*item, ty));
+                    } else {
+                        ready = false;
+                    }
+                }
+                if !ready {
+                    return Ok(None);
+                }
+                let ty = ir::Ty::Dyn(
+                    ir::DynTy::recipe(*principal, args, associated_types, budget)
+                        .map_err(Error::new)?,
+                );
+                caller
+                    .validate_ty_metadata_with_budget(&ty, budget)
+                    .map_err(|error| Error::new(error.into_legacy_diagnostic(budget)))?;
+                ty
+            }
             Shape::Nominal(declaration, arguments) => {
                 let demand = Demand {
                     declaration: *declaration,
@@ -587,7 +631,33 @@ pub(in crate::compiler) fn shape(
         },
         // Closed object identities were lowered by the canonical dynamic path.
         ir::Ty::Dyn(object) if object.is_closed_leaf() => Shape::Leaf(ty.clone()),
-        ir::Ty::Closure(_) | ir::Ty::Dyn(_) => {
+        ir::Ty::Dyn(object) => {
+            let bytes = object
+                .associated_types
+                .len()
+                .checked_mul(std::mem::size_of::<(ir::DeclId, Shape)>())
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
+                .ok_or_else(|| Error::new("dynamic source recipe allocation overflow"))?;
+            budget.retain_bytes(bytes).map_err(Error::new)?;
+            let mut assigned = Vec::new();
+            assigned
+                .try_reserve_exact(object.associated_types.len())
+                .map_err(|_| Error::new("dynamic source recipe allocation failed"))?;
+            for (item, value) in object.associated_types.iter() {
+                assigned.push((*item, shape(value, budget, depth + 1)?));
+            }
+            let bytes = object
+                .args
+                .len()
+                .checked_mul(std::mem::size_of::<Shape>())
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
+                .ok_or_else(|| Error::new("dynamic source actual allocation overflow"))?;
+            budget.retain_bytes(bytes).map_err(Error::new)?;
+            Shape::Dyn(object.principal, children(&object.args)?, assigned.into())
+        }
+        ir::Ty::Closure(_) => {
             return Err(Error::new(
                 "unsupported: nominal source recipe needs independently authenticated closure or dynamic metadata",
             ));

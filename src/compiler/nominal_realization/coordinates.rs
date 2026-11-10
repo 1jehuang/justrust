@@ -132,8 +132,9 @@ impl Term {
                     "unsupported: opaque nominal realization coordinate",
                 ));
             }
-            ir::Ty::Dyn(object) if object.is_closed_leaf() => {
-                let mut assigned = Vec::new();
+            ir::Ty::Dyn(object) => {
+                let mut assigned = ir::FnPointerTy::storage(object.associated_types.len(), b)
+                    .map_err(Error::new)?;
                 for (item, ty) in object.associated_types.iter() {
                     assigned.push((*item, Self::from_ty(ty, b, depth + 1)?));
                 }
@@ -142,11 +143,6 @@ impl Term {
                     Self::from_types(&object.args, b, depth + 1)?,
                     assigned,
                 )
-            }
-            ir::Ty::Dyn(_) => {
-                return Err(Error::new(
-                    "unsupported: generic dynamic nominal realization coordinate",
-                ));
             }
         })
     }

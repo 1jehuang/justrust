@@ -1,7 +1,68 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/oracle.rs"]
 mod oracle;
+#[path = "support/closure_oracle.rs"]
+mod output_oracle;
 use oracle::{Case, Expect};
+
+#[test]
+fn nominal_dynamic_string_output_recipes() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "nominal-dynamic-string-output",
+        &[Case {
+            name: "nominal_string_output",
+            source: r#"
+trait Get { type Out; fn get(&self) -> Self::Out; }
+struct Source;
+impl Get for Source { type Out = String; fn get(&self) -> String { String::from("recipe") } }
+struct Holder { inner: Box<dyn Get<Out = String>> }
+fn main() { let h = Holder { inner: Box::new(Source) }; println!("{}", h.inner.get()); }
+"#,
+            expect: Expect::Run("recipe\n"),
+        }],
+    );
+}
+
+#[test]
+fn nominal_dynamic_non_string_output_recipes() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "nominal-dynamic-non-string-output",
+        &[Case {
+            name: "non_string_nominal_output",
+            source: r#"
+struct Payload { value: i32 }
+trait Get { type Out; fn get(&self) -> Self::Out; }
+struct Source;
+impl Get for Source { type Out = Payload; fn get(&self) -> Payload { Payload { value: 42 } } }
+struct Holder { inner: Box<dyn Get<Out = Payload>> }
+fn main() { let h = Holder { inner: Box::new(Source) }; println!("{}", h.inner.get().value); }
+"#,
+            expect: Expect::Run("42\n"),
+        }],
+    );
+}
+
+#[test]
+fn nominal_dynamic_unused_invalid_recipes() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "nominal-dynamic-unused-invalid",
+        &[
+            Case {
+                name: "unused_unknown_associated_output",
+                source: "trait Get { type Out; fn get(&self) -> Self::Out; } struct Bad { inner: Box<dyn Get<Wrong = String>> } fn main() {}",
+                expect: Expect::Invalid("E0220"),
+            },
+            Case {
+                name: "unused_missing_associated_output",
+                source: "trait Get { type Out; fn get(&self) -> Self::Out; } struct Bad { inner: Box<dyn Get> } fn main() {}",
+                expect: Expect::Invalid("E0191"),
+            },
+        ],
+    );
+}
 
 #[test]
 fn dynamic_associated_types_and_generic_principals() {

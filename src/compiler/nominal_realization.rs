@@ -492,14 +492,19 @@ impl AcyclicRead {
                 | ir::Ty::RawPtr { pointee: ty, .. }
                 | ir::Ty::Array { element: ty, .. }
                 | ir::Ty::Slice { element: ty } => child(ty)?,
-                // A closed object carries no nominal children to authenticate.
-                ir::Ty::Dyn(object) if object.is_closed_leaf() => {}
+                // Dynamic metadata can carry nominal actuals and associated
+                // outputs. Each retains the same current-engine authority checks.
+                ir::Ty::Dyn(object) => {
+                    for ty in object.types() {
+                        child(ty)?;
+                    }
+                }
                 ir::Ty::Closure(closure) => {
                     for ty in closure.types() {
                         child(ty)?;
                     }
                 }
-                ir::Ty::Dyn(_) | ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
+                ir::Ty::AssociatedType(_) | ir::Ty::Param(_) => {
                     return Err("unsupported: nonclosed nominal substitution provenance".into());
                 }
                 _ => {}
