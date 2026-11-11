@@ -143,6 +143,61 @@ pub fn ensure() -> Result<Vec<PathBuf>> {
     result
 }
 
+/// Supply C build scripts with the pinned Zig compiler, not Zig's Rust linker.
+/// Target-scoped variables leave host build dependencies on the host compiler.
+pub fn apply_musl_c(cmd: &mut Command, target: &str, paths: &[PathBuf]) -> Result<()> {
+    let zig_target = match target {
+        "x86_64-unknown-linux-musl" => "x86_64-linux-musl",
+        "aarch64-unknown-linux-musl" => "aarch64-linux-musl",
+        _ => bail!("unsupported pinned musl C target: {target}"),
+    };
+    let zig_dir = paths.get(1).context("missing pinned Zig directory")?;
+    let zig = zig_dir.join("zig");
+    let wrappers = zig_dir.join("justrust-musl-c-v1").join(target);
+    std::fs::create_dir_all(&wrappers)?;
+    // A wrapper avoids CC's whitespace parsing and ensures compiler probes and
+    // assembly compilation use exactly the same target as C compilation.
+    let quoted_zig = format!("'{}'", zig.to_string_lossy().replace('\'', "'\\''"));
+    for (name, arguments) in [
+        ("cc", format!("cc -target {zig_target}")),
+        ("ar", "ar".to_owned()),
+    ] {
+        // cc-rs detects Clang and adds --target=<Rust triple>. Zig requires
+        // arch-os-abi instead of arch-vendor-os-abi. Translate only our exact
+        // target, retaining argument boundaries and every other compiler flag.
+        let translate = if name == "cc" {
+            format!(
+                "for arg do\n  shift\n  case \"$arg\" in\n    --target={target}) arg=--target={zig_target} ;;\n    {target}) arg={zig_target} ;;\n  esac\n  set -- \"$@\" \"$arg\"\ndone\n"
+            )
+        } else {
+            String::new()
+        };
+        let script = format!("#!/bin/sh\n{translate}exec {quoted_zig} {arguments} \"$@\"\n");
+        let destination = wrappers.join(name);
+        if std::fs::read(&destination).ok().as_deref() != Some(script.as_bytes()) {
+            // Publish atomically: concurrent builds must never execute a
+            // truncated wrapper. These files contain no host/user configuration.
+            let temporary = wrappers.join(format!(".{name}-{}", crate::record::new_run_id()));
+            std::fs::write(&temporary, script)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))?;
+            }
+            std::fs::rename(&temporary, &destination)?;
+        }
+        cmd.env(
+            format!("{}_{target}", name.to_ascii_uppercase()),
+            &destination,
+        )
+        .env(
+            format!("{}_{}", name.to_ascii_uppercase(), target.replace('-', "_")),
+            &destination,
+        );
+    }
+    Ok(())
+}
+
 pub fn apply(cmd: &mut Command, paths: Vec<PathBuf>) -> Result<()> {
     let zig = paths
         .get(1)
@@ -172,6 +227,85 @@ pub fn apply(cmd: &mut Command, paths: Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn musl_c_tools_are_target_scoped_and_preserve_lld() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "justrust zig's tools {}",
+            crate::record::new_run_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let zig = root.join("zig");
+        std::fs::write(&zig, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&zig, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for (target, zig_target) in [
+            ("x86_64-unknown-linux-musl", "x86_64-linux-musl"),
+            ("aarch64-unknown-linux-musl", "aarch64-linux-musl"),
+        ] {
+            let mut cmd = Command::new("cargo");
+            let linker_key = format!(
+                "CARGO_TARGET_{}_LINKER",
+                target.replace('-', "_").to_ascii_uppercase()
+            );
+            cmd.env(&linker_key, "/pinned/rust-lld");
+            apply_musl_c(&mut cmd, target, &[root.join("bin"), root.clone()]).unwrap();
+            let env: std::collections::BTreeMap<_, _> = cmd
+                .get_envs()
+                .map(|(key, value)| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(env[&linker_key], "/pinned/rust-lld");
+            assert!(!env.contains_key("CC"));
+            assert!(!env.contains_key("AR"));
+            assert!(!env.contains_key("PATH"));
+            for (tool, expected) in [
+                (
+                    "CC",
+                    format!("cc\n-target\n{zig_target}\ninput with spaces.c\n"),
+                ),
+                ("AR", "ar\ninput with spaces.c\n".to_owned()),
+            ] {
+                let path = &env[&format!("{tool}_{target}")];
+                assert_eq!(path, &env[&format!("{tool}_{}", target.replace('-', "_"))]);
+                let result = Command::new(path)
+                    .arg("input with spaces.c")
+                    .output()
+                    .unwrap();
+                assert!(result.status.success());
+                assert_eq!(String::from_utf8(result.stdout).unwrap(), expected);
+            }
+            let result = Command::new(&env[&format!("CC_{target}")])
+                .args([
+                    format!("--target={target}"),
+                    "-c".into(),
+                    "file name.c".into(),
+                    "-target".into(),
+                    target.into(),
+                ])
+                .output()
+                .unwrap();
+            assert!(result.status.success());
+            assert_eq!(
+                String::from_utf8(result.stdout).unwrap(),
+                format!(
+                    "cc\n-target\n{zig_target}\n--target={zig_target}\n-c\nfile name.c\n-target\n{zig_target}\n"
+                )
+            );
+            // Reusing a published wrapper is safe and does not rewrite it.
+            apply_musl_c(&mut cmd, target, &[root.join("bin"), root.clone()]).unwrap();
+        }
+        assert!(apply_musl_c(&mut Command::new("cargo"), "unsupported", &[]).is_err());
+        assert!(
+            apply_musl_c(&mut Command::new("cargo"), "x86_64-unknown-linux-musl", &[]).is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn only_reviewed_archives_are_allowed() {
         for arch in ["x86_64", "aarch64"] {

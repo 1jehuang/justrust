@@ -407,6 +407,15 @@ fn apply_musl_linker(
     pinned: Option<&crate::toolchain::Toolchain>,
     args: &[OsString],
 ) -> Result<()> {
+    apply_musl_linker_with_tools(cmd, pinned, args, crate::release_tools::ensure)
+}
+
+fn apply_musl_linker_with_tools(
+    cmd: &mut Command,
+    pinned: Option<&crate::toolchain::Toolchain>,
+    args: &[OsString],
+    tools: impl FnOnce() -> Result<Vec<PathBuf>>,
+) -> Result<()> {
     if subcommand(args).as_deref() != Some("build") {
         return Ok(());
     }
@@ -433,6 +442,9 @@ fn apply_musl_linker(
             ToolchainRequired(format!("pinned musl linker missing: {}", linker.display())).into(),
         );
     }
+    let tools = tools()
+        .map_err(|error| ToolchainRequired(format!("musl C tools unavailable: {error:#}")))?;
+    crate::release_tools::apply_musl_c(cmd, target, &tools)?;
     cmd.env(
         format!(
             "CARGO_TARGET_{}_LINKER",
@@ -1792,13 +1804,20 @@ mod tests {
         assert!(super::apply_musl_linker(&mut cmd, Some(&tc), &args).is_err());
         std::fs::create_dir_all(linker.parent().unwrap()).unwrap();
         std::fs::write(&linker, b"test linker").unwrap();
-        super::apply_musl_linker(&mut cmd, Some(&tc), &args).unwrap();
+        super::apply_musl_linker_with_tools(&mut cmd, Some(&tc), &args, || {
+            Ok(vec![dir.join("bin"), dir.join("zig")])
+        })
+        .unwrap();
         assert!(cmd.get_envs().any(|(key, value)| key
             == "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
             && value == Some(linker.as_os_str())));
         assert!(
             cmd.get_envs().any(|(key, value)| key == "JUSTRUST_LINKER"
                 && value == Some(std::ffi::OsStr::new("off")))
+        );
+        assert!(
+            cmd.get_envs()
+                .any(|(key, value)| key == "CC_aarch64_unknown_linux_musl" && value.is_some())
         );
         let mut native = std::process::Command::new("cargo");
         super::apply_musl_linker(&mut native, None, &["build".into(), "--release".into()]).unwrap();

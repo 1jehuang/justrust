@@ -69,10 +69,21 @@ does not borrow libraries from the host's default rustup toolchain. Custom
 `jr-*` compilers must already include their own matching target libraries.
 The native path selects `rust-lld` from that exact compiler's host sysroot and
 disables the development linker shim. Rust's target std supplies its static
-musl CRT and libc. No system linker, Zig, root access, Python/pip installation,
-cloud deployment or protocol change is needed for this repository's Rust-only
-dependencies. An absent pinned linker is an error, not a system fallback.
-`JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0` prevents automatic target downloads as well.
+musl CRT and libc. C dependencies such as `ring` use checksum-pinned Zig 0.13.0
+from the existing release-tool store, with target-scoped `CC` and `AR` wrappers.
+The C compiler runs `zig cc -target x86_64-linux-musl` or
+`zig cc -target aarch64-linux-musl`. Host build dependencies retain their host
+compiler. Zig is not selected as the final Rust linker, so rustc's
+`--fix-cortex-a53-843419` mitigation is preserved. No system musl GCC, root
+access, or Python/pip installation is needed. An absent pinned linker or
+unavailable pinned C tools is an error, not a system fallback.
+`JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0` prevents automatic target and tool downloads.
+The tool store currently installs Zig and cargo-zigbuild together, but native
+`build` does not invoke cargo-zigbuild.
+
+Keep `JUSTRUST_HOSTED_RELEASES=0` until actual release acceptance, including C
+dependencies, passes for both supported architectures. The runner zigbuild
+fallback remains independent of this native C-compiler integration.
 
 A separate compatibility `zigbuild` command installs checksum-pinned Zig 0.13.0
 and cargo-zigbuild 0.20.1 in the account toolchain store. Its compiler selector
