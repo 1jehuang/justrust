@@ -7128,14 +7128,7 @@ impl CarrierBuilder<'_, '_> {
                 FactsCtx::Validated(facts) => Some(facts),
                 _ => None,
             });
-        let Some(facts) = facts else {
-            return Ok(false);
-        };
-        // A universal body may still issue a call whose family actuals are
-        // closed: their copy permission is independent of the caller's
-        // parameters, so the closed-phase proof below applies unchanged.
-        let closed = facts.phase() == super::traits::FactsPhase::Closed;
-        if !closed && facts.phase() != super::traits::FactsPhase::Universal {
+        if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
             return Ok(false);
         }
         let Some(families) = copy_family_effect_rows(view.original_contract(), self.budget)? else {
@@ -7145,9 +7138,6 @@ impl CarrierBuilder<'_, '_> {
             let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
                 return Ok(false);
             };
-            if !closed && !actual.is_closed_shallow() {
-                return Ok(false);
-            }
             if !self.copy_permission_in(actual, authority)?
                 && !self.owned_shared_family_write_admitted(params, parameter, view, authority)?
             {
@@ -7385,12 +7375,20 @@ impl CarrierBuilder<'_, '_> {
                     )?;
                     return Ok(false);
                 };
-                let Some(semantic) = self.metadata_value(ir::carrier_at(
-                    parameter,
-                    &destination.location,
-                    &self.ledger,
-                ))?
-                else {
+                // The transported path names nominal owners through the view's
+                // own instantiated signature (its nominal mappings target that
+                // signature's applications). A graph-realized caller signature
+                // describes the same call with different application ids, so
+                // fall back to the view's signature for the same parameter.
+                let semantic = match ir::carrier_at(parameter, &destination.location, &self.ledger)
+                {
+                    Ok(ty) => Ok(ty),
+                    Err(error) => match view.signature_for_replay().params.get(destination.param) {
+                        Some(own) => ir::carrier_at(own, &destination.location, &self.ledger),
+                        None => Err(error),
+                    },
+                };
+                let Some(semantic) = self.metadata_value(semantic)? else {
                     return Ok(false);
                 };
                 if !self.copy_permission_in(&semantic, authority)? {

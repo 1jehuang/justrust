@@ -72,3 +72,17 @@ fn unused_enumerated_reference_chain_wrong_depth_is_rejected() {
         r#"fn unused() { let a = [4, 5]; let refs = [&a[0], &a[1]]; for (_, r) in refs.iter().enumerate() { let _v: &&bool = r; } } fn main() {}"#,
     );
 }
+
+#[test]
+fn option_take_replace_and_generic_put_with_reference_payloads() {
+    oracle::stock_native(
+        r#"fn put<T>(slot: &mut Option<T>, v: T) { *slot = Some(v); } fn tk<T>(s: &mut Option<T>) -> Option<T> { s.take() } fn main() { let x = 5i64; let y = 7i64; let mut o: Option<&i64> = None; put(&mut o, &x); println!("{:?}", o); let t = tk(&mut o); let u = o.replace(&y); println!("{:?} {:?} {:?}", o, t, u); }"#,
+    );
+}
+
+#[test]
+fn unused_taken_reference_outliving_its_source_is_rejected() {
+    oracle::stock_and_native_reject(
+        r#"fn unused() { let t; { let x = 5i64; let mut o: Option<&i64> = Some(&x); t = o.take(); } println!("{:?}", t); } fn main() {}"#,
+    );
+}

@@ -65,21 +65,11 @@ impl<T> Option<T> {
     }
 
     pub fn take(&mut self) -> Option<T> {
-        let p = self as *mut Option<T>;
-        unsafe {
-            let old = *p;
-            *p = Option::None;
-            old
-        }
+        super::mem::replace(self, Option::None)
     }
 
     pub fn replace(&mut self, value: T) -> Option<T> {
-        let p = self as *mut Option<T>;
-        unsafe {
-            let old = *p;
-            *p = Option::Some(value);
-            old
-        }
+        super::mem::replace(self, Option::Some(value))
     }
 
     pub fn insert(&mut self, value: T) -> &mut T {
@@ -192,20 +182,6 @@ impl<T> Option<T> {
                 inner: Option::Some(value),
             },
             Option::None => OptionIter { inner: Option::None },
-        }
-    }
-
-    pub fn as_ref(&self) -> Option<&T> {
-        match self {
-            Option::Some(value) => Option::Some(value),
-            Option::None => Option::None,
-        }
-    }
-
-    pub fn as_mut(&mut self) -> Option<&mut T> {
-        match self {
-            Option::Some(value) => Option::Some(value),
-            Option::None => Option::None,
         }
     }
 }
