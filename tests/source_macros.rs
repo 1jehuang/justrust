@@ -8,6 +8,51 @@
 mod statement_oracle;
 
 #[test]
+fn expanded_stored_closures_keep_capture_hygiene() {
+    use statement_oracle::{Case, Expect};
+    statement_oracle::check(
+        "expanded-stored-closures",
+        &[
+            Case {
+                name: "generated_closure",
+                source: r#"macro_rules! run{()=>{let f=||{println!("done");};f();let g=|x:i32|x+1;println!("{}",g(6));};}fn main(){run!();}"#,
+                expect: Expect::Run("done\n7\n"),
+            },
+            Case {
+                name: "definition_and_captured_bindings",
+                source: r#"fn main(){let n=3;macro_rules! run{($x:ident)=>{let f=||n*10+$x;println!("{}",f());};}let n=7;run!(n);run!(n);}"#,
+                expect: Expect::Run("37\n37\n"),
+            },
+            Case {
+                name: "closure_in_macro_function_captures_and_shadows",
+                source: r#"fn main(){let n=3;let x=100;macro_rules! one{()=>{1};}let f=|x:i32|n+x+one!();let g=||{let n=n*2;n};println!("{} {} {} {}",f(10),g(),n,x);}"#,
+                expect: Expect::Run("14 6 3 100\n"),
+            },
+            Case {
+                name: "unused_closure_param_does_not_leak_in_macro_function",
+                source: r#"fn unused(){macro_rules! one{()=>{1};}let f=|q:i32|q+one!();let _=f(1);let _=q;}fn main(){}"#,
+                expect: Expect::Invalid("E0425"),
+            },
+            Case {
+                name: "parenthesized_closure_called_in_expansion",
+                source: r#"macro_rules! twice{($e:expr)=>{(|x:i32|x*2)($e)};}fn main(){let n=4;println!("{}",twice!(n));}"#,
+                expect: Expect::Run("8\n"),
+            },
+            Case {
+                name: "unused_generated_closure_type_error",
+                source: r#"macro_rules! run{()=>{let f=||{let x:bool=1;x};};}fn unused(){run!();}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "private_closure_binding_does_not_escape",
+                source: r#"macro_rules! run{()=>{let f=||1;};}fn unused(){run!();f();}fn main(){}"#,
+                expect: Expect::Invalid("E0425"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn statement_expansions_keep_enclosing_scope_and_hygiene() {
     use statement_oracle::{Case, Expect};
     statement_oracle::check(

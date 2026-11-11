@@ -18760,6 +18760,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn group_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.is("|") || self.is("||") || self.is("move") {
+            // The legacy immediate form never admits expanded tokens. Inside
+            // an authenticated expansion the parenthesized closure is an
+            // ordinary stored closure (`(||7)()` from a macro body).
+            if self.expansion.is_some() || self.item_expansion.is_some() {
+                let closure = self.stored_closure()?;
+                self.expect(")")?;
+                return Ok(closure);
+            }
             return self.immediate_closure();
         }
         if self.eat(")") {
