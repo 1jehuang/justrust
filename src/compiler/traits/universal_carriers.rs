@@ -320,31 +320,8 @@ impl ValidatedTraitWorld {
     ) -> Result<Ty> {
         self.check_facts(facts, false)?;
         scratch.for_facts(facts);
-        let raw = Ty::AssociatedType(projection.clone());
-        // A declaration family can already be closed (`<str as ToOwned>::Owned`
-        // in a non-generic signature). It is not a rigid family: normalize it
-        // here through the exact logical normalizer, after authenticating its
-        // metadata under the declaration environment. A closed projection that
-        // does not normalize is still rejected with the same diagnostic.
-        if self.raw_associated_ty_is_closed(&raw, 0)? {
-            self.validate_ty_metadata_with(&raw, env, 0, &mut scratch.for_world(self.id).replays)?;
-            let normalized = self.normalize_closed_projected_type_for_use(
-                &raw,
-                ProofContext::from_facts(facts).for_storage(false),
-                false,
-                scratch.for_world(self.id),
-                false,
-            );
-            return match normalized {
-                Ok((actual, _)) if !self.type_contains_projection(&actual, 1)? => Ok(actual),
-                Err(error) if error.is_resource() => Err(error),
-                _ => Err(FactsError::invalid(
-                    &self.budget,
-                    "closed associated projection must normalize before execution",
-                )),
-            };
-        }
         self.validate_universal_projection_with(projection, env, scratch.for_world(self.id))?;
+        let raw = Ty::AssociatedType(projection.clone());
         let schema = GenericSchema {
             env: Arc::new(env.clone()),
             signature: Signature {

@@ -400,7 +400,7 @@ impl ValidatedTraitWorld {
                 }
             }
             self.validate_raw_associated_ty(&header.ty, &header.env, 0)?;
-            self.validate_declaration_predicates(&header.predicates, &header.env, None)?;
+            self.validate_predicates(&header.predicates, &header.env, None)?;
             if owner.kind != DeclKind::Trait && !header.has_initializer {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -424,11 +424,7 @@ impl ValidatedTraitWorld {
                     &Predicate::Implements(self.symbolic_trait_ref(header.owner)?),
                 )?;
             }
-            self.close_original_declaration_predicates(
-                header.declaration,
-                &mut predicates,
-                &header.env,
-            )?;
+            self.close_predicates(&mut predicates, &header.env)?;
             self.validate_declared_equality_domains(&predicates, &header.env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {

@@ -112,8 +112,6 @@ impl ClosedReceipt {
             target: target.clone(),
             original: original.clone(),
             mapped: mapped.clone(),
-            // A closed-instance receipt never carries trait-call graph inputs.
-            graph_inputs: None,
         };
         let output = Self {
             receipt,

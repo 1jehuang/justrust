@@ -16,177 +16,7 @@ pub(super) enum NominalCallSignature {
     Blocked(NominalPreparation),
 }
 
-/// Graph realizations a trait call resolves against, or the complete demand
-/// frontier still missing.
-pub(super) enum NominalCallInputs {
-    Ready(Vec<ir::Ty>),
-    Blocked(NominalPreparation),
-}
-
 impl Checker<'_> {
-    /// Typed graph realizations for every closed source nominal application
-    /// in a trait call's signature whose storage involves a projection, keyed
-    /// per declaration and ordered actuals. Reuses the associated-signature
-    /// collector: open or unresolved coordinates are never demanded, every
-    /// missing read is demanded together before blocking, and trait-call
-    /// instantiation selects these through its existing transport without
-    /// reminting a nominal's executable fields itself.
-    pub(super) fn nominal_trait_call_inputs(
-        &self,
-        target_trait_call: Option<&ir::TraitCall>,
-        signature: &ir::Signature,
-    ) -> Result<NominalCallInputs, String> {
-        if self.nominal_inputs.is_none() {
-            return Ok(NominalCallInputs::Ready(Vec::new()));
-        }
-        let mut scratch = tr::TraitScratch::default();
-        let mut sources = Vec::new();
-        let mut missing = Vec::new();
-        for root in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            self.collect_associated_signature_nominals(
-                root,
-                &mut sources,
-                &mut missing,
-                &mut scratch,
-                false,
-                0,
-            )?;
-        }
-        if !missing.is_empty() {
-            return Ok(NominalCallInputs::Blocked(NominalPreparation::Blocked {
-                nominals: missing.into(),
-                declarations: Arc::from([]),
-                needs_source_schemas: false,
-                unresolved_constraints: false,
-            }));
-        }
-        // The selected impl substitutes the trait operands into its own
-        // header, so an operand that is already a typed graph read (such as
-        // `Self = Cow<str>`) reappears there as a source application whose
-        // storage may name a projection. Offer exactly those existing reads,
-        // keyed by declaration and ordered actuals, for selection. Nothing new
-        // is demanded here: source operands still go through the collector.
-        let mut operands = Vec::new();
-        if let Some(call) = target_trait_call {
-            self.collect_graph_operand_nominals(&call.trait_ref.self_ty, &mut operands, 0)?;
-            for argument in call.trait_ref.args.iter() {
-                self.collect_graph_operand_nominals(argument, &mut operands, 0)?;
-            }
-        }
-        let mut realized: Vec<ir::Ty> = Vec::new();
-        for source in sources.iter().chain(operands.iter()) {
-            let ty = self.realize_constructor_source(source)?;
-            let mut duplicate = false;
-            let identity = |ty: &ir::Ty| match ty {
-                ir::Ty::Struct(value) => Some(value.id()),
-                ir::Ty::Enum(value) => Some(value.id()),
-                _ => None,
-            };
-            for previous in realized.iter() {
-                self.infer_work(0)?;
-                duplicate |= identity(previous).is_some() && identity(previous) == identity(&ty);
-            }
-            if !duplicate {
-                self.infer_storage(1)?;
-                realized.push(ty);
-            }
-        }
-        Ok(NominalCallInputs::Ready(realized))
-    }
-
-    /// The exact graph reads a realized call signature already names, for its
-    /// immutable receipt. Nothing is demanded or minted: these are the reads
-    /// `nominal_call_signature` placed into the mapped signature.
-    pub(super) fn signature_graph_rows(
-        &self,
-        signature: &ir::Signature,
-    ) -> Result<Option<(Arc<[ir::Ty]>, Option<crate::engine::EngineAuthority>)>, String> {
-        let Some(inputs) = self.nominal_inputs else {
-            return Ok(None);
-        };
-        let mut found = Vec::new();
-        for root in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            self.collect_graph_operand_nominals(root, &mut found, 0)?;
-        }
-        let identity = |ty: &ir::Ty| match ty {
-            ir::Ty::Struct(value) => Some(value.id()),
-            ir::Ty::Enum(value) => Some(value.id()),
-            _ => None,
-        };
-        let mut rows: Vec<ir::Ty> = Vec::new();
-        for ty in found {
-            let mut duplicate = false;
-            for previous in rows.iter() {
-                self.infer_work(0)?;
-                duplicate |= identity(previous).is_some() && identity(previous) == identity(&ty);
-            }
-            if !duplicate {
-                self.infer_storage(1)?;
-                rows.push(ty);
-            }
-        }
-        if rows.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some((Arc::from(rows), inputs.engine)))
-    }
-
-    /// Existing graph-realized nominal applications inside one trait operand.
-    fn collect_graph_operand_nominals(
-        &self,
-        ty: &ir::Ty,
-        out: &mut Vec<ir::Ty>,
-        depth: usize,
-    ) -> Result<(), String> {
-        self.infer_work(depth)?;
-        match ty {
-            ir::Ty::Struct(value) if !value.is_back_edge() => {
-                if value.id().index.is_graph() {
-                    self.infer_storage(1)?;
-                    out.push(ty.clone());
-                }
-            }
-            ir::Ty::Enum(value) if !value.is_back_edge() => {
-                if value.id().index.is_graph() {
-                    self.infer_storage(1)?;
-                    out.push(ty.clone());
-                }
-            }
-            _ => {}
-        }
-        if let Some((_, arguments)) = nominal_parts(ty) {
-            for argument in arguments {
-                self.collect_graph_operand_nominals(argument, out, depth + 1)?;
-            }
-            return Ok(());
-        }
-        match ty {
-            ir::Ty::Tuple(parts) => {
-                for part in parts.iter() {
-                    self.collect_graph_operand_nominals(part, out, depth + 1)?;
-                }
-            }
-            ir::Ty::Ref {
-                referent: child, ..
-            }
-            | ir::Ty::RawPtr { pointee: child, .. }
-            | ir::Ty::Array { element: child, .. }
-            | ir::Ty::Slice { element: child } => {
-                self.collect_graph_operand_nominals(child, out, depth + 1)?;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
     pub(super) fn nominal_call_signature(
         &self,
         target: &ir::Callee,
@@ -210,28 +40,6 @@ impl Checker<'_> {
                 &mut self.trait_scratch.borrow_mut(),
             )
             .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
-        // Selection may already have realized storage through typed graph
-        // reads. Retain the canonical source application independently, not
-        // that executable signature, for the later original-source replay.
-        // This is exactly the computation replay repeats for this occurrence.
-        // Its selected callee is not retained here: the existing receipt
-        // replay independently validates target correspondence.
-        let (_, mut original) = facts
-            .canonical_source_call_with_scratch(
-                target,
-                &signature,
-                &mut self.trait_scratch.borrow_mut(),
-            )
-            .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
-        // The receipt requires original and mapped to share one contract
-        // allocation. The source view rebuilds an equal contract; adopt the
-        // selected allocation only when it is exactly equal, else fail closed.
-        if original.params.len() != signature.params.len()
-            || *original.ref_contract != *signature.ref_contract
-        {
-            return Err("nominal call source signature changed contract or arity".into());
-        }
-        original.ref_contract = signature.ref_contract.clone();
         self.infer_storage(signature.params.len())?;
         let mut missing = Vec::new();
         let mut params = Vec::new();
@@ -274,7 +82,7 @@ impl Checker<'_> {
             signature: mapped.clone(),
             realization: Some(Box::new(NominalCallRealization {
                 target: target.clone(),
-                original,
+                original: signature,
                 mapped,
             })),
         })

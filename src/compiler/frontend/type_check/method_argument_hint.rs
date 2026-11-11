@@ -136,10 +136,6 @@ impl Checker<'_> {
         let mut deferred = false;
         let mut partial_result = None;
         let mut unproved_expected = false;
-        // Graph-input checking resolves an inherent target against the exact
-        // typed reads of its own source signature, exactly as path calls do.
-        let prepare = |target: &ir::CallTarget| self.associated_signature_nominal_inputs(target);
-        let prepared = self.nominal_inputs.is_some();
         let selection = plan.select_method_with_arguments_scratch(
             receiver,
             name,
@@ -186,9 +182,6 @@ impl Checker<'_> {
                                     )?;
                                 }
                                 MethodArguments::Deferred
-                            }
-                            InherentMethodInference::Applicable(Some(actuals)) if prepared => {
-                                MethodArguments::ReadyPrepared(Cow::Owned(actuals), &prepare)
                             }
                             InherentMethodInference::Applicable(Some(actuals)) => {
                                 MethodArguments::Ready(Cow::Owned(actuals))

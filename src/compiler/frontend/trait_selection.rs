@@ -628,15 +628,15 @@ impl PlanCtx {
                     if substitution.len() != candidate.schema_env.total_arity() {
                         continue;
                     }
-                    let self_ty = facts
-                        .world()
-                        .original_implementation_self_for_discovery(
-                            candidate.declaration,
-                            &substitution,
-                            facts,
-                            &mut tr::TraitScratch::default(),
-                        )
-                        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                    let mut cx = self.clone();
+                    let self_ty = ir::substitute_ty(
+                        &candidate.trait_ref.self_ty,
+                        &candidate.schema_env,
+                        &substitution,
+                        ir::FactsCtx::Validated(facts),
+                        &mut cx,
+                        budget,
+                    )?;
                     matches.push(ir::TraitRef {
                         declaration: implementation.trait_ref.declaration,
                         self_ty: bound_value(&implementation.trait_ref.self_ty)
@@ -717,52 +717,8 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
         scratch: &std::cell::RefCell<tr::TraitScratch>,
     ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
-        self.select_associated_prepared(
-            owner, name, args, caller, module, dot, budget, scratch, None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn select_associated_with_nominal_preparation(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        dot: bool,
-        budget: &ir::PlanBudget,
-        scratch: &std::cell::RefCell<tr::TraitScratch>,
-        prepare: &dyn Fn(&ir::CallTarget) -> Result<tr::GraphInvocationInputs, String>,
-    ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
-        self.select_associated_prepared(
-            owner,
-            name,
-            args,
-            caller,
-            module,
-            dot,
-            budget,
-            scratch,
-            Some(prepare),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn select_associated_prepared(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        dot: bool,
-        budget: &ir::PlanBudget,
-        scratch: &std::cell::RefCell<tr::TraitScratch>,
-        prepare: Option<&dyn Fn(&ir::CallTarget) -> Result<tr::GraphInvocationInputs, String>>,
-    ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
         for traits_only in [false, true] {
-            let selected = self.lookup_associated_prepared(
+            let selected = self.lookup_associated_with_scratch(
                 owner,
                 name,
                 args,
@@ -772,9 +728,7 @@ impl PlanCtx {
                 None,
                 traits_only,
                 budget,
-                &[],
                 &mut scratch.borrow_mut(),
-                prepare,
             )?;
             if let Some(selected) = selected {
                 return Ok(selected);
@@ -832,68 +786,6 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
         nominals: &[ir::Ty],
         scratch: &mut tr::TraitScratch,
-    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
-        self.lookup_associated_prepared(
-            owner,
-            name,
-            method_args,
-            caller,
-            module,
-            dot,
-            filter,
-            traits_only,
-            budget,
-            nominals,
-            scratch,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn lookup_associated_with_preparation(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        method_args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        filter: Option<ReceiverKind>,
-        traits_only: bool,
-        budget: &ir::PlanBudget,
-        scratch: &mut tr::TraitScratch,
-        prepare: &dyn Fn(&ir::CallTarget) -> Result<tr::GraphInvocationInputs, String>,
-    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
-        self.lookup_associated_prepared(
-            owner,
-            name,
-            method_args,
-            caller,
-            module,
-            true,
-            filter,
-            traits_only,
-            budget,
-            &[],
-            scratch,
-            Some(prepare),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lookup_associated_prepared(
-        &self,
-        owner: &ir::Ty,
-        name: &AstIdent,
-        method_args: &[ir::Ty],
-        caller: ir::FactsCtx<'_>,
-        module: &ModuleId,
-        dot: bool,
-        filter: Option<ReceiverKind>,
-        traits_only: bool,
-        budget: &ir::PlanBudget,
-        nominals: &[ir::Ty],
-        scratch: &mut tr::TraitScratch,
-        prepare: Option<&dyn Fn(&ir::CallTarget) -> Result<tr::GraphInvocationInputs, String>>,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         self.program
@@ -969,33 +861,20 @@ impl PlanCtx {
             let ir::FactsCtx::Validated(facts) = caller else {
                 return Err("associated call requires validated facts".into());
             };
-            let prepared = prepare.map(|prepare| prepare(&target)).transpose()?;
-            if prepared.is_some() && !nominals.is_empty() {
-                return Err(
-                    "invalid metadata: associated target preparation changed existing transport"
-                        .into(),
-                );
-            }
-            let mut discharge = || match prepared.as_ref() {
-                Some(inputs) => facts
-                    .world()
-                    .discharge_direct_with_graph_inputs(&target, facts, inputs, scratch),
-                None => facts
-                    .service()
-                    .discharge_direct_with_nominals(&target, facts, nominals, scratch),
-            };
-            let empty = prepared
-                .as_ref()
-                .map_or(nominals.is_empty(), |inputs| inputs.is_empty());
-            let signature = if empty {
+            let signature = if nominals.is_empty() {
                 self.instantiate_signature(&target, caller, budget)?
             } else {
-                discharge()
+                facts
+                    .service()
+                    .discharge_direct_with_nominals(&target, facts, nominals, scratch)
                     .map_err(|error| error.into_legacy_diagnostic(budget))?
                     .signature()
                     .clone()
             };
-            let proof = discharge().map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+            let proof = facts
+                .service()
+                .discharge_direct_with_nominals(&target, facts, nominals, scratch)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
             if !facts
                 .world()
                 .signatures_equal(proof.signature(), &signature)

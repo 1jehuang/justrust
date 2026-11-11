@@ -8160,39 +8160,12 @@ pub(super) fn replay_source_body_with_scratch(
         validate_original_callee(original_target, target, budget)?;
         let Some(name) = &site.ordinary else {
             // Source provider/selection role is frozen before publication; no ordinary omitted-call exemption.
-            // A call checked against exact graph reads is re-derived only
-            // through the inputs its own receipt retained, never re-collected.
-            // Without such a receipt the ordinary transport-free check applies.
-            let graph_inputs = match &original.nominal_call_realizations {
-                Some(rows) => {
-                    let row = rows.get(position).ok_or_else(|| {
-                        FactsError::invalid(budget, "nominal call realization receipt missing")
-                    })?;
-                    if row.expression() != id {
-                        return Err(FactsError::invalid(
-                            budget,
-                            "nominal call realization occurrence changed",
-                        ));
-                    }
-                    row.graph_inputs(facts, &mut call_scratch)?
-                }
-                None => None,
-            };
-            match &graph_inputs {
-                Some(inputs) => ir::validate_callee_with_graph_inputs_scratch(
-                    target,
-                    signature,
-                    facts,
-                    inputs,
-                    &mut call_scratch,
-                ),
-                None => ir::validate_callee_scratch(
-                    target,
-                    signature,
-                    ir::FactsCtx::Validated(facts),
-                    &mut call_scratch,
-                ),
-            }
+            ir::validate_callee_scratch(
+                target,
+                signature,
+                ir::FactsCtx::Validated(facts),
+                &mut call_scratch,
+            )
             .map_err(|e| source_error(budget, &e))?;
             if let ir::Callee::TraitItem(call) = target
                 && facts.uses_equality_required_call(call)?

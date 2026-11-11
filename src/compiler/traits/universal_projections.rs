@@ -346,14 +346,11 @@ impl ValidatedTraitWorld {
                     }
                     Ok(Ty::Tuple(output.into()))
                 }
-                Ty::Struct(_) | Ty::Enum(_) => world.normalize_nominal_actuals_for_use(
-                    ty,
-                    env,
-                    depth,
-                    None,
-                    false,
-                    |argument| normalize(world, argument, env, depth + 1),
-                ),
+                Ty::Struct(_) | Ty::Enum(_) => {
+                    world.normalize_nominal_actuals(ty, env, depth, |argument| {
+                        normalize(world, argument, env, depth + 1)
+                    })
+                }
                 _ => Ok(ty.clone()),
             }
         }

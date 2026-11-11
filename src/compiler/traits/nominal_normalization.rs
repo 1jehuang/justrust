@@ -2,64 +2,6 @@
 //! A field rewrite is never permission to reuse the original nominal identity.
 use super::*;
 
-/// Exact graph reads admitted by the current graph computation. This is not a
-/// parent-local source-field seal and never authorizes minting an identity.
-#[derive(Default)]
-pub(in crate::compiler) struct GraphInvocationInputs {
-    definitions: Vec<Ty>,
-    engine: Option<crate::engine::EngineAuthority>,
-}
-
-impl GraphInvocationInputs {
-    pub(in crate::compiler) fn new(
-        definitions: Vec<Ty>,
-        engine: Option<crate::engine::EngineAuthority>,
-        facts: &ValidatedFacts,
-        scratch: &mut TraitScratch,
-    ) -> Result<Self> {
-        if !definitions.is_empty() && engine.is_none() {
-            return Err(FactsError::invalid(
-                facts.budget(),
-                "graph invocation inputs require the current engine authority",
-            ));
-        }
-        let inputs = Self {
-            definitions,
-            engine,
-        };
-        let transport = inputs.transport();
-        transport.validate_with_scratch(facts.world(), facts, scratch)?;
-        Ok(inputs)
-    }
-
-    pub(in crate::compiler) fn is_empty(&self) -> bool {
-        self.definitions.is_empty()
-    }
-
-    /// The exact admitted rows and engine, for retention in an immutable call
-    /// receipt. Reconstruction goes through `new`, which replays every row.
-    pub(in crate::compiler) fn rows(&self) -> (&[Ty], Option<crate::engine::EngineAuthority>) {
-        (&self.definitions, self.engine)
-    }
-
-    #[cfg(test)]
-    pub(in crate::compiler) fn select_for_tests(
-        &self,
-        original: &Ty,
-        facts: &ValidatedFacts,
-    ) -> Result<Option<Ty>> {
-        self.transport().select(facts.world(), original, facts)
-    }
-
-    pub(super) fn transport(&self) -> ParentLocalTransport<'_> {
-        ParentLocalTransport {
-            definitions: &self.definitions,
-            graph_engine: self.engine,
-            validation: None,
-        }
-    }
-}
-
 /// Invocation-local input, never retained by the world. Local substitution
 /// scratch may pin exact immutable rows, never this borrowed transport. A row
 /// is useful only after its private source-field receipt replays under the
@@ -67,7 +9,6 @@ impl GraphInvocationInputs {
 #[derive(Clone, Copy, Default)]
 pub(in crate::compiler) struct ParentLocalTransport<'a> {
     definitions: &'a [Ty],
-    graph_engine: Option<crate::engine::EngineAuthority>,
     validation: Option<&'a std::cell::RefCell<ParentLocalValidation>>,
 }
 
@@ -143,7 +84,6 @@ impl<'a> ParentLocalTransport<'a> {
     pub(in crate::compiler) fn new(definitions: &'a [Ty]) -> Self {
         Self {
             definitions,
-            graph_engine: None,
             validation: None,
         }
     }
@@ -185,7 +125,7 @@ impl<'a> ParentLocalTransport<'a> {
         for candidate in self.definitions {
             self.validate_row(world, facts, candidate, &mut NominalReplays::default())?;
         }
-        self.validate_graph_conflicts(world)
+        Ok(())
     }
 
     pub(super) fn validate_with_replay(
@@ -231,31 +171,6 @@ impl<'a> ParentLocalTransport<'a> {
         for (candidate, replays) in self.definitions.iter().zip(rows) {
             self.validate_row(world, facts, candidate, replays)?;
         }
-        self.validate_graph_conflicts(world)
-    }
-
-    fn validate_graph_conflicts(self, world: &ValidatedTraitWorld) -> Result<()> {
-        if self.graph_engine.is_none() {
-            return Ok(());
-        }
-        for (index, left) in self.definitions.iter().enumerate() {
-            for right in &self.definitions[index + 1..] {
-                charged(&world.budget, world.budget.charge_work(1))?;
-                if world.types_equal(std::slice::from_ref(left), std::slice::from_ref(right))?
-                    && !schema_instantiation::same_inputs(
-                        std::slice::from_ref(left),
-                        std::slice::from_ref(right),
-                        &world.budget,
-                        0,
-                    )?
-                {
-                    return Err(FactsError::invalid(
-                        &world.budget,
-                        "graph invocation has conflicting application identities",
-                    ));
-                }
-            }
-        }
         Ok(())
     }
 
@@ -267,49 +182,6 @@ impl<'a> ParentLocalTransport<'a> {
         replays: &mut NominalReplays,
     ) -> Result<()> {
         charged(&world.budget, world.budget.charge_work(1))?;
-        if let Some(engine) = self.graph_engine {
-            let read = match candidate {
-                Ty::Struct(value)
-                    if !value.is_back_edge()
-                        && value.id().index.is_graph()
-                        && value.parent_local_receipt().is_none() =>
-                {
-                    value.realization()
-                }
-                Ty::Enum(value)
-                    if !value.is_back_edge()
-                        && value.id().index.is_graph()
-                        && value.parent_local_receipt().is_none() =>
-                {
-                    value.realization()
-                }
-                _ => None,
-            }
-            .ok_or_else(|| {
-                FactsError::invalid(
-                    &world.budget,
-                    "graph invocation transport requires an exact typed graph read",
-                )
-            })?;
-            if read.engine_authority() != engine {
-                return Err(FactsError::invalid(
-                    &world.budget,
-                    "foreign engine graph invocation transport",
-                ));
-            }
-            read.check_definition(candidate)
-                .map_err(|error| FactsError::from_message(&world.budget, &error.to_string()))?;
-            read.replay_with(candidate, world, replays)
-                .map_err(|error| FactsError::from_message(&world.budget, &error.to_string()))?;
-            world.validate_ty_metadata_with_facts(
-                candidate,
-                facts.env(),
-                0,
-                replays,
-                Some(facts),
-            )?;
-            return Ok(());
-        }
         let sealed = match candidate {
             Ty::Struct(value) => !value.is_back_edge() && value.parent_local_receipt().is_some(),
             Ty::Enum(value) => !value.is_back_edge() && value.parent_local_receipt().is_some(),
@@ -349,72 +221,6 @@ impl<'a> ParentLocalTransport<'a> {
             Ty::Enum(value) if !value.is_back_edge() => value.def().source_decl,
             _ => return Ok(None),
         };
-        if self.graph_engine.is_some() {
-            let parent_local = match original {
-                Ty::Struct(value) => value.parent_local_receipt().is_some(),
-                Ty::Enum(value) => value.parent_local_receipt().is_some(),
-                _ => false,
-            };
-            if parent_local {
-                return Err(FactsError::invalid(
-                    &world.budget,
-                    "graph invocation cannot replace a parent-local source seal",
-                ));
-            }
-            let original_graph = match original {
-                Ty::Struct(value) => value.id().index.is_graph(),
-                Ty::Enum(value) => value.id().index.is_graph(),
-                _ => false,
-            };
-            let mut selected: Option<Ty> = None;
-            for candidate in self.definitions {
-                charged(&world.budget, world.budget.charge_work(1))?;
-                let same_kind = matches!(
-                    (original, candidate),
-                    (Ty::Struct(_), Ty::Struct(_)) | (Ty::Enum(_), Ty::Enum(_))
-                );
-                let declaration = match candidate {
-                    Ty::Struct(value) => value.def().source_decl,
-                    Ty::Enum(value) => value.def().source_decl,
-                    _ => unreachable!("validated graph invocation row"),
-                };
-                if !same_kind
-                    || declaration != source
-                    || !world.types_equal(type_arguments(candidate), type_arguments(original))?
-                {
-                    continue;
-                }
-                if original_graph
-                    && !schema_instantiation::same_inputs(
-                        std::slice::from_ref(original),
-                        std::slice::from_ref(candidate),
-                        &world.budget,
-                        0,
-                    )?
-                {
-                    return Err(FactsError::invalid(
-                        &world.budget,
-                        "graph invocation cannot replace an existing typed read",
-                    ));
-                }
-                if let Some(previous) = &selected {
-                    if !schema_instantiation::same_inputs(
-                        std::slice::from_ref(previous),
-                        std::slice::from_ref(candidate),
-                        &world.budget,
-                        0,
-                    )? {
-                        return Err(FactsError::invalid(
-                            &world.budget,
-                            "graph invocation has conflicting application identities",
-                        ));
-                    }
-                } else {
-                    selected = Some(candidate.clone());
-                }
-            }
-            return Ok(selected);
-        }
         let mut selected: Option<Ty> = None;
         for candidate in self.definitions {
             charged(&world.budget, world.budget.charge_work(1))?;

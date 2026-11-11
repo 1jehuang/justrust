@@ -7,7 +7,6 @@ use super::super::frontend::{
 use super::*;
 
 pub(super) struct Capabilities {
-    engine: Option<crate::engine::EngineAuthority>,
     pub(super) sources: Vec<ReadSource>,
     pub(super) nominals: Vec<ReadNominal>,
     // Retained only by this consumer computation across missing-input retries.
@@ -17,7 +16,6 @@ pub(super) struct Capabilities {
 impl Capabilities {
     pub(super) fn new() -> Self {
         Self {
-            engine: None,
             sources: Vec::new(),
             nominals: Vec::new(),
             replays: std::cell::RefCell::new(traits::NominalReplays::default()),
@@ -42,11 +40,9 @@ impl Capabilities {
             self.lookup(demand, &world, &caller, &budget)
                 .map_err(|e| e.to_string())
         };
-        let inputs = frontend::NominalPreparationInputs::new(&schema, &source, &nominal);
-        f(match self.engine {
-            Some(engine) => inputs.with_engine(engine),
-            None => inputs,
-        })
+        f(frontend::NominalPreparationInputs::new(
+            &schema, &source, &nominal,
+        ))
     }
 
     pub(super) fn source_recipe(
@@ -444,11 +440,6 @@ impl Capabilities {
         declaration: ir::DeclId,
         preparation: frontend::NominalPreparation,
     ) -> Result<(), Error> {
-        let engine = cx.authority();
-        if self.engine.is_some_and(|original| original != engine) {
-            return Err(Error::new("nominal input capability engine changed"));
-        }
-        self.engine = Some(engine);
         let world = types.trait_world().map_err(Error::new)?;
         let budget = world.budget();
         let caller = types.callable_facts(declaration).map_err(Error::new)?;

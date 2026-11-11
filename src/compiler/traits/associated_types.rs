@@ -1419,16 +1419,8 @@ impl ValidatedTraitWorld {
                     "associated assignment implementation environment mismatch",
                 ));
             }
-            self.validate_declaration_ref(
-                &implementation.trait_ref,
-                &implementation.schema_env,
-                None,
-            )?;
-            self.validate_declaration_predicates(
-                &implementation.predicates,
-                &implementation.schema_env,
-                None,
-            )?;
+            self.validate_ref_in(&implementation.trait_ref, &implementation.schema_env, None)?;
+            self.validate_predicates(&implementation.predicates, &implementation.schema_env, None)?;
             self.validate_impl_parameter_constraints(implementation)?;
             let owner = self.trait_header(implementation.trait_ref.declaration)?;
             let mut seen = Vec::new();
@@ -1601,7 +1593,7 @@ impl ValidatedTraitWorld {
                     &mut dependencies,
                     0,
                 )?;
-                self.validate_declaration_signature(
+                self.validate_schema_signature(
                     callable.declaration,
                     &schema.signature,
                     &schema.env,

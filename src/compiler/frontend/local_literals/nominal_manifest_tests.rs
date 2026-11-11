@@ -812,7 +812,6 @@ fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
     };
     let nominal_type = |_demand: &Demand| Ok(None);
     let inputs = Inputs {
-        engine: None,
         declaration_schema: &declaration_schema,
         source_type: &primitive_source,
         nominal_type: &nominal_type,
@@ -917,7 +916,6 @@ fn missing_source_certificate_is_explicit_not_eager_fallback() {
         panic!("no nominal type requested")
     };
     let inputs = Inputs {
-        engine: None,
         declaration_schema: &declaration_schema,
         source_type: &source_type,
         nominal_type: &nominal_type,
@@ -979,7 +977,6 @@ fn missing_declaration_inventory_is_exact_and_deduplicated() {
     };
     let nominal_type = |_demand: &Demand| Ok(None);
     let inputs = Inputs {
-        engine: None,
         declaration_schema: &declaration_schema,
         source_type: &primitive_source,
         nominal_type: &nominal_type,
