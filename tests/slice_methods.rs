@@ -86,6 +86,47 @@ fn aggregate_mutable_slice_carriers_match_stock() {
 }
 
 #[test]
+fn by_value_reference_self_autoref_receivers_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "by-value-reference-self-autoref",
+        &[
+            closure_oracle::Case {
+                name: "shared_slice_methods_on_mutable_slice",
+                source: "fn split_first_mut(v:&mut[i32])->Option<(&mut i32,&mut[i32])>{v.split_first_mut()} fn main(){let mut nums=vec![3,1,4,1,5];if let Some((h,t))=split_first_mut(&mut nums){*h+=t.iter().sum::<i32>();t[0]=9;}println!(\"{:?}\",nums);let t:&mut[i32]=&mut nums[1..];for x in t.iter(){print!(\"{} \",x);}println!(\"{}\",t.iter().map(|x|x*2).count());}",
+                expect: closure_oracle::Expect::Run("[14, 9, 4, 1, 5]\n9 4 1 5 4\n"),
+            },
+            closure_oracle::Case {
+                name: "user_reference_self_impls",
+                source: "trait Tot{fn tot(self)->usize;}impl Tot for &String{fn tot(self)->usize{self.len()}}impl Tot for &mut Vec<i32>{fn tot(self)->usize{self.push(1);self.len()}}impl Tot for &i32{fn tot(self)->usize{*self as usize}}fn main(){let s=String::from(\"abc\");println!(\"{}\",s.tot());let mut v=vec![1];println!(\"{}\",v.tot());let r=&mut v;println!(\"{}\",r.tot());println!(\"{:?}\",v);let mut n=5i32;let m=&mut n;println!(\"{}\",m.tot());}",
+                expect: closure_oracle::Expect::Run("3\n2\n3\n[1, 1, 1]\n5\n"),
+            },
+            closure_oracle::Case {
+                name: "vector_split_at_mut_through_deref_mut",
+                source: "trait Bump{fn bump(self)->usize;}impl Bump for &mut [i32]{fn bump(self)->usize{self[0]+=1;self.len()}}fn main(){let mut grid=vec![0usize,0,0,0,0,7];let(top,bottom)=grid.split_at_mut(3);top[0]=bottom[2]*10;println!(\"{} {}\",top.len(),bottom.len());println!(\"{:?}\",grid);let mut v=vec![1,2];let r:&mut Vec<i32>=&mut v;println!(\"{}\",r.bump());println!(\"{:?}\",v);}",
+                expect: closure_oracle::Expect::Run("3 3\n[70, 0, 0, 0, 0, 7]\n2\n[2, 2]\n"),
+            },
+            closure_oracle::Case {
+                name: "unused_shared_autoref_conflicts_with_mutable_loan",
+                source: "fn bad(t:&mut[i32]){let i=t.iter();t[0]=1;let _=i.count();}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0506"),
+            },
+            closure_oracle::Case {
+                name: "unused_mutable_reference_self_through_shared",
+                source: "trait Bump{fn bump(self);}impl Bump for &mut Vec<i32>{fn bump(self){self.push(1);}}fn bad(v:&Vec<i32>){v.bump();}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0596"),
+            },
+            closure_oracle::Case {
+                name: "unused_split_at_mut_halves_overlap_owner",
+                source: "fn bad(){let mut v=vec![1,2];let(a,_b)=v.split_at_mut(1);v.push(3);a[0]=2;}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn aggregate_mutable_slice_carriers_reject_invalid_sources() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;

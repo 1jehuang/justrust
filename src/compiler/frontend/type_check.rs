@@ -10255,10 +10255,27 @@ impl<'a> Checker<'a> {
         // An overloaded index is a place even when its index is dynamic and
         // static_source_place cannot represent it. Obtain its checked reference
         // before the owned-rvalue path can attempt to move a non-Copy element.
+        // A by-value `self` whose Self is a reference reached by autoref
+        // (`impl T for &[U]` called on `&mut [U]` or `Vec<U>`, `&String` impls
+        // on `String`) receives exactly the autoref'd place loan, the same
+        // expression a `&self` method on the dereferenced owner receives.
+        let receiver_mode = match (selected.mode, selected.adjustment) {
+            (ReceiverKind::Value { .. }, ReceiverAdjustment::SharedAutoref) => {
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared,
+                }
+            }
+            (ReceiverKind::Value { .. }, ReceiverAdjustment::MutAutoref) => {
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Mut,
+                }
+            }
+            (mode, _) => mode,
+        };
         let indexed_receiver = if matches!(
             selected.adjustment,
             ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
-        ) && let ReceiverKind::Borrowed { kind } = selected.mode
+        ) && let ReceiverKind::Borrowed { kind } = receiver_mode
         {
             if let Some(adjusted) = self.deref_field_receiver(receiver, kind, &selected)? {
                 Some(adjusted)
@@ -10319,7 +10336,7 @@ impl<'a> Checker<'a> {
             });
             return Ok(id);
         }
-        let adjusted = match selected.mode {
+        let adjusted = match receiver_mode {
             ReceiverKind::None => return Err("method has no receiver".into()),
             ReceiverKind::Value { .. } => {
                 // `s[a..b].m()`: the hinted receiver is the shared subslice
@@ -10480,6 +10497,15 @@ impl<'a> Checker<'a> {
                 }
             }
         };
+        // The canonical two-phase receiver marker names a `&mut self`
+        // receiver. A by-value `self: &mut T` reached by autoref keeps an
+        // ordinary immediate loan (never weaker than stock's two-phase one).
+        let adjusted = match (selected.mode, adjusted) {
+            (ReceiverKind::Value { .. }, (id, Some(ir::ImplicitBorrowKind::MutableReceiver))) => {
+                (id, None)
+            }
+            (_, adjusted) => adjusted,
+        };
         self.finish_checked_call(
             selected.target,
             name,
@@ -10634,18 +10660,22 @@ impl<'a> Checker<'a> {
         let selected = self
             .method_selection_with_inference(&target, name, type_args, args, expected)?
             .ok_or(MISSING)?;
+        // A by-value `self` of type `&Target`/`&mut Target` selected by autoref
+        // (`vec.split_at_mut(i)`) receives the same Deref/DerefMut loan.
         let kind = match (selected.mode, selected.depth, selected.adjustment) {
             (
                 ReceiverKind::Borrowed {
                     kind: ir::BorrowKind::Shared,
-                },
+                }
+                | ReceiverKind::Value { .. },
                 0,
                 ReceiverAdjustment::SharedAutoref,
             ) => ir::BorrowKind::Shared,
             (
                 ReceiverKind::Borrowed {
                     kind: ir::BorrowKind::Mut,
-                },
+                }
+                | ReceiverKind::Value { .. },
                 0,
                 ReceiverAdjustment::MutAutoref,
             ) => ir::BorrowKind::Mut,
@@ -10671,7 +10701,9 @@ impl<'a> Checker<'a> {
             self.type_actual_regions(type_args, region_offset)?,
             Some((
                 deref,
-                (kind == ir::BorrowKind::Mut).then_some(ir::ImplicitBorrowKind::MutableReceiver),
+                (kind == ir::BorrowKind::Mut
+                    && !matches!(selected.mode, ReceiverKind::Value { .. }))
+                .then_some(ir::ImplicitBorrowKind::MutableReceiver),
             )),
         )
     }
