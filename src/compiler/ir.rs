@@ -2530,6 +2530,15 @@ impl BodySubstitutionProof {
         fn shared_shape(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<bool, String> {
             budget.check_depth(depth)?;
             budget.charge_work(1)?;
+            // A component with no reference carrier (an owned `Box<i32>` or a
+            // `'static` object) has no cell to cover, so it cannot expose
+            // mutable authority through the shared cover.
+            if !matches!(ty, Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_))
+                && ty.is_closed_shallow()
+                && carrier_locations(ty, budget)?.is_empty()
+            {
+                return Ok(true);
+            }
             match ty {
                 Ty::Unit
                 | Ty::Never

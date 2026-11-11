@@ -569,3 +569,47 @@ fn main() { if run() == 4 { println!("borrow oracle ok"); } }
         "borrow oracle ok\n",
     );
 }
+
+#[test]
+fn accepts_generic_body_entry_with_closed_static_key() {
+    runs(
+        r#"use std::collections::HashMap;
+struct Bus { subs: HashMap<&'static str, Vec<i32>> }
+impl Bus { fn on<T: Default>(&mut self, name: &'static str, _t: T) { self.subs.entry(name).or_default().push(1); } }
+fn main() { let mut b = Bus { subs: HashMap::new() }; b.on("a", 0u8); b.on("a", 1u8); if b.subs["a"].len() == 2 { println!("borrow oracle ok"); } }
+"#,
+        "borrow oracle ok\n",
+    );
+}
+
+#[test]
+fn accepts_static_key_map_with_boxed_values() {
+    runs(
+        r#"use std::collections::HashMap;
+fn main() { let mut m: HashMap<&'static str, Vec<Box<dyn Fn(i32) -> i32>>> = HashMap::new(); m.entry("a").or_default().push(Box::new(|x| x + 1)); if m.get("a").map(|v| v[0](1)) == Some(2) { println!("borrow oracle ok"); } }
+"#,
+        "borrow oracle ok\n",
+    );
+}
+
+#[test]
+fn rejects_generic_body_entry_alias_conflict() {
+    rejects(
+        "generic_entry_alias",
+        r#"use std::collections::HashMap;
+fn on<T: Default>(m: &mut HashMap<&'static str, Vec<i32>>, _t: T) { let v = m.entry("a").or_default(); m.clear(); v.push(1); }
+fn main() {}
+"#,
+    );
+}
+
+#[test]
+fn rejects_frame_local_key_in_static_map() {
+    rejects(
+        "frame_local_static_key",
+        r#"use std::collections::BTreeMap;
+fn on(m: &mut BTreeMap<&'static str, i32>) { let s = String::from("a"); m.entry(s.as_str()).or_insert(0); }
+fn main() {}
+"#,
+    );
+}
