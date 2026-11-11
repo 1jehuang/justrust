@@ -229,6 +229,164 @@ fn native_box_application_fixture() -> (PlanCtx, Arc<tr::ValidatedFacts>) {
 }
 
 #[test]
+fn native_box_application_replays_parent_local_source_and_exact_facts() {
+    use crate::compiler::{
+        CompilerProvider, Input, Snapshot, TEMPLATE_BODY, TemplateBodyFact, keys,
+    };
+    use crate::engine::Engine;
+    let snapshot = Arc::new(Snapshot {
+        input: Input::Text("fn other(){}fn main(){let n=41;let first=Box::new(move||n+1);let second=Box::new(move||n+2);}".into()),
+        source_options: crate::compiler::source::SourceOptions::default(),
+        budget: ir::PlanBudget::default(),
+    });
+    let engine = Engine::new(CompilerProvider(snapshot));
+    let signatures = engine.request(keys::SignaturesDebtRoot.key());
+    let checked = engine.request(keys::CheckRoot.key());
+    engine.run(1).unwrap();
+    signatures.completion().unwrap();
+    checked.completion().unwrap();
+    let plan = signatures.fact::<PlanCtx>(0).unwrap();
+    let main = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|d| d.kind == ir::DeclKind::Function && d.name.rsplit("::").next() == Some("main"))
+        .unwrap()
+        .id;
+    let other = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|d| d.kind == ir::DeclKind::Function && d.name.rsplit("::").next() == Some("other"))
+        .unwrap()
+        .id;
+    let body = engine
+        .fact_of::<TemplateBodyFact>(
+            &keys::Item::<TEMPLATE_BODY>(plan.callable_index(main).unwrap()).key(),
+            0,
+        )
+        .expect("CHECK published the exact original main body");
+    let facts = body
+        .publication
+        .as_ref()
+        .expect("original source publication")
+        .facts();
+    let budget = facts.budget();
+    let first = &body
+        .checked
+        .locals
+        .iter()
+        .find(|local| local.name == "first")
+        .unwrap()
+        .ty;
+    let second = &body
+        .checked
+        .locals
+        .iter()
+        .find(|local| local.name == "second")
+        .unwrap()
+        .ty;
+    let (ir::Ty::Struct(first_box), ir::Ty::Struct(second_box)) = (first, second) else {
+        panic!("real native Box locals")
+    };
+    let ir::NominalIndex::ParentLocal { owner, ordinal } = first_box.id().index else {
+        panic!("real body-owned allocation")
+    };
+    assert_eq!(owner, main);
+    assert!(matches!(&first_box.def().type_args[0], ir::Ty::Closure(_)));
+    assert!(
+        !ir::identical_type(
+            &first_box.def().type_args[0],
+            &second_box.def().type_args[0],
+            budget
+        )
+        .unwrap()
+    );
+    let receipt = first_box
+        .parent_local_receipt()
+        .expect("original private receipt")
+        .clone();
+    let forged = |definition| {
+        ir::Ty::Struct(
+            ir::StructTy::new_parent_local(definition).with_parent_local_receipt(receipt.clone()),
+        )
+    };
+    let closed = facts
+        .world()
+        .instance_facts(&ir::CallTarget {
+            declaration: main,
+            type_args: Arc::from([]),
+        })
+        .unwrap();
+    let foreign = facts
+        .world()
+        .instance_facts(&ir::CallTarget {
+            declaration: other,
+            type_args: Arc::from([]),
+        })
+        .unwrap();
+    for caller in [facts.as_ref(), closed.as_ref()] {
+        let app =
+            tr::SchemaCx::native_box_application(caller.world().schema_for_tests(), first, caller)
+                .unwrap()
+                .unwrap();
+        app.authorize_definition(first, budget).unwrap();
+        assert!(
+            app.authorize_definition(&forged(first_box.def().clone()), budget)
+                .is_err(),
+            "allocation receipts cannot authorize a metadata clone"
+        );
+        let mut changed = first_box.def().clone();
+        changed.id.index = ir::NominalIndex::ParentLocal {
+            owner: other,
+            ordinal,
+        };
+        assert!(
+            tr::SchemaCx::native_box_application(
+                caller.world().schema_for_tests(),
+                &forged(changed),
+                caller
+            )
+            .is_err()
+        );
+        let mut changed = first_box.def().clone();
+        changed.type_args = second_box.def().type_args.clone();
+        changed.fields = second_box.def().fields.clone();
+        assert!(
+            tr::SchemaCx::native_box_application(
+                caller.world().schema_for_tests(),
+                &forged(changed),
+                caller
+            )
+            .is_err(),
+            "shape-consistent actual substitution must replay the original logical receipt"
+        );
+        let mut changed = first_box.def().clone();
+        let mut fields = changed.fields.read(budget).unwrap().to_vec();
+        fields[0].ty = ir::Ty::RawPtr {
+            kind: ir::BorrowKind::Mut,
+            pointee: Arc::new(ir::Ty::Bool),
+        };
+        changed.fields = fields.into();
+        assert!(
+            tr::SchemaCx::native_box_application(
+                caller.world().schema_for_tests(),
+                &forged(changed),
+                caller
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        tr::SchemaCx::native_box_application(foreign.world().schema_for_tests(), first, &foreign)
+            .is_err(),
+        "another caller's same-world facts cannot authorize the parent-local allocation"
+    );
+    let foreign_schema = native_box_source_adapter(&plan, budget);
+    assert!(tr::SchemaCx::native_box_application(&foreign_schema, first, facts).is_err());
+}
+
+#[test]
 fn native_box_application_replays_canonical_source_and_binds_exact_allocation() {
     let (plan, facts) = native_box_application_fixture();
     let budget = &plan.budget;

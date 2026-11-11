@@ -8,6 +8,41 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn parent_local_box_closure_runtime_matches_stock() {
+    output_oracle::check(
+        "parent-local-box-closure",
+        &[output_oracle::Case {
+            name: "captured_closure_box_cleanup",
+            source: "fn main(){let n=41;let first=Box::new(move||n+1);let second=Box::new(move||n+2);let a=first.as_ref();let b=second.as_ref();println!(\"{} {}\",a(),b());}",
+            expect: output_oracle::Expect::Run("42 43\n"),
+        }],
+    );
+}
+
+#[test]
+fn parent_local_box_button_matches_stock() {
+    output_oracle::check(
+        "parent-local-box-button",
+        &[output_oracle::Case {
+            name: "button_string_output",
+            source: r#"
+struct Button { handlers: Vec<Box<dyn FnMut(&str) -> String>> }
+fn main() {
+    let mut count = 0;
+    let mut b = Button { handlers: vec![] };
+    b.handlers.push(Box::new(|e| format!("first:{e}")));
+    b.handlers.push(Box::new(move |e| { count += 1; format!("second:{e}#{count}") }));
+    for _ in 0..2 { for hd in b.handlers.iter_mut() { println!("{}", hd("click")); } }
+}
+"#,
+            expect: output_oracle::Expect::Run(
+                "first:click\nsecond:click#1\nfirst:click\nsecond:click#2\n",
+            ),
+        }],
+    );
+}
+
+#[test]
 fn reference_application_user_blankets_match_stock() {
     use output_oracle::{Case, Expect};
     output_oracle::check(

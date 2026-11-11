@@ -103,28 +103,49 @@ pub(super) fn issue_application(
         .map_err(|error| adapter.error(error))?;
     if definition.id.snapshot != facts.registry_snapshot()
         || definition.source_decl.snapshot != definition.id.snapshot
-        || !matches!(definition.id.index, ir::NominalIndex::SourceSlot(slot)
-            if slot == nominal_schema::canonical_slot(&(definition.source_decl, vec![actual.clone()])))
         || owner.native_sequence_binding().is_some()
     {
         return Err(adapter.error("noncanonical native Box source application identity".into()));
     }
-    // Recompute the original declaration, not the supplied definition's fields.
-    let canonical = adapter
-        .scratch()
-        .intern(
-            &adapter.registry,
-            definition.source_decl,
-            std::slice::from_ref(actual),
-            ir::FactsCtx::Validated(facts),
-            budget,
-            0,
-        )
-        .map_err(|error| adapter.error(error))?;
-    let ir::Ty::Struct(canonical) = canonical else {
-        return Err(adapter.error("native Box canonical source changed nominal kind".into()));
-    };
-    bounded_same_definition(owner, &canonical, budget).map_err(|error| adapter.error(error))?;
+    match definition.id.index {
+        ir::NominalIndex::ParentLocal { .. } => {
+            // A Box whose actual contains a closure is minted by its owning
+            // body, not the source interner. Replay its original source schema
+            // and private receipt under these exact facts. This authenticates
+            // the parent, ordinal, ordered actuals and every normalized field.
+            adapter.validate_nominal_tree(ty, facts.env(), budget, false, Some(facts))?;
+        }
+        ir::NominalIndex::SourceSlot(slot)
+            if slot
+                == nominal_schema::canonical_slot(&(
+                    definition.source_decl,
+                    vec![actual.clone()],
+                )) =>
+        {
+            // Recompute the original declaration, not the supplied definition's fields.
+            let canonical = adapter
+                .scratch()
+                .intern(
+                    &adapter.registry,
+                    definition.source_decl,
+                    std::slice::from_ref(actual),
+                    ir::FactsCtx::Validated(facts),
+                    budget,
+                    0,
+                )
+                .map_err(|error| adapter.error(error))?;
+            let ir::Ty::Struct(canonical) = canonical else {
+                return Err(
+                    adapter.error("native Box canonical source changed nominal kind".into())
+                );
+            };
+            bounded_same_definition(owner, &canonical, budget)
+                .map_err(|error| adapter.error(error))?;
+        }
+        _ => {
+            return Err(adapter.error("noncanonical native Box source application identity".into()));
+        }
+    }
     budget
         .charge_nodes(1)
         .map_err(|error| adapter.error(error))?;
