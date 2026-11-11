@@ -19,7 +19,7 @@ env:
   JUSTRUST_RELEASE_BUILD: "1"
   # Enable JUSTRUST_HOSTED_RELEASES=1 only after the nonpublishing hosted
   # Linux validation workflow passes with the repository's JCODE_API_KEY.
-  HOSTED_CLIENT_REV: 0adbc3ecfb4c8729a56b677a9b784ba73d1814e2
+  HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
