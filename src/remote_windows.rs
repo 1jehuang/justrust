@@ -187,14 +187,12 @@ fn decode(text: &str) -> Result<Vec<u8>> {
 }
 
 pub fn agent_command(probe: bool) -> String {
-    let script = format!(
-        "$ErrorActionPreference='Stop'; & '{AGENT}'{}; exit $LASTEXITCODE",
-        if probe { " -Probe" } else { "" }
-    );
-    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    // This fixed path has no cmd.exe metacharacters or whitespace. Request
+    // arguments belong exclusively on stdin, never in this SSH command.
+    // Invoke the reviewed agent directly, without an intermediate script.
     format!(
-        "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
-        encode(&utf16)
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -File {AGENT}{}",
+        if probe { " -Probe" } else { "" }
     )
 }
 
@@ -1507,25 +1505,35 @@ mod tests {
     }
 
     #[test]
-    fn agent_command_only_contains_encoded_constant_script() {
+    fn agent_command_only_contains_fixed_file_invocation() {
         for probe in [true, false] {
             let cmd = agent_command(probe);
-            let encoded = cmd
-                .strip_prefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
-                .unwrap();
-            let bytes = decode(encoded).unwrap();
-            let text = String::from_utf16(
-                &bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-            assert!(text.contains(AGENT));
-            assert_eq!(text.contains(" -Probe"), probe);
-            assert!(!text.contains("bash") && !text.contains("rsync") && !text.contains("cargo"));
+            let expected = r"powershell.exe -NoLogo -NoProfile -NonInteractive -File C:\ProgramData\Justrust\hosted-agent.ps1";
+            assert_eq!(
+                cmd,
+                format!("{expected}{}", if probe { " -Probe" } else { "" })
+            );
+            assert!(!cmd.contains("EncodedCommand"));
+            assert!(!cmd.contains(['&', ';', '|', '<', '>', '%', '^', '\n', '\r']));
         }
+    }
+
+    #[test]
+    fn agent_stdin_json_preserves_non_ascii_arguments() {
+        let scratch = Scratch::new();
+        std::fs::write(
+            scratch.0.join("Cargo.toml"),
+            "[package]\nname='app'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        let argument = "日本語 café 🦀 & echo %PATH% | 'quoted'";
+        let args = ["--".to_owned(), argument.to_owned()];
+        let request = bundle("test", &args, "utf8-run", &scratch.0, &[scratch.0.clone()]).unwrap();
+        // prepare serializes the bundle this way, and execute writes those
+        // bytes directly to SSH stdin, without including them in the command.
+        let payload = serde_json::to_vec(&request).unwrap();
+        assert!(std::str::from_utf8(&payload).unwrap().contains(argument));
+        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap(), request);
+        assert!(!agent_command(false).contains(argument));
     }
 }
