@@ -110,6 +110,30 @@ impl IntrinsicOp {
     }
 }
 
+impl IntrinsicOp {
+    /// Methods `u8` shares with `char` under the same ASCII definitions.
+    /// The Unicode `is_whitespace`/`is_control` forms are `char`-only.
+    pub fn is_ascii_byte_method(self) -> bool {
+        use IntrinsicOp::*;
+        matches!(
+            self,
+            IsAscii
+                | IsAsciiDigit
+                | IsAsciiHexdigit
+                | IsAsciiAlphabetic
+                | IsAsciiAlphanumeric
+                | IsAsciiUppercase
+                | IsAsciiLowercase
+                | IsAsciiWhitespace
+                | IsAsciiPunctuation
+                | IsAsciiGraphic
+                | IsAsciiControl
+                | ToAsciiUppercase
+                | ToAsciiLowercase
+        )
+    }
+}
+
 const TABLE: &[(&str, IntrinsicOp)] = {
     use IntrinsicOp::*;
     &[
@@ -213,6 +237,10 @@ impl Intrinsic {
                 ScalarTy::Char,
             ) => (vec![], Ty::Bool),
             (ToAsciiUppercase | ToAsciiLowercase, ScalarTy::Char) => (vec![], Ty::Char),
+            (op, ScalarTy::Int(IntTy::U8)) if op.is_ascii_byte_method() => match op {
+                ToAsciiUppercase | ToAsciiLowercase => (vec![], this),
+                _ => (vec![], Ty::Bool),
+            },
             (Sqrt | FloatAbs, ScalarTy::Float(_)) => (vec![], this),
             (FloatMin | FloatMax, ScalarTy::Float(_)) => (vec![this.clone()], this),
             (

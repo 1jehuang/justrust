@@ -85,6 +85,18 @@ impl CharMethods for char {
     }
 }
 
+// ---- u8 ----
+
+pub trait ByteMethods {
+    fn eq_ignore_ascii_case(&self, other: &u8) -> bool;
+}
+
+impl ByteMethods for u8 {
+    fn eq_ignore_ascii_case(&self, other: &u8) -> bool {
+        self.to_ascii_lowercase() == other.to_ascii_lowercase()
+    }
+}
+
 /// `char::from_digit`.
 pub fn char_from_digit(num: u32, radix: u32) -> Option<char> {
     if radix < 2u32 || radix > 36u32 {

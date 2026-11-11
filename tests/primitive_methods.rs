@@ -1286,6 +1286,34 @@ fn primitive_methods_match_stock() {
                 expect: Expect::Run(""),
             },
             Case {
+                name: "bytes_ascii",
+                source: r#"fn main() {
+    let bytes = [b'7', b'a', b'Z', b' ', 0x0bu8, 0x0c, b'!', b'~', 0x7f, 0x80, b'f', b'G', b'\n', 0];
+    for b in bytes {
+        println!("{} {}{}{}{}{}{}{}{}{}{}{} {} {}", b,
+            b.is_ascii() as u8, b.is_ascii_alphabetic() as u8, b.is_ascii_digit() as u8,
+            b.is_ascii_alphanumeric() as u8, b.is_ascii_whitespace() as u8, b.is_ascii_punctuation() as u8,
+            b.is_ascii_uppercase() as u8, b.is_ascii_lowercase() as u8, b.is_ascii_hexdigit() as u8,
+            b.is_ascii_graphic() as u8, b.is_ascii_control() as u8,
+            b.to_ascii_uppercase(), b.to_ascii_lowercase());
+    }
+    println!("{} {} {}", b'a'.eq_ignore_ascii_case(&b'A'), b'1'.eq_ignore_ascii_case(&b'1'), b'a'.eq_ignore_ascii_case(&b'b'));
+    let s: &[u8] = b"x-12";
+    let r: &u8 = &s[2];
+    println!("{} {}", r.is_ascii_digit(), s.iter().filter(|c| c.is_ascii_digit()).count());
+}"#,
+                expect: Expect::Run(
+                    "55 10110000110 55 55\n97 11010001110 65 97\n90 11010010010 90 122\n32 10001000000 32 32\n11 10000000001 11 11\n12 10001000001 12 12\n33 10000100010 33 33\n126 10000100010 126 126\n127 10000000001 127 127\n128 00000000000 128 128\n102 11010001110 70 102\n71 11010010010 71 103\n10 10001000001 10 10\n0 10000000001 0 0\ntrue true false\ntrue 2\n",
+                ),
+            },
+            Case {
+                name: "wider_int_ascii_method_unused",
+                source: r#"#[allow(dead_code)]
+fn f() -> bool { 300u16.is_ascii_digit() }
+fn main() {}"#,
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
                 name: "floats",
                 source: r#"fn main() {
             assert_eq!(9.0f64.sqrt(), 3.0); assert_eq!((-4.0f32).abs(), 4.0);

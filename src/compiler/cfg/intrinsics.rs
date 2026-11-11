@@ -498,6 +498,9 @@ impl Lowerer<'_> {
                 );
             }
             (op, ScalarTy::Char) => self.lower_char_intrinsic(destination, op, x, origin)?,
+            (op, ScalarTy::Int(IntTy::U8)) if op.is_ascii_byte_method() => {
+                self.lower_ascii_byte_intrinsic(destination, op, x, origin)?
+            }
             (IsNan, ScalarTy::Float(_)) => {
                 let value = self.compare_rvalue(BinaryOp::Ne, x.clone(), x);
                 self.assign(destination.clone(), value, origin);
@@ -533,6 +536,50 @@ impl Lowerer<'_> {
         Ok(())
     }
 
+    /// `u8` ASCII predicates and case maps: the same code point ranges as the
+    /// `char` forms, compared as byte values.
+    fn lower_ascii_byte_intrinsic(
+        &mut self,
+        destination: &Place,
+        op: IntrinsicOp,
+        b: Operand,
+        origin: Option<ExprId>,
+    ) -> Result<(), String> {
+        use IntrinsicOp::*;
+        let byte = |value: u32| int(IntTy::U8, u128::from(value));
+        if let ToAsciiUppercase | ToAsciiLowercase = op {
+            let (lo, hi, up) = if matches!(op, ToAsciiUppercase) {
+                (0x61, 0x7a, false)
+            } else {
+                (0x41, 0x5a, true)
+            };
+            let inside = self.in_ranges_with(&b, &[(lo, hi)], byte, origin)?;
+            let yes = self.block();
+            let no = self.block();
+            let join = self.block();
+            self.branch(inside, yes, no, origin)?;
+            self.current = yes;
+            let shifted = self.arith(
+                IntTy::U8,
+                if up { BinaryOp::Add } else { BinaryOp::Sub },
+                b.clone(),
+                int(IntTy::U8, 0x20),
+                origin,
+            );
+            self.assign(destination.clone(), Rvalue::Use(shifted), origin);
+            self.terminate(Terminator::Goto(join), origin)?;
+            self.current = no;
+            self.assign(destination.clone(), Rvalue::Use(b), origin);
+            self.terminate(Terminator::Goto(join), origin)?;
+            self.current = join;
+            return Ok(());
+        }
+        let ranges = ascii_ranges(op).ok_or("byte primitive method lowering invariant")?;
+        let inside = self.in_ranges_with(&b, ranges, byte, origin)?;
+        self.assign(destination.clone(), Rvalue::Use(inside), origin);
+        Ok(())
+    }
+
     fn lower_char_intrinsic(
         &mut self,
         destination: &Place,
@@ -542,33 +589,6 @@ impl Lowerer<'_> {
     ) -> Result<(), String> {
         use IntrinsicOp::*;
         let ranges: &[(u32, u32)] = match op {
-            IsAscii => &[(0, 0x7f)],
-            IsAsciiDigit => &[(0x30, 0x39)],
-            IsAsciiHexdigit => &[(0x30, 0x39), (0x41, 0x46), (0x61, 0x66)],
-            IsAsciiAlphabetic => &[(0x41, 0x5a), (0x61, 0x7a)],
-            IsAsciiAlphanumeric => &[(0x30, 0x39), (0x41, 0x5a), (0x61, 0x7a)],
-            IsAsciiUppercase => &[(0x41, 0x5a)],
-            IsAsciiLowercase => &[(0x61, 0x7a)],
-            // Rust's ASCII whitespace excludes U+000B.
-            IsAsciiWhitespace => &[(0x09, 0x0a), (0x0c, 0x0d), (0x20, 0x20)],
-            IsAsciiPunctuation => &[(0x21, 0x2f), (0x3a, 0x40), (0x5b, 0x60), (0x7b, 0x7e)],
-            IsAsciiGraphic => &[(0x21, 0x7e)],
-            IsAsciiControl => &[(0x00, 0x1f), (0x7f, 0x7f)],
-            // Unicode White_Space (char::is_whitespace).
-            IsWhitespace => &[
-                (0x09, 0x0d),
-                (0x20, 0x20),
-                (0x85, 0x85),
-                (0xa0, 0xa0),
-                (0x1680, 0x1680),
-                (0x2000, 0x200a),
-                (0x2028, 0x2029),
-                (0x202f, 0x202f),
-                (0x205f, 0x205f),
-                (0x3000, 0x3000),
-            ],
-            // General_Category Cc.
-            IsControl => &[(0x00, 0x1f), (0x7f, 0x9f)],
             ToAsciiUppercase | ToAsciiLowercase => {
                 let (lo, hi, delta_up) = if matches!(op, ToAsciiUppercase) {
                     (0x61, 0x7a, false)
@@ -614,7 +634,30 @@ impl Lowerer<'_> {
                 self.current = join;
                 return Ok(());
             }
-            _ => return Err("character primitive method lowering invariant".into()),
+            _ => {
+                if let Some(ranges) = ascii_ranges(op) {
+                    ranges
+                } else {
+                    match op {
+                        // Unicode White_Space (char::is_whitespace).
+                        IsWhitespace => &[
+                            (0x09, 0x0d),
+                            (0x20, 0x20),
+                            (0x85, 0x85),
+                            (0xa0, 0xa0),
+                            (0x1680, 0x1680),
+                            (0x2000, 0x200a),
+                            (0x2028, 0x2029),
+                            (0x202f, 0x202f),
+                            (0x205f, 0x205f),
+                            (0x3000, 0x3000),
+                        ],
+                        // General_Category Cc.
+                        IsControl => &[(0x00, 0x1f), (0x7f, 0x9f)],
+                        _ => return Err("character primitive method lowering invariant".into()),
+                    }
+                }
+            }
         };
         let inside = self.in_ranges(&c, ranges, origin)?;
         self.assign(destination.clone(), Rvalue::Use(inside), origin);
@@ -628,12 +671,22 @@ impl Lowerer<'_> {
         ranges: &[(u32, u32)],
         origin: Option<ExprId>,
     ) -> Result<Operand, String> {
+        self.in_ranges_with(c, ranges, char_value, origin)
+    }
+
+    fn in_ranges_with(
+        &mut self,
+        c: &Operand,
+        ranges: &[(u32, u32)],
+        constant: impl Fn(u32) -> Operand,
+        origin: Option<ExprId>,
+    ) -> Result<Operand, String> {
         let result = self.temporary(Ty::Bool, origin);
         self.assign(result.clone(), bool_value(false), origin);
         let join = self.block();
         for &(lo, hi) in ranges {
-            let above = self.compare(BinaryOp::Ge, c.clone(), char_value(lo), origin);
-            let below = self.compare(BinaryOp::Le, c.clone(), char_value(hi), origin);
+            let above = self.compare(BinaryOp::Ge, c.clone(), constant(lo), origin);
+            let below = self.compare(BinaryOp::Le, c.clone(), constant(hi), origin);
             let both = self.temporary(Ty::Bool, origin);
             self.assign(
                 both.clone(),
@@ -746,6 +799,26 @@ fn bool_value(value: bool) -> Rvalue {
 
 fn char_value(value: u32) -> Operand {
     Operand::Constant(Constant::Char(CharValue { value }))
+}
+
+/// ASCII class code point ranges shared by the `char` and `u8` methods.
+fn ascii_ranges(op: IntrinsicOp) -> Option<&'static [(u32, u32)]> {
+    use IntrinsicOp::*;
+    Some(match op {
+        IsAscii => &[(0, 0x7f)],
+        IsAsciiDigit => &[(0x30, 0x39)],
+        IsAsciiHexdigit => &[(0x30, 0x39), (0x41, 0x46), (0x61, 0x66)],
+        IsAsciiAlphabetic => &[(0x41, 0x5a), (0x61, 0x7a)],
+        IsAsciiAlphanumeric => &[(0x30, 0x39), (0x41, 0x5a), (0x61, 0x7a)],
+        IsAsciiUppercase => &[(0x41, 0x5a)],
+        IsAsciiLowercase => &[(0x61, 0x7a)],
+        // Rust's ASCII whitespace excludes U+000B.
+        IsAsciiWhitespace => &[(0x09, 0x0a), (0x0c, 0x0d), (0x20, 0x20)],
+        IsAsciiPunctuation => &[(0x21, 0x2f), (0x3a, 0x40), (0x5b, 0x60), (0x7b, 0x7e)],
+        IsAsciiGraphic => &[(0x21, 0x7e)],
+        IsAsciiControl => &[(0x00, 0x1f), (0x7f, 0x7f)],
+        _ => return None,
+    })
 }
 
 /// (MIN, MAX) bit patterns at the declared width.
