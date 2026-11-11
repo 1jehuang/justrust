@@ -12,6 +12,9 @@ pub(super) use carrier_mapping::require_type as require_receiver_carriers;
 pub(super) use carriers::require_preserved_boundary;
 pub(super) use carriers::{PhysicalCarrierFlow, PhysicalCarrierIdentity};
 use virtual_calls::VirtualPhysicalCall;
+#[path = "opaque_physical/cleanup.rs"]
+mod cleanup;
+use cleanup::CleanupMapping;
 
 #[derive(Clone, Debug)]
 struct DirectPhysicalCall {
@@ -105,6 +108,7 @@ pub(super) struct PhysicalNormalizationProof {
     calls: Arc<[Arc<opaque_dispatch::OpaqueCallAuthorization>]>,
     direct_calls: Arc<[DirectPhysicalCall]>,
     virtual_calls: Arc<[VirtualPhysicalCall]>,
+    cleanup_mappings: Arc<[CleanupMapping]>,
     packs: Arc<[(ir::ExprId, ir::OpaquePackProof)]>,
 }
 
@@ -254,6 +258,7 @@ impl<'a> PhysicalValidation<'a> {
             || self.proof.packs.len() != expected.proof.packs.len()
             || self.proof.direct_calls.len() != expected.proof.direct_calls.len()
             || self.proof.virtual_calls.len() != expected.proof.virtual_calls.len()
+            || self.proof.cleanup_mappings.len() != expected.proof.cleanup_mappings.len()
         {
             return Err("physical CFG type, pack or direct-call mapping changed".into());
         }
@@ -286,6 +291,17 @@ impl<'a> PhysicalValidation<'a> {
         self.budget.charge_work(self.proof.virtual_calls.len())?;
         if self.proof.virtual_calls != expected.proof.virtual_calls {
             return Err("physical virtual-call occurrence or ABI mapping changed".into());
+        }
+        for (mapping, replayed) in self
+            .proof
+            .cleanup_mappings
+            .iter()
+            .zip(expected.proof.cleanup_mappings.iter())
+        {
+            if !mapping.matches_replayed(replayed, self.budget)? {
+                return Err("physical existing cleanup correspondence changed".into());
+            }
+            mapping.validate_candidate(candidate, facts)?;
         }
         let expected = &expected.function;
         if candidate.runtime_sites != expected.runtime_sites
@@ -579,7 +595,16 @@ pub(super) fn normalize(
     let mut packs = Vec::new();
     let mut direct_calls = Vec::new();
     let mut virtual_calls = Vec::new();
-    for block in &mut output.blocks {
+    let mut cleanup_mappings = Vec::new();
+    let cleanup_replay = cfg::ValidatedCleanupCall::physical_owner_replay(
+        original,
+        publication,
+        target,
+        &closed,
+        budget,
+    )
+    .map_err(Error::new)?;
+    for (block_index, block) in output.blocks.iter_mut().enumerate() {
         for statement in &mut block.statements {
             let cfg::Statement::Assign { value, .. } = &mut statement.value else {
                 continue;
@@ -675,6 +700,26 @@ pub(super) fn normalize(
                 }
                 _ => {}
             }
+        }
+        if let cfg::Terminator::Drop { cleanup, .. } = &mut block.terminator.value {
+            let source = cleanup.clone();
+            let mapped = cleanup_replay
+                .remap(block_index, &source, &output.locals, output.return_local)
+                .map_err(Error::new)?;
+            budget
+                .retain_bytes(std::mem::size_of::<CleanupMapping>())
+                .map_err(Error::new)?;
+            cleanup_mappings
+                .try_reserve_exact(1)
+                .map_err(|_| Error::new("physical cleanup proof allocation failed"))?;
+            *cleanup = mapped.clone();
+            cleanup_mappings.push(CleanupMapping {
+                source_block: block_index,
+                physical_block: block_index,
+                origin: block.terminator.origin,
+                source,
+                physical: mapped,
+            });
         }
         if let cfg::Terminator::Call {
             target: callee,
@@ -786,6 +831,7 @@ pub(super) fn normalize(
         calls: calls.to_vec().into(),
         direct_calls: direct_calls.into(),
         virtual_calls: virtual_calls.into(),
+        cleanup_mappings: cleanup_mappings.into(),
         packs: packs.into(),
     };
     Ok(PhysicalCfgDraft {

@@ -194,6 +194,15 @@ pub(super) async fn produce(
             &provider.0.budget,
         )
         .map_err(Error::new)?;
+    let cleanup = if let Some(handle) = cleanup {
+        let demand: Arc<instances::DirectDemands> = cx.read_fact(handle).await?;
+        demand
+            .validate_cleanup(physical.function(), &provider.0.budget)
+            .map_err(Error::new)?;
+        Some(demand)
+    } else {
+        None
+    };
     // Unchanged owning types retain their original cleanup. A changed owner
     // can avoid new destructor dependencies only when the exact physical CFG
     // proves it is completely consumed before every cleanup-requiring event.
@@ -221,18 +230,22 @@ pub(super) async fn produce(
                     &provider.0.budget,
                 )
                 .map_err(Error::new)?
+                && !match &cleanup {
+                    Some(demand) => normal_exit::fully_cleaned(
+                        physical.function(),
+                        ir::LocalId(index),
+                        demand,
+                        &provider.0.budget,
+                    )
+                    .map_err(Error::new)?,
+                    None => false,
+                }
             {
                 return Err(Error::new(
                     "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
                 ));
             }
         }
-    }
-    if let Some(handle) = cleanup {
-        let demand: Arc<instances::DirectDemands> = cx.read_fact(handle).await?;
-        demand
-            .validate_cleanup(physical.function(), &provider.0.budget)
-            .map_err(Error::new)?;
     }
     scale_task_work_by_cfg(physical.function());
     let concrete =

@@ -22,6 +22,30 @@ pub(super) fn fully_consumed(
     )
 }
 
+/// Unlike fully_consumed, this path can discharge a genuine root cleanup only
+/// after the instance frontier has authenticated every destructor dependency.
+pub(super) fn fully_cleaned(
+    function: &cfg::Function,
+    local: ir::LocalId,
+    demands: &crate::compiler::instances::DirectDemands,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    if local.0 >= function.locals.len() {
+        return Err("physical cleanup proof has an invalid local".into());
+    }
+    demands.validate_cleanup(function, budget)?;
+    budget.charge_work(function.params.len())?;
+    solve_with_cleanup(
+        &function.blocks,
+        function.entry,
+        function.params.contains(&local),
+        function.return_local == local,
+        local,
+        budget,
+        true,
+    )
+}
+
 // 0 is unreachable, 1 reachable/uninitialized, 2 reachable/may-initialized.
 // Entries only increase. Each block becomes reachable once and may-initialized
 // once, so no arbitrary iteration ceiling or whole-program budget is needed.
@@ -32,6 +56,18 @@ fn solve(
     returned: bool,
     local: ir::LocalId,
     budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    solve_with_cleanup(blocks, entry, parameter, returned, local, budget, false)
+}
+
+fn solve_with_cleanup(
+    blocks: &[cfg::BasicBlock],
+    entry: cfg::BlockId,
+    parameter: bool,
+    returned: bool,
+    local: ir::LocalId,
+    budget: &ir::PlanBudget,
+    authenticated_cleanup: bool,
 ) -> Result<bool, String> {
     budget.charge_work(1)?;
     if entry.0 >= blocks.len() {
@@ -141,7 +177,12 @@ fn solve(
                     // This helper cannot authorize or replace an introduced
                     // destructor dependency, including a projected cleanup.
                     if cleanup.owner().local == local {
-                        return Ok(false);
+                        if !authenticated_cleanup {
+                            return Ok(false);
+                        }
+                        if cleanup.owner().projection.is_empty() {
+                            initialized = false;
+                        }
                     }
                     [Some(*next), None]
                 }

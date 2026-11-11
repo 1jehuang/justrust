@@ -1,5 +1,6 @@
 //! Semantic normal-path cleanup, integrated before canonical CFG publication.
 use super::*;
+mod physical_remap;
 use crate::compiler::traits::{NormalDropPlan, ValidatedDestructor, ValidatedFacts};
 use std::sync::Arc;
 

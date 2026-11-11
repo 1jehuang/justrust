@@ -8,6 +8,38 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn opaque_body_existing_cleanup_explicit_drop_matches_stock() {
+    output_oracle::check(
+        "opaque-existing-cleanup-explicit-drop",
+        &[output_oracle::Case {
+            name: "opaque_counter_and_consumed_box",
+            source: r#"fn counter()->impl FnMut()->i32{let mut n=0;move||{n+=1;n}}fn main(){let mut c=counter();let n=41;let b=Box::new(move||n+1);let call=b.as_ref();println!("{} {}",c(),call());drop(b);println!("{}",c());}"#,
+            expect: output_oracle::Expect::Run("1 42\n2\n"),
+        }],
+    );
+}
+
+#[test]
+fn opaque_cleanup_unused_invalids_are_rejected() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "opaque-cleanup-unused-invalids",
+        &[
+            Case {
+                name: "unused_opaque_mutable_capture_cannot_become_fn",
+                source: r#"fn counter()->impl FnMut()->i32{let mut n=0;move||{n+=1;n}}fn bad(){let mut c=counter();let _b:Box<dyn Fn()->i32>=Box::new(move||c());}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_cleanup_owner_cannot_lose_drop_field",
+                source: r#"struct Token{value:String}impl Drop for Token{fn drop(&mut self){}}fn bad(){let owner=Token{value:String::from("owned")};let _stolen=owner.value;}fn main(){}"#,
+                expect: Expect::Invalid("E0509"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_body_preserves_virtual_dispatch_matches_stock() {
     output_oracle::check(
         "opaque-body-virtual-dispatch",
