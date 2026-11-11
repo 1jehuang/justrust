@@ -303,6 +303,51 @@ mod tests {
                     let request = cx.request(super::super::key(&caller, occurrence, call, budget)?);
                     let authorization: Arc<super::super::OpaqueCallAuthorization> =
                         cx.read_fact(request.get(0)).await?;
+                    let representations = opaque_instances::read(
+                        &facts,
+                        std::slice::from_ref(&call.trait_ref.self_ty),
+                        budget,
+                    )
+                    .await?;
+                    authorization.replay(
+                        publication,
+                        &caller,
+                        occurrence,
+                        &representations,
+                        &types,
+                        budget,
+                    )?;
+                    let rejects = |changed: super::super::OpaqueCallAuthorization| {
+                        assert!(
+                            changed
+                                .replay(
+                                    publication,
+                                    &caller,
+                                    occurrence,
+                                    &representations,
+                                    &types,
+                                    budget,
+                                )
+                                .is_err()
+                        );
+                    };
+                    let mut changed = (*authorization).clone();
+                    changed.physical_signature.result = ir::Ty::Bool;
+                    rejects(changed);
+                    let mut changed = (*authorization).clone();
+                    changed.physical_signature.params.clear();
+                    rejects(changed);
+                    let mut changed = (*authorization).clone();
+                    changed.selected_signature.result = ir::Ty::Bool;
+                    rejects(changed);
+                    let mut changed = (*authorization).clone();
+                    changed.selected_signature.params.clear();
+                    rejects(changed);
+                    let mut changed = (*authorization).clone();
+                    let mut contract = (*changed.physical_signature.ref_contract).clone();
+                    contract.region_count = contract.region_count.checked_add(1).unwrap();
+                    changed.physical_signature.ref_contract = Arc::new(contract);
+                    rejects(changed);
                     let transport = &authorization.transport;
                     assert_ne!(
                         transport.selected, transport.execution,
@@ -331,6 +376,29 @@ mod tests {
                         "fixture must exercise Graph versus Source, not only stored engine equality"
                     );
                     let foreign = Engine::new(CompilerProvider(provider.0.clone()));
+                    nominal_realization::substitution::replay_closed_signature_with(
+                        cx.authority(),
+                        &ir::Callee::Direct(authorization.target().clone()),
+                        &authorization.selected_signature,
+                        &authorization.physical_signature,
+                        ir::FactsCtx::from_validated(&closed),
+                        budget,
+                        &mut traits::TraitScratch::default(),
+                    )
+                    .map_err(Error::new)?;
+                    assert!(
+                        nominal_realization::substitution::replay_closed_signature_with(
+                            foreign.authority(),
+                            &ir::Callee::Direct(authorization.target().clone()),
+                            &authorization.selected_signature,
+                            &authorization.physical_signature,
+                            ir::FactsCtx::from_validated(&closed),
+                            budget,
+                            &mut traits::TraitScratch::default(),
+                        )
+                        .is_err(),
+                        "full mapped ABI replay must reject foreign-engine typed reads"
+                    );
                     let mut changed = transport.clone();
                     changed.engine = foreign.authority();
                     let rejected = changed

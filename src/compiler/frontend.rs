@@ -8170,9 +8170,9 @@ pub(super) fn replay_source_body_with_scratch(
                 let required = view.signature();
                 let mut equal = required.params.len() == signature.params.len();
                 for (required, actual) in required.params.iter().zip(&signature.params) {
-                    equal &= replay_type_equal(required, actual, budget)?;
+                    equal &= root_type_equal(required, actual, facts, budget)?;
                 }
-                equal &= replay_type_equal(&required.result, &signature.result, budget)?;
+                equal &= root_type_equal(&required.result, &signature.result, facts, budget)?;
                 // Both signatures already carry exact canonical authority:
                 // the emitted callee was replayed above and the original view
                 // was authenticated in this caller. The fixture-only structural

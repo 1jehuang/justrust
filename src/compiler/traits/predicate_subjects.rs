@@ -30,6 +30,7 @@ impl ValidatedTraitWorld {
         };
         let closed = self.goal_is_closed_in_with(&projection.trait_ref, context, active)?;
         if !closed
+            && !self.raw_associated_ty_is_closed(&goal.self_ty, 0)?
             && self
                 .opaque_associated_binding(projection, context.env())?
                 .is_none()
@@ -118,10 +119,12 @@ impl ValidatedTraitWorld {
         // Replay validates each reduction under the same staging it was
         // produced with (pre-finalization owner normalization is staged).
         for reduction in reductions.iter() {
-            self.validate_staged_projected_dependency(
+            self.validate_projected_dependency_with_for_use(
                 reduction,
                 context,
+                &mut ProofScratch::default(),
                 !self.owner_normalization_finalized,
+                context.executable_storage,
             )?;
         }
         Ok(())

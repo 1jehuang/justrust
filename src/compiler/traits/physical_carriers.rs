@@ -25,6 +25,50 @@ fn same_result_subject(
     }
 }
 
+impl ValidatedFacts {
+    /// Pair exact, independently authenticated closed nominal applications for
+    /// physical carrier coordinates. This grants no source equality shortcut.
+    pub(in crate::compiler) fn physical_carrier_nominals(
+        &self,
+        original: &Ty,
+        physical: &Ty,
+        engine: crate::engine::EngineAuthority,
+        budget: &PlanBudget,
+    ) -> Result<Vec<ir::NominalCarrierMapping>> {
+        if self.phase() != FactsPhase::Closed {
+            return Err(FactsError::invalid(
+                budget,
+                "physical carrier nominal mapping requires closed facts",
+            ));
+        }
+        self.validate_ty_metadata_with_budget(original, budget)?;
+        self.validate_ty_metadata_with_budget(physical, budget)?;
+        if !self.world.types_equal(
+            std::slice::from_ref(original),
+            std::slice::from_ref(physical),
+        )? {
+            return Err(FactsError::invalid(
+                budget,
+                "physical carrier nominal pair changed canonical type",
+            ));
+        }
+        super::super::nominal_realization::substitution::replay_closed_type_mapping_with(
+            None,
+            engine,
+            original,
+            physical,
+            self,
+            budget,
+            &mut TraitScratch::default(),
+        )
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+        let mut output = Vec::new();
+        self.world
+            .collect_nominal_mappings(original, physical, &mut output, 0)?;
+        Ok(output)
+    }
+}
+
 impl CarrierContractView {
     /// Declaration-owned instantiated signature, before physical representation mapping.
     pub(in crate::compiler) fn physical_source_signature(&self) -> &Signature {
@@ -37,12 +81,14 @@ impl CarrierContractView {
         contract: ir::CarrierContract,
         source_regions: Arc<ir::SourceRegionEnv>,
         components: Arc<[ir::CarrierComponentMapping]>,
+        nominals: Arc<[ir::NominalCarrierMapping]>,
     ) -> Self {
         let mut view = original.clone();
         view.physical = Some(identity);
         view.contract = contract;
         view.source_regions = source_regions;
         view.components = components;
+        view.nominals = nominals;
         view.fixed = signature.ref_contract.clone();
         view.result_signature = signature;
         // The borrowed physical boundary replays the original view before

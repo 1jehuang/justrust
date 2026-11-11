@@ -4,6 +4,10 @@ mod physical_remap;
 use crate::compiler::traits::{NormalDropPlan, ValidatedDestructor, ValidatedFacts};
 use std::sync::Arc;
 
+mod abstract_scope;
+mod physical;
+pub(in crate::compiler) use physical::materialize as materialize_physical_cleanup;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedCleanupCall {
     owner: Place,
@@ -179,9 +183,6 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
             return Err("explicit canonical destructor calls are not allowed".into());
         }
     }
-    if !authority.has_normal_drop_impls() {
-        return Ok(false);
-    }
     let mut enabled = false;
     for ty in source
         .locals
@@ -192,6 +193,11 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
     {
         authority.budget().charge_work(1)?;
         enabled |= descriptor(ty, facts)?.is_some();
+        if !enabled {
+            // Preserve source statement-temporary events without claiming a
+            // destructor for a representation not yet available to this node.
+            enabled = abstract_scope::required(ty, authority)?;
+        }
     }
     // Every demanded closed body is lowered again before its generated shape
     // is sealed. The instance frontier separately demands each concrete cleanup

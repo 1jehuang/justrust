@@ -1471,18 +1471,30 @@ impl Local {
                     if matches!(callee, ir::Callee::TraitItem(call)
                         if matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)))
                     {
-                        let (resolved, _) =
+                        let (resolved, nominals) =
                             substitution.call(callee, signature, source_scratch, scratch)?;
-                        let ir::Callee::TraitItem(call) = resolved else {
-                            return Err("opaque alignment call lost public source contract".into());
-                        };
-                        if !matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) {
-                            return Err(
-                                "opaque alignment call changed original opaque receiver".into()
-                            );
+                        match resolved {
+                            ir::Callee::Direct(next) => {
+                                // Ordinary blanket implementation selection retains
+                                // the public opaque actual, never its hidden value.
+                                retain(SelectedSite::Call(occurrence), next, &nominals, scratch)?;
+                            }
+                            ir::Callee::TraitItem(call) => {
+                                if !matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) {
+                                    return Err(
+                                        "opaque alignment call changed original opaque receiver"
+                                            .into(),
+                                    );
+                                }
+                                budget.retain_bytes(std::mem::size_of::<OpaqueCall>())?;
+                                opaque_sites.push(OpaqueCall { occurrence, call });
+                            }
+                            _ => {
+                                return Err(
+                                    "opaque alignment call lost public source contract".into()
+                                );
+                            }
                         }
-                        budget.retain_bytes(std::mem::size_of::<OpaqueCall>())?;
-                        opaque_sites.push(OpaqueCall { occurrence, call });
                         continue;
                     }
                     let (resolved, nominals) =
@@ -2665,6 +2677,96 @@ mod tests {
         let mut changed = calls;
         Arc::make_mut(&mut changed.cleanup_opaque)[0].0 = SelectedSite::CleanupResult;
         assert!(changed.validate(&mut plan, &budget, None).is_err());
+    }
+
+    #[test]
+    fn alignment_domain_opaque_blanket_source_retains_exact_call_binding() {
+        let source = "struct V{n:u32}trait Read{fn read(&self)->&u32;}trait Forward{fn forward<X>(&self,x:X)->&u32;}impl<T:Read> Forward for T{fn forward<X>(&self,_x:X)->&u32{self.read()}}impl Read for V{fn read(&self)->&u32{&self.n}}fn make()->impl Read{V{n:7u32}}fn main(){let v=make();let _r=v.forward::<u8>(1u8);let _d=v.read();}";
+        let minimal_fixture = || {
+            let options = source::SourceOptions {
+                prelude: false,
+                ..source::SourceOptions::default()
+            };
+            let mut assembler = source::SourceAssembler::new(&options);
+            let source::AssemblyStep::Done(prepared) = assembler
+                .provide(Arc::new(source::prepare_text_unit(
+                    "opaque-blanket-source.rs",
+                    source,
+                    &options,
+                )))
+                .unwrap()
+            else {
+                panic!("minimal authored fixture unexpectedly requested a source dependency")
+            };
+            let program = frontend::resolve(&frontend::parse_prepared(&prepared).unwrap()).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let index = program
+                .functions
+                .iter()
+                .position(|function| {
+                    function
+                        .name
+                        .segments()
+                        .last()
+                        .is_some_and(|id| program.names.spelling(*id).unwrap() == "main")
+                })
+                .unwrap();
+            let owner = plan.function_decl(index).unwrap();
+            let locals = fixture_locals(&plan, owner, &budget);
+            (locals, owner, budget, plan)
+        };
+        let (locals, owner, budget, mut plan) = minimal_fixture();
+        let local = locals.iter().find(|local| local.owner == owner).unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let calls = local
+            .closed_calls(&target, facts, &mut plan, &budget, None)
+            .unwrap();
+        calls.validate(&mut plan, &budget, None).unwrap();
+        // Only the declared Read method remains a producer-owned opaque edge.
+        assert_eq!(calls.opaque_sites.len(), 1);
+        let selected = calls
+            .selected
+            .iter()
+            .position(|(_, target, _)| {
+                matches!(
+                    target.type_args.as_ref(),
+                    [ir::Ty::Opaque(_), ir::Ty::Int(ir::IntTy::U8)]
+                )
+            })
+            .expect("ordinary blanket source call must retain its public opaque and own actual");
+        for mutation in 0..3 {
+            let mut changed = calls.clone();
+            let next = &mut Arc::make_mut(&mut changed.selected)[selected].1;
+            match mutation {
+                0 => next.declaration = owner,
+                1 => {
+                    next.type_args =
+                        Arc::from([next.type_args[1].clone(), next.type_args[0].clone()])
+                }
+                _ => next.type_args = Arc::from([next.type_args[0].clone()]),
+            }
+            assert!(
+                changed.validate(&mut plan, &budget, None).is_err(),
+                "forged blanket source target {mutation} admitted"
+            );
+        }
+        let mut erased = calls.clone();
+        erased.opaque_sites = Arc::from([]);
+        assert!(erased.validate(&mut plan, &budget, None).is_err());
+        let (_, foreign_owner, _, foreign_plan) = minimal_fixture();
+        let mut foreign = calls;
+        foreign.facts = foreign_plan
+            .instance_facts(&ir::CallTarget {
+                declaration: foreign_owner,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert!(foreign.validate(&mut plan, &budget, None).is_err());
     }
 
     #[test]

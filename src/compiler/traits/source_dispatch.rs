@@ -394,7 +394,24 @@ impl ValidatedTraitWorld {
         }
         let predicate = Predicate::Implements(call.trait_ref.clone());
         if matches!(call.trait_ref.self_ty, Ty::Opaque(_)) {
-            self.require_in(&predicate, caller, active)?;
+            let evidence = self.require_in(&predicate, caller, active)?;
+            if matches!(&evidence.0.origin, ProofOrigin::Implementation { .. }) {
+                if evidence.0.world != self.id
+                    || evidence.0.executable_storage != caller.executable_storage
+                    || !caller.matches_source(&evidence.0.source_metadata)?
+                    || evidence.0.environment != caller.predicates.index
+                    || evidence.0.phase != caller.phase
+                    || !self.eq_predicate(&evidence.0.goal, &predicate)?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque blanket source dispatch changed exact caller membership",
+                    ));
+                }
+                return Ok(Callee::Direct(
+                    self.selected_trait_target(call, facts, caller, &evidence, false)?,
+                ));
+            }
             return Ok(Callee::TraitItem(call.clone()));
         }
         let closed = caller.closed_selection(self);

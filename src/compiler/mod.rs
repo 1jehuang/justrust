@@ -2308,6 +2308,14 @@ impl Provider for CompilerProvider {
                 INSTANCE => {
                     let types = facts.types().await?;
                     let (target, source_index) = facts.instance_of(&key, &this.0.budget).await?;
+                    // Each closed root admits its own source before discovering
+                    // executable callees. Other roots remain independently requested.
+                    if key_root_slot(&key) == Some(source_index)
+                        && types.is_closed_root(source_index).map_err(Error::new)?
+                    {
+                        let admission = cx.request(function(SOURCE_ADMISSION, source_index)).get(0);
+                        cx.read(admission).await?;
+                    }
                     let template = facts.template(source_index).await?;
                     let source = this.validated_body(&types, source_index, &template)?;
                     let mut context = types.as_ref().clone();
@@ -2723,6 +2731,15 @@ impl Provider for CompilerProvider {
                     }
                 }
                 OBJECT => {
+                    // BUILD overlaps this root's object with discovery, so gate
+                    // both paths on the same original source admission.
+                    if let Some(index) = key_root_slot(&key) {
+                        let types = facts.types().await?;
+                        if root_instance(&types, index)?.is_some() {
+                            let admission = cx.request(function(SOURCE_ADMISSION, index)).get(0);
+                            cx.read(admission).await?;
+                        }
+                    }
                     if let Some(object) = opaque_object::produce(&this, &cx, &key).await? {
                         cx.publish_fact(
                             1,
@@ -3156,40 +3173,6 @@ impl Provider for CompilerProvider {
                         let target = publication.facts().target().ok_or_else(|| {
                             Error::new("closed alignment omitted canonical target")
                         })?;
-                        let symbolic_key =
-                            keys::alignment_domain::AlignmentDomain::Topology(declaration);
-                        let closed_key =
-                            keys::closed_domain::ClosedDomain::topology(target, &this.0.budget)
-                                .map_err(Error::new)?;
-                        symbolic_key
-                            .charge_key(&this.0.budget)
-                            .map_err(Error::new)?;
-                        closed_key.charge_key(&this.0.budget).map_err(Error::new)?;
-                        cx.request_item(&symbolic_key);
-                        cx.request_item(&closed_key);
-                        let domain =
-                            alignment_domain_graph::summary(&facts, declaration, &this.0.budget)
-                                .await?;
-                        domain.admit_symbolic(declaration).map_err(Error::new)?;
-                        cx.publish_fact(
-                            4,
-                            AlignmentDomainFact {
-                                proof: domain,
-                                closed: None,
-                            },
-                        )?;
-                        let closed_alignment =
-                            closed_alignment_graph::summary(&facts, target, &this.0.budget).await?;
-                        let admission = ClosedAlignmentProofFact {
-                            proof: Some(closed_alignment),
-                        };
-                        admission
-                            .proof
-                            .as_ref()
-                            .ok_or_else(|| Error::new("missing compact closed alignment proof"))?
-                            .admit(target, &this.0.budget)
-                            .map_err(Error::new)?;
-                        cx.publish_fact(5, admission)?;
                         // Declare this node's own input before lowering charges it.
                         scale_task_work_by_callable(&types, declaration);
                         let lowered = cfg::lower_source_closed(publication, &this.0.budget)
@@ -3233,34 +3216,67 @@ impl Provider for CompilerProvider {
                         let const_context =
                             types.callable_constness(declaration).map_err(Error::new)?
                                 == frontend::Constness::Const;
-                        match ownership::analyze_closed_with_effects_in_const_context(
-                            closed,
-                            &effects,
-                            const_context,
-                        ) {
-                            Ok(concrete) => {
-                                cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
-                                this.retain(envelope::<Option<ClosedSourceProof>>())?;
-                                cx.publish_fact(
-                                    SOURCE_CLOSED_PROOF_OUTPUT,
-                                    Some(ClosedSourceProof {
+                        let source_proof =
+                            match ownership::analyze_closed_with_effects_in_const_context(
+                                closed,
+                                &effects,
+                                const_context,
+                            ) {
+                                Ok(concrete) => {
+                                    cx.publish_fact(ANALYSIS_OUTPUT, concrete.analysis().clone())?;
+                                    this.retain(envelope::<Option<ClosedSourceProof>>())?;
+                                    ClosedSourceProof {
                                         concrete,
                                         publication: publication.clone(),
                                         const_context,
-                                    }),
-                                )?;
-                            }
-                            Err(analysis) => {
-                                let message = analysis_diagnostic(
-                                    &this.0.budget,
-                                    "source declaration",
-                                    index,
-                                    &analysis,
-                                );
-                                cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
-                                return Err(Error::new(message));
-                            }
-                        }
+                                    }
+                                }
+                                Err(analysis) => {
+                                    let message = analysis_diagnostic(
+                                        &this.0.budget,
+                                        "source declaration",
+                                        index,
+                                        &analysis,
+                                    );
+                                    cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
+                                    return Err(Error::new(message));
+                                }
+                            };
+                        let symbolic_key =
+                            keys::alignment_domain::AlignmentDomain::Topology(declaration);
+                        let closed_key =
+                            keys::closed_domain::ClosedDomain::topology(target, &this.0.budget)
+                                .map_err(Error::new)?;
+                        symbolic_key
+                            .charge_key(&this.0.budget)
+                            .map_err(Error::new)?;
+                        closed_key.charge_key(&this.0.budget).map_err(Error::new)?;
+                        cx.request_item(&symbolic_key);
+                        cx.request_item(&closed_key);
+                        let domain =
+                            alignment_domain_graph::summary(&facts, declaration, &this.0.budget)
+                                .await?;
+                        domain.admit_symbolic(declaration).map_err(Error::new)?;
+                        cx.publish_fact(
+                            4,
+                            AlignmentDomainFact {
+                                proof: domain,
+                                closed: None,
+                            },
+                        )?;
+                        let closed_alignment =
+                            closed_alignment_graph::summary(&facts, target, &this.0.budget).await?;
+                        let admission = ClosedAlignmentProofFact {
+                            proof: Some(closed_alignment),
+                        };
+                        admission
+                            .proof
+                            .as_ref()
+                            .ok_or_else(|| Error::new("missing compact closed alignment proof"))?
+                            .admit(target, &this.0.budget)
+                            .map_err(Error::new)?;
+                        cx.publish_fact(5, admission)?;
+                        cx.publish_fact(SOURCE_CLOSED_PROOF_OUTPUT, Some(source_proof))?;
                     }
                     if let Some(handle) = opaque_admission {
                         let admission: Arc<opaque_declarations::Admission> =

@@ -125,7 +125,10 @@ impl PhysicalValidation<'_> {
             let index = function
                 .blocks
                 .iter()
-                .position(|block| block.terminator.origin == Some(site))
+                .position(|block| {
+                    block.terminator.origin == Some(site)
+                        && matches!(&block.terminator.value, cfg::Terminator::Call { .. })
+                })
                 .ok_or("physical carrier view lost its original call occurrence")?;
             self.call_carriers(function, facts, cfg::BlockId(index))?
                 .realize()?
@@ -337,7 +340,10 @@ impl PhysicalCarrierBoundary<'_> {
                     .function
                     .blocks
                     .iter()
-                    .find(|block| block.terminator.origin == Some(site))
+                    .find(|block| {
+                        block.terminator.origin == Some(site)
+                            && matches!(&block.terminator.value, cfg::Terminator::Call { .. })
+                    })
                     .ok_or("physical result flow lost its call occurrence")?;
                 let cfg::Terminator::Call { target, .. } = &block.terminator.value else {
                     return Err("physical result flow changed its call kind".into());
@@ -360,6 +366,7 @@ impl PhysicalCarrierBoundary<'_> {
         let mapping = carrier_mapping::Mapping::new(
             self.original.physical_source_signature(),
             &self.signature,
+            Some(self.facts),
             self.validation.representations,
             self.validation.budget,
         )?;
@@ -389,6 +396,8 @@ impl PhysicalCarrierBoundary<'_> {
                 self.contract.clone(),
                 source_regions,
                 components,
+                mapping
+                    .nominal_mappings(self.original.nominal_mappings(), self.validation.budget)?,
             ),
         ))
     }
@@ -404,7 +413,10 @@ impl PhysicalCarrierBoundary<'_> {
                 .function
                 .blocks
                 .iter()
-                .find(|block| block.terminator.origin == Some(site))
+                .find(|block| {
+                    block.terminator.origin == Some(site)
+                        && matches!(&block.terminator.value, cfg::Terminator::Call { .. })
+                })
                 .ok_or("physical carrier boundary occurrence disappeared")?;
             let cfg::Terminator::Call {
                 target, signature, ..
@@ -450,6 +462,17 @@ pub(in crate::compiler) fn require_preserved_boundary(
     representations: &opaque_instances::Representations,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
+    require_preserved_boundary_in(public, physical, world, None, representations, budget)
+}
+
+fn require_preserved_boundary_in(
+    public: &ir::Signature,
+    physical: &ir::Signature,
+    world: &traits::ValidatedTraitWorld,
+    facts: Option<&traits::ValidatedFacts>,
+    representations: &opaque_instances::Representations,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
     for contract in [&public.ref_contract, &physical.ref_contract] {
         budget.charge_work(
             contract
@@ -488,7 +511,7 @@ pub(in crate::compiler) fn require_preserved_boundary(
             return Err("physical boundary differs from authenticated normalization".into());
         }
     }
-    carrier_mapping::Mapping::new(public, physical, representations, budget)?;
+    carrier_mapping::Mapping::new(public, physical, facts, representations, budget)?;
     ir::validate_stored_ref_contract(
         &physical.params,
         &physical.result,
@@ -504,16 +527,18 @@ fn preserved_contract(
     representations: &opaque_instances::Representations,
     budget: &ir::PlanBudget,
 ) -> Result<ir::CarrierContract, String> {
-    require_preserved_boundary(
+    require_preserved_boundary_in(
         original.physical_source_signature(),
         signature,
         facts.world(),
+        Some(facts),
         representations,
         budget,
     )?;
     carrier_mapping::Mapping::new(
         original.physical_source_signature(),
         signature,
+        Some(facts),
         representations,
         budget,
     )?
@@ -932,6 +957,7 @@ mod tests {
                     let map = carrier_mapping::Mapping::new(
                         boundary.original.physical_source_signature(),
                         &boundary.signature,
+                        Some(&closed),
                         &representations,
                         budget,
                     )

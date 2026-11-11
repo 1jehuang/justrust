@@ -111,6 +111,116 @@ fn required_owner_predicates_do_not_authorize_stronger_method_bound() {
 }
 
 #[test]
+fn opaque_public_blanket_projection_preserves_normalization_authority() {
+    let world = source_world(
+        "trait Public{type Item;}trait Blanket{type Item;}impl<T:Public> Blanket for T{type Item=T::Item;}struct Seed;impl Public for Seed{type Item=(u8,i32);}fn make()->impl Public<Item=(u8,i32)>{Seed}fn hidden()->impl Sized{Seed}fn main(){}",
+    );
+    let owners: Vec<_> = world
+        .headers
+        .callables
+        .iter()
+        .filter(|header| matches!(header.schema.signature.result, Ty::Opaque(_)))
+        .collect();
+    assert_eq!(owners.len(), 2);
+    let blanket = world
+        .headers
+        .impls
+        .iter()
+        .find(|header| header.schema_env.total_arity() == 1 && header.associated_types.len() == 1)
+        .unwrap();
+    let public = owners.iter().find(|header| {
+        let Ty::Opaque(opaque) = &header.schema.signature.result else {
+            unreachable!()
+        };
+        opaque
+            .bounds()
+            .iter()
+            .any(|bound| bound.declaration() != world.catalog.id(CatalogItem::Sized))
+    });
+    let public = public.expect("fixture must expose its public associated bound");
+    let facts = world.callable_facts(public.declaration).unwrap();
+    let context = ProofContext::from_facts(&facts).for_storage(false);
+    let predicate_for = |self_ty| {
+        Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Sized),
+            self_ty: Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: blanket.trait_ref.declaration,
+                    self_ty,
+                    args: Arc::from([]),
+                },
+                item: blanket.associated_types[0].associated,
+            })),
+            args: Arc::from([]),
+        })
+    };
+    let predicate = predicate_for(public.schema.signature.result.clone());
+    let evidence = world
+        .require_in(&predicate, context, &mut ProofScratch::default())
+        .unwrap();
+    let ProofOrigin::ProjectedSubject {
+        evidence: normal,
+        reductions,
+    } = &evidence.0.origin
+    else {
+        panic!("projected predicate must retain its normalization proof")
+    };
+    assert!(!reductions.is_empty());
+    world
+        .validate_projected_subject_evidence(&predicate, context, &evidence.0.origin)
+        .unwrap();
+    let mut changed = (*normal.0).clone();
+    let Predicate::Implements(goal) = &mut changed.goal else {
+        unreachable!()
+    };
+    goal.self_ty = Ty::Bool;
+    let changed = ProofOrigin::ProjectedSubject {
+        evidence: ProofEvidence(Arc::new(changed)),
+        reductions: reductions.clone(),
+    };
+    assert!(
+        world
+            .validate_projected_subject_evidence(&predicate, context, &changed)
+            .is_err()
+    );
+    let mut wrong_role = (*normal.0).clone();
+    wrong_role.executable_storage = true;
+    let wrong_role = ProofOrigin::ProjectedSubject {
+        evidence: ProofEvidence(Arc::new(wrong_role)),
+        reductions: reductions.clone(),
+    };
+    assert!(
+        world
+            .validate_projected_subject_evidence(&predicate, context, &wrong_role)
+            .is_err()
+    );
+    let mut foreign = (*normal.0).clone();
+    foreign.world = WorldId(SnapshotId::standalone().unwrap());
+    let foreign = ProofOrigin::ProjectedSubject {
+        evidence: ProofEvidence(Arc::new(foreign)),
+        reductions: reductions.clone(),
+    };
+    assert!(
+        world
+            .validate_projected_subject_evidence(&predicate, context, &foreign)
+            .is_err()
+    );
+    let hidden = owners
+        .iter()
+        .find(|header| header.declaration != public.declaration)
+        .unwrap();
+    let hidden_facts = world.callable_facts(hidden.declaration).unwrap();
+    assert!(!matches!(
+        world.prove_in(
+            &predicate_for(hidden.schema.signature.result.clone()),
+            ProofContext::from_facts(&hidden_facts).for_storage(false),
+            &mut ProofScratch::default()
+        ),
+        Ok(ProofOutcome::Proved(_))
+    ));
+}
+
+#[test]
 fn cyclic_assignment_is_rejected_at_closed_projection_boundary() {
     let source = frontend::parse("trait Bound<A>{}trait Required{type Item;fn run<F:Bound<Self::Item>>(self,f:F);}struct Seed;impl Required for Seed{type Item=Self::Item;fn run<F:Bound<Self::Item>>(self,f:F){}}fn main(){}").unwrap();
     let result = PlanCtx::from_program(&source, &PlanBudget::default());

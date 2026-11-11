@@ -1089,6 +1089,30 @@ fn alignment_domain_check_keeps_closed_instance_and_codegen_nodes_undemanded() {
 }
 
 #[test]
+fn valid_source_still_rejects_unsupported_closed_callee_alignment() {
+    let source = r#"fn item(){} fn alignment<T>(value:T)->usize{std::mem::align_of::<T>()} fn main(){println!("{}",alignment(item));}"#;
+    let (root, compiled) = stock(source, "closed-callee-frontier");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let error = compiler::compile(source.into(), workers, check)
+                .err()
+                .expect("successful source ownership must not bypass closed alignment admission")
+                .to_string();
+            assert!(
+                error.to_lowercase().contains("unsupported"),
+                "workers={workers}, check={check}: {error}"
+            );
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn alignment_domain_graph_reads_compact_headers_not_transitive_bodies() {
     use std::collections::HashMap;
     let source = "fn leaf<T>()->usize{std::mem::align_of::<T>()}fn caller<T>()->usize{leaf::<T>()}fn apply<F:Fn()->usize>(f:F)->usize{f()}fn main(){let _n=caller::<u16>();let _m=apply(||std::mem::align_of::<u16>());}";

@@ -17,6 +17,7 @@ mod guard_bindings;
 mod intrinsics;
 mod runtime_sites;
 pub use drop_normal::ValidatedCleanupCall;
+pub(super) use drop_normal::materialize_physical_cleanup;
 pub use runtime_sites::CfgRuntimeSites;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -1581,3 +1581,117 @@ fn scalar_operators_with_reference_operands_match_stock() {
         ],
     );
 }
+
+#[test]
+fn opaque_physical_cleanup_unused_expression_statement_order() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-unused",
+        r#"
+fn main() { make(8); println!("between"); make(9); println!("end"); }
+"#,
+        "make 8\ndrop 8\nbetween\nmake 9\ndrop 9\nend\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_borrowed_temporary_lifetime() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-borrowed",
+        r#"
+fn main() { let borrowed = &make(10); println!("value {}", borrowed.id()); println!("end"); }
+"#,
+        "make 10\nvalue 10\nend\ndrop 10\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_rejects_unused_borrow_escape() {
+    parse_oracle(
+        "opaque-cleanup-escape",
+        &[closure_oracle::Case {
+            name: "unused_opaque_borrow_outlives_owner",
+            source: "trait Tag{fn id(&self)->i32;}struct Token{n:i32}impl Tag for Token{fn id(&self)->i32{self.n}}impl Drop for Token{fn drop(&mut self){}}fn make()->impl Tag{Token{n:11}}fn unused(){let output;{let value=make();output=&value;}let _n=output.id();}fn main(){}",
+            expect: closure_oracle::Expect::Invalid("E0597"),
+        }],
+    );
+}
+
+fn opaque_cleanup_order_case(name: &'static str, body: &str, expected: &'static str) {
+    let source = format!(
+        r#"
+trait Tag {{ fn id(&self) -> i32; }}
+struct Token {{ n: i32 }}
+impl Tag for Token {{ fn id(&self) -> i32 {{ self.n }} }}
+impl Drop for Token {{ fn drop(&mut self) {{ println!("drop {{}}", self.n); }} }}
+fn make(n: i32) -> impl Tag {{ println!("make {{}}", n); Token {{ n }} }}
+{body}
+"#
+    );
+    parse_oracle(
+        name,
+        &[closure_oracle::Case {
+            name,
+            source: Box::leak(source.into_boxed_str()),
+            expect: closure_oracle::Expect::Run(expected),
+        }],
+    );
+}
+#[test]
+fn opaque_physical_cleanup_overwrite_and_call_order() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-replace",
+        r#"
+fn main() { let mut x = make(1); x = make(2); println!("value {}", x.id()); }
+"#,
+        "make 1\nmake 2\ndrop 1\nvalue 2\ndrop 2\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_preserves_existing_drop_placement() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-existing-placement",
+        r#"
+fn main() { let _retained = Token { n: 9 }; let mut hidden = make(1); hidden = make(2); println!("value {}", hidden.id()); }
+"#,
+        "make 1\nmake 2\ndrop 1\nvalue 2\ndrop 2\ndrop 9\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_early_return() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-return",
+        r#"
+fn early(stop: bool) { let x = make(3); if stop { return; } println!("value {}", x.id()); }
+fn main() { early(true); early(false); }
+"#,
+        "make 3\ndrop 3\nmake 3\nvalue 3\ndrop 3\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_loop_replacement() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-loop",
+        r#"
+fn main() { let mut x = make(0); let mut n = 1i32; while n < 3 { x = make(n); n += 1; } println!("value {}", x.id()); }
+"#,
+        "make 0\nmake 1\ndrop 0\nmake 2\ndrop 1\nvalue 2\ndrop 2\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_whole_move_once() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-move",
+        r#"
+fn main() { let x = make(4); let y = x; println!("value {}", y.id()); }
+"#,
+        "make 4\nvalue 4\ndrop 4\n",
+    );
+}
+#[test]
+fn opaque_physical_cleanup_partial_move_remainder_order() {
+    opaque_cleanup_order_case(
+        "opaque-cleanup-partial",
+        r#"
+fn main() { let pair = (make(5), make(6)); let (first, _) = pair; println!("value {}", first.id()); }
+"#,
+        "make 5\nmake 6\nvalue 5\ndrop 5\ndrop 6\n",
+    );
+}

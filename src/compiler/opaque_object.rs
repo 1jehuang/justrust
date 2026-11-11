@@ -31,6 +31,7 @@ pub(super) async fn produce(
     if !candidate {
         return Ok(None);
     }
+    scale_task_work_by_callable(&types, target.declaration);
     let publication = template.publication.as_ref().ok_or_else(|| {
         Error::new(format!(
             "physical opaque object {} (source {source_index}) omitted original publication",
@@ -131,20 +132,15 @@ pub(super) async fn produce(
     }
     let original = cfg::lower_source_template(publication, &provider.0.budget)
         .map_err(|error| Error::new(error.to_string()))?;
+    scale_task_work_by_cfg(original.function());
     // Unchanged owning locals retain their original cleanup. Demand the same
     // owner-local frontier used by ordinary objects before any independent
     // representation read suspends this producer.
-    let cleanup = if has_drop(original.function()) {
-        // Opaque roots are published universally even when they have no type
-        // arguments. Their canonical INSTANCE frontier, not the closed-source
-        // root-only publication protocol, owns the destructor dependencies.
-        Some(
-            cx.request(keys::words(INSTANCE, key.params.clone())?)
-                .get(0),
-        )
-    } else {
-        None
-    };
+    // A universal opaque owner may be trivial before representation reads.
+    // Its existing instance frontier must also authorize newly concrete drops.
+    let cleanup = cx
+        .request(keys::words(INSTANCE, key.params.clone())?)
+        .get(0);
     // All independent source and call-authority producers are requested before
     // representation reads suspend this branch. No global hidden-type inventory.
     let representations = opaque_instances::read(&facts, &roots, &provider.0.budget).await?;
@@ -184,6 +180,7 @@ pub(super) async fn produce(
         &types,
         &provider.0.budget,
     )?;
+    scale_task_work_by_cfg(physical.function());
     let validation = physical
         .seal(
             publication,
@@ -194,32 +191,32 @@ pub(super) async fn produce(
             &provider.0.budget,
         )
         .map_err(Error::new)?;
-    let cleanup = if let Some(handle) = cleanup {
-        let demand: Arc<instances::DirectDemands> = cx.read_fact(handle).await?;
-        demand
-            .validate_cleanup(physical.function(), &provider.0.budget)
-            .map_err(Error::new)?;
-        Some(demand)
-    } else {
-        None
-    };
+    let demand: Arc<instances::DirectDemands> = cx.read_fact(cleanup).await?;
+    demand
+        .validate_cleanup(physical.function(), &provider.0.budget)
+        .map_err(Error::new)?;
     // Unchanged owning types retain their original cleanup. A changed owner
     // can avoid new destructor dependencies only when the exact physical CFG
     // proves it is completely consumed before every cleanup-requiring event.
     if closed.has_normal_drop_impls() {
+        let mut cleanup_scratch = traits::TraitScratch::default();
         for (index, local) in physical.function().locals.iter().enumerate() {
             provider.0.budget.charge_work(1).map_err(Error::new)?;
             let requires_realized_cleanup = match closed
-                .normal_drop_plan(&local.ty)
+                .normal_drop_plan_with_scratch(&local.ty, &mut cleanup_scratch)
                 .map_err(|error| source_fact_error(error, &provider.0.budget))?
             {
                 traits::NormalDropPlan::Trivial => false,
                 traits::NormalDropPlan::Destructor(_) => {
-                    let source = original.function().locals.get(index).ok_or_else(|| {
-                        Error::new("physical opaque cleanup has no original owning local")
-                    })?;
-                    !ir::identical_type(&source.ty, &local.ty, &provider.0.budget)
-                        .map_err(Error::new)?
+                    match original.function().locals.get(index) {
+                        Some(source) => {
+                            !ir::identical_type(&source.ty, &local.ty, &provider.0.budget)
+                                .map_err(Error::new)?
+                        }
+                        // Generated cleanup temporaries are authenticated by the
+                        // independently replayed physical normalization shape.
+                        None => true,
+                    }
                 }
                 _ => true,
             };
@@ -230,16 +227,13 @@ pub(super) async fn produce(
                     &provider.0.budget,
                 )
                 .map_err(Error::new)?
-                && !match &cleanup {
-                    Some(demand) => normal_exit::fully_cleaned(
-                        physical.function(),
-                        ir::LocalId(index),
-                        demand,
-                        &provider.0.budget,
-                    )
-                    .map_err(Error::new)?,
-                    None => false,
-                }
+                && !normal_exit::fully_cleaned(
+                    physical.function(),
+                    ir::LocalId(index),
+                    &demand,
+                    &provider.0.budget,
+                )
+                .map_err(Error::new)?
             {
                 return Err(Error::new(
                     "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
@@ -247,7 +241,6 @@ pub(super) async fn produce(
             }
         }
     }
-    scale_task_work_by_cfg(physical.function());
     let concrete =
         ownership::analyze_physical(Arc::new(physical.function().clone()), closed, &validation)
             .map_err(|analysis| {

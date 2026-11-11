@@ -24,6 +24,30 @@ fn main() {
 "#;
 
 #[test]
+fn abstract_scope_events_follow_owned_fields_not_reference_pointees() {
+    let budget = ir::PlanBudget::default();
+    let publication = publish(
+        "fn f<T>(value:T,borrowed:&T,raw:*const T,wrapped:Wrap<T>){}struct Wrap<T>{value:T}fn main(){}",
+        &budget,
+    );
+    let facts = publication.facts();
+    for (index, expected) in [true, false, false, true].into_iter().enumerate() {
+        let ty = &publication.source().locals[publication.source().params[index].0].ty;
+        assert_eq!(abstract_scope::required(ty, facts).unwrap(), expected);
+        assert!(
+            descriptor(ty, ir::FactsCtx::from_validated(facts))
+                .unwrap()
+                .is_none()
+        );
+    }
+    let template = lower_source_template(&publication, &budget).unwrap();
+    template
+        .function()
+        .validate_source_publication(&publication, &budget)
+        .unwrap();
+}
+
+#[test]
 fn direct_let_borrowed_owners_have_lexical_storage_and_canonical_cleanup() {
     let budget = ir::PlanBudget::default();
     let publication = publish(BORROWED, &budget);

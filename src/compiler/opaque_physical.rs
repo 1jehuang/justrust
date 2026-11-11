@@ -819,6 +819,27 @@ pub(super) fn normalize(
     // until their source proofs have been authenticated. Only now close marker
     // constants; they retain full canonical type metadata despite zero storage.
     specialize_marker_constants(&mut output, &mut specialization, budget)?;
+    let placements =
+        cfg::materialize_physical_cleanup(original, &mut output, publication, &closed, budget)
+            .map_err(Error::new)?;
+    for mapping in &mut cleanup_mappings {
+        budget.charge_work(1).map_err(Error::new)?;
+        mapping.physical_block = placements
+            .get(mapping.source_block)
+            .ok_or_else(|| Error::new("physical cleanup lost original terminator placement"))?
+            .0;
+    }
+    local_types.clear();
+    for local in &output.locals {
+        budget.charge_work(1).map_err(Error::new)?;
+        budget
+            .retain_bytes(std::mem::size_of::<ir::Ty>())
+            .map_err(Error::new)?;
+        local_types
+            .try_reserve(1)
+            .map_err(|_| Error::new("physical local inventory allocation failed"))?;
+        local_types.push(local.ty.clone());
+    }
     // Original source evidence is retained in `original`, not relabeled as
     // closed evidence. The physical shape protocol must replay it separately.
     output.lowering_proof = None;
@@ -844,6 +865,139 @@ pub(super) fn normalize(
 #[cfg(test)]
 mod captured_family_tests {
     use super::*;
+
+    #[test]
+    fn introduced_physical_cleanup_replays_complete_ownership_shape() {
+        struct Probe(CompilerProvider);
+        impl Provider for Probe {
+            fn outputs(&self, key: &Key) -> usize {
+                if key.kind == 9019 {
+                    1
+                } else {
+                    self.0.outputs(key)
+                }
+            }
+            fn start(&self, cx: Context, key: Key) -> TaskFuture {
+                if key.kind != 9019 {
+                    return self.0.start(cx, key);
+                }
+                let provider = self.0.clone();
+                Box::pin(async move {
+                    let facts = Facts { cx: &cx };
+                    let types = facts.types().await?;
+                    let template = facts.template(0).await?;
+                    provider.validated_body(&types, 0, &template)?;
+                    let publication = template.publication.as_ref().unwrap();
+                    let budget = &provider.0.budget;
+                    let target = ir::CallTarget {
+                        declaration: publication.facts().declaration(),
+                        type_args: Arc::from([]),
+                    };
+                    let params = instance_params(&types, &target, budget)?;
+                    let demand = cx.request(keys::words(INSTANCE, params)?).get(0);
+                    let roots = publication
+                        .source()
+                        .locals
+                        .iter()
+                        .map(|local| local.ty.clone())
+                        .chain(
+                            publication
+                                .source()
+                                .exprs
+                                .iter()
+                                .map(|expression| expression.ty.clone()),
+                        )
+                        .collect::<Vec<_>>();
+                    let representations = opaque_instances::read(&facts, &roots, budget).await?;
+                    let demands: Arc<instances::DirectDemands> = cx.read_fact(demand).await?;
+                    let original = cfg::lower_source_template(publication, budget)
+                        .map_err(|error| Error::new(error.to_string()))?;
+                    let closed = types.instance_facts(&target).map_err(Error::new)?;
+                    let mut physical = normalize(
+                        publication,
+                        &target,
+                        original.function(),
+                        &representations,
+                        &[],
+                        &types,
+                        budget,
+                    )?;
+                    let validation = physical
+                        .seal(
+                            publication,
+                            original.function(),
+                            &representations,
+                            &types,
+                            &closed,
+                            budget,
+                        )
+                        .map_err(Error::new)?;
+                    demands
+                        .validate_cleanup(physical.function(), budget)
+                        .map_err(Error::new)?;
+                    let cleanups = physical
+                        .function()
+                        .blocks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, block)| {
+                            if let cfg::Terminator::Drop { cleanup, next } = &block.terminator.value
+                            {
+                                Some((index, cleanup.clone(), *next))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    assert!(cleanups.len() >= 2);
+                    for change in 0..4 {
+                        let mut forged = physical.function().clone();
+                        let (block, cleanup, next) = &cleanups[0];
+                        match change {
+                            0 => {
+                                forged.blocks[*block].terminator.value =
+                                    cfg::Terminator::Goto(*next)
+                            }
+                            1 => {
+                                let other = cleanups
+                                    .iter()
+                                    .find(|(_, other, _)| other.owner() != cleanup.owner())
+                                    .unwrap();
+                                forged.blocks[*block].terminator.value = cfg::Terminator::Drop {
+                                    cleanup: other.1.clone(),
+                                    next: *next,
+                                };
+                            }
+                            2 => {
+                                forged.blocks[*block].terminator.value = cfg::Terminator::Drop {
+                                    cleanup: cleanup.clone(),
+                                    next: cfg::BlockId(*block),
+                                }
+                            }
+                            _ => {
+                                forged.locals.last_mut().unwrap().ty = ir::Ty::Bool;
+                            }
+                        }
+                        assert!(
+                            validation.validate_cfg(&forged, &closed).is_err(),
+                            "forged physical cleanup {change}"
+                        );
+                    }
+                    cx.publish_fact(0, ())
+                })
+            }
+        }
+        for workers in [1, 8] {
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text("fn main(){let x=make(7i32);let y=x;}fn make(n:i32)->impl Tag{Token{n}}trait Tag{}struct Token{n:i32}impl Tag for Token{}impl Drop for Token{fn drop(&mut self){self.n=0;}}".into()),
+                source_options: source::SourceOptions::default(), budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(Probe(CompilerProvider(snapshot)));
+            let handle = engine.request(keys::test_key(9019, vec![1]));
+            engine.run(workers).unwrap();
+            handle.completion().unwrap();
+        }
+    }
 
     #[test]
     fn marker_constant_specialization_preserves_original_source_and_closed_actuals() {

@@ -542,6 +542,159 @@ mod tests {
     }
 
     #[test]
+    fn opaque_required_signature_preserves_exact_graph_receipt_authority() {
+        const SOURCE: &str = "fn pairs()->impl Iterator<Item=(usize,bool)>{[(7usize,true)].into_iter()}fn main(){let mut values=pairs();while let Some((number,flag))=values.next(){println!(\"{} {}\",number,flag);}}";
+        for workers in [1, 8] {
+            let (budget, publication) = graph_publication_for(SOURCE, "main", workers);
+            let (_, foreign) = graph_publication_for(SOURCE, "main", workers);
+            let original = publication.original().source_for_test();
+            replay_source_body(
+                &original,
+                publication.source(),
+                publication.facts(),
+                &budget,
+            )
+            .unwrap();
+            let (call_id, call, signature) = publication
+                .source()
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expression)| {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::TraitItem(call),
+                        signature,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return None;
+                    };
+                    matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)).then_some((
+                        ir::ExprId(index),
+                        call,
+                        signature,
+                    ))
+                })
+                .expect("genuine public opaque Iterator::next call");
+            let view = publication
+                .facts()
+                .original_callable_schema(tr::OriginalCallableSubject::TraitItem(call))
+                .unwrap();
+            view.validate_for(publication.facts()).unwrap();
+            let ir::Ty::Enum(source_result) = &view.signature().result else {
+                panic!("source Option result")
+            };
+            let ir::Ty::Enum(graph_result) = &signature.result else {
+                panic!("graph Option result")
+            };
+            assert!(!source_result.id().index.is_graph());
+            assert!(graph_result.id().index.is_graph());
+            assert_eq!(
+                source_result.def().source_decl,
+                graph_result.def().source_decl
+            );
+            assert_eq!(source_result.def().type_args, graph_result.def().type_args);
+            assert!(
+                !replay_type_equal(&view.signature().result, &signature.result, &budget).unwrap()
+            );
+            let foreign_result = foreign
+                .source()
+                .exprs
+                .iter()
+                .find_map(|expression| {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::TraitItem(call),
+                        signature,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return None;
+                    };
+                    if !matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_)) {
+                        return None;
+                    }
+                    match &signature.result {
+                        ir::Ty::Enum(value) => Some(value),
+                        _ => None,
+                    }
+                })
+                .expect("genuine foreign-engine graph Option result");
+            assert_ne!(
+                graph_result.realization().unwrap().engine_authority(),
+                foreign_result.realization().unwrap().engine_authority()
+            );
+            for mutation in 0..4 {
+                let mut checked = publication.source().as_ref().clone();
+                let ir::ExprKind::Call {
+                    signature: changed, ..
+                } = &mut checked.exprs[call_id.0].kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => {
+                        let mut definition = source_result.def().clone();
+                        definition.source_decl.index += 1;
+                        definition.id = replay_nominal_source_id(
+                            definition.source_decl,
+                            &definition.type_args,
+                            &budget,
+                        )
+                        .unwrap();
+                        changed.result = ir::Ty::Enum(ir::EnumTy::new(definition));
+                    }
+                    1 => {
+                        let mut definition = source_result.def().clone();
+                        definition.type_args = Arc::from([ir::Ty::Tuple(Arc::from([
+                            ir::Ty::Bool,
+                            ir::Ty::Int(ir::IntTy::Usize),
+                        ]))]);
+                        definition.id = replay_nominal_source_id(
+                            definition.source_decl,
+                            &definition.type_args,
+                            &budget,
+                        )
+                        .unwrap();
+                        changed.result = ir::Ty::Enum(ir::EnumTy::new(definition));
+                    }
+                    2 => {
+                        Arc::make_mut(&mut changed.ref_contract).region_count += 1;
+                    }
+                    3 => {
+                        // Keep this caller's exact canonical source application,
+                        // but graft an actual read retained from another engine.
+                        // Canonical Graph/Source equality is not read authority.
+                        let mut definition = graph_result.def().clone();
+                        definition.id = foreign_result.id();
+                        changed.result = ir::Ty::Enum(
+                            ir::EnumTy::new(definition)
+                                .with_realization(foreign_result.realization().unwrap().clone()),
+                        );
+                        let ir::Ty::Enum(grafted) = &changed.result else {
+                            unreachable!()
+                        };
+                        assert_eq!(grafted.def().source_decl, source_result.def().source_decl);
+                        assert_eq!(grafted.def().type_args, source_result.def().type_args);
+                    }
+                    _ => unreachable!(),
+                }
+                let error =
+                    replay_source_body(&original, &Arc::new(checked), publication.facts(), &budget)
+                        .unwrap_err();
+                assert_eq!(
+                    error.kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "complete guard mutation {mutation}: {error}"
+                );
+            }
+            assert!(
+                replay_source_body(&original, publication.source(), foreign.facts(), &budget)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn graph_source_publication_rejects_missing_and_changed_call_receipts() {
         let (budget, publication) = graph_publication();
         let source = publication.source();

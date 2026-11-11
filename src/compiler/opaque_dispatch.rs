@@ -51,6 +51,7 @@ pub(super) struct OpaqueCallAuthorization {
     receiver: ir::Ty,
     hidden: ir::Ty,
     transport: target_transport::Transport,
+    selected_signature: ir::Signature,
     physical_signature: ir::Signature,
 }
 
@@ -160,7 +161,7 @@ impl OpaqueCallAuthorization {
             .resolve_trait_call(&physical_call, &closed)
             .map_err(|error| Error::new(error.to_string()))?;
         if resolved.callee() != &ir::Callee::Direct(self.transport.selected().clone())
-            || resolved.signature() != &self.physical_signature
+            || resolved.signature() != &self.selected_signature
         {
             return Err(Error::new(
                 "opaque physical target or signature failed canonical replay",
@@ -168,6 +169,19 @@ impl OpaqueCallAuthorization {
         }
         self.transport
             .replay(&resolved, &closed, representations.engine(), budget)?;
+        let mapped = mapped_physical_signature(
+            &specialized_signature,
+            resolved.signature(),
+            self.transport.execution(),
+            representations,
+            &closed,
+            budget,
+        )?;
+        if mapped != self.physical_signature {
+            return Err(Error::new(
+                "opaque mapped ABI changed retained source type authority",
+            ));
+        }
         opaque_physical::require_preserved_boundary(
             &specialized_signature,
             &self.physical_signature,
@@ -566,8 +580,16 @@ pub(super) async fn produce(
         public_signature: signature.clone(),
         receiver: specialized.trait_ref.self_ty.clone(),
         hidden,
+        physical_signature: mapped_physical_signature(
+            &specialized_signature,
+            resolved.signature(),
+            transport.execution(),
+            &representations,
+            &closed,
+            &provider.0.budget,
+        )?,
         transport,
-        physical_signature: resolved.signature().clone(),
+        selected_signature: resolved.signature().clone(),
     };
     let physical_signature = proof.physical_signature.clone();
     proof.replay(
@@ -617,6 +639,52 @@ pub(super) async fn produce(
         ));
     }
     cx.publish_fact(1, PhysicalCalleeReady { target: physical })
+}
+
+/// Map the original substituted ABI, retaining its current-engine nominal reads.
+/// The selected declaration signature remains the independent comparison source.
+fn mapped_physical_signature(
+    source: &ir::Signature,
+    selected: &ir::Signature,
+    target: &ir::CallTarget,
+    representations: &opaque_instances::Representations,
+    closed: &traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<ir::Signature, Error> {
+    let mut params = Vec::new();
+    budget
+        .charge_nodes(source.params.len())
+        .map_err(Error::new)?;
+    params
+        .try_reserve_exact(source.params.len())
+        .map_err(|_| Error::new("opaque mapped ABI parameter allocation failed"))?;
+    for parameter in &source.params {
+        params.push(representations.normalize(parameter, budget)?);
+    }
+    let mapped = ir::Signature {
+        params,
+        result: representations.normalize(&source.result, budget)?,
+        ref_contract: selected.ref_contract.clone(),
+    };
+    nominal_realization::substitution::replay_closed_signature_with(
+        representations.engine(),
+        &ir::Callee::Direct(target.clone()),
+        selected,
+        &mapped,
+        ir::FactsCtx::from_validated(closed),
+        budget,
+        &mut traits::TraitScratch::default(),
+    )
+    .map_err(Error::new)?;
+    opaque_physical::require_preserved_boundary(
+        source,
+        &mapped,
+        closed.world(),
+        representations,
+        budget,
+    )
+    .map_err(Error::new)?;
+    Ok(mapped)
 }
 
 impl crate::engine::Fact for OpaqueCallAuthorization {}

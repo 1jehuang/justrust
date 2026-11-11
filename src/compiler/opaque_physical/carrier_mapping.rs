@@ -11,6 +11,7 @@ struct Row {
 
 pub(super) struct Mapping {
     rows: Vec<Row>,
+    nominals: Vec<ir::NominalCarrierMapping>,
 }
 
 fn buffer<T>(count: usize, budget: &ir::PlanBudget) -> Result<Vec<T>, String> {
@@ -132,6 +133,7 @@ impl Mapping {
     pub(super) fn new(
         public: &ir::Signature,
         physical: &ir::Signature,
+        facts: Option<&traits::ValidatedFacts>,
         representations: &opaque_instances::Representations,
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
@@ -139,6 +141,7 @@ impl Mapping {
             return Err("physical carrier mapping changed the parameter count".into());
         }
         let mut rows = Vec::new();
+        let mut nominals = Vec::new();
         for (parameter, before, after) in public
             .params
             .iter()
@@ -147,10 +150,49 @@ impl Mapping {
             .map(|(index, (before, after))| (Some(index), before, after))
             .chain(std::iter::once((None, &public.result, &physical.result)))
         {
+            let mut slot_nominals = Vec::new();
+            if let Some(facts) = facts {
+                let normalized = representations
+                    .normalize(before, budget)
+                    .map_err(|error| error.to_string())?;
+                slot_nominals = facts
+                    .physical_carrier_nominals(&normalized, after, representations.engine(), budget)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                for mapping in &slot_nominals {
+                    budget.charge_work(nominals.len().saturating_add(1))?;
+                    if let Some(previous) =
+                        nominals
+                            .iter()
+                            .find(|previous: &&ir::NominalCarrierMapping| {
+                                previous.original == mapping.original
+                            })
+                    {
+                        if previous.instantiated != mapping.instantiated {
+                            return Err(
+                                "physical carrier nominal owner has conflicting realizations"
+                                    .into(),
+                            );
+                        }
+                    } else {
+                        budget.retain_bytes(std::mem::size_of::<ir::NominalCarrierMapping>())?;
+                        nominals
+                            .try_reserve_exact(1)
+                            .map_err(|_| "physical carrier nominal mapping allocation failed")?;
+                        nominals.push(mapping.clone());
+                    }
+                }
+            }
             let actual = ir::carrier_locations(after, budget)?;
             let mut next = 0usize;
             for original in ir::carrier_locations(before, budget)?.iter() {
-                let physical = expand(original, representations, budget)?;
+                let expanded = expand(original, representations, budget)?;
+                let mut physical = buffer(expanded.len(), budget)?;
+                for location in expanded.iter() {
+                    let mut mapped = location.clone();
+                    remap_nominals(&mut mapped, &slot_nominals, budget)?;
+                    physical.push(mapped);
+                }
+                let physical: Arc<[ir::CarrierLocation]> = physical.into();
                 for mapped in physical.iter() {
                     budget.charge_work(mapped.path.0.len().saturating_add(1))?;
                     if actual.get(next) != Some(mapped) {
@@ -177,7 +219,48 @@ impl Mapping {
                 return Err("physical opaque carrier mapping omitted a concrete carrier".into());
             }
         }
-        Ok(Self { rows })
+        Ok(Self { rows, nominals })
+    }
+
+    pub(super) fn nominal_mappings(
+        &self,
+        original: &[ir::NominalCarrierMapping],
+        budget: &ir::PlanBudget,
+    ) -> Result<Arc<[ir::NominalCarrierMapping]>, String> {
+        let mut output = buffer(
+            original
+                .len()
+                .checked_add(self.nominals.len())
+                .ok_or("physical nominal mapping count overflow")?,
+            budget,
+        )?;
+        for mapping in original {
+            let mut mapped = mapping.clone();
+            for physical in &self.nominals {
+                budget.charge_work(1)?;
+                if mapped.instantiated == physical.original {
+                    mapped.instantiated = physical.instantiated;
+                    break;
+                }
+            }
+            output.push(mapped);
+        }
+        for mapping in &self.nominals {
+            budget.charge_work(output.len().saturating_add(1))?;
+            if let Some(previous) = output
+                .iter()
+                .find(|previous| previous.original == mapping.original)
+            {
+                if previous.instantiated != mapping.instantiated {
+                    return Err(
+                        "physical nominal mapping changed original owner correspondence".into(),
+                    );
+                }
+            } else {
+                output.push(mapping.clone());
+            }
+        }
+        Ok(output.into())
     }
 
     fn locations(
@@ -301,8 +384,11 @@ impl Mapping {
         }
         let mut output = buffer(count, budget)?;
         for row in original {
-            for substituted in expand(&row.substituted, representations, budget)?.iter() {
-                let original_location = if substituted == &row.substituted {
+            for expanded in expand(&row.substituted, representations, budget)?.iter() {
+                let mut substituted = expanded.clone();
+                remap_nominals(&mut substituted, &self.nominals, budget)?;
+                let substituted = &substituted;
+                let original_location = if expanded == &row.substituted {
                     row.original.clone()
                 } else {
                     let prefix = substituted.channel.prefix();
@@ -532,6 +618,7 @@ mod tests {
         let physical: Arc<[ir::CarrierLocation]> =
             Arc::from([location(Some(0), 0), location(Some(1), 1)]);
         let mapping = Mapping {
+            nominals: Vec::new(),
             rows: [Some(0), None]
                 .into_iter()
                 .map(|parameter| Row {
@@ -596,5 +683,230 @@ mod tests {
             ..Default::default()
         });
         assert!(mapping.contract(&contract, &denied).is_err());
+    }
+}
+
+#[cfg(test)]
+mod nominal_tests {
+    use super::*;
+
+    #[test]
+    fn physical_carrier_nominal_paths_replay_exact_graph_owners() {
+        struct PublishedTy(ir::Ty);
+        impl crate::engine::Fact for PublishedTy {}
+        struct Probe(CompilerProvider, Option<ir::Ty>);
+        impl Provider for Probe {
+            fn outputs(&self, key: &Key) -> usize {
+                self.0.outputs(key)
+            }
+            fn start(&self, cx: Context, key: Key) -> TaskFuture {
+                if key.kind != 9031 {
+                    return self.0.start(cx, key);
+                }
+                let provider = self.0.clone();
+                let foreign = self.1.clone();
+                Box::pin(async move {
+                    let graph = Facts { cx: &cx };
+                    let types = graph.types().await?;
+                    let index = (0..types.callable_count()).find(|index| {
+                        types.callable_decl(*index).ok().and_then(|id| types.persistent_decl_path(id).ok())
+                            .is_some_and(|path| matches!(path.item(), frontend::PersistentDeclItem::Name(name) if name == "main"))
+                    }).unwrap();
+                    let template: Arc<TemplateBodyFact> =
+                        graph.get(keys::item(TEMPLATE_BODY, index)).await?;
+                    let publication = template.publication.as_ref().unwrap();
+                    let target = ir::CallTarget {
+                        declaration: types.callable_decl(index).map_err(Error::new)?,
+                        type_args: Arc::from([]),
+                    };
+                    let budget = &provider.0.budget;
+                    let closed = types.instance_facts(&target).map_err(Error::new)?;
+                    let representations = opaque_instances::read(&graph, &[], budget).await?;
+                    let mut specialization = opaque_specialization::Specialization::new(
+                        publication,
+                        &target,
+                        &types,
+                        budget,
+                        cx.authority(),
+                    )?;
+                    for (index, expression) in publication.source().exprs.iter().enumerate() {
+                        if !matches!(&expression.kind, ir::ExprKind::Call { .. }) {
+                            continue;
+                        }
+                        let (callee, physical) = specialization.call(ir::ExprId(index))?;
+                        let ir::Ty::Enum(after) = &physical.result else {
+                            continue;
+                        };
+                        let original = closed
+                            .carrier_contract(ir::SignatureSubject::Call(&callee))
+                            .map_err(|e| source_fact_error(e, budget))?;
+                        let public = original.physical_source_signature();
+                        let ir::Ty::Enum(before) = &public.result else {
+                            continue;
+                        };
+                        if before.id() == after.id() || !after.id().index.is_graph() {
+                            continue;
+                        }
+                        assert!(matches!(before.id().index, ir::NominalIndex::SourceSlot(_)));
+                        let mapping = Mapping::new(
+                            public,
+                            &physical,
+                            Some(&closed),
+                            &representations,
+                            budget,
+                        )
+                        .map_err(Error::new)?;
+                        assert!(
+                            Mapping::new(public, &physical, None, &representations, budget)
+                                .is_err()
+                        );
+                        assert!(mapping.nominals.iter().any(
+                            |row| row.original == before.id() && row.instantiated == after.id()
+                        ));
+                        let original_location =
+                            ir::carrier_locations(&public.result, budget).map_err(Error::new)?;
+                        let location = original_location
+                            .iter()
+                            .find(|location| {
+                                location.path.0.iter().any(|step| {
+                                    matches!(step, ir::CarrierStep::VariantField { .. })
+                                })
+                            })
+                            .unwrap();
+                        let mapped = mapping
+                            .locations(None, location, budget)
+                            .map_err(Error::new)?;
+                        assert_eq!(
+                            mapped,
+                            ir::carrier_locations(&physical.result, budget)
+                                .map_err(Error::new)?
+                                .as_ref()
+                        );
+                        for control in 0..6 {
+                            let mut forged = location.clone();
+                            let mut path = forged.path.0.to_vec();
+                            let step = path
+                                .iter_mut()
+                                .find(|step| matches!(step, ir::CarrierStep::VariantField { .. }))
+                                .unwrap();
+                            let ir::CarrierStep::VariantField { variant, field } = step else {
+                                unreachable!()
+                            };
+                            match control {
+                                0 => variant.index = usize::MAX,
+                                1 => *field = usize::MAX,
+                                2 => variant.owner = after.id(),
+                                3 => {
+                                    forged.channel =
+                                        ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                            depth: 1,
+                                        })
+                                }
+                                4 => {
+                                    forged.channel = ir::CarrierChannel::ParamTail {
+                                        parameter: ir::ParamId {
+                                            owner: ir::BinderId {
+                                                declaration: target.declaration,
+                                            },
+                                            index: 0,
+                                        },
+                                        prefix: 0,
+                                    }
+                                }
+                                _ => *step = ir::CarrierStep::Referent,
+                            }
+                            forged.path = ir::CarrierPath(path.into());
+                            assert!(
+                                mapping.locations(None, &forged, budget).is_err(),
+                                "forged carrier coordinate {control}"
+                            );
+                        }
+                        for control in 0..3 {
+                            let mut definition = after.def().clone();
+                            match control {
+                                0 => definition.source_decl = target.declaration,
+                                1 => {
+                                    definition.type_args = definition
+                                        .type_args
+                                        .iter()
+                                        .map(|_| ir::Ty::Bool)
+                                        .collect::<Vec<_>>()
+                                        .into()
+                                }
+                                _ => {}
+                            }
+                            let mut forged = ir::EnumTy::new(definition);
+                            if control != 2 {
+                                forged =
+                                    forged.with_realization(after.realization().unwrap().clone());
+                            }
+                            let forged = ir::Ty::Enum(forged);
+                            assert!(
+                                closed
+                                    .physical_carrier_nominals(
+                                        &public.result,
+                                        &forged,
+                                        representations.engine(),
+                                        budget
+                                    )
+                                    .is_err(),
+                                "forged nominal metadata {control}"
+                            );
+                        }
+                        let other_budget = ir::PlanBudget::default();
+                        assert!(
+                            closed
+                                .physical_carrier_nominals(
+                                    &public.result,
+                                    &physical.result,
+                                    representations.engine(),
+                                    &other_budget
+                                )
+                                .is_err()
+                        );
+                        if let Some(foreign) = &foreign {
+                            assert!(
+                                closed
+                                    .physical_carrier_nominals(
+                                        &public.result,
+                                        foreign,
+                                        representations.engine(),
+                                        budget
+                                    )
+                                    .is_err(),
+                                "foreign-engine graph nominal accepted"
+                            );
+                        }
+                        assert!(budget.charge_work(usize::MAX).is_err());
+                        let first_failure = budget.first_resource_failure();
+                        assert!(first_failure.is_some());
+                        let resource = closed
+                            .physical_carrier_nominals(
+                                &public.result,
+                                &physical.result,
+                                representations.engine(),
+                                budget,
+                            )
+                            .unwrap_err();
+                        assert_eq!(resource.kind(), traits::FactsErrorKind::Resource);
+                        assert_eq!(budget.first_resource_failure(), first_failure);
+                        return cx.publish_fact(0, PublishedTy(physical.result.clone()));
+                    }
+                    Err(Error::new("fixture did not produce a graph nominal pair"))
+                })
+            }
+        }
+        for workers in [1, 8] {
+            let snapshot = Arc::new(Snapshot { input: Input::Text("fn main(){let values=[1i32,2];let mut iter=values.iter();if let Some(value)=iter.next(){println!(\"{}\",value);}}".into()), source_options: source::SourceOptions::default(), budget: ir::PlanBudget::default() });
+            let engine = Engine::new(Probe(CompilerProvider(snapshot.clone()), None));
+            let handle = engine.request(keys::test_key(9031, vec![0]));
+            engine.run(workers).unwrap();
+            handle.completion().unwrap();
+            let foreign = handle.fact::<PublishedTy>(0).unwrap();
+            let second = Engine::new(Probe(CompilerProvider(snapshot), Some(foreign.0.clone())));
+            let handle = second.request(keys::test_key(9031, vec![0]));
+            second.run(workers).unwrap();
+            handle.completion().unwrap();
+        }
     }
 }

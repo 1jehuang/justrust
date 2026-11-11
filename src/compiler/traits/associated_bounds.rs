@@ -278,10 +278,10 @@ impl ValidatedTraitWorld {
                     )?;
                     if closed
                         || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
-                        || (context.phase == FactsPhase::Universal
-                            && associated_types::implementation_application_self(
-                                &projection.trait_ref.self_ty,
-                            ))
+                        || (associated_types::implementation_application_self(
+                            &projection.trait_ref.self_ty,
+                        ) && (context.phase == FactsPhase::Universal
+                            || self.raw_associated_ty_is_closed(&raw, 0)?))
                     {
                         let (normal, dependencies) = self.normalize_closed_projected_type_for_use(
                             &raw,
@@ -443,6 +443,171 @@ mod tests {
             .unwrap()
             .declaration;
         (world, facts, owner, item)
+    }
+
+    #[test]
+    fn closed_opaque_blanket_assignment_replays_public_associated_bounds() {
+        let source = "trait Public{type Item;}trait Blanket{type Item;type Walk:Public<Item=Self::Item>;}impl<T:Public> Blanket for T{type Item=T::Item;type Walk=T;}struct Seed;impl Public for Seed{type Item=(u8,i32);}struct Wrong;impl Public for Wrong{type Item=bool;}fn make()->impl Public<Item=(u8,i32)>{Seed}fn hidden()->impl Sized{Seed}fn main(){}";
+        let make_world = || {
+            let program = frontend::parse(source).unwrap();
+            PlanCtx::from_program(&program, &PlanBudget::default())
+                .unwrap()
+                .trait_world()
+                .unwrap()
+        };
+        let world = make_world();
+        let public = world.headers.callables.iter().find(|header| {
+            matches!(&header.schema.signature.result, Ty::Opaque(opaque) if opaque.bounds().iter().any(|bound| !bound.equalities().is_empty()))
+        }).unwrap();
+        let facts = world
+            .instance_facts(&ir::CallTarget {
+                declaration: public.declaration,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert_eq!(facts.phase(), FactsPhase::Closed);
+        let context = ProofContext::from_facts(&facts).for_storage(false);
+        let blanket = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| header.associated_types.len() == 2)
+            .unwrap();
+        let walk = blanket
+            .associated_types
+            .iter()
+            .find(|value| matches!(value.rhs, Ty::Param(_)))
+            .unwrap()
+            .associated;
+        let owner = TraitRef {
+            declaration: blanket.trait_ref.declaration,
+            self_ty: public.schema.signature.result.clone(),
+            args: Arc::from([]),
+        };
+        let projection = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: owner.clone(),
+            item: walk,
+        }));
+        let staged = !world.owner_normalization_finalized;
+        let (normal, dependencies) = world
+            .normalize_closed_projected_type_for_use(
+                &projection,
+                context,
+                staged,
+                &mut ProofScratch::default(),
+                false,
+            )
+            .unwrap();
+        assert!(world.eq_ty(&normal, &owner.self_ty, 0).unwrap());
+        assert!(!dependencies.is_empty());
+        world
+            .discharge_associated_bound_predicates(
+                walk,
+                &owner,
+                &normal,
+                context,
+                &mut ProofScratch::default(),
+                None,
+            )
+            .unwrap();
+        let wrong = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| {
+                header
+                    .associated_types
+                    .iter()
+                    .any(|value| matches!(value.rhs, Ty::Bool))
+            })
+            .unwrap();
+        assert!(
+            world
+                .discharge_associated_bound_predicates(
+                    walk,
+                    &owner,
+                    &wrong.trait_ref.self_ty,
+                    context,
+                    &mut ProofScratch::default(),
+                    None
+                )
+                .is_err()
+        );
+        for dependency in &dependencies {
+            world
+                .validate_projected_dependency_with_for_use(
+                    dependency,
+                    context,
+                    &mut ProofScratch::default(),
+                    staged,
+                    false,
+                )
+                .unwrap();
+            assert!(
+                world
+                    .validate_projected_dependency_with_for_use(
+                        dependency,
+                        context,
+                        &mut ProofScratch::default(),
+                        staged,
+                        true
+                    )
+                    .is_err()
+            );
+        }
+        let foreign = make_world();
+        let foreign_public = foreign.headers.callables.iter().find(|header| matches!(&header.schema.signature.result, Ty::Opaque(opaque) if opaque.bounds().iter().any(|bound| !bound.equalities().is_empty()))).unwrap();
+        let foreign_facts = foreign
+            .instance_facts(&ir::CallTarget {
+                declaration: foreign_public.declaration,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert!(
+            world
+                .discharge_associated_bound_predicates(
+                    walk,
+                    &owner,
+                    &normal,
+                    ProofContext::from_facts(&foreign_facts).for_storage(false),
+                    &mut ProofScratch::default(),
+                    None
+                )
+                .is_err()
+        );
+        let hidden = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                matches!(&header.schema.signature.result, Ty::Opaque(_))
+                    && header.declaration != public.declaration
+            })
+            .unwrap();
+        let hidden_facts = world
+            .instance_facts(&ir::CallTarget {
+                declaration: hidden.declaration,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let hidden_projection = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                self_ty: hidden.schema.signature.result.clone(),
+                ..owner
+            },
+            item: walk,
+        }));
+        assert!(
+            world
+                .normalize_closed_projected_type_for_use(
+                    &hidden_projection,
+                    ProofContext::from_facts(&hidden_facts).for_storage(false),
+                    staged,
+                    &mut ProofScratch::default(),
+                    false
+                )
+                .is_err()
+        );
     }
 
     #[test]
