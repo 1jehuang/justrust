@@ -17,7 +17,7 @@ concurrency:
 
 env:
   # Updated only after reviewing and validating a new bootstrap client.
-  HOSTED_CLIENT_REV: d0c35300773df0103e3beeb090a5a1a5c6681185
+  HOSTED_CLIENT_REV: 0adbc3ecfb4c8729a56b677a9b784ba73d1814e2
   JUSTRUST_TOOLCHAIN: 1.99.0
   JUSTRUST_TOOLCHAIN_REQUIRED: "1"
   JUSTRUST_REMOTE_REQUIRED: "1"
