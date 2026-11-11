@@ -261,10 +261,9 @@ pub fn use_command(kind: &str, args: &[String]) -> Result<()> {
             }
         }
         "hosted" => {
-            if !args.is_empty() {
-                bail!("unexpected arguments for `remote use hosted`");
-            }
+            let platform = crate::remote_windows::setup_args(args)?;
             crate::remote_hosted::check_use()?;
+            crate::remote_windows::select(&platform)?;
             Backend::Hosted
         }
         "off" | "none" => {

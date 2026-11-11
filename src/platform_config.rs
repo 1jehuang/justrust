@@ -35,6 +35,7 @@ struct Config {
 
 fn env_name(key: &str) -> Result<Option<&'static str>> {
     Ok(match key {
+        "host-platform" => Some("JUSTRUST_HOST_PLATFORM"),
         "microsoft-sdk-license" => Some("JUSTRUST_ACCEPT_MICROSOFT_SDK_LICENSE"),
         "install-llvm-tools" => Some("JUSTRUST_INSTALL_LLVM_TOOLS"),
         "darwin-sdk" => Some("JUSTRUST_DARWIN_SDK"),
@@ -46,6 +47,10 @@ fn env_name(key: &str) -> Result<Option<&'static str>> {
 fn validate(key: &str, value: &str) -> Result<()> {
     env_name(key)?;
     match key {
+        "host-platform" => ensure!(
+            matches!(value, "linux" | "windows"),
+            "host-platform must be linux or windows"
+        ),
         "microsoft-sdk-license" | "install-llvm-tools" => {
             ensure!(matches!(value, "0" | "1"), "{key} must be 0 or 1")
         }

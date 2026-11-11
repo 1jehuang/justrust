@@ -699,7 +699,7 @@ fn check_native_test(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn check_windows_for_target(data: &[u8], executable: bool, target: &str) -> Result<()> {
+pub(crate) fn check_windows_for_target(data: &[u8], executable: bool, target: &str) -> Result<()> {
     use object::{Object, ObjectKind, ObjectSection};
     let expected = match target {
         "aarch64-pc-windows-msvc" => object::Architecture::Aarch64,

@@ -86,6 +86,7 @@ mod release_tools;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
+mod remote_windows;
 // Build-host eviction runs on Unix hosts only.
 #[cfg_attr(not(unix), allow(dead_code))]
 mod remote_evict;
@@ -627,6 +628,9 @@ enum ToolchainCmd {
 enum RemoteCmd {
     /// Create the machine, or start it if it is stopped.
     Up {
+        /// Hosted worker OS (linux or windows), independent of Cargo --target.
+        #[arg(long = "platform", alias = "host-platform")]
+        platform: Option<String>,
         /// AWS region (default us-west-2).
         #[arg(long)]
         region: Option<String>,
@@ -781,6 +785,13 @@ fn route_then_accelerate(
 }
 
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
+    let args = match remote_windows::take_platform_flags(args) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("justrust: {e:#}");
+            std::process::exit(2);
+        }
+    };
     let (args, route_mode, local_why) = take_route_flags(args);
     let (args, rerun) = test_reuse::take_rerun_flag(args);
     if let Some(m) = route_mode {
@@ -793,6 +804,34 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
     }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
+    match remote_windows::selected() {
+        Ok(true) if route_mode != Some("off") => {
+            let args = full[1..]
+                .iter()
+                .map(|a| {
+                    a.to_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| anyhow::anyhow!("native Windows arguments must be UTF-8"))
+                })
+                .collect::<anyhow::Result<Vec<_>>>();
+            let result = args.and_then(|args| remote_build::run(sub, args));
+            if let Err(e) = result {
+                eprintln!("justrust: {e:#}");
+            }
+            std::process::exit(2);
+        }
+        Ok(true) if !cfg!(windows) => {
+            eprintln!(
+                "justrust: native Windows execution cannot run locally on this platform; remove --local"
+            );
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("justrust: {e:#}");
+            std::process::exit(2);
+        }
+        _ => {}
+    }
     // An identical passing test run needs no sync, build or run at all.
     if !rerun && let Some(code) = test_reuse::try_reuse(&full) {
         std::process::exit(code);
@@ -1159,16 +1198,32 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Upgrade { plan, no_wait } => account::upgrade(plan, no_wait)?,
         Command::Remote { cmd } => match cmd {
             RemoteCmd::Up {
+                platform,
                 region,
                 instance_type,
                 on_demand,
                 idle_minutes,
-            } => remote::up(remote::UpOptions {
-                region,
-                instance_type,
-                on_demand,
-                idle_minutes,
-            })?,
+            } => {
+                if let Some(platform) = platform {
+                    if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
+                        anyhow::bail!(
+                            "--platform requires the hosted backend: use `justrust remote use hosted --platform windows`"
+                        );
+                    }
+                    remote_windows::select(&platform)?;
+                    // The explicit selection also overrides a stored setup default
+                    // for this single-threaded command invocation.
+                    unsafe {
+                        std::env::set_var("JUSTRUST_HOST_PLATFORM", platform);
+                    }
+                }
+                remote::up(remote::UpOptions {
+                    region,
+                    instance_type,
+                    on_demand,
+                    idle_minutes,
+                })?
+            }
             RemoteCmd::Down => remote::down()?,
             RemoteCmd::Destroy { yes } => {
                 if !yes {

@@ -95,7 +95,9 @@ const FORWARDED_ENV: &[&str] = &[
 /// caller's machine is not a portable hosted build control. An empty Cargo
 /// config override is portable: it disables a configured wrapper without
 /// overriding justrust's own RUSTC_WRAPPER instrumentation.
-fn forwarded_env(mut lookup: impl FnMut(&str) -> Option<String>) -> Vec<(String, String)> {
+pub(crate) fn forwarded_env(
+    mut lookup: impl FnMut(&str) -> Option<String>,
+) -> Vec<(String, String)> {
     let mut env = Vec::new();
     for &name in FORWARDED_ENV {
         if let Some(value) = lookup(name) {
@@ -1306,6 +1308,45 @@ fn run_remote_inner(
         *admitted = Some(HostedRun::new(hosted, run_id, total));
     }
     let hosted_run = admitted.as_mut().expect("run admitted above");
+    if crate::remote_windows::selected()? {
+        if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
+            return infra(format!(
+                "{CLIENT_SIDE}native Windows execution requires the hosted backend"
+            ));
+        }
+        diagnostic.stage = "windows_transport";
+        let prepared = crate::remote_windows::prepare(sub, args, run_id, &cwd, &roots)?;
+        hosted_run.running();
+        diagnostic.may_have_started = true;
+        let native = crate::remote_windows::execute(prepared, run_id)?;
+        diagnostic.exit = Some(native.code);
+        let failure = native
+            .summary
+            .as_ref()
+            .and_then(|summary| {
+                serde_json::from_value::<crate::summary::Summary>(summary.clone()).ok()
+            })
+            .and_then(|summary| summary.failure_wire());
+        hosted_run.finish("done", Some(native.code), failure.as_ref());
+        if let Some(summary) = native.summary {
+            let mut summary: crate::summary::Summary = serde_json::from_value(summary)?;
+            summary.id = run_id.to_owned();
+            summary.cwd = cwd.display().to_string();
+            let _ = record_remote(
+                run_id,
+                &serde_json::to_vec(&summary)?,
+                &[],
+                "Windows x86_64 (MSVC)",
+                0.0,
+                None,
+                total.elapsed().as_secs_f64(),
+            );
+        }
+        return Ok(Ok(Outcome {
+            code: native.code,
+            run_id: run_id.to_owned(),
+        }));
+    }
     mark("charged");
     crate::e2e::mark("admitted");
     // Visible to `justrust status` (and the status bar) while it runs.

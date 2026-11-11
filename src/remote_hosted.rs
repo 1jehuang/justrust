@@ -38,6 +38,14 @@ use crate::remote_backend::Target;
 pub const DEFAULT_API_BASE: &str = "https://api.jcode.sh/v1";
 /// The build fleet (justrust-cloud). Every `build/...` path goes here.
 pub const DEFAULT_BUILD_BASE: &str = "https://build.jcode.sh/v1";
+
+fn host_status_path() -> Result<&'static str> {
+    Ok(if crate::remote_windows::selected()? {
+        "build/host?platform=windows&target=x86_64-pc-windows-msvc"
+    } else {
+        "build/host"
+    })
+}
 const ENV_FILE: &str = "jcode-subscription.env";
 const POLL: Duration = Duration::from_secs(2);
 /// First creation of a machine: boot plus cloud-init.
@@ -669,7 +677,7 @@ pub fn check_access(c: &Creds) -> Result<Me> {
         // flags). The fleet is the source of truth: a 200 from build/host
         // means entitled, and a fleet outage is reported as one, not as an
         // account problem.
-        match request(c, "GET", "build/host", None) {
+        match request(c, "GET", host_status_path()?, None) {
             Ok(r) if r.code == 200 => {
                 m.build_hosts = true;
                 if m.builds.is_none() {
@@ -1143,7 +1151,8 @@ const STATUS_TTL_S: u64 = 30;
 pub fn status_cached(refresh: bool) -> HostedStatus {
     let file = crate::paths::home()
         .ok()
-        .map(|h| h.join("remote/hosted/status.json"));
+        .and_then(|_| dir().ok())
+        .map(|d| d.join("status.json"));
     let cached: Option<HostedStatus> = file
         .as_ref()
         .and_then(|f| std::fs::read(f).ok())
@@ -1185,7 +1194,7 @@ pub fn status() -> HostedStatus {
     let r = (|| -> Result<()> {
         let c = creds()?;
         s.me = Some(me(&c)?);
-        let h = ok(request(&c, "GET", "build/host", None)?)?;
+        let h = ok(request(&c, "GET", host_status_path()?, None)?)?;
         s.host_state = h["state"].as_str().map(str::to_string);
         s.credits = Credits::from(&h["credits"]);
         s.hours_left = s.credits.hours_left();
@@ -1238,7 +1247,7 @@ impl HostedUpdate {
 
 pub fn current_update() -> Result<Option<HostedUpdate>> {
     let c = creds()?;
-    let h = ok(request(&c, "GET", "build/host", None)?)?;
+    let h = ok(request(&c, "GET", host_status_path()?, None)?)?;
     match h.get("update").filter(|v| !v.is_null()) {
         Some(update) => Ok(Some(serde_json::from_value(update.clone())?)),
         None => Ok(None),
@@ -1257,6 +1266,7 @@ pub struct Ready {
     pub builds: Option<Builds>,
     /// The release the hosted fleet expects clients to run (`fleet_version`).
     pub fleet_version: Option<String>,
+    pub ssh_certificate: Option<String>,
 }
 
 fn safe_host(s: &str) -> bool {
@@ -1273,13 +1283,30 @@ fn safe_user(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
 }
 
+#[cfg(test)]
 fn parse_ready(b: &Value) -> Result<Ready> {
-    // The current transport executes Linux commands. Missing platform denotes
-    // the legacy Linux API, not permission to accept an incompatible worker.
+    parse_ready_for(b, false)
+}
+
+fn parse_ready_for(b: &Value, windows: bool) -> Result<Ready> {
+    let expected = if windows { "windows" } else { "linux" };
     if b.get("platform")
-        .is_some_and(|platform| platform.as_str() != Some("linux"))
+        .is_some_and(|p| p.as_str() != Some(expected))
+        || (windows
+            && (b["platform"] != "windows"
+                || b["transport"] != crate::remote_windows::TRANSPORT
+                || b["target"] != crate::remote_windows::TARGET
+                || b["user"] != "jrbuild"
+                || b["ssh_certificate"]
+                    .as_str()
+                    .is_none_or(|c| c.is_empty() || c.contains(['\r', '\n']))))
+        || (!windows
+            && b.get("transport")
+                .is_some_and(|t| !matches!(t.as_str(), Some("ssh" | "linux"))))
     {
-        bail!("the hosted build API returned an unsupported worker platform, refusing to connect");
+        bail!(
+            "the hosted build API returned an unsupported worker platform/target/transport, refusing to connect"
+        );
     }
     let address = b["address"].as_str().unwrap_or("").to_string();
     let user = b["user"].as_str().unwrap_or("ubuntu").to_string();
@@ -1310,6 +1337,7 @@ fn parse_ready(b: &Value) -> Result<Ready> {
         port: port as u16,
         user,
         host_keys,
+        ssh_certificate: b["ssh_certificate"].as_str().map(str::to_owned),
         credits: Credits::from(&b["credits"]),
         builds: Builds::from(&b["builds"]),
         fleet_version: b["fleet_version"]
@@ -1333,12 +1361,30 @@ pub fn connect_with(
     mut progress: impl FnMut(&str),
 ) -> Result<Ready> {
     let start = Instant::now();
-    let body = json!({ "public_key": public_key.trim(), "platform": "linux" });
+    let windows = crate::remote_windows::selected()?;
+    let body = if windows {
+        json!({ "public_key": public_key.trim(), "platform": "windows", "target": crate::remote_windows::TARGET })
+    } else {
+        json!({ "public_key": public_key.trim(), "platform": "linux" })
+    };
     let mut last = String::new();
     loop {
         let r = request(c, "POST", "build/host/connect", Some(&body))?;
         match r.code {
-            200 if r.body["ready"].as_bool() != Some(false) => return parse_ready(&r.body),
+            200 if r.body["ready"].as_bool() != Some(false) => {
+                let ready = parse_ready_for(&r.body, windows)?;
+                if windows {
+                    crate::remote_windows::verify_certificate(
+                        ready
+                            .ssh_certificate
+                            .as_deref()
+                            .context("Windows SSH certificate missing")?,
+                        public_key,
+                        now(),
+                    )?;
+                }
+                return Ok(ready);
+            }
             200..=299 => {
                 let msg = r.body["message"]
                     .as_str()
@@ -1414,7 +1460,11 @@ pub fn dev_mode() -> bool {
 }
 
 pub fn dir() -> Result<PathBuf> {
-    let d = crate::remote::dir()?.join("hosted");
+    let d = if crate::remote_windows::selected()? {
+        crate::remote::dir()?.join("hosted/windows/x86_64-pc-windows-msvc")
+    } else {
+        crate::remote::dir()?.join("hosted")
+    };
     std::fs::create_dir_all(&d)?;
     set_mode(&d, 0o700);
     Ok(d)
@@ -1439,6 +1489,12 @@ fn write_private(p: &Path, content: &[u8]) -> Result<()> {
 pub fn target(d: &Path, user: &str, address: &str, port: u16) -> Target {
     let o = |s: String| ["-o".to_string(), s];
     let mut opts: Vec<String> = vec!["-i".into(), d.join("id_ed25519").display().to_string()];
+    if d.join("id_ed25519-cert.pub").is_file() {
+        opts.extend(o(format!(
+            "CertificateFile={}",
+            d.join("id_ed25519-cert.pub").display()
+        )));
+    }
     for s in [
         "IdentitiesOnly=yes".to_string(),
         format!("UserKnownHostsFile={}", d.join("known_hosts").display()),
@@ -1476,6 +1532,12 @@ pub struct State {
     pub port: u16,
     /// Unix seconds.
     pub ready_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
 }
 
 fn now() -> u64 {
@@ -1486,11 +1548,23 @@ fn now() -> u64 {
 }
 
 fn state_file() -> Option<PathBuf> {
-    Some(crate::paths::home().ok()?.join("remote/hosted/state.json"))
+    Some(dir().ok()?.join("state.json"))
 }
 
 pub fn load_state() -> Option<State> {
-    serde_json::from_slice(&std::fs::read(state_file()?).ok()?).ok()
+    let state: State = serde_json::from_slice(&std::fs::read(state_file()?).ok()?).ok()?;
+    if !safe_host(&state.address) || !safe_user(&state.user) || state.port == 0 {
+        return None;
+    }
+    if crate::remote_windows::selected().ok()?
+        && (state.platform.as_deref() != Some("windows")
+            || state.target.as_deref() != Some(crate::remote_windows::TARGET)
+            || state.transport.as_deref() != Some(crate::remote_windows::TRANSPORT)
+            || state.user != "jrbuild")
+    {
+        return None;
+    }
+    Some(state)
 }
 
 /// The cached destination, without any network.
@@ -1543,6 +1617,7 @@ fn new_key(d: &Path) -> Result<String> {
     let k = d.join("id_ed25519");
     let _ = std::fs::remove_file(&k);
     let _ = std::fs::remove_file(d.join("id_ed25519.pub"));
+    let _ = std::fs::remove_file(d.join("id_ed25519-cert.pub"));
     let out = Command::new("ssh-keygen")
         .args([
             "-q",
@@ -1574,6 +1649,9 @@ fn new_key(d: &Path) -> Result<String> {
 /// moment after the API reports ready, so retry inside the key window. The
 /// persisted master inherits stdio, so it gets a log file, not a pipe.
 fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
+    if crate::remote_windows::selected()? {
+        return crate::remote_windows::probe(t);
+    }
     let start = Instant::now();
     let log = d.join("ssh.log");
     loop {
@@ -1630,16 +1708,32 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
     let d = dir()?;
     let _lock = Lock::take(&d)?;
     cached_or_refresh(
-        refresh,
+        refresh || crate::remote_windows::selected()?,
         || master_alive().then(cached_target).flatten(),
         || {
             let c = creds()?;
+            if crate::remote_windows::selected()?
+                && let Some(old) = cached_target()
+            {
+                // A new short-lived certificate must be exercised on a new
+                // authenticated connection, not shadowed by an older master.
+                let _ = old
+                    .command()
+                    .args(["-O", "exit"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
             let pubkey = new_key(&d)?;
             eprintln!("hosted: connecting to a build machine...");
             let r = connect_with(&c, &pubkey, POLL, CONNECT_TIMEOUT, |m| {
                 eprintln!("hosted: {m}")
             })?;
             write_private(&d.join("known_hosts"), known_hosts(&r).as_bytes())?;
+            if let Some(cert) = &r.ssh_certificate {
+                write_private(&d.join("id_ed25519-cert.pub"), cert.as_bytes())?;
+            }
             let t = target(&d, &r.user, &r.address, r.port);
             // A stale master for another address must not shadow the new one.
             let _ = std::fs::remove_file(d.join("state.json"));
@@ -1650,6 +1744,11 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
                 user: r.user.clone(),
                 port: r.port,
                 ready_at: now(),
+                platform: crate::remote_windows::selected()?.then(|| "windows".into()),
+                target: crate::remote_windows::selected()?
+                    .then(|| crate::remote_windows::TARGET.into()),
+                transport: crate::remote_windows::selected()?
+                    .then(|| crate::remote_windows::TRANSPORT.into()),
             };
             write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
             let _ = std::fs::remove_file(d.join("fleet-version"));
@@ -1680,7 +1779,14 @@ pub fn up() -> Result<()> {
 /// local session.
 pub fn down() -> Result<()> {
     let c = creds()?;
-    let b = ok(request(&c, "POST", "build/host/stop", Some(&json!({})))?)?;
+    let b = ok(request(
+        &c,
+        "POST",
+        "build/host/stop",
+        Some(
+            &json!({"platform": if crate::remote_windows::selected()? { "windows" } else { "linux" }}),
+        ),
+    )?)?;
     if let Some(t) = cached_target() {
         let _ = t
             .command()
@@ -1707,7 +1813,7 @@ pub fn check_use() -> Result<Me> {
     let m = check_access(&c)?;
     let who = m.email.as_deref().unwrap_or("signed in");
     let tier = m.tier.as_deref().unwrap_or("subscription");
-    let credits = request(&c, "GET", "build/host", None)
+    let credits = request(&c, "GET", host_status_path()?, None)
         .ok()
         .filter(|r| r.code == 200)
         .and_then(|r| Credits::from(&r.body["credits"]).hours_left());
@@ -2573,6 +2679,27 @@ mod tests {
             ready["platform"] = platform;
             let err = parse_ready(&ready).unwrap_err();
             assert!(err.to_string().contains("unsupported worker platform"));
+        }
+    }
+
+    #[test]
+    fn windows_requires_explicit_native_transport_target_user_and_certificate() {
+        let mut ready: Value = serde_json::from_str(READY).unwrap();
+        ready["platform"] = json!("windows");
+        ready["target"] = json!(crate::remote_windows::TARGET);
+        ready["transport"] = json!(crate::remote_windows::TRANSPORT);
+        ready["user"] = json!("jrbuild");
+        ready["ssh_certificate"] = json!("ssh-ed25519-cert-v01@openssh.com test");
+        assert!(parse_ready_for(&ready, true).is_ok());
+        assert!(parse_ready_for(&ready, false).is_err());
+        for key in ["platform", "target", "transport", "user", "ssh_certificate"] {
+            let mut missing = ready.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(parse_ready_for(&missing, true).is_err(), "{key}");
+            missing[key] = json!("linux");
+            if key != "ssh_certificate" {
+                assert!(parse_ready_for(&missing, true).is_err(), "{key}");
+            }
         }
     }
 
