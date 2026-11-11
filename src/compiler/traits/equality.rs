@@ -807,6 +807,19 @@ impl ValidatedTraitWorld {
                     Ty::Slice { element } => element.as_ref(),
                     other => other,
                 };
+                // A shared chain (`&&T`, e.g. `Item = (usize, &&T)` for an
+                // enumerated slice of references) is still only a type row:
+                // every layer is Copy and read-only. Recurse so each layer
+                // gets the same admission; mutable layers stay rejected.
+                if matches!(
+                    referent,
+                    Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        ..
+                    }
+                ) {
+                    return self.validate_equality_reference_domain(referent, depth + 1);
+                }
                 self.reject_projected_references(referent, depth + 1)
             }
             // `Item = &'a mut T` is likewise a type row, not a loan. The value

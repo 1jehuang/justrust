@@ -51,3 +51,24 @@ fn unused_factory_chain_with_missing_member_is_rejected() {
         "struct Holder<T>{value:T}impl<T> Holder<T>{fn make(value:T)->Self{Self{value}}}fn unused(){let _=Holder::<u32>::make(4u32).missing();}fn main(){}",
     );
 }
+
+#[test]
+fn enumerated_slice_of_references_yields_shared_reference_chains() {
+    oracle::stock_native(
+        r#"fn main() { let words = ["alpha", "beta", "gamma"]; let joined = words.iter().enumerate().map(|(i, w)| format!("{i}:{w}")).collect::<Vec<_>>().join(","); println!("{joined}"); let a = [4, 5]; let refs = [&a[0], &a[1]]; for (i, r) in refs.iter().enumerate() { let v: &&i32 = r; println!("{i} {v}"); } }"#,
+    );
+}
+
+#[test]
+fn unused_enumerated_reference_chain_mutation_is_rejected() {
+    oracle::stock_and_native_reject(
+        r#"fn unused() { let a = [4, 5]; let refs = [&a[0], &a[1]]; for (_, r) in refs.iter().enumerate() { **r += 1; } } fn main() {}"#,
+    );
+}
+
+#[test]
+fn unused_enumerated_reference_chain_wrong_depth_is_rejected() {
+    oracle::stock_and_native_reject(
+        r#"fn unused() { let a = [4, 5]; let refs = [&a[0], &a[1]]; for (_, r) in refs.iter().enumerate() { let _v: &&bool = r; } } fn main() {}"#,
+    );
+}
