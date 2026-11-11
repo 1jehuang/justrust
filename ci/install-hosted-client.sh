@@ -11,10 +11,13 @@ work=$(mktemp -d "${RUNNER_TEMP:-${JCODE_SCRATCH_DIR:-${TMPDIR:-/tmp}}}/justrust
 git init -q "$work/source"
 git -C "$work/source" remote add origin https://github.com/1jehuang/justrust.git
 git -C "$work/source" sparse-checkout set --no-cone \
-  '/Cargo.toml' '/Cargo.lock' '/src/' '/docs/AGENTS-snippet.md' '/README.md' '/LICENSE*'
+  '/Cargo.toml' '/Cargo.lock' '/src/' '/docs/AGENTS-snippet.md' \
+  '/scripts/sign-release.py' '/README.md' '/LICENSE*'
 git -C "$work/source" fetch --quiet --depth=1 --filter=blob:none origin "$revision"
 git -C "$work/source" checkout --quiet --detach FETCH_HEAD
 [[ $(git -C "$work/source" rev-parse HEAD) == "$revision" ]]
+# Compile-time include_str! input outside src/. Keep it in the sparse snapshot.
+[[ -r "$work/source/scripts/sign-release.py" ]]
 # Do not mark the bootstrap as a published auto-updating release. The output
 # being built later gets JUSTRUST_RELEASE_BUILD=1, not this bootstrap client.
 JUSTRUST_RELEASE_BUILD=0 CARGO_TARGET_DIR="$work/target" \
