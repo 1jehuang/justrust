@@ -48,8 +48,11 @@ fn host_status_path() -> Result<&'static str> {
 }
 const ENV_FILE: &str = "jcode-subscription.env";
 const POLL: Duration = Duration::from_secs(2);
-/// First creation of a machine: boot plus cloud-init.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+/// First creation includes boot and provisioning. Fresh Windows Sysprep boots
+/// need more headroom than Linux cloud-init, but both waits remain bounded.
+fn connect_timeout(windows: bool) -> Duration {
+    Duration::from_secs(if windows { 12 * 60 } else { 6 * 60 })
+}
 /// A ready this recent counts as up for routing even before the master check.
 const RECENT_READY_S: u64 = 60;
 
@@ -1945,9 +1948,8 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             }
             let pubkey = new_key(&d)?;
             eprintln!("hosted: connecting to a build machine...");
-            let r = connect_with(&c, &pubkey, POLL, CONNECT_TIMEOUT, |m| {
-                eprintln!("hosted: {m}")
-            })?;
+            let timeout = connect_timeout(crate::remote_windows::selected()?);
+            let r = connect_with(&c, &pubkey, POLL, timeout, |m| eprintln!("hosted: {m}"))?;
             write_private(&d.join("known_hosts"), known_hosts(&r).as_bytes())?;
             if let Some(cert) = &r.ssh_certificate {
                 write_private(&d.join("id_ed25519-cert.pub"), cert.as_bytes())?;
@@ -2047,6 +2049,18 @@ pub fn check_use() -> Result<Me> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connect_timeout_bounds_windows_and_preserves_linux() {
+        assert_eq!(
+            super::connect_timeout(true),
+            std::time::Duration::from_secs(720)
+        );
+        assert_eq!(
+            super::connect_timeout(false),
+            std::time::Duration::from_secs(360)
+        );
+    }
+
     #[test]
     fn run_admission_negotiates_maintenance_without_legacy_bypass() {
         use super::*;
