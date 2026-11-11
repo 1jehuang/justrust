@@ -235,10 +235,44 @@ impl<'a> Specialization<'a> {
                     .map_err(|error| source_fact_error(error, self.budget))?;
                 (ir::Callee::TraitItem(call), signature)
             }
-            ir::Callee::Virtual(_) => {
-                return Err(Error::new(
-                    "unsupported: virtual opaque specialization call",
-                ));
+            ir::Callee::Virtual(original) => {
+                original.principal().map_err(Error::new)?;
+                if !original.call.method_args.is_empty() {
+                    return Err(Error::new("unsupported: generic virtual methods"));
+                }
+                let self_ty = self.ty(&original.call.trait_ref.self_ty)?;
+                let mut arguments = self.type_buffer(original.call.trait_ref.args.len())?;
+                for argument in original.call.trait_ref.args.iter() {
+                    arguments.push(self.ty(argument)?);
+                }
+                let virtual_call = ir::VirtualCall {
+                    call: ir::TraitCall {
+                        trait_ref: ir::TraitRef {
+                            declaration: original.call.trait_ref.declaration,
+                            self_ty,
+                            args: arguments.into(),
+                        },
+                        item: original.call.item,
+                        method_args: Arc::from([]),
+                    },
+                };
+                if virtual_call.principal().map_err(Error::new)?
+                    != original.principal().map_err(Error::new)?
+                {
+                    return Err(Error::new(
+                        "virtual specialization changed canonical principal",
+                    ));
+                }
+                let signature = self
+                    .closed
+                    .service()
+                    .instantiate_trait_signature_with(
+                        &virtual_call.call,
+                        &self.closed,
+                        &mut self.closed_scratch,
+                    )
+                    .map_err(|error| source_fact_error(error, self.budget))?;
+                (ir::Callee::Virtual(virtual_call), signature)
             }
             ir::Callee::Untupled(_) => {
                 return Err(Error::new(

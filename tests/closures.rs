@@ -8,6 +8,30 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn opaque_body_preserves_virtual_dispatch_matches_stock() {
+    output_oracle::check(
+        "opaque-body-virtual-dispatch",
+        &[output_oracle::Case {
+            name: "opaque_counter_and_dynamic_button",
+            source: r#"
+fn counter()->impl FnMut()->i32{let mut n=0;move||{n+=1;n}}
+fn mixed(hd:&dyn Fn(&str)->String){let mut c=counter();println!("{} {} {}",c(),c(),hd("click"));}
+fn main(){
+    let first=|s:&str|format!("first:{s}");
+    let second=|s:&str|format!("second:{s}");
+    let a:&dyn Fn(&str)->String=&first;
+    let b:&dyn Fn(&str)->String=&second;
+    mixed(a);mixed(b);mixed(a);
+}
+"#,
+            expect: output_oracle::Expect::Run(
+                "1 2 first:click\n1 2 second:click\n1 2 first:click\n",
+            ),
+        }],
+    );
+}
+
+#[test]
 fn parent_local_box_closure_runtime_matches_stock() {
     output_oracle::check(
         "parent-local-box-closure",

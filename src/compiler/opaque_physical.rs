@@ -6,9 +6,12 @@ use super::*;
 mod carrier_mapping;
 #[path = "opaque_physical/carriers.rs"]
 mod carriers;
+#[path = "opaque_physical/virtual_calls.rs"]
+mod virtual_calls;
 pub(super) use carrier_mapping::require_type as require_receiver_carriers;
 pub(super) use carriers::require_preserved_boundary;
 pub(super) use carriers::{PhysicalCarrierFlow, PhysicalCarrierIdentity};
+use virtual_calls::VirtualPhysicalCall;
 
 #[derive(Clone, Debug)]
 struct DirectPhysicalCall {
@@ -101,6 +104,7 @@ pub(super) struct PhysicalNormalizationProof {
     result: ir::Ty,
     calls: Arc<[Arc<opaque_dispatch::OpaqueCallAuthorization>]>,
     direct_calls: Arc<[DirectPhysicalCall]>,
+    virtual_calls: Arc<[VirtualPhysicalCall]>,
     packs: Arc<[(ir::ExprId, ir::OpaquePackProof)]>,
 }
 
@@ -249,6 +253,7 @@ impl<'a> PhysicalValidation<'a> {
             || self.proof.result != expected.proof.result
             || self.proof.packs.len() != expected.proof.packs.len()
             || self.proof.direct_calls.len() != expected.proof.direct_calls.len()
+            || self.proof.virtual_calls.len() != expected.proof.virtual_calls.len()
         {
             return Err("physical CFG type, pack or direct-call mapping changed".into());
         }
@@ -277,6 +282,10 @@ impl<'a> PhysicalValidation<'a> {
             {
                 return Err("physical direct-call ABI mapping changed".into());
             }
+        }
+        self.budget.charge_work(self.proof.virtual_calls.len())?;
+        if self.proof.virtual_calls != expected.proof.virtual_calls {
+            return Err("physical virtual-call occurrence or ABI mapping changed".into());
         }
         let expected = &expected.function;
         if candidate.runtime_sites != expected.runtime_sites
@@ -333,6 +342,19 @@ impl<'a> PhysicalValidation<'a> {
             {
                 return Ok(());
             }
+        }
+        self.budget
+            .charge_work(self.expected.proof.virtual_calls.len())?;
+        if let Some(expected) = self
+            .expected
+            .proof
+            .virtual_calls
+            .iter()
+            .find(|call| call.occurrence == site)
+            && callee == &ir::Callee::Virtual(expected.target.clone())
+            && signature == &expected.physical_signature
+        {
+            return Ok(());
         }
         Err("physical call lacks exact original-occurrence ABI authorization".into())
     }
@@ -556,6 +578,7 @@ pub(super) fn normalize(
     output.ref_contract = signature.ref_contract;
     let mut packs = Vec::new();
     let mut direct_calls = Vec::new();
+    let mut virtual_calls = Vec::new();
     for block in &mut output.blocks {
         for statement in &mut block.statements {
             let cfg::Statement::Assign { value, .. } = &mut statement.value else {
@@ -706,7 +729,41 @@ pub(super) fn normalize(
                     *signature = direct.physical_signature.clone();
                     direct_calls.push(direct);
                 }
-                ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) | ir::Callee::Untupled(_) => {
+                ir::Callee::Virtual(_) => {
+                    let virtual_call = VirtualPhysicalCall::seal(
+                        publication,
+                        occurrence,
+                        representations,
+                        context,
+                        budget,
+                        &mut specialization,
+                    )?;
+                    let expression = publication
+                        .source()
+                        .exprs
+                        .get(occurrence.0)
+                        .ok_or_else(|| Error::new("physical virtual occurrence is absent"))?;
+                    let ir::ExprKind::Call {
+                        target: original_target,
+                        signature: original_signature,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return Err(Error::new("physical virtual occurrence is not a call"));
+                    };
+                    if callee != original_target || signature != original_signature {
+                        return Err(Error::new(
+                            "physical virtual call differs from original occurrence",
+                        ));
+                    }
+                    *callee = ir::Callee::Virtual(virtual_call.target.clone());
+                    *signature = virtual_call.physical_signature.clone();
+                    virtual_calls
+                        .try_reserve_exact(1)
+                        .map_err(|_| Error::new("physical virtual proof allocation failed"))?;
+                    virtual_calls.push(virtual_call);
+                }
+                ir::Callee::TraitItem(_) | ir::Callee::Untupled(_) => {
                     return Err(Error::new("unsupported: residual abstract physical callee"));
                 }
             }
@@ -728,6 +785,7 @@ pub(super) fn normalize(
         result: output.result.clone(),
         calls: calls.to_vec().into(),
         direct_calls: direct_calls.into(),
+        virtual_calls: virtual_calls.into(),
         packs: packs.into(),
     };
     Ok(PhysicalCfgDraft {
