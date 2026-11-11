@@ -438,12 +438,15 @@ fn fleet_policy_allows(hosted: bool, dev_mode: bool, durable_session: bool) -> b
     hosted && !dev_mode && !durable_session
 }
 
+// Durable hosted sessions are Unix-only (see `remote_session` in lib.rs).
+#[cfg_attr(windows, allow(dead_code))]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct PinnedSessionExecutable {
     pub path: String,
     pub sha256: String,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 impl PinnedSessionExecutable {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -468,6 +471,7 @@ impl PinnedSessionExecutable {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn session_executable_prepare_script(digest: &str) -> String {
     format!(
         r#"set -eu; umask 077
@@ -493,6 +497,7 @@ fi"#
     )
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn session_executable_publish_script(pin: &PinnedSessionExecutable, temp: &str) -> Result<String> {
     pin.validate()?;
     let parent = Path::new(&pin.path).parent().unwrap();
@@ -526,6 +531,7 @@ valid"#,
 
 /// Unlike the mutable fleet launcher, this exact-byte executable survives other
 /// clients replacing ~/.cargo/bin/justrust between create and reattachment.
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSessionExecutable> {
     let arch = target
         .command()
