@@ -5656,6 +5656,18 @@ impl ValidatedTraitWorld {
                 walk.component_replays(&self.budget)?,
             )?;
         }
+        // An object's associated bindings replay the same immutable nominal
+        // facts as the rest of this walk. Share its completed replays instead
+        // of re-proving every embedded realization from an empty set.
+        if let Ty::Dyn(object) = ty
+            && matches!(
+                usage,
+                TypeUse::Referent { .. } | TypeUse::Root | TypeUse::Actual
+            )
+            && self.trait_header(object.principal)?.declaration == object.principal
+        {
+            self.validate_ty_metadata_with(ty, env, depth, walk.component_replays(&self.budget)?)?;
+        }
         let logical_nominals = walk.logical_nominals;
         let maybe_unsized = walk.maybe_unsized;
         let mut height = 0usize;
@@ -5972,7 +5984,6 @@ impl ValidatedTraitWorld {
                         "foreign trait object principal",
                     ));
                 }
-                self.validate_ty_metadata_in(ty, env, depth)?;
                 for value in object.types() {
                     child(value, TypeUse::Root)?;
                 }
