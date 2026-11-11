@@ -95,6 +95,46 @@ fn callable_mediated_results_track_instance_sources() {
     );
 }
 
+#[test]
+fn local_reference_frontier_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "local-reference-frontier",
+        &[
+            Case {
+                name: "macro_vector_split_words_fold",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn main(){let text=String::from("the borrow checker");let mut words=vec![];for w in text.split(' '){words.push(w);}println!("{:?}",words);let l=words.iter().fold("",|acc,w|longest(acc,w));println!("{l}");}"#,
+                expect: Expect::Run("[\"the\", \"borrow\", \"checker\"]\nchecker\n"),
+            },
+            Case {
+                name: "nested_mutable_iterator_arithmetic_results",
+                source: r#"fn main(){let mut grid=vec![vec![0usize;3];2];for(r,row)in grid.iter_mut().enumerate(){for(c,cell)in row.iter_mut().enumerate(){*cell=r*3+c+1-1;}}let t=grid[1][2]*10;println!("{:?} {}",grid,t);}"#,
+                expect: Expect::Run("[[0, 1, 2], [3, 4, 5]] 50\n"),
+            },
+            Case {
+                name: "unused_wrong_vector_reference",
+                source: r#"fn unused(){let mut words:Vec<&u8>=Vec::new();let mut word=Some("abc");while let Some(w)=word.take(){words.push(w);}}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_reference_fold_escape",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn unused()->&'static str{let text=String::from("abc");let mut words=Vec::new();words.push(text.as_str());words.iter().fold("",|a,w|longest(a,w))}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_immutable_mutable_iteration",
+                source: r#"fn unused(){let grid=vec![vec![0;3];2];for(_,row)in grid.iter_mut().enumerate(){for(_,cell)in row.iter_mut().enumerate(){*cell=1;}}}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_iterator_arithmetic_mismatch",
+                source: r#"fn unused(){let mut grid=vec![vec![0u8;3];2];for(r,row)in grid.iter_mut().enumerate(){for(c,cell)in row.iter_mut().enumerate(){*cell=r*3+c;}}}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
 fn compare(name: &str, source: &str) {
     let dir = std::env::temp_dir().join(format!("jr-body-inference-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

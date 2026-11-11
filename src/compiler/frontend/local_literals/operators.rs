@@ -35,6 +35,17 @@ impl Operation {
     pub(super) fn index_result(&self) -> Option<Term> {
         matches!(self.kind, Kind::Index(_) | Kind::Deref).then_some(self.result)
     }
+
+    /// An arithmetic or unary result whose Output is selected solely from its
+    /// own operand types. It is a local frontier member only once every
+    /// operand already is.
+    pub(super) fn operand_result(&self) -> Option<(Term, Option<Term>, Term)> {
+        matches!(self.kind, Kind::Binary(_) | Kind::Unary(_)).then_some((
+            self.left,
+            self.right,
+            self.result,
+        ))
+    }
 }
 
 pub(super) fn comparison(op: BinaryOp) -> bool {

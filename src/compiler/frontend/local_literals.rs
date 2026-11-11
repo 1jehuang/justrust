@@ -12,6 +12,8 @@ pub(super) mod nominal_manifest;
 
 #[path = "local_literals/iteration.rs"]
 mod iteration;
+#[path = "local_literals/lazy_frontier.rs"]
+mod lazy_frontier;
 
 #[path = "local_literals/callable.rs"]
 mod callable;
@@ -1501,7 +1503,7 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Unknown => {
                 for target in targets {
                     self.checker.infer_work(depth)?;
-                    if self.root(*target) == self.root(term) {
+                    if self.local_frontier_contains(*target, term, depth + 1)? {
                         return Ok(true);
                     }
                 }
@@ -1574,7 +1576,6 @@ impl<'s> Solver<'_, '_, 's> {
                 .any(|operator| operator.lazy_frontier_inputs().is_none())
             || !self.associated_equalities.is_empty()
             || !self.patterns.is_empty()
-            || !self.pending_referents.is_empty()
             || !self.tries.is_empty()
         {
             return Ok(false);
@@ -1694,6 +1695,10 @@ impl<'s> Solver<'_, '_, 's> {
             if !progress {
                 break;
             }
+        }
+        self.local_operator_results(&mut targets)?;
+        if !self.local_referents_ready(&targets)? {
+            return Ok(false);
         }
         for operator in &self.operators {
             let Some((left, right)) = operator.lazy_frontier_inputs() else {

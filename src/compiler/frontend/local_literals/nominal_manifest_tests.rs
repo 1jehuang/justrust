@@ -5,7 +5,7 @@ use super::*;
 fn local_lazy_frontier_retains_delayed_result_while_selecting_independent_input() {
     let prepared = crate::compiler::source::prepare_text_with_prelude(
         "independent-lazy-input.rs",
-        "fn main(){}",
+        "struct Frontier<T>{value:T}fn main(){}",
         &crate::compiler::source::SourceOptions::default(),
     )
     .unwrap();
@@ -60,6 +60,84 @@ fn local_lazy_frontier_retains_delayed_result_while_selecting_independent_input(
             .unwrap()
     );
     assert!(ready.is_empty(), "missing graph inputs retain the barrier");
+
+    solver.missing_source_schemas.set(false);
+    let text = solver.fixed(ir::Ty::Str).unwrap();
+    let reference = solver
+        .node(Domain::Ref(ir::BorrowKind::Shared, text))
+        .unwrap();
+    let input = solver.fresh().unwrap();
+    let use_site = solver
+        .node(Domain::Ref(ir::BorrowKind::Shared, input))
+        .unwrap();
+    solver.lazy_coercions = vec![(reference, input)];
+    solver.pending_referents = vec![(use_site, reference)];
+    ready.clear();
+    assert!(
+        solver
+            .local_lazy_inputs_ready(&[], &[], &mut ready)
+            .unwrap()
+    );
+    assert_eq!(ready, vec![(reference, input)]);
+    assert!(matches!(solver.domain(input), Domain::Unknown));
+    assert_eq!(
+        solver.pending_referents.len(),
+        1,
+        "readiness cannot consume a coercion"
+    );
+    let unrelated = solver.fresh().unwrap();
+    let unrelated_ref = solver
+        .node(Domain::Ref(ir::BorrowKind::Shared, unrelated))
+        .unwrap();
+    solver.pending_referents = vec![(unrelated_ref, reference)];
+    assert!(
+        !solver
+            .local_lazy_inputs_ready(&[], &[], &mut Vec::new())
+            .unwrap()
+    );
+    solver.pending_referents = vec![(use_site, unrelated_ref)];
+    assert!(
+        !solver
+            .local_lazy_inputs_ready(&[], &[], &mut Vec::new())
+            .unwrap()
+    );
+    solver.pending_referents = vec![(input, reference)];
+    assert!(
+        !solver
+            .local_lazy_inputs_ready(&[], &[], &mut Vec::new())
+            .unwrap()
+    );
+    solver.pending_referents = vec![(use_site, reference)];
+    solver.unify(reference, input).unwrap();
+    solver.coerce(use_site, reference).unwrap();
+    assert!(
+        matches!(solver.domain(input), Domain::Ref(ir::BorrowKind::Shared, _)),
+        "the ordinary coercion must preserve the extra reference layer"
+    );
+
+    let item = solver.fresh().unwrap();
+    let pair = solver.node(Domain::Tuple(vec![leaf, item])).unwrap();
+    let nested = solver.node(Domain::Tuple(vec![pair])).unwrap();
+    assert!(solver.lazy_input_frontier(item, &[nested], 0).unwrap());
+    assert!(!solver.lazy_input_frontier(unrelated, &[nested], 0).unwrap());
+    assert!(matches!(solver.domain(item), Domain::Unknown));
+    let nominal = solver
+        .node(Domain::Nominal(
+            signatures.plan().unwrap().nominal_declaration(0).unwrap(),
+            vec![unrelated],
+        ))
+        .unwrap();
+    assert!(
+        !solver
+            .lazy_input_frontier(unrelated, &[nominal], 0)
+            .unwrap(),
+        "nominal actuals do not grant structural field authority"
+    );
+    assert!(
+        solver
+            .local_frontier_contains(nested, item, usize::MAX)
+            .is_err()
+    );
 }
 
 #[test]
