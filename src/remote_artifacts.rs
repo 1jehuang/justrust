@@ -166,6 +166,77 @@ fn candidates(dir: &Path) -> Vec<(String, std::fs::Metadata)> {
     out
 }
 
+/// Narrow only unambiguous build requests. Mixed target selectors retain the
+/// historical scan because they can request outputs beyond the named binaries.
+fn exclusive_bins(args: &[String]) -> Option<Vec<String>> {
+    if !matches!(args.first().map(String::as_str), Some("build" | "zigbuild")) {
+        return None;
+    }
+    let mut bins = Vec::new();
+    let mut args_iter = args.iter().skip(1).take_while(|arg| arg.as_str() != "--");
+    while let Some(arg) = args_iter.next() {
+        let flag = arg.split('=').next().unwrap_or(arg);
+        if matches!(
+            flag,
+            "--lib"
+                | "--bins"
+                | "--example"
+                | "--examples"
+                | "--test"
+                | "--tests"
+                | "--bench"
+                | "--benches"
+                | "--all-targets"
+        ) {
+            return None;
+        }
+        let bin = if arg == "--bin" {
+            Some(args_iter.next()?.as_str())
+        } else {
+            arg.strip_prefix("--bin=")
+        };
+        if let Some(bin) = bin {
+            // Cargo bin names cannot be paths. Decline malformed/ambiguous
+            // requests rather than changing their legacy transfer behavior.
+            if bin.is_empty()
+                || bin.starts_with('-')
+                || Path::new(bin).components().count() != 1
+                || !safe_name(bin)
+                || bin.contains(['*', '?', '[', ']'])
+            {
+                return None;
+            }
+            let windows = build_target(args)
+                .map(|target| target.contains("windows"))
+                .unwrap_or(cfg!(windows));
+            bins.push(if windows {
+                format!("{bin}.exe")
+            } else {
+                bin.into()
+            });
+        }
+    }
+    (!bins.is_empty()).then_some(bins)
+}
+
+fn build_candidates(dir: &Path, args: &[String]) -> Vec<(String, std::fs::Metadata)> {
+    let bins = exclusive_bins(args);
+    candidates(dir)
+        .into_iter()
+        .filter(|(name, _)| {
+            bins.as_ref().is_none_or(|bins| {
+                bins.contains(name)
+                    // Native binaries may require libraries emitted alongside
+                    // them, including Cargo's Rust dynamic libraries.
+                    || name.ends_with(".so")
+                    || name.contains(".so.")
+                    || name.ends_with(".dylib")
+                    || name.ends_with(".dll")
+            })
+        })
+        .collect()
+}
+
 /// What the machine should send: missing here or newer than the client's copy.
 /// Cargo may reuse an old output on the host for a fresh CI checkout.
 fn needed(have: Option<&Have>, rid: &str, rmtime: f64, start: f64) -> bool {
@@ -498,7 +569,7 @@ fn serve_selected_dir(
         write_frame(&mut out, &Frame::Selected { artifacts }, &[])?;
         files
     } else {
-        candidates(dir)
+        build_candidates(dir, &req.args)
     };
     for (name, m) in files {
         let rid = id_of(&m);
@@ -522,6 +593,15 @@ fn serve_selected_dir(
         // delta base must be exactly what was sent.
         let snap = sent_root.join(format!("{key}.new"));
         std::fs::copy(&path, &snap).with_context(|| format!("copy {}", path.display()))?;
+        // A rebuild can change the metadata id without changing the output.
+        // Only compare against a base the client explicitly still has. Keep
+        // that base and its old id when skipping: advancing the id here would
+        // forget the client's provenance and force the next request to resend.
+        // Compare the snapshot, not the live build output, just as for deltas.
+        if patch && identical_artifact(&snap, &sent).unwrap_or(false) {
+            let _ = std::fs::remove_file(&snap);
+            continue;
+        }
         let zst = sent_root.join(format!("{key}.zst"));
         let base = (!patch && req.anchors)
             .then(|| anchor(&streamed, m.len()))
@@ -566,6 +646,38 @@ fn serve_selected_dir(
     out.flush()?;
     Ok(())
 }
+
+/// Exact comparison with bounded memory. Modes are part of the output contract,
+/// so a chmod must still produce a frame even when all bytes are unchanged.
+fn identical_artifact(a: &Path, b: &Path) -> std::io::Result<bool> {
+    let mut a_file = std::fs::File::open(a)?;
+    let mut b_file = std::fs::File::open(b)?;
+    let a_meta = a_file.metadata()?;
+    let b_meta = b_file.metadata()?;
+    if a_meta.len() != b_meta.len()
+        || crate::sys::mode(&a_meta, a) & 0o7777 != crate::sys::mode(&b_meta, b) & 0o7777
+    {
+        return Ok(false);
+    }
+    let mut a_buf = [0; 64 * 1024];
+    let mut b_buf = [0; 64 * 1024];
+    let mut remaining = a_meta.len();
+    while remaining > 0 {
+        let n = remaining.min(a_buf.len() as u64) as usize;
+        a_file.read_exact(&mut a_buf[..n])?;
+        b_file.read_exact(&mut b_buf[..n])?;
+        if a_buf[..n] != b_buf[..n] {
+            return Ok(false);
+        }
+        remaining -= n as u64;
+    }
+    // Do not call a concurrently extended snapshot identical.
+    Ok(a_file.read(&mut a_buf[..1])? == 0 && b_file.read(&mut b_buf[..1])? == 0)
+}
+
+#[cfg(all(test, unix))]
+#[path = "remote_artifacts_transfer_tests.rs"]
+mod transfer_tests;
 
 /// The earlier file of this stream closest in size to a `size`-byte file,
 /// when it is similar enough to be worth a delta: both at least 1 MB, sizes
