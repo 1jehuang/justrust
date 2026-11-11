@@ -470,8 +470,14 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
         let url = c.url(path);
         let host = url.split('/').take(3).collect::<Vec<_>>().join("/");
         bail!(
-            "could not reach {host}: {}. Builds run locally.",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "{}",
+            platform_guidance(
+                format!(
+                    "could not reach {host}: {}. Builds run locally.",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+                matches!(crate::remote_windows::selected(), Ok(true)),
+            )
         );
     }
     if let Some(metrics) = metrics {
@@ -505,6 +511,29 @@ pub(crate) fn retry_over_ipv6(code: Option<i32>) -> bool {
 
 /// Turn a non-2xx response into user guidance.
 pub fn api_error(r: &Resp) -> anyhow::Error {
+    anyhow!(platform_guidance(
+        api_error_unscoped(r).to_string(),
+        matches!(crate::remote_windows::selected(), Ok(true)),
+    ))
+}
+
+fn platform_guidance(message: String, windows: bool) -> String {
+    if windows && let Some((reason, _)) = message.split_once(" Builds run locally") {
+        let server = message
+            .split_once(" (server:")
+            .map_or("", |(_, detail)| detail);
+        let detail = if server.is_empty() {
+            String::new()
+        } else {
+            format!(" (server:{server}")
+        };
+        format!("{reason} Windows requests are not retried on the local host.{detail}")
+    } else {
+        message
+    }
+}
+
+fn api_error_unscoped(r: &Resp) -> anyhow::Error {
     let code = r.body["error"]["code"].as_str().unwrap_or("");
     // Bounded and on one line so a hostile body cannot flood the terminal.
     let msg: String = r.body["error"]["message"]
@@ -1400,8 +1429,14 @@ pub fn connect_with(
         }
         if start.elapsed() >= timeout {
             bail!(
-                "the hosted build machine did not become ready within {} s (last state: {last}). Builds run locally, retry later.",
-                timeout.as_secs()
+                "{}",
+                platform_guidance(
+                    format!(
+                        "the hosted build machine did not become ready within {} s (last state: {last}). Builds run locally, retry later.",
+                        timeout.as_secs()
+                    ),
+                    windows,
+                )
             );
         }
         std::thread::sleep(poll_wait(
@@ -1829,6 +1864,29 @@ pub fn check_use() -> Result<Me> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_guidance_does_not_promise_local_fallback() {
+        for reason in [
+            super::NO_CREDITS,
+            super::TIME_EXHAUSTED,
+            super::UNAVAILABLE,
+            super::NOT_OFFERED,
+            super::AT_CAPACITY,
+            super::SUBSCRIBE,
+        ] {
+            let original = format!("{reason} (server: Native Windows unavailable.)");
+            let windows = super::platform_guidance(original.clone(), true);
+            assert!(!windows.contains("Builds run locally"));
+            assert!(windows.contains("Windows requests are not retried on the local host."));
+            assert!(windows.ends_with(" (server: Native Windows unavailable.)"));
+            assert_eq!(super::platform_guidance(original.clone(), false), original);
+        }
+        assert_eq!(
+            super::platform_guidance(super::RATE_LIMITED.into(), true),
+            super::RATE_LIMITED
+        );
+    }
+
     #[test]
     fn hosted_update_recovery_requires_correlated_completed_stopped_attempt() {
         let mut update = super::HostedUpdate {
