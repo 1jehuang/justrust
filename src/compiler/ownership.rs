@@ -1902,7 +1902,7 @@ fn preflight_with_plan(
         budget.spend(1)?;
         for item in &block.statements {
             budget.spend(1)?;
-            if let Statement::Inspect(place) = &item.value {
+            if let Statement::Inspect(place) | Statement::FakeRead(place) = &item.value {
                 place_type(f, place, &mut budget)?;
             }
             match &item.value {
@@ -2420,7 +2420,7 @@ impl Paths {
             for statement in &block.statements {
                 match &statement.value {
                     Statement::Assign { destination, .. } => observe(destination),
-                    Statement::Inspect(place) => observe(place),
+                    Statement::Inspect(place) | Statement::FakeRead(place) => observe(place),
                     Statement::IndexInspect { array, .. }
                     | Statement::IndexAssign { array, .. }
                     | Statement::IndexAssignOp { array, .. } => observe(array),
@@ -4024,6 +4024,10 @@ impl Transfer<'_> {
             self.phase = Phase::Read;
             match &item.value {
                 Statement::Inspect(place) => self.read(state, place)?,
+                // A place mention neither accesses nor requires initialization
+                // (stock accepts `let x: String; let _ = x;`). It only extends
+                // loan liveness, which borrow.rs computes from the same statement.
+                Statement::FakeRead(_) => {}
                 Statement::IndexInspect { array, index } => {
                     self.operand(state, index)?;
                     self.read(state, array)?;

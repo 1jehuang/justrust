@@ -234,7 +234,8 @@ fn shape(
             match &statement.value {
                 cfg::Statement::StorageLive(_)
                 | cfg::Statement::StorageDead(_)
-                | cfg::Statement::Inspect(_) => {}
+                | cfg::Statement::Inspect(_)
+                | cfg::Statement::FakeRead(_) => {}
                 cfg::Statement::Assign { destination, value } => {
                     if whole(destination).is_none_or(|local| local >= locals) {
                         return Ok(Err("projected assignment"));

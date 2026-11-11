@@ -497,6 +497,7 @@ fn specialize_marker_constants(
                     operand(index, specialization, budget)?
                 }
                 cfg::Statement::Inspect(_)
+                | cfg::Statement::FakeRead(_)
                 | cfg::Statement::StorageLive(_)
                 | cfg::Statement::StorageDead(_) => {}
             }

@@ -641,6 +641,10 @@ pub enum Statement {
     /// Nonconsuming initialized-place read needed while evaluating an index.
     /// This has no runtime load or value result.
     Inspect(Place),
+    /// Stock's fake read of a place matched only by wildcard patterns
+    /// (`let _ = r;`, `match r { _ => .. }`). It keeps loans reachable from the
+    /// place live, but neither moves, checks initialization nor accesses it.
+    FakeRead(Place),
     StorageLive(LocalId),
     StorageDead(LocalId),
     Assign {
@@ -1391,7 +1395,7 @@ impl Statement {
                 visit(value)?;
             }
             Self::IndexInspect { index, .. } => visit(index)?,
-            Self::Inspect(_) | Self::StorageLive(_) | Self::StorageDead(_) => {}
+            Self::Inspect(_) | Self::FakeRead(_) | Self::StorageLive(_) | Self::StorageDead(_) => {}
         }
         Ok(())
     }
@@ -1933,7 +1937,8 @@ impl Function {
                     Statement::IndexAssignOp { array, .. }
                     | Statement::IndexAssign { array, .. }
                     | Statement::IndexInspect { array, .. }
-                    | Statement::Inspect(array) => path(&mut bytes, array, budget)?,
+                    | Statement::Inspect(array)
+                    | Statement::FakeRead(array) => path(&mut bytes, array, budget)?,
                     Statement::StorageLive(_) | Statement::StorageDead(_) => {}
                 }
                 statement
@@ -2419,7 +2424,9 @@ impl Function {
                                 _ => {}
                             }
                         }
-                        Statement::Inspect(place) => check_place(place)?,
+                        Statement::Inspect(place) | Statement::FakeRead(place) => {
+                            check_place(place)?
+                        }
                         Statement::IndexInspect { array, index } => {
                             check_place(array)?;
                             check_operand(index)?;
@@ -2626,7 +2633,7 @@ impl Function {
                         path(array, budget)?;
                         operand(index, budget, facts)?;
                     }
-                    Statement::Inspect(place) => path(place, budget)?,
+                    Statement::Inspect(place) | Statement::FakeRead(place) => path(place, budget)?,
                     Statement::StorageLive(_) | Statement::StorageDead(_) => {}
                     Statement::Assign { destination, value } => {
                         path(destination, budget)?;
@@ -3965,7 +3972,7 @@ impl Function {
                     Statement::IndexInspect { array, index } => {
                         self.indexed_element_ty(array, index, facts, scratch)?;
                     }
-                    Statement::Inspect(place) => {
+                    Statement::Inspect(place) | Statement::FakeRead(place) => {
                         self.place_ty_with_budget(place, budget)?;
                     }
                     Statement::StorageLive(local) | Statement::StorageDead(local) => {
@@ -4803,6 +4810,11 @@ impl Lowerer<'_> {
         let source = self.pattern_source(scrutinee)?;
         let scrutinee_depth = self.scopes.len();
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
+        // Stock fake-reads every matched place before testing any arm, so a
+        // wildcard-only `match r { _ => .. }` still uses the loans in `r`.
+        if completes {
+            self.statement(Statement::FakeRead(source.clone()), Some(scrutinee));
+        }
         let join = self.block();
         let last_arm = arms.len().saturating_sub(1);
         for (arm_index, arm) in arms.iter().enumerate() {
@@ -5518,6 +5530,11 @@ impl Lowerer<'_> {
                     let source = self.pattern_source(*value)?;
                     let completes =
                         self.source.exprs[value.0].completion == ir::Completion::Returns;
+                    // `let _ = place;` and all-wildcard destructuring mention
+                    // the place: stock's fake read keeps its loans live here.
+                    if bindings.is_empty() && completes {
+                        self.statement(Statement::FakeRead(source.clone()), Some(*value));
+                    }
                     for binding in bindings {
                         if binding.local == source.local {
                             return Err("pattern binding aliases initializer storage".into());
@@ -14660,7 +14677,7 @@ mod tests {
                         live_operand(index, &live);
                         assert!(live[array.local.0], "indexed inspection reads dead array");
                     }
-                    Statement::Inspect(place) => {
+                    Statement::Inspect(place) | Statement::FakeRead(place) => {
                         assert!(live[place.local.0], "inspection reads dead storage");
                     }
                     Statement::StorageLive(local) => {

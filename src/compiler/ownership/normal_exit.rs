@@ -132,6 +132,7 @@ fn solve_with_cleanup(
                         consume(index, local, &mut initialized, budget)?;
                     }
                     cfg::Statement::Inspect(_)
+                    | cfg::Statement::FakeRead(_)
                     | cfg::Statement::StorageLive(_)
                     | cfg::Statement::StorageDead(_) => {}
                 }

@@ -5493,7 +5493,8 @@ impl CarrierBuilder<'_, '_> {
             // cannot manufacture, replace or duplicate a carrier component.
             Statement::IndexAssignOp { .. }
             | Statement::IndexInspect { .. }
-            | Statement::Inspect(_) => {}
+            | Statement::Inspect(_)
+            | Statement::FakeRead(_) => {}
         }
         Ok(())
     }
@@ -8277,7 +8278,7 @@ fn visit_rvalue_for_statement(
 ) {
     match statement {
         Statement::Assign { value, .. } => visit_rvalue(f, value, &mut visit),
-        Statement::Inspect(place) => visit(place, false),
+        Statement::Inspect(place) | Statement::FakeRead(place) => visit(place, false),
         Statement::IndexInspect { array, index } => {
             visit(array, false);
             visit_operand(index, &mut visit);

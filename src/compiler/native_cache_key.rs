@@ -474,6 +474,10 @@ impl Encoder<'_, '_> {
                 self.n(3)?;
                 self.place(p)
             }
+            FakeRead(p) => {
+                self.n(7)?;
+                self.place(p)
+            }
             StorageLive(l) => {
                 self.n(4)?;
                 self.n(l.0)

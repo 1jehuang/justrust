@@ -4102,7 +4102,7 @@ impl Emitter<'_> {
             cfg::Statement::StorageLive(local) | cfg::Statement::StorageDead(local) => {
                 self.set_drop_flag(*local, false)
             }
-            cfg::Statement::Inspect(_) => {}
+            cfg::Statement::Inspect(_) | cfg::Statement::FakeRead(_) => {}
             cfg::Statement::IndexInspect { array, index } => {
                 self.index_address(array, index)?;
             }

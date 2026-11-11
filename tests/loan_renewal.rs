@@ -320,3 +320,34 @@ fn invalid_loans(cases: &[Case]) {
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn wildcard_place_mentions_fake_read_like_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    let cases = [
+        Case {
+            name: "let_wildcard_keeps_mutable_loan_live",
+            source: "fn bad(){let mut o=1;let r=&mut o;o=2;let _=r;}fn main(){}",
+            expect: Expect::Invalid("E0506"),
+        },
+        Case {
+            name: "let_wildcard_keeps_first_loan_live",
+            source: "fn bad(){let mut o=1;let r=&mut o;let r2=&mut o;let _=r;let _=r2;}fn main(){}",
+            expect: Expect::Invalid("E0499"),
+        },
+        Case {
+            name: "wildcard_match_and_tuple_patterns_keep_loans_live",
+            source: "fn a(){let mut o=1;let r=&mut o;o=2;match r{_=>{}}}fn b(){let mut o=(1,2);let r=&mut o;o.0=5;let (_,_)=r;}fn c(){let mut o=1;let r=&mut o;o=2;if let _=r{}}fn d(){let mut o=1;let r=&mut o;o=2;let _=*r;}fn main(){}",
+            expect: Expect::Invalid("E0506"),
+        },
+        Case {
+            name: "wildcard_place_neither_moves_nor_requires_initialization",
+            source: r#"fn uninit(){let x:String;let _=x;let y:i32;match y{_=>{}}}
+fn main(){uninit();let s=String::from("s");let _=s;println!("{s}");let v=vec![String::from("a")];let _=v[0];match s{_=>{}}println!("{:?} {}",v,s);let t=(String::from("t"),1);let (_,n)=t;println!("{} {}",t.0,n);let moved=String::new();drop(moved);let _=moved;let mut o=1;let r=&mut o;let _=o;match o{_=>{}}*r=2;println!("{o}");}"#,
+            expect: Expect::Run("s\n[\"a\"] s\nt 1\n2\n"),
+        },
+    ];
+    closure_oracle::check("wildcard-fake-read", &cases);
+}
