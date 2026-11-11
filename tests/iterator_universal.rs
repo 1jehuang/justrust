@@ -264,3 +264,17 @@ fn unused_universal_body_and_unproved_projection_reject() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn peekable_over_references_and_producer_slot_writes() {
+    oracle::stock_native(
+        "struct P<I, T> { it: I, peeked: Option<T> } impl<T, I: Iterator<Item = T>> P<I, T> { fn fill(&mut self) { if let None = self.peeked { self.peeked = self.it.next(); } } } fn fill<T, I: Iterator<Item = T>>(it: &mut I, slot: &mut Option<T>) { *slot = it.next(); } fn put<T>(slot: &mut Option<T>, v: T) { *slot = Some(v); } fn main() { let v: Vec<i64> = vec![1, 2, 10, 11, 20]; let mut p: P<std::slice::Iter<i64>, &i64> = P { it: v.iter(), peeked: None }; p.fill(); println!(\"{:?}\", p.peeked); let mut it = v.iter(); let mut s: Option<&i64> = None; fill(&mut it, &mut s); println!(\"{:?}\", s); let x = 5i64; let mut o: Option<&i64> = None; put(&mut o, &x); let t = o.take(); let u = o.replace(&x); println!(\"{:?} {:?} {:?}\", o, t, u); let mut pk = v.iter().peekable(); while let Some(x) = pk.next() { if let Some(&&n) = pk.peek() { if n % 10 == 0 { print!(\"{x}->{n} \"); } } } println!(); }\n",
+    );
+    for source in [
+        "fn fill<T, I: Iterator<Item = T>>(it: &mut I, slot: &mut Option<T>) { *slot = it.next(); } fn unused() { let mut s: Option<&i64> = None; { let v: Vec<i64> = vec![1]; let mut it = v.iter(); fill(&mut it, &mut s); } println!(\"{:?}\", s); } fn main() {}\n",
+        "fn main() {\n    let mut v: Vec<i64> = vec![1, 2, 3];\n    let mut p = v.iter().peekable();\n    let r = p.peek();\n    v.push(4);\n    println!(\"{:?}\", r);\n}\n",
+        "fn unused() {\n    let r;\n    {\n        let v: Vec<i64> = vec![1];\n        let mut p = v.iter().peekable();\n        r = *p.peek().unwrap();\n    }\n    println!(\"{}\", r);\n}\nfn main() {}\n",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

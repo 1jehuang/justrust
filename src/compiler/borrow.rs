@@ -6075,6 +6075,11 @@ impl CarrierBuilder<'_, '_> {
                                 .is_some_and(|family| {
                                     source.location.channel.family().as_ref() == Some(&family)
                                 });
+                        // A declared producer edge between two distinct rigid
+                        // families (`I: Iterator<Item = T>` filling a `T`).
+                        let cross_family = !same_family
+                            && write.destination.location.channel.family().is_some()
+                            && source.location.channel.family().is_some();
                         for (source, source_component) in self.transport_effect_input_with_replay(
                             source,
                             view,
@@ -6087,6 +6092,21 @@ impl CarrierBuilder<'_, '_> {
                                 && component.is_some()
                                 && source_component.is_some()
                                 && component != source_component
+                            {
+                                continue;
+                            }
+                            // A producer edge into another rigid family
+                            // (`I: Iterator<Item = T>` filling a `T` slot)
+                            // reveals loans only through concrete carriers.
+                            // A caller's own rigid family is already typed
+                            // by its signature, and the caller's summary keeps
+                            // the declared edge for its own callers. A
+                            // substituted instance body was already proven in
+                            // its universal form, where this edge was checked.
+                            if cross_family
+                                && ((source.location.channel.family().is_some()
+                                    && destination.location.channel.family().is_some())
+                                    || self.f.body_substitution.is_some())
                             {
                                 continue;
                             }
@@ -8000,6 +8020,28 @@ impl CarrierBuilder<'_, '_> {
                                     sources.push(input);
                                 }
                             }
+                        }
+                    }
+                }
+                // A declared source from a different rigid family is a type
+                // equality edge (`I: Iterator<Item = T>` writing a `T` slot),
+                // not a body flow: a value the callee produces through the
+                // projection carries no body family yet still holds the
+                // producer's data. Keep these edges in the summary so the
+                // caller never sees a narrower write than the type forces.
+                if let Some(destination) = envelope.destination.location.channel.family() {
+                    for source in envelope.sources.iter() {
+                        self.budget.spend(sources.len() + 1)?;
+                        if source
+                            .location
+                            .channel
+                            .family()
+                            .is_some_and(|family| family != destination)
+                            && !sources.contains(source)
+                        {
+                            self.retain(size_of::<InputCarrier>(), 1)?;
+                            checked_vec_growth(&mut sources, self.budget)?;
+                            sources.push(source.clone());
                         }
                     }
                 }

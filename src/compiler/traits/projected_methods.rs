@@ -1459,7 +1459,59 @@ impl ValidatedTraitWorld {
         provided: &CallableHeader,
     ) -> Result<()> {
         let source = self.owner_applied_source_regions(item, implementation, required)?;
-        let (required, _) = self.derive_carriers(required, &source, &provided.schema.env)?;
+        let (mut required, _) = self.derive_carriers(required, &source, &provided.schema.env)?;
+        // The required declaration is evaluated in the real implementation
+        // environment, whose where-clauses (`I: Iterator<Item = T>`) are
+        // exactly the provided callable's declared rows. Those rows admit the
+        // same producer-family write edges for both sides.
+        let mut writes = Vec::new();
+        for write in required.writes.iter() {
+            let mut sources = write.sources.to_vec();
+            for input in required.inputs.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if !sources.contains(input)
+                    && self.projection_produced_write(
+                        provided.declaration,
+                        &write.destination.location.channel,
+                        &input.location.channel,
+                    )?
+                {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+            }
+            push(
+                &self.budget,
+                &mut writes,
+                ir::CarrierWriteEnvelope {
+                    destination: write.destination.clone(),
+                    sources: sources.into(),
+                },
+            )?;
+        }
+        required.writes = writes.into();
+        // Re-run derive_carriers' ENTRY closure over the widened writes.
+        let mut results = required.results.to_vec();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for result in &mut results {
+                let mut sources = result.sources.to_vec();
+                for write in required.writes.iter() {
+                    charged(&self.budget, self.budget.charge_work(sources.len() + 1))?;
+                    if !sources.contains(&write.destination) {
+                        continue;
+                    }
+                    for input in write.sources.iter() {
+                        if !sources.contains(input) {
+                            push(&self.budget, &mut sources, input.clone())?;
+                            changed = true;
+                        }
+                    }
+                }
+                result.sources = sources.into();
+            }
+        }
+        required.results = results.into();
         // The provided declaration was independently normalized and published
         // by build_origin_schemas. It cannot supply the required topology.
         let provided = self.declaration_carriers(provided.declaration)?;

@@ -8224,9 +8224,26 @@ impl ValidatedTraitWorld {
                 if !self.carrier_writable(destination_ty, &destination.location)? {
                     continue;
                 }
+                // A rigid `T` slot written from an `Item = T` producer: the
+                // universal contract keeps the value in `T`'s family, but a
+                // substituted producer reveals which of its components flow.
+                let mut declared = write.sources.to_vec();
+                for input in retained.contract.inputs.iter() {
+                    charged(&self.budget, self.budget.charge_work(declared.len() + 1))?;
+                    if !declared.contains(input)
+                        && self.projection_produced_write(
+                            declaration,
+                            &write.destination.location.channel,
+                            &input.location.channel,
+                        )?
+                    {
+                        push(&self.budget, &mut declared, input.clone())?;
+                    }
+                }
                 let sources = self.expand_carrier_sources_in(
+                    declaration,
                     &write.destination.location.channel,
-                    &write.sources,
+                    &declared,
                     destination.component.as_ref(),
                     &raw.env,
                     &arguments,
@@ -8553,6 +8570,7 @@ impl ValidatedTraitWorld {
             return Ok(Arc::from(sources));
         }
         let declared = self.expand_carrier_sources_in(
+            declaration,
             &result.location.channel,
             &result.sources,
             output.component.as_ref(),
@@ -8589,6 +8607,7 @@ impl ValidatedTraitWorld {
     #[allow(clippy::too_many_arguments)]
     fn expand_carrier_sources_in(
         &self,
+        declaration: DeclId,
         destination: &ir::CarrierChannel,
         sources: &[ir::InputCarrier],
         component: Option<&ir::CarrierLocation>,
@@ -8662,6 +8681,11 @@ impl ValidatedTraitWorld {
                                 &b.channel,
                                 facts.env(),
                             )?
+                            || self.projection_produced_write(
+                                declaration,
+                                destination,
+                                &source.location.channel,
+                            )?
                     }
                     (
                         Some(ir::CarrierLocation {
@@ -8699,6 +8723,15 @@ impl ValidatedTraitWorld {
                                     &b.channel,
                                     facts.env(),
                                 )?)
+                            // Exact declared `Item = T` producer edge, only
+                            // for substituted (concrete) components: which
+                            // producer component reaches the slot is
+                            // impl-internal, so each one may.
+                            || self.projection_produced_write(
+                                declaration,
+                                destination,
+                                &source.location.channel,
+                            )?
                     }
                     (None, None) => true,
                     _ => false,
@@ -8716,6 +8749,52 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(output.into())
+    }
+    /// A rigid `T` slot can receive values produced by an associated output
+    /// equal to `T` (`I: Iterator<Item = T>` then `*slot = it.next()`). Such a
+    /// value is built from data of the parameters the projection mentions, so
+    /// the write envelope must include those producer families. Only an exact
+    /// declared `ProjectionEq` row on this callable grants the edge. This only
+    /// widens the conservative envelope (more loans at the caller, never fewer).
+    fn projection_produced_write(
+        &self,
+        declaration: DeclId,
+        destination: &ir::CarrierChannel,
+        input: &ir::CarrierChannel,
+    ) -> Result<bool> {
+        let (
+            ir::CarrierChannel::ParamTail {
+                parameter: slot,
+                prefix: 0,
+            },
+            ir::CarrierChannel::ParamTail {
+                parameter: producer,
+                ..
+            },
+        ) = (destination, input)
+        else {
+            return Ok(false);
+        };
+        if slot == producer {
+            return Ok(false);
+        }
+        let Some(position) = self
+            .declared_callable_index
+            .get(&self.budget, declaration)?
+        else {
+            return Ok(false);
+        };
+        let context = &self.declared_callables[position];
+        for predicate in context.predicates.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if let Predicate::ProjectionEq { projection, ty } = predicate
+                && *ty == Ty::Param(*slot)
+                && self.projection_mentions_parameter(projection, *producer)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     fn projection_mentions_parameter(
         &self,
@@ -9645,7 +9724,13 @@ impl ValidatedTraitWorld {
                         Some(destination.param),
                     )?
                 };
-                if eligible {
+                if eligible
+                    || self.projection_produced_write(
+                        source.declaration,
+                        &destination.location.channel,
+                        &input.location.channel,
+                    )?
+                {
                     push(&self.budget, &mut sources, input.clone())?;
                 }
             }
