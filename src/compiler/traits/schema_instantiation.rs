@@ -218,8 +218,19 @@ pub(super) fn same_transport(
             (Ty::Enum(a), Ty::Enum(b)) => (a.parent_local_receipt(), b.parent_local_receipt()),
             _ => return Ok(false),
         };
-        if !matches!(receipts, (Some(a), Some(b)) if Arc::ptr_eq(a, b)) {
-            return Ok(false);
+        match receipts {
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => {}
+            (None, None) => {
+                let reads = match (left, right) {
+                    (Ty::Struct(a), Ty::Struct(b)) => (a.realization(), b.realization()),
+                    (Ty::Enum(a), Ty::Enum(b)) => (a.realization(), b.realization()),
+                    _ => return Ok(false),
+                };
+                if !matches!(reads, (Some(a), Some(b)) if a.same_fact(b)) {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
         }
     }
     Ok(true)

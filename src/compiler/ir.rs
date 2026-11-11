@@ -592,6 +592,35 @@ pub(super) fn validate_callee_for_use_scratch(
     scratch: &mut super::traits::TraitScratch,
     executable_storage: bool,
 ) -> Result<(), String> {
+    validate_callee_in(target, signature, facts, scratch, executable_storage, None)
+}
+/// As `validate_callee_scratch` for a call checked against exact typed graph
+/// reads. The signature is re-derived through those same inputs and compared
+/// exactly; every other check is the ordinary executable callee validation.
+pub(super) fn validate_callee_with_graph_inputs_scratch(
+    target: &Callee,
+    signature: &Signature,
+    facts: &super::traits::ValidatedFacts,
+    inputs: &super::traits::GraphInvocationInputs,
+    scratch: &mut super::traits::TraitScratch,
+) -> Result<(), String> {
+    validate_callee_in(
+        target,
+        signature,
+        FactsCtx::Validated(facts),
+        scratch,
+        true,
+        Some(inputs),
+    )
+}
+fn validate_callee_in(
+    target: &Callee,
+    signature: &Signature,
+    facts: FactsCtx<'_>,
+    scratch: &mut super::traits::TraitScratch,
+    executable_storage: bool,
+    graph: Option<&super::traits::GraphInvocationInputs>,
+) -> Result<(), String> {
     if target.type_arguments().len() > 32 {
         return Err("generic call argument limit exceeded".into());
     }
@@ -616,7 +645,15 @@ pub(super) fn validate_callee_for_use_scratch(
         {
             return Err("unresolved trait call in closed body".into());
         }
-        if executable_storage {
+        if let Some(inputs) = graph {
+            authority.world().validate_signature_with_graph_inputs(
+                SignatureSubject::Call(target),
+                signature,
+                authority,
+                inputs,
+                scratch,
+            )
+        } else if executable_storage {
             authority.validate_signature_with(SignatureSubject::Call(target), signature, scratch)
         } else {
             authority.validate_source_flow_signature_with_scratch(

@@ -105,6 +105,31 @@ pub(super) struct Receipt {
     target: ir::Callee,
     original: ir::Signature,
     mapped: ir::Signature,
+    /// Exact typed graph reads this call was checked against, if any. Replay
+    /// rebuilds them only from here, never by re-collecting.
+    graph_inputs: Option<GraphRows>,
+}
+
+pub(super) type GraphRows = (Arc<[ir::Ty]>, Option<crate::engine::EngineAuthority>);
+
+impl Receipt {
+    /// Rebuild this call's exact graph inputs, replaying every retained row
+    /// under the current caller. `None` means the call used no graph inputs.
+    pub(super) fn graph_inputs(
+        &self,
+        facts: &tr::ValidatedFacts,
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<Option<tr::GraphInvocationInputs>, FactsError> {
+        let Some((rows, engine)) = &self.graph_inputs else {
+            return Ok(None);
+        };
+        sr::work(facts.budget(), rows.len())?;
+        tr::GraphInvocationInputs::new(rows.to_vec(), *engine, facts, scratch).map(Some)
+    }
+
+    pub(super) fn expression(&self) -> ir::ExprId {
+        self.expression
+    }
 }
 
 fn validate(
@@ -158,6 +183,7 @@ impl CanonicalSourceCapability {
         target: &ir::Callee,
         original: ir::Signature,
         mapped: ir::Signature,
+        graph_inputs: Option<GraphRows>,
         scratch: &mut tr::TraitScratch,
     ) -> Result<(), String> {
         let budget = &self.plan.budget;
@@ -166,8 +192,12 @@ impl CanonicalSourceCapability {
             target: target.clone(),
             original,
             mapped,
+            graph_inputs,
         };
         validate(&receipt, &self.facts, budget, scratch).map_err(|e| self.render(e))?;
+        receipt
+            .graph_inputs(&self.facts, scratch)
+            .map_err(|e| self.render(e))?;
         let mut inventory = self.nominal_call_realizations.borrow_mut();
         let rows = inventory
             .as_mut()

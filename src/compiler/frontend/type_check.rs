@@ -7,6 +7,7 @@ mod argument_trait_selection;
 mod associated_hint;
 #[path = "type_check/associated_nominal_inputs.rs"]
 mod associated_nominal_inputs;
+mod associated_signature_inputs;
 #[path = "type_check/binary_expression.rs"]
 mod binary_expression;
 
@@ -40,6 +41,8 @@ pub(in crate::compiler) use local_literals::nominal_manifest::{
     Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
     PreparedHints as NominalPreparedHints, Shape as NominalShape,
 };
+#[path = "type_check/closed_field_types.rs"]
+mod closed_field_types;
 #[path = "type_check/method_argument_hint.rs"]
 mod method_argument_hint;
 #[path = "type_check/method_owner.rs"]
@@ -2072,6 +2075,10 @@ impl<'s> Checker<'s> {
             _ => return Err("constructor declaration kind mismatch".into()),
         };
         let definitions = definitions.read(&plan.budget)?;
+        // A field whose declared type is a projection (`Owned(B::Owned)`) is
+        // not injective: it is constrained only once its inputs are solved,
+        // through the same projected-formal path as call arguments.
+        let mut projected = Vec::new();
         for (selector, expr) in fields {
             let index = match selector {
                 InferField::Tuple(index) => *index,
@@ -2080,7 +2087,22 @@ impl<'s> Checker<'s> {
             let field = definitions.get(index).ok_or("unknown constructor field")?;
             let formal = solver.schema(&field.ty, depth + 1)?;
             let evidence = self.inference_evidence(expr, depth + 1)?;
-            solver.constrain(&formal, &evidence, depth + 1)?;
+            // An authored constructor field is a coercion site like a call
+            // argument: `&[T; N]` may unsize to a `&[T]` field. Only that
+            // outer equation is relaxed (the element stays invariant), and the
+            // ordinary field check still proves and records the coercion.
+            let (formal, evidence, extra) = sr::call_input_equation(&formal, &evidence);
+            if ir::contains_associated_types(&field.ty, &plan.budget)? && extra == 0 {
+                self.infer_storage(1)?;
+                projected.push((formal.clone(), evidence.clone()));
+                continue;
+            }
+            solver.constrain(formal, evidence, depth + 1 + extra)?;
+        }
+        if !projected.is_empty() {
+            // Pending projections leave their slots to other evidence; the
+            // ordinary field check still proves each field's exact type.
+            solver.constrain_projected_terms(projected, false)?;
         }
         Ok((declaration, solver))
     }
@@ -9867,7 +9889,7 @@ impl<'a> Checker<'a> {
         // Resolve under the original caller facts before recording ordinary
         // actuals. Trait Self is not an ordinary source type argument, but a
         // selected recipe may have genuine ordinary arguments of its own.
-        let (target, signature) = if let ir::Callee::TraitItem(call) = &target {
+        let (target, signature, graph_rows) = if let ir::Callee::TraitItem(call) = &target {
             let facts = self
                 .facts()
                 .validated()
@@ -9883,10 +9905,51 @@ impl<'a> Checker<'a> {
             let nominals = facts
                 .parent_local_signature_inputs(&signature)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
-            let resolved = facts
-                .service()
-                .resolve_trait_call_with_nominals(call, facts, &nominals, &mut scratch)
-                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            // A closed source nominal in this call's own signature resolves
+            // against its per-(declaration, ordered actuals) graph read, so
+            // instantiation never remints its executable fields in place.
+            // Parent-local seals keep their existing transport unchanged.
+            let graph = if nominals.is_empty() {
+                drop(scratch);
+                let realized = match self.nominal_trait_call_inputs(Some(call), &signature)? {
+                    nominal_calls::NominalCallInputs::Ready(realized) => realized,
+                    nominal_calls::NominalCallInputs::Blocked(blocked) => {
+                        *self.nominal_blocked.borrow_mut() = Some(blocked);
+                        return Err("missing graph input: trait call signature realizations".into());
+                    }
+                };
+                scratch = self.trait_scratch.borrow_mut();
+                if realized.is_empty() {
+                    None
+                } else {
+                    Some(
+                        tr::GraphInvocationInputs::new(
+                            realized,
+                            self.nominal_inputs.and_then(|inputs| inputs.engine),
+                            facts,
+                            &mut scratch,
+                        )
+                        .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?,
+                    )
+                }
+            } else {
+                None
+            };
+            let resolved = match &graph {
+                Some(inputs) => facts.world().resolve_trait_call_with_graph_inputs(
+                    call,
+                    facts,
+                    inputs,
+                    &mut scratch,
+                ),
+                None => facts.service().resolve_trait_call_with_nominals(
+                    call,
+                    facts,
+                    &nominals,
+                    &mut scratch,
+                ),
+            }
+            .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             drop(scratch);
             let signature = resolved.signature();
             plan.budget.charge_work(
@@ -9906,16 +9969,31 @@ impl<'a> Checker<'a> {
                     .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Callee>()))
                     .ok_or("resolved call evidence metadata allocation overflow")?,
             )?;
-            facts
-                .validate_signature_with(
+            match &graph {
+                // A signature resolved against exact graph reads is re-derived
+                // through that same transport, not through a transport-free
+                // replay that would remint the substituted impl header.
+                Some(inputs) => facts.world().validate_signature_with_graph_inputs(
+                    ir::SignatureSubject::Call(resolved.callee()),
+                    signature,
+                    facts,
+                    inputs,
+                    &mut self.trait_scratch.borrow_mut(),
+                ),
+                None => facts.validate_signature_with(
                     ir::SignatureSubject::Call(resolved.callee()),
                     signature,
                     &mut self.trait_scratch.borrow_mut(),
-                )
-                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
-            (resolved.callee().clone(), signature.clone())
+                ),
+            }
+            .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let graph_rows = graph.as_ref().map(|inputs| {
+                let (rows, engine) = inputs.rows();
+                (Arc::<[ir::Ty]>::from(rows), engine)
+            });
+            (resolved.callee().clone(), signature.clone(), graph_rows)
         } else {
-            (target, signature)
+            (target, signature, None)
         };
         let (signature, nominal_realization) =
             match self.nominal_call_signature(&target, signature)? {
@@ -10117,6 +10195,29 @@ impl<'a> Checker<'a> {
         if let Some(realization) = nominal_realization
             && !(self.canonical.is_none() && self.nominal_closure_body)
         {
+            // Graph rows are replayed only through the graph-input validator,
+            // which never mixes them with parent-local seals. A mapped
+            // signature that carries such seals keeps its existing
+            // seal-only replay, exactly as before graph rows were recorded.
+            let graph_rows = match graph_rows {
+                Some(rows) => Some(rows),
+                // A call mapped through graph reads by `nominal_call_signature`
+                // records exactly the reads its mapped signature names.
+                None => self.signature_graph_rows(&realization.mapped)?,
+            };
+            let graph_rows = match graph_rows {
+                Some(rows) => {
+                    let facts = self
+                        .facts()
+                        .validated()
+                        .ok_or("nominal call receipt requires validated facts")?;
+                    let seals = facts
+                        .parent_local_signature_inputs(&realization.mapped)
+                        .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+                    seals.is_empty().then_some(rows)
+                }
+                None => None,
+            };
             self.canonical
                 .ok_or("nominal call realization requires canonical source publication")?
                 .record_nominal_call_realization(
@@ -10124,6 +10225,7 @@ impl<'a> Checker<'a> {
                     &realization.target,
                     realization.original,
                     realization.mapped,
+                    graph_rows,
                     &mut self.trait_scratch.borrow_mut(),
                 )?;
         }
@@ -10835,7 +10937,7 @@ impl<'a> Checker<'a> {
             )?
             .ok_or("E0277: trait obligation not proven")?
         } else {
-            plan.select_associated_with_scratch(
+            plan.select_associated_with_nominal_preparation(
                 &owner,
                 name,
                 &actuals,
@@ -10844,6 +10946,7 @@ impl<'a> Checker<'a> {
                 receiver.is_some(),
                 &plan.budget,
                 &self.trait_scratch,
+                &|target| self.associated_signature_nominal_inputs(target),
             )?
         };
         let adjusted = if let Some(receiver) = receiver {
@@ -13023,7 +13126,7 @@ impl<'a> Checker<'a> {
                         Expectation::SourceSchema(&field.ty, &formal),
                     )?;
                     let flow = self.flow(value);
-                    self.require(&flow, &field.ty)?;
+                    self.require(&flow, &self.constructor_field_type(&field.ty)?)?;
                     completes &= flow.completes;
                     values.push((index, value));
                 }
