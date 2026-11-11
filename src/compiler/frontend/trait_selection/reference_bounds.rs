@@ -8,7 +8,7 @@ impl PlanCtx {
         &self,
         implementation: &tr::ImplHeader,
         owner: &ir::Ty,
-        bindings: &BudgetVec<(ir::ParamId, &ir::Ty)>,
+        bindings: &BudgetVec<(ir::ParamId, ir::Ty)>,
         facts: &tr::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<Option<Vec<ir::TraitRef>>, String> {
@@ -90,7 +90,7 @@ impl PlanCtx {
                     .map_err(selection_token_error)?;
                 for (id, actual) in bindings.as_slice() {
                     inferred
-                        .push((*id, *actual))
+                        .push((*id, actual.clone()))
                         .map_err(selection_token_error)?;
                 }
                 let mut fits = true;
@@ -118,7 +118,7 @@ impl PlanCtx {
                             else {
                                 continue 'predicates;
                             };
-                            (*actual).clone()
+                            actual.clone()
                         }
                         argument if !mentions_param(argument) => argument.clone(),
                         _ => continue 'predicates,
@@ -180,7 +180,7 @@ mod tests {
             referent: Arc::new(value.clone()),
         };
         let mut bindings = BudgetVec::new(plan.program.names.budget(), Storage::Temporary).unwrap();
-        bindings.push((*parameter, &value)).unwrap();
+        bindings.push((*parameter, value.clone())).unwrap();
         let applications = plan
             .reference_bound_applications(&implementation, &owner, &bindings, &facts, &budget)
             .unwrap()
@@ -278,7 +278,9 @@ mod tests {
         };
         let mut missing_bindings =
             BudgetVec::new(plan.program.names.budget(), Storage::Temporary).unwrap();
-        missing_bindings.push((*parameter, &missing)).unwrap();
+        missing_bindings
+            .push((*parameter, missing.clone()))
+            .unwrap();
         assert!(
             plan.reference_bound_applications(
                 &implementation,

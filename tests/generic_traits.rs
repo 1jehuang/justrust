@@ -23,6 +23,46 @@ fn const_impl_owned_array_iteration_collection_milestone() {
 }
 
 #[test]
+fn const_length_array_impls_match_concrete_arrays_by_dot_call() {
+    coherence_oracle::stock_native(
+        r#"
+use std::fmt::Display;
+fn sum<const N: usize>(values: &[i32; N]) -> i32 { let mut sum = 0; let mut i = 0; while i < N { let v = &values[i]; sum += *v; i += 1; } sum }
+fn render<T: Display, const N: usize>(values: &[T; N]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < N { out.push_str(&format!("<{}>", &values[i])); i += 1; }
+    out
+}
+trait Total { fn total(&self) -> i32; }
+impl<const N: usize> Total for [i32; N] {
+    fn total(&self) -> i32 { sum(self) }
+}
+trait Show { fn show(&self) -> String; fn width(self) -> usize; }
+impl<T: Display, const N: usize> Show for [T; N] {
+    fn show(&self) -> String { render(self) }
+    fn width(self) -> usize { N }
+}
+trait Three { fn three(&self) -> &'static str; }
+impl<T> Three for [T; 3] { fn three(&self) -> &'static str { "three" } }
+fn main() {
+    println!("{} {}", [1, 2, 3].total(), [4i32, 5, 6, 7, 8].total());
+    let words = [String::from("a"), String::from("bc")];
+    println!("{} {}", words.show(), [1.5f64, 2.0, 3.25].show());
+    println!("{} {}", words.width(), [true; 4].width());
+    println!("{}", ['x', 'y', 'z'].three());
+}
+"#,
+    );
+    for source in [
+        "trait Three{fn three(&self)->u8;}impl<T> Three for [T;3]{fn three(&self)->u8{3}}fn unused(){let _=[1i32,2,3,4].three();}fn main(){}",
+        "use std::fmt::Display;trait Show{fn show(&self)->String;}impl<T:Display,const N:usize> Show for [T;N]{fn show(&self)->String{String::new()}}struct P;fn unused(){let _=[P,P].show();}fn main(){}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn const_impl_array_heads_keep_owned_element_and_extent_slots() {
     coherence_oracle::stock_native(
         r#"

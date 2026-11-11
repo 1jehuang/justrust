@@ -16,11 +16,11 @@ pub(super) fn trait_application_ambiguity() -> String {
         location: None,
     }.to_string()
 }
-fn match_trait_self<'actual>(
+fn match_trait_self(
     pattern: &ir::Ty,
-    actual: &'actual ir::Ty,
+    actual: &ir::Ty,
     env: &ir::GenericEnv,
-    bindings: &mut super::super::token_session::BudgetVec<(ir::ParamId, &'actual ir::Ty)>,
+    bindings: &mut super::super::token_session::BudgetVec<(ir::ParamId, ir::Ty)>,
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<bool, String> {
@@ -36,12 +36,55 @@ fn match_trait_self<'actual>(
                 }
             }
             bindings
-                .push((*parameter, actual))
+                .push((*parameter, actual.clone()))
                 .map_err(selection_token_error)?;
             return Ok(true);
         }
     }
     match (pattern, actual) {
+        // `impl<.., const N: usize> .. for [T; N]` on a concrete `[X; L]`
+        // binds N to the exact usize length constant, as rustc unifies it.
+        (
+            ir::Ty::DependentArray { element, length },
+            ir::Ty::Array {
+                element: actual_element,
+                len,
+            },
+        ) => {
+            let parameter = ir::ParamId {
+                owner: length.owner,
+                index: length.index,
+            };
+            if !env.contains(parameter)
+                || env.parameter_kind(parameter)
+                    != Some(ir::GenericParamKind::Const(ir::ConstType::Int(
+                        ir::IntTy::Usize,
+                    )))
+            {
+                return Ok(false);
+            }
+            let value = ir::Ty::Const(ir::ConstArgument::Integer {
+                ty: ir::IntTy::Usize,
+                bits: *len as u128,
+            });
+            let mut bound = false;
+            for (existing, previous) in bindings.as_slice() {
+                budget.charge_work(1)?;
+                if *existing == parameter {
+                    if !metered_type_equal(previous, &value, budget, depth + 1)? {
+                        return Ok(false);
+                    }
+                    bound = true;
+                }
+            }
+            if !bound {
+                budget.retain_bytes(std::mem::size_of::<ir::Ty>() + 32)?;
+                bindings
+                    .push((parameter, value))
+                    .map_err(selection_token_error)?;
+            }
+            match_trait_self(element, actual_element, env, bindings, budget, depth + 1)
+        }
         (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
             for (a, b) in a.iter().zip(b.iter()) {
                 if !match_trait_self(a, b, env, bindings, budget, depth + 1)? {
@@ -411,7 +454,7 @@ impl PlanCtx {
                 for (bound, actual) in bindings.as_slice() {
                     budget.charge_work(1)?;
                     if *bound == parameter {
-                        value = Some((*actual).clone());
+                        value = Some(actual.clone());
                         break;
                     }
                 }
@@ -487,7 +530,7 @@ impl PlanCtx {
         &self,
         implementation: &tr::ImplHeader,
         parameter: ir::ParamId,
-        bindings: &super::super::token_session::BudgetVec<(ir::ParamId, &ir::Ty)>,
+        bindings: &super::super::token_session::BudgetVec<(ir::ParamId, ir::Ty)>,
         facts: &tr::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<Option<Vec<ir::TraitRef>>, String> {
@@ -505,7 +548,7 @@ impl PlanCtx {
                     .as_slice()
                     .iter()
                     .find(|(b, _)| b == p)
-                    .map(|(_, v)| (*v).clone()),
+                    .map(|(_, v)| v.clone()),
                 ty if !mentions_param(ty) => Some(ty.clone()),
                 _ => None,
             }
@@ -572,7 +615,7 @@ impl PlanCtx {
                         for (bound, actual) in candidate_bindings.as_slice() {
                             budget.charge_work(1)?;
                             if *bound == parameter {
-                                value = Some((*actual).clone());
+                                value = Some(actual.clone());
                                 break;
                             }
                         }
