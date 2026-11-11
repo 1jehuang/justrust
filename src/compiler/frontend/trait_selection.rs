@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod reference_bounds;
+
 fn selection_token_error(error: super::super::token_session::TokenError) -> String {
     super::super::source::SourceError::from_token(error).to_string()
 }
@@ -414,6 +416,18 @@ impl PlanCtx {
                     }
                 }
                 let Some(value) = value else {
+                    if let Some(expanded) = self.reference_bound_applications(
+                        implementation,
+                        owner,
+                        &bindings,
+                        facts,
+                        budget,
+                    )? {
+                        for application in expanded {
+                            self.push_trait_application(&mut applications, application, budget)?;
+                        }
+                        continue 'implementations;
+                    }
                     // A parameter not fixed by the self type (`U` in
                     // `impl<T, U: From<T>> Into<U> for T`) is enumerated from
                     // the impls satisfying its own where-clause. Each match is

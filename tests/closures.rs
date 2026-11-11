@@ -8,6 +8,54 @@ use justrust_engine::compiler;
 use oracle::{Case, Expect};
 
 #[test]
+fn reference_application_user_blankets_match_stock() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "reference-application-user-blankets",
+        &[Case {
+            name: "original_bound_reference_chain",
+            source: r#"
+trait Inner<A> { type Output; fn inner(&self) -> A; }
+trait Outer<A> { fn outer(&self) -> A; }
+struct Base;
+impl Inner<i32> for Base { type Output = bool; fn inner(&self) -> i32 { 42 } }
+impl<A, R, F: Inner<A, Output = R> + ?Sized> Outer<A> for &F {
+    fn outer(&self) -> A { (*self).inner() }
+}
+fn main() {
+    let value = Base;
+    let r = &value;
+    println!("{}", r.outer());
+    let object: &dyn Inner<i32, Output = bool> = &value;
+    println!("{}", object.outer());
+}
+"#,
+            expect: Expect::Run("42\n42\n"),
+        }],
+    );
+}
+
+#[test]
+fn reference_application_unused_invalids() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "reference-application-unused-invalids",
+        &[
+            Case {
+                name: "unused_missing_original_referent_bound",
+                source: "struct Missing;trait Inner<A>{}trait Outer<A>{fn outer(&self)->A;}impl<A,F:Inner<A>> Outer<A> for &F{fn outer(&self)->A{panic!(\"unused\")}}fn unused(){let value=Missing;let borrowed=&value;let _=< &Missing as Outer<i32>>::outer(&borrowed);}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_wrong_original_associated_equality",
+                source: "struct Base;trait Inner<A>{type Output;}trait Outer<A>{fn outer(&self)->A;}impl Inner<i32> for Base{type Output=i32;}impl<A,F:Inner<A,Output=bool>> Outer<A> for &F{fn outer(&self)->A{panic!(\"unused\")}}fn unused(){let value=Base;let borrowed=&value;let _=< &Base as Outer<i32>>::outer(&borrowed);}fn main(){}",
+                expect: Expect::Invalid("E0271"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn closure_modes_reject_unused_invalids() {
     use output_oracle::{Case, Expect};
     output_oracle::check(
