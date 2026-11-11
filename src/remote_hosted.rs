@@ -313,6 +313,9 @@ fn curl_with_timing(
     if timing {
         cmd.args(["-H", "X-Justrust-Timing: 1"]);
     }
+    if method == "POST" && path == "build/runs" {
+        cmd.args(["-H", "X-Justrust-Admission: maintenance-v1"]);
+    }
     if let Some(b) = body {
         cmd.args(["-H", "Content-Type: application/json", "--data-binary"])
             .arg(b.to_string());
@@ -330,7 +333,8 @@ fn curl_with_timing(
 /// Parse only bounded numeric fleet metrics. Never echo arbitrary response
 /// headers, metric names, descriptions, IDs or control characters.
 fn admission_timing(header: &str) -> Option<String> {
-    const NAMES: [&str; 5] = [
+    const NAMES: [&str; 6] = [
+        "jr_maintenance",
         "jr_identity",
         "jr_charge",
         "jr_identity_wait",
@@ -750,12 +754,40 @@ pub fn charge_run(c: &Creds, run_id: &str) -> std::result::Result<Option<Builds>
     charge_run_labeled(c, run_id, None, None)
 }
 
+#[cfg(test)]
 pub fn charge_run_labeled(
     c: &Creds,
     run_id: &str,
     cmd: Option<&str>,
     project: Option<&str>,
 ) -> std::result::Result<Option<Builds>, String> {
+    match admit_run_labeled(c, run_id, cmd, project)? {
+        RunAdmission::Charged { builds, .. } => Ok(builds),
+        RunAdmission::Updating(update) => Err(format!(
+            "planned hosted update {}: {}",
+            update.id,
+            update.label()
+        )),
+    }
+}
+
+/// A maintenance response never means a charge happened. Older servers omit
+/// the acknowledgement, so callers must keep their legacy status check.
+#[derive(Debug)]
+pub enum RunAdmission {
+    Charged {
+        builds: Option<Builds>,
+        maintenance_checked: bool,
+    },
+    Updating(HostedUpdate),
+}
+
+pub fn admit_run_labeled(
+    c: &Creds,
+    run_id: &str,
+    cmd: Option<&str>,
+    project: Option<&str>,
+) -> std::result::Result<RunAdmission, String> {
     let mut body = json!({ "run_id": run_id });
     if let Some(cmd) = cmd {
         body["cmd"] = json!(run_label(cmd, 160));
@@ -778,8 +810,31 @@ pub fn charge_run_labeled(
         body["agent"] = json!(agent);
     }
     let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
+    parse_run_admission(r)
+}
+
+fn parse_run_admission(r: Resp) -> std::result::Result<RunAdmission, String> {
+    let maintenance_checked = r.body["admission"] == "maintenance-v1";
     if r.code == 200 {
-        Ok(Builds::from(&r.body["builds"]))
+        // A contradictory response is not permission to run during maintenance.
+        if maintenance_checked && !r.body["update"].is_null() {
+            let update: HostedUpdate =
+                serde_json::from_value(r.body["update"].clone()).map_err(|e| e.to_string())?;
+            if matches!(update.state.as_str(), "announced" | "restarting") {
+                return Err("invalid hosted admission: active maintenance after charge".into());
+            }
+        }
+        Ok(RunAdmission::Charged {
+            builds: Builds::from(&r.body["builds"]),
+            maintenance_checked,
+        })
+    } else if r.code == 409 && maintenance_checked && r.body["error"]["code"] == "host_updating" {
+        let update: HostedUpdate =
+            serde_json::from_value(r.body["update"].clone()).map_err(|e| e.to_string())?;
+        if !matches!(update.state.as_str(), "announced" | "restarting") {
+            return Err("invalid hosted maintenance response".into());
+        }
+        Ok(RunAdmission::Updating(update))
     } else {
         Err(api_error(&r).to_string())
     }
@@ -1993,6 +2048,63 @@ pub fn check_use() -> Result<Me> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn run_admission_negotiates_maintenance_without_legacy_bypass() {
+        use super::*;
+        for (body, expected) in [
+            (json!({"charged":"trial"}), false),
+            (
+                json!({"charged":"repeat", "admission":"maintenance-v1", "update":null}),
+                true,
+            ),
+        ] {
+            assert!(
+                matches!(parse_run_admission(Resp { code: 200, body }).unwrap(),
+                RunAdmission::Charged { maintenance_checked, .. } if maintenance_checked == expected)
+            );
+        }
+        let update = json!({"id":"security-123", "reason":"Kernel update", "state":"announced",
+            "started_at":1, "completed_at":null, "interrupted_work_stopped":false});
+        let body = json!({"admission":"maintenance-v1", "update":update,
+            "error":{"code":"host_updating"}});
+        assert!(
+            matches!(parse_run_admission(Resp { code: 409, body: body.clone() }).unwrap(),
+            RunAdmission::Updating(update) if update.id == "security-123")
+        );
+        assert!(
+            parse_run_admission(Resp {
+                code: 200,
+                body: body.clone()
+            })
+            .is_err()
+        );
+        let mut malformed = body.clone();
+        malformed["update"]["state"] = json!("completed");
+        assert!(
+            parse_run_admission(Resp {
+                code: 409,
+                body: malformed
+            })
+            .is_err()
+        );
+        let mut untyped = body;
+        untyped.as_object_mut().unwrap().remove("admission");
+        assert!(
+            parse_run_admission(Resp {
+                code: 409,
+                body: untyped
+            })
+            .is_err()
+        );
+        assert!(
+            parse_run_admission(Resp {
+                code: 402,
+                body: json!({"error":{"code":"builds_exhausted"}})
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn windows_guidance_does_not_promise_local_fallback() {
         for reason in [
             super::NO_CREDITS,
@@ -2659,6 +2771,8 @@ mod tests {
             "\n%{http_code}",
             "--config",
             "-",
+            "-H",
+            "X-Justrust-Admission: maintenance-v1",
             "-H",
             "Content-Type: application/json",
             "--data-binary",
