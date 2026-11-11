@@ -31,6 +31,7 @@ object = { version = "=0.37.3", default-features = false, features = ["read_core
 memmap2 = "0.9.11"
 tungstenite = { version = "0.30", default-features = false, features = ["rustls-tls-native-roots", "handshake"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 # Large artifact round trips otherwise spend their test time in debug DEFLATE.
 # Keep the client itself unoptimized for fast edit/build loops. Release is unchanged.

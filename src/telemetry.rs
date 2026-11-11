@@ -994,7 +994,109 @@ fn post_outcome(curl_exit: Option<i32>, code: u16) -> PostOutcome {
     }
 }
 
+// Keep curl's explicit certificate, proxy and curlrc configuration working.
+// Select before sending, never replay an ambiguous native POST through curl.
+const CURL_TRANSPORT_ENV: &[&str] = &[
+    "CURL_CA_BUNDLE",
+    "CURL_SSL_BACKEND",
+    "CURL_HOME",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+fn curl_customized() -> bool {
+    curl_customized_with(
+        |name| std::env::var_os(name).is_some(),
+        dirs::home_dir().as_deref(),
+        dirs::config_dir().as_deref(),
+    )
+}
+
+fn curl_customized_with(
+    has_env: impl Fn(&str) -> bool,
+    home: Option<&std::path::Path>,
+    config: Option<&std::path::Path>,
+) -> bool {
+    CURL_TRANSPORT_ENV.iter().any(|name| has_env(name))
+        || home.is_some_and(|h| h.join(".curlrc").exists() || h.join("_curlrc").exists())
+        || config.is_some_and(|d| d.join("curlrc").exists())
+}
+
+fn telemetry_agent() -> ureq::Agent {
+    use std::time::Duration;
+    ureq::Agent::config_builder()
+        .https_only(true)
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .timeout_resolve(Some(Duration::from_secs(5)))
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_global(Some(Duration::from_secs(20)))
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .new_agent()
+}
+
+const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+
+fn post_native(
+    agent: &ureq::Agent,
+    url: &str,
+    body: &str,
+    auth: Option<&crate::remote_hosted::Creds>,
+) -> PostOutcome {
+    use std::io::Read;
+    let mut request = agent.post(url).header("Content-Type", "application/json");
+    if let Some(auth) = auth {
+        request = request.header("Authorization", auth.authorization_header());
+    }
+    let Ok(mut response) = request.send(body) else {
+        return PostOutcome {
+            delivery: Delivery::Retry,
+            http_status: None,
+            curl_exit: None,
+        };
+    };
+    let code = response.status().as_u16();
+    // Drain a small response so consecutive batches reuse TLS and TCP. Do not
+    // retain response contents or let a broken endpoint stream without a bound.
+    let drained = std::io::copy(
+        &mut response.body_mut().as_reader().take(MAX_RESPONSE_BYTES + 1),
+        &mut std::io::sink(),
+    );
+    PostOutcome {
+        delivery: if drained.is_ok_and(|n| n <= MAX_RESPONSE_BYTES) {
+            delivery(code)
+        } else {
+            Delivery::Retry
+        },
+        http_status: (100..=599).contains(&code).then_some(code),
+        curl_exit: None,
+    }
+}
+
 fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> PostOutcome {
+    let url = telemetry_url();
+    if trusted_endpoint(&url, std::env::var_os("JUSTRUST_TELEMETRY_URL").is_some())
+        && !curl_customized()
+    {
+        static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+        return post_native(AGENT.get_or_init(telemetry_agent), &url, body, auth);
+    }
+    post_curl(&url, body, auth)
+}
+
+fn post_curl(url: &str, body: &str, auth: Option<&crate::remote_hosted::Creds>) -> PostOutcome {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let Ok(mut child) = Command::new("curl")
@@ -1019,7 +1121,7 @@ fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> PostOutcome {
             "-w",
             "%{http_code}",
         ])
-        .arg(telemetry_url())
+        .arg(url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1306,6 +1408,10 @@ pub fn command(action: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "telemetry_transport_tests.rs"]
+mod transport_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn observation_quality_is_numeric_and_absence_is_not_zero() {
@@ -1326,6 +1432,45 @@ mod tests {
         assert!(data.as_object().unwrap().len() <= 80);
     }
     use super::*;
+
+    #[test]
+    fn explicit_curl_transport_options_keep_compatibility_path() {
+        assert!(!curl_customized_with(|_| false, None, None));
+        for option in CURL_TRANSPORT_ENV {
+            assert!(
+                curl_customized_with(|name| name == *option, None, None),
+                "{option}"
+            );
+        }
+        let credentials = crate::remote_hosted::Creds::new(
+            crate::remote_hosted::DEFAULT_API_BASE.into(),
+            "secret".into(),
+        )
+        .unwrap();
+        let header = credentials.authorization_header();
+        assert!(header.is_sensitive());
+        assert_eq!(header.to_str().unwrap(), "Bearer secret");
+    }
+
+    #[test]
+    fn curlrc_locations_keep_compatibility_path_without_global_environment_changes() {
+        let d = std::env::temp_dir().join(format!("justrust-curlrc-{}", random_uuid()));
+        let home = d.join("home");
+        let config = d.join("config");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        assert!(!curl_customized_with(|_| false, Some(&home), Some(&config)));
+        for path in [
+            home.join(".curlrc"),
+            home.join("_curlrc"),
+            config.join("curlrc"),
+        ] {
+            std::fs::write(&path, "# custom configuration\n").unwrap();
+            assert!(curl_customized_with(|_| false, Some(&home), Some(&config)));
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir_all(d).unwrap();
+    }
 
     #[test]
     fn transport_diagnostics_are_codes_only_and_bounded() {

@@ -203,6 +203,16 @@ impl Creds {
         format!("header = \"Authorization: Bearer {k}\"\n")
     }
 
+    /// Native request credentials stay sensitive and in memory, never in argv.
+    pub(crate) fn authorization_header(&self) -> tungstenite::http::HeaderValue {
+        // Creds::new rejects controls/whitespace before constructing headers.
+        let mut authorization =
+            tungstenite::http::HeaderValue::from_str(&format!("Bearer {}", self.key))
+                .expect("validated bearer credential");
+        authorization.set_sensitive(true);
+        authorization
+    }
+
     /// WebSocket credentials stay in memory, never in argv or query strings.
     pub(crate) fn status_event_request(&self) -> (String, tungstenite::http::HeaderValue) {
         let url = self.url("build/events");
@@ -211,12 +221,7 @@ impl Creds {
         } else {
             format!("ws://{}", url.strip_prefix("http://").unwrap_or(&url))
         };
-        // Creds::new rejects controls/whitespace before constructing headers.
-        let mut authorization =
-            tungstenite::http::HeaderValue::from_str(&format!("Bearer {}", self.key))
-                .expect("validated bearer credential");
-        authorization.set_sensitive(true);
-        (url, authorization)
+        (url, self.authorization_header())
     }
 
     pub(crate) fn url(&self, suffix: &str) -> String {
