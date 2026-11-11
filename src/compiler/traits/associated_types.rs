@@ -2039,7 +2039,7 @@ impl ValidatedTraitWorld {
             context.proof,
             &mut stack.obligations,
         )?;
-        let builtin_pointer = matches!(selected_goal.self_ty, Ty::FnPointer(_))
+        let builtin_pointer = matches!(selected_goal.self_ty, Ty::FnPointer(_) | Ty::FnItem(_))
             && self
                 .schema
                 .closure_trait_kind(selected_goal.declaration)?

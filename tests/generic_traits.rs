@@ -1204,3 +1204,25 @@ fn native_generic_traits_workers1_8_check_build_no_compiler_fallback() {
         "NATIVE GENERIC TRAITS:112 cells, modes{modes:?};24 nonempty-output main images;4 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
 }
+
+#[test]
+fn generic_function_item_callable_output() {
+    coherence_oracle::stock_native(
+        r#"
+fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() }
+fn pair<T, F: Fn() -> T>(f: F) -> (T, T) { (f(), f()) }
+fn seeded<T: Clone>(x: &T) -> Vec<T> { let mut v = make(Vec::new); v.push(x.clone()); v }
+fn empties<T>() -> usize { let (a, b): (Vec<T>, Vec<T>) = pair(Vec::new); a.len() + b.len() }
+fn main() {
+    println!("{:?} {:?}", seeded(&5), seeded(&String::from("s")));
+    println!("{}", empties::<String>());
+}
+"#,
+    );
+    for source in [
+        "fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() } fn unused<T>() { let v: Vec<T> = make(Vec::new); let a = v; let b = v; drop((a, b)); } fn main() {}",
+        "fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() } fn unused<T>() -> Vec<u8> { make::<T, _>(Vec::new) } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}

@@ -1412,7 +1412,14 @@ impl ValidatedTraitWorld {
                 ProofOrigin::ReflexiveEquality { membership },
             );
         }
-        if self.checked_closure_projection(projection, context.env())?
+        // A function item's callable Output is fixed by its signature, exactly
+        // like a checked closure, even when its type arguments are open.
+        let fn_item_output = matches!(projection.trait_ref.self_ty, Ty::FnItem(_))
+            && self
+                .closure_trait_kind(projection.trait_ref.declaration)?
+                .is_some();
+        if fn_item_output
+            || self.checked_closure_projection(projection, context.env())?
             || self
                 .opaque_associated_binding(projection, context.env())?
                 .is_some()
