@@ -317,7 +317,17 @@ fn changed_outputs_and_unproven_clients_still_receive_files() {
             "bytes" => {
                 let mut body = std::fs::read(&fixture.saved).unwrap();
                 body[65_537] ^= 1;
-                std::fs::write(fixture.remote.join("app"), body).unwrap();
+                let path = fixture.remote.join("app");
+                std::fs::write(&path, body).unwrap();
+                // A same-size rewrite can land in the original filesystem clock
+                // tick. Keep this changed-output case distinct from the saved
+                // client's metadata identity without timing-dependent sleeps.
+                std::fs::File::open(&path)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_234_567_891),
+                    ))
+                    .unwrap();
             }
             "mode" => crate::sys::set_mode(&fixture.remote.join("app"), 0o700).unwrap(),
             "unknown" => fixture.req.have[0].id = Some("another-client-base".into()),
