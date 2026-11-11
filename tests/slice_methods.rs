@@ -118,6 +118,23 @@ fn by_value_reference_self_autoref_receivers_match_stock() {
                 expect: closure_oracle::Expect::Invalid("E0596"),
             },
             closure_oracle::Case {
+                name: "split_at_mut_rows_of_vectors",
+                source: "fn main(){let mut grid=vec![vec![0usize,1,2],vec![3,4,5],vec![6,7,8]];let(top,bottom)=grid.split_at_mut(1);top[0][0]=bottom[0][2]*10;bottom[1].push(9);let(a,b)=bottom.split_at_mut(1);a[0][1]+=b[0][3];println!(\"{:?}\",grid);let mut w=vec![String::from(\"a\"),String::from(\"b\")];if let Some((h,t))=w.split_first_mut(){h.push_str(&t[0]);}println!(\"{:?}\",w);}",
+                expect: closure_oracle::Expect::Run(
+                    "[[50, 1, 2], [3, 13, 5], [6, 7, 8, 9]]\n[\"ab\", \"b\"]\n",
+                ),
+            },
+            closure_oracle::Case {
+                name: "unused_split_rows_overlap_owner",
+                source: "fn bad(){let mut g=vec![vec![1usize]];let(a,_b)=g.split_at_mut(1);g.push(vec![]);a[0][0]=2;}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+            closure_oracle::Case {
+                name: "unused_overlapping_split_halves_used_together",
+                source: "fn bad(){let mut g=vec![vec![1usize],vec![2]];let(a,_b)=g.split_at_mut(1);let(c,_d)=g.split_at_mut(1);a[0][0]=c[0][0];}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+            closure_oracle::Case {
                 name: "unused_split_at_mut_halves_overlap_owner",
                 source: "fn bad(){let mut v=vec![1,2];let(a,_b)=v.split_at_mut(1);v.push(3);a[0]=2;}fn main(){}",
                 expect: closure_oracle::Expect::Invalid("E0499"),
@@ -1611,5 +1628,21 @@ fn main(){let mut a:[i32;2]=[1,2];let s:&mut[i32]=&mut a;let w=slice_view(s);pri
                 "E0502",
             ),
         ],
+    );
+}
+
+#[test]
+fn unchanged_m2_lifetimes_borrowing_matches_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "unchanged-m2-lifetimes-borrowing",
+        &[closure_oracle::Case {
+            name: "11_lifetimes_borrowing",
+            source: include_str!("milestones/m2/11_lifetimes_borrowing.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "milestones/m2/11_lifetimes_borrowing.stdout"
+            )),
+        }],
     );
 }

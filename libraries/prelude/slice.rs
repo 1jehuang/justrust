@@ -131,10 +131,11 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
         assert!(mid <= len);
         let data = __justrust_slice_as_mut_ptr!(self);
         // The checked midpoint partitions one allocation into adjacent,
-        // nonoverlapping ranges. Both returned loans retain the receiver's
+        // nonoverlapping ranges, addressed by the same physical element
+        // stride as slice indexing (any element type, including `Vec<T>`). Both returned loans retain the receiver's
         // lifetime, including when either range is empty.
         unsafe {
-            let right = <*mut T as super::ptr::MutPtr<T>>::add(data, mid);
+            let right = iter_mut_slot(data, mid);
             (from_raw_parts_mut(data, mid), from_raw_parts_mut(right, len - mid))
         }
     }
@@ -145,7 +146,7 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
         }
         let data = __justrust_slice_as_mut_ptr!(self);
         unsafe {
-            let rest = <*mut T as super::ptr::MutPtr<T>>::add(data, 1usize);
+            let rest = iter_mut_slot(data, 1usize);
             super::option::Option::Some((&mut *data, from_raw_parts_mut(rest, len - 1usize)))
         }
     }
@@ -156,7 +157,7 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
         }
         let data = __justrust_slice_as_mut_ptr!(self);
         unsafe {
-            let last = <*mut T as super::ptr::MutPtr<T>>::add(data, len - 1usize);
+            let last = iter_mut_slot(data, len - 1usize);
             super::option::Option::Some((&mut *last, from_raw_parts_mut(data, len - 1usize)))
         }
     }
@@ -173,7 +174,7 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
             return super::option::Option::None;
         }
         let data = __justrust_slice_as_mut_ptr!(self);
-        unsafe { super::option::Option::Some(&mut *<*mut T as super::ptr::MutPtr<T>>::add(data, len - 1usize)) }
+        unsafe { super::option::Option::Some(&mut *iter_mut_slot(data, len - 1usize)) }
     }
 }
 
