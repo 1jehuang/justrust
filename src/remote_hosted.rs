@@ -791,7 +791,21 @@ pub fn admit_run_labeled(
     cmd: Option<&str>,
     project: Option<&str>,
 ) -> std::result::Result<RunAdmission, String> {
-    let mut body = json!({ "run_id": run_id });
+    let windows = crate::remote_windows::selected().map_err(|e| e.to_string())?;
+    admit_run_labeled_for(c, run_id, cmd, project, windows)
+}
+
+fn admit_run_labeled_for(
+    c: &Creds,
+    run_id: &str,
+    cmd: Option<&str>,
+    project: Option<&str>,
+    windows: bool,
+) -> std::result::Result<RunAdmission, String> {
+    // Use the same selection as host connect so billing records join the
+    // worker that actually runs the build, without a second admission.
+    let mut body =
+        json!({ "run_id": run_id, "platform": if windows { "windows" } else { "linux" } });
     if let Some(cmd) = cmd {
         body["cmd"] = json!(run_label(cmd, 160));
     }
@@ -876,8 +890,23 @@ pub fn report_run_event(
     let Ok(c) = creds() else {
         return;
     };
-    let body = run_event_body(event, exit_code, wall_s, failure);
+    let Ok(windows) = crate::remote_windows::selected() else {
+        return;
+    };
+    let body = hosted_run_event_body(event, exit_code, wall_s, failure, windows);
     post_detached(&c, &format!("build/runs/{run_id}/event"), &body);
+}
+
+fn hosted_run_event_body(
+    event: &str,
+    exit_code: Option<i32>,
+    wall_s: Option<f64>,
+    failure: Option<&crate::failure::Wire>,
+    windows: bool,
+) -> Value {
+    let mut body = run_event_body(event, exit_code, wall_s, failure);
+    body["platform"] = json!(if windows { "windows" } else { "linux" });
+    body
 }
 
 /// Why a failed run failed, for run history: a fixed class and a short
@@ -2627,6 +2656,49 @@ mod tests {
         assert!(b.get("cmd").is_none());
         assert!(s[0].auth.as_deref() == Some("Bearer sk-secret-123"));
         assert_eq!(c.url("me"), format!("{api}/me"));
+    }
+
+    #[test]
+    fn run_admission_sends_selected_platform_once() {
+        for (windows, platform) in [(false, "linux"), (true, "windows")] {
+            for (code, response, maintenance) in [
+                (200, r#"{"charged":"trial"}"#, false),
+                (
+                    409,
+                    r#"{"admission":"maintenance-v1","update":{"id":"update-1","reason":"Kernel update","state":"announced","started_at":1,"completed_at":null,"interrupted_work_stopped":false},"error":{"code":"host_updating"}}"#,
+                    true,
+                ),
+            ] {
+                let (c, seen) = mock(vec![(code, response)]);
+                let result = admit_run_labeled_for(
+                    &c,
+                    "platform-run",
+                    Some("test"),
+                    Some("project"),
+                    windows,
+                );
+                if maintenance {
+                    assert!(matches!(result.unwrap(), RunAdmission::Updating(_)));
+                } else {
+                    assert!(matches!(result.unwrap(), RunAdmission::Charged { .. }));
+                }
+                let seen = seen.lock().unwrap();
+                assert_eq!(seen.len(), 1, "one billing admission only");
+                assert_eq!(seen[0].path, "/v1/build/runs");
+                let body: Value = serde_json::from_str(&seen[0].body).unwrap();
+                assert_eq!(body["platform"], platform);
+                assert_eq!(body["run_id"], "platform-run");
+                assert_eq!(body["cmd"], "test");
+                assert_eq!(body["project"], "project");
+            }
+            for event in ["running", "done", "abandoned"] {
+                let body = hosted_run_event_body(event, Some(0), Some(1.0), None, windows);
+                assert_eq!(body["platform"], platform);
+                let mut expected = run_event_body(event, Some(0), Some(1.0), None);
+                expected["platform"] = json!(platform);
+                assert_eq!(body, expected);
+            }
+        }
     }
 
     #[test]
