@@ -1528,7 +1528,14 @@ mod tests {
         .unwrap();
         let argument = "日本語 café 🦀 & echo %PATH% | 'quoted'";
         let args = ["--".to_owned(), argument.to_owned()];
-        let request = bundle("test", &args, "utf8-run", &scratch.0, &[scratch.0.clone()]).unwrap();
+        let request = bundle(
+            "test",
+            &args,
+            "utf8-run",
+            &scratch.0,
+            std::slice::from_ref(&scratch.0),
+        )
+        .unwrap();
         // prepare serializes the bundle this way, and execute writes those
         // bytes directly to SSH stdin, without including them in the command.
         let payload = serde_json::to_vec(&request).unwrap();

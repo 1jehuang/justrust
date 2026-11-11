@@ -194,6 +194,7 @@ pub fn local(m: &Marks, now: f64, phases: &crate::summary::Phases) -> E2e {
 #[derive(Debug, Clone, Default)]
 pub struct RemoteTimes {
     pub sync: Option<SyncTiming>,
+    pub run: Option<crate::remote_proto::RunTiming>,
     /// Host-recorded wall and phases, from the host's summary.
     pub host_wall: f64,
     pub host_phases: crate::summary::Phases,
@@ -203,7 +204,12 @@ pub struct RemoteTimes {
 /// `daemon_connected`, `flushed`, `exit`, `artifacts`, now = recording.
 pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
     let mut w = Waterfall::new();
-    w.until("client.route", m.get("routed"));
+    if let Some(preflight) = m.get("remote_preflight") {
+        w.until("client.route", Some(preflight));
+        w.until("remote.preflight", m.get("routed"));
+    } else {
+        w.until("client.route", m.get("routed"));
+    }
     w.until("client.roots", m.get("remote_roots"));
     w.until("remote.admission", m.get("admitted"));
     w.until("remote.daemon_connect", m.get("daemon_connected"));
@@ -224,10 +230,25 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
     let phase_sum: f64 = host.iter().map(|(_, v)| v).sum();
     // Phases sum to the host wall; anything recorded beyond them is "other".
     host.push(("host.other".into(), (r.host_wall - phase_sum).max(0.0)));
+    if let Some(t) = r.run.filter(valid_run_timing) {
+        host.insert(0, ("host.prepare".into(), t.prepare_ms / 1000.0));
+        host.push((
+            "host.recorder".into(),
+            (t.execute_ms / 1000.0 - r.host_wall).max(0.0),
+        ));
+        host.push(("host.finalize".into(), t.finalize_ms / 1000.0));
+        host.push(("host.records".into(), t.records_ms / 1000.0));
+    }
     split_owned(&mut w, m.get("exit"), &host, "remote.host_overhead");
     w.until("remote.artifacts", m.get("artifacts"));
     w.until("client.report", Some(now));
     w.finish(now, false)
+}
+
+fn valid_run_timing(t: &crate::remote_proto::RunTiming) -> bool {
+    [t.prepare_ms, t.execute_ms, t.finalize_ms, t.records_ms]
+        .into_iter()
+        .all(|ms| ms.is_finite() && ms >= 0.0)
 }
 
 /// Cargo phases for a reconstruction. Older recorders lost the test phase
@@ -278,8 +299,13 @@ pub fn label(key: &str) -> &str {
         "client.setup" => "toolchain, slot, setup",
         "client.report" => "collect, report",
         "remote.admission" => "hosted admission",
+        "remote.preflight" => "hosted maintenance check",
         "remote.daemon_connect" => "sync daemon connect",
         "remote.host_overhead" => "host start, results back",
+        "host.prepare" => "agent preflight, protection",
+        "host.recorder" => "recorder setup, reporting",
+        "host.finalize" => "activity finalization, GC",
+        "host.records" => "pack, send run records",
         "remote.artifacts" => "artifacts back",
         "remote.other" => "not attributed",
         "sync.lock_wait" => "sync: queued behind",
@@ -398,6 +424,7 @@ mod tests {
             ("artifacts", 10.5),
         ]);
         let r = RemoteTimes {
+            run: None,
             sync: Some(SyncTiming {
                 lock_ms: 2000.0,
                 link_ms: 0.0,
@@ -441,6 +468,107 @@ mod tests {
     }
 
     #[test]
+    fn host_agent_timings_explain_recorder_and_maintenance_without_double_counting() {
+        let m = Marks(vec![("flushed", 1.0), ("exit", 11.0)]);
+        let r = RemoteTimes {
+            run: Some(crate::remote_proto::RunTiming {
+                prepare_ms: 200.0,
+                execute_ms: 6500.0,
+                finalize_ms: 400.0,
+                records_ms: 300.0,
+            }),
+            host_wall: 5.0,
+            host_phases: Phases {
+                compile: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let e = remote(&m, 11.0, &r);
+        assert!((sum(&e) - 11.0).abs() < 1e-9, "{e:?}");
+        for (key, expected) in [
+            ("host.prepare", 0.2),
+            ("host.compile", 5.0),
+            ("host.recorder", 1.5),
+            ("host.finalize", 0.4),
+            ("host.records", 0.3),
+            ("remote.host_overhead", 2.6),
+        ] {
+            assert!((get(&e, key) - expected).abs() < 1e-9, "{key}: {e:?}");
+        }
+    }
+
+    #[test]
+    fn remote_preflight_is_separate_from_client_routing() {
+        let m = Marks(vec![
+            ("remote_preflight", 0.1),
+            ("routed", 0.8),
+            ("exit", 1.0),
+        ]);
+        let e = remote(&m, 1.0, &RemoteTimes::default());
+        assert!((get(&e, "client.route") - 0.1).abs() < 1e-9);
+        assert!((get(&e, "remote.preflight") - 0.7).abs() < 1e-9);
+        assert!((sum(&e) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pipelined_agent_timings_are_scaled_to_the_client_span() {
+        let m = Marks(vec![("flushed", 1.0), ("exit", 3.0)]);
+        let r = RemoteTimes {
+            run: Some(crate::remote_proto::RunTiming {
+                prepare_ms: 100.0,
+                execute_ms: 4500.0,
+                finalize_ms: 200.0,
+                records_ms: 200.0,
+            }),
+            host_wall: 4.0,
+            host_phases: Phases {
+                compile: 4.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let e = remote(&m, 3.0, &r);
+        assert!((sum(&e) - 3.0).abs() < 1e-9, "{e:?}");
+        assert!((get(&e, "host.compile") - 1.6).abs() < 1e-9, "{e:?}");
+        assert_eq!(get(&e, "remote.host_overhead"), 0.0);
+        assert!(
+            e.segments
+                .iter()
+                .all(|s| s.secs.is_finite() && s.secs >= 0.0)
+        );
+    }
+
+    #[test]
+    fn invalid_agent_timing_is_ignored_and_pipeline_overlap_remains_bounded() {
+        let m = Marks(vec![("flushed", 1.0), ("exit", 3.0)]);
+        for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+            let r = RemoteTimes {
+                run: Some(crate::remote_proto::RunTiming {
+                    prepare_ms: invalid,
+                    execute_ms: 5000.0,
+                    ..Default::default()
+                }),
+                host_wall: 4.0,
+                host_phases: Phases {
+                    compile: 4.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let e = remote(&m, 3.0, &r);
+            assert!((sum(&e) - 3.0).abs() < 1e-9, "{e:?}");
+            assert!(
+                e.segments
+                    .iter()
+                    .all(|s| s.secs.is_finite() && s.secs >= 0.0)
+            );
+            assert_eq!(get(&e, "host.prepare"), 0.0);
+            assert_eq!(get(&e, "host.compile"), 2.0);
+        }
+    }
+
+    #[test]
     fn every_mark_permutation_sums_to_wall_without_negatives() {
         let names = [
             "routed",
@@ -454,6 +582,7 @@ mod tests {
             "cargo_done",
         ];
         let r = RemoteTimes {
+            run: None,
             sync: Some(SyncTiming {
                 lock_ms: 900.0,
                 link_ms: 50.0,

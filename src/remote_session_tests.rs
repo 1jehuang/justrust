@@ -320,7 +320,14 @@ fn transient_disconnect_reattaches_original_job_and_replays_only_missing_output(
         &Msg::Out { id: 7, stream: 2 },
         b"test failed after disconnect\n",
     );
-    let exit = f.output(&Msg::Exit { id: 7, code: 101 }, b"{}");
+    let exit = f.output(
+        &Msg::Exit {
+            id: 7,
+            code: 101,
+            timing: None,
+        },
+        b"{}",
+    );
     let (mut stream, attachment) = f.attach(Some(identity), first.len() as u64);
     assert!(matches!(
         receive(&mut stream).unwrap().0,

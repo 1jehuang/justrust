@@ -348,7 +348,7 @@ fn admission_timing(header: &str) -> Option<String> {
     {
         return None;
     }
-    let mut values = [None; 5];
+    let mut values = [None; NAMES.len()];
     for metric in header.split(',') {
         let (name, duration) = metric.trim().split_once(";dur=")?;
         let index = NAMES.iter().position(|candidate| *candidate == name)?;

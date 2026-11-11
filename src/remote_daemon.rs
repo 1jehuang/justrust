@@ -2167,9 +2167,24 @@ mod tests {
         }
         assert!(link.alive());
         assert!(link.child.lock().unwrap().try_wait().unwrap().is_none());
-        link.send(&Msg::Exit { id: 77, code: 0 }, &[]).unwrap();
+        link.send(
+            &Msg::Exit {
+                id: 77,
+                code: 0,
+                timing: None,
+            },
+            &[],
+        )
+        .unwrap();
         let (msg, _) = run_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(msg, Msg::Exit { id: 77, code: 0 }));
+        assert!(matches!(
+            msg,
+            Msg::Exit {
+                id: 77,
+                code: 0,
+                ..
+            }
+        ));
         link.kill();
         reader.join().unwrap();
         hint_rx.recv_timeout(Duration::from_secs(1)).unwrap();

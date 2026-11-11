@@ -68,6 +68,9 @@ const FORWARDED_ENV: &[&str] = &[
     "JCODE_SESSION_ID",
     "CARGO_TERM_COLOR",
     "JUSTRUST_DEPCACHE_EXPLAIN",
+    "JUSTRUST_PASSES",
+    "JUSTRUST_RECORD_PHASE_TRACE",
+    "JUSTRUST_SLOT_WARM_REUSE",
     "JUSTRUST_DEPCACHE",
     "JUSTRUST_LOCALCACHE",
     "JUSTRUST_LOCALCACHE_TARGET_BOUND",
@@ -950,12 +953,20 @@ fn charge_hosted(
     run_id: &str,
     cmd: &str,
     project: Option<&str>,
-) -> std::result::Result<bool, String> {
+) -> Result<std::result::Result<bool, String>> {
     if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
-        return Ok(false);
+        return Ok(Ok(false));
     }
-    let c = crate::remote_hosted::creds().map_err(|e| format!("{BILLING}{e}"))?;
-    match crate::remote_hosted::charge_run_labeled(&c, run_id, Some(cmd), project) {
+    let c = match crate::remote_hosted::creds() {
+        Ok(c) => c,
+        Err(e) => return Ok(Err(format!("{BILLING}{e}"))),
+    };
+    let admission = await_hosted_admission(
+        || crate::remote_hosted::admit_run_labeled(&c, run_id, Some(cmd), project),
+        crate::remote_hosted::current_update,
+        wait_for_hosted_update,
+    )?;
+    Ok(match admission {
         Ok(_) => Ok(true),
         Err(e)
             if e.contains("justrust upgrade")
@@ -965,6 +976,46 @@ fn charge_hosted(
             Err(format!("{BILLING}{e}"))
         }
         Err(e) => Err(e),
+    })
+}
+
+/// New servers check maintenance in the mandatory authenticated admission.
+/// A legacy server still gets its status check before execution. Maintenance
+/// failures are outer errors so they can never trigger a local fallback.
+fn await_hosted_admission(
+    mut admit: impl FnMut() -> std::result::Result<crate::remote_hosted::RunAdmission, String>,
+    mut legacy_status: impl FnMut() -> Result<Option<crate::remote_hosted::HostedUpdate>>,
+    mut wait: impl FnMut(crate::remote_hosted::HostedUpdate) -> Result<()>,
+) -> Result<std::result::Result<Option<crate::remote_hosted::Builds>, String>> {
+    use crate::remote_hosted::RunAdmission;
+    let mut updates = BTreeSet::new();
+    loop {
+        match admit() {
+            Ok(RunAdmission::Charged {
+                builds,
+                maintenance_checked,
+            }) => {
+                if !maintenance_checked
+                    && let Ok(Some(update)) = legacy_status()
+                    && matches!(update.state.as_str(), "announced" | "restarting")
+                {
+                    wait(update)?;
+                }
+                return Ok(Ok(builds));
+            }
+            Ok(RunAdmission::Updating(update)) => {
+                if updates.len() >= 2 || !updates.insert(update.id.clone()) {
+                    bail!("hosted maintenance admission did not clear; no local fallback");
+                }
+                eprintln!(
+                    "justrust remote: planned hosted update {}: {}; waiting before admission (no local fallback)",
+                    update.id,
+                    update.label()
+                );
+                wait(update)?;
+            }
+            Err(message) => return Ok(Err(message)),
+        }
     }
 }
 
@@ -1086,19 +1137,7 @@ pub fn run_remote(
     let mut diagnostic = RemoteDiagnostic::default();
     let run_id = crate::record::new_run_id();
     let mut lifecycle = crate::telemetry::BuildLifecycle::start(&run_id, sub, "remote");
-    if matches!(
-        remote_backend::load(),
-        Some(remote_backend::Backend::Hosted)
-    ) && let Ok(Some(update)) = crate::remote_hosted::current_update()
-        && matches!(update.state.as_str(), "announced" | "restarting")
-    {
-        eprintln!(
-            "justrust remote: planned hosted update {}: {}; waiting before starting work (no local fallback)",
-            update.id,
-            update.label()
-        );
-        wait_for_hosted_update(update)?;
-    }
+    crate::e2e::mark("remote_preflight");
     let mut hosted_run = None;
     let mut recovered = BTreeSet::new();
     let result = loop {
@@ -1301,7 +1340,7 @@ fn run_remote_inner(
     crate::e2e::mark("remote_roots");
     diagnostic.stage = "remote_admission";
     if admitted.is_none() {
-        let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref()) {
+        let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref())? {
             Ok(h) => h,
             Err(m) => return infra(m),
         };
@@ -1338,6 +1377,7 @@ fn run_remote_inner(
                 &[],
                 "Windows x86_64 (MSVC)",
                 0.0,
+                None,
                 None,
                 total.elapsed().as_secs_f64(),
             );
@@ -1517,7 +1557,7 @@ fn run_remote_inner(
                 mark(&format!("run files {} KB", data.len() / 1024));
                 run_files = data
             }
-            (Msg::Exit { code, .. }, summary) => {
+            (Msg::Exit { code, timing, .. }, summary) => {
                 diagnostic.exit = Some(code);
                 diagnostic.may_have_started = true;
                 mark("exit");
@@ -1591,6 +1631,7 @@ fn run_remote_inner(
                     &machine,
                     ms,
                     sync_timing,
+                    timing,
                     total.elapsed().as_secs_f64(),
                 ) {
                     report_remote_failure(sub, diagnostic, total.elapsed().as_secs_f64());
@@ -1795,6 +1836,7 @@ impl Drop for LiveRun {
 /// Keep a local copy of the remote run so `justrust runs/show/log` and the
 /// router see it. Marked `remote` in the index. `run_files` (from a v4+
 /// agent) carries the output log, units, and samples.
+#[allow(clippy::too_many_arguments)]
 fn record_remote(
     run_id: &str,
     summary: &[u8],
@@ -1802,6 +1844,7 @@ fn record_remote(
     machine: &str,
     sync_ms: f64,
     sync_timing: Option<crate::e2e::SyncTiming>,
+    run_timing: Option<crate::remote_proto::RunTiming>,
     wall: f64,
 ) -> bool {
     let Ok(mut s) = serde_json::from_slice::<crate::summary::Summary>(summary) else {
@@ -1834,12 +1877,14 @@ fn record_remote(
         sync_ms,
         client_wall: wall,
         sync: sync_timing,
+        run: run_timing,
     });
     s.e2e = Some(crate::e2e::remote(
         &crate::e2e::marks(),
         crate::e2e::elapsed(),
         &crate::e2e::RemoteTimes {
             sync: sync_timing,
+            run: run_timing,
             host_wall: s.wall,
             host_phases: s.phases.clone(),
         },
@@ -1894,6 +1939,10 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
         Err(Infra(m)) => bail!("remote build unavailable: {m}"),
     }
 }
+
+#[cfg(test)]
+#[path = "remote_admission_tests.rs"]
+mod admission_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2075,6 +2124,7 @@ mod tests {
             &[],
             "private-machine",
             0.0,
+            None,
             None,
             0.0
         ));

@@ -373,6 +373,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 run_id,
                 ..
             } => {
+                let received = std::time::Instant::now();
                 if sync_run {
                     send(
                         &out,
@@ -455,8 +456,10 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                             return;
                         }
                     };
+                    let prepared = received.elapsed();
                     let result =
                         start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids);
+                    let executed = received.elapsed();
                     if let (Some(root), Ok(mut r)) = (&root, roots.lock())
                         && let Err(e) = r.end(
                             root,
@@ -478,6 +481,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         );
                     }
                     evict_now(&roots);
+                    let finalized = received.elapsed();
                     let code = match result {
                         Ok(c) => c,
                         Err(e) => {
@@ -502,7 +506,21 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                             send(&out, &Msg::RunFiles { id }, &files);
                         }
                     }
-                    send(&out, &Msg::Exit { id, code }, &summary);
+                    let timing = crate::remote_proto::RunTiming {
+                        prepare_ms: prepared.as_secs_f64() * 1000.0,
+                        execute_ms: (executed - prepared).as_secs_f64() * 1000.0,
+                        finalize_ms: (finalized - executed).as_secs_f64() * 1000.0,
+                        records_ms: (received.elapsed() - finalized).as_secs_f64() * 1000.0,
+                    };
+                    send(
+                        &out,
+                        &Msg::Exit {
+                            id,
+                            code,
+                            timing: Some(timing),
+                        },
+                        &summary,
+                    );
                 });
             }
             Msg::Cancel { id } => {

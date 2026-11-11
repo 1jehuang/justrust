@@ -325,7 +325,7 @@ impl Broker {
             bail!("durable-session diagnostic journal exhausted its 256 MiB limit");
         }
         let terminal = match msg {
-            Msg::Exit { id, code } => Some((*id, "finished", Some(*code))),
+            Msg::Exit { id, code, .. } => Some((*id, "finished", Some(*code))),
             Msg::Error { id, .. } if *id != 0 => Some((*id, "failed", None)),
             _ => None,
         };

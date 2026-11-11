@@ -118,6 +118,20 @@ pub struct SyncTiming {
     pub barrier_ms: f64,
 }
 
+/// Host-side monotonic durations, independent of the client's clock. This is
+/// observational metadata only, never an input to Cargo or a cache key.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub struct RunTiming {
+    /// Disk preflight, source activity protection, and worker scheduling.
+    pub prepare_ms: f64,
+    /// The complete recorder child, including setup and reporting around Cargo.
+    pub execute_ms: f64,
+    /// Durable activity finalization and post-build collection.
+    pub finalize_ms: f64,
+    /// Reading and packing run records, before sending the terminal frame.
+    pub records_ms: f64,
+}
+
 /// One cache entry a peer has: enough to decide whether fetching it beats
 /// compiling.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -256,6 +270,8 @@ pub enum Msg {
     Exit {
         id: u64,
         code: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timing: Option<RunTiming>,
     },
     Cancel {
         id: u64,
@@ -397,6 +413,42 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<(Msg, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_timing_is_optional_and_old_receivers_ignore_it() {
+        let old = br#"{"t":"Exit","id":7,"code":101}"#;
+        let msg: Msg = serde_json::from_slice(old).unwrap();
+        assert!(matches!(
+            msg,
+            Msg::Exit {
+                id: 7,
+                code: 101,
+                timing: None
+            }
+        ));
+        let timed = Msg::Exit {
+            id: 7,
+            code: 101,
+            timing: Some(RunTiming {
+                prepare_ms: 1.0,
+                execute_ms: 20.0,
+                finalize_ms: 2.0,
+                records_ms: 3.0,
+            }),
+        };
+        #[derive(Deserialize)]
+        #[serde(tag = "t")]
+        enum Legacy {
+            Exit { id: u64, code: i32 },
+        }
+        let bytes = serde_json::to_vec(&timed).unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<Legacy>(&bytes).unwrap(),
+            Legacy::Exit { id: 7, code: 101 }
+        ));
+        let parsed: Msg = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(parsed, Msg::Exit { timing: Some(t), .. } if t.execute_ms == 20.0));
+    }
 
     #[test]
     fn flushed_sync_timing_is_compatible_both_ways() {

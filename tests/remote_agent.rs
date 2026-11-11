@@ -179,7 +179,7 @@ impl Agent {
                     out.push_str(&String::from_utf8_lossy(&d))
                 }
                 (Msg::Out { .. }, _) => {}
-                (Msg::Exit { id: i, code }, _) if i == id => return (out, code),
+                (Msg::Exit { id: i, code, .. }, _) if i == id => return (out, code),
                 (Msg::Error { msg, .. }, _) => panic!("run error: {msg}"),
                 other => panic!("unexpected {other:?}"),
             }
@@ -509,7 +509,7 @@ fn main() {
                     output.push_str(&String::from_utf8_lossy(&data));
                 }
                 (Msg::RunFiles { id: got }, _) if got == id => {}
-                (Msg::Exit { id: got, code }, _) if got == id => {
+                (Msg::Exit { id: got, code, .. }, _) if got == id => {
                     assert_eq!(code, 0, "{output}");
                     assert!(output.contains("workload complete"), "{output}");
                     assert_eq!(
@@ -617,7 +617,7 @@ fn run_children_preserve_distinct_umasks_without_changing_agent_default() {
                 .entry(id)
                 .or_default()
                 .push_str(&String::from_utf8_lossy(&data)),
-            (Msg::Exit { id, code }, _) => {
+            (Msg::Exit { id, code, .. }, _) => {
                 assert_eq!(code, 0);
                 assert!(pending.remove(&id));
             }
@@ -776,7 +776,7 @@ fn disk_full_other_root_requires_exact_repair_before_unchanged_run() {
     loop {
         match a.recv() {
             (Msg::Out { id: 5, .. } | Msg::RunFiles { id: 5 }, _) => {}
-            (Msg::Exit { id: 5, code }, _) => {
+            (Msg::Exit { id: 5, code, .. }, _) => {
                 assert_eq!(code, 0);
                 break;
             }
@@ -890,7 +890,7 @@ edition="2024"
                     output.push_str(&String::from_utf8_lossy(&data))
                 }
                 (Msg::RunFiles { id: got }, _) if got == id => {}
-                (Msg::Exit { id: got, code }, data) if got == id => {
+                (Msg::Exit { id: got, code, .. }, data) if got == id => {
                     assert_eq!(
                         code == 0,
                         success,
@@ -987,7 +987,7 @@ fn replaced_agent_executable_still_checks_with_stable_recording_shims() {
             match a.recv() {
                 (Msg::Out { .. }, data) => output.push_str(&String::from_utf8_lossy(&data)),
                 (Msg::RunFiles { .. }, _) => {}
-                (Msg::Exit { id: got, code }, data) => {
+                (Msg::Exit { id: got, code, .. }, data) => {
                     assert_eq!(got, id);
                     assert_eq!(code, 0, "real check after replacement: {output}");
                     if recorded {
@@ -1135,6 +1135,7 @@ fn remote_shadow_preserves_leaf_verdicts_and_normal_build_fallback() {
                     Msg::Exit {
                         id: got,
                         code: actual,
+                        ..
                     },
                     data,
                 ) if got == id => {
@@ -1258,7 +1259,7 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
         loop {
             match a.recv().0 {
                 Msg::Out { id: got, .. } if got == id => {}
-                Msg::Exit { id: got, code } if got == id => {
+                Msg::Exit { id: got, code, .. } if got == id => {
                     assert_ne!(code, 0);
                     break;
                 }

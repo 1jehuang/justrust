@@ -116,6 +116,9 @@ pub struct RemoteInfo {
     /// Where the sync daemon spent `sync_ms` (absent from older daemons).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<crate::e2e::SyncTiming>,
+    /// Monotonic host-agent durations (absent from older agents).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<crate::remote_proto::RunTiming>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
