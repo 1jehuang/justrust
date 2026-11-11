@@ -2181,7 +2181,16 @@ impl Replay<'_> {
         let env = env.ok_or_else(|| {
             FactsError::invalid(self.budget, "generic static producer owner binder missing")
         })?;
-        if env.arity() != written.len() || env.arity() != direct.type_args.len() {
+        // Omitted owner slots follow the nominal's own parameters (including
+        // defaulted ones), while the impl binder may fix some of them
+        // (`impl<K, V> HashMap<K, V, RandomState>`). Each arity is exact.
+        let nominal_arity = self
+            .original
+            .plan
+            .param_env(associated.nominal)
+            .map_err(|e| source_error(self.budget, &e))?
+            .arity();
+        if nominal_arity != written.len() || env.arity() != direct.type_args.len() {
             return Err(FactsError::invalid(
                 self.budget,
                 "generic static producer owner arity changed",
@@ -2401,9 +2410,20 @@ impl Replay<'_> {
                 "generic static producer changed original actual-region occurrences",
             ));
         }
-        if result_locations.is_empty()
+        let mut inputs_carry_references = false;
+        for input in &input_types {
+            inputs_carry_references |= !ir::carrier_locations(input, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+                .is_empty();
+        }
+        // With no reference-carrying input (`HashMap::<&'static str, _>::new()`)
+        // the result's reference carriers cannot borrow from the caller: the
+        // borrow analysis issues them no loan. Only the declaration's exact
+        // contract is replayed, as for a reference-free result.
+        if (result_locations.is_empty()
             && !actual_has_carriers
-            && !contains_source_ref(&result, self.budget, depth + 1)?
+            && !contains_source_ref(&result, self.budget, depth + 1)?)
+            || !inputs_carry_references
         {
             if view.signature().ref_contract != canonical.ref_contract {
                 return Err(FactsError::invalid(

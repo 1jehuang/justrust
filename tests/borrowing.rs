@@ -613,3 +613,25 @@ fn main() {}
 "#,
     );
 }
+
+#[test]
+fn accepts_annotated_static_key_map_passed_to_generic_fn() {
+    runs(
+        r#"use std::collections::HashMap;
+fn on<T: Default>(m: &mut HashMap<&'static str, Vec<i32>>, name: &'static str, _t: T) { m.entry(name).or_default().push(1); }
+fn main() { let mut m: HashMap<&'static str, Vec<i32>> = HashMap::new(); on(&mut m, "a", 0u8); on(&mut m, "a", 1u8); if m["a"].len() == 2 { println!("borrow oracle ok"); } }
+"#,
+        "borrow oracle ok\n",
+    );
+}
+
+#[test]
+fn rejects_frame_local_key_passed_to_generic_static_param() {
+    rejects(
+        "generic_static_param_local_key",
+        r#"use std::collections::HashMap;
+fn on<T: Default>(m: &mut HashMap<&'static str, Vec<i32>>, name: &'static str, _t: T) { m.entry(name).or_default().push(1); }
+fn main() { let mut m: HashMap<&'static str, Vec<i32>> = HashMap::new(); let s = String::from("a"); on(&mut m, s.as_str(), 0u8); }
+"#,
+    );
+}
