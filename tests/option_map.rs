@@ -197,6 +197,26 @@ fn option_reference_values_match_stock() {
                 source: "struct Value;fn unused(x:&Value){let _=Some(x).cloned();}fn main(){}",
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "as_ref_and_as_mut_borrow_the_payload",
+                source: r#"fn main(){let mut opt=Some(String::from("x"));if let Some(s)=opt.as_mut(){s.push('y');}println!("{:?}",opt.as_ref().map(|s|s.len()));let taken=opt.take();println!("{taken:?} {opt:?}");let mut n=Some(5);if let Some(v)=n.as_mut(){*v+=1;}*n.as_mut().unwrap()*=2;let r:Option<&i32>=n.as_ref();println!("{:?} {:?} {:?}",r,n,None::<u8>.as_ref());}"#,
+                expect: Expect::Run("Some(2)\nSome(\"xy\") None\nSome(12) Some(12) None\n"),
+            },
+            Case {
+                name: "as_mut_loan_conflicts_with_take",
+                source: "fn unused(){let mut o=Some(1);let r=o.as_mut();let _=o.take();drop(r);}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "as_mut_requires_mutable_owner",
+                source: "fn unused(o:&Option<i32>){let _=o.as_mut();}fn main(){}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "as_ref_cannot_outlive_owner",
+                source: "fn unused()->Option<&'static String>{let o=Some(String::new());o.as_ref()}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
         ],
     );
 }

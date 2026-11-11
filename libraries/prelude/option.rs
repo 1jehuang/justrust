@@ -194,6 +194,20 @@ impl<T> Option<T> {
             Option::None => OptionIter { inner: Option::None },
         }
     }
+
+    pub fn as_ref(&self) -> Option<&T> {
+        match self {
+            Option::Some(value) => Option::Some(value),
+            Option::None => Option::None,
+        }
+    }
+
+    pub fn as_mut(&mut self) -> Option<&mut T> {
+        match self {
+            Option::Some(value) => Option::Some(value),
+            Option::None => Option::None,
+        }
+    }
 }
 
 pub struct OptionIter<'a, T> {
