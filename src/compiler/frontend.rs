@@ -77,6 +77,7 @@ pub(crate) mod signature_graph;
 mod source_input_replay;
 mod source_inventory_walk;
 mod source_schemas;
+mod statement_macros;
 #[cfg(test)]
 mod trait_method_arguments;
 mod type_alignment;
@@ -13704,6 +13705,23 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion: Option<super::semantic_scope::ExpansionAdmission>,
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
+        self.isolated_parse_at(buffer, expansion, expansion_depth, |child| {
+            let value = child.expr(0)?;
+            if !child.is("") {
+                return Err(
+                    child.unsupported("macro output must be exactly one complete expression")
+                );
+            }
+            Ok(value)
+        })
+    }
+    fn isolated_parse_at<T>(
+        &mut self,
+        buffer: &NativeTokenBuffer,
+        expansion: Option<super::semantic_scope::ExpansionAdmission>,
+        expansion_depth: u32,
+        parse: impl FnOnce(&mut Parser<'_, '_>) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
         let mut child = Parser {
             child_sites: Arc::from([]),
             child_entries: Vec::new(),
@@ -13752,13 +13770,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             // block-local consts like any other item.
             local_consts: std::mem::take(&mut self.local_consts),
         };
-        let result = child.expr(0).and_then(|value| {
-            if !child.is("") {
-                Err(child.unsupported("macro output must be exactly one complete expression"))
-            } else {
-                Ok(value)
-            }
-        });
+        let result = parse(&mut child);
         self.type_params = std::mem::take(&mut child.type_params);
         self.const_params = std::mem::take(&mut child.const_params);
         self.impl_const_params = std::mem::take(&mut child.impl_const_params);
@@ -18085,9 +18097,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     fn block_inner(&mut self) -> Result<Block, ParseError> {
         self.expect("{")?;
+        let block = self.block_contents("}")?;
+        self.expect("}")?;
+        Ok(block)
+    }
+    fn block_contents(&mut self, end: &str) -> Result<Block, ParseError> {
         let mut statements = Vec::new();
         let mut tail = None;
-        while !self.is("}") {
+        while !self.is(end) {
             if self.is("") {
                 return Err(self.error("unterminated block"));
             }
@@ -18121,18 +18138,34 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 return Err(self.unsupported("block-local items are unsupported"));
             }
+            if let Some(expanded) = self.try_macro_statements(end)? {
+                statements.extend(expanded.statements);
+                if let Some(value) = expanded.tail {
+                    if self.eat(";") {
+                        statements.push(Stmt::Expr(*value));
+                    } else if self.is(end) {
+                        tail = Some(value);
+                        break;
+                    } else {
+                        statements.push(Stmt::Expr(*value));
+                    }
+                } else {
+                    self.eat(";");
+                }
+                continue;
+            }
             if self.try_for_statement(&mut statements)? {
                 continue;
             }
             if self.eat("let") {
                 statements.push(self.let_statement()?);
             } else if self.eat("return") {
-                let value = if self.is(";") || self.is("}") {
+                let value = if self.is(";") || self.is(end) {
                     None
                 } else {
                     Some(self.expr(0)?)
                 };
-                if !self.eat(";") && !self.is("}") {
+                if !self.eat(";") && !self.is(end) {
                     return Err(self.error("expected semicolon or block end after return"));
                 }
                 statements.push(Stmt::Return(value));
@@ -18155,7 +18188,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     statements.push(self.plain_assignment_statement(expr)?);
                 } else if self.eat(";") {
                     statements.push(Stmt::Expr(expr));
-                } else if self.is("}") {
+                } else if self.is(end) {
                     tail = Some(Box::new(expr));
                     break;
                 } else if (brace_macro && matches!(expr, Expr::Panic(_) | Expr::Output(_)))
@@ -18177,7 +18210,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
         }
-        self.expect("}")?;
         Ok(Block { statements, tail })
     }
     fn assignment_place(&self, mut expr: Expr) -> Result<Place, ParseError> {

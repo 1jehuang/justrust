@@ -4,6 +4,49 @@
 //! Recursive expansion and nested function-item helpers remain explicit boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/closure_oracle.rs"]
+mod statement_oracle;
+
+#[test]
+fn statement_expansions_keep_enclosing_scope_and_hygiene() {
+    use statement_oracle::{Case, Expect};
+    statement_oracle::check(
+        "statement-macro-expansion",
+        &[
+            Case {
+                name: "generated_guard_lives_to_enclosing_exit",
+                source: r#"struct D(i32);impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}fn main(){let guard=9;macro_rules! hold{($x:expr)=>{let guard=D($x);println!("armed");};}hold!(1);println!("body {}",guard);}"#,
+                expect: Expect::Run("armed\nbody 9\ndrop 1\n"),
+            },
+            Case {
+                name: "captured_binding_and_private_binding",
+                source: r#"fn main(){let hidden=1;macro_rules! declare{($n:ident)=>{let $n=7;let hidden=8;};}declare!(answer);println!("{} {}",answer,hidden);}"#,
+                expect: Expect::Run("7 1\n"),
+            },
+            Case {
+                name: "nested_statement_and_expression_continuation",
+                source: r#"fn main(){macro_rules! inner{($n:ident)=>{let $n=3;};}macro_rules! outer{($n:ident)=>{inner!($n);};}macro_rules! value{()=>{2};}outer!(x);value!();println!("{} {}",x,value!()+1);}"#,
+                expect: Expect::Run("3 3\n"),
+            },
+            Case {
+                name: "qualified_exported_guard",
+                source: r#"struct D;impl Drop for D{fn drop(&mut self){println!("drop");}}#[macro_export]macro_rules! hold{()=>{let _guard=$crate::D;};}fn main(){crate::hold!();println!("body");}"#,
+                expect: Expect::Run("body\ndrop\n"),
+            },
+            Case {
+                name: "unused_generated_type_error",
+                source: r#"fn unused(){macro_rules! bad{()=>{let x:bool=1;};}bad!();}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_definition_binding_is_not_caller_binding",
+                source: r#"fn unused(){macro_rules! hidden{()=>{let secret=1;};}hidden!();let _=secret;}fn main(){}"#,
+                expect: Expect::Invalid("E0425"),
+            },
+        ],
+    );
+}
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
