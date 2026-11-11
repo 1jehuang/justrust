@@ -2,6 +2,70 @@
 use super::*;
 
 #[test]
+fn associated_nominal_frontier_keeps_header_projection_pending() {
+    let options = crate::compiler::source::SourceOptions {
+        prelude: false,
+        ..crate::compiler::source::SourceOptions::default()
+    };
+    let prepared = crate::compiler::source::prepare_text_with_prelude(
+        "associated-projection-frontier.rs",
+        "trait Family{type Item;}fn probe<T:Family>(){}fn main(){}",
+        &options,
+    )
+    .unwrap();
+    let parsed = crate::compiler::frontend::parse_prepared(&prepared).unwrap();
+    let program = crate::compiler::frontend::resolve(&parsed).unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let plan = signatures.plan().unwrap();
+    let world = plan.trait_world().unwrap();
+    let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+    let trait_ref = facts
+        .predicates()
+        .predicates()
+        .iter()
+        .find_map(|predicate| {
+            let ir::Predicate::Implements(trait_ref) = predicate else {
+                return None;
+            };
+            world
+                .all_headers()
+                .associated_types
+                .iter()
+                .find(|item| item.trait_decl == trait_ref.declaration)
+                .map(|item| (trait_ref.clone(), item.declaration))
+        })
+        .unwrap();
+    let projection = ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+        trait_ref: trait_ref.0,
+        item: trait_ref.1,
+    }));
+    let checker = Checker::new(
+        &signatures,
+        ir::Ty::Unit,
+        program.functions.last().unwrap().module,
+    );
+    let recipe = checker.nominal_recipe_shape(&projection, 0).unwrap();
+    let mut bindings = HashMap::new();
+    for parameter in facts.env().ordered_params() {
+        bindings.insert(parameter, nominal_manifest::Shape::Leaf(ir::Ty::Bool));
+    }
+    let nested = nominal_manifest::Shape::Array(Arc::new(recipe.clone()), 1);
+    for recipe in [&recipe, &nested] {
+        assert!(
+            super::super::associated_nominal_inputs::substitute_recipe(
+                &checker,
+                recipe,
+                facts.env(),
+                &bindings,
+                0,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+}
+
+#[test]
 fn blanket_method_propagates_nested_nominal_receiver_and_result_constraints() {
     for (payload, expected) in [
         ("&x", "&u64"),
@@ -153,6 +217,7 @@ fn inspect_with_opaque_hint(
         sites: Vec::new(),
         receiver_sites: Vec::new(),
         associated_owner_sites: Vec::new(),
+        associated_nominal_sites: Vec::new(),
         methods: Vec::new(),
         structural_impl_stack: Vec::new(),
         projections: Vec::new(),

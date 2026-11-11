@@ -18,6 +18,131 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn vecdeque_owned_array_conversion_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "vecdeque-owned-array",
+        &[Case {
+            name: "empty_duplicates_and_owned_drop_order",
+            source: r#"use std::collections::VecDeque;
+struct Value(String);
+impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn convert<T,const N:usize>(items:[T;N])->VecDeque<T> { VecDeque::from(items) }
+fn main() {
+    let empty: VecDeque<String> = convert([]);
+    println!("empty {}",empty.len());
+    let mut queue = VecDeque::from([3i32,3i32,7i32]);
+    println!("{:?} {:?} {:?}",queue.pop_front(),queue.pop_front(),queue.pop_front());
+    let mut owned = convert([Value("first".to_string()),Value("second".to_string())]);
+    drop(owned.pop_front());
+    println!("remaining {}",owned.len());
+}"#,
+            expect: Expect::Run(
+                "empty 0\nSome(3) Some(3) Some(7)\ndrop first\nremaining 1\ndrop second\n",
+            ),
+        }],
+    );
+}
+
+#[test]
+fn vecdeque_owned_array_rejects_unused_move() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "vecdeque-array-move",
+        &[Case {
+            name: "unused_moved_array_is_rejected",
+            source: r#"use std::collections::VecDeque;
+fn unused(){let items=["owned".to_string()];let _queue=VecDeque::from(items);drop(items);}
+fn main(){}"#,
+            expect: Expect::Invalid("E0382"),
+        }],
+    );
+}
+
+#[test]
+fn vecdeque_owned_array_rejects_unused_escape() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "vecdeque-array-escape",
+        &[Case {
+            name: "unused_borrowed_array_escape_is_rejected",
+            source: r#"use std::collections::VecDeque;
+fn unused<'a>()->VecDeque<&'a String>{let value="local".to_string();VecDeque::from([&value])}
+fn main(){}"#,
+            expect: Expect::Invalid("E0515"),
+        }],
+    );
+}
+
+#[test]
+fn vecdeque_owned_array_frontier_demands_are_general() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "associated-nominal-frontier",
+        &[
+            Case {
+                name: "renamed_trait_competing_nominal_argument",
+                source: r#"mod api { pub trait Make<S> { fn make(source:S)->Self; } }
+use api::Make as Assemble;
+struct Holder<T> { value:T }
+impl<T:Copy> Assemble<[T;1]> for Holder<T> {
+    fn make(source:[T;1])->Self { Holder { value:source[0] } }
+}
+impl<T> Assemble<Vec<T>> for Holder<T> {
+    fn make(_source:Vec<T>)->Self { loop {} }
+}
+fn main(){let holder=Holder::<i32>::make([7i32]);println!("{}",holder.value);}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "failed_bound_nominal_competitor_does_not_add_ambiguity",
+                source: r#"trait Make<S> { fn make(source:S)->Self; }
+trait Other<S> { fn make(source:S)->Self; }
+trait Disabled {}
+struct Holder<T> { value:T }
+impl<T:Copy> Make<[T;1]> for Holder<T> {
+    fn make(source:[T;1])->Self { Holder { value:source[0] } }
+}
+impl<T:Disabled> Other<Vec<T>> for Holder<T> {
+    fn make(_source:Vec<T>)->Self { loop {} }
+}
+fn main(){let holder=Holder::<i32>::make([7i32]);println!("{}",holder.value);}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "failed_candidate_cannot_demand_illformed_nominal",
+                source: r#"trait Make<S> { fn make(source:S)->Self; }
+trait Enabled {}
+struct Needs<T:Enabled>(T);
+struct Holder<T> { value:T }
+impl<T:Copy> Make<[T;1]> for Holder<T> {
+    fn make(source:[T;1])->Self { Holder { value:source[0] } }
+}
+impl<T:Enabled> Make<Needs<T>> for Holder<T> {
+    fn make(_source:Needs<T>)->Self { loop {} }
+}
+fn main(){let holder=Holder::<i32>::make([7i32]);println!("{}",holder.value);}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "unused_other_trait_nominal_competitor_remains_ambiguous",
+                source: r#"trait Make<S> { fn make(source:S)->Self; }
+trait Other<S> { fn make(source:S)->Self; }
+struct Holder<T> { value:T }
+impl<T:Copy> Make<[T;1]> for Holder<T> {
+    fn make(source:[T;1])->Self { Holder { value:source[0] } }
+}
+impl<T> Other<Vec<T>> for Holder<T> {
+    fn make(_source:Vec<T>)->Self { loop {} }
+}
+fn unused(){let _=Holder::<i32>::make([7i32]);} fn main(){}"#,
+                expect: Expect::Invalid("E0034"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unchanged_grid_bfs_matches_stock() {
     parse_oracle(
         "unchanged-grid-bfs",

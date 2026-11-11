@@ -14,6 +14,7 @@ mod outlives;
 
 pub(super) mod alignment_provider;
 mod associated_bounds;
+mod associated_candidate_inputs;
 mod associated_constants;
 mod associated_types;
 mod body_validation;
@@ -16421,6 +16422,108 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn original_candidate_predicates_keep_caller_domain_and_order() {
+        let options = crate::compiler::source::SourceOptions {
+            prelude: false,
+            ..crate::compiler::source::SourceOptions::default()
+        };
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "associated-candidate-obligations.rs",
+            "trait Enabled{}struct Needs<A:Enabled,B>(A,B);fn good<T:Enabled,U>(x:Needs<T,U>){}fn main(){}",
+            &options,
+        ).unwrap();
+        let parsed = crate::compiler::frontend::parse_prepared(&prepared).unwrap();
+        let program = crate::compiler::frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = world.callable_facts(declaration).unwrap();
+        let owner = world.callable_schema(declaration).unwrap().signature.params[0].clone();
+        let Ty::Struct(owner) = owner else {
+            panic!("nominal fixture");
+        };
+        let nominal = owner.def().source_decl;
+        let arguments = &owner.def().type_args;
+        let mut scratch = TraitScratch::default();
+        assert!(
+            world
+                .prove_original_declaration_predicates(nominal, arguments, &facts, &mut scratch)
+                .unwrap()
+        );
+        let swapped = [arguments[1].clone(), arguments[0].clone()];
+        assert!(
+            !world
+                .prove_original_declaration_predicates(nominal, &swapped, &facts, &mut scratch)
+                .unwrap()
+        );
+        assert!(
+            world
+                .prove_original_declaration_predicates(
+                    nominal,
+                    &arguments[..1],
+                    &facts,
+                    &mut scratch
+                )
+                .is_err()
+        );
+        assert!(world.original_predicate_schema(declaration).is_err());
+        assert!(
+            world
+                .prove_original_declaration_predicates(
+                    nominal,
+                    &[
+                        Ty::Const(ir::ConstArgument::Bool(true)),
+                        arguments[1].clone()
+                    ],
+                    &facts,
+                    &mut scratch,
+                )
+                .is_err()
+        );
+        let mut foreign = nominal;
+        foreign.snapshot = SnapshotId::standalone().unwrap();
+        assert!(world.original_predicate_schema(foreign).is_err());
+        let empty = world
+            .callable_facts(plan.function_decl(1).unwrap())
+            .unwrap();
+        assert!(
+            world
+                .prove_original_declaration_predicates(nominal, arguments, &empty, &mut scratch)
+                .is_err()
+        );
+        let own = world.original_predicate_schema(nominal).unwrap();
+        let foreign_parameter = Ty::Param(own.env.ordered_params().next().unwrap());
+        assert!(
+            world
+                .prove_original_declaration_predicates(
+                    nominal,
+                    &[foreign_parameter, arguments[1].clone()],
+                    &facts,
+                    &mut scratch
+                )
+                .is_err()
+        );
+        let other_budget = PlanBudget::default();
+        let other_plan =
+            crate::compiler::frontend::PlanCtx::from_program(&program, &other_budget).unwrap();
+        let other_world = other_plan.trait_world().unwrap();
+        let other_facts = other_world
+            .callable_facts(other_plan.function_decl(0).unwrap())
+            .unwrap();
+        assert!(
+            world
+                .prove_original_declaration_predicates(
+                    nominal,
+                    arguments,
+                    &other_facts,
+                    &mut scratch
+                )
+                .is_err()
+        );
+    }
+
     #[test]
     fn nominal_application_keeps_exact_fn_once_output_obligation_and_caller_authority() {
         let prepared = crate::compiler::source::prepare_text_with_prelude(

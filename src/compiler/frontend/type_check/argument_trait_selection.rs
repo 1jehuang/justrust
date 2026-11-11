@@ -199,6 +199,13 @@ impl Checker<'_> {
                 }
                 continue;
             }
+            if let Some(inputs) = self.nominal_inputs
+                && let Some(arguments) = solver.finish(false)?
+                && self.original_candidate_predicates(header.declaration, &arguments, inputs)?
+                    == associated_nominal_inputs::OriginalPredicates::NotProven
+            {
+                continue;
+            }
             let owner_pending =
                 match self.source_application_from_solver(owner, &header, &solver)? {
                     SourceApplication::Unproved => continue,

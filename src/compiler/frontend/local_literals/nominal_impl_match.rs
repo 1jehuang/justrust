@@ -33,6 +33,24 @@ impl Solver<'_, '_, '_> {
         Ok(true)
     }
 
+    pub(in crate::compiler::frontend::type_check::local_literals) fn associated_owner_bindings(
+        &self,
+        receiver: Term,
+        header: &tr::ImplHeader,
+    ) -> Result<Option<HashMap<ir::ParamId, Term>>, String> {
+        let mut bindings = HashMap::new();
+        if !self.correlated_pattern_compatible(
+            receiver,
+            &header.trait_ref.self_ty,
+            &header.schema_env,
+            &mut bindings,
+            0,
+        )? {
+            return Ok(None);
+        }
+        Ok(Some(bindings))
+    }
+
     fn correlated_pattern_compatible(
         &self,
         actual: Term,

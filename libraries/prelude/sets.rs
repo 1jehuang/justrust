@@ -639,6 +639,16 @@ impl<T: Clone> Clone for VecDeque<T> {
     }
 }
 
+impl<T, const N: usize> super::convert::From<[T; N]> for VecDeque<T> {
+    fn from(items: [T; N]) -> VecDeque<T> {
+        let mut queue = VecDeque::new();
+        for item in items {
+            queue.push_back(item);
+        }
+        queue
+    }
+}
+
 impl<T> super::convert::From<Vec<T>> for VecDeque<T> {
     fn from(items: Vec<T>) -> VecDeque<T> {
         VecDeque { items }

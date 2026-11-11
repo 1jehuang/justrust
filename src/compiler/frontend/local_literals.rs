@@ -18,6 +18,8 @@ mod callable;
 #[path = "local_literals/function_pointers.rs"]
 mod function_pointers;
 
+#[path = "local_literals/associated_nominals.rs"]
+mod associated_nominals;
 #[path = "local_literals/trait_methods.rs"]
 mod trait_methods;
 
@@ -126,6 +128,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     sites: Vec<(usize, Term)>,
     receiver_sites: Vec<(usize, Term)>,
     associated_owner_sites: Vec<(usize, Term)>,
+    associated_nominal_sites: Vec<(Term, AstIdent)>,
     methods: Vec<Method>,
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
@@ -268,6 +271,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         sites: Vec::new(),
         receiver_sites: Vec::new(),
         associated_owner_sites: Vec::new(),
+        associated_nominal_sites: Vec::new(),
         methods: Vec::new(),
         projections: Vec::new(),
         delayed_results: Vec::new(),
@@ -3329,6 +3333,8 @@ impl<'s> Solver<'_, '_, 's> {
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
                 }
+                self.checker.infer_storage(1)?;
+                self.associated_nominal_sites.push((owner, *name));
                 let open_arguments = args.iter().try_fold(false, |open, argument| {
                     self.resolve(*argument, 0)
                         .map(|resolved| open || resolved.is_none())

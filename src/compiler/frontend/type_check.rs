@@ -5,6 +5,8 @@ use super::*;
 mod argument_trait_selection;
 #[path = "type_check/associated_hint.rs"]
 mod associated_hint;
+#[path = "type_check/associated_nominal_inputs.rs"]
+mod associated_nominal_inputs;
 #[path = "type_check/binary_expression.rs"]
 mod binary_expression;
 

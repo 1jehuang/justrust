@@ -1024,7 +1024,7 @@ impl<'s> Solver<'_, '_, 's> {
     /// Source-region authority is retained by the owning source/caller facts,
     /// not reconstructed from these erased type shapes.
     pub(super) fn solved_nominal_manifest(&self, skip_unready: bool) -> Result<Manifest, String> {
-        let mut demands: Vec<Demand> = Vec::new();
+        let mut demands = self.associated_nominal_demands()?;
         for term in 0..self.variables.len() {
             self.checker.infer_work(0)?;
             if self.root(term) != term {

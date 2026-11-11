@@ -139,6 +139,16 @@ impl Checker<'_> {
         type_shape(self, ty, depth)
     }
 
+    /// Inspect only inputs already read by this operation. Missing recipes are
+    /// pending, never permission to intern or to request speculative inputs.
+    pub(super) fn existing_nominal_recipe(
+        &self,
+        shape: &NominalShape,
+        inputs: &NominalPreparationInputs<'_>,
+    ) -> Result<Option<ir::Ty>, String> {
+        recipe_type(self, inputs, shape, &mut Vec::new(), 0)
+    }
+
     /// Representation tokens authenticate graph reads and source slots separately.
     /// Only after replaying both may a source consumer compare semantic types.
     pub(super) fn nominal_input_types_equal(
