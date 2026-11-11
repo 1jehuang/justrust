@@ -617,6 +617,8 @@ impl Solver<'_, '_, '_> {
         let mut unproved_expected = false;
         let mut deferred_inherent = false;
         let mut same_trait: Vec<(ir::TraitRef, ir::DeclId)> = Vec::new();
+        let mut open_trait = false;
+        let mut open_template = None;
         // Reuse the ordinary receiver/adjustment and inherent-before-trait order.
         // Returning Deferred stops at the first applicable frontier, rather than
         // silently considering a lower-priority trait while its arguments wait.
@@ -636,15 +638,35 @@ impl Solver<'_, '_, '_> {
                     }
                     return Ok(MethodArguments::Missing);
                 }
-                let (candidates, unproved) = plan.method_trait_candidates_expected(
+                let mut open = Vec::new();
+                let (candidates, unproved) = plan.method_trait_candidates_open(
                     owner,
                     &name,
                     checker.facts(),
                     &checker.module,
                     &plan.budget,
                     expected_type.as_ref().map(|result| (result, mode)),
+                    Some(&mut open),
                 )?;
                 unproved_expected |= unproved;
+                if !open.is_empty() {
+                    // A trait argument the receiver leaves free (`U` in
+                    // `impl<T, U> Map<T, U> for [T; N]`) becomes a fresh
+                    // inference term below. Only one such trait, with no
+                    // exact candidate beside it, contributes equations;
+                    // the checked call still selects and proves it.
+                    open_trait = true;
+                    if open.len() == 1 && candidates.as_slice().is_empty() {
+                        let (trait_id, item) = open[0];
+                        if receiver_mode(plan.declaration(item)?.receiver) == receiver_mode(mode)
+                            && let Some(template) =
+                                plan.open_trait_application(owner, trait_id, facts, &plan.budget)?
+                        {
+                            open_template = Some((template, item));
+                        }
+                    }
+                    return Ok(MethodArguments::Deferred);
+                }
                 let mut applicable = None;
                 let mut collected: Vec<_> = Vec::new();
                 for (application, item) in candidates.as_slice() {
@@ -686,7 +708,18 @@ impl Solver<'_, '_, '_> {
             },
             |_, _| Ok(None),
         )?;
+        let mut free = Vec::new();
+        if open_trait {
+            let Some(((template, open_free), item)) = open_template else {
+                return Ok(None);
+            };
+            free = open_free;
+            discovered = Some((template, item));
+        }
         if !same_trait.is_empty() {
+            discovered = self.select_application_by_arguments(&same_trait, arguments)?;
+        }
+        if discovered.is_none() && !same_trait.is_empty() {
             discovered = self.select_application_by_expected(&same_trait, expected)?;
             if discovered.is_none() {
                 self.trait_application_pending = true;
@@ -718,7 +751,12 @@ impl Solver<'_, '_, '_> {
             .chain(application.args.iter())
             .enumerate()
         {
-            let term = self.fixed(actual.clone())?;
+            let term = match actual {
+                ir::Ty::Param(parameter) if index > 0 && free.contains(parameter) => {
+                    self.fresh()?
+                }
+                _ => self.fixed(actual.clone())?,
+            };
             params.insert(
                 ir::ParamId {
                     owner: owner.binder(),
@@ -763,6 +801,58 @@ impl Solver<'_, '_, '_> {
             target = found;
         }
         Ok(target)
+    }
+
+    /// Several applications of one trait (`Take<i32>`, `Take<bool>`): the
+    /// unique one whose bound formals equal the arguments' already fixed
+    /// types. Literal-only or otherwise undecided arguments choose nothing.
+    fn select_application_by_arguments(
+        &mut self,
+        applications: &[(ir::TraitRef, ir::DeclId)],
+        arguments: &[Term],
+    ) -> Result<Option<(ir::TraitRef, ir::DeclId)>, String> {
+        let plan = self.checker.signatures.plan()?;
+        let mut chosen = None;
+        for (application, item) in applications {
+            self.checker.infer_work(0)?;
+            let schema = plan.raw_schema(*item)?;
+            if schema.signature.params.len() != arguments.len() + 1 {
+                return Ok(None);
+            }
+            let owner = plan.param_env(application.declaration)?;
+            let mut bindings = HashMap::new();
+            for (index, actual) in std::iter::once(&application.self_ty)
+                .chain(application.args.iter())
+                .enumerate()
+            {
+                bindings.insert(
+                    ir::ParamId {
+                        owner: owner.binder(),
+                        index: index as u16,
+                    },
+                    actual.clone(),
+                );
+            }
+            let mut fits = true;
+            for (argument, formal) in arguments.iter().zip(schema.signature.params.iter().skip(1)) {
+                let formal =
+                    super::super::trait_method_hint::bind_owner(formal, &bindings, &plan.budget)?;
+                if super::super::inferred_owner::mentions_param(&formal) {
+                    return Ok(None);
+                }
+                let Domain::Fixed(actual) = self.domain(*argument) else {
+                    return Ok(None);
+                };
+                if super::super::inferred_owner::mentions_param(&actual) {
+                    return Ok(None);
+                }
+                fits &= actual == formal;
+            }
+            if fits && chosen.replace((application.clone(), *item)).is_some() {
+                return Ok(None);
+            }
+        }
+        Ok(chosen)
     }
 
     /// Chooses among several proven applications of one trait by the

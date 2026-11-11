@@ -135,6 +135,280 @@ impl Checker<'_> {
     }
 }
 
+impl Checker<'_> {
+    /// Whether every argument's settled type equals its formal under the
+    /// trait application `app`. `None` when any formal stays generic or any
+    /// argument is not yet a closed type: the caller must not decide then.
+    pub(super) fn trait_application_fits_arguments(
+        &self,
+        app: &ir::TraitRef,
+        item: ir::DeclId,
+        arguments: &[Expr],
+    ) -> Result<Option<bool>, String> {
+        let plan = self.signatures.plan()?;
+        let owner = plan.param_env(app.declaration)?;
+        if owner.arity() != app.args.len() + 1 {
+            return Err("trait argument arity mismatch".into());
+        }
+        let schema = plan.raw_schema(item)?;
+        if schema.signature.params.len() != arguments.len() + 1 {
+            return Ok(None);
+        }
+        self.infer_storage(owner.arity())?;
+        let mut bindings = HashMap::new();
+        for (index, actual) in std::iter::once(&app.self_ty)
+            .chain(app.args.iter())
+            .enumerate()
+        {
+            bindings.insert(
+                ir::ParamId {
+                    owner: owner.binder(),
+                    index: index as u16,
+                },
+                actual.clone(),
+            );
+        }
+        let solver = Inference::empty(self)?;
+        let mut fits = true;
+        for (formal, argument) in schema.signature.params[1..].iter().zip(arguments) {
+            plan.budget.charge_work(1)?;
+            let formal = bind_owner(formal, &bindings, &plan.budget)?;
+            if inferred_owner::mentions_param(&formal) {
+                return Ok(None);
+            }
+            let evidence = self.inference_evidence(argument, 0)?;
+            let Some(actual) = solver.resolve(&evidence, false, 0)? else {
+                return Ok(None);
+            };
+            if inferred_owner::mentions_param(&actual) {
+                return Ok(None);
+            }
+            fits &= actual == formal || self.nominal_input_types_equal(&actual, &formal)?;
+        }
+        Ok(Some(fits))
+    }
+
+    /// Complete an open trait application (`template`, whose `free` impl
+    /// parameters stand bare in its trait arguments) from the call itself.
+    /// A free argument is fixed only by direct evidence: an argument whose
+    /// formal is exactly that trait parameter, an expected result that is
+    /// exactly it, or a callable `Output` equality (`F: FnMut(T) -> U`) whose
+    /// projection is closed once the method's own slots are inferred. Every
+    /// piece of evidence must agree. Anything else returns `None` and keeps the
+    /// ordinary boundary. The completed application is proved again by the
+    /// caller and by final selection.
+    pub(super) fn infer_open_trait_application(
+        &self,
+        template: &ir::TraitRef,
+        free: &[ir::ParamId],
+        item: ir::DeclId,
+        explicit: &[Type],
+        arguments: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<Option<ir::TraitRef>, String> {
+        let plan = self.signatures.plan()?;
+        let owner = plan.param_env(template.declaration)?;
+        if owner.arity() != template.args.len() + 1 {
+            return Err("trait argument arity mismatch".into());
+        }
+        let own = plan.param_env(item)?;
+        if !explicit.is_empty() && explicit.len() != own.arity() {
+            return Err("E0107: wrong number of trait method generic arguments".into());
+        }
+        // Trait parameter -> slot in `free`, for each open trait argument.
+        self.infer_storage(owner.arity())?;
+        let mut open = Vec::new();
+        let mut bindings = HashMap::new();
+        for (index, actual) in std::iter::once(&template.self_ty)
+            .chain(template.args.iter())
+            .enumerate()
+        {
+            let parameter = ir::ParamId {
+                owner: owner.binder(),
+                index: index as u16,
+            };
+            match actual {
+                ir::Ty::Param(p) if index > 0 && free.contains(p) => {
+                    open.push((parameter, *p));
+                }
+                _ => {
+                    if inferred_owner::mentions_param(actual) {
+                        return Ok(None);
+                    }
+                    self.facts().validate_ty_with_budget(actual, &plan.budget)?;
+                    bindings.insert(parameter, actual.clone());
+                }
+            }
+        }
+        if open.len() != free.len() {
+            return Ok(None);
+        }
+        let is_open = |ty: &ir::Ty| -> bool {
+            matches!(ty, ir::Ty::Param(p) if open.iter().any(|(q, _)| q == p))
+        };
+        // Whether `ty` mentions any open trait parameter. Conservative: any
+        // shape this cannot inspect counts as mentioning one.
+        fn mentions_open(ty: &ir::Ty, open: &[(ir::ParamId, ir::ParamId)]) -> bool {
+            match ty {
+                ir::Ty::Param(p) => open.iter().any(|(q, _)| q == p),
+                ir::Ty::Ref { referent, .. } => mentions_open(referent, open),
+                ir::Ty::RawPtr { pointee, .. } => mentions_open(pointee, open),
+                ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+                    mentions_open(element, open)
+                }
+                ir::Ty::Tuple(fields) => fields.iter().any(|t| mentions_open(t, open)),
+                ir::Ty::AssociatedType(p) => {
+                    mentions_open(&p.trait_ref.self_ty, open)
+                        || p.trait_ref.args.iter().any(|t| mentions_open(t, open))
+                }
+                ir::Ty::Int(_)
+                | ir::Ty::Float(_)
+                | ir::Ty::Bool
+                | ir::Ty::Char
+                | ir::Ty::Str
+                | ir::Ty::Unit
+                | ir::Ty::Never => false,
+                ir::Ty::Struct(t) => t.def().type_args.iter().any(|t| mentions_open(t, open)),
+                ir::Ty::Enum(t) => t.def().type_args.iter().any(|t| mentions_open(t, open)),
+                _ => !open.is_empty(),
+            }
+        }
+        let schema = plan.raw_schema(item)?;
+        if schema.signature.params.len() != arguments.len() + 1 {
+            return Err("trait method argument count mismatch".into());
+        }
+        let mut solver = Inference::new(self, own)?;
+        for (slot, actual) in explicit.iter().enumerate() {
+            let formal = self.infer_node(InferKind::Slot(slot))?;
+            let actual = self.partial_type_term(actual, 0)?;
+            solver.constrain(&formal, &actual, 0)?;
+        }
+        self.infer_storage(arguments.len())?;
+        let mut constraints = Vec::new();
+        let mut direct = Vec::new();
+        for (formal, argument) in schema.signature.params[1..].iter().zip(arguments) {
+            if is_open(formal) {
+                direct.push((formal.clone(), argument));
+                continue;
+            }
+            if mentions_open(formal, &open) {
+                continue;
+            }
+            let formal = self.method_owner_term(&solver.schema(formal, 0)?, &bindings, 0)?;
+            let evidence = self.inference_evidence(argument, 0)?;
+            let (formal, evidence, _) = sr::call_input_equation(&formal, &evidence);
+            constraints.push((formal.clone(), evidence.clone()));
+        }
+        if !solver.constrain_projected_terms(constraints, true)? {
+            return Ok(None);
+        }
+        let mut values: Vec<Option<ir::Ty>> = vec![None; open.len()];
+        // Record one piece of evidence; false on a conflict or open value.
+        fn record(
+            values: &mut [Option<ir::Ty>],
+            open: &[(ir::ParamId, ir::ParamId)],
+            parameter: &ir::Ty,
+            value: ir::Ty,
+        ) -> bool {
+            let ir::Ty::Param(p) = parameter else {
+                return false;
+            };
+            let Some(slot) = open.iter().position(|(q, _)| q == p) else {
+                return false;
+            };
+            if inferred_owner::mentions_param(&value) {
+                return false;
+            }
+            match &values[slot] {
+                Some(previous) if *previous != value => false,
+                _ => {
+                    values[slot] = Some(value);
+                    true
+                }
+            }
+        }
+        for predicate in schema.predicates.iter() {
+            plan.budget.charge_work(1)?;
+            let ir::Predicate::ProjectionEq { projection, ty } = predicate else {
+                continue;
+            };
+            let projection = ir::Ty::AssociatedType(Arc::new(projection.clone()));
+            if mentions_open(&projection, &open) {
+                if mentions_open(ty, &open) {
+                    return Ok(None);
+                }
+                continue;
+            }
+            let projection = bind_owner(&projection, &bindings, &plan.budget)?;
+            if is_open(ty) {
+                let Some(term) = solver.projected_schema(&projection, 0, true)? else {
+                    return Ok(None);
+                };
+                let Some(value) = solver.resolve(&term, true, 0)? else {
+                    return Ok(None);
+                };
+                if !record(&mut values, &open, ty, value) {
+                    return Ok(None);
+                }
+            } else if !matches!(ty, ir::Ty::AssociatedType(_))
+                && inferred_owner::mentions_param(ty)
+                && !mentions_open(ty, &open)
+            {
+                let ty = bind_owner(ty, &bindings, &plan.budget)?;
+                solver.constrain_projection_equality(&projection, &ty, Some(&bindings), true)?;
+            }
+        }
+        for (formal, argument) in direct {
+            let evidence = self.inference_evidence(argument, 0)?;
+            let Some(value) = solver.resolve(&evidence, true, 0)? else {
+                return Ok(None);
+            };
+            if !record(&mut values, &open, &formal, value) {
+                return Ok(None);
+            }
+        }
+        // The expected result is only a fallback. With call evidence present
+        // the ordinary result check reports any mismatch (it may coerce).
+        if let Some(expected) = expected
+            && is_open(&schema.signature.result)
+            && let ir::Ty::Param(p) = &schema.signature.result
+            && let Some(slot) = open.iter().position(|(q, _)| q == p)
+            && values[slot].is_none()
+            && !record(
+                &mut values,
+                &open,
+                &schema.signature.result,
+                expected.clone(),
+            )
+        {
+            return Ok(None);
+        }
+        let mut args = Vec::new();
+        self.infer_storage(template.args.len())?;
+        for (index, actual) in template.args.iter().enumerate() {
+            let parameter = ir::ParamId {
+                owner: owner.binder(),
+                index: (index + 1) as u16,
+            };
+            match open.iter().position(|(q, _)| *q == parameter) {
+                Some(slot) => match values[slot].take() {
+                    Some(value) => {
+                        self.facts().validate_ty_with_budget(&value, &plan.budget)?;
+                        args.push(value);
+                    }
+                    None => return Ok(None),
+                },
+                None => args.push(actual.clone()),
+            }
+        }
+        Ok(Some(ir::TraitRef {
+            declaration: template.declaration,
+            self_ty: template.self_ty.clone(),
+            args: args.into(),
+        }))
+    }
+}
+
 /// Replace enclosing trait-owner parameters (Self and trait arguments) with
 /// the selected application's actuals. Method-own parameters stay slots.
 pub(super) fn bind_owner(

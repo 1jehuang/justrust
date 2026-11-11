@@ -521,6 +521,81 @@ impl PlanCtx {
         Ok(applications)
     }
 
+    /// The unique impl of `trait_id` matching `owner` whose trait arguments
+    /// are each closed, bound by the self match, or a bare impl parameter the
+    /// self type leaves free (`U` in `impl<T, U> Map<T, U> for [T; N]`).
+    /// Returns the partial application, with free parameters left as
+    /// `Ty::Param`, and those parameters. `None` for any other shape or for
+    /// several matching impls: the caller keeps the ordinary boundary. This is
+    /// only an inference template. The completed application is proved again.
+    pub(super) fn open_trait_application(
+        &self,
+        owner: &ir::Ty,
+        trait_id: ir::DeclId,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<(ir::TraitRef, Vec<ir::ParamId>)>, String> {
+        use super::super::{expansion_budget::Storage, token_session::BudgetVec};
+        let mut found = None;
+        for implementation in facts.world().impl_headers() {
+            budget.charge_work(1)?;
+            if implementation.trait_ref.declaration != trait_id {
+                continue;
+            }
+            let mut bindings = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
+                .map_err(selection_token_error)?;
+            if !match_trait_self(
+                &implementation.trait_ref.self_ty,
+                owner,
+                &implementation.schema_env,
+                &mut bindings,
+                budget,
+                0,
+            )? {
+                continue;
+            }
+            if found.is_some() {
+                return Ok(None);
+            }
+            let mut args = self.selection_arguments(implementation.trait_ref.args.len(), budget)?;
+            let mut free = Vec::new();
+            for argument in implementation.trait_ref.args.iter() {
+                budget.charge_work(1)?;
+                match argument {
+                    ir::Ty::Param(parameter) if implementation.schema_env.contains(*parameter) => {
+                        match bindings.as_slice().iter().find(|(p, _)| p == parameter) {
+                            Some((_, value)) => args.push(value.clone()),
+                            None => {
+                                if implementation.schema_env.parameter_kind(*parameter)
+                                    != Some(ir::GenericParamKind::Type)
+                                    || free.contains(parameter)
+                                {
+                                    return Ok(None);
+                                }
+                                free.push(*parameter);
+                                args.push(argument.clone());
+                            }
+                        }
+                    }
+                    closed if !mentions_param(closed) => args.push(closed.clone()),
+                    _ => return Ok(None),
+                }
+            }
+            if free.is_empty() {
+                return Ok(None);
+            }
+            found = Some((
+                ir::TraitRef {
+                    declaration: trait_id,
+                    self_ty: owner.clone(),
+                    args: args.into(),
+                },
+                free,
+            ));
+        }
+        Ok(found)
+    }
+
     /// Candidate applications for a blanket impl whose trait argument is an
     /// impl parameter `U` constrained only by a where-clause `U: Bound<Args>`
     /// with `Args` fixed by the self match. Each concrete (parameter-free)
@@ -954,6 +1029,31 @@ impl PlanCtx {
         ),
         String,
     > {
+        self.method_trait_candidates_open(owner, name, caller, module, budget, expected, None)
+    }
+
+    /// As `method_trait_candidates_expected`, but a visible trait whose only
+    /// matching impls leave a trait argument unfixed by the receiver (`U` in
+    /// `impl<T, U> Map<T, U> for [T; N]`) is reported in `open` as
+    /// `(trait, item)` instead of failing. Callers must infer and then prove
+    /// the exact application. Without `open` the boundary stays an error.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn method_trait_candidates_open(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        budget: &ir::PlanBudget,
+        expected: Option<(&ir::Ty, ReceiverKind)>,
+        mut open: Option<&mut Vec<(ir::DeclId, ir::DeclId)>>,
+    ) -> Result<
+        (
+            super::super::token_session::BudgetVec<(ir::TraitRef, ir::DeclId)>,
+            bool,
+        ),
+        String,
+    > {
         use super::super::{expansion_budget::Storage, token_session::BudgetVec};
         self.check_budget(budget)?;
         self.program
@@ -1047,11 +1147,26 @@ impl PlanCtx {
                     continue;
                 }
             }
-            for application in self
-                .trait_applications(owner, *trait_id, facts, budget)
-                .map_err(|error| format!("method application discovery: {error}"))?
-                .as_slice()
-            {
+            let applications = match open.as_deref_mut() {
+                None => self.trait_applications(owner, *trait_id, facts, budget),
+                Some(open) => self
+                    .inferred_trait_applications(owner, *trait_id, facts, budget)
+                    .and_then(|(applications, deferred)| {
+                        if !deferred {
+                            return Ok(applications);
+                        }
+                        // A partially enumerated frontier is never mixed
+                        // with exact applications of the same trait.
+                        if !applications.as_slice().is_empty() {
+                            return Err(trait_application_ambiguity());
+                        }
+                        budget.charge_work(1)?;
+                        open.push((*trait_id, item));
+                        Ok(applications)
+                    }),
+            }
+            .map_err(|error| format!("method application discovery: {error}"))?;
+            for application in applications.as_slice() {
                 candidates
                     .push((application.clone(), item))
                     .map_err(selection_token_error)?;

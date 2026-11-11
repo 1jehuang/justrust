@@ -192,16 +192,54 @@ impl Checker<'_> {
                 let ir::FactsCtx::Validated(facts) = self.facts() else {
                     return Err("method inference requires canonical caller facts".into());
                 };
-                let (candidates, unproved) = plan.method_trait_candidates_expected(
+                let mut open = Vec::new();
+                let mut open_inferred = false;
+                let (mut candidates, unproved) = plan.method_trait_candidates_open(
                     owner,
                     name,
                     self.facts(),
                     &self.module,
                     &plan.budget,
                     expected.map(|result| (result, mode)),
+                    Some(&mut open),
                 )?;
                 unproved_expected |= unproved;
+                // A trait argument the receiver leaves free (`U` in
+                // `impl<T, U> Map<T, U> for [T; N]`) is completed from this
+                // call's own evidence, then proved below like any candidate.
+                for (trait_id, item) in open {
+                    plan.budget.charge_work(1)?;
+                    if receiver_mode(plan.declaration(item)?.receiver) != receiver_mode(mode) {
+                        continue;
+                    }
+                    let Some((template, free)) =
+                        plan.open_trait_application(owner, trait_id, facts, &plan.budget)?
+                    else {
+                        return Err(super::super::trait_selection::trait_application_ambiguity());
+                    };
+                    match self.infer_open_trait_application(
+                        &template, &free, item, explicit, arguments, expected,
+                    )? {
+                        Some(application) => candidates
+                            .push((application, item))
+                            .map(|()| open_inferred = true)
+                            .map_err(|error| {
+                                super::super::super::source::SourceError::from_token(error)
+                                    .to_string()
+                            })?,
+                        None if hint_only => {
+                            deferred = true;
+                            return Ok(MethodArguments::Deferred);
+                        }
+                        None => {
+                            return Err(
+                                super::super::trait_selection::trait_application_ambiguity(),
+                            );
+                        }
+                    }
+                }
                 let mut selected = None;
+                let mut argument_pinned = false;
                 let mut same: Vec<(&ir::TraitRef, ir::DeclId)> = Vec::new();
                 for (application, item) in candidates.as_slice() {
                     plan.budget.charge_work(1)?;
@@ -237,6 +275,33 @@ impl Checker<'_> {
                         same.push((application, *item));
                     }
                     selected = Some(application);
+                }
+                if !same.is_empty() && expected.is_none() {
+                    // Several applications of one trait (`Take<i32>`,
+                    // `Take<bool>`) and no expected result: the arguments
+                    // pick the unique application whose bound formals accept
+                    // their evidence by plain equation, as stock unifies the
+                    // open trait argument. Any undecided candidate keeps the
+                    // ambiguity.
+                    let mut fitting = None;
+                    let mut undecided = false;
+                    for (app, item) in &same {
+                        plan.budget.charge_work(1)?;
+                        match self.trait_application_fits_arguments(app, *item, arguments)? {
+                            Some(true) => {
+                                if fitting.replace(*app).is_some() {
+                                    undecided = true;
+                                }
+                            }
+                            Some(false) => {}
+                            None => undecided = true,
+                        }
+                    }
+                    if !undecided && let Some(app) = fitting {
+                        same.clear();
+                        argument_pinned = true;
+                        selected = Some(app);
+                    }
                 }
                 if !same.is_empty() {
                     // Several applications of one trait (`Into<T>`): the
@@ -304,7 +369,10 @@ impl Checker<'_> {
                 // Expected-result discovery can prove one exact application
                 // without enumerating an open blanket-implementation frontier.
                 // Preserve that application through final method selection too.
-                let pinned = !same.is_empty() || expected.is_some();
+                // Applications completed from the call's own arguments are
+                // not rediscovered by final selection's open frontier.
+                let pinned =
+                    !same.is_empty() || expected.is_some() || argument_pinned || open_inferred;
                 Ok(
                     match self.inferred_trait_method_actuals(
                         application,
