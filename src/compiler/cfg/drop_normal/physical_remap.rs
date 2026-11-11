@@ -9,6 +9,8 @@ pub(in crate::compiler) struct PhysicalCleanupReplay<'a> {
     publication: &'a Arc<CanonicalSourcePublication>,
     closed: &'a ValidatedFacts,
     budget: &'a ir::PlanBudget,
+    source_scratch: TraitScratch,
+    closed_scratch: TraitScratch,
 }
 
 impl ValidatedCleanupCall {
@@ -42,13 +44,15 @@ impl ValidatedCleanupCall {
             publication,
             closed,
             budget,
+            source_scratch: TraitScratch::default(),
+            closed_scratch: TraitScratch::default(),
         })
     }
 }
 
 impl PhysicalCleanupReplay<'_> {
     pub(in crate::compiler) fn remap(
-        &self,
+        &mut self,
         block: usize,
         source: &Arc<ValidatedCleanupCall>,
         locals: &[ir::LocalDecl],
@@ -71,8 +75,11 @@ impl PhysicalCleanupReplay<'_> {
                 "physical cleanup changed exact original descriptor or local inventory".into(),
             );
         }
-        let mut source_scratch = TraitScratch::default();
-        source.validate(self.original, self.publication.facts(), &mut source_scratch)?;
+        source.validate(
+            self.original,
+            self.publication.facts(),
+            &mut self.source_scratch,
+        )?;
         let owner = &source.owner;
         let ty = ir::projected_ty(
             &locals
@@ -85,16 +92,15 @@ impl PhysicalCleanupReplay<'_> {
         if owner.local == return_local {
             return Err("physical cleanup cannot destroy protected return storage".into());
         }
-        let mut closed_scratch = TraitScratch::default();
         let NormalDropPlan::Destructor(destructor) = self
             .closed
-            .normal_drop_plan_with_scratch(&ty, &mut closed_scratch)
+            .normal_drop_plan_with_scratch(&ty, &mut self.closed_scratch)
             .map_err(|e| e.into_legacy_diagnostic(self.budget))?
         else {
             return Err("unsupported: mapped existing cleanup has no canonical destructor".into());
         };
         destructor
-            .validate_with_scratch(&ty, self.closed, &mut closed_scratch)
+            .validate_with_scratch(&ty, self.closed, &mut self.closed_scratch)
             .map_err(|e| e.into_legacy_diagnostic(self.budget))?;
         let bytes = owner
             .projection
@@ -158,7 +164,7 @@ mod tests {
                     let original = crate::compiler::cfg::lower_source_template(publication, budget)
                         .map_err(|e| Error::new(e.to_string()))?;
                     let closed = types.instance_facts(&target).map_err(Error::new)?;
-                    let replay = ValidatedCleanupCall::physical_owner_replay(
+                    let mut replay = ValidatedCleanupCall::physical_owner_replay(
                         original.function(),
                         publication,
                         &target,

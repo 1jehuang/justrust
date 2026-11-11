@@ -28,6 +28,7 @@ impl CleanupMapping {
         &self,
         candidate: &cfg::Function,
         facts: &traits::ValidatedFacts,
+        scratch: &mut traits::TraitScratch,
     ) -> Result<(), String> {
         facts.budget().charge_work(1)?;
         let block = candidate
@@ -45,7 +46,7 @@ impl CleanupMapping {
         let owner = candidate.place_ty_with_budget(cleanup.owner(), Some(facts.budget()))?;
         cleanup
             .destructor()
-            .validate(&owner, facts)
+            .validate_with_scratch(&owner, facts, scratch)
             .map_err(|e| e.into_legacy_diagnostic(facts.budget()))
     }
 }

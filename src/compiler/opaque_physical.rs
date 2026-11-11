@@ -292,6 +292,7 @@ impl<'a> PhysicalValidation<'a> {
         if self.proof.virtual_calls != expected.proof.virtual_calls {
             return Err("physical virtual-call occurrence or ABI mapping changed".into());
         }
+        let mut cleanup_scratch = traits::TraitScratch::default();
         for (mapping, replayed) in self
             .proof
             .cleanup_mappings
@@ -301,7 +302,7 @@ impl<'a> PhysicalValidation<'a> {
             if !mapping.matches_replayed(replayed, self.budget)? {
                 return Err("physical existing cleanup correspondence changed".into());
             }
-            mapping.validate_candidate(candidate, facts)?;
+            mapping.validate_candidate(candidate, facts, &mut cleanup_scratch)?;
         }
         let expected = &expected.function;
         if candidate.runtime_sites != expected.runtime_sites
@@ -596,7 +597,7 @@ pub(super) fn normalize(
     let mut direct_calls = Vec::new();
     let mut virtual_calls = Vec::new();
     let mut cleanup_mappings = Vec::new();
-    let cleanup_replay = cfg::ValidatedCleanupCall::physical_owner_replay(
+    let mut cleanup_replay = cfg::ValidatedCleanupCall::physical_owner_replay(
         original,
         publication,
         target,
