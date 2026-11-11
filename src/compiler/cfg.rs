@@ -4670,11 +4670,26 @@ impl Lowerer<'_> {
         pattern: &ir::MatchPattern,
         completes: bool,
     ) -> Result<(), String> {
+        self.initialize_pattern_bindings_in_scope(id, source, pattern, completes, false)
+    }
+
+    fn initialize_pattern_bindings_in_scope(
+        &mut self,
+        id: ExprId,
+        source: &Place,
+        pattern: &ir::MatchPattern,
+        completes: bool,
+        lexical_bindings: bool,
+    ) -> Result<(), String> {
         if let ir::MatchPattern::Binding(local) = pattern {
             if *local == source.local {
                 return Err("match binding aliases scrutinee storage".into());
             }
-            self.live(*local, Some(id));
+            if lexical_bindings {
+                self.live_binding(*local, Some(id));
+            } else {
+                self.live(*local, Some(id));
+            }
             if completes {
                 if self.guard_defers(source, true)? {
                     let whole = ir::PatternBinding {
@@ -4700,7 +4715,11 @@ impl Lowerer<'_> {
                 if binding.local == source.local {
                     return Err("match field binding aliases scrutinee storage".into());
                 }
-                self.live(binding.local, Some(id));
+                if lexical_bindings {
+                    self.live_binding(binding.local, Some(id));
+                } else {
+                    self.live(binding.local, Some(id));
+                }
                 if completes {
                     let selected = if matches!(pattern, ir::MatchPattern::Decision { .. }) {
                         self.decision_place(source, &binding.projection)?
@@ -5046,7 +5065,9 @@ impl Lowerer<'_> {
         for local in temporaries.iter().rev() {
             self.end_storage(*local, Some(value));
         }
-        self.initialize_pattern_bindings(value, &source, pattern, completes)
+        // A successful let-else introduces lexical bindings, not statement
+        // temporaries. Match-arm bindings use their own arm scope instead.
+        self.initialize_pattern_bindings_in_scope(value, &source, pattern, completes, true)
     }
 
     fn block(&mut self) -> BlockId {

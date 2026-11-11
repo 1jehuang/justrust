@@ -8,6 +8,36 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[allow(dead_code)]
+#[path = "support/closure_oracle.rs"]
+mod lexical_oracle;
+
+#[test]
+fn generic_let_else_bindings_keep_lexical_storage() {
+    use lexical_oracle::{Case, Expect};
+    lexical_oracle::check_with_compiler(
+        "generic-let-else-lexical",
+        &[
+            Case {
+                name: "generic_integer_binding",
+                source: r#"struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w else{loop{}};x}fn main(){println!("{}",unwrap(Wrap(42)));}"#,
+                expect: Expect::Run("42\n"),
+            },
+            Case {
+                name: "generic_owned_binding",
+                source: r#"struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w else{loop{}};x}fn main(){println!("{}",unwrap(Wrap(String::from("kept"))));}"#,
+                expect: Expect::Run("kept\n"),
+            },
+            Case {
+                name: "unused_generic_double_move",
+                source: r#"struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w else{loop{}};let first=x;x}fn main(){}"#,
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+        std::path::Path::new(&lexical_oracle::pinned_stock::stock_rustc()),
+    );
+}
+
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
 // Final32 stock JSON SHA256, measured before native expectations:
 // 37c21394dc18eb320a15885a12001ec61a2c78c792e360826840a685d66f7885
