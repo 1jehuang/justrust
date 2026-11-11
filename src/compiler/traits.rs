@@ -8504,7 +8504,7 @@ impl ValidatedTraitWorld {
             }
             return Ok(Arc::from(sources));
         }
-        self.expand_carrier_sources_in(
+        let declared = self.expand_carrier_sources_in(
             &result.location.channel,
             &result.sources,
             output.component.as_ref(),
@@ -8514,7 +8514,29 @@ impl ValidatedTraitWorld {
             facts,
             scratch,
             actuals,
-        )
+        )?;
+        // A callable argument can return what its own inputs or captures
+        // carry. Those sources join, never replace, the declared ones.
+        let mediated = self.callable_result_sources(
+            result,
+            output,
+            declared_inputs,
+            raw,
+            args,
+            nominals,
+            facts,
+            scratch,
+            actuals,
+        )?;
+        if mediated.is_empty() {
+            return Ok(declared);
+        }
+        let mut sources = declared.to_vec();
+        for source in mediated {
+            self.push_callable_source(&mut sources, source)?;
+        }
+        retain::<ir::InputCarrier>(&self.budget, sources.len())?;
+        Ok(sources.into())
     }
     #[allow(clippy::too_many_arguments)]
     fn expand_carrier_sources_in(

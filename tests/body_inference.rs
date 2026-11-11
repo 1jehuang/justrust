@@ -55,6 +55,46 @@ fn temporary_method_receivers_match_stock() {
     );
 }
 
+#[test]
+fn callable_mediated_results_track_instance_sources() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "callable-mediated-results",
+        &[
+            Case {
+                name: "fold_static_elements_escape_collection",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn pick()->&'static str{let words:Vec<&'static str>=vec!["ab","abcd","a"];words.iter().fold("",|a,w|longest(a,*w))}fn main(){println!("{}",pick());}"#,
+                expect: Expect::Run("abcd\n"),
+            },
+            Case {
+                name: "fold_owned_elements_used_locally",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn main(){let words=vec![String::from("ab"),String::from("abcd")];let l=words.iter().fold("",|a,w|longest(a,w.as_str()));println!("{l}");}"#,
+                expect: Expect::Run("abcd\n"),
+            },
+            Case {
+                name: "fold_borrowed_collection_result_outlives_iterator",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn pick(words:&Vec<String>)->&str{let it=words.iter();it.fold("",|a,w|longest(a,w.as_str()))}fn main(){let words=vec![String::from("ab"),String::from("abcd")];let l=pick(&words);println!("{l}");}"#,
+                expect: Expect::Run("abcd\n"),
+            },
+            Case {
+                name: "fold_owned_elements_escape",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn unused()->&'static str{let words=vec![String::from("ab")];words.iter().fold("",|a,w|longest(a,w.as_str()))}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "fold_moved_local_string_escape",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn unused()->&'static str{let s=String::from("abc");let words=vec![s];words.iter().fold("",|a,w|longest(a,w))}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "fold_result_keeps_collection_borrowed",
+                source: r#"fn longest<'a>(a:&'a str,b:&'a str)->&'a str{if a.len()>=b.len(){a}else{b}}fn unused(){let words=vec![String::from("ab")];let l=words.iter().fold("",|a,w|longest(a,w.as_str()));drop(words);println!("{l}");}fn main(){}"#,
+                expect: Expect::Invalid("E0505"),
+            },
+        ],
+    );
+}
+
 fn compare(name: &str, source: &str) {
     let dir = std::env::temp_dir().join(format!("jr-body-inference-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

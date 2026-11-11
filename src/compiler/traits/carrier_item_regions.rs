@@ -6,6 +6,8 @@
 //! Every step uses an original parameter identity. Concrete type equality is
 //! never used to discover an input occurrence.
 use super::*;
+#[path = "callable_result_sources.rs"]
+mod callable_results;
 
 struct ItemRegionContext<'a> {
     env: &'a Arc<GenericEnv>,
