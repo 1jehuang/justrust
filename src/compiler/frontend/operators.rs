@@ -7,7 +7,7 @@ use super::*;
 #[path = "operators/hints.rs"]
 mod hints;
 
-fn overloadable(ty: &ir::Ty) -> bool {
+pub(super) fn overloadable(ty: &ir::Ty) -> bool {
     matches!(
         ty,
         ir::Ty::Struct(_) | ir::Ty::Enum(_) | ir::Ty::Tuple(_) | ir::Ty::Param(_)
@@ -425,6 +425,9 @@ impl type_check::Checker<'_> {
         statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         if let Some(result) = self.interior_index_assignment(statement, statements)? {
+            return Ok(Some(result));
+        }
+        if let Some(result) = self.slice_row_index_assignment(statement, statements)? {
             return Ok(Some(result));
         }
         let (base, literal, index, op, value) = match statement {
@@ -990,11 +993,17 @@ impl type_check::Checker<'_> {
                         // `Index::index` returns instead of copying it.
                         let nested =
                             if matches!(value, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
-                                self.overloaded_index_reference(
+                                match self.overloaded_index_reference(
                                     kind,
                                     value,
                                     value as *const Expr as usize,
-                                )?
+                                )? {
+                                    Some(reference) => Some(reference),
+                                    // `s[0][j]` with `s: &[Vec<T>]`: the inner
+                                    // receiver is a builtin, bounds-checked slice
+                                    // element place, borrowed in place.
+                                    None => self.borrow_indexed_place(kind, value)?,
+                                }
                             } else {
                                 None
                             };

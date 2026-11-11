@@ -9249,6 +9249,7 @@ mod range_expr;
 mod raw_slices;
 mod receiver_authority;
 mod recipes;
+mod slice_row_assignment;
 #[cfg(test)]
 mod slice_tests;
 mod static_mut;

@@ -272,3 +272,38 @@ fn vec_range_index_method_receivers_match_stock() {
         ],
     );
 }
+
+#[test]
+fn nested_index_through_slice_of_vectors_matches_stock() {
+    use range_receiver_oracle::{Case, Expect};
+    range_receiver_oracle::check(
+        "slice-of-vectors-nested-index",
+        &[
+            Case {
+                name: "shared_and_mutable_slice_rows",
+                source: "fn get(b:&[Vec<usize>])->usize{let i=2;b[0][2]+b[1][i]}fn put(b:&mut [Vec<usize>],j:usize){b[0][2]=b[1][j]*10;b[1][0]+=1;}fn main(){let mut g=vec![vec![1usize,2,3],vec![4,5,6]];println!(\"{}\",get(&g));put(&mut g,1);let s=&g[..];println!(\"{} {:?}\",s[0][2],g);let w=vec![vec![String::from(\"a\")]];let r:&[Vec<String>]=&w;println!(\"{}\",r[0][0].len());}",
+                expect: Expect::Run("9\n50 [[1, 2, 50], [5, 5, 6]]\n1\n"),
+            },
+            Case {
+                name: "unused_shared_slice_row_write",
+                source: "fn bad(b:&[Vec<usize>]){b[0][1]=2;}fn main(){}",
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_row_borrow_conflicts_with_owner",
+                source: "fn bad(){let mut g=vec![vec![1usize]];let s:&mut [Vec<usize>]=&mut g;let r=&s[0][0];g.push(vec![]);let _x=*r;}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "slice_row_fields_and_array_rows",
+                source: "struct P{x:usize}fn put(b:&mut [Vec<P>],c:&mut [[Vec<usize>;2]]){b[0][1].x+=7;c[0][1][0]=4;}fn main(){let mut g=vec![vec![P{x:1},P{x:2}]];let mut h=vec![[vec![0usize],vec![1]]];put(&mut g,&mut h);let row=&h[0];println!(\"{} {}\",g[0][1].x,row[1][0]);}",
+                expect: Expect::Run("9 4\n"),
+            },
+            Case {
+                name: "unused_slice_row_write_while_row_shared",
+                source: "fn bad(){let mut g=vec![vec![1usize]];let s:&mut [Vec<usize>]=&mut g;let r=&s[0];s[0][0]=3;let _x=r.len();}fn main(){}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
