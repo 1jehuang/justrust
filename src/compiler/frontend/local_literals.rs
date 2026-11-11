@@ -404,6 +404,15 @@ impl<'s> Solver<'_, '_, 's> {
         }
         self.fixed(ty.clone())
     }
+    fn dyn_types_equal(&self, left: &ir::Ty, right: &ir::Ty) -> Result<bool, String> {
+        let plan = self.checker.signatures.plan()?;
+        let facts = self.checker.facts();
+        facts.validate_ty_metadata_with_budget(left, &plan.budget)?;
+        facts.validate_ty_metadata_with_budget(right, &plan.budget)?;
+        plan.trait_world()?
+            .types_equal(std::slice::from_ref(left), std::slice::from_ref(right))
+            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))
+    }
     fn fixed(&mut self, ty: ir::Ty) -> Result<Term, String> {
         self.schema(&ty, &HashMap::new(), 0)
     }
@@ -823,6 +832,14 @@ impl<'s> Solver<'_, '_, 's> {
             | (Domain::Float, Domain::Fixed(ty @ ir::Ty::Float(_)))
             | (Domain::Fixed(ty @ ir::Ty::Float(_)), Domain::Float) => Domain::Fixed(ty.clone()),
             (Domain::Fixed(x), Domain::Fixed(y)) if x == y => Domain::Fixed(x.clone()),
+            // An object type keeps its associated bindings as rigid types, and
+            // one nominal may be spelled by its source slot on one side and by
+            // its graph realization on the other. Compare canonically.
+            (Domain::Fixed(x @ ir::Ty::Dyn(_)), Domain::Fixed(y @ ir::Ty::Dyn(_)))
+                if self.dyn_types_equal(x, y)? =>
+            {
+                Domain::Fixed(x.clone())
+            }
             (Domain::Opaque(a, x), Domain::Opaque(b, y))
                 if x.len() == y.len() && self.opaque_identity_matches(a, b, depth + 1)? =>
             {

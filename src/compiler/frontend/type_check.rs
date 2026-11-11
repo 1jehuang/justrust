@@ -1096,7 +1096,10 @@ impl<'c, 's> Inference<'c, 's> {
             }
             // Only the canonical (replayed) checker carries inferred reference
             // actuals with origins. Legacy cloned-Program adapters cannot.
+            // Closure bodies are typed by a child checker that never carries
+            // the capability; their own body is borrow checked directly.
             if self.checker.canonical.is_none()
+                && !self.checker.closure_body
                 && contains_source_ref(ty, &plan.budget, 0)
                     .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
             {
@@ -2289,6 +2292,8 @@ pub(super) struct Checker<'a> {
     associated_owner_hints: HashMap<usize, ir::Ty>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
+    /// This checker types a closure body inside its parent's check.
+    pub(super) closure_body: bool,
     pub(super) opaque_hidden: Vec<ir::OpaqueHiddenType>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
     pub(super) locals: Vec<ir::LocalDecl>,
@@ -4398,6 +4403,7 @@ impl<'a> Checker<'a> {
             associated_owner_hints: HashMap::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
+            closure_body: false,
             inferred_closure_result: false,
             opaque_hidden: Vec::new(),
             pending_references: Vec::new(),

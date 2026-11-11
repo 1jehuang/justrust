@@ -28583,14 +28583,16 @@ fn metered_type_equal(
                 return Ok(false);
             }
             for (left, right) in a.args.iter().zip(b.args.iter()) {
-                if !metered_type_equal(left, right, budget, depth + 1)? {
+                if !object_component_equal(left, right, budget, depth + 1)? {
                     return Ok(false);
                 }
             }
             for ((left_item, left), (right_item, right)) in
                 a.associated_types.iter().zip(b.associated_types.iter())
             {
-                if left_item != right_item || !metered_type_equal(left, right, budget, depth + 1)? {
+                if left_item != right_item
+                    || !object_component_equal(left, right, budget, depth + 1)?
+                {
                     return Ok(false);
                 }
             }
@@ -28637,6 +28639,59 @@ fn metered_type_equal(
             | ir::Ty::Enum(_),
         ) => Ok(false),
         _ => Ok(a == b),
+    }
+}
+/// Object principal arguments and associated bindings are rigid types that
+/// may name one nominal application by its source slot on one side and by its
+/// graph realization on the other. Their identity is the canonical declaration
+/// plus ordered actuals.
+fn object_component_equal(
+    a: &ir::Ty,
+    b: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    if let (Some((left, xs)), Some((right, ys))) = (nominal_parts(a), nominal_parts(b))
+        && matches!(
+            (a, b),
+            (ir::Ty::Struct(_), ir::Ty::Struct(_)) | (ir::Ty::Enum(_), ir::Ty::Enum(_))
+        )
+    {
+        if left != right || xs.len() != ys.len() {
+            return Ok(false);
+        }
+        for (x, y) in xs.iter().zip(ys) {
+            if !object_component_equal(x, y, budget, depth + 1)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    match (a, b) {
+        (ir::Ty::Tuple(x), ir::Ty::Tuple(y)) => {
+            if x.len() != y.len() {
+                return Ok(false);
+            }
+            for (x, y) in x.iter().zip(y.iter()) {
+                if !object_component_equal(x, y, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (
+            ir::Ty::Ref {
+                kind: k,
+                referent: x,
+            },
+            ir::Ty::Ref {
+                kind: l,
+                referent: y,
+            },
+        ) => Ok(k == l && object_component_equal(x, y, budget, depth + 1)?),
+        _ => metered_type_equal(a, b, budget, depth),
     }
 }
 fn match_impl_type(

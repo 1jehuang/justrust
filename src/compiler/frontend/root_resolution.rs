@@ -800,7 +800,7 @@ impl Resolver<'_> {
         walk_depth(DepthNode::Type(&alias.target), Some(&self.alias_budget))?;
         let params = alias.params.clone();
         let mut target = alias.target.clone();
-        fn check_target(ty: &Type) -> Result<(), String> {
+        fn check_target(ty: &Type, top: bool) -> Result<(), String> {
             match ty {
                 Type::Projection(projection) => match projection.as_ref() {
                     SourceProjection::SelfItem { .. } => {
@@ -811,7 +811,7 @@ impl Resolver<'_> {
                         trait_path,
                         ..
                     } => {
-                        check_target(self_ty)?;
+                        check_target(self_ty, false)?;
                         if let TraitPath::Source(path) = trait_path {
                             for segment in &path.segments {
                                 for actual in segment.args.iter().chain(
@@ -820,7 +820,7 @@ impl Resolver<'_> {
                                         .iter()
                                         .map(|binding| &binding.value),
                                 ) {
-                                    check_target(actual)?;
+                                    check_target(actual, false)?;
                                 }
                             }
                         }
@@ -834,23 +834,31 @@ impl Resolver<'_> {
                     return Err("explicit lifetime type aliases are unsupported".into());
                 }
                 Type::Slice(_) => return Err("unsized type aliases are unsupported".into()),
-                Type::Dyn(_) => {
-                    return Err("unsupported: trait object type aliases are unsupported".into());
+                // A nested object keeps the same default object lifetime it
+                // would have when written at the use site (owned or pointer
+                // positions default to `'static`), so expansion is exact. A
+                // bare unsized `dyn` alias would change the default lifetime
+                // under a borrow and stays unsupported.
+                Type::Dyn(_) if top => {
+                    return Err(
+                        "unsupported: unsized trait object type aliases are unsupported".into(),
+                    );
                 }
+                Type::Dyn(_) => {}
                 Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                     if let Some(argument) = &source.argument {
-                        check_target(argument)?;
+                        check_target(argument, false)?;
                     }
                 }
-                Type::DependentArray(t, _) | Type::Array(t, _) => check_target(t)?,
+                Type::DependentArray(t, _) | Type::Array(t, _) => check_target(t, false)?,
                 Type::FnPointer { inputs, output } => {
                     for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
-                        check_target(field)?;
+                        check_target(field, false)?;
                     }
                 }
                 Type::Tuple(fields) => {
                     for field in fields {
-                        check_target(field)?;
+                        check_target(field, false)?;
                     }
                 }
                 Type::Apply(path) => {
@@ -861,7 +869,7 @@ impl Resolver<'_> {
                                 .iter()
                                 .map(|binding| &binding.value),
                         ) {
-                            check_target(arg)?;
+                            check_target(arg, false)?;
                         }
                     }
                 }
@@ -869,7 +877,7 @@ impl Resolver<'_> {
             }
             Ok(())
         }
-        check_target(&target)?;
+        check_target(&target, true)?;
         self.charge_entries::<PathKey>(1)?;
         self.alias_active
             .try_reserve(1)
@@ -952,6 +960,20 @@ impl Resolver<'_> {
                             .map(|binding| &binding.value),
                     ) {
                         self.collect_params(arg, used, depth + 1)?;
+                    }
+                }
+            }
+            Type::Dyn(trait_path) => {
+                if let TraitPath::Source(path) = trait_path.as_ref() {
+                    for segment in &path.segments {
+                        for arg in segment.args.iter().chain(
+                            segment
+                                .associated_types
+                                .iter()
+                                .map(|binding| &binding.value),
+                        ) {
+                            self.collect_params(arg, used, depth + 1)?;
+                        }
                     }
                 }
             }
@@ -1052,6 +1074,22 @@ impl Resolver<'_> {
                     }
                 }
             }
+            // The object trait keeps its genuine definition-site occurrence,
+            // like a projection's trait. Only its actuals carry this use.
+            Type::Dyn(trait_path) => {
+                if let TraitPath::Source(path) = trait_path.as_mut() {
+                    for segment in &mut path.segments {
+                        for actual in segment.args.iter_mut().chain(
+                            segment
+                                .associated_types
+                                .iter_mut()
+                                .map(|binding| &mut binding.value),
+                        ) {
+                            self.alias_use(actual, source, depth + 1)?;
+                        }
+                    }
+                }
+            }
             Type::PhantomData(marker) => {
                 marker.occurrence = self.resolved_use(&marker.occurrence, source)?;
                 if let Some(argument) = &mut marker.argument {
@@ -1142,6 +1180,20 @@ impl Resolver<'_> {
                             .map(|binding| &mut binding.value),
                     ) {
                         self.substitute(arg, params, args, depth + 1)?;
+                    }
+                }
+            }
+            Type::Dyn(trait_path) => {
+                if let TraitPath::Source(path) = trait_path.as_mut() {
+                    for segment in &mut path.segments {
+                        for arg in segment.args.iter_mut().chain(
+                            segment
+                                .associated_types
+                                .iter_mut()
+                                .map(|binding| &mut binding.value),
+                        ) {
+                            self.substitute(arg, params, args, depth + 1)?;
+                        }
                     }
                 }
             }

@@ -2180,6 +2180,8 @@ struct CarrierBuilder<'a, 'b> {
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
     input_regions: Vec<(InputCarrier, AnalysisRegionId)>,
+    /// Explicit `'static` sequence-element inputs: they outlive every region.
+    static_inputs: Vec<InputCarrier>,
     family_regions: Vec<(ir::CarrierFamily, CarrierLocation, AnalysisRegionId)>,
     singleton_heap_slot: Option<SingletonHeapSlot>,
     native_storage: Vec<NativeStorageTransfer>,
@@ -3408,6 +3410,11 @@ impl CarrierBuilder<'_, '_> {
                 location: row.location.clone(),
             };
             let regions = self.body_term_regions(&row.region)?;
+            if matches!(row.region, ir::CarrierRegionTerm::Static) {
+                self.retain(4 * size_of::<InputCarrier>(), 1)?;
+                self.static_inputs.push(input);
+                continue;
+            }
             if matches!(
                 row.region,
                 ir::CarrierRegionTerm::Family { .. }
@@ -3555,8 +3562,13 @@ impl CarrierBuilder<'_, '_> {
             self.budget
                 .spend(self.dependencies[origin].0.len() + self.input_regions.len() + 1)?;
             let mut mapped = false;
+            let mut static_input = false;
             for target in &self.targets[origin] {
                 if let CanonicalRoot::ParameterReferent(local, location) = &target.place.root {
+                    self.budget.spend(self.static_inputs.len())?;
+                    static_input |= self.static_inputs.iter().any(|input| {
+                        self.f.params.get(input.param) == Some(local) && input.location == *location
+                    });
                     for (input, region) in &self.input_regions {
                         if self.f.params.get(input.param) == Some(local)
                             && input.location == *location
@@ -3568,6 +3580,11 @@ impl CarrierBuilder<'_, '_> {
                         }
                     }
                 }
+            }
+            // Every target is explicit `'static` caller data.
+            if static_input && !mapped && self.targets[origin].len() == 1 {
+                pending.extend(self.dependencies[origin].members());
+                continue;
             }
             if !mapped {
                 // An origin with no storage targets and no dependencies holds
@@ -4308,6 +4325,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             regions: RegionRelations::default(),
             effect_table: None,
             input_regions: vec![],
+            static_inputs: vec![],
             singleton_heap_slot: None,
             native_storage: Vec::new(),
             native_exchanges: Vec::new(),

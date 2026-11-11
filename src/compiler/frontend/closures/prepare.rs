@@ -95,6 +95,7 @@ impl Checker<'_> {
         child.nominal_closure_body = self.nominal_inputs.is_some();
         child.install_lexical_scope(syntax.lexical_scope)?;
         child.capture_parent_scope = self.lexical_scope;
+        child.closure_body = true;
         let receiver = child.temporary("closure self", ir::Ty::Unit, false)?;
         let arguments_ty = if parameter_types.is_empty() {
             ir::Ty::Unit

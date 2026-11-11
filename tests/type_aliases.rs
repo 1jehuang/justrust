@@ -359,7 +359,7 @@ const FIXTURES: &[Fixture] = &[
     },
     Fixture {
         name: "target_bounds_deferred",
-        outcome: Outcome::Unsupported,
+        outcome: Outcome::Valid,
         source: "trait Tr{}struct S<T:Tr>{x:T}type A<T>=S<T>;fn main(){println!(\"alias ok\");}",
         code: "",
     },
@@ -475,6 +475,48 @@ const FIXTURES: &[Fixture] = &[
         name: "formal_parameter_shadows_outer_alias",
         outcome: Outcome::Valid,
         source: "type T=A<i32>;type A<T>=T;fn main(){let x:T=7;if x==7{println!(\"alias ok\");}}",
+        code: "",
+    },
+    Fixture {
+        name: "trait_object_box",
+        outcome: Outcome::Valid,
+        source: "type H=Box<dyn Fn(i32)->i32>;fn main(){let h:H=Box::new(|x|x+1);if h(6)==7{println!(\"alias ok\");}}",
+        code: "",
+    },
+    Fixture {
+        name: "generic_trait_object_box",
+        outcome: Outcome::Valid,
+        source: "type H<T>=Box<dyn Fn(T)->Option<T>>;fn mk()->H<i32>{Box::new(|x|Some(x+1))}fn main(){let v:Vec<H<i32>>=vec![mk()];if v[0](6)==Some(7){println!(\"alias ok\");}}",
+        code: "",
+    },
+    Fixture {
+        name: "trait_object_event_handler",
+        outcome: Outcome::Valid,
+        source: "use std::any::Any;type H=Box<dyn Fn(&dyn Any)->Option<String>>;fn on<E:Any>(v:&mut Vec<H>,f:impl Fn(&E)->String+'static){v.push(Box::new(move|e|e.downcast_ref::<E>().map(&f)));}fn main(){let mut v:Vec<H>=Vec::new();on::<i32>(&mut v,|x|format!(\"{x}\"));if v[0](&5i32)==Some(String::from(\"5\"))&&v[0](&'c').is_none(){println!(\"alias ok\");}}",
+        code: "",
+    },
+    Fixture {
+        name: "trait_object_wrong_signature",
+        outcome: Outcome::Invalid,
+        source: "type H=Box<dyn Fn(i32)->i32>;fn f(h:H)->bool{h(1)}fn main(){}",
+        code: "E0308",
+    },
+    Fixture {
+        name: "trait_object_missing_bound",
+        outcome: Outcome::Invalid,
+        source: "use std::fmt::Display;type D=Box<dyn Display>;struct S;fn f()->D{Box::new(S)}fn main(){}",
+        code: "E0277",
+    },
+    Fixture {
+        name: "unsized_trait_object",
+        outcome: Outcome::Unsupported,
+        source: "type D=dyn std::fmt::Debug;fn main(){}",
+        code: "",
+    },
+    Fixture {
+        name: "borrowed_trait_object",
+        outcome: Outcome::Unsupported,
+        source: "type H<'a>=Box<dyn Fn(&str)->usize+'a>;fn main(){}",
         code: "",
     },
 ];

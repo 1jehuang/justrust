@@ -144,7 +144,21 @@ impl Checker<'_> {
             &self.trait_scratch,
             |owner, mode, traits_only| {
                 if let Some(written) = &written {
-                    return Ok(MethodArguments::Ready(Cow::Borrowed(written)));
+                    // Anonymous `impl Trait` parameters cannot be written in a
+                    // turbofish. Their actuals come from inference, with the
+                    // written ones pinned to the leading explicit slots.
+                    let anonymous = !traits_only
+                        && match self.inherent_method_candidate(owner, name, Some(mode))? {
+                            super::receiver_result_hint::InherentMethodCandidate::Unique(id, _) => {
+                                plan.registry
+                                    .source_callable(id)
+                                    .is_some_and(|f| f.impl_params != 0)
+                            }
+                            _ => false,
+                        };
+                    if !anonymous {
+                        return Ok(MethodArguments::Ready(Cow::Borrowed(written)));
+                    }
                 }
                 if !traits_only {
                     return Ok(
