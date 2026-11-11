@@ -219,12 +219,12 @@ impl String {
         pattern.is_contained_in(self.as_str())
     }
 
-    pub fn starts_with(&self, pattern: &str) -> bool {
-        str_starts_with(self.as_str(), pattern)
+    pub fn starts_with<P: StrPattern>(&self, mut pattern: P) -> bool {
+        pattern.match_at(self.as_str(), 0usize).is_some()
     }
 
-    pub fn ends_with(&self, pattern: &str) -> bool {
-        str_ends_with(self.as_str(), pattern)
+    pub fn ends_with<P: StrPattern>(&self, pattern: P) -> bool {
+        pattern.is_suffix_of(self.as_str())
     }
 
     pub fn find<P: StrPattern>(&self, pattern: P) -> Option<usize> {
@@ -635,9 +635,24 @@ pub trait StrPattern {
     fn is_contained_in(self, text: &str) -> bool;
     fn find_in(self, text: &str) -> Option<usize>;
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize>;
+    /// Whether the pattern matches a suffix ending exactly at `text.len()`.
+    fn is_suffix_of(self, text: &str) -> bool;
+}
+
+// Start of the last scalar in a nonempty UTF-8 text of `end` bytes.
+fn char_boundary_before(ptr: usize, end: usize) -> usize {
+    let mut at = end - 1usize;
+    while at > 0usize && (read_u8(ptr + at) & 192u8) == 128u8 {
+        at -= 1usize;
+    }
+    at
 }
 
 impl StrPattern for char {
+    fn is_suffix_of(self, text: &str) -> bool {
+        let (ptr, len) = str_parts(text);
+        len > 0usize && decode_utf8_at(ptr, char_boundary_before(ptr, len)) == self
+    }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
         if at < len && (read_u8(ptr + at) & 192u8) != 128u8 && decode_utf8_at(ptr, at) == *self {
@@ -673,6 +688,9 @@ impl StrPattern for char {
 }
 
 impl StrPattern for &str {
+    fn is_suffix_of(self, text: &str) -> bool {
+        str_ends_with(text, self)
+    }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
         let (pattern, count) = str_parts(*self);
@@ -698,7 +716,43 @@ impl StrPattern for &str {
     }
 }
 
+impl StrPattern for &String {
+    fn is_suffix_of(self, text: &str) -> bool {
+        self.as_str().is_suffix_of(text)
+    }
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
+        let mut pattern = self.as_str();
+        pattern.match_at(text, at)
+    }
+    fn is_contained_in(self, text: &str) -> bool {
+        self.as_str().is_contained_in(text)
+    }
+    fn find_in(self, text: &str) -> Option<usize> {
+        self.as_str().find_in(text)
+    }
+}
+
+impl StrPattern for &&str {
+    fn is_suffix_of(self, text: &str) -> bool {
+        (*self).is_suffix_of(text)
+    }
+    fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
+        let mut pattern = **self;
+        pattern.match_at(text, at)
+    }
+    fn is_contained_in(self, text: &str) -> bool {
+        (*self).is_contained_in(text)
+    }
+    fn find_in(self, text: &str) -> Option<usize> {
+        (*self).find_in(text)
+    }
+}
+
 impl<F: FnMut(char) -> bool> StrPattern for F {
+    fn is_suffix_of(mut self, text: &str) -> bool {
+        let (ptr, len) = str_parts(text);
+        len > 0usize && self(decode_utf8_at(ptr, char_boundary_before(ptr, len)))
+    }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
         if at < len && (read_u8(ptr + at) & 192u8) != 128u8 && self(decode_utf8_at(ptr, at)) {
@@ -752,8 +806,8 @@ pub trait StrMethods {
     fn split<'a, P: StrPattern>(&'a self, separator: P) -> Split<&'a str, P>;
     fn split_once<'a, P: StrPattern>(&'a self, separator: P) -> Option<(&'a str, &'a str)>;
     fn lines<'a>(&'a self) -> Lines<&'a str>;
-    fn starts_with(&self, pattern: &str) -> bool;
-    fn ends_with(&self, pattern: &str) -> bool;
+    fn starts_with<P: StrPattern>(&self, pattern: P) -> bool;
+    fn ends_with<P: StrPattern>(&self, pattern: P) -> bool;
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn rfind<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn trim(&self) -> &str;
@@ -829,12 +883,12 @@ impl StrMethods for str {
         Lines { ptr, len, at: 0usize, marker: self }
     }
 
-    fn starts_with(&self, pattern: &str) -> bool {
-        str_starts_with(self, pattern)
+    fn starts_with<P: StrPattern>(&self, mut pattern: P) -> bool {
+        pattern.match_at(self, 0usize).is_some()
     }
 
-    fn ends_with(&self, pattern: &str) -> bool {
-        str_ends_with(self, pattern)
+    fn ends_with<P: StrPattern>(&self, pattern: P) -> bool {
+        pattern.is_suffix_of(self)
     }
 
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize> {

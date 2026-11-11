@@ -3606,6 +3606,9 @@ impl<'s> Solver<'_, '_, 's> {
                     Domain::Array(element, _)
                     | Domain::DependentArray(element, _)
                     | Domain::Slice(element) => self.node(Domain::Slice(element)),
+                    // `text[a..b]` on `&str` is the unsized `str` the checker's
+                    // subslice produces; char boundaries are checked at runtime.
+                    Domain::Fixed(ir::Ty::Str) => self.fixed(ir::Ty::Str),
                     Domain::Nominal(decl, args) if self.is_prelude_vec(decl)? => {
                         match args.first() {
                             Some(&element) => self.node(Domain::Slice(element)),

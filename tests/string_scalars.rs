@@ -117,6 +117,32 @@ fn main(){
                 source: "fn bad()->&'static str{let text=String::from(\"a,b\");text.split(',').next().unwrap()}fn main(){}",
                 expect: Expect::Invalid("E0515"),
             },
+            Case {
+                name: "prefix_suffix_char_str_and_predicate_patterns",
+                source: r#"struct P<'a>{src:&'a str,pos:usize}impl<'a> P<'a>{fn skip_ws(&mut self){while self.src[self.pos..].starts_with(' '){self.pos+=1;}}}fn main(){
+    let mut p=P{src:"  é日 x",pos:0};p.skip_ws();println!("{}",p.pos);
+    let s=String::from("é日🦀");
+    println!("{} {} {} {}",s.starts_with('é'),s.starts_with('日'),s.ends_with('🦀'),s.ends_with('日'));
+    println!("{} {} {}","é日🦀".starts_with("é日"),"é日🦀".ends_with("日🦀"),"".ends_with('a'));
+    println!("{} {}","abc".starts_with(|c:char|c.is_alphabetic()),"ab1".ends_with(char::is_numeric));
+    let owned=String::from("é");let pre="é日";
+    println!("{} {} {}","é日🦀".starts_with(&owned),"é日🦀".starts_with(&pre),s.ends_with(&format!("{}",'🦀')));
+    let text="ab cd";let at=3usize;println!("{} {} {}",text[at..].len(),text[..2].to_uppercase(),text[1..at].trim().is_empty());
+}"#,
+                expect: Expect::Run(
+                    "2\ntrue false true false\ntrue true false\ntrue true\ntrue true true\n2 AB false\n",
+                ),
+            },
+            Case {
+                name: "unused_str_range_is_not_string",
+                source: "fn bad(s:&str)->usize{let t:&String=&s[1..];t.len()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_prefix_pattern_wrong_type",
+                source: "fn bad(s:&str)->bool{s.starts_with(1u8)}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
         ],
     );
 }

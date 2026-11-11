@@ -5582,7 +5582,7 @@ impl<'a> Checker<'a> {
                             element: element.clone(),
                         }),
                     }),
-                    ir::Ty::Slice { .. } => Some(ir::Ty::Ref {
+                    ir::Ty::Slice { .. } | ir::Ty::Str => Some(ir::Ty::Ref {
                         kind: ir::BorrowKind::Shared,
                         referent: referent.clone(),
                     }),
@@ -10397,7 +10397,20 @@ impl<'a> Checker<'a> {
                     && (kind == ir::BorrowKind::Shared
                         || (selected.depth == 0 && genuine_call(receiver)))
                 {
-                    let mut id = self.expr(receiver)?;
+                    // `text[a..].m()` with a `&self` method on `str`/`[T]`:
+                    // the receiver is the checked shared subslice handle.
+                    let mut id = if kind == ir::BorrowKind::Shared
+                        && let Expr::RangeIndex {
+                            base,
+                            start,
+                            end,
+                            inclusive,
+                        } = receiver
+                    {
+                        self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?
+                    } else {
+                        self.expr(receiver)?
+                    };
                     for _ in 0..selected.depth {
                         let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
                             return Err("invalid receiver dereference".into());
