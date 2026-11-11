@@ -307,11 +307,14 @@ impl CarrierBuilder<'_, '_> {
         Ok(None)
     }
 
-    /// A locally owned sequence (`let mut d: Vec<T>`) has one issued element
-    /// summary cell per carrier component. A store through its source-issued
+    /// A locally owned sequence (`let mut d: Vec<T>`, or a by-value
+    /// `mut v: Vec<T>` parameter) has one issued element summary cell per
+    /// carrier component. A store through its source-issued
     /// `IndexMut::index_mut` result joins that existing cell weakly, exactly
     /// as for a parameter referent, but needs no writable input envelope: the
-    /// owner is body storage, not caller-visible input. Nothing is issued.
+    /// owner is callee storage, not caller-visible input. Nothing is issued.
+    /// A by-value parameter's own input row stays on the joined cell, so its
+    /// declared-region outlives check still applies to the stored origins.
     fn owned_indexed_summary_write(
         &mut self,
         state: &FlowState,
@@ -321,11 +324,7 @@ impl CarrierBuilder<'_, '_> {
         target: &Target,
         owner: LocalId,
     ) -> Result<Option<IndexedSummaryWrite>, Exhausted> {
-        if self.f.params.contains(&owner) {
-            // A by-value parameter's element cells carry input rows; keep
-            // those on the authored-envelope route.
-            return Ok(None);
-        }
+        let owner_param = self.f.params.iter().position(|local| *local == owner);
         let (Some(original_destination), Some(original_owner)) = (
             self.original_locals.get(destination.local.0),
             self.original_locals.get(owner.0),
@@ -382,7 +381,10 @@ impl CarrierBuilder<'_, '_> {
             // Never manufacture a summary cell or a new concrete channel.
             return Ok(None);
         };
-        if self.cells[cell].input.is_some() {
+        // Only the owner's own by-value input row may already label the cell.
+        if let Some(input) = &self.cells[cell].input
+            && Some(input.param) != owner_param
+        {
             return Ok(None);
         }
         Ok(Some(IndexedSummaryWrite { cell }))

@@ -285,16 +285,18 @@ impl<T: Num> Sq<T> {
     }
     fn show(&self) -> String { let mut out = String::new(); for x in &self.d { out.push_str(&format!("{x} ")); } out }
 }
-// By-value parameter `Vec<T>` element stores (`fn f<T>(mut v: Vec<T>, x: T) { v[0] = x }`)
-// are not yet supported and are rejected with an explicit diagnostic.
+fn fill<T: Clone>(mut v: Vec<T>, x: T) -> Vec<T> { let i = v.len() - 1; v[i] = x; v }
+// Generic `Vec<&'a T>` element stores (`fn put<'a, T>(mut v: Vec<&'a T>, x: &'a T)`) are
+// blocked by the equality-RHS limitation and rejected with an explicit diagnostic.
 fn main() {
     let a = Sq { n: 2, d: vec![1i64, 1, 1, 0] };
     println!("{}", a.mul(&a).mul(&Sq::ident(2)).show());
     let b = Sq { n: 2, d: vec![0.5f64, 2.0, 1.0, 0.0] };
     println!("{}", b.mul(&Sq::<f64>::ident(2)).mul(&b).show());
+    println!("{:?}", fill(vec![String::from("a"), String::from("b")], String::from("z")));
 }
 "#,
-                expect: Expect::Run("2 1 1 1 \n2.25 1 0.5 2 \n"),
+                expect: Expect::Run("2 1 1 1 \n2.25 1 0.5 2 \n[\"a\", \"z\"]\n"),
             },
             Case {
                 name: "generic_local_sequence_short_reference_store_unused",
@@ -310,6 +312,24 @@ fn main() {}
                 source: r#"
 #[allow(dead_code)]
 fn f<T: Default>(n: usize, v: T) -> Vec<T> { let mut d: Vec<T> = Vec::new(); for _ in 0..n { d.push(T::default()); } d[0] = v; drop(v); d }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "by_value_param_sequence_short_reference_returned_unused",
+                source: r#"
+#[allow(dead_code)]
+fn put<'a, 'b, T>(mut v: Vec<&'a T>, x: &'b T) -> Vec<&'a T> { v[0] = x; v }
+fn main() {}
+"#,
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "by_value_param_sequence_store_then_use_moved_unused",
+                source: r#"
+#[allow(dead_code)]
+fn fill<T>(mut v: Vec<T>, x: T) -> Vec<T> { v[0] = x; drop(x); v }
 fn main() {}
 "#,
                 expect: Expect::Invalid("E0382"),
