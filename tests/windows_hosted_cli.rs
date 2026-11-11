@@ -166,3 +166,81 @@ fn setup_persists_host_platform_and_routes_before_linux_test_reuse() {
     );
     fixture.assert_no_local_build();
 }
+
+#[test]
+fn hosted_status_does_not_project_linux_probe_or_daemon_into_windows() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let fixture = Fixture::new();
+    let remote = fixture.0.join("state/remote");
+    let windows = remote.join("hosted/windows/x86_64-pc-windows-msvc");
+    std::fs::create_dir_all(&windows).unwrap();
+    std::fs::write(remote.join("backend.json"), r#"{"kind":"hosted"}"#).unwrap();
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let probe = serde_json::json!({
+        "at": at, "ok": true, "ready": true, "spot": false,
+        "dest": "ubuntu@linux.example", "platform": "Linux x86_64"
+    });
+    std::fs::write(remote.join("probe-hosted.json"), probe.to_string()).unwrap();
+    let listener = UnixListener::bind(remote.join("daemon.sock")).unwrap();
+    // Exactly one ping is expected: Linux. Windows must not query this daemon.
+    let daemon = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len = [0; 4];
+        stream.read_exact(&mut len).unwrap();
+        let mut header = vec![0; u32::from_be_bytes(len) as usize];
+        stream.read_exact(&mut header).unwrap();
+        stream.read_exact(&mut len).unwrap();
+        let reply = serde_json::json!({"t":"Pong", "roots":["/linux/root"],
+            "machine":"hosted", "pushed":7, "connected":true, "build":"fixture"});
+        let header = serde_json::to_vec(&reply).unwrap();
+        stream
+            .write_all(&(header.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&header).unwrap();
+        stream.write_all(&0u32.to_be_bytes()).unwrap();
+    });
+    for error in [None, Some("Native Windows hosted builds are unavailable.")] {
+        let cached = serde_json::json!({"at": at, "host_state":"absent",
+            "credits":{}, "connected":false, "error":error});
+        std::fs::write(windows.join("status.json"), cached.to_string()).unwrap();
+        let output = fixture
+            .command()
+            .env("JUSTRUST_HOST_PLATFORM", "windows")
+            .args(["remote", "status", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(status["probe"].is_null(), "{status}");
+        assert!(status["daemon"].is_null(), "{status}");
+        assert!(status["host"].is_null(), "{status}");
+        assert_eq!(status["error"], serde_json::json!(error));
+    }
+    std::fs::write(
+        remote.join("hosted/status.json"),
+        serde_json::json!({
+            "at":at, "host_state":"absent", "credits":{}, "connected":false
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = fixture
+        .command()
+        .env("JUSTRUST_HOST_PLATFORM", "linux")
+        .args(["remote", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["probe"]["platform"], "Linux x86_64");
+    assert_eq!(status["probe"]["dest"], "ubuntu@linux.example");
+    assert_eq!(status["daemon"]["connected"], true);
+    assert_eq!(status["daemon"]["roots"][0], "/linux/root");
+    daemon.join().unwrap();
+}

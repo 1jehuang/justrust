@@ -314,7 +314,12 @@ pub fn collect(probe: bool) -> Status {
         Some(Backend::Hosted) => collect_hosted(probe),
         Some(Backend::Ssh { host, opts }) => collect_ssh(&host, &opts, probe),
     };
-    out.daemon = daemon_state();
+    // Native Windows sessions never use the Unix sync daemon.
+    out.daemon = if out.backend == "hosted" && !hosted_unix_metrics() {
+        None
+    } else {
+        daemon_state()
+    };
     out.signed_in = crate::remote_hosted::signed_in();
     out.pending_login_url = crate::account::load_pending().map(|p| p.url);
     out.builds = out.hosted.as_ref().and_then(|h| h.builds.clone());
@@ -340,6 +345,11 @@ fn daemon_state() -> Option<DaemonState> {
     })
 }
 
+// Invalid selections must not expose Linux session data either.
+fn hosted_unix_metrics() -> bool {
+    matches!(crate::remote_windows::selected(), Ok(false))
+}
+
 fn collect_hosted(probe: bool) -> Status {
     let h = crate::remote_hosted::status_cached(probe);
     let mut out = Status {
@@ -353,6 +363,12 @@ fn collect_hosted(probe: bool) -> Status {
         error: h.error.clone(),
         ..Default::default()
     };
+    // The legacy hosted probe cache describes Linux only. Preserve API status
+    // and errors, but never substitute a previous Linux machine for Windows.
+    if !hosted_unix_metrics() {
+        out.hosted = Some(h);
+        return out;
+    }
     if h.connected
         && let Some(t) = crate::remote_hosted::cached_target()
     {
@@ -1229,6 +1245,10 @@ pub fn status(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
 }
 
 fn update_hosted_metrics(st: &mut Status) {
+    if !hosted_unix_metrics() {
+        st.probe = None;
+        return;
+    }
     if let Some(t) = crate::remote_hosted::cached_target() {
         let cached = cached_probe_file(HOSTED_PROBE)
             .filter(|p| p.dest.as_deref() == Some(&t.dest) && now() - p.at < PROBE_TTL);
