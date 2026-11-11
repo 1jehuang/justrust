@@ -42,12 +42,49 @@ fn operand_place(value: &Operand) -> Option<&Place> {
 /// rejected even if the historical copy might otherwise remain usable.
 fn prefix_source<'a>(
     statements: &'a [cfg::Located<Statement>],
-    mut place: &'a Place,
+    place: &'a Place,
     parameters: &[LocalId],
     ledger: &ir::PlanBudget,
     budget: &mut Budget,
 ) -> Result<Option<&'a Place>, Exhausted> {
+    prefix_source_in(statements, place, parameters, None, ledger, budget)
+}
+
+/// A copied raw pointer does not own its referent. Ending the storage of a
+/// historical Copy operand cannot end the copied pointer value's lifetime.
+/// This does not authorize the slot: its exact reaching call and heap-owner
+/// invariant are still independently replayed by prepare_native_storage.
+fn prefix_pointer_source<'a>(
+    statements: &'a [cfg::Located<Statement>],
+    place: &'a Place,
+    parameters: &[LocalId],
+    locals: &[ir::LocalDecl],
+    ledger: &ir::PlanBudget,
+    budget: &mut Budget,
+) -> Result<Option<&'a Place>, Exhausted> {
+    prefix_source_in(statements, place, parameters, Some(locals), ledger, budget)
+}
+
+fn prefix_source_in<'a>(
+    statements: &'a [cfg::Located<Statement>],
+    mut place: &'a Place,
+    parameters: &[LocalId],
+    pointer_locals: Option<&[ir::LocalDecl]>,
+    ledger: &ir::PlanBudget,
+    budget: &mut Budget,
+) -> Result<Option<&'a Place>, Exhausted> {
     ledger.charge_work(1).map_err(|_| Exhausted)?;
+    let pointer_type = if let Some(locals) = pointer_locals {
+        let Some(local) = locals.get(place.local.0) else {
+            return Ok(None);
+        };
+        if !place.projection.is_empty() || !matches!(local.ty, Ty::RawPtr { .. }) {
+            return Ok(None);
+        }
+        Some(&local.ty)
+    } else {
+        None
+    };
     for statement in statements {
         budget.spend(1)?;
         match &statement.value {
@@ -64,13 +101,34 @@ fn prefix_source<'a>(
         ledger.check_depth(depth).map_err(|_| Exhausted)?;
         budget.spend(parameters.len().saturating_add(1))?;
         let entry_definition = parameters.contains(&place.local);
+        if let Some(locals) = pointer_locals {
+            let Some(local) = locals.get(place.local.0) else {
+                return Ok(None);
+            };
+            if !place.projection.is_empty()
+                || !ir::identical_type(pointer_type.expect("pointer mode"), &local.ty, ledger)
+                    .map_err(|_| Exhausted)?
+            {
+                return Ok(None);
+            }
+        }
         let mut definition = None;
         let mut live = None;
+        let mut historical_death = false;
         // A later write/kill cannot be replayed as the value read by this hop.
         // Reject it rather than silently giving an earlier copy a new root.
         for statement in &statements[before..] {
             budget.spend(1)?;
             match &statement.value {
+                Statement::StorageDead(local)
+                    if *local == place.local
+                        && pointer_locals.is_some()
+                        && before < statements.len()
+                        && !entry_definition
+                        && !historical_death =>
+                {
+                    historical_death = true;
+                }
                 Statement::StorageLive(local) | Statement::StorageDead(local)
                     if *local == place.local =>
                 {
@@ -102,6 +160,9 @@ fn prefix_source<'a>(
                     let Some(source) = operand_place(value) else {
                         return Ok(None);
                     };
+                    if pointer_locals.is_some() && !matches!(value, Operand::Copy(_)) {
+                        return Ok(None);
+                    }
                     definition = Some((index, source));
                 }
                 _ => {}
@@ -197,8 +258,14 @@ impl CarrierBuilder<'_, '_> {
                     local: destination.local,
                     projection: Vec::new(),
                 };
-                let Some(pointer) =
-                    prefix_source(prefix, &pointer, &f.params, &self.ledger, self.budget)?
+                let Some(pointer) = prefix_pointer_source(
+                    prefix,
+                    &pointer,
+                    &f.params,
+                    &f.locals,
+                    &self.ledger,
+                    self.budget,
+                )?
                 else {
                     continue;
                 };
@@ -529,6 +596,122 @@ mod tests {
             value,
             origin: None,
         }
+    }
+
+    #[test]
+    fn native_slot_copy_survives_only_historical_raw_pointer_temporary_death() {
+        let ledger = ir::PlanBudget::default();
+        let pointer = Ty::RawPtr {
+            kind: BorrowKind::Mut,
+            pointee: Arc::new(Ty::Int(ir::IntTy::U8)),
+        };
+        let locals: Vec<_> = (0..4)
+            .map(|index| ir::LocalDecl {
+                name: format!("p{index}"),
+                ty: pointer.clone(),
+                mutable: true,
+            })
+            .collect();
+        let root = local(0);
+        let output = local(2);
+        let prefix = [
+            copy(local(1), root.clone()),
+            copy(output.clone(), local(1)),
+            storage(Statement::StorageDead(LocalId(1))),
+        ];
+        let mut work = Budget::new(100_000);
+        assert_eq!(
+            prefix_pointer_source(&prefix, &output, &[], &locals, &ledger, &mut work).unwrap(),
+            Some(&root)
+        );
+        // The ordinary owner/index/value lineage remains deliberately strict.
+        assert!(
+            prefix_source(&prefix, &output, &[], &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        for tail in [
+            storage(Statement::StorageDead(LocalId(2))),
+            storage(Statement::StorageLive(LocalId(1))),
+            copy(local(1), local(3)),
+            storage(Statement::StorageDead(LocalId(1))),
+        ] {
+            let mut changed = prefix.to_vec();
+            changed.push(tail);
+            assert!(
+                prefix_pointer_source(&changed, &output, &[], &locals, &ledger, &mut work)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let killed_before_read = [
+            copy(local(1), root.clone()),
+            storage(Statement::StorageDead(LocalId(1))),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_pointer_source(
+                &killed_before_read,
+                &output,
+                &[],
+                &locals,
+                &ledger,
+                &mut work
+            )
+            .unwrap()
+            .is_none()
+        );
+        let moved_pointer = [
+            moved(local(1), root.clone()),
+            copy(output.clone(), local(1)),
+        ];
+        assert!(
+            prefix_pointer_source(&moved_pointer, &output, &[], &locals, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let killed_parameter = [
+            copy(output.clone(), root.clone()),
+            storage(Statement::StorageDead(LocalId(0))),
+        ];
+        assert!(
+            prefix_pointer_source(
+                &killed_parameter,
+                &output,
+                &[LocalId(0)],
+                &locals,
+                &ledger,
+                &mut work
+            )
+            .unwrap()
+            .is_none()
+        );
+        let mut mismatched = locals.clone();
+        mismatched[1].ty = Ty::RawPtr {
+            kind: BorrowKind::Shared,
+            pointee: Arc::new(Ty::Int(ir::IntTy::U8)),
+        };
+        assert!(
+            prefix_pointer_source(&prefix, &output, &[], &mismatched, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
+        let references: Vec<_> = locals
+            .iter()
+            .map(|local| ir::LocalDecl {
+                name: local.name.clone(),
+                ty: Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(Ty::Int(ir::IntTy::U8)),
+                },
+                mutable: true,
+            })
+            .collect();
+        assert!(
+            prefix_pointer_source(&prefix, &output, &[], &references, &ledger, &mut work)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
