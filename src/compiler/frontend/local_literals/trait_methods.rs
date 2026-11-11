@@ -274,8 +274,11 @@ impl Solver<'_, '_, '_> {
         // as IntoIter<Result<T, ?E>>::Item = Result<T, ?E> so an independently
         // known consumer may constrain ?E. The unique compatible source impl
         // below is still only an equation, never a membership proof.
+        // An unsuffixed literal actual (`IterMut<{integer}>`) is still open:
+        // resolving it would apply the i32 default before later uses decide.
         let open_nominal = matches!(self.domain(receiver), Domain::Nominal(..))
-            && self.resolve(receiver, depth + 1)?.is_none();
+            && (self.resolve(receiver, depth + 1)?.is_none()
+                || !self.manifest_ready_with_defaults(&[receiver], depth + 1, false)?);
         if !open_nominal && !self.contains_callable(receiver, depth + 1)? {
             return Ok(None);
         }

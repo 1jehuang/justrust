@@ -81,7 +81,31 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(item)
     }
 
+    /// `for c in v.iter_mut()` with `v: Vec<{integer}>`: resolving the source
+    /// would default the literal to i32 before the loop body's uses decide.
+    /// A unique structural `IntoIterator` impl links the item to the open
+    /// actual instead (an equation, never a proof).
+    fn open_iterator_item(&mut self, source: Term) -> Result<Option<Term>, String> {
+        if self.projection_defaults
+            || !matches!(self.domain(source), Domain::Nominal(..))
+            || self.manifest_ready_with_defaults(&[source], 0, false)?
+        {
+            return Ok(None);
+        }
+        let plan = self.checker.signatures.plan()?;
+        let Some(trait_id) = plan.into_iterator_trait_id()? else {
+            return Ok(None);
+        };
+        let Some(item) = plan.native_associated_item(trait_id, "Item")? else {
+            return Ok(None);
+        };
+        self.structural_projection(source, trait_id, item, &[], 0)
+    }
+
     fn iterator_item(&mut self, source: Term) -> Result<Term, String> {
+        if let Some(term) = self.open_iterator_item(source)? {
+            return Ok(term);
+        }
         if let Some(item) = self.resolved_iterator_item(source)? {
             return self.fixed(item);
         }
@@ -121,6 +145,11 @@ impl<'s> Solver<'_, '_, 's> {
             self.checker.infer_work(0)?;
             let (item, result) = match &pending {
                 Pending::Ordinary(source, result) => {
+                    if let Some(term) = self.open_iterator_item(*source)? {
+                        self.unify(*result, term)?;
+                        progress = true;
+                        continue;
+                    }
                     let item = self.resolved_iterator_item(*source)?;
                     (item, *result)
                 }

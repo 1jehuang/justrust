@@ -330,3 +330,28 @@ fn contradictory_and_underconstrained_bindings_reject() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn mutable_iteration_items_defer_literal_defaults() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "mutable-iteration-literal-defaults",
+        &[
+            Case {
+                name: "nested_iter_mut_enumerate_fixes_usize",
+                source: r#"fn main(){let mut g=vec![vec![0;3];2];for (r,row) in g.iter_mut().enumerate(){for (c,cell) in row.iter_mut().enumerate(){*cell=r*3+c;}}println!("{:?}",g);let mut h=vec![7;2];for x in h.iter_mut(){*x+=1;}println!("{:?} {}",h,h[0]-9);}"#,
+                expect: Expect::Run("[[0, 1, 2], [3, 4, 5]]\n[8, 8] -1\n"),
+            },
+            Case {
+                name: "unused_loop_fixed_element_conflicts_with_later_use",
+                source: r#"fn bad(){let mut g=vec![0;3];for c in g.iter_mut(){*c=1usize;}let _x:i32=g[0];}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_loop_fixed_element_rejects_out_of_range_push",
+                source: r#"fn bad(){let mut g=vec![0;3];for c in g.iter_mut(){*c=1u8;}g.push(300);}fn main(){}"#,
+                expect: Expect::Invalid("literal out of range"),
+            },
+        ],
+    );
+}

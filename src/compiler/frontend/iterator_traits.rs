@@ -156,29 +156,9 @@ impl PlanCtx {
             return Err("iterator associated item changed caller authority".into());
         }
         caller.validate_ty_with_budget(receiver, &self.budget)?;
-        let source = self.registry.source_trait(declaration)?;
-        let mut item = None;
-        for associated in &source.associated_types {
-            self.budget.charge_work(1)?;
-            if self
-                .program
-                .names
-                .spelling(associated.name)
-                .map_err(native_adapter::name_diagnostic)?
-                == item_name
-                && item
-                    .replace(self.registry.associated_type_item(
-                        declaration,
-                        associated.name,
-                        &self.budget,
-                    )?)
-                    .is_some()
-            {
-                return Err("duplicate canonical IntoIterator::Item".into());
-            }
-        }
-        let item =
-            item.ok_or_else(|| format!("canonical IntoIterator declaration has no {item_name}"))?;
+        let item = self
+            .native_associated_item(declaration, item_name)?
+            .ok_or_else(|| format!("canonical IntoIterator declaration has no {item_name}"))?;
         self.budget
             .retain_bytes(std::mem::size_of::<ir::AssociatedTypeProjection>())?;
         let goal = ir::TraitRef {
@@ -205,6 +185,36 @@ impl PlanCtx {
             .map_err(|error| error.into_legacy_diagnostic(&self.budget))?;
         caller.validate_ty_with_budget(&item, &self.budget)?;
         Ok(Some(item))
+    }
+
+    /// The canonical associated type `item_name` of a native iterator trait.
+    pub(super) fn native_associated_item(
+        &self,
+        declaration: ir::DeclId,
+        item_name: &str,
+    ) -> Result<Option<ir::DeclId>, String> {
+        let source = self.registry.source_trait(declaration)?;
+        let mut item = None;
+        for associated in &source.associated_types {
+            self.budget.charge_work(1)?;
+            if self
+                .program
+                .names
+                .spelling(associated.name)
+                .map_err(native_adapter::name_diagnostic)?
+                == item_name
+                && item
+                    .replace(self.registry.associated_type_item(
+                        declaration,
+                        associated.name,
+                        &self.budget,
+                    )?)
+                    .is_some()
+            {
+                return Err("duplicate canonical iterator associated type".into());
+            }
+        }
+        Ok(item)
     }
 }
 
