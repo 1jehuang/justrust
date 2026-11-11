@@ -174,6 +174,9 @@ impl SourceMetadataCache {
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
+        if actual.is_const_generic_leaf(caller)? {
+            return Ok(());
+        }
         match caller {
             ir::FactsCtx::Validated(facts) => self.validation.with_scratch(budget, |scratch| {
                 facts
@@ -950,10 +953,21 @@ impl PlanState {
                             .ok_or_else(|| "unknown nominal type".to_owned())?
                     }
                 };
+                let scope = registry.declaration(decl)?.param_env.clone();
                 let args = segment
                     .args
                     .iter()
-                    .map(|arg| {
+                    .enumerate()
+                    .map(|(index, arg)| {
+                        let kind = scope.parameter_kind(ir::ParamId {
+                            owner: scope.binder(),
+                            index: u16::try_from(index).map_err(|_| "generic slot overflow")?,
+                        });
+                        if let Some(ir::GenericParamKind::Const(expected)) = kind {
+                            return nominal_const_argument(
+                                registry, arg, expected, bindings, caller,
+                            );
+                        }
                         // A trait object as a direct nominal actual (`Box<dyn P>`);
                         // `?Sized` admission is the parameter's Sized row.
                         if let Type::Dyn(trait_path) = arg {
@@ -1342,7 +1356,7 @@ impl PlanState {
                     ir::FactsCtx::Validated(facts) => ir::FactsCtx::Universal(facts.env()),
                     facts => facts,
                 };
-                structural.validate_ty_metadata_with_budget(arg, budget)?;
+                structural.validate_generic_argument_with_budget(arg, budget)?;
                 if !raw_type_has_projection(arg, budget, 0)? {
                     self.probe_source_carriers(arg, budget)?;
                 }
@@ -2590,5 +2604,40 @@ mod tests {
                 .unwrap_err()
                 .contains("wrong generic arity")
         );
+    }
+}
+
+/// A source argument for a declaration-owned const slot of a nominal:
+/// a scalar literal or a forwarded const parameter of the same scalar type.
+pub(super) fn nominal_const_argument(
+    registry: &DeclRegistry,
+    argument: &Type,
+    expected: ir::ConstType,
+    bindings: &HashMap<GenericBindingKey, ir::Ty>,
+    caller: ir::FactsCtx<'_>,
+) -> Result<ir::Ty, String> {
+    match argument {
+        Type::ConstArgument(value) => Ok(ir::Ty::Const(value.resolve(expected)?)),
+        Type::Param(name) => {
+            let key = registry.parameter_key(*name)?;
+            let Some(ir::Ty::Param(parameter)) = bindings.get(&key) else {
+                return Err("E0747: type provided when a constant was expected".into());
+            };
+            let kind = match caller {
+                ir::FactsCtx::Universal(env) => env.parameter_kind(*parameter),
+                ir::FactsCtx::Validated(facts) => facts.env().parameter_kind(*parameter),
+                ir::FactsCtx::Concrete => None,
+            };
+            match kind {
+                Some(ir::GenericParamKind::Const(actual)) if actual == expected => {
+                    Ok(ir::Ty::Param(*parameter))
+                }
+                Some(ir::GenericParamKind::Const(_)) => {
+                    Err("E0308: forwarded const argument has the wrong scalar type".into())
+                }
+                _ => Err("E0747: type provided when a constant was expected".into()),
+            }
+        }
+        _ => Err("E0747: type provided when a constant was expected".into()),
     }
 }

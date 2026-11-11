@@ -74,6 +74,10 @@ impl type_check::Checker<'_> {
                 index: u16::try_from(index).map_err(|_| "nominal arity overflow")?,
             };
             if binder.relaxed_sized(parameter)
+                || matches!(
+                    binder.parameter_kind(parameter),
+                    Some(ir::GenericParamKind::Const(_))
+                )
                 || !matches!(
                     actual,
                     ir::Ty::Param(_) | ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_)

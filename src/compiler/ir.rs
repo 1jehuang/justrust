@@ -4777,6 +4777,24 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                 }
                 *marker = mapped;
             }
+            ExprKind::ParamRepeat { value, length } => {
+                length.validate(FactsCtx::from_validated(template.facts()), budget)?;
+                let len = RepeatLength::Parameter(*length).substitute(
+                    env,
+                    args,
+                    FactsCtx::from_validated(closed_facts),
+                    budget,
+                )?;
+                let RepeatLength::Known(len) = len else {
+                    return Err(
+                        "unsupported: const-parameter array repeat requires a closed extent".into(),
+                    );
+                };
+                if !matches!(&expression.ty, Ty::Array { len: count, .. } if *count == len) {
+                    return Err("const array repeat substitution changed its array type".into());
+                }
+                expression.kind = ExprKind::Repeat { value: *value, len };
+            }
             ExprKind::ConstParameter(operand) => {
                 operand.validate(FactsCtx::from_validated(template.facts()), budget)?;
                 let value = operand
@@ -11822,6 +11840,12 @@ pub enum ExprKind {
         value: ExprId,
         len: usize,
     },
+    /// `[value; N]` with a declaration-owned const extent. Instantiation
+    /// replaces it with a closed `Repeat`; it never reaches lowering.
+    ParamRepeat {
+        value: ExprId,
+        length: ConstOperand,
+    },
     Index {
         base: ExprId,
         index: usize,
@@ -12674,6 +12698,7 @@ impl CheckedFunction {
                 ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::ConstParameter(operand) => operand.validate(facts, budget)?,
+                ExprKind::ParamRepeat { length, .. } => length.validate(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -14138,6 +14163,28 @@ impl CheckedFunction {
                     }
                     for &id in elements {
                         expr(id)?;
+                    }
+                }
+                ExprKind::ParamRepeat {
+                    value: operand,
+                    length,
+                } => {
+                    expr(*operand)?;
+                    let FactsCtx::Validated(validated) = facts else {
+                        return Err("const array repeat lacks validated source authority".into());
+                    };
+                    let checked = RepeatLength::parameter(*length, facts, validated.budget())?;
+                    let Ty::DependentArray {
+                        element,
+                        length: extent,
+                    } = &value.ty
+                    else {
+                        return Err("const array repeat requires a dependent array type".into());
+                    };
+                    if *extent != length.parameter()
+                        || (checked.requires_copy() && !facts.must_copy(element)?)
+                    {
+                        return Err("invalid const array repeat extent or Copy requirement".into());
                     }
                 }
                 ExprKind::Repeat {

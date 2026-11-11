@@ -3420,11 +3420,14 @@ impl Function {
                     validate_type_with_budget(ty, 0, budget)?;
                 }
                 facts.validate_ty_scratch(ty, scratch)?;
-                let Ty::Array { element, len } = ty else {
-                    return Err("CFG repeat requires array type".into());
+                let (element, len) = match ty {
+                    Ty::Array { element, len } => (element, *len),
+                    // A symbolic extent may exceed one element.
+                    Ty::DependentArray { element, .. } => (element, usize::MAX),
+                    _ => return Err("CFG repeat requires array type".into()),
                 };
                 self.require_operand_with_facts(value, element, facts, scratch)?;
-                if *len > 1 && !facts.must_copy_scratch(element, scratch)? {
+                if len > 1 && !facts.must_copy_scratch(element, scratch)? {
                     return Err(
                         "CFG array repeat requires Copy element for length greater than one".into(),
                     );
@@ -6009,6 +6012,25 @@ impl Lowerer<'_> {
                     Rvalue::Aggregate {
                         ty: expression.ty.clone(),
                         fields,
+                    },
+                    origin,
+                );
+            }
+            ir::ExprKind::ParamRepeat { value, length } => {
+                let Ty::DependentArray { length: extent, .. } = &expression.ty else {
+                    return Err("checked const repeat requires a dependent array type".into());
+                };
+                if *extent != length.parameter() {
+                    return Err("checked const array repeat extent mismatch".into());
+                }
+                // Symbolic template body only: instances substitute a closed
+                // `Repeat` before physical lowering.
+                let value = self.expression(*value)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Repeat {
+                        ty: expression.ty.clone(),
+                        value,
                     },
                     origin,
                 );

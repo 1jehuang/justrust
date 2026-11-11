@@ -324,7 +324,7 @@ impl PlanState {
         // inserts to the capacity reserved above, including omitted slots.
         for (parameter, actual) in info.type_params.iter().zip(&actuals) {
             budget.charge_work(1)?;
-            caller.validate_ty_metadata_with_budget(actual, budget)?;
+            caller.validate_generic_argument_with_budget(actual, budget)?;
             bindings.insert(registry.parameter_key(*parameter)?, actual.clone());
         }
         let context = registry.source_type_context(declaration)?;

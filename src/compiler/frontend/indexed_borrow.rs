@@ -714,3 +714,102 @@ impl type_check::Checker<'_> {
         Ok(Some(id))
     }
 }
+
+impl type_check::Checker<'_> {
+    /// `values[i]` read by value where the indexed array is `[T; N]` with a
+    /// declaration-owned const extent (possibly behind references). The
+    /// element is read through the bounds-checked place borrow and copied out,
+    /// so `T: Copy` is required exactly as for a builtin array element move.
+    pub(super) fn dependent_array_copy_read(
+        &mut self,
+        value: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let Expr::DynamicIndex { base, .. } = value else {
+            return Ok(None);
+        };
+        let mut chain = Vec::new();
+        let mut cursor = base.as_ref();
+        let root = loop {
+            if chain.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Ok(None);
+            }
+            self.signatures.plan()?.budget.charge_work(1)?;
+            match cursor {
+                Expr::Var(path) => {
+                    break if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+                        receiver_authority::local(path)
+                    } else if path.anchor() == PathAnchor::Relative
+                        && let Some(name) = path.single()
+                    {
+                        LocalName::Named(name)
+                    } else {
+                        return Ok(None);
+                    };
+                }
+                Expr::Field { base, field } => {
+                    chain.push(Some(field));
+                    cursor = base;
+                }
+                Expr::DynamicIndex { base, .. } | Expr::Index { base, .. } => {
+                    chain.push(None);
+                    cursor = base;
+                }
+                Expr::Deref { value } => {
+                    cursor = value;
+                }
+                _ => return Ok(None),
+            }
+        };
+        let Some(root) = self.lookup_optional(root)? else {
+            return Ok(None);
+        };
+        let mut ty = self.locals[root.0].ty.clone();
+        for step in chain.iter().rev() {
+            while let ir::Ty::Ref { referent, .. } = &ty {
+                ty = referent.as_ref().clone();
+            }
+            ty = match step {
+                Some(field) => match self.field_type(&ty, field) {
+                    Ok((_, field_ty)) => field_ty,
+                    Err(_) => return Ok(None),
+                },
+                None => match &ty {
+                    ir::Ty::Array { element, .. } | ir::Ty::DependentArray { element, .. } => {
+                        element.as_ref().clone()
+                    }
+                    _ => return Ok(None),
+                },
+            };
+        }
+        while let ir::Ty::Ref { referent, .. } = &ty {
+            ty = referent.as_ref().clone();
+        }
+        let ir::Ty::DependentArray { element, .. } = &ty else {
+            return Ok(None);
+        };
+        let element = element.as_ref().clone();
+        if !self.facts().must_copy(&element)? {
+            return Err(
+                "E0507: cannot move out of an indexed array element; borrow it or require Copy"
+                    .into(),
+            );
+        }
+        let Some(reference) = self.indexed_place_borrow(ir::BorrowKind::Shared, value, true)?
+        else {
+            return Ok(None);
+        };
+        let completion = self.exprs[reference.0].completion;
+        let ty = match &self.exprs[reference.0].ty {
+            ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+            _ => ir::Ty::Never,
+        };
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            kind: ir::ExprKind::Deref { value: reference },
+            completion,
+        });
+        Ok(Some(id))
+    }
+}

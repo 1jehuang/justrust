@@ -766,6 +766,7 @@ pub(super) fn supported(
             budget,
             depth + 1,
         ),
+        Expr::ParamRepeat { .. } => Ok(false),
         Expr::Repeat { value, .. } => supported(
             value,
             &node.child(11, 0, budget)?,

@@ -108,6 +108,7 @@ impl Checker<'_> {
             | Expr::BorrowValue { value, .. }
             | Expr::Deref { value }
             | Expr::Repeat { value, .. }
+            | Expr::ParamRepeat { value, .. }
             | Expr::Unary { value, .. } => self.prepare_callable_arguments(value, depth + 1)?,
             Expr::Field { base, .. } | Expr::Index { base, .. } => {
                 self.prepare_callable_arguments(base, depth + 1)?;

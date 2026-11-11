@@ -4385,6 +4385,7 @@ impl Resolver<'_> {
             | Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
+            | Expr::ParamRepeat { value, .. }
             | Expr::Index { base: value, .. }
             | Expr::Unary { value, .. } => self.expr(value, module, locals)?,
             Expr::Borrow { kind, place } => {

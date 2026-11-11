@@ -123,8 +123,24 @@ impl Checker<'_> {
                 arguments
                     .try_reserve_exact(application.arguments.len())
                     .map_err(|_| "infrastructure: constructor source term allocation failed")?;
+                let scope = plan.param_env(declaration)?;
                 for (index, source) in application.arguments.iter().enumerate() {
-                    let written = self.partial_type_term(source, depth + 1)?;
+                    let written = if let Some(ir::GenericParamKind::Const(expected)) = scope
+                        .parameter_kind(ir::ParamId {
+                            owner: scope.binder(),
+                            index: u16::try_from(index).map_err(|_| "generic slot overflow")?,
+                        }) {
+                        let actual = plan.source_generic_argument(
+                            source,
+                            ir::GenericParamKind::Const(expected),
+                            &self.signatures.params,
+                            self.facts(),
+                            &plan.budget,
+                        )?;
+                        self.infer_type_term(&actual, None, depth + 1)?
+                    } else {
+                        self.partial_type_term(source, depth + 1)?
+                    };
                     arguments.push(self.merge_constructor_context(
                         &written,
                         inherited.as_ref().and_then(|args| args.get(index)),

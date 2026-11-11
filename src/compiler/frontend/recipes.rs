@@ -567,6 +567,7 @@ pub(super) fn inventory_validated(
                 }
                 expr(value, ds, b, d + 1)?;
             }
+            Expr::ParamRepeat { value, .. } => expr(value, ds, b, d + 1)?,
             Expr::Apply { path, value } => {
                 generic_path(path, ds, b, d)?;
                 expr(value, ds, b, d + 1)?;

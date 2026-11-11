@@ -455,6 +455,19 @@ impl ValidatedTraitWorld {
                     true
                 }
             }
+            (Ty::DependentArray { element: a, length }, Ty::Array { element: b, len }) => {
+                let slot = ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                let extent = self.nominal_realization_parameter_with(replays, input, &slot)?;
+                if matches!(&extent, Ty::Const(value) if value.as_usize() == Some(*len)) {
+                    self.replay_nominal_field_term(replays, input, a, b, depth + 1)?;
+                    true
+                } else {
+                    false
+                }
+            }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 self.replay_nominal_field_arguments(replays, input, a, b, depth + 1)?
             }

@@ -1436,6 +1436,7 @@ impl<'s> Checker<'s> {
                 self.inference_evidence(value, depth + 1)?,
                 *len,
             ))?,
+            Expr::ParamRepeat { .. } => self.infer_node(InferKind::Unknown(false))?,
             Expr::Unary { value, .. }
                 if matches!(value.as_ref(), Expr::Integer(_) | Expr::Float(_)) =>
             {
@@ -7649,7 +7650,9 @@ impl<'a> Checker<'a> {
                 NestedStep::ConstIndex(index) => self.index_type(&ty, *index)?,
                 NestedStep::Runtime(..) => {
                     let element = match &ty {
-                        ir::Ty::Array { element, .. } => element.as_ref().clone(),
+                        ir::Ty::Array { element, .. } | ir::Ty::DependentArray { element, .. } => {
+                            element.as_ref().clone()
+                        }
                         ir::Ty::Ref { .. } => {
                             return Err(
                                 "unsupported: nested index assignment through a reference".into()
@@ -7658,11 +7661,13 @@ impl<'a> Checker<'a> {
                         _ => return Err("runtime index assignment requires an array".into()),
                     };
                     if position != last
-                        && !(matches!(element, ir::Ty::Array { .. })
-                            && matches!(
-                                steps[position + 1],
-                                NestedStep::Runtime(..) | NestedStep::ConstIndex(_)
-                            ))
+                        && !(matches!(
+                            element,
+                            ir::Ty::Array { .. } | ir::Ty::DependentArray { .. }
+                        ) && matches!(
+                            steps[position + 1],
+                            NestedStep::Runtime(..) | NestedStep::ConstIndex(_)
+                        ))
                     {
                         return Err("unsupported: field or whole-row access after a runtime index in an assignment target".into());
                     }
@@ -7750,15 +7755,20 @@ impl<'a> Checker<'a> {
                     let probe_index =
                         self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?;
                     self.index_bounds_probe(&place, probe_index, original, statements)?;
-                    if position == last {
+                    // A symbolic extent has no AssignIndex length operand: the
+                    // probe above already checked it, so assign the place.
+                    if position == last && !matches!(place_ty, ir::Ty::DependentArray { .. }) {
                         final_index = Some(
                             self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?,
                         );
                         break;
                     }
-                    let ir::Ty::Array {
+                    let (ir::Ty::Array {
                         element: row_ty, ..
-                    } = &place_ty
+                    }
+                    | ir::Ty::DependentArray {
+                        element: row_ty, ..
+                    }) = &place_ty
                     else {
                         return Err("runtime index assignment requires an array".into());
                     };
@@ -7827,7 +7837,9 @@ impl<'a> Checker<'a> {
                     self.index_type(&current_ty, *index)?,
                 ),
                 ir::Projection::DynamicIndex(local) => {
-                    let ir::Ty::Array { element, .. } = &current_ty else {
+                    let (ir::Ty::Array { element, .. } | ir::Ty::DependentArray { element, .. }) =
+                        &current_ty
+                    else {
                         return Err("runtime index assignment requires an array".into());
                     };
                     let element = element.as_ref().clone();
@@ -11737,15 +11749,18 @@ impl<'a> Checker<'a> {
             let builtin = match &flow.ty {
                 ir::Ty::Array { .. } => true,
                 ir::Ty::Ref { kind, referent } => {
-                    matches!(referent.as_ref(), ir::Ty::Array { .. })
-                        || (*kind == ir::BorrowKind::Shared
-                            && matches!(referent.as_ref(), ir::Ty::Slice { .. }))
+                    matches!(
+                        referent.as_ref(),
+                        ir::Ty::Array { .. } | ir::Ty::DependentArray { .. }
+                    ) || (*kind == ir::BorrowKind::Shared
+                        && matches!(referent.as_ref(), ir::Ty::Slice { .. }))
                 }
                 _ => false,
             };
             if !builtin && self.signatures.plan()?.into_iterator_trait_id()?.is_some() {
                 return self.for_iterator_statement(label, pattern, for_source, value, body);
             }
+            let mut dependent_len = None;
             let (element, len, borrowed) = match &flow.ty {
                 ir::Ty::Array { element, len } => {
                     if !self.facts().must_copy(element)? {
@@ -11759,6 +11774,13 @@ impl<'a> Checker<'a> {
                 ir::Ty::Ref { kind, referent } => {
                     match referent.as_ref() {
                         ir::Ty::Array { element, len } => (element.as_ref().clone(), Some(*len), Some(*kind)),
+                        // `for x in &a` with `a: [T; N]` in a const-generic
+                        // body: the extent is the declaration-owned slot value.
+                        ir::Ty::DependentArray { element, length } => {
+                            let plan = self.signatures.plan()?;
+                            dependent_len = Some(ir::ConstOperand::new(*length, self.facts(), &plan.budget)?);
+                            (element.as_ref().clone(), None, Some(*kind))
+                        }
                         ir::Ty::Slice { element } if *kind == ir::BorrowKind::Shared => (element.as_ref().clone(), None, Some(*kind)),
                         _ => return Err("unsupported: for iteration requires an array or shared scalar/unit slice element-place authority".into()),
                     }
@@ -11777,6 +11799,8 @@ impl<'a> Checker<'a> {
                 self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
             let length_kind = if let Some(len) = len {
                 ir::ExprKind::Int(ir::IntValue::usize(len as u64))
+            } else if let Some(operand) = dependent_len {
+                ir::ExprKind::ConstParameter(operand)
             } else {
                 let slice = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
                 ir::ExprKind::SliceLen { slice }
@@ -12914,6 +12938,54 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
+            Expr::ParamRepeat { value, length } => {
+                let plan = self.signatures.plan()?;
+                let Some(operand) = super::const_parameters::parameter_value(
+                    self.signatures,
+                    *length,
+                    &plan.budget,
+                )?
+                else {
+                    return Err("E0435: array repeat extent is not a const parameter".into());
+                };
+                let extent = ir::RepeatLength::parameter(operand, self.facts(), &plan.budget)?;
+                let hint = match expected {
+                    Some(
+                        ir::Ty::Array { element, .. } | ir::Ty::DependentArray { element, .. },
+                    ) => Some(element.as_ref()),
+                    _ => None,
+                };
+                let value =
+                    self.expr_with_expectation(value, expectation.aggregate_child(hint, 0))?;
+                let flow = self.flow(value);
+                if let Some(expected) = hint {
+                    self.require(&flow, expected)?;
+                }
+                let element = hint.cloned().unwrap_or(flow.ty);
+                if extent.requires_copy() && !self.facts().must_copy(&element)? {
+                    return Err("E0277: array repeat of more than one element requires Copy".into());
+                }
+                // Symbolic borrow carriers have no per-element expansion.
+                if ir::reject_references(&element, &plan.budget).is_err() {
+                    return Err(
+                        "unsupported: const-parameter array repeat of a reference-bearing element"
+                            .into(),
+                    );
+                }
+                (
+                    ir::ExprKind::ParamRepeat {
+                        value,
+                        length: operand,
+                    },
+                    Flow {
+                        ty: ir::Ty::DependentArray {
+                            element: std::sync::Arc::new(element),
+                            length: operand.parameter(),
+                        },
+                        completes: flow.completes,
+                    },
+                )
+            }
             Expr::DynamicIndex { base, index, .. }
                 if matches!(base.as_ref(), Expr::RangeIndex { .. }) =>
             {
@@ -12932,6 +13004,9 @@ impl<'a> Checker<'a> {
             Expr::DynamicIndex { base, index, .. } => {
                 if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
+                }
+                if let Some(read) = self.dependent_array_copy_read(e)? {
+                    return Ok(read);
                 }
                 let base = match self.shared_slice_view(base)? {
                     Some(view) => view,

@@ -129,6 +129,7 @@ fn primitive_leaf(ty: &ir::Ty) -> bool {
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
             | ir::Ty::DependentArray { .. }
+            | ir::Ty::Const(_)
             | ir::Ty::Param(_)
     ) || matches!(ty, ir::Ty::Dyn(object)
         if object.is_closed_leaf())
@@ -782,6 +783,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Int(_)
                 | ir::Ty::Float(_)
                 | ir::Ty::DependentArray { .. }
+                | ir::Ty::Const(_)
                 | ir::Ty::Param(_) => Domain::Fixed(ty.clone()),
                 // Closed nongeneric object principal (nominal_source_shapes).
                 ir::Ty::Dyn(object) if object.is_closed_leaf() => Domain::Fixed(ty.clone()),
@@ -1118,6 +1120,7 @@ impl<'s> Solver<'_, '_, 's> {
                 | ir::Ty::Int(_)
                 | ir::Ty::Float(_)
                 | ir::Ty::DependentArray { .. }
+                | ir::Ty::Const(_)
                 | ir::Ty::Param(_) => Shape::Leaf(ty),
                 // Closed nongeneric object principal: a rigid leaf with no
                 // inference-bearing children (nominal_source_shapes).

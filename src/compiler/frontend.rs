@@ -42,6 +42,7 @@ mod const_impl;
 mod const_parameters;
 mod extern_crate;
 mod local_consts;
+mod nominal_const;
 mod owner_lifetimes;
 pub use const_arguments::SourceConstArgument;
 mod target_features;
@@ -4651,6 +4652,7 @@ impl SourceInventory {
             }
             Expr::Cast { value, .. }
             | Expr::Repeat { value, .. }
+            | Expr::ParamRepeat { value, .. }
             | Expr::SliceDataPointer(value) => self.expr(
                 value,
                 &node.child(11, 0, budget)?,
@@ -5412,7 +5414,7 @@ impl CanonicalSourceCapability {
             })?;
         let receiver = match checked.get(id.0).map(|value| &value.kind) {
             Some(ir::ExprKind::SliceLen { slice }) => *slice,
-            Some(ir::ExprKind::Int(_)) => iterable,
+            Some(ir::ExprKind::Int(_) | ir::ExprKind::ConstParameter(_)) => iterable,
             _ => {
                 return Err(self.render(FactsError::invalid(
                     budget,
@@ -6881,6 +6883,10 @@ fn replay_builtin_lens(
             ir::ExprKind::Int(bound) if site.for_iterable => checked.exprs.get(row.receiver.0).is_some_and(|receiver| {
                 let ty = match &receiver.ty { ir::Ty::Ref { referent, .. } => referent.as_ref(), ty => ty };
                 matches!(ty, ir::Ty::Array { len, .. } if *bound == ir::IntValue::usize(*len as u64))
+            }),
+            ir::ExprKind::ConstParameter(operand) if site.for_iterable => checked.exprs.get(row.receiver.0).is_some_and(|receiver| {
+                let ty = match &receiver.ty { ir::Ty::Ref { referent, .. } => referent.as_ref(), ty => ty };
+                matches!(ty, ir::Ty::DependentArray { length, .. } if *length == operand.parameter())
             }),
             _ => false,
         };
@@ -10039,6 +10045,7 @@ pub struct RegionDecls {
 }
 #[derive(Clone, Debug)]
 pub struct StructDecl {
+    pub const_params: Vec<SourceConstParameter>,
     repr_align: Option<c_abi::SourceAlignment>,
     pub shape: StructShape,
     pub module: ModuleId,
@@ -10060,6 +10067,7 @@ pub enum StructShape {
 }
 #[derive(Clone, Debug)]
 pub struct EnumDecl {
+    pub const_params: Vec<SourceConstParameter>,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
     type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
@@ -11016,6 +11024,11 @@ pub enum Expr {
     Repeat {
         value: Box<Expr>,
         len: usize,
+    },
+    /// `[value; N]` whose extent is a declaration-owned const parameter.
+    ParamRepeat {
+        value: Box<Expr>,
+        length: AstIdent,
     },
     Index {
         base: Box<Expr>,
@@ -15038,7 +15051,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.limit("generic parameter resource limit 32"));
             }
             if self.is("const") {
-                return Err(self.unsupported("const generic parameters are unsupported"));
+                if !matches!(defaults, nominal_defaults::Owner::Nominal) {
+                    return Err(self.unsupported("const generic parameters are unsupported"));
+                }
+                self.nominal_const_parameter(&mut params)?;
+                if !self.eat(",") || self.token().text.starts_with('>') {
+                    break;
+                }
+                continue;
             }
             if self.token().is_lifetime() {
                 if !params.is_empty() {
@@ -15061,7 +15081,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 continue;
             }
-            let name = self.predeclared_parameter(&declarations, params.len())?;
+            let type_index = params.len() - self.const_params.len();
+            let name = self.predeclared_parameter(&declarations, type_index)?;
             if self.contains_name(&params, name, LookupClass::TypeParameter)? {
                 return Err(self.error("duplicate type parameter"));
             }
@@ -16238,6 +16259,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             let declaration = parsed.program.enums.len();
             parsed.program.enums.push(EnumDecl {
+                const_params: std::mem::take(&mut self.const_params),
                 module,
                 type_params,
                 type_defaults,
@@ -16322,6 +16344,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .take()
                 .map(|syntax| c_abi::SourceAlignment::parsed(syntax, module, name));
             parsed.program.structs.push(StructDecl {
+                const_params: std::mem::take(&mut self.const_params),
                 repr_align,
                 shape,
                 module,
@@ -18827,6 +18850,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let first = self.nested_expr()?;
         if self.eat(";") {
+            if let Some(length) = self.const_parameter_extent()? {
+                self.expect("]")?;
+                return Ok(Expr::ParamRepeat {
+                    value: Box::new(first),
+                    length,
+                });
+            }
             let len = self.array_number("array repeat length")?;
             self.expect("]")?;
             return Ok(Expr::Repeat {
@@ -22035,7 +22065,9 @@ fn walk_depth_inspecting<'source>(
                 Expr::Deref { value }
                 | Expr::BorrowValue { value, .. }
                 | Expr::SliceDataPointer(value) => push(DepthNode::Expr(value))?,
-                Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
+                Expr::Repeat { value, .. } | Expr::ParamRepeat { value, .. } => {
+                    push(DepthNode::Expr(value))?
+                }
                 Expr::DynamicIndex { base, index, .. } => {
                     push(DepthNode::Expr(base))?;
                     push(DepthNode::Expr(index))?;
@@ -24826,6 +24858,44 @@ impl PlanCtx {
                     Some(bound);
             }
         }
+        for declaration in &program.structs {
+            if declaration.const_params.is_empty() {
+                continue;
+            }
+            let key =
+                name_scope::path_key(program.names.as_ref(), &declaration.name, Namespace::Type)?;
+            let id = *registry
+                .nominals
+                .get(&key)
+                .ok_or("missing const struct declaration")?;
+            nominal_const::install(
+                &mut registry,
+                program,
+                id,
+                &declaration.type_params,
+                &declaration.const_params,
+                budget,
+            )?;
+        }
+        for declaration in &program.enums {
+            if declaration.const_params.is_empty() {
+                continue;
+            }
+            let key =
+                name_scope::path_key(program.names.as_ref(), &declaration.name, Namespace::Type)?;
+            let id = *registry
+                .nominals
+                .get(&key)
+                .ok_or("missing const enum declaration")?;
+            nominal_const::install(
+                &mut registry,
+                program,
+                id,
+                &declaration.type_params,
+                &declaration.const_params,
+                budget,
+            )?;
+        }
         for (implementation, block) in program.impls.iter().enumerate() {
             let id = registry.impl_ids[implementation];
             const_impl::install(&mut registry, program, implementation, budget)?;
@@ -24993,7 +25063,18 @@ impl PlanCtx {
             if info
                 .type_params
                 .iter()
-                .map(|p| {
+                .enumerate()
+                // Unused const parameters are accepted by stock (no E0392).
+                .filter(|(index, _)| {
+                    !matches!(
+                        info.param_env.parameter_kind(ir::ParamId {
+                            owner: info.param_env.binder(),
+                            index: *index as u16,
+                        }),
+                        Some(ir::GenericParamKind::Const(_))
+                    )
+                })
+                .map(|(_, p)| {
                     program
                         .names
                         .key(*p, LookupClass::TypeParameter)
@@ -26429,7 +26510,7 @@ impl PlanCtx {
             return Err("nominal interning changed validated caller authority".into());
         }
         for argument in args {
-            caller.validate_ty_metadata_with_budget(argument, budget)?;
+            caller.validate_generic_argument_with_budget(argument, budget)?;
         }
         // Scratch is fresh per call, so nested schema replay cannot re-enter a
         // shared state lock. Preserve the exact caller's validated authority.
@@ -26676,7 +26757,7 @@ impl ir::SubstitutionCx for PlanCtx {
             // Schema substitution may carry raw associated projections
             // (`Option<<C as Iter>::Item>`); they normalize later through
             // the trait world, so only metadata is checked here.
-            caller.validate_ty_metadata_with_budget(arg, budget)?;
+            caller.validate_generic_argument_with_budget(arg, budget)?;
         }
         let mut state = self.scratch();
         let declaration = request.source_decl();

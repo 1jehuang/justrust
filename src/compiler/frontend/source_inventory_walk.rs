@@ -71,7 +71,9 @@ impl SourceInventory {
                 }
             }
             match expr {
-                Expr::Cast { value, .. } | Expr::Repeat { value, .. } => {
+                Expr::Cast { value, .. }
+                | Expr::Repeat { value, .. }
+                | Expr::ParamRepeat { value, .. } => {
                     node = node.child(11, 0, budget)?;
                     expr = value;
                     application = None;

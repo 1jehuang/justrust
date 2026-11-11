@@ -315,6 +315,7 @@ impl PlanCtx {
                 )
             }
             Type::Apply(path) => {
+                let owner = declaration;
                 if path.segments.iter().any(|s| !s.associated_types.is_empty()) {
                     return Err(
                         "unsupported: associated equalities in nominal source recipe".into(),
@@ -352,7 +353,23 @@ impl PlanCtx {
                 let mut args = Vec::new();
                 args.try_reserve_exact(segment.args.len())
                     .map_err(|_| "infrastructure: nominal recipe actual allocation failed")?;
+                let scope = self.registry.declaration(declaration)?.param_env.clone();
                 for (index, ty) in segment.args.iter().enumerate() {
+                    if let Some(ir::GenericParamKind::Const(expected)) =
+                        scope.parameter_kind(ir::ParamId {
+                            owner: scope.binder(),
+                            index: u16::try_from(index).map_err(|_| "generic slot overflow")?,
+                        })
+                    {
+                        args.push(Shape::Leaf(nominal_schema::nominal_const_argument(
+                            &self.registry,
+                            ty,
+                            expected,
+                            bindings,
+                            ir::FactsCtx::Universal(&self.registry.declaration(owner)?.env),
+                        )?));
+                        continue;
+                    }
                     args.push(child(ty).map_err(|error| {
                         format!("{error}; nominal={declaration:?} argument={index}")
                     })?);

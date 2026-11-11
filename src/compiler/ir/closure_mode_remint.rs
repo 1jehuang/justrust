@@ -134,6 +134,7 @@ pub(in crate::compiler) fn remint_closure_mode_body(
             // Associated constants keep their original symbolic operand since
             // the substitution above is the identity on every generic slot.
             ExprKind::ConstParameter(_)
+            | ExprKind::ParamRepeat { .. }
             | ExprKind::AssociatedConst(_)
             | ExprKind::RuntimeQuery(_)
             | ExprKind::FnItem

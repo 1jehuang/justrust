@@ -1394,6 +1394,10 @@ impl<'a> Validator<'a> {
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }
                 | Expr::Unary { value, .. } => self.push(Visit::Expr(value))?,
+                Expr::ParamRepeat { value, length } => {
+                    self.push(Visit::Ident(*length, LookupClass::TypeParameter))?;
+                    self.push(Visit::Expr(value))?;
+                }
                 Expr::DynamicIndex { base, index, .. } => {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Expr(index))?;
@@ -2265,6 +2269,7 @@ mod tests {
         let module = input.module_root().unwrap();
         let path = input.path("crate::S").unwrap();
         input.structs.push(StructDecl {
+            const_params: Vec::new(),
             repr_align: None,
             module,
             shape: StructShape::Record,
@@ -2340,6 +2345,7 @@ mod tests {
         let module = input.module_root().unwrap();
         let name = input.path("crate::Unit").unwrap();
         input.structs.push(StructDecl {
+            const_params: Vec::new(),
             repr_align: None,
             module,
             shape: StructShape::Unit,
@@ -2858,6 +2864,7 @@ mod tests {
         let module = input.module_root().unwrap();
         let name = input.path("crate::Pair").unwrap();
         input.structs.push(StructDecl {
+            const_params: Vec::new(),
             repr_align: None,
             module,
             shape: StructShape::Tuple,

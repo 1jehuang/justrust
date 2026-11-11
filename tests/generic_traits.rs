@@ -209,6 +209,65 @@ fn main() {
 }
 
 #[test]
+fn user_const_generic_structs_impls_and_functions() {
+    coherence_oracle::stock_native(
+        r#"
+struct Buf<T, const N: usize> { items: [T; N] }
+impl<T: Copy + std::fmt::Debug, const N: usize> Buf<T, N> {
+    fn len(&self) -> usize { N }
+    fn get(&self, i: usize) -> T { self.items[i] }
+    fn sum_with(&self, f: impl Fn(T) -> i64) -> i64 { let mut s = 0; for x in &self.items { s += f(*x); } s }
+}
+struct Matrix<const R: usize, const C: usize> { d: [[i32; C]; R] }
+impl<const R: usize, const C: usize> Matrix<R, C> {
+    fn transpose(&self) -> Matrix<C, R> {
+        let mut d = [[0; R]; C];
+        for i in 0..R { for j in 0..C { d[j][i] = self.d[i][j]; } }
+        Matrix { d }
+    }
+}
+struct Flags<const ON: bool>(u8);
+impl<const ON: bool> Flags<ON> { fn on(&self) -> bool { ON } }
+fn fill<const N: usize>(v: u8) -> [u8; N] { [v; N] }
+fn total<T: Copy + Into<i64>, const N: usize>(values: &[T; N]) -> i64 {
+    let mut s = 0; let mut i = 0;
+    while i < N { s += values[i].into(); i += 1; }
+    for x in values { s += (*x).into(); }
+    s
+}
+fn first_last<const N: usize>(a: Buf<i32, N>) -> (i32, i32) { (a.get(0), a.get(N - 1)) }
+fn main() {
+    let b = Buf { items: [3i32, 1, 4, 1, 5] };
+    println!("{} {} {}", b.len(), b.get(2), b.sum_with(|x| x as i64 * 2));
+    let c: Buf<i32, 5> = b;
+    println!("{:?} {}", first_last(c), Buf::<char, 2> { items: ['a', 'b'] }.get(1));
+    let m = Matrix { d: [[1, 2, 3], [4, 5, 6]] };
+    let t = m.transpose();
+    println!("{} {} {}", t.d[2][1], t.d[0][1], t.d.len());
+    println!("{} {}", Flags::<true>(0).on(), Flags::<false>(0).on());
+    let on: Flags<true> = Flags(0);
+    let off: Flags<false> = Flags(0);
+    println!("{} {}", on.on(), off.on());
+    println!("{:?} {:?}", fill::<3>(7), fill::<0>(1));
+    println!("{} {}", total(&[1u8, 2, 3]), total(&[10i32; 4]));
+}
+"#,
+    );
+    for source in [
+        "struct S<const N: usize>; fn unused() { let _: S<u8> = S; } fn main() {}",
+        "struct S<T>(T); fn unused() { let _: S<3> = S(1); } fn main() {}",
+        "struct S<const N: usize>([i32; N]); fn unused() { let _: S<1, 2> = S([0]); } fn main() {}",
+        "struct S<const N: usize>([i32; N]); fn unused() { let _: S<3> = S([1, 2, 3, 4]); } fn main() {}",
+        "fn take(_: [i32; 3]) {} fn unused() { take([1, 2, 3, 4]); } fn main() {}",
+        "fn n<const N: usize>() -> usize { N } fn unused() { n::<1, 2>(); } fn main() {}",
+        "struct S<const N: usize>(u8); impl<const N: usize> S<N> { fn f(&self) -> bool { N } } fn main() {}",
+        "fn fill<T, const N: usize>(v: T) -> [T; N] { [v; N] } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn inherent_method_arguments_follow_unique_trait_applications() {
     coherence_oracle::stock_native(
         r#"

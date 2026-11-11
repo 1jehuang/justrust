@@ -231,7 +231,28 @@ impl GenericEnv {
     }
 }
 
+impl FactsCtx<'_> {
+    /// Metadata for one ordered generic argument. A closed const or a
+    /// const-kinded parameter is a const leaf with no value-type metadata.
+    pub fn validate_generic_argument_with_budget(
+        self,
+        argument: &Ty,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        if argument.is_const_argument_leaf(Some(self))? {
+            return Ok(());
+        }
+        self.validate_ty_metadata_with_budget(argument, budget)
+    }
+}
+
 impl Ty {
+    /// A closed const or a const-kinded parameter of the caller binder.
+    pub fn is_const_generic_leaf(&self, facts: FactsCtx<'_>) -> Result<bool, String> {
+        self.is_const_argument_leaf(Some(facts))
+    }
+
     /// Generic argument leaves have no value-type children. Closed constants
     /// are admitted only by callers walking an ordered argument list.
     pub(super) fn is_const_argument_leaf(

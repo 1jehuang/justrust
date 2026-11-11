@@ -334,9 +334,9 @@ impl CanonicalSourceCapability {
                 }
                 Ok(reads_static)
             }
-            Expr::Repeat { value, .. } | Expr::Unary { value, .. } => {
-                self.promotion_reads_static(value, depth + 1)
-            }
+            Expr::Repeat { value, .. }
+            | Expr::ParamRepeat { value, .. }
+            | Expr::Unary { value, .. } => self.promotion_reads_static(value, depth + 1),
             Expr::Binary { left, right, .. } => {
                 let left = self.promotion_reads_static(left, depth + 1)?;
                 let right = self.promotion_reads_static(right, depth + 1)?;

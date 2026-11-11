@@ -414,6 +414,13 @@ impl ValidatedTraitWorld {
             }
             return Ok(Callee::TraitItem(call.clone()));
         }
+        // A const-extent array (`[T; N]` in a const-generic body) has no
+        // closed builtin provider until the instance substitutes `N`. Keep
+        // the proven trait item, exactly like a rigid type parameter.
+        if matches!(call.trait_ref.self_ty, Ty::DependentArray { .. }) {
+            self.require_in(&predicate, caller, active)?;
+            return Ok(Callee::TraitItem(call.clone()));
+        }
         let closed = caller.closed_selection(self);
         let evidence = self.require_in(&predicate, closed, active)?;
         if evidence.0.executable_storage != closed.executable_storage
@@ -601,6 +608,12 @@ impl ValidatedTraitWorld {
                     }
                     push(&self.budget, &mut args, referent.as_ref().clone())?;
                     RecipeDescriptor::CloneSharedRef
+                }
+                Ty::DependentArray { .. } => {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: Clone of a const-generic array field",
+                    ));
                 }
                 _ => {
                     return Err(FactsError::invalid(

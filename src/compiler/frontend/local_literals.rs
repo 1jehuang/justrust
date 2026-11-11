@@ -3065,29 +3065,44 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 let typed_const_args = {
                     let plan = self.checker.signatures.plan()?;
-                    let declaration = if let Expr::Call { name, .. } = value.as_ref() {
-                        plan.registry
+                    let declaration = match value.as_ref() {
+                        Expr::Call { name, .. } => plan
+                            .registry
                             .functions
                             .get(&self.checker.path_key(name, Namespace::Value)?)
+                            .map(|declaration| (*declaration, Namespace::Value)),
+                        Expr::Struct { name, .. } | Expr::TupleStruct { name, .. } => plan
+                            .registry
+                            .nominals
+                            .get(&self.checker.path_key(name, Namespace::Type)?)
+                            .map(|declaration| (*declaration, Namespace::Type)),
+                        _ => None,
+                    };
+                    let const_slots = if let Some((declaration, namespace)) = declaration {
+                        let info = plan.declaration(declaration)?;
+                        let is_const = |kind| matches!(kind, Some(ir::GenericParamKind::Const(_)));
+                        let any_const = if namespace == Namespace::Type {
+                            let scope = &info.param_env;
+                            (0..scope.arity()).any(|index| {
+                                is_const(scope.parameter_kind(ir::ParamId {
+                                    owner: scope.binder(),
+                                    index: index as u16,
+                                }))
+                            })
+                        } else {
+                            info.env
+                                .ordered_params()
+                                .any(|parameter| is_const(info.env.parameter_kind(parameter)))
+                        };
+                        any_const.then_some(namespace)
                     } else {
                         None
                     };
-                    let const_slots = if let Some(declaration) = declaration {
-                        let info = plan.declaration(*declaration)?;
-                        info.env.ordered_params().any(|parameter| {
-                            matches!(
-                                info.env.parameter_kind(parameter),
-                                Some(ir::GenericParamKind::Const(_))
-                            )
-                        })
-                    } else {
-                        false
-                    };
-                    if const_slots {
+                    if let Some(namespace) = const_slots {
                         Some(
                             plan.application(
                                 path,
-                                Namespace::Value,
+                                namespace,
                                 &self.checker.signatures.params,
                                 self.checker.facts(),
                                 &plan.budget,
@@ -3587,6 +3602,23 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Repeat { value, len } => {
                 let item = self.expr(value, depth + 1)?;
                 self.node(Domain::Array(item, *len))
+            }
+            Expr::ParamRepeat { value, length } => {
+                let item = self.expr(value, depth + 1)?;
+                let plan = self.checker.signatures.plan()?;
+                let Some(operand) = super::const_parameters::parameter_value(
+                    self.checker.signatures,
+                    *length,
+                    &plan.budget,
+                )?
+                else {
+                    return Err("E0435: array repeat extent is not a const parameter".into());
+                };
+                let length = self.fixed(ir::Ty::Param(ir::ParamId {
+                    owner: operand.parameter().owner,
+                    index: operand.parameter().index,
+                }))?;
+                self.node(Domain::DependentArray(item, length))
             }
             Expr::Tuple(fields) => {
                 let fields = fields

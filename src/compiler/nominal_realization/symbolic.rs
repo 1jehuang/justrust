@@ -39,10 +39,28 @@ pub(super) fn close_term(
         Ok(out)
     };
     Ok(match ty {
-        ir::Ty::DependentArray { .. } => {
-            return Err(Error::new(
-                "unsupported: const-dependent nominal realization",
-            ));
+        // `[T; N]` under a nominal const slot closes to its exact extent.
+        ir::Ty::DependentArray { element, length } => {
+            let slot = ir::ParamId {
+                owner: length.owner,
+                index: length.index,
+            };
+            let index = env
+                .ordered_params()
+                .position(|bound| bound == slot)
+                .ok_or_else(|| Error::new("unsupported: const-dependent nominal realization"))?;
+            let Some(Term::Const(value)) = actuals.get(index) else {
+                return Err(Error::new(
+                    "unsupported: const-dependent nominal realization",
+                ));
+            };
+            let len = value
+                .as_usize()
+                .ok_or_else(|| Error::new("E0308: array extent must be usize"))?;
+            if len > ir::MAX_ARRAY_TYPE_LEN {
+                return Err(Error::new("array length limit exceeded"));
+            }
+            Term::Array(Box::new(child(element)?), len)
         }
         ir::Ty::Param(p) => {
             let index = env

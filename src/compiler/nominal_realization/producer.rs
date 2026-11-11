@@ -476,10 +476,33 @@ fn field<'a>(
         let error = |e: traits::FactsError| Error::new(e.into_legacy_diagnostic(b));
         let mut dependencies = Vec::new();
         let result = match ty {
-            ir::Ty::DependentArray { .. } => {
-                return Err(Error::new(
-                    "unsupported: const-dependent nominal realization",
-                ));
+            // `[T; N]` under a nominal const slot: the closed input supplies
+            // the exact extent, so the field is an ordinary closed array.
+            ir::Ty::DependentArray { element, length } => {
+                let slot = ir::ParamId {
+                    owner: length.owner,
+                    index: length.index,
+                };
+                let ir::Ty::Const(value) = world
+                    .nominal_realization_parameter(input, &slot)
+                    .map_err(error)?
+                else {
+                    return Err(Error::new(
+                        "unsupported: const-dependent nominal realization",
+                    ));
+                };
+                let len = value
+                    .as_usize()
+                    .ok_or_else(|| Error::new("E0308: array extent must be usize"))?;
+                if len > ir::MAX_ARRAY_TYPE_LEN {
+                    return Err(Error::new("array length limit exceeded"));
+                }
+                let (t, p) = field(cx, (*element).clone(), input, world, depth + 1).await?;
+                dependencies = p;
+                ir::Ty::Array {
+                    element: Arc::new(t),
+                    len,
+                }
             }
             ir::Ty::Param(p) => world
                 .nominal_realization_parameter(input, &p)

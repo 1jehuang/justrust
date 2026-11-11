@@ -5672,6 +5672,7 @@ impl ValidatedTraitWorld {
         let logical_nominals = walk.logical_nominals;
         let maybe_unsized = walk.maybe_unsized;
         let mut height = 0usize;
+        let mut forwarded_const = false;
         let mut child = |t: &Ty, next_use: TypeUse| -> Result<()> {
             height = height.max(
                 self.validate_ty_inner_with_facts(t, env, depth + 1, next_use, walk, caller)?
@@ -5888,6 +5889,18 @@ impl ValidatedTraitWorld {
                         charged(&self.budget, value.closed_key().map(|_| ()))?;
                         continue;
                     }
+                    // A forwarded const slot (`S<N>` inside `impl<const N>`)
+                    // is an ordered const argument, never a value type.
+                    if let Ty::Param(param) = t
+                        && env.contains(*param)
+                        && matches!(
+                            env.parameter_kind(*param),
+                            Some(ir::GenericParamKind::Const(_))
+                        )
+                    {
+                        forwarded_const = true;
+                        continue;
+                    }
                     child(
                         t,
                         if usage == TypeUse::Actual {
@@ -5907,6 +5920,18 @@ impl ValidatedTraitWorld {
                 for t in t.def().type_args.iter() {
                     if let Ty::Const(value) = t {
                         charged(&self.budget, value.closed_key().map(|_| ()))?;
+                        continue;
+                    }
+                    // A forwarded const slot (`S<N>` inside `impl<const N>`)
+                    // is an ordered const argument, never a value type.
+                    if let Ty::Param(param) = t
+                        && env.contains(*param)
+                        && matches!(
+                            env.parameter_kind(*param),
+                            Some(ir::GenericParamKind::Const(_))
+                        )
+                    {
+                        forwarded_const = true;
                         continue;
                     }
                     child(
@@ -5976,6 +6001,9 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
+        }
+        if forwarded_const {
+            walk.has_parameters = true;
         }
         if let Some(key) = key {
             walk.insert(key, height, ty, &self.budget)?;

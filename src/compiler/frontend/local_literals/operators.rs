@@ -219,9 +219,9 @@ impl Solver<'_, '_, '_> {
                             ty = referent.as_ref();
                         }
                         match ty {
-                            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
-                                self.fixed(element.as_ref().clone())?
-                            }
+                            ir::Ty::Array { element, .. }
+                            | ir::Ty::DependentArray { element, .. }
+                            | ir::Ty::Slice { element } => self.fixed(element.as_ref().clone())?,
                             _ => return Err(self.user_error("E0608: cannot index this type")),
                         }
                     }
