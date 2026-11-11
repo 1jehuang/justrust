@@ -748,11 +748,15 @@ impl SliceInventory<'_> {
                     ));
                 }
                 if let Term::Slice(element) = child.as_ref() {
-                    if *kind != ir::BorrowKind::Shared {
-                        return Err(Error::new("unsupported: nested mutable slice carriers"));
-                    }
                     self.allow_references = false;
-                    let element_height = self.shared_element(element, depth + 2);
+                    let element_height = if *kind == ir::BorrowKind::Shared {
+                        self.shared_element(element, depth + 2)
+                    } else {
+                        // Only the descriptor is carried by the aggregate. Mutable
+                        // element storage remains reference-free, as in the ordinary
+                        // slice boundary walker.
+                        self.term(element, depth + 2)
+                    };
                     self.allow_references = true;
                     return element_height?
                         .checked_add(2)

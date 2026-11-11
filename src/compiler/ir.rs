@@ -9257,13 +9257,9 @@ fn slice_boundary_walk_inner(
                 if matches!(mode, SliceBoundaryMode::Carriers)
                     && let Some((kind, element)) = node.slice_ref_element()
                 {
-                    let direct_mutable_pair = matches!(ty, Ty::Tuple(fields)
-                        if fields.len() == 2
-                            && fields.iter().all(|field| field.mut_slice_element().is_some()))
-                        && at == depth.checked_add(1).ok_or("slice type depth overflow")?;
-                    if kind != BorrowKind::Shared && !direct_mutable_pair {
-                        return Err("unsupported: nested mutable slice carriers".into());
-                    }
+                    // Aggregate position does not change a slice descriptor's ABI.
+                    // Its element storage still has the strict reference-free policy
+                    // below, independently of enclosing tuple or nominal carriers.
                     if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
                         return Err(
                             "unsupported: mutable slice elements containing references".into()
@@ -15078,8 +15074,19 @@ mod conditional_validation_tests {
                 element: Arc::new(shared.clone()),
             }),
         };
-        for excluded in [
-            Ty::Tuple(Arc::from([referenced_element.clone(), referenced_element])),
+        let excluded = Ty::Tuple(Arc::from([referenced_element.clone(), referenced_element]));
+        assert!(
+            slice_boundary_walk(
+                &excluded,
+                true,
+                false,
+                Some(&PlanBudget::default()),
+                0,
+                &mut 0,
+            )
+            .is_err()
+        );
+        for admitted in [
             Ty::Tuple(Arc::from([pair.clone()])),
             Ty::Array {
                 element: Arc::new(pair),
@@ -15091,30 +15098,31 @@ mod conditional_validation_tests {
                 mutable.clone(),
                 mutable.clone(),
             ])),
+            Ty::Tuple(Arc::from([mutable])),
         ] {
-            assert!(
-                slice_boundary_walk(
-                    &excluded,
-                    true,
-                    false,
-                    Some(&PlanBudget::default()),
-                    0,
-                    &mut 0
-                )
-                .is_err()
-            );
-        }
-        assert!(
             slice_boundary_walk(
-                &Ty::Tuple(Arc::from([mutable])),
+                &admitted,
                 true,
                 false,
                 Some(&PlanBudget::default()),
                 0,
-                &mut 0
+                &mut 0,
             )
-            .is_err()
-        );
+            .unwrap();
+            let budget = PlanBudget::default();
+            for location in carrier_locations(&admitted, &budget).unwrap().iter() {
+                let carrier = carrier_at(&admitted, &location, &budget).unwrap();
+                assert!(matches!(carrier, Ty::Ref { .. }));
+                let mut forged = location.clone();
+                forged.channel = CarrierChannel::Fixed(ReferencePosition { depth: 127 });
+                assert!(carrier_at(&admitted, &forged, &budget).is_err());
+                forged = location.clone();
+                let mut path = forged.path.0.to_vec();
+                path.push(CarrierStep::Field(127));
+                forged.path = CarrierPath(path.into());
+                assert!(carrier_at(&admitted, &forged, &budget).is_err());
+            }
+        }
         let nested = Ty::Ref {
             kind: BorrowKind::Shared,
             referent: Arc::new(Ty::Slice {

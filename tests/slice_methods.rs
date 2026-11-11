@@ -60,6 +60,63 @@ fn generic_independent_mutable_slice_tuple_matches_stock() {
 }
 
 #[test]
+fn aggregate_mutable_slice_carriers_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "aggregate-mutable-slice-carriers",
+        &[
+            closure_oracle::Case {
+                name: "optional_split_descriptor",
+                source: "fn split(v:&mut[i32])->Option<(&mut i32,&mut[i32])>{v.split_first_mut()} fn main(){let mut a=[5i32,1,4];if let Some((h,t))=split(&mut a){*h+=t[0]+t[1];t[0]=9;}println!(\"{:?}\",a);let mut e:[i32;0]=[];println!(\"{}\",split(&mut e).is_none());}",
+                expect: closure_oracle::Expect::Run("[10, 9, 4]\ntrue\n"),
+            },
+            closure_oracle::Case {
+                name: "nominal_independent_origins",
+                source: "struct Views<'a,'b>{a:Option<&'a mut[i32]>,b:(&'b mut[i32],usize)}fn views<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->Views<'a,'b>{Views{a:Some(a),b:(b,7)}}fn main(){let mut a=[1i32];let mut b=[2i32];let n;{let v=views(&mut a,&mut b);if let Some(x)=v.a{x[0]=10;}v.b.0[0]=20;n=v.b.1;}println!(\"{} {} {}\",a[0],b[0],n);}",
+                expect: closure_oracle::Expect::Run("10 20 7\n"),
+            },
+            closure_oracle::Case {
+                name: "exclusive_enum_alternatives_reuse_one_input",
+                source: "enum Pick<'a>{A(&'a mut[i32]),B(&'a mut[i32])}fn pick<'a>(x:&'a mut[i32],first:bool)->Pick<'a>{if first{Pick::A(x)}else{Pick::B(x)}}fn main(){let mut a=[1i32];for flag in [true,false]{match pick(&mut a,flag){Pick::A(x)=>x[0]+=2,Pick::B(x)=>x[0]+=3}}println!(\"{}\",a[0]);}",
+                expect: closure_oracle::Expect::Run("6\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn aggregate_mutable_slice_carriers_reject_invalid_sources() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "aggregate-mutable-slice-invalid",
+        &[
+            closure_oracle::Case {
+                name: "unused_same_variant_mutable_shared_alias",
+                source: "enum Views<'a>{Both(&'a mut[i32],&'a[i32]),None}fn bad<'a>(x:&'a mut[i32])->Views<'a>{Views::Both(&mut*x,&*x)}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0502"),
+            },
+            closure_oracle::Case {
+                name: "unused_duplicate_mutable_descriptor",
+                source: "fn duplicate<'a>(x:&'a mut[i32])->Option<(&'a mut[i32],&'a mut[i32])>{Some((x,x))}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0499"),
+            },
+            closure_oracle::Case {
+                name: "unused_wrong_named_origin",
+                source: "fn swapped<'a,'b>(a:&'a mut[i32],b:&'b mut[i32])->Option<(&'a mut[i32],&'b mut[i32])>{Some((b,a))}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("lifetime may not live long enough"),
+            },
+            closure_oracle::Case {
+                name: "optional_output_outlives_owner",
+                source: "fn wrap(x:&mut[i32])->Option<&mut[i32]>{Some(x)}fn main(){let out;{let mut a=[1i32];out=wrap(&mut a);}if let Some(x)=out{x[0]=2;}}",
+                expect: closure_oracle::Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn mutable_slice_tuple_reference_elements_remain_unsupported() {
     let source = "fn pair<'a,'b,T>(a:&'a mut[T],b:&'b mut[T])->(&'a mut[T],&'b mut[T]){(a,b)}fn main(){let value=1i32;let mut a=[&value];let mut b=[&value];let(x,y)=pair(&mut a,&mut b);let _=x[0];let _=y[0];}";
     let root = scratch("tuple-reference-elements");

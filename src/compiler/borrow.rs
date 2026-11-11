@@ -13,6 +13,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 mod aggregate_reborrow;
+mod aggregate_result;
 mod cell_access;
 mod correlation;
 mod indexed_write;
@@ -8120,7 +8121,21 @@ impl CarrierBuilder<'_, '_> {
                     &writes,
                     &must_overwrite,
                 )?;
-            if (family_admitted || identity_admitted || pair_admitted || aggregate_admitted)
+            let finite_result_admitted = !family_admitted
+                && !identity_admitted
+                && !pair_admitted
+                && !aggregate_admitted
+                && !invalid_binding
+                && writes.is_empty()
+                && must_overwrite.is_empty()
+                && !unmodeled_raw_write
+                && self.problems.is_empty()
+                && self.closed_aggregate_result_admitted(&body, &outgoing)?;
+            if (family_admitted
+                || identity_admitted
+                || pair_admitted
+                || aggregate_admitted
+                || finite_result_admitted)
                 && self.problems.is_empty()
                 && !unmodeled_raw_write
             {
@@ -11754,6 +11769,73 @@ mod parameter_equality_tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn closed_aggregate_result_replays_exact_source_and_affine_cells() {
+        let source = "fn pack<'a,'b,'c>(a:&'a mut[i32],b:&'b mut i32,c:&'c[i32])->Option<(&'a mut[i32],(&'b mut i32,&'c[i32]))>{Some((a,(b,c)))}fn main(){}";
+        let (function, facts) = shared_aggregate_body_fixture(source);
+        let make_plan =
+            |function: &Arc<cfg::Function>, facts: &Arc<super::super::traits::ValidatedFacts>| {
+                Plan::build_validated(
+                    function,
+                    facts,
+                    None,
+                    &mut Budget::new(32_000_000),
+                    128 * 1024 * 1024,
+                )
+            };
+        let genuine = make_plan(&function, &facts).unwrap();
+        assert!(genuine.problems.is_empty(), "{:?}", genuine.problems);
+        assert!(
+            genuine.effects().is_some(),
+            "finite owned carrier aggregate requires complete effects"
+        );
+        for mutation in 0..4 {
+            let mut forged = (*function).clone();
+            match mutation {
+                0 => forged.result = Ty::Unit,
+                1 => {
+                    forged.ref_contract = Arc::new(ir::RefContract {
+                        region_count: 0,
+                        ..(*forged.ref_contract).clone()
+                    })
+                }
+                2 => {
+                    forged.locals[forged.params[0].0].ty = Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent: Arc::new(Ty::Slice {
+                            element: Arc::new(Ty::Int(ir::IntTy::I32)),
+                        }),
+                    }
+                }
+                3 => forged.params.swap(0, 1),
+                _ => unreachable!(),
+            }
+            if let Ok(plan) = make_plan(&Arc::new(forged), &facts) {
+                assert!(
+                    plan.effects().is_none() || !plan.problems.is_empty(),
+                    "forgery {mutation}"
+                );
+            }
+        }
+        let (_, foreign) = shared_aggregate_body_fixture(source);
+        if let Ok(plan) = make_plan(&function, &foreign) {
+            assert!(
+                plan.effects().is_none() || !plan.problems.is_empty(),
+                "foreign graph/facts"
+            );
+        }
+        assert!(
+            Plan::build_validated(
+                &function,
+                &facts,
+                None,
+                &mut Budget::new(0),
+                128 * 1024 * 1024
+            )
+            .is_err()
+        );
     }
 
     #[test]
