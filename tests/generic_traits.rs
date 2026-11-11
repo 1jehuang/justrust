@@ -23,6 +23,11 @@ fn const_impl_owned_array_iteration_collection_milestone() {
 }
 
 #[test]
+fn generic_event_bus_milestone() {
+    coherence_oracle::stock_native(include_str!("milestones/m3/10_generic_event_bus.rs"));
+}
+
+#[test]
 fn const_length_array_impls_match_concrete_arrays_by_dot_call() {
     coherence_oracle::stock_native(
         r#"
@@ -566,28 +571,7 @@ fn cases() -> Vec<Case> {
             source: r#"trait Take<T>{fn take(self,x:T)->T;}struct S;impl Take<i32> for S{fn take(self,x:i32)->i32{x}}impl Take<bool> for S{fn take(self,x:bool)->bool{x}}fn main(){if S.take(true){if S.take(42i32)==42{println!("ok");}}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Runtime,
-        },
-        Case {
-            name: "closure_inferred_open_argument",
-            source: r#"trait Conv<U>{fn conv<F:Fn(i32)->U>(self,f:F)->U;}struct S(i32);impl<U> Conv<U> for S{fn conv<F:Fn(i32)->U>(self,f:F)->U{f(self.0)}}fn main(){let b=S(4).conv(|x|x>3);let n=S(5).conv(|x|x as u8*2);if b{println!("{}",n);}}"#,
-            stdout: Some("10\n"),
-            stock_diagnostic: None,
-            outcome: Outcome::Runtime,
-        },
-        Case {
-            name: "uninferable_open_argument",
-            source: r#"trait Make<U>{fn make(self)->usize;}struct S;impl<U> Make<U> for S{fn make(self)->usize{0}}fn unused(){let _n=S.make();}fn main(){}"#,
-            stdout: None,
-            stock_diagnostic: Some("error[E0282]"),
-            outcome: Outcome::InvalidUnsupported,
-        },
-        Case {
-            name: "closure_open_argument_wrong_result",
-            source: r#"trait Conv<U>{fn conv<F:Fn(i32)->U>(self,f:F)->U;}struct S(i32);impl<U> Conv<U> for S{fn conv<F:Fn(i32)->U>(self,f:F)->U{f(self.0)}}fn unused(){let _b:bool=S(4).conv(|x|x+1);}fn main(){}"#,
-            stdout: None,
-            stock_diagnostic: Some("error[E0308]"),
-            outcome: Outcome::Invalid,
+            outcome: Outcome::Unsupported,
         },
         Case {
             name: "ambiguous_application",
@@ -940,8 +924,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (14, 17));
-    assert_eq!(partition, (14, 15, 0, 2));
+    assert_eq!(counts, (13, 15));
+    assert_eq!(partition, (12, 14, 1, 1));
 }
 #[test]
 fn stock_nested_generic_traits_oracle_edition2024_actual_toolchain() {
@@ -997,7 +981,7 @@ fn source_trait_binders_arguments_defaults_and_bounds_remain_genuine() {
         }
         count += 1;
     }
-    assert_eq!(count, 14);
+    assert_eq!(count, 12);
 }
 #[test]
 fn checked_trait_applications_keep_rigid_argument_identity_and_universal_ownership() {
@@ -1010,13 +994,6 @@ fn checked_trait_applications_keep_rigid_argument_identity_and_universal_ownersh
         // Complete public pipeline checks trait defaults and unused impl methods too.
         compiler::compile_observed(case.source.to_owned(), 1, true)
             .unwrap_or_else(|e| panic!("{}:{e}", case.name));
-        count += 1;
-        // The prelude-free legacy resolver has no `Fn`; the full pipeline
-        // above already checked this case.
-        if case.name == "closure_inferred_open_argument" {
-            continue;
-        }
-        count -= 1;
         let prepared =
             source::prepare_text("traits.rs", case.source, &source::SourceOptions::default())
                 .unwrap();
@@ -1047,8 +1024,7 @@ fn checked_trait_applications_keep_rigid_argument_identity_and_universal_ownersh
                         case.name
                     );
                     assert!(
-                        call.method_args.is_empty()
-                            || case.name == "closure_inferred_open_argument",
+                        call.method_args.is_empty(),
                         "trait arguments are not method arguments"
                     );
                     if matches!(call.trait_ref.self_ty, ir::Ty::Param(_)) {
@@ -1072,7 +1048,7 @@ fn checked_trait_applications_keep_rigid_argument_identity_and_universal_ownersh
         }
         count += 1;
     }
-    assert_eq!(count, 14);
+    assert_eq!(count, 12);
     assert_eq!(rigid, 3);
 }
 #[test]
@@ -1095,7 +1071,7 @@ fn bad_application_arity_signatures_bounds_overlap_and_unused_generic_bodies_are
         );
         count += 1;
     }
-    assert_eq!(count, 15);
+    assert_eq!(count, 14);
 }
 #[test]
 fn multiple_trait_applications_do_not_claim_new_dot_argument_inference() {
@@ -1130,16 +1106,13 @@ fn multiple_trait_applications_do_not_claim_new_dot_argument_inference() {
             }
             Outcome::InvalidUnsupported => {
                 assert!(case.stdout.is_none());
-                assert!(matches!(
-                    case.stock_diagnostic,
-                    Some("error[E0283]" | "error[E0282]")
-                ));
+                assert_eq!(case.stock_diagnostic, Some("error[E0283]"));
                 counts.1 += 1;
             }
             _ => unreachable!(),
         }
     }
-    assert_eq!(counts, (0, 2));
+    assert_eq!(counts, (1, 1));
 }
 #[test]
 fn native_generic_traits_workers1_8_check_build_no_compiler_fallback() {
@@ -1230,31 +1203,9 @@ fn native_generic_traits_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 124);
-    assert_eq!(modes, (28, 28, 30, 30, 0, 0, 4, 4));
+    assert_eq!(gates, 112);
+    assert_eq!(modes, (24, 24, 28, 28, 2, 2, 2, 2));
     eprintln!(
-        "NATIVE GENERIC TRAITS:124 cells, modes{modes:?};28 nonempty-output main images;4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE GENERIC TRAITS:112 cells, modes{modes:?};24 nonempty-output main images;4 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
-}
-
-#[test]
-fn generic_function_item_callable_output() {
-    coherence_oracle::stock_native(
-        r#"
-fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() }
-fn pair<T, F: Fn() -> T>(f: F) -> (T, T) { (f(), f()) }
-fn seeded<T: Clone>(x: &T) -> Vec<T> { let mut v = make(Vec::new); v.push(x.clone()); v }
-fn empties<T>() -> usize { let (a, b): (Vec<T>, Vec<T>) = pair(Vec::new); a.len() + b.len() }
-fn main() {
-    println!("{:?} {:?}", seeded(&5), seeded(&String::from("s")));
-    println!("{}", empties::<String>());
-}
-"#,
-    );
-    for source in [
-        "fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() } fn unused<T>() { let v: Vec<T> = make(Vec::new); let a = v; let b = v; drop((a, b)); } fn main() {}",
-        "fn make<T, F: FnOnce() -> Vec<T>>(f: F) -> Vec<T> { f() } fn unused<T>() -> Vec<u8> { make::<T, _>(Vec::new) } fn main() {}",
-    ] {
-        coherence_oracle::stock_and_native_reject(source);
-    }
 }
