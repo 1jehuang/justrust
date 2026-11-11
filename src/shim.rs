@@ -53,6 +53,10 @@ pub struct Unit {
     pub rmeta_secs: Option<f64>,
     pub exit: i32,
     pub passes: Vec<Pass>,
+    /// Source or absence of compiler phase telemetry for a real compile.
+    /// Empty on cache hits and recordings from older clients.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub phase_coverage: String,
     /// Shared dependency cache outcome: "hit", "miss" (compiled, stored when
     /// it succeeded), or empty when the unit was not eligible (local,
     /// incremental, disabled with `JUSTRUST_DEPCACHE=0`).
@@ -205,14 +209,11 @@ fn proc_macro_inputs_enforced(toolchain: &std::path::Path) -> bool {
 }
 
 /// Whether the toolchain's compiler has the phase ledger
-/// (`JUSTRUST_RUSTC_PHASES_FILE`, jr-rustc `jr_phases_write`). Scanned once
-/// per toolchain and remembered in `<toolchain>/.jr-phases`.
+/// (`JUSTRUST_RUSTC_PHASES_FILE`, jr-rustc `jr_phases_write`). Cache the
+/// probe against driver metadata, not its installation directory name.
 fn phase_ledger_supported(toolchain: &std::path::Path) -> bool {
-    let marker = toolchain.join(".jr-phases");
-    if let Ok(v) = std::fs::read_to_string(&marker) {
-        return v.trim() == "yes";
-    }
-    let found = std::fs::read_dir(toolchain.join("lib"))
+    use std::hash::{Hash, Hasher};
+    let mut drivers: Vec<_> = std::fs::read_dir(toolchain.join("lib"))
         .into_iter()
         .flatten()
         .flatten()
@@ -221,15 +222,69 @@ fn phase_ledger_supported(toolchain: &std::path::Path) -> bool {
             let n = n.to_string_lossy();
             n.starts_with("librustc_driver") && n.ends_with(".so")
         })
-        .any(|e| {
-            std::fs::read(e.path())
-                .is_ok_and(|b| memchr::memmem::find(&b, b"JUSTRUST_RUSTC_PHASES_FILE").is_some())
-        });
+        .filter_map(|e| Some((e.path(), e.metadata().ok()?)))
+        .collect();
+    drivers.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut identity = std::collections::hash_map::DefaultHasher::new();
+    for (path, metadata) in &drivers {
+        path.hash(&mut identity);
+        metadata.len().hash(&mut identity);
+        metadata.modified().ok().hash(&mut identity);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            metadata.dev().hash(&mut identity);
+            metadata.ino().hash(&mut identity);
+            metadata.ctime().hash(&mut identity);
+            metadata.ctime_nsec().hash(&mut identity);
+        }
+    }
+    let key = format!("v2:{:016x}", identity.finish());
+    let marker = toolchain.join(".jr-phases");
+    if let Ok(v) = std::fs::read_to_string(&marker)
+        && let Some(answer) = v.strip_prefix(&format!("{key}\n"))
+    {
+        return answer.trim() == "yes";
+    }
+    let found = drivers
+        .iter()
+        .any(|(path, _)| driver_has_phase_ledger(path));
     let tmp = toolchain.join(format!(".jr-phases.{}", std::process::id()));
-    if std::fs::write(&tmp, if found { "yes\n" } else { "no\n" }).is_ok() {
+    if std::fs::write(
+        &tmp,
+        format!("{key}\n{}\n", if found { "yes" } else { "no" }),
+    )
+    .is_ok()
+    {
         let _ = std::fs::rename(&tmp, &marker);
     }
     found
+}
+
+/// Driver libraries exceed 500 MB on some hosted toolchains. Keep the
+/// initial probe bounded, including markers split across read boundaries.
+fn driver_has_phase_ledger(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    const MARKER: &[u8] = b"JUSTRUST_RUSTC_PHASES_FILE";
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0; 64 * 1024];
+    let mut carry = 0;
+    loop {
+        let n = match file.read(&mut buf[carry..]) {
+            Ok(0) => return false,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        };
+        let end = carry + n;
+        if memchr::memmem::find(&buf[..end], MARKER).is_some() {
+            return true;
+        }
+        carry = end.min(MARKER.len() - 1);
+        buf.copy_within(end - carry..end, 0);
+    }
 }
 
 /// Where this unit's compiler writes its phase ledger, when it can.
@@ -239,22 +294,35 @@ fn phase_ledger_supported(toolchain: &std::path::Path) -> bool {
 /// compiler option, so no incremental, depcache or cargo fingerprint key
 /// moves, and it costs no stderr traffic. `JUSTRUST_PASSES=0` turns it off.
 fn phase_ledger_path(real: &std::path::Path, run_dir: &std::path::Path) -> Option<PathBuf> {
-    if matches!(
-        std::env::var("JUSTRUST_PASSES").as_deref(),
-        Ok("0") | Ok("off") | Ok("false") | Ok("no")
-    ) || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
-    {
+    if phase_timing_disabled() {
         return None;
     }
+    phase_ledger_path_enabled(real, run_dir)
+}
+
+fn phase_ledger_path_enabled(real: &std::path::Path, run_dir: &std::path::Path) -> Option<PathBuf> {
     let toolchain = real.parent()?.parent()?;
-    if !toolchain.file_name()?.to_string_lossy().starts_with("jr-")
-        || !phase_ledger_supported(toolchain)
-    {
+    if !phase_ledger_supported(toolchain) {
         return None;
     }
     let dir = run_dir.join("phases");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join(format!("{}.tsv", std::process::id())))
+}
+
+fn phase_timing_disabled() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_PASSES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
+}
+
+fn phase_ledger_environment(cmd: &mut Command, ledger: Option<&std::path::Path>) {
+    match ledger {
+        Some(path) => cmd.env("JUSTRUST_RUSTC_PHASES_FILE", path),
+        // Never inherited: a nested build must not write another unit's file.
+        None => cmd.env_remove("JUSTRUST_RUSTC_PHASES_FILE"),
+    };
 }
 
 /// Parse a phase ledger: `label\tseconds\tcount` per line.
@@ -505,11 +573,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let ledger = (!passes_on)
         .then(|| phase_ledger_path(real, run_dir))
         .flatten();
-    match &ledger {
-        Some(path) => cmd.env("JUSTRUST_RUSTC_PHASES_FILE", path),
-        // Never inherited: a nested build must not write another unit's file.
-        None => cmd.env_remove("JUSTRUST_RUSTC_PHASES_FILE"),
-    };
+    phase_ledger_environment(&mut cmd, ledger.as_deref());
     if plan.is_none() {
         let hot =
             crate::hotpatch::rustc_args(described.local, described.test, !link_args.is_empty());
@@ -620,12 +684,29 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     unit.exit = exit;
     unit.rmeta_secs = rmeta_at.lock().ok().and_then(|g| *g).map(|t| t - start);
     unit.passes = std::mem::take(&mut *passes.lock().unwrap());
+    unit.phase_coverage = if passes_on {
+        "time-passes"
+    } else if ledger.is_some() {
+        "native-ledger-missing"
+    } else if phase_timing_disabled() {
+        "disabled"
+    } else {
+        // No capable driver, or the recording directory was not writable.
+        "native-ledger-unavailable"
+    }
+    .into();
     if let Some(path) = &ledger {
         // Written when the compiler exits, or just before an early reply
         // (jr-rustc `jr_phases_write_now`): its total is then the time the
         // caller waited, without the background incremental persist.
         if let Ok(text) = std::fs::read_to_string(path) {
             unit.passes = parse_phase_ledger(&text);
+            unit.phase_coverage = if unit.passes.is_empty() {
+                "native-ledger-empty"
+            } else {
+                "native-ledger"
+            }
+            .into();
             let _ = std::fs::remove_file(path);
         }
     }
@@ -1035,13 +1116,67 @@ mod tests {
     }
 
     #[test]
+    fn native_phase_setup_preserves_arguments_and_cache_environment() {
+        let args = [
+            "--crate-name",
+            "example",
+            "-Cincremental=/tmp/inc",
+            "--emit=metadata",
+        ];
+        let mut cmd = Command::new("rustc");
+        cmd.args(args);
+        phase_ledger_environment(&mut cmd, Some(std::path::Path::new("/record/phases.tsv")));
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), args.map(OsStr::new));
+        let env = cmd.get_envs().collect::<Vec<_>>();
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].0, "JUSTRUST_RUSTC_PHASES_FILE");
+        assert_eq!(env[0].1, Some(OsStr::new("/record/phases.tsv")));
+        assert!(!crate::depcache::keyed_env("JUSTRUST_RUSTC_PHASES_FILE"));
+        phase_ledger_environment(&mut cmd, None);
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), args.map(OsStr::new));
+        assert_eq!(
+            cmd.get_envs().collect::<Vec<_>>(),
+            [(OsStr::new("JUSTRUST_RUSTC_PHASES_FILE"), None)]
+        );
+    }
+
+    #[test]
+    fn phase_coverage_is_backward_compatible() {
+        let mut value = serde_json::to_value(Unit::default()).unwrap();
+        assert!(value.get("phase_coverage").is_none());
+        let old: Unit = serde_json::from_value(value.clone()).unwrap();
+        assert!(old.phase_coverage.is_empty());
+        value["phase_coverage"] = "native-ledger-unavailable".into();
+        let new: Unit = serde_json::from_value(value).unwrap();
+        assert_eq!(new.phase_coverage, "native-ledger-unavailable");
+    }
+
+    #[test]
+    fn phase_ledger_probe_handles_chunk_boundaries() {
+        let path = std::env::temp_dir().join(format!("jr-phase-boundary-{}", std::process::id()));
+        let marker = b"JUSTRUST_RUSTC_PHASES_FILE";
+        for split in 0..marker.len() {
+            let mut data = vec![b'.'; 64 * 1024 - split];
+            data.extend_from_slice(marker);
+            std::fs::write(&path, data).unwrap();
+            assert!(driver_has_phase_ledger(&path), "split {split}");
+        }
+        std::fs::write(&path, b"JUSTRUST_RUSTC_PHASES_FIL").unwrap();
+        assert!(!driver_has_phase_ledger(&path));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn phase_ledger_detected_from_driver() {
-        let dir = std::env::temp_dir().join(format!("jr-phases-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hosted-compiler-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("lib")).unwrap();
         std::fs::write(dir.join("lib/librustc_driver-x.so"), b"old driver").unwrap();
         assert!(!phase_ledger_supported(&dir));
-        std::fs::remove_file(dir.join(".jr-phases")).unwrap();
+        assert!(phase_ledger_path_enabled(&dir.join("bin/rustc"), &dir.join("record")).is_none());
+        assert!(!dir.join("record").exists());
+        // Legacy negative probes must not hide a replacement driver.
+        std::fs::write(dir.join(".jr-phases"), "no\n").unwrap();
         std::fs::write(
             dir.join("lib/librustc_driver-x.so"),
             b"..JUSTRUST_RUSTC_PHASES_FILE..",
@@ -1049,6 +1184,34 @@ mod tests {
         .unwrap();
         assert!(phase_ledger_supported(&dir));
         assert!(phase_ledger_supported(&dir), "cached");
+        let ledger = phase_ledger_path_enabled(&dir.join("bin/rustc"), &dir.join("record"));
+        assert_eq!(
+            ledger,
+            Some(dir.join(format!("record/phases/{}.tsv", std::process::id())))
+        );
+        #[cfg(unix)]
+        {
+            let driver = dir.join("lib/librustc_driver-x.so");
+            let metadata = std::fs::metadata(&driver).unwrap();
+            let replacement = dir.join("lib/replacement");
+            std::fs::write(&replacement, vec![b'.'; metadata.len() as usize]).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&replacement)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+                .unwrap();
+            std::fs::rename(replacement, driver).unwrap();
+            assert!(!phase_ledger_supported(&dir), "inode replacement");
+        }
+        std::fs::write(dir.join("lib/librustc_driver-x.so"), b"replacement").unwrap();
+        assert!(!phase_ledger_supported(&dir));
+        std::fs::write(
+            dir.join("lib/librustc_driver-x.so"),
+            b"new JUSTRUST_RUSTC_PHASES_FILE driver",
+        )
+        .unwrap();
+        assert!(phase_ledger_supported(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
