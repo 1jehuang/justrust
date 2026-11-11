@@ -5,6 +5,30 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn captured_iterator_results_with_parameter_patterns() {
+    oracle::check(
+        "captured-iterator-parameter-patterns",
+        &[
+            Case {
+                name: "wildcard_captured_iterator",
+                source: "fn checksum(bytes:&[u8])->u8{let f=|_:i32|bytes.iter().cloned();f(0).sum()}fn main(){println!(\"{}\",checksum(&[2u8,5]));}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "destructured_captured_iterator",
+                source: "fn checksum(bytes:&[u8])->u8{let f=|(_, _):(i32,i32)|bytes.iter().cloned();f((1,2)).sum()}fn main(){println!(\"{}\",checksum(&[7u8,9]));}",
+                expect: Expect::Run("16\n"),
+            },
+            Case {
+                name: "unused_pattern_capture_escape",
+                source: "fn unused()->impl Iterator<Item=u8>{let bytes=[1u8,2];(0..2).flat_map(|_|bytes.iter().cloned())}fn main(){}",
+                expect: Expect::Invalid("E0373"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn stored_closure_constant_inputs() {
     oracle::check(
         "stored_closure_constant_inputs",

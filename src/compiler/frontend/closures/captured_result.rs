@@ -511,8 +511,11 @@ pub(super) fn validate_source(
         )
         .map_err(|error| error.into_legacy_diagnostic(budget))?;
     for statement in &source.body.statements {
-        let ir::TypedStmt::Let { value, .. } = statement else {
-            return Err("capture result changed original straight-line parameter entry".into());
+        let value = match statement {
+            ir::TypedStmt::Let { value, .. } | ir::TypedStmt::LetPattern { value, .. } => *value,
+            _ => {
+                return Err("capture result changed original straight-line parameter entry".into());
+            }
         };
         let Some(ir::TypedExpr {
             kind: ir::ExprKind::Field { base, .. },
