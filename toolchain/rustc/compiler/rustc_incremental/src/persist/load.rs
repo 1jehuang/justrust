@@ -75,7 +75,13 @@ fn load_dep_graph(sess: &Session, incr_comp_session: &IncrCompSession) -> LoadRe
                 prev_work_products.insert(swp.id, swp.work_product);
             } else {
                 debug!("reconcile_work_products: some file for {:?} does not exist", swp);
-                return LoadResult::DataOutOfDate;
+                // An incomplete product cannot be reused, but it does not
+                // invalidate queries or independent work products. Codegen
+                // checks previous_work_product before marking a CGU green,
+                // and metadata reuse makes the same presence check. Omit
+                // the whole product (including its remaining files) so its
+                // consumer regenerates it normally. Keep the dep-graph's
+                // compiler/header and command-line hash validation below.
             }
         }
     }
