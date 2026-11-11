@@ -18,8 +18,11 @@
 //!   `CARGO_BUILD_TARGET_DIR`, `--target-dir`, `--config ...target-dir...`).
 //! - A session (`JCODE_SESSION_ID`, else the Unix session id) sticks to its
 //!   slot so its incremental cache stays warm. If that slot is busy it takes
-//!   a free one, creating up to `JUSTRUST_SLOTS` (default 4) slots. If all are
+//!   a free one, preferring an idle slot with the same request key before
+//!   creating up to `JUSTRUST_SLOTS` (default 4) slots. If all are
 //!   busy it falls back to the shared dir and never waits.
+//!   `JUSTRUST_SLOT_WARM_REUSE=0` restores allocation-before-idle-reuse for
+//!   controlled comparisons. It does not disable existing join behavior.
 //! - A new slot is seeded with a reflink copy of the shared profile dir, so
 //!   dependencies are fresh and the copy shares disk extents. Without reflink
 //!   support (not btrfs/xfs) slots are disabled: a full copy would be huge.
@@ -33,6 +36,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
+
+#[cfg(test)]
+#[path = "slots_contention_tests.rs"]
+mod contention_tests;
 
 const DEFAULT_SLOTS: usize = 4;
 /// Subcommands that use slots by default.
@@ -52,8 +59,8 @@ pub struct SlotInfo {
     pub slot: Option<usize>,
     /// The target dir cargo used.
     pub target_dir: String,
-    /// "sticky" (this session's slot), "new", "reused" (taken from another
-    /// session), or "fallback" (all slots busy, used the shared dir).
+    /// "sticky" (this session's slot), "new", "warm" (idle matching request),
+    /// "reused" (another session's LRU slot), "joined", or "fallback".
     pub how: String,
     /// Seconds spent seeding the slot before cargo started.
     #[serde(default)]
@@ -342,6 +349,7 @@ fn read_meta(path: &Path) -> Option<SlotMeta> {
 enum Pick {
     Sticky(usize),
     New(usize),
+    Warm(usize),
     Reused(usize),
     /// Another run of the identical command held this slot; we waited for it.
     Joined(usize),
@@ -350,9 +358,22 @@ enum Pick {
 /// Pick a slot: this session's own, else an unused number below the cap,
 /// else the least recently used existing one. `metas[i]` is None for slot
 /// numbers that do not exist yet. `free(i)` tries to lock slot i.
+#[cfg(test)]
 fn pick(
     metas: &[Option<SlotMeta>],
     me: &str,
+    free: impl FnMut(usize) -> bool,
+) -> (Option<Pick>, usize) {
+    pick_compatible(metas, me, |_| false, free)
+}
+
+/// Prefer an idle slot that last ran this request before creating another
+/// target tree. Compatibility is a locality hint, never a freshness proof:
+/// Cargo still executes and validates every input, including build-script env.
+fn pick_compatible(
+    metas: &[Option<SlotMeta>],
+    me: &str,
+    mut compatible: impl FnMut(usize) -> bool,
     mut free: impl FnMut(usize) -> bool,
 ) -> (Option<Pick>, usize) {
     let mut busy = 0;
@@ -364,6 +385,26 @@ fn pick(
         tried[i] = true;
         if free(i) {
             return (Some(Pick::Sticky(i)), busy);
+        }
+        busy += 1;
+    }
+    // Most recently used matching state is the best warm-cache candidate.
+    // Probe under the same exclusive lease used for the whole build, so a
+    // concurrent caller cannot allocate the same target tree.
+    let mut warm: Vec<usize> = (0..metas.len())
+        .filter(|&i| !tried[i] && metas[i].as_ref().is_some_and(|m| m.seeded) && compatible(i))
+        .collect();
+    warm.sort_by(|&a, &b| {
+        metas[b]
+            .as_ref()
+            .unwrap()
+            .last_used
+            .total_cmp(&metas[a].as_ref().unwrap().last_used)
+    });
+    for i in warm {
+        tried[i] = true;
+        if free(i) {
+            return (Some(Pick::Warm(i)), busy);
         }
         busy += 1;
     }
@@ -899,11 +940,11 @@ fn try_lock_shared(path: &Path) -> Option<File> {
     f.try_lock_shared().is_ok().then_some(f)
 }
 
-/// Identity of a build request for joining: working dir, cargo arguments
-/// (before `--`: test filters do not change what is compiled), and the
-/// environment that changes compilation. Equal keys compile the same units
-/// from the same sources unless a file changes in between, and then cargo's
-/// own fingerprints still catch it, because the joiner runs cargo itself.
+/// Locality hint for joining and idle reuse: working dir, cargo arguments
+/// (before `--`: test filters do not change what is compiled), and common
+/// compiler environment inputs. Not an artifact cache key: arbitrary inputs
+/// such as build-script environment and source edits are validated by Cargo,
+/// which always runs again. Never use this to share a result or skip a build.
 fn request_key(args: &[OsString]) -> String {
     let mut k = std::env::current_dir()
         .map(|d| d.to_string_lossy().into_owned())
@@ -960,10 +1001,26 @@ fn join_identical(root: &Path, cap: usize, key: &str) -> (Option<(usize, File)>,
         "justrust: an identical build is running in slot {n}; waiting for it instead of \
          compiling the same crates twice (JUSTRUST_JOIN=0 disables)"
     );
+    wait_for_identical(root, n, key, join_max_wait())
+}
+
+fn wait_for_identical(
+    root: &Path,
+    n: usize,
+    key: &str,
+    max: Duration,
+) -> (Option<(usize, File)>, f64) {
     let t = Instant::now();
-    let max = join_max_wait();
     loop {
+        if !std::fs::read_to_string(root.join(format!("{n}.req"))).is_ok_and(|k| k == key) {
+            return (None, t.elapsed().as_secs_f64());
+        }
         if let Some(f) = try_lock(&root.join(format!("{n}.lock"))) {
+            // The previous owner may have finished and a different request
+            // may have acquired this slot during our polling interval.
+            if !std::fs::read_to_string(root.join(format!("{n}.req"))).is_ok_and(|k| k == key) {
+                return (None, t.elapsed().as_secs_f64());
+            }
             return (Some((n, f)), t.elapsed().as_secs_f64());
         }
         if t.elapsed() >= max {
@@ -1039,6 +1096,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     let cap = capacity();
     let me = session_key();
     let key = request_key(args);
+    let warm_reuse = std::env::var("JUSTRUST_SLOT_WARM_REUSE").as_deref() != Ok("0");
     let (joined, join_wait) = join_identical(&root, cap, &key);
     let metas: Vec<Option<SlotMeta>> = (0..cap)
         .map(|i| read_meta(&root.join(format!("{i}.json"))))
@@ -1049,10 +1107,19 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
             locks[n] = Some(lock);
             (Some(Pick::Joined(n)), 0)
         }
-        None => pick(&metas, &me, |i| {
-            locks[i] = try_lock(&root.join(format!("{i}.lock")));
-            locks[i].is_some()
-        }),
+        None => pick_compatible(
+            &metas,
+            &me,
+            |i| {
+                warm_reuse
+                    && std::fs::read_to_string(root.join(format!("{i}.req")))
+                        .is_ok_and(|k| k == key)
+            },
+            |i| {
+                locks[i] = try_lock(&root.join(format!("{i}.lock")));
+                locks[i].is_some()
+            },
+        ),
     };
 
     let Some(picked) = picked else {
@@ -1073,6 +1140,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     let (n, how) = match picked {
         Pick::Sticky(n) => (n, "sticky"),
         Pick::New(n) => (n, "new"),
+        Pick::Warm(n) => (n, "warm"),
         Pick::Reused(n) => (n, "reused"),
         Pick::Joined(n) => (n, "joined"),
     };
@@ -1730,6 +1798,58 @@ mod tests {
     }
 
     #[test]
+    fn warm_matching_slot_avoids_new_target_copy() {
+        let metas = vec![meta("old", 10.0), None, None, None];
+        assert_eq!(
+            pick_compatible(&metas, "new-session", |i| i == 0, |_| true),
+            (Some(Pick::Warm(0)), 0)
+        );
+        // No matching warm state: retain the existing bounded allocation rule.
+        assert_eq!(
+            pick_compatible(&metas, "new-session", |_| false, |_| true),
+            (Some(Pick::New(1)), 0)
+        );
+    }
+
+    #[test]
+    fn warm_reuse_keeps_sticky_and_never_probes_a_busy_slot_twice() {
+        let metas = vec![meta("a", 10.0), meta("b", 20.0), None];
+        assert_eq!(
+            pick_compatible(&metas, "a", |_| true, |_| true),
+            (Some(Pick::Sticky(0)), 0)
+        );
+        let mut probes = vec![0; metas.len()];
+        assert_eq!(
+            pick_compatible(
+                &metas,
+                "c",
+                |_| true,
+                |i| {
+                    probes[i] += 1;
+                    i == 2
+                }
+            ),
+            (Some(Pick::New(2)), 2)
+        );
+        assert_eq!(probes, [1, 1, 1]);
+        assert_eq!(pick_compatible(&metas, "c", |_| true, |_| false), (None, 3));
+    }
+
+    #[test]
+    fn warm_reuse_prefers_recent_seeded_state() {
+        let mut metas = vec![meta("a", 10.0), meta("b", 20.0), None];
+        assert_eq!(
+            pick_compatible(&metas, "c", |_| true, |_| true),
+            (Some(Pick::Warm(1)), 0)
+        );
+        metas[1].as_mut().unwrap().seeded = false;
+        assert_eq!(
+            pick_compatible(&metas, "c", |_| true, |_| true),
+            (Some(Pick::Warm(0)), 0)
+        );
+    }
+
+    #[test]
     fn target_dir_inserted_after_subcommand() {
         let args = os(&["+nightly", "test", "-p", "x", "--", "f"]);
         assert_eq!(subcommand_index(&args), Some(1));
@@ -1859,6 +1979,35 @@ mod tests {
         assert!(waited >= 0.2, "waited {waited}");
         t.join().unwrap();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn join_abandons_changed_request_without_waiting_for_unrelated_build() {
+        let root =
+            std::env::temp_dir().join(format!("justrust-join-changed-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let held = try_lock(&root.join("0.lock")).unwrap();
+        std::fs::write(root.join("0.req"), "different").unwrap();
+        // Even with the slot still locked, the unrelated owner is not queued on.
+        let (joined, _) = wait_for_identical(&root, 0, "original", Duration::from_secs(300));
+        assert!(joined.is_none());
+        drop(held);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn join_timeout_does_not_claim_or_allocate_a_slot() {
+        let root =
+            std::env::temp_dir().join(format!("justrust-join-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("0.req"), "same").unwrap();
+        let held = try_lock(&root.join("0.lock")).unwrap();
+        let (joined, _) = wait_for_identical(&root, 0, "same", Duration::ZERO);
+        assert!(joined.is_none());
+        assert!(try_lock(&root.join("0.lock")).is_none());
+        assert!(!root.join("1.lock").exists());
+        drop(held);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
