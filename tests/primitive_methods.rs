@@ -248,6 +248,77 @@ fn unchanged_vm_interpreter_matches_stock() {
 }
 
 #[test]
+fn unchanged_matrix_generic_num_matches_stock() {
+    parse_oracle(
+        "unchanged-matrix-generic-num",
+        &[closure_oracle::Case {
+            name: "08_matrix_generic_num",
+            source: include_str!("milestones/m3/08_matrix_generic_num.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "milestones/m3/08_matrix_generic_num.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn generic_local_sequence_indexed_write_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "generic-local-sequence-indexed-write",
+        &[
+            Case {
+                name: "generic_local_sequence_indexed_write",
+                source: r#"
+use std::ops::{Add, Mul};
+use std::fmt::Display;
+trait Num: Copy + Add<Output = Self> + Mul<Output = Self> + Display { fn zero() -> Self; fn one() -> Self; }
+impl Num for i64 { fn zero() -> Self { 0 } fn one() -> Self { 1 } }
+impl Num for f64 { fn zero() -> Self { 0.0 } fn one() -> Self { 1.0 } }
+struct Sq<T> { n: usize, d: Vec<T> }
+impl<T: Num> Sq<T> {
+    fn ident(n: usize) -> Self { let mut d = vec![T::zero(); n * n]; for i in 0..n { d[i * n + i] = T::one(); } Sq { n, d } }
+    fn mul(&self, o: &Self) -> Self {
+        let n = self.n; let mut d = vec![T::zero(); n * n];
+        for i in 0..n { for j in 0..n { let mut s = T::zero(); for k in 0..n { s = s + self.d[i * n + k] * o.d[k * n + j]; } d[i * n + j] = s; } }
+        Sq { n, d }
+    }
+    fn show(&self) -> String { let mut out = String::new(); for x in &self.d { out.push_str(&format!("{x} ")); } out }
+}
+// By-value parameter `Vec<T>` element stores (`fn f<T>(mut v: Vec<T>, x: T) { v[0] = x }`)
+// are not yet supported and are rejected with an explicit diagnostic.
+fn main() {
+    let a = Sq { n: 2, d: vec![1i64, 1, 1, 0] };
+    println!("{}", a.mul(&a).mul(&Sq::ident(2)).show());
+    let b = Sq { n: 2, d: vec![0.5f64, 2.0, 1.0, 0.0] };
+    println!("{}", b.mul(&Sq::<f64>::ident(2)).mul(&b).show());
+}
+"#,
+                expect: Expect::Run("2 1 1 1 \n2.25 1 0.5 2 \n"),
+            },
+            Case {
+                name: "generic_local_sequence_short_reference_store_unused",
+                source: r#"
+#[allow(dead_code)]
+fn f<'a, T: Copy>(x: &'a T, y: &'static T) -> Vec<&'static T> { let mut d: Vec<&'static T> = Vec::new(); d.push(y); d[0] = x; d }
+fn main() {}
+"#,
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "generic_local_sequence_store_then_use_moved_unused",
+                source: r#"
+#[allow(dead_code)]
+fn f<T: Default>(n: usize, v: T) -> Vec<T> { let mut d: Vec<T> = Vec::new(); for _ in 0..n { d.push(T::default()); } d[0] = v; drop(v); d }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn fn_item_callable_reference_result_matches_stock() {
     use closure_oracle::{Case, Expect};
     parse_oracle(

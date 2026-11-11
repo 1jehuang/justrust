@@ -128,8 +128,18 @@ impl CarrierBuilder<'_, '_> {
         {
             return Ok(None);
         }
-        let CanonicalRoot::ParameterReferent(owner, referent_location) = &target.place.root else {
-            return Ok(None);
+        let (owner, referent_location) = match &target.place.root {
+            CanonicalRoot::ParameterReferent(owner, location) => (owner, location),
+            CanonicalRoot::Owned(owner) => {
+                return self.owned_indexed_summary_write(
+                    state,
+                    destination,
+                    component,
+                    channel,
+                    target,
+                    *owner,
+                );
+            }
         };
         let Some(body) = self.body.clone() else {
             return Ok(None);
@@ -295,6 +305,87 @@ impl CarrierBuilder<'_, '_> {
             }
         }
         Ok(None)
+    }
+
+    /// A locally owned sequence (`let mut d: Vec<T>`) has one issued element
+    /// summary cell per carrier component. A store through its source-issued
+    /// `IndexMut::index_mut` result joins that existing cell weakly, exactly
+    /// as for a parameter referent, but needs no writable input envelope: the
+    /// owner is body storage, not caller-visible input. Nothing is issued.
+    fn owned_indexed_summary_write(
+        &mut self,
+        state: &FlowState,
+        destination: &Place,
+        component: &CarrierLocation,
+        channel: &CellChannel,
+        target: &Target,
+        owner: LocalId,
+    ) -> Result<Option<IndexedSummaryWrite>, Exhausted> {
+        if self.f.params.contains(&owner) {
+            // A by-value parameter's element cells carry input rows; keep
+            // those on the authored-envelope route.
+            return Ok(None);
+        }
+        let (Some(original_destination), Some(original_owner)) = (
+            self.original_locals.get(destination.local.0),
+            self.original_locals.get(owner.0),
+        ) else {
+            // CFG-only scratch ordinals are not original source coordinates.
+            return Ok(None);
+        };
+        let (original_destination, original_owner) =
+            (original_destination.clone(), original_owner.clone());
+        let Some(original_value) =
+            probe_projected_shape(&original_destination, &destination.projection, self.budget)?
+        else {
+            return Ok(None);
+        };
+        let Some(original_owner) =
+            probe_projected_shape(&original_owner, &target.place.projection, self.budget)?
+        else {
+            return Ok(None);
+        };
+        if original_owner.owned_sequence_element() != Some(&original_value) {
+            return Ok(None);
+        }
+        let Some(closed_owner) = self.f.locals.get(owner.0).map(|local| local.ty.clone()) else {
+            return Ok(None);
+        };
+        let Some(closed_owner) =
+            probe_projected_shape(&closed_owner, &target.place.projection, self.budget)?
+        else {
+            return Ok(None);
+        };
+        let closed_value = self.place_ty(self.f, destination)?;
+        if closed_owner.owned_sequence_element() != Some(&closed_value)
+            || !self.indexed_reference_origin(state, destination)?
+        {
+            return Ok(None);
+        }
+        self.retain(
+            mul(
+                target.place.projection.len() + component.path.0.len() * 2 + 2,
+                size_of::<Projection>(),
+            )?,
+            target.place.projection.len() + component.path.0.len() + 1,
+        )?;
+        let mut storage = target.place.clone();
+        storage
+            .projection
+            .push(Projection::DynamicIndex(LocalId(usize::MAX)));
+        storage.projection.extend(value_projection(component));
+        let Some(cell) = self.cell(&CellKey {
+            storage,
+            channel: channel.clone(),
+        })?
+        else {
+            // Never manufacture a summary cell or a new concrete channel.
+            return Ok(None);
+        };
+        if self.cells[cell].input.is_some() {
+            return Ok(None);
+        }
+        Ok(Some(IndexedSummaryWrite { cell }))
     }
 
     /// One moved original element family may expand to several affine fields.

@@ -4899,7 +4899,9 @@ impl CarrierBuilder<'_, '_> {
                     weak_cover = true;
                 }
             }
-            if !copy
+            // Copy elements whose weak cover failed take the same summary
+            // route; the join below never overwrites the summary.
+            if !weak_cover
                 && indices.len() != targets.len()
                 && let Some(summary) =
                     self.indexed_summary_write(state, destination, location, &channel, &targets)?
