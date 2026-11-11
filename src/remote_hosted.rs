@@ -21,9 +21,9 @@
 //!
 //! Credentials are the ones `jcode account login` writes: `JCODE_API_KEY`
 //! and `JCODE_API_BASE` from the environment, else
-//! `~/.config/jcode/jcode-subscription.env`. HTTP goes through curl. The key
-//! is handed to curl on stdin (`--config -`), never in argv or a URL, and
-//! never printed.
+//! `~/.config/jcode/jcode-subscription.env`. HTTP uses curl compatibility,
+//! except default detached run events use a native HTTPS child. Keys reach
+//! either child only on stdin, never in argv or a URL, and are never printed.
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -985,10 +985,132 @@ pub fn report_local_run(
     );
 }
 
-/// A detached curl POST that never delays or fails the build.
+/// A detached POST that never delays or fails the build. Keep custom curl
+/// configuration and every other route on the existing compatibility path.
 fn post_detached(c: &Creds, path: &str, body: &Value) {
+    if let Some(command) = event_command(c, path, body)
+        && spawn_detached(command)
+    {
+        return;
+    }
+    // A failed spawn cannot have sent a request. It is safe to retain curl
+    // when, for example, an atomic client replacement removed this executable.
+    // Once the helper starts, never retry an ambiguous transport outcome.
     spawn_detached(curl(c, "POST", path, Some(body)));
 }
+
+pub(crate) const EVENT_SENDER_ARG: &str = "__hosted_event";
+const MAX_EVENT_BYTES: u64 = 1024 * 1024;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventEnvelope {
+    key: String,
+    path: String,
+    body: Value,
+}
+
+fn valid_event_path(path: &str) -> bool {
+    path.strip_prefix("build/runs/")
+        .and_then(|s| s.strip_suffix("/event"))
+        .is_some_and(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.bytes().any(|b| b.is_ascii_digit())
+                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+        })
+}
+
+fn event_command(c: &Creds, path: &str, body: &Value) -> Option<(Command, String)> {
+    if c.base != DEFAULT_API_BASE
+        || c.build_base != DEFAULT_BUILD_BASE
+        || c.key.is_empty()
+        || !valid_event_path(path)
+        || crate::telemetry::curl_customized()
+    {
+        return None;
+    }
+    let envelope = serde_json::to_string(&EventEnvelope {
+        key: c.key.clone(),
+        path: path.to_owned(),
+        body: body.clone(),
+    })
+    .ok()?;
+    if envelope.len() as u64 > MAX_EVENT_BYTES {
+        return None;
+    }
+    let mut command = Command::new(std::env::current_exe().ok()?);
+    command.arg(EVENT_SENDER_ARG);
+    Some((command, envelope))
+}
+
+fn parse_event_envelope(reader: impl std::io::Read) -> Result<EventEnvelope> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader.take(MAX_EVENT_BYTES + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() as u64 <= MAX_EVENT_BYTES, "event too large");
+    let envelope: EventEnvelope = serde_json::from_slice(&bytes)?;
+    anyhow::ensure!(valid_event_path(&envelope.path), "invalid event path");
+    anyhow::ensure!(!envelope.key.is_empty(), "missing event key");
+    Creds::new(DEFAULT_API_BASE.into(), envelope.key.clone())?;
+    Ok(envelope)
+}
+
+fn event_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .https_only(true)
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .timeout_resolve(Some(Duration::from_secs(5)))
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .new_agent()
+}
+
+fn send_event_native(agent: &ureq::Agent, c: &Creds, path: &str, body: &Value) -> Result<u16> {
+    use std::io::Read;
+    let encoded = body.to_string();
+    anyhow::ensure!(encoded.len() as u64 <= MAX_EVENT_BYTES, "event too large");
+    let mut response = agent
+        .post(c.url(path))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Authorization", c.authorization_header())
+        .send(encoded)?;
+    let code = response.status().as_u16();
+    let bytes = std::io::copy(
+        &mut response.body_mut().as_reader().take(MAX_EVENT_BYTES + 1),
+        &mut std::io::sink(),
+    )?;
+    anyhow::ensure!(bytes <= MAX_EVENT_BYTES, "event response too large");
+    Ok(code)
+}
+
+/// Independent child, like the previous detached curl: it survives the build
+/// caller exiting. Credentials and payload arrive only on stdin. Never replay
+/// an ambiguous POST through curl after a native transport failure.
+pub(crate) fn event_sender_main() -> ! {
+    crate::sys::lower_priority();
+    let result = (|| -> Result<()> {
+        let event = parse_event_envelope(std::io::stdin().lock())?;
+        let mut creds = Creds::new(DEFAULT_API_BASE.into(), event.key)?;
+        creds.set_build_base(DEFAULT_BUILD_BASE.into())?;
+        send_event_native(&event_agent(), &creds, &event.path, &event.body)?;
+        Ok(())
+    })();
+    std::process::exit(if result.is_ok() { 0 } else { 1 });
+}
+
+#[cfg(test)]
+#[path = "hosted_event_sender_tests.rs"]
+mod event_sender_tests;
 
 /// `POST {build}/build/records`: store one account-private record (`run`
 /// after every recorded build, `bench` for a benchmark result). This is
@@ -1114,14 +1236,14 @@ pub fn post_anonymous_detached(path: &str, body: &Value) {
     spawn_detached((cmd, body.to_string()));
 }
 
-fn spawn_detached((mut cmd, stdin_text): (Command, String)) {
+fn spawn_detached((mut cmd, stdin_text): (Command, String)) -> bool {
     let Ok(mut child) = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
     else {
-        return;
+        return false;
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(stdin_text.as_bytes());
@@ -1131,6 +1253,7 @@ fn spawn_detached((mut cmd, stdin_text): (Command, String)) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+    true
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]

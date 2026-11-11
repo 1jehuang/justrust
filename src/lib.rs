@@ -891,6 +891,7 @@ pub fn main() -> anyhow::Result<()> {
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some(telemetry::BG_ARG) => telemetry::background_main(),
+        Some(remote_hosted::EVENT_SENDER_ARG) => remote_hosted::event_sender_main(),
         Some(records_queue::ARG) => records_queue::sender_main(),
         Some("__agent") => {
             let prefix = match std::env::args().nth(2).as_deref() {

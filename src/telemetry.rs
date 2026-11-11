@@ -1010,7 +1010,7 @@ const CURL_TRANSPORT_ENV: &[&str] = &[
     "all_proxy",
 ];
 
-fn curl_customized() -> bool {
+pub(crate) fn curl_customized() -> bool {
     curl_customized_with(
         |name| std::env::var_os(name).is_some(),
         dirs::home_dir().as_deref(),
