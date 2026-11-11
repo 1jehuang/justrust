@@ -47,7 +47,7 @@ use crate::paths;
 use crate::remote_proto::{Msg, OfferItem, OutInfo, read_frame, write_frame};
 use crate::sys::net::{UnixListener, UnixStream};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -299,30 +299,41 @@ pub fn journal_since(root: &Path, since: u64) -> (Vec<OfferItem>, u64) {
 }
 
 fn journal_window(root: &Path, since: u64, max: usize) -> (Vec<OfferItem>, u64) {
-    let Ok(text) = std::fs::read(journal(root)) else {
+    let Ok(mut file) = std::fs::File::open(journal(root)) else {
         return (Vec::new(), 0);
     };
-    let len = text.len() as u64;
+    let Ok(metadata) = file.metadata() else {
+        return (Vec::new(), 0);
+    };
+    let len = metadata.len();
     // `u64::MAX`: only learn where the journal ends now.
     if since == u64::MAX {
         return (Vec::new(), len);
     }
-    // A truncated or replaced journal starts over.
+    // A truncated journal starts over. Snapshot the length so concurrent
+    // appenders cannot extend this scan indefinitely.
     let since = if since > len { 0 } else { since };
-    let tail = &text[since as usize..];
-    // Whole lines only (a writer may be mid-append), at most `max`.
+    if since == len || max == 0 {
+        return (Vec::new(), since);
+    }
+    if file.seek(SeekFrom::Start(since)).is_err() {
+        return (Vec::new(), since);
+    }
+    let mut reader = BufReader::new(file.take(len - since));
     let mut items = Vec::new();
-    let mut end = 0;
-    for (i, line) in tail.split_inclusive(|&b| b == b'\n').enumerate() {
-        if i == max || !line.ends_with(b"\n") {
+    let mut end = since;
+    let mut line = Vec::new();
+    for _ in 0..max {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).is_err() || !line.ends_with(b"\n") {
             break;
         }
-        end += line.len();
-        if let Ok(it) = serde_json::from_slice(line) {
+        end += line.len() as u64;
+        if let Ok(it) = serde_json::from_slice(&line) {
             items.push(it);
         }
     }
-    (items, since + end as u64)
+    (items, end)
 }
 
 /// What to send, most valuable first: entries present here, deduplicated,
@@ -1092,6 +1103,68 @@ mod tests {
         }
         assert_eq!(seen, 5);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn journal_tail_preserves_offsets_and_completed_appends() {
+        let d = std::env::temp_dir().join(format!("jr-peer-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let line = serde_json::to_vec(&OfferItem::default()).unwrap();
+        let mut file = std::fs::File::create(journal(&d)).unwrap();
+        // A large sparse consumed prefix must not be allocated or scanned.
+        let prefix = 1_u64 << 30;
+        file.seek(SeekFrom::Start(prefix)).unwrap();
+        file.write_all(b"invalid\n").unwrap();
+        file.write_all(&line).unwrap();
+        file.write_all(b"\npartial").unwrap();
+        let len = file.metadata().unwrap().len();
+        assert_eq!(journal_since(&d, u64::MAX).1, len);
+        assert_eq!(journal_window(&d, prefix, 0).1, prefix);
+        let (items, next) = journal_window(&d, prefix, 1);
+        assert!(items.is_empty());
+        assert_eq!(next, prefix + 8);
+        let (items, next) = journal_since(&d, next);
+        assert_eq!(items.len(), 1);
+        assert_eq!(next, len - 7);
+        assert_eq!(journal_since(&d, next).1, next);
+        file.write_all(b"\n").unwrap();
+        let (items, next) = journal_since(&d, next);
+        assert!(items.is_empty());
+        assert_eq!(next, len + 1);
+        assert_eq!(journal_since(&d, next).1, next);
+        drop(file);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "comparative journal polling microbenchmark"]
+    fn journal_polling_benchmark() {
+        let d = std::env::temp_dir().join(format!("jr-peer-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let path = journal(&d);
+        let prefix = vec![b' '; 16 << 20];
+        std::fs::write(&path, &prefix).unwrap();
+        let len = prefix.len() as u64;
+        let iterations = 100;
+        // Warm the page cache for both paths, then compare identical EOF polls.
+        std::hint::black_box(std::fs::read(&path).unwrap());
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let text = std::fs::read(&path).unwrap();
+            std::hint::black_box(&text[len as usize..]);
+        }
+        let legacy = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(journal_since(&d, len));
+        }
+        let tail = start.elapsed();
+        println!(
+            "journal_polling: {iterations} EOF polls, {} bytes history, legacy={legacy:?}, tail={tail:?}",
+            len
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
