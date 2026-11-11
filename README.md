@@ -82,6 +82,36 @@ waterfall across runs to show where agent wait goes.
 
 Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
+### Human dashboard, explicitly interactive
+
+The normal justrust install includes a terminal dashboard in the same binary:
+
+```sh
+justrust interactive dashboard
+```
+
+Only the `interactive` namespace enters a terminal UI. There is no automatic
+TUI detection, and redirected stdin or stdout is rejected immediately. Existing
+build, status, runs, and show commands retain their agent-friendly behavior.
+For automation use `justrust status --json`, `justrust runs --json`, and
+`justrust show ID --json` instead.
+
+The dashboard shows active builds observed by this client, recent local runs,
+account-private uploaded recordings, and your signed-in account's build allowance.
+It uses the same credentials as `justrust login`, without operator access or a
+separate installation. Local history works while signed out or offline. Hosted
+refresh failures keep the last successful data visible with its age and error.
+
+Use **↑/↓** to select a run, **Enter** for details, **l** for the last 2,000 local
+log lines (up to 1 MiB), **a** for full account status and refresh errors,
+**f** for failures, **h** for this project, **r** to refresh,
+and **q** to quit. **Esc** returns from details, with **Page Up/Down** for scrolling.
+Local history is a bounded recent window (up to 200 index entries); the account
+list contains up to 50 uploaded runs. Older account records may show unknown
+results until opened. Hosted uploads contain summaries, not full output logs.
+The dashboard is read-only: it does not start/cancel builds, change routing,
+subscribe, spend credits, or modify your account.
+
 ### Known work avoided
 
 `justrust savings` totals recorded cache hits across retained run history.

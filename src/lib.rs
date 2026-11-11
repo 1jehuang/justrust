@@ -17,6 +17,7 @@ mod buildd;
 mod buildscript;
 mod cross_tools;
 mod darwin_tools;
+mod dashboard;
 mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
@@ -173,7 +174,10 @@ Examples:
   justrust test -p my-crate --lib some_module::
   justrust test -p my-crate -- --nocapture
   justrust log --grep warning      full output of the last run
-  justrust show                    where the time went in the last run";
+  justrust show                    where the time went in the last run
+
+Human terminal UI (explicit opt-in, never used by build/status commands):
+  justrust interactive dashboard";
 
 #[derive(Parser)]
 #[command(name = "justrust", version, about, after_help = AFTER_HELP)]
@@ -191,6 +195,11 @@ struct Passthrough {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Human-operated terminal interfaces. Never entered by other commands.
+    Interactive {
+        #[command(subcommand)]
+        command: InteractiveCommand,
+    },
     /// Experimental local Blaze-derived compiler. Cargo remains the default.
     #[command(disable_help_flag = true)]
     Native(Passthrough),
@@ -561,6 +570,12 @@ enum Command {
         #[arg(default_value = "status")]
         action: String,
     },
+}
+
+#[derive(Subcommand)]
+enum InteractiveCommand {
+    /// Open your builds, results, logs and account usage in a terminal dashboard.
+    Dashboard,
 }
 
 #[derive(Subcommand)]
@@ -961,7 +976,11 @@ pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if !matches!(
         cli.command,
-        Command::Login { .. } | Command::Logout | Command::Mcp | Command::Feedback { .. }
+        Command::Login { .. }
+            | Command::Logout
+            | Command::Mcp
+            | Command::Feedback { .. }
+            | Command::Interactive { .. }
     ) {
         account::poll_pending();
     }
@@ -1003,6 +1022,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Setup { .. } => "setup",
         Command::TestBundle { .. } => "test-bundle",
         Command::Log { .. } => "log",
+        Command::Interactive { .. } => "interactive",
         Command::Runs { .. } => "runs",
         Command::Savings { .. } => "savings",
         Command::Status { watch: Some(_), .. } => return None,
@@ -1044,6 +1064,9 @@ fn command_name(c: &Command) -> Option<&'static str> {
 
 fn dispatch(command: Command) -> anyhow::Result<()> {
     match command {
+        Command::Interactive {
+            command: InteractiveCommand::Dashboard,
+        } => dashboard::run()?,
         Command::Native(p) => native::main(p.args)?,
         Command::TestBundle { cmd } => test_bundle::main(cmd),
         Command::Check(p) => agent("check", p.args),

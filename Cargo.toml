@@ -29,6 +29,9 @@ tar = "0.4"
 memchr = "2"
 object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "pe", "macho", "std", "unaligned"] }
 memmap2 = "0.9.11"
+# Explicitly opt-in terminal dashboard, bundled in the normal client binary.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+unicode-width = "0.2"
 tungstenite = { version = "0.30", default-features = false, features = ["rustls-tls-native-roots", "handshake"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }

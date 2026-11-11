@@ -39,6 +39,7 @@ pub(crate) struct RunRow {
 pub(crate) struct HostedSnapshot {
     pub account: crate::remote_hosted::Me,
     pub runs: Vec<RunRow>,
+    pub history_error: Option<String>,
 }
 
 /// An independent local update. The caller retains last-good hosted data.
@@ -76,13 +77,21 @@ pub(crate) fn local_snapshot() -> Snapshot {
 pub(crate) fn fetch_hosted() -> Result<HostedSnapshot> {
     let credentials = crate::remote_hosted::creds()?;
     let account = crate::remote_hosted::me(&credentials)?;
-    let records = get(&credentials, "build/records?kind=run&limit=50")?;
-    let rows = records["records"]
-        .as_array()
-        .context("hosted records response is missing records array")?;
+    let history = (|| -> Result<Vec<RunRow>> {
+        let records = get(&credentials, "build/records?kind=run&summary=1&limit=50")?;
+        let rows = records["records"]
+            .as_array()
+            .context("hosted records response is missing records array")?;
+        Ok(rows.iter().take(50).filter_map(hosted_row).collect())
+    })();
+    let (runs, history_error) = match history {
+        Ok(runs) => (runs, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
     Ok(HostedSnapshot {
         account,
-        runs: rows.iter().take(50).filter_map(hosted_row).collect(),
+        runs,
+        history_error,
     })
 }
 
@@ -140,13 +149,30 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
     }
     // The list deliberately contains metadata only. Do not invent a command,
     // verdict, or execution location from the uploader machine label.
+    let summary = &value["summary"];
     Some(RunRow {
         id: id.into(),
-        start: number(&value["at"]),
+        start: summary["start"]
+            .as_f64()
+            .filter(|n| n.is_finite())
+            .unwrap_or_else(|| number(&value["at"])),
+        cwd: summary["cwd"].as_str().unwrap_or_default().into(),
+        args: summary["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(128)
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        exit: summary["exit"].as_i64().and_then(|n| i32::try_from(n).ok()),
+        wall: number(&summary["wall"]),
         machine: value["machine"].as_str().map(str::to_owned),
-        place: "unknown".into(),
+        place: summary["place"]
+            .as_str()
+            .filter(|p| matches!(*p, "local" | "remote" | "hosted"))
+            .unwrap_or("unknown")
+            .into(),
         origin: "hosted".into(),
-        ..RunRow::default()
     })
 }
 
@@ -289,6 +315,19 @@ mod tests {
         assert_eq!(row.exit, None);
         assert_eq!(row.place, "unknown");
         assert_eq!(row.origin, "hosted");
+    }
+
+    #[test]
+    fn compact_hosted_summary_reports_only_explicit_values() {
+        let row = hosted_row(&serde_json::json!({"id":"cloud-1", "at":999, "summary": {"start":123, "cwd":"/work/project", "args":["test","--lib"], "exit":101, "wall":4.5, "place":"hosted"}})).unwrap();
+        assert_eq!(row.start, 123.0);
+        assert_eq!(row.exit, Some(101));
+        assert_eq!(row.args, ["test", "--lib"]);
+        assert_eq!(row.wall, 4.5);
+        assert_eq!(row.place, "hosted");
+        let unknown = hosted_row(&serde_json::json!({"id":"cloud-2", "at":999, "summary":{"exit":null, "wall":null, "place":null}})).unwrap();
+        assert_eq!(unknown.exit, None);
+        assert_eq!(unknown.place, "unknown");
     }
 
     #[test]
