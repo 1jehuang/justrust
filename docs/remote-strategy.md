@@ -5,6 +5,27 @@ up, and how the product and licensing should be structured. The machine itself
 is covered in [remote.md](remote.md). The phased plan is in
 [toolchain.md](toolchain.md).
 
+## Hosted agent maintenance experiments
+
+Hosted run records can include monotonic agent preparation, recorder,
+finalization, and run-record transfer timings. Older agents omit these fields
+without changing build results. `justrust show <run-id>` separates that work
+from Cargo rather than attributing it all to network or compiler time.
+
+`JUSTRUST_REMOTE_EVICT_INTERVAL_SECS=60` opts into at most one opportunistic
+post-build target/artifact collection pass per minute per persistent agent.
+The client forwards the control to the agent. Zero (the default), invalid
+values, or values over 3600 preserve per-build collection. This experiment
+requires an agent containing the cadence implementation, for example a pinned
+development session with `JUSTRUST_REMOTE_DEV=1`.
+
+This does not defer durable source activity updates or change active-root
+protection, tenant boundaries, collection grace, or eviction eligibility.
+Low-disk build admission and ENOSPC recovery still collect immediately,
+independently of the opportunistic cadence. A focused warm-loop comparison
+does not replace the comprehensive session-weighted benchmark gate required
+before changing the default.
+
 ## Where compile time goes (measured)
 
 Measured on justrust itself (47 dependencies, 16-core laptop) with

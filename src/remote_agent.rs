@@ -120,6 +120,36 @@ fn evict_now(roots: &crate::remote_evict::Shared) {
     );
 }
 
+/// Opportunistic collection is maintenance, not part of every Cargo result.
+/// Claim before scanning so concurrent runs share one bounded cadence. Urgent
+/// low-disk admission and ENOSPC recovery deliberately bypass this limiter.
+fn claim_periodic_collection(
+    last: &Mutex<Option<std::time::Instant>>,
+    now: std::time::Instant,
+    interval: std::time::Duration,
+) -> bool {
+    let Ok(mut last) = last.lock() else {
+        return false;
+    };
+    if last.is_some_and(|previous| now.saturating_duration_since(previous) < interval) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+fn collection_interval(env: &[(String, String)]) -> std::time::Duration {
+    // Zero preserves the per-build sweep. Cadence is opt-in until the full
+    // session-weighted benchmark gate can validate default promotion.
+    let secs = env
+        .iter()
+        .find(|(key, _)| key == "JUSTRUST_REMOTE_EVICT_INTERVAL_SECS")
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+        .filter(|secs| *secs <= 3600)
+        .unwrap_or(0);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Free bytes if below the build floor even after an eviction attempt.
 fn low_disk_after_eviction(roots: &crate::remote_evict::Shared) -> Option<u64> {
     use crate::remote_evict as ev;
@@ -282,6 +312,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         crate::remote_evict::Registry::disabled(e.to_string())
     });
     let roots: crate::remote_evict::Shared = Arc::new(Mutex::new(registry));
+    let last_periodic_collection = Arc::new(Mutex::new(None));
     // Paths whose latest Write or Delete failed: the tree differs from what
     // the daemon believes. Reported with every barrier until a later frame
     // for the same path succeeds, so no build runs on a stale file.
@@ -408,6 +439,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 // must survive the window before its process has a PID.
                 pids.lock().unwrap().insert(id, RunStatus::default());
                 let roots = roots.clone();
+                let last_periodic_collection = last_periodic_collection.clone();
                 std::thread::spawn(move || {
                     let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
                     if let Some(free) = low_disk_after_eviction(&roots) {
@@ -480,7 +512,13 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                             root.display()
                         );
                     }
-                    evict_now(&roots);
+                    if claim_periodic_collection(
+                        &last_periodic_collection,
+                        std::time::Instant::now(),
+                        collection_interval(&env),
+                    ) {
+                        evict_now(&roots);
+                    }
                     let finalized = received.elapsed();
                     let code = match result {
                         Ok(c) => c,
@@ -913,6 +951,74 @@ fn own_run_lifetime(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn periodic_collection_is_bounded_and_zero_restores_every_run() {
+        let last = std::sync::Mutex::new(None);
+        let now = std::time::Instant::now();
+        let interval = std::time::Duration::from_secs(60);
+        assert!(super::claim_periodic_collection(&last, now, interval));
+        assert!(!super::claim_periodic_collection(&last, now, interval));
+        assert!(!super::claim_periodic_collection(
+            &last,
+            now + std::time::Duration::from_secs(59),
+            interval,
+        ));
+        assert!(super::claim_periodic_collection(
+            &last,
+            now + interval,
+            interval
+        ));
+        assert!(super::claim_periodic_collection(
+            &last,
+            now + interval,
+            std::time::Duration::ZERO,
+        ));
+    }
+
+    #[test]
+    fn periodic_collection_claim_is_single_flight_for_simultaneous_runs() {
+        let last = std::sync::Mutex::new(None);
+        let now = std::time::Instant::now();
+        let claimed = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        super::claim_periodic_collection(
+                            &last,
+                            now,
+                            std::time::Duration::from_secs(60),
+                        )
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(claimed, 1);
+        assert!(!super::claim_periodic_collection(
+            &last,
+            now,
+            std::time::Duration::from_secs(60),
+        ));
+    }
+
+    #[test]
+    fn periodic_collection_interval_is_bounded_and_request_scoped() {
+        assert_eq!(super::collection_interval(&[]).as_secs(), 0);
+        for (input, expected) in [
+            ("0", 0),
+            ("1", 1),
+            ("3600", 3600),
+            ("3601", 0),
+            ("-1", 0),
+            ("bad", 0),
+        ] {
+            let env = vec![("JUSTRUST_REMOTE_EVICT_INTERVAL_SECS".into(), input.into())];
+            assert_eq!(super::collection_interval(&env).as_secs(), expected);
+        }
+    }
     use super::*;
 
     #[cfg(target_os = "linux")]
