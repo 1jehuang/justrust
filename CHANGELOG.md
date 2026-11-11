@@ -3,6 +3,18 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.24
+
+- **Failed runs report their cause to run history.** Hosted and signed-in
+  local runs send a failure class (user code, toolchain, infrastructure,
+  interrupted) and a short fixed reason, so the operator dashboard no longer
+  shows "cause not reported" for current clients.
+- **Why a build stayed local** is shown in the status bar and tooltip.
+- Remote status is pushed through local watches and authenticated hosted
+  events, with healthy WebSocket keepalives across idle windows.
+- Durable hosted sessions pin verified client executable bytes.
+- Owned formatters are built and required before installing jr sysroots.
+
 ## 0.1.0-alpha.23
 
 - **Dependency-cache misses explain their inputs.** Recorded units compare
