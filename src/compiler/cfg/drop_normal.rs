@@ -168,7 +168,9 @@ fn admit_pattern_moves(
 /// referents: ordinary loan analysis checks their uses against the canonical
 /// cleanup's exclusive receiver access. No separate borrowed-owner exemption
 /// is needed for either source helpers or destructor bodies.
-pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Result<bool, String> {
+pub(super) fn admit(admitted: &AdmittedSource<'_, '_>) -> Result<bool, String> {
+    let source = admitted.source;
+    let facts = admitted.facts;
     let Some(authority) = facts.validated() else {
         return Ok(false);
     };
@@ -184,20 +186,14 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
         }
     }
     let mut enabled = false;
-    for ty in source
-        .locals
-        .iter()
-        .map(|l| &l.ty)
-        .chain(source.exprs.iter().map(|e| &e.ty))
-        .chain(std::iter::once(&source.result))
-    {
+    for ty in admitted.types() {
         authority.budget().charge_work(1)?;
         enabled |= descriptor(ty, facts)?.is_some();
-        if !enabled {
-            // Preserve source statement-temporary events without claiming a
-            // destructor for a representation not yet available to this node.
-            enabled = abstract_scope::required(ty, authority)?;
-        }
+    }
+    if !enabled {
+        // The borrowed arena's existing full metadata admission remains the
+        // authority. This probe only requests statement-temporary scopes.
+        enabled = abstract_scope::required_for_admitted_source(admitted)?;
     }
     // Every demanded closed body is lowered again before its generated shape
     // is sealed. The instance frontier separately demands each concrete cleanup

@@ -45,6 +45,23 @@ fn abstract_scope_events_follow_owned_fields_not_reference_pointees() {
         .function()
         .validate_source_publication(&publication, &budget)
         .unwrap();
+    let terminal_tuple = Ty::Tuple(Arc::from([Ty::Int(ir::IntTy::I32), Ty::Bool]));
+    assert!(!abstract_scope::required(&terminal_tuple, facts).unwrap());
+    let foreign = publish("fn f<U>(value:U){}fn main(){}", &budget);
+    let foreign_parameter = &foreign.source().locals[foreign.source().params[0].0].ty;
+    let mut forged = publication.source().as_ref().clone();
+    forged.locals.push(ir::LocalDecl {
+        name: "unused_foreign_owner".into(),
+        ty: foreign_parameter.clone(),
+        mutable: false,
+    });
+    assert!(lower_template(Arc::new(forged), facts.clone(), &budget).is_err());
+    let original_parameter = &publication.source().locals[publication.source().params[0].0].ty;
+    assert!(abstract_scope::required(original_parameter, foreign.facts()).is_err());
+    assert!(budget.charge_work(usize::MAX).is_err());
+    let first = budget.first_resource_failure();
+    assert!(abstract_scope::required(&terminal_tuple, facts).is_err());
+    assert_eq!(budget.first_resource_failure(), first);
 }
 
 #[test]

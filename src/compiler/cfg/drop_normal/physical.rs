@@ -42,10 +42,8 @@ pub(in crate::compiler) fn materialize(
     if !introduced.iter().any(|value| *value) {
         return Ok(placements);
     }
-    if !admit(
-        source.source(),
-        ir::FactsCtx::from_validated(source.facts()),
-    )? {
+    let admission = AdmittedSource::from_publication(source, budget)?;
+    if !admit(&admission)? {
         return Err(
             "unsupported: physical cleanup requires original canonical owning temporary scopes"
                 .into(),

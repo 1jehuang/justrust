@@ -6917,6 +6917,38 @@ fn reject_slices(
     Ok(())
 }
 
+// Borrowed only after this exact arena has passed its ordinary complete
+// metadata/source admission. Scope discovery is not a second type proof.
+struct AdmittedSource<'a, 'f> {
+    source: &'a ir::CheckedFunction,
+    facts: ir::FactsCtx<'f>,
+}
+impl<'a> AdmittedSource<'a, 'a> {
+    fn from_publication(
+        publication: &'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        ir::validate_published_source(publication, budget)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        let facts = ir::FactsCtx::from_validated(publication.facts());
+        reject_slices(publication.source(), facts, Some(budget))?;
+        Ok(Self {
+            source: publication.source(),
+            facts,
+        })
+    }
+}
+impl AdmittedSource<'_, '_> {
+    fn types(&self) -> impl Iterator<Item = &Ty> {
+        self.source
+            .locals
+            .iter()
+            .map(|local| &local.ty)
+            .chain(self.source.exprs.iter().map(|expression| &expression.ty))
+            .chain(std::iter::once(&self.source.result))
+    }
+}
+
 fn lower_internal_with_source(
     source: &ir::CheckedFunction,
     facts: ir::FactsCtx<'_>,
@@ -6973,7 +7005,8 @@ fn lower_internal_with_source(
     // Metadata and exact publication authority precede unsupported-position
     // classification, including for unused and concretely substituted types.
     reject_slices(source, facts, budget)?;
-    let drop_enabled = drop_normal::admit(source, facts)?;
+    let admission = AdmittedSource { source, facts };
+    let drop_enabled = drop_normal::admit(&admission)?;
     let arena_size = source
         .exprs
         .len()

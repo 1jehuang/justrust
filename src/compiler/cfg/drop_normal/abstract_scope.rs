@@ -2,6 +2,24 @@
 //! ordinary statement-temporary storage events for a later physical instance.
 use super::*;
 
+pub(super) fn required_for_admitted_source(
+    admitted: &AdmittedSource<'_, '_>,
+) -> Result<bool, String> {
+    let facts = admitted
+        .facts
+        .validated()
+        .ok_or("abstract scope discovery requires admitted source facts")?;
+    let mut active = Vec::new();
+    for ty in admitted.types() {
+        if walk(ty, facts.budget(), &mut active, 0)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+// Standalone probes do not possess the source arena's prior admission.
+#[cfg(test)]
 pub(super) fn required(ty: &Ty, facts: &ValidatedFacts) -> Result<bool, String> {
     facts
         .validate_ty_metadata(ty)

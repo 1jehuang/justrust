@@ -147,6 +147,18 @@ fn reference_application_unused_invalids() {
 }
 
 #[test]
+fn unchanged_m2_closures_match_stock() {
+    output_oracle::check(
+        "unchanged-m2-closures",
+        &[output_oracle::Case {
+            name: "05_closures",
+            source: include_str!("milestones/m2/05_closures.rs"),
+            expect: output_oracle::Expect::Run(include_str!("milestones/m2/05_closures.stdout")),
+        }],
+    );
+}
+
+#[test]
 fn closure_modes_reject_unused_invalids() {
     use output_oracle::{Case, Expect};
     output_oracle::check(
