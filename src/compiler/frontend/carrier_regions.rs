@@ -26,6 +26,7 @@ pub(super) fn attach(
         next_region: original.region_count,
         empty_nominals: Vec::new(),
         empty_nominal_storage: None,
+        nominal_stack: Vec::new(),
     };
     let offset = usize::from(receiver != ReceiverKind::None);
     if offset != 0 {
@@ -200,6 +201,9 @@ struct Collector<'a> {
     // key so a deeper reuse cannot bypass any source traversal depth check.
     empty_nominals: Vec<(ir::DeclId, usize, usize)>,
     empty_nominal_storage: Option<ir::PlanReservation>,
+    // Canonical nominal applications on the current source traversal stack.
+    // Local to this one signature computation.
+    nominal_stack: Vec<ir::NominalAppId>,
 }
 impl Collector<'_> {
     fn lifetime_key(&self, name: AstIdent) -> Result<NameKey, String> {
@@ -568,6 +572,62 @@ impl Collector<'_> {
         if !region_args.is_empty() && region_args.len() != region_params.len() {
             return Err("nominal lifetime argument arity mismatch".into());
         }
+        // Re-entering a canonical application already being traversed is a
+        // finite recursive type behind indirection (`Vec<Self>`). Its fields
+        // were or will be traversed by the ancestor frame, so a carrier-free
+        // application contributes no new rows. A carrier-bearing one would
+        // need unboundedly many rows and is rejected explicitly.
+        let app = match semantic {
+            ir::Ty::Struct(value) => value.id(),
+            ir::Ty::Enum(value) => value.id(),
+            _ => unreachable!(),
+        };
+        self.budget.charge_work(self.nominal_stack.len())?;
+        if self.nominal_stack.contains(&app) {
+            if ir::carrier_locations(semantic, self.budget)?.is_empty() {
+                return Ok(());
+            }
+            return Err("unsupported: recursive type carrying references, type parameters or projections through indirection".into());
+        }
+        self.budget
+            .retain_bytes(std::mem::size_of::<ir::NominalAppId>())?;
+        self.nominal_stack
+            .try_reserve(1)
+            .map_err(|_| "source carrier stack allocation failed")?;
+        self.nominal_stack.push(app);
+        let result = self.nominal_fields(
+            semantic,
+            parameter,
+            path,
+            depth,
+            NominalFields {
+                id,
+                type_params,
+                region_params,
+                args,
+                region_args,
+                fields,
+            },
+        );
+        self.nominal_stack.pop();
+        result
+    }
+    fn nominal_fields(
+        &mut self,
+        semantic: &ir::Ty,
+        parameter: Option<usize>,
+        path: &mut Vec<ir::CarrierStep>,
+        depth: usize,
+        nominal: NominalFields<'_, '_>,
+    ) -> Result<(), String> {
+        let NominalFields {
+            id,
+            type_params,
+            region_params,
+            args,
+            region_args,
+            fields,
+        } = nominal;
         let pointer = match semantic {
             ir::Ty::Struct(value) => std::ptr::from_ref(value.def()) as usize,
             ir::Ty::Enum(value) => std::ptr::from_ref(value.def()) as usize,
@@ -637,6 +697,14 @@ impl Collector<'_> {
         }
         Ok(())
     }
+}
+struct NominalFields<'d, 's> {
+    id: ir::DeclId,
+    type_params: &'d [AstIdent],
+    region_params: &'d [AstIdent],
+    args: &'s [Type],
+    region_args: &'s [RegionName],
+    fields: Vec<(ir::CarrierStep, &'d FieldDecl, ir::Ty)>,
 }
 fn substitute(
     registry: &DeclRegistry,

@@ -76,6 +76,14 @@ fn recursive_types_with_interior_mutability_run() {
     runs("refcell_tree");
 }
 
+/// Recursion through owned sequences and maps (`Vec<Self>`,
+/// `BTreeMap<String, Self>`) is finite. Carrier inventory used to unfold it
+/// until the planning depth limit.
+#[test]
+fn recursive_types_through_vec_and_btreemap_run() {
+    runs("vec_btree_recursive");
+}
+
 #[test]
 fn recursive_cell_methods_reject_invalid_unused_bodies() {
     for operation in ["first.marked.set(1)", "first.marked.set::<bool>(true)"] {
@@ -138,6 +146,7 @@ fn by_value_recursion_is_rejected() {
     for source in [
         "struct A{x:A} fn main(){}",
         "enum E{A(E),B} fn main(){}",
+        "enum J{N,A(J)} fn main(){}",
         "struct A{x:(i32,[A;1])} fn main(){}",
         "struct A{x:[A;0]} fn main(){}",
         "struct A{x:Option<A>} fn main(){}",

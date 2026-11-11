@@ -947,6 +947,13 @@ pub(super) fn source_carrier_inventory(
         _base: Option<PlanReservation>,
         _extra: Option<PlanReservation>,
     }
+    /// Canonical nominal applications on the current expansion stack, and the
+    /// ones a back edge reached. Local to this one inventory computation.
+    #[derive(Default)]
+    struct NominalCycle {
+        stack: Vec<NominalAppId>,
+        back_targets: Vec<NominalAppId>,
+    }
     impl PresenceMemo {
         fn insert(
             &mut self,
@@ -997,6 +1004,7 @@ pub(super) fn source_carrier_inventory(
         depth: usize,
         memo: &mut PresenceMemo,
         deferred: &mut Vec<Ty>,
+        cycle: &mut NominalCycle,
     ) -> Result<(bool, usize), String> {
         budget.check_depth(depth)?;
         budget.charge_work(1)?;
@@ -1015,13 +1023,44 @@ pub(super) fn source_carrier_inventory(
             budget.check_depth(depth.checked_add(height).ok_or("carrier depth overflow")?)?;
             return Ok((has, height));
         }
+        // A nominal application already on the current expansion stack is a
+        // finite recursive type reached through indirection (`Vec<Self>`).
+        // Its presence is the ancestor frame's own answer: return the least
+        // fixed point provisionally and require that answer to stay false.
+        let nominal = match ty {
+            Ty::Struct(value) => Some(value.id()),
+            Ty::Enum(value) => Some(value.id()),
+            _ => None,
+        };
+        if let Some(id) = nominal
+            && cycle.stack.contains(&id)
+        {
+            budget.charge_work(cycle.stack.len())?;
+            if !cycle.back_targets.contains(&id) {
+                budget.retain_bytes(std::mem::size_of::<NominalAppId>())?;
+                cycle
+                    .back_targets
+                    .try_reserve(1)
+                    .map_err(|_| "carrier cycle allocation resource limit")?;
+                cycle.back_targets.push(id);
+            }
+            return Ok((false, 0));
+        }
+        if let Some(id) = nominal {
+            budget.retain_bytes(std::mem::size_of::<NominalAppId>())?;
+            cycle
+                .stack
+                .try_reserve(1)
+                .map_err(|_| "carrier cycle allocation resource limit")?;
+            cycle.stack.push(id);
+        }
         let mut has = matches!(
             ty,
             Ty::Ref { .. } | Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_)
         );
         let mut height = 0;
         let mut child = |ty: &Ty| -> Result<(), String> {
-            let (found, h) = present(ty, budget, depth + 1, memo, deferred)?;
+            let (found, h) = present(ty, budget, depth + 1, memo, deferred, cycle)?;
             has |= found;
             height = height.max(h + 1);
             Ok(())
@@ -1079,6 +1118,14 @@ pub(super) fn source_carrier_inventory(
             | Ty::Dyn(_)
             | Ty::Const(_)
             | Ty::Never => {}
+        }
+        if let Some(id) = nominal {
+            cycle.stack.pop();
+            budget.charge_work(cycle.back_targets.len())?;
+            if has && cycle.back_targets.contains(&id) {
+                // Every recursive unfolding would add new carrier locations.
+                return Err("unsupported: recursive type carrying references, type parameters or projections through indirection".into());
+            }
         }
         memo.insert(key, (has, height), budget)?;
         Ok((has, height))
@@ -1284,7 +1331,8 @@ pub(super) fn source_carrier_inventory(
     }
     let mut memo = PresenceMemo::default();
     let mut deferred = Vec::new();
-    let (has, height) = present(ty, budget, 0, &mut memo, &mut deferred)?;
+    let mut cycle = NominalCycle::default();
+    let (has, height) = present(ty, budget, 0, &mut memo, &mut deferred, &mut cycle)?;
     if !deferred.is_empty() {
         return Ok(SourceCarrierInventory::Deferred(deferred));
     }
