@@ -175,15 +175,13 @@ fn ignored_lockfiles(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         if entry.ends_with(b"/") {
-            // walk does not follow symlinks and prunes target, .git and
-            // .justrust at every depth, just like the original result filter.
-            if let Ok(files) = walk(&root.join(&rel)) {
-                locks.extend(
-                    files
-                        .into_iter()
-                        .filter(|p| p.file_name().is_some_and(|n| n == "Cargo.lock"))
-                        .map(|p| rel.join(p)),
-                );
+            // Filter while traversing: ignored artifact directories may contain
+            // hundreds of thousands of files, but only lockfiles are needed.
+            // Do not allocate and retain a relative path for every artifact.
+            if let Ok(files) =
+                walk_matching(&root.join(&rel), Some(std::ffi::OsStr::new("Cargo.lock")))
+            {
+                locks.extend(files.into_iter().map(|p| rel.join(p)));
             }
         } else if rel.file_name().is_some_and(|n| n == "Cargo.lock") {
             locks.push(rel);
@@ -219,6 +217,12 @@ fn skip_listed(root: &Path, rel: &Path) -> bool {
 }
 
 fn walk(root: &Path) -> Result<Vec<PathBuf>> {
+    walk_matching(root, None)
+}
+
+/// Traverse with identical pruning and symlink rules, optionally retaining only
+/// a specific filename. Check entry type/name before constructing its path.
+fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
@@ -226,19 +230,25 @@ fn walk(root: &Path) -> Result<Vec<PathBuf>> {
             continue;
         };
         for e in rd.flatten() {
-            let r = rel.join(e.file_name());
-            if skip(&r) {
+            let name = e.file_name();
+            if name == "target" || name == ".git" || name == ".justrust" {
                 continue;
             }
             match e.file_type() {
-                Ok(t) if t.is_dir() => stack.push(r),
-                Ok(t) if t.is_file() => out.push(r),
+                Ok(t) if t.is_dir() => stack.push(rel.join(name)),
+                Ok(t) if t.is_file() && wanted.is_none_or(|wanted| name == wanted) => {
+                    out.push(rel.join(name));
+                }
                 _ => {}
             }
         }
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "remote_sync_scan_tests.rs"]
+mod scan_tests;
 
 // Git-listed target directories can contain source, not build output. Keep
 // these exceptions exact: including target/*** would expose ignored files.
