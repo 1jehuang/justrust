@@ -1,6 +1,8 @@
 //! Closed associated-type normalization. Raw source terms are never carrier facts.
 use super::*;
 
+mod dependent_array;
+
 impl ValidatedFacts {
     /// Check the identity and raw type metadata of a call without executing,
     /// selecting an implementation, or admitting residual projections.
@@ -2032,6 +2034,11 @@ impl ValidatedTraitWorld {
         )?;
         let opaque_reference = matches!(&selected_goal.self_ty, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::Opaque(_)));
         let implementation_application = implementation_application_self(&selected_goal.self_ty);
+        let array_membership = self.dependent_array_implementation(
+            &selected_goal,
+            context.proof,
+            &mut stack.obligations,
+        )?;
         let builtin_pointer = matches!(selected_goal.self_ty, Ty::FnPointer(_))
             && self
                 .schema
@@ -2043,6 +2050,7 @@ impl ValidatedTraitWorld {
             && !builtin_pointer
             && !opaque_reference
             && !implementation_application
+            && array_membership.is_none()
         {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -2111,11 +2119,15 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence_with(&evidence, context, &mut stack.obligations)?;
             return Ok(evidence);
         }
-        let membership = match self.prove_implementation_in(
-            &Predicate::Implements(selected_goal.clone()),
-            selection_context,
-            &mut stack.obligations,
-        )? {
+        let membership = match if let Some(membership) = array_membership {
+            ProofOutcome::Proved(membership)
+        } else {
+            self.prove_implementation_in(
+                &Predicate::Implements(selected_goal.clone()),
+                selection_context,
+                &mut stack.obligations,
+            )?
+        } {
             ProofOutcome::Proved(evidence) => evidence,
             ProofOutcome::NotProven => {
                 return Err(FactsError::unproved(
@@ -2737,7 +2749,10 @@ impl ValidatedTraitWorld {
             || ((matches!(
                 &evidence.membership.0.origin,
                 ProofOrigin::Closure { .. } | ProofOrigin::FnItem { .. }
-            ) || implementation_application_self(&evidence.selected_goal.self_ty))
+            ) || implementation_application_self(&evidence.selected_goal.self_ty)
+                || self
+                    .dependent_array_implementation(&evidence.selected_goal, context.proof, proofs)?
+                    .is_some())
                 && !self.goal_is_closed_in_for_use(
                     &evidence.selected_goal,
                     context.proof,
@@ -3289,6 +3304,251 @@ mod tests {
         );
     }
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn dependent_array_projection_requires_exact_caller_assignment() {
+        let program = frontend::parse("trait Mark{}trait Has{type Out;fn take(self)->Self::Out;}impl<T:Mark,const N:usize> Has for [T;N]{type Out=T;fn take(self)->Self::Out{loop{}}}fn inspect<T:Mark,const N:usize>(value:[T;N]){}fn missing<T,const N:usize>(value:[T;N]){}fn foreign<T,const M:usize>(value:[T;M]){}struct Carrier<T>(T);impl<T:Mark> Has for Carrier<T>{type Out=T;fn take(self)->Self::Out{loop{}}}fn carrier<T:Mark,const N:usize>(value:Carrier<T>,array:[T;N]){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let schema = world.schema.declaration_schema(owner).unwrap();
+        let header = &world.headers.associated_types[0];
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: header.trait_decl,
+                self_ty: schema.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: header.declaration,
+        };
+        let facts = world.callable_facts(owner).unwrap();
+        let normal = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        normal.validate_for(&projection, &facts).unwrap();
+        assert_eq!(
+            world
+                .normalize_carrier_equality_type_with_scratch(
+                    &Ty::AssociatedType(Arc::new(projection.clone())),
+                    &facts,
+                    &mut TraitScratch::default()
+                )
+                .unwrap(),
+            *normal.ty()
+        );
+        let call = ir::TraitCall {
+            item: world
+                .headers
+                .items
+                .iter()
+                .find(|item| item.trait_decl == header.trait_decl)
+                .unwrap()
+                .declaration,
+            trait_ref: projection.trait_ref.clone(),
+            method_args: Arc::from([]),
+        };
+        let subject = parameter_equality::EqualityResultSubject::Required(call.clone());
+        let (_, _, application) = world
+            .source_carrier_application(
+                &subject,
+                &facts,
+                ProofContext::from_facts(&facts),
+                &mut ProofScratch::default(),
+            )
+            .unwrap();
+        assert_eq!(&application.signature.result, normal.ty());
+        let callee = Callee::TraitItem(call);
+        facts
+            .validate_source_flow_signature(SignatureSubject::Call(&callee), &application.signature)
+            .unwrap();
+        let mut changed_signature = application.signature.clone();
+        changed_signature.result = Ty::Bool;
+        assert!(
+            facts
+                .validate_source_flow_signature(SignatureSubject::Call(&callee), &changed_signature)
+                .is_err()
+        );
+        let mut changed_signature = application.signature.clone();
+        changed_signature.params[0] = Ty::Bool;
+        assert!(
+            facts
+                .validate_source_flow_signature(SignatureSubject::Call(&callee), &changed_signature)
+                .is_err()
+        );
+        assert_eq!(
+            normal.ty(),
+            &Ty::Param(schema.env.ordered_params().next().unwrap())
+        );
+        let equality = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: normal.ty().clone(),
+        };
+        world
+            .require_in(
+                &equality,
+                ProofContext::from_facts(&facts),
+                &mut ProofScratch::default(),
+            )
+            .unwrap();
+        let wrong = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: Ty::Bool,
+        };
+        assert!(
+            world
+                .require_in(
+                    &wrong,
+                    ProofContext::from_facts(&facts),
+                    &mut ProofScratch::default()
+                )
+                .is_err()
+        );
+        let other = plan.function_decl(1).unwrap();
+        let other_schema = world.schema.declaration_schema(other).unwrap();
+        let other_facts = world.callable_facts(other).unwrap();
+        let mut missing = projection.clone();
+        missing.trait_ref.self_ty = other_schema.signature.params[0].clone();
+        assert!(
+            world
+                .normalize_associated_type(&missing, &other_facts)
+                .is_err()
+        );
+        assert!(
+            world
+                .normalize_carrier_equality_type_with_scratch(
+                    &Ty::AssociatedType(Arc::new(missing.clone())),
+                    &other_facts,
+                    &mut TraitScratch::default()
+                )
+                .is_err()
+        );
+        let missing_equality = Predicate::ProjectionEq {
+            projection: missing,
+            ty: Ty::Param(other_schema.env.ordered_params().next().unwrap()),
+        };
+        assert!(
+            world
+                .require_in(
+                    &missing_equality,
+                    ProofContext::from_facts(&other_facts),
+                    &mut ProofScratch::default()
+                )
+                .is_err()
+        );
+        assert!(normal.validate_for(&projection, &other_facts).is_err());
+        let foreign = world
+            .schema
+            .declaration_schema(plan.function_decl(2).unwrap())
+            .unwrap();
+        let mut foreign_signature = application.signature.clone();
+        foreign_signature.params[0] = foreign.signature.params[0].clone();
+        assert!(
+            facts
+                .validate_source_flow_signature(SignatureSubject::Call(&callee), &foreign_signature)
+                .is_err()
+        );
+        let Ty::DependentArray {
+            length: foreign_length,
+            ..
+        } = &foreign.signature.params[0]
+        else {
+            panic!("missing foreign extent")
+        };
+        let Ty::DependentArray { element, length } = &projection.trait_ref.self_ty else {
+            panic!("missing source extent")
+        };
+        for changed in [
+            ir::ConstParamId {
+                index: 0,
+                ..*length
+            },
+            *foreign_length,
+        ] {
+            let mut changed_projection = projection.clone();
+            changed_projection.trait_ref.self_ty = Ty::DependentArray {
+                element: element.clone(),
+                length: changed,
+            };
+            assert!(
+                world
+                    .normalize_associated_type(&changed_projection, &facts)
+                    .is_err()
+            );
+            assert!(
+                world
+                    .normalize_carrier_equality_type_with_scratch(
+                        &Ty::AssociatedType(Arc::new(changed_projection.clone())),
+                        &facts,
+                        &mut TraitScratch::default()
+                    )
+                    .is_err()
+            );
+            let changed_equality = Predicate::ProjectionEq {
+                projection: changed_projection.clone(),
+                ty: normal.ty().clone(),
+            };
+            assert!(
+                world
+                    .require_in(
+                        &changed_equality,
+                        ProofContext::from_facts(&facts),
+                        &mut ProofScratch::default()
+                    )
+                    .is_err()
+            );
+            assert!(normal.validate_for(&changed_projection, &facts).is_err());
+        }
+        let carrier = plan.function_decl(3).unwrap();
+        let carrier_schema = world.schema.declaration_schema(carrier).unwrap();
+        let carrier_facts = world.callable_facts(carrier).unwrap();
+        let mut left = projection.clone();
+        left.trait_ref.self_ty = carrier_schema.signature.params[0].clone();
+        let mut right = projection.clone();
+        right.trait_ref.self_ty = carrier_schema.signature.params[1].clone();
+        let rhs_normal = Ty::Param(carrier_schema.env.ordered_params().next().unwrap());
+        let Ty::DependentArray {
+            element: rhs_element,
+            length: rhs_length,
+        } = &right.trait_ref.self_ty
+        else {
+            panic!("missing rhs extent")
+        };
+        for changed in [
+            ir::ConstParamId {
+                index: 0,
+                ..*rhs_length
+            },
+            *foreign_length,
+        ] {
+            let mut forged = right.clone();
+            forged.trait_ref.self_ty = Ty::DependentArray {
+                element: rhs_element.clone(),
+                length: changed,
+            };
+            assert!(
+                world
+                    .dependent_array_equality_rhs_matches(
+                        &rhs_normal,
+                        &Ty::AssociatedType(Arc::new(forged)),
+                        ProofContext::from_facts(&carrier_facts),
+                        &mut ProofScratch::default()
+                    )
+                    .is_err()
+            );
+        }
+        let projected_rhs = Predicate::ProjectionEq {
+            projection: left,
+            ty: Ty::AssociatedType(Arc::new(right)),
+        };
+        world
+            .require_in(
+                &projected_rhs,
+                ProofContext::from_facts(&carrier_facts),
+                &mut ProofScratch::default(),
+            )
+            .unwrap();
+    }
 
     #[test]
     fn function_pointer_rhs_replay_preserves_signature_and_binder_authority() {

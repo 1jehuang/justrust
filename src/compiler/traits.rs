@@ -12309,8 +12309,10 @@ impl ValidatedTraitWorld {
                     "implementation equality evidence cannot prove membership",
                 ));
             };
-            let normal = self.implementation_equality_rhs(projection, membership, facts)?;
-            if !self.eq_ty(&normal, ty, 0)? {
+            let mut active = ProofScratch::default();
+            let normal =
+                self.implementation_equality_rhs_with(projection, membership, facts, &mut active)?;
+            if !self.dependent_array_equality_rhs_matches(&normal, ty, facts, &mut active)? {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "implementation equality evidence changed RHS",
@@ -12325,7 +12327,12 @@ impl ValidatedTraitWorld {
                     "closed equality evidence cannot prove membership",
                 ));
             };
-            if !self.eq_ty(normalization.ty(), ty, 0)? {
+            if !self.dependent_array_equality_rhs_matches(
+                normalization.ty(),
+                ty,
+                facts,
+                &mut ProofScratch::default(),
+            )? {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "closed equality evidence changed RHS",

@@ -544,6 +544,28 @@ impl ValidatedTraitWorld {
                 )?
                 .0;
         }
+        if let parameter_equality::EqualityResultSubject::Required(call) = subject
+            && self
+                .dependent_array_implementation(&call.trait_ref, context, active)?
+                .is_some()
+        {
+            // Reconstruct the same authenticated caller-array assignments used
+            // by required-call realization, before comparing the exact ABI.
+            for ty in &mut application.signature.params {
+                *ty = self
+                    .normalize_closed_projected_type_for_use(ty, context, false, active, false)?
+                    .0;
+            }
+            application.signature.result = self
+                .normalize_closed_projected_type_for_use(
+                    &application.signature.result,
+                    context,
+                    false,
+                    active,
+                    false,
+                )?
+                .0;
+        }
         Ok((declaration, arguments, application))
     }
 }

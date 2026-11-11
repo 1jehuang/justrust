@@ -7,6 +7,115 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn hashmap_owned_array_conversion_matches_stock() {
+    closure_oracle::check(
+        "hashmap-owned-array",
+        &[
+            Case {
+                name: "inferred_duplicate_and_empty_arrays",
+                source: r#"use std::collections::HashMap;
+fn convert<K: std::hash::Hash + Eq, V, const N: usize>(a: [(K,V);N]) -> HashMap<K,V> { HashMap::from(a) }
+fn main() {
+    let m = HashMap::from([(1,10),(2,20),(1,30)]);
+    println!("{} {:?} {:?}",m.len(),m.get(&1),m.get(&2));
+    let e: HashMap<i32,String> = convert([]);
+    println!("{}",e.len());
+    let s = convert([("key".to_string(),"old".to_string()),("key".to_string(),"new".to_string())]);
+    println!("{} {:?}",s.len(),s.get("key"));
+}"#,
+                expect: Expect::Run("2 Some(30) Some(20)\n0\n1 Some(\"new\")\n"),
+            },
+            Case {
+                name: "explicit_owner_infers_extent_from_nested_source_calls",
+                source: r#"use std::collections::HashMap;fn main(){let m=HashMap::<String,String>::from([("key".to_string(),"value".to_string())]);println!("{} {:?}",m.len(),m.get("key"));}"#,
+                expect: Expect::Run("1 Some(\"value\")\n"),
+            },
+            Case {
+                name: "source_trait_constructor_infers_owner_and_extent",
+                source: r#"trait Assemble<S> { fn assemble(source: S) -> Self; }
+struct Packet<T>(T);
+impl<T,const N:usize> Assemble<[T;N]> for Packet<[T;N]> {
+    fn assemble(source:[T;N])->Self { Packet(source) }
+}
+fn wrap<T,const N:usize>(source:[T;N])->Packet<[T;N]> { Packet::assemble(source) }
+fn main(){let p=wrap([3,7]);println!("{} {}",p.0[0],p.0[1]);}"#,
+                expect: Expect::Run("3 7\n"),
+            },
+            Case {
+                name: "renamed_source_trait_constructor_is_in_scope",
+                source: r#"mod api { pub trait Assemble<S> { fn assemble(source:S)->Self; } }
+use api::Assemble as Load;
+struct Packet<T>(T);
+impl<T,const N:usize> Load<[T;N]> for Packet<[T;N]> { fn assemble(source:[T;N])->Self{Packet(source)} }
+fn main(){let p=Packet::assemble([3,7]);println!("{} {}",p.0[0],p.0[1]);}"#,
+                expect: Expect::Run("3 7\n"),
+            },
+            Case {
+                name: "unused_out_of_scope_source_trait_constructor_is_rejected",
+                source: r#"mod api { pub trait Assemble<S> { fn assemble(source:S)->Self; } }
+struct Packet<T>(T);
+impl<T,const N:usize> api::Assemble<[T;N]> for Packet<[T;N]> { fn assemble(source:[T;N])->Self{Packet(source)} }
+fn unused(){let _=Packet::assemble([3,7]);}fn main(){}"#,
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "duplicate_owned_value_is_dropped_once",
+                source: r#"use std::collections::HashMap;
+struct Value(i32);
+impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn main() {
+    let m = HashMap::from([(1,Value(10)),(1,Value(20))]);
+    println!("{} {}", m.len(), m.get(&1).unwrap().0);
+    drop(m);
+}"#,
+                expect: Expect::Run("drop 10\n1 20\ndrop 20\n"),
+            },
+            Case {
+                name: "unused_non_hash_key_is_rejected",
+                source: r#"use std::collections::HashMap; #[derive(PartialEq,Eq)] struct Key(i32); fn unused(){let _ = HashMap::from([(Key(1),2)]);} fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_non_eq_key_is_rejected",
+                source: r#"use std::collections::HashMap; #[derive(Hash)] struct Key(i32); fn unused(){let _ = HashMap::from([(Key(1),2)]);} fn main(){}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "owned_array_cannot_be_reused",
+                source: r#"use std::collections::HashMap;fn unused(){let a=[("k".to_string(),"v".to_string())];let _=HashMap::from(a);let again=a;}fn main(){}"#,
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "another_visible_from_trait_is_ambiguous",
+                source: r#"use std::collections::HashMap;
+trait Other { fn from(value: [(i32,i32);1]) -> Self; }
+impl Other for HashMap<i32,i32> { fn from(value: [(i32,i32);1])->Self { HashMap::new() } }
+fn unused(){let _=HashMap::<i32,i32>::from([(1,2)]);}fn main(){}"#,
+                expect: Expect::Invalid("E0034"),
+            },
+            Case {
+                name: "inherited_other_from_trait_is_ambiguous",
+                source: r#"use std::collections::HashMap;
+trait Other: Sized { fn from(value: bool) -> Self { panic!("not called") } }
+impl Other for HashMap<i32,i32> {}
+fn unused(){let _=HashMap::<i32,i32>::from([(1,2)]);}fn main(){}"#,
+                expect: Expect::Invalid("E0034"),
+            },
+            Case {
+                name: "unsatisfied_other_trait_is_not_a_candidate",
+                source: r#"use std::collections::HashMap;
+trait Other { fn from(value: bool) -> Self; }
+impl<K:Copy+std::hash::Hash+Eq,V> Other for HashMap<K,V> {
+    fn from(value:bool)->Self { HashMap::new() }
+}
+fn main(){let m=HashMap::<String,String>::from([("key".to_string(),"value".to_string())]);println!("{}",m.len());}"#,
+                expect: Expect::Run("1\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn btree_ranges_match_stock() {
     closure_oracle::check(
         "btree-ranges",

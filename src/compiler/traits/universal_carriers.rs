@@ -416,6 +416,20 @@ impl ValidatedTraitWorld {
                         scratch.for_world(self.id),
                     )?
                     || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
+                    || (self
+                        .declared_equality_rhs(
+                            projection,
+                            &facts.predicates.predicates,
+                            facts.env(),
+                        )?
+                        .is_none()
+                        && self
+                            .dependent_array_implementation(
+                                &projection.trait_ref,
+                                context,
+                                scratch.for_world(self.id),
+                            )?
+                            .is_some())
                     || (context.phase == FactsPhase::Universal
                         && self
                             .declared_equality_rhs(

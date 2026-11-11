@@ -27,6 +27,18 @@ impl<K: Hash + Eq, V> HashMap<K, V, RandomState> {
     }
 }
 
+impl<K: Hash + Eq, V, const N: usize> super::convert::From<[(K, V); N]>
+    for HashMap<K, V, RandomState>
+{
+    fn from(entries: [(K, V); N]) -> HashMap<K, V, RandomState> {
+        let mut map: HashMap<K, V, RandomState> = HashMap::new();
+        for (key, value) in entries {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
 impl<K, V, S> HashMap<K, V, S> {
     pub fn with_hasher(hash_builder: S) -> HashMap<K, V, S> {
         HashMap { hashes: Vec::new(), keys: Vec::new(), values: Vec::new(), hash_builder }

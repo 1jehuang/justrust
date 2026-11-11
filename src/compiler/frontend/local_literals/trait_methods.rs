@@ -30,7 +30,8 @@ impl Solver<'_, '_, '_> {
             }
             if !unresolved && !self.contains_callable(receiver, 0)? {
                 // Only structural impls apply for an open receiver.
-                if let Some(header) = self.structural_impl(receiver, trait_id)?
+                if let Some(header) =
+                    self.structural_impl_with_arguments(receiver, trait_id, &arguments)?
                     && header.trait_ref.args.len() == arguments.len()
                 {
                     let params = self.structural_impl_parameters(receiver, &header, 0)?;
@@ -44,7 +45,9 @@ impl Solver<'_, '_, '_> {
                 }
                 continue;
             }
-            let Some(header) = self.structural_impl(receiver, trait_id)? else {
+            let Some(header) =
+                self.structural_impl_with_arguments(receiver, trait_id, &arguments)?
+            else {
                 if self.unique_concrete_impl_arguments(receiver, trait_id, &arguments)? {
                     progress = true;
                     continue;
@@ -179,6 +182,29 @@ impl Solver<'_, '_, '_> {
                     self.impl_pattern_compatible(*actual, pattern, &header.schema_env, 0)?;
             }
             if !compatible {
+                continue;
+            }
+            self.checker.infer_storage(1)?;
+            if selected.replace(header.clone()).is_some() {
+                return Ok(None);
+            }
+        }
+        Ok(selected)
+    }
+
+    fn structural_impl_with_arguments(
+        &self,
+        receiver: Term,
+        trait_id: ir::DeclId,
+        arguments: &[Term],
+    ) -> Result<Option<tr::ImplHeader>, String> {
+        let plan = self.checker.signatures.plan()?;
+        let mut selected = None;
+        for header in plan.trait_world()?.impl_headers() {
+            self.checker.infer_work(0)?;
+            if header.trait_ref.declaration != trait_id
+                || !self.impl_head_compatible(receiver, arguments, header)?
+            {
                 continue;
             }
             self.checker.infer_storage(1)?;
@@ -385,6 +411,11 @@ impl Solver<'_, '_, '_> {
     ) -> Result<Option<Term>, String> {
         let plan = self.checker.signatures.plan()?;
         let implicit = plan.program.implicit_prelude(self.checker.module)?;
+        let fixed_owner = if associated {
+            self.resolve(receiver, 0)?
+        } else {
+            None
+        };
         let mut selected = None;
         for trait_id in &plan.registry.trait_ids {
             self.checker.infer_work(0)?;
@@ -402,10 +433,38 @@ impl Solver<'_, '_, '_> {
                     visible = true;
                 }
             }
-            if !visible || matches!(plan.declaration(item)?.receiver, ReceiverKind::None) {
+            if !visible
+                || (!associated && matches!(plan.declaration(item)?.receiver, ReceiverKind::None))
+            {
                 continue;
             }
             let header = self.structural_impl(receiver, *trait_id)?;
+            if let (Some(owner), ir::FactsCtx::Validated(facts)) =
+                (&fixed_owner, self.checker.facts())
+            {
+                let (applications, open) =
+                    plan.inferred_trait_applications(owner, *trait_id, facts, &plan.budget)?;
+                // An open application is not absence evidence. Only a closed
+                // frontier whose every exact goal is unproved can be omitted.
+                if !open {
+                    let mut proved = false;
+                    for application in applications.as_slice() {
+                        self.checker.infer_work(0)?;
+                        if matches!(
+                            facts
+                                .service()
+                                .prove_goal(&ir::Predicate::Implements(application.clone()), facts,)
+                                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
+                            tr::ProofOutcome::Proved(_)
+                        ) {
+                            proved = true;
+                        }
+                    }
+                    if !proved {
+                        continue;
+                    }
+                }
+            }
             if header.is_none() {
                 if !associated && !self.numeric_nominal_actuals(receiver)? {
                     continue;
@@ -504,6 +563,27 @@ impl Solver<'_, '_, '_> {
         {
             let formal = self.schema(formal, &params, 0)?;
             self.coerce(*actual, formal)?;
+        }
+        // The item schema alone does not relate Self to the trait's source
+        // argument. Retain that application so source impl-head equations can
+        // infer both together after the call and its expected result are known.
+        if associated && header.is_none() {
+            let mut arguments = Vec::new();
+            for index in 1..owner.arity() {
+                let parameter = ir::ParamId {
+                    owner: owner.binder(),
+                    index: index as u16,
+                };
+                arguments.push(
+                    *params
+                        .get(&parameter)
+                        .ok_or("missing trait argument term")?,
+                );
+            }
+            if !arguments.is_empty() {
+                self.checker.infer_storage(1)?;
+                self.trait_arguments.push((trait_id, receiver, arguments));
+            }
         }
         self.callable_predicates(&schema.predicates, &params)?;
         self.schema(&schema.signature.result, &params, 0).map(Some)

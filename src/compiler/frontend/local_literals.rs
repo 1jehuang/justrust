@@ -3329,7 +3329,11 @@ impl<'s> Solver<'_, '_, 's> {
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
                 }
-                if self.resolve(owner, 0)?.is_none()
+                let open_arguments = args.iter().try_fold(false, |open, argument| {
+                    self.resolve(*argument, 0)
+                        .map(|resolved| open || resolved.is_none())
+                })?;
+                if (self.resolve(owner, 0)?.is_none() || open_arguments)
                     && let Some(result) =
                         self.associated_trait_receiver_constraints(owner, *name, &args, &actuals)?
                 {

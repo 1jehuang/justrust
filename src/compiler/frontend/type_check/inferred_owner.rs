@@ -57,12 +57,17 @@ impl Checker<'_> {
                 );
             }
         }
-        let id = candidate.ok_or_else(|| {
-            format!(
+        let Some(id) = candidate else {
+            if let Some(owner) =
+                self.infer_source_trait_owner(owner, name, method_args, args, expected)?
+            {
+                return Ok(owner);
+            }
+            return Err(format!(
                 "no applicable associated item {}",
                 names.spelling(*name).unwrap_or_default()
-            )
-        })?;
+            ));
+        };
         let info = plan.declaration(id)?;
         let associated = info
             .path
@@ -121,6 +126,77 @@ impl Checker<'_> {
             }
         }
         plan.intern_nominal(decl, &concrete, self.facts(), &plan.budget)
+    }
+
+    fn infer_source_trait_owner(
+        &self,
+        owner: &Type,
+        name: &AstIdent,
+        method_args: usize,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<Option<ir::Ty>, String> {
+        if method_args != 0 {
+            return Ok(None);
+        }
+        let plan = self.signatures.plan()?;
+        let written = self.partial_type_term(owner, 0)?;
+        let mut selected = None;
+        for (header, id) in self.source_associated_trait_candidates(name)? {
+            let Some(id) = id else { continue };
+            if plan.param_env(id)?.arity() != 0 {
+                continue;
+            }
+            let schema = plan.function_schema(id)?;
+            if schema.signature.params.len() != args.len() {
+                continue;
+            }
+            let mut solver = Inference::new(self, plan.param_env(header.declaration)?)?;
+            let formal_owner = solver.schema(&header.trait_ref.self_ty, 0)?;
+            let mut constraints = vec![(formal_owner.clone(), written.clone())];
+            if let Some(expected) = expected {
+                constraints.push((
+                    solver.schema(&schema.signature.result, 0)?,
+                    self.infer_type_term(expected, None, 0)?,
+                ));
+            }
+            for (formal, arg) in schema.signature.params.iter().zip(args) {
+                constraints.push((solver.schema(formal, 0)?, self.inference_evidence(arg, 0)?));
+            }
+            let mut fits = true;
+            for (formal, actual) in constraints {
+                if let Err(error) = solver.core.constrain(&formal, &actual, 0) {
+                    if error.is_resource() || error.kind() == tr::FactsErrorKind::Infrastructure {
+                        return Err(error.into_legacy_diagnostic(&plan.budget));
+                    }
+                    fits = false;
+                    break;
+                }
+            }
+            if !fits {
+                continue;
+            }
+            let Some(actuals) = solver.finish(true)? else {
+                continue;
+            };
+            let mut substitution = plan.clone();
+            let owner = ir::substitute_ty(
+                &header.trait_ref.self_ty,
+                &header.schema_env,
+                &actuals,
+                self.facts(),
+                &mut substitution,
+                &plan.budget,
+            )?;
+            if let Some(previous) = &selected {
+                if !metered_type_equal(previous, &owner, &plan.budget, 0)? {
+                    return Ok(None);
+                }
+            } else {
+                selected = Some(owner);
+            }
+        }
+        Ok(selected)
     }
 }
 

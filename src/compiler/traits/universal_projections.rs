@@ -169,6 +169,24 @@ impl ValidatedTraitWorld {
                     return Ok(());
                 }
             }
+            let caller = self.predicate_env(declaration)?;
+            if self
+                .dependent_array_implementation(
+                    &projection.trait_ref,
+                    ProofContext {
+                        transport: ParentLocalTransport::default(),
+                        original: None,
+                        source_metadata: None,
+                        predicates: &caller,
+                        executable_storage: true,
+                        phase: FactsPhase::Universal,
+                    },
+                    active,
+                )?
+                .is_some()
+            {
+                return Ok(());
+            }
             // Named applications and anonymous closure providers have
             // implementation-owned membership, even when their enclosing
             // function is generic. It need not appear as a written bound on

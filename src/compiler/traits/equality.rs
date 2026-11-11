@@ -1410,7 +1410,7 @@ impl ValidatedTraitWorld {
                 .normalize_closed_equality_projection_for_use(projection, context, active, false)?;
             let normal = normalization.ty();
             self.validate_equality_domain_in(projection, normal, context, active)?;
-            if !self.eq_ty(normal, rhs, 0)? {
+            if !self.dependent_array_equality_rhs_matches(normal, rhs, context, active)? {
                 return Ok(ProofOutcome::NotProven);
             }
             return self.evidence(
@@ -1422,12 +1422,30 @@ impl ValidatedTraitWorld {
         let Some(normal) =
             self.declared_equality_rhs(projection, &context.predicates.predicates, context.env())?
         else {
+            if let Some(membership) =
+                self.dependent_array_implementation(&projection.trait_ref, context, active)?
+            {
+                let normal = self.implementation_equality_rhs_with(
+                    projection,
+                    &membership,
+                    context,
+                    active,
+                )?;
+                if !self.dependent_array_equality_rhs_matches(&normal, rhs, context, active)? {
+                    return Ok(ProofOutcome::NotProven);
+                }
+                return self.evidence(
+                    &goal,
+                    context,
+                    ProofOrigin::ImplementationEquality { membership },
+                );
+            }
             let Some((membership, normal)) =
                 self.rigid_nominal_implementation_rhs(projection, context, active)?
             else {
                 return Ok(ProofOutcome::NotProven);
             };
-            if !self.eq_ty(&normal, rhs, 0)? {
+            if !self.dependent_array_equality_rhs_matches(&normal, rhs, context, active)? {
                 return Ok(ProofOutcome::NotProven);
             }
             return self.evidence(
@@ -1436,7 +1454,7 @@ impl ValidatedTraitWorld {
                 ProofOrigin::ImplementationEquality { membership },
             );
         };
-        if !self.eq_ty(&normal, rhs, 0)? {
+        if !self.dependent_array_equality_rhs_matches(&normal, rhs, context, active)? {
             return Ok(ProofOutcome::NotProven);
         }
         self.require_in(
@@ -2130,6 +2148,20 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut ProofScratch,
     ) -> Result<bool> {
+        if facts.phase() == FactsPhase::Universal
+            && self
+                .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
+                .is_none()
+            && self
+                .dependent_array_implementation(
+                    &projection.trait_ref,
+                    ProofContext::from_facts(facts),
+                    scratch,
+                )?
+                .is_some()
+        {
+            return Ok(true);
+        }
         Ok(facts.phase() == FactsPhase::Universal
             && associated_types::implementation_application_self(&projection.trait_ref.self_ty)
             && self
