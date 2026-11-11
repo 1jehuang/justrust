@@ -10426,6 +10426,22 @@ impl<'a> Checker<'a> {
                         self.deref_field_receiver(receiver, kind, &selected)?
                     {
                         adjusted
+                    } else if let Some(adjusted) =
+                        self.indexed_method_receiver(receiver, kind, &selected)?
+                    {
+                        // Identity receivers through a dynamic index (`v[i]`
+                        // holding `&mut T`) reborrow the checked indexed place.
+                        adjusted
+                    } else if static_source_place(receiver).is_err() {
+                        // An owned rvalue of reference type (`x.get(i).ok_or(e)?`)
+                        // reached after autoderef. Materialize it into a
+                        // full-expression temporary and reborrow through it.
+                        self.rvalue_reference_receiver(
+                            receiver,
+                            kind,
+                            &selected,
+                            inferred_receiver.then_some(&ty),
+                        )?
                     } else {
                         let source = static_source_place(receiver)?;
                         let (mut place, _, _) = self.checked_place(&source)?;
@@ -12631,7 +12647,11 @@ impl<'a> Checker<'a> {
                     } else {
                         false
                     };
+                    // Value roots (`*map.get(k).ok_or(e)?`, `*match ..`) already
+                    // evaluated to a checked reference; only place roots need the
+                    // static projection authority.
                     if !matches!(root, Expr::Var(_))
+                        && place_expression(root)
                         && !literal_carrier
                         && !genuine_call(root)
                         && !slice_carrier

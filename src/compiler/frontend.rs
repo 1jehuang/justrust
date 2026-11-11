@@ -107,6 +107,7 @@ mod nominal_bounds;
 mod nominal_intern_tests;
 mod opaque;
 mod operators;
+mod rvalue_receiver;
 pub use opaque::SourceOpaqueType;
 mod panic_format;
 mod param_patterns;

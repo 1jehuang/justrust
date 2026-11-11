@@ -143,6 +143,97 @@ fn unused(){let _=Holder::<i32>::make([7i32]);} fn main(){}"#,
 }
 
 #[test]
+fn rvalue_and_dynamic_index_receivers_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "rvalue-dynamic-index-receivers",
+        &[
+            Case {
+                name: "rvalue_dynamic_index_receivers",
+                source: r#"
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum Ins { Push(i64), Halt }
+struct Counter { n: u32 }
+impl Counter {
+    fn bump(&mut self) -> u32 { self.n += 1; self.n }
+    fn get(&self) -> u32 { self.n }
+}
+impl Drop for Counter { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn make(n: u32) -> Counter { Counter { n } }
+fn fetch(prog: &[Ins], pc: usize) -> Result<Ins, String> {
+    let ins = prog.get(pc).ok_or("pc out of range")?.clone();
+    Ok(ins)
+}
+fn first_len(v: &[String]) -> usize { v.first().unwrap().len() }
+fn lookup(vars: &std::collections::HashMap<String, i64>, v: &str) -> Result<i64, String> {
+    let x = *vars.get(v).ok_or(format!("undefined {v}"))?;
+    Ok(x + 1)
+}
+fn main() {
+    let mut vars = std::collections::HashMap::new();
+    vars.insert(String::from("a"), 41i64);
+    println!("{:?} {:?}", lookup(&vars, "a"), lookup(&vars, "b"));
+    let prog = vec![Ins::Push(3), Ins::Halt];
+    println!("{:?} {:?}", fetch(&prog, 0), fetch(&prog, 5));
+    println!("{}", first_len(&[String::from("abc")]));
+    let x = make(1).bump();
+    println!("after {}", x);
+    let v = vec![make(5), make(7)];
+    let i = 1;
+    println!("{}", v[i].get());
+    let mut w = vec![vec![1u32], vec![2u32]];
+    let j = 1;
+    w[j].push(9);
+    println!("{:?}", w);
+}
+"#,
+                expect: Expect::Run(
+                    "Ok(42) Err(\"undefined b\")\nOk(Push(3)) Err(\"pc out of range\")\n3\ndrop 2\nafter 2\n7\n[[1], [2, 9]]\ndrop 5\ndrop 7\n",
+                ),
+            },
+            Case {
+                name: "rvalue_receiver_borrow_escapes_statement_unused",
+                source: r#"
+fn make() -> String { String::from("hello") }
+#[allow(dead_code)]
+fn unused() {
+    let r: &str = make().as_str();
+    println!("{}", r);
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0716"),
+            },
+            Case {
+                name: "deref_try_root_moves_string_unused",
+                source: r#"
+#[allow(dead_code)]
+fn take(v: &[String]) -> Result<String, String> {
+    let s = *v.first().ok_or(String::from("empty"))?;
+    Ok(s)
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "deref_match_root_moves_string_unused",
+                source: r#"
+#[allow(dead_code)]
+fn take(o: Option<&String>) -> String {
+    let s = *match o { Some(r) => r, None => return String::new() };
+    s
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0507"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unchanged_vm_interpreter_matches_stock() {
     parse_oracle(
         "unchanged-vm-interpreter",
