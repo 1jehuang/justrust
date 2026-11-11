@@ -13179,6 +13179,13 @@ impl CheckedFunction {
     pub fn validate_with_facts(&self, facts: FactsCtx<'_>) -> Result<(), String> {
         self.validate_with_evidence(facts, CallEvidencePolicy::Legacy)
     }
+    pub(in crate::compiler) fn validate_with_facts_scratch(
+        &self,
+        facts: FactsCtx<'_>,
+        scratch: &mut super::traits::TraitScratch,
+    ) -> Result<(), String> {
+        self.validate_with_evidence_scratch(facts, CallEvidencePolicy::Legacy, scratch)
+    }
     fn validate_with_evidence(
         &self,
         facts: FactsCtx<'_>,

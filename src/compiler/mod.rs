@@ -676,8 +676,14 @@ impl Facts<'_> {
                 types,
                 budget,
                 &|provider, args| {
-                    instances::graph_key::replay_closure(
-                        types, &templates, &missing, budget, provider, args,
+                    instances::graph_key::replay_closure_with_reads(
+                        types,
+                        &templates,
+                        &missing,
+                        budget,
+                        provider,
+                        args,
+                        self.cx.authority(),
                     )
                 },
             );

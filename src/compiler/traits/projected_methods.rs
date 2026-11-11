@@ -1644,6 +1644,19 @@ impl ValidatedTraitWorld {
         }
         if closed
             && method_args.is_empty()
+            && let Some(adapter) = self.closed_fn_item_result_signature(
+                item,
+                goal,
+                &instantiated.signature,
+                &selection,
+                context,
+                active,
+            )?
+        {
+            instantiated.signature.ref_contract = adapter.ref_contract;
+        }
+        if closed
+            && method_args.is_empty()
             && matches!(&selection.0.origin, ProofOrigin::Implementation { .. })
             && charged(
                 &self.budget,
@@ -2478,8 +2491,20 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
             )?;
-            let (contract, regions) =
+            let (mut contract, regions) =
                 self.derive_carriers(&schema.signature, &source_regions, &schema.env)?;
+            if !caller_owned
+                && matches!(&evidence.selection.0.origin, ProofOrigin::FnItem { .. })
+                && matches!(evidence.goal.self_ty, Ty::FnItem(_))
+                && !charged(
+                    &self.budget,
+                    ir::carrier_locations(&schema.signature.result, &self.budget),
+                )?
+                .is_empty()
+            {
+                contract.results =
+                    self.fn_item_result_carriers(&evidence.goal, &contract, facts)?;
+            }
             return Ok(ProjectedCarrierBase {
                 schema,
                 arguments: arguments.into(),

@@ -56,6 +56,42 @@ fn canonicalize_empty_projected_result(
     Ok(())
 }
 
+// Every result layer has a fresh region and no fixed input origin.
+fn canonicalize_empty_projected_result_layers(
+    signature: &mut Signature,
+    budget: &PlanBudget,
+) -> Result<()> {
+    let results = charged(
+        budget,
+        ir::derive_return_contracts(
+            &signature.params,
+            &signature.result,
+            &signature.ref_contract,
+            budget,
+        ),
+    )?;
+    charged(budget, budget.charge_work(results.len()))?;
+    if results.len() != signature.ref_contract.results.len()
+        || results.iter().any(|row| {
+            !matches!(&row.returns,
+                ir::ReturnContract::SharedInputPaths(inputs) if inputs.is_empty())
+                && !matches!(&row.returns,
+                    ir::ReturnContract::SharedInputEnvelopes(inputs) if inputs.is_empty())
+        })
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "function item result acquired a fixed input origin",
+        ));
+    }
+    retain::<ir::RefContract>(budget, 1)?;
+    signature.ref_contract = Arc::new(ir::RefContract {
+        results,
+        ..(*signature.ref_contract).clone()
+    });
+    Ok(())
+}
+
 impl ValidatedTraitWorld {
     // A required Fn item names its result through FnOnce::Output rather than a
     // rigid result parameter. Its reference origins therefore come from the
@@ -79,6 +115,11 @@ impl ValidatedTraitWorld {
             return Ok(());
         };
         let item = &self.headers.items[position];
+        if let Some(Ty::FnItem(_)) = arguments.first() {
+            return self.realize_source_fn_item_contract(
+                item, schema, arguments, signature, context, active,
+            );
+        }
         let Some(Ty::Closure(closure)) = arguments.first() else {
             return Ok(());
         };
@@ -122,6 +163,64 @@ impl ValidatedTraitWorld {
         if let Some(adapter) = self.closed_closure_argument_result_signature(
             item, &goal, signature, &selection, closed, active,
         )? {
+            signature.ref_contract = adapter.ref_contract;
+        }
+        Ok(())
+    }
+
+    /// Source-carrier application of a builtin function item callable
+    /// (`call_mut` with `Self = FnItem`) uses the same closed adapter as the
+    /// executable projected application: fresh result regions, no fixed
+    /// origin, receiver never an origin. Its tuple-field sources come from
+    /// `fn_item_result_carriers`.
+    fn realize_source_fn_item_contract(
+        &self,
+        item: &TraitItemHeader,
+        schema: &GenericSchema,
+        arguments: &[Ty],
+        signature: &mut Signature,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<()> {
+        if self.closure_trait_kind(item.trait_decl)?.is_none() {
+            return Ok(());
+        }
+        if context.executable_storage
+            || !self.same_env(&schema.env, &item.schema.env)?
+            || !self.eq_signature(&schema.signature, &item.schema.signature)?
+            || schema.predicates.len() != item.schema.predicates.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source function item changed its canonical declaration schema",
+            ));
+        }
+        for (actual, original) in schema.predicates.iter().zip(item.schema.predicates.iter()) {
+            if !self.eq_predicate(actual, original)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source function item changed its canonical predicates",
+                ));
+            }
+        }
+        let trait_arity = self.trait_header(item.trait_decl)?.env.total_arity();
+        if arguments.len() != trait_arity || trait_arity == 0 {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source function item changed its ordered trait arguments",
+            ));
+        }
+        retain::<Ty>(&self.budget, arguments.len() - 1)?;
+        let goal = TraitRef {
+            declaration: item.trait_decl,
+            self_ty: arguments[0].clone(),
+            args: arguments[1..].into(),
+        };
+        let closed = context.closed_selection(self);
+        let selection = self.require_in(&Predicate::Implements(goal.clone()), closed, active)?;
+        if let Some(adapter) = self
+            .closed_fn_item_result_signature(item, &goal, signature, &selection, closed, active)?
+        {
             signature.ref_contract = adapter.ref_contract;
         }
         Ok(())
@@ -327,6 +426,203 @@ impl ValidatedTraitWorld {
             canonicalize_empty_projected_result(&mut provider.signature, &self.budget)?;
         }
         Ok(Some(provider.signature))
+    }
+
+    /// Builtin `FnItem: Fn*<(A..)>` call results borrow only from the ordered
+    /// argument tuple, exactly as the discharged item's own signature says.
+    /// The callable receiver is a zero-sized item and is never an origin.
+    /// The fixed RefContract cannot name tuple fields, so the result receives
+    /// fresh regions with no fixed input origin (the closure argument-origin
+    /// encoding). Exact tuple-field sources come from
+    /// `fn_item_result_carriers`, which remaps the item's own carrier rows.
+    pub(super) fn closed_fn_item_result_signature(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        signature: &Signature,
+        selection: &ProofEvidence,
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+    ) -> Result<Option<Signature>> {
+        self.check_context(context)?;
+        let ProofOrigin::FnItem { kind } = &selection.0.origin else {
+            return Ok(None);
+        };
+        let Ty::FnItem(target) = &goal.self_ty else {
+            return Ok(None);
+        };
+        let layers = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
+        if layers == 0 || layers <= signature.ref_contract.results.len() {
+            return Ok(None);
+        }
+        if self.closure_trait_kind(item.trait_decl)? != Some(*kind)
+            || item.trait_decl != goal.declaration
+            || selection.0.executable_storage != context.executable_storage
+            || selection.0.world != self.id
+            || selection.0.environment != self.empty.index
+            || selection.0.phase != FactsPhase::Closed
+            || !self.eq_predicate(&selection.0.goal, &Predicate::Implements(goal.clone()))?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function item result selection changed exact source authority",
+            ));
+        }
+        if self.trait_header(item.trait_decl)?.items.as_ref() != [item.declaration]
+            || self.item_header(item.declaration)?.trait_decl != item.trait_decl
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function item result requires the exact sole callable trait item",
+            ));
+        }
+        let direct = self.discharge_in(target, context, active)?;
+        let tuple = self.fn_item_arguments(direct.signature())?;
+        if goal.args.len() != 1
+            || signature.params.len() != 2
+            || !self.eq_ty(&goal.args[0], &tuple, 0)?
+            || !self.eq_ty(&signature.params[1], &tuple, 0)?
+            || !self.eq_ty(&signature.result, &direct.signature().result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function item result differs from its discharged item signature",
+            ));
+        }
+        // Only shared result layers: a mutable result would need exclusive
+        // tuple-field authority this encoding does not express.
+        let mut ty = &signature.result;
+        while let Ty::Ref { kind, referent } = ty {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if *kind != ir::BorrowKind::Shared {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: function item callable returning a mutable reference",
+                ));
+            }
+            ty = referent.as_ref();
+        }
+        if !signature.ref_contract.results.is_empty() {
+            return Ok(None);
+        }
+        let base = usize::from(signature.ref_contract.region_count);
+        if base + layers > ir::MAX_REGION_PARAMS {
+            return Err(FactsError::resource(
+                &self.budget,
+                "function item result region limit exceeded",
+            ));
+        }
+        retain::<ir::ResultReference>(&self.budget, layers)?;
+        retain::<(ir::RegionParamId, ir::RegionParamId)>(&self.budget, layers)?;
+        let mut results = Vec::new();
+        let mut outlives = signature.ref_contract.outlives.to_vec();
+        let mut above = None;
+        for depth in 0..layers {
+            let region = ir::RegionParamId((base + depth) as u16);
+            if let Some(above) = above {
+                push(&self.budget, &mut outlives, (region, above))?;
+            }
+            push(
+                &self.budget,
+                &mut results,
+                ir::ResultReference {
+                    position: ir::ReferencePosition { depth: depth as u8 },
+                    region,
+                    returns: ir::ReturnContract::NoReference,
+                },
+            )?;
+            above = Some(region);
+        }
+        let raw = ir::RefContract {
+            region_count: (base + layers) as u16,
+            input_regions: signature.ref_contract.input_regions.clone(),
+            results: results.into(),
+            outlives: outlives.into(),
+            static_regions: signature.ref_contract.static_regions,
+        };
+        let mut adapted = Signature {
+            params: signature.params.clone(),
+            result: signature.result.clone(),
+            ref_contract: charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?,
+        };
+        canonicalize_empty_projected_result_layers(&mut adapted, &self.budget)?;
+        Ok(Some(adapted))
+    }
+
+    /// Exact tuple-field result sources for a builtin function item call:
+    /// direct parameter `i` at location `L` becomes trait parameter 1 at
+    /// `Field(i)` followed by `L`. Every mapped source must already be an
+    /// input carrier of the tuple; the receiver is never a source.
+    pub(super) fn fn_item_result_carriers(
+        &self,
+        goal: &TraitRef,
+        contract: &ir::CarrierContract,
+        facts: &ValidatedFacts,
+    ) -> Result<Arc<[ir::CarrierReturn]>> {
+        let Ty::FnItem(target) = &goal.self_ty else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function item result carrier lost its item",
+            ));
+        };
+        let callee = Callee::Direct(target.as_ref().clone());
+        let direct = self.carrier_contract(SignatureSubject::Call(&callee), facts)?;
+        let direct = direct.contract();
+        if direct.results.len() != contract.results.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function item result carriers changed result shape",
+            ));
+        }
+        let mut returned = Vec::new();
+        for (row, expected) in direct.results.iter().zip(contract.results.iter()) {
+            if !self.same_location(&row.location, &expected.location)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function item result carrier changed location",
+                ));
+            }
+            let mut sources = Vec::new();
+            for source in row.sources.iter() {
+                let mut path = Vec::new();
+                push(
+                    &self.budget,
+                    &mut path,
+                    ir::CarrierStep::Field(source.param),
+                )?;
+                for step in source.location.path.0.iter() {
+                    push(&self.budget, &mut path, step.clone())?;
+                }
+                let mapped = ir::InputCarrier {
+                    param: 1,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(path.into()),
+                        channel: source.location.channel.clone(),
+                    },
+                };
+                charged(&self.budget, self.budget.charge_work(contract.inputs.len()))?;
+                if !contract.inputs.contains(&mapped) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "function item result source is outside the argument tuple",
+                    ));
+                }
+                if !sources.contains(&mapped) {
+                    push(&self.budget, &mut sources, mapped)?;
+                }
+            }
+            retain::<ir::InputCarrier>(&self.budget, sources.len())?;
+            push(
+                &self.budget,
+                &mut returned,
+                ir::CarrierReturn {
+                    location: expected.location.clone(),
+                    sources: sources.into(),
+                },
+            )?;
+        }
+        retain::<ir::CarrierReturn>(&self.budget, returned.len())?;
+        Ok(returned.into())
     }
 
     pub(super) fn closed_closure_tuple_input(

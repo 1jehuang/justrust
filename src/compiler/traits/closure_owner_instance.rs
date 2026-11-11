@@ -14,6 +14,37 @@ impl ValidatedFacts {
         original: &Arc<ir::ClosureTy>,
         owner_arguments: &[Ty],
     ) -> Result<Arc<ir::ClosureTy>> {
+        self.instantiate_closure_owner_inner(original, owner_arguments, None)
+    }
+
+    pub(in crate::compiler) fn instantiate_closure_owner_with_reads(
+        &self,
+        original: &Arc<ir::ClosureTy>,
+        owner_arguments: &[Ty],
+        context: &mut crate::compiler::frontend::PlanCtx,
+        engine: crate::engine::EngineAuthority,
+    ) -> Result<Arc<ir::ClosureTy>> {
+        let context_world = context
+            .trait_world()
+            .map_err(|error| FactsError::from_message(&self.world.budget, &error))?;
+        if !Arc::ptr_eq(&context_world, &self.world) {
+            return Err(FactsError::invalid(
+                &self.world.budget,
+                "closure owner typed reads changed their source world",
+            ));
+        }
+        self.instantiate_closure_owner_inner(original, owner_arguments, Some((context, engine)))
+    }
+
+    fn instantiate_closure_owner_inner(
+        &self,
+        original: &Arc<ir::ClosureTy>,
+        owner_arguments: &[Ty],
+        reads: Option<(
+            &mut crate::compiler::frontend::PlanCtx,
+            crate::engine::EngineAuthority,
+        )>,
+    ) -> Result<Arc<ir::ClosureTy>> {
         let world = &self.world;
         world.check_facts(self, true)?;
         if self.phase() != FactsPhase::Closed {
@@ -42,10 +73,21 @@ impl ValidatedFacts {
                 ));
             }
         }
+        let mut read_scratch = TraitScratch::default();
         for argument in owner_arguments {
             world.validate_executable_actual(argument, self.env())?;
+            if let Some((_, engine)) = reads.as_ref() {
+                crate::compiler::nominal_realization::substitution::replay_closed_storage_with(
+                    *engine,
+                    argument,
+                    self,
+                    &world.budget,
+                    &mut read_scratch,
+                )
+                .map_err(|error| FactsError::from_message(&world.budget, &error))?;
+            }
         }
-        if owner.env.total_arity() == 0 {
+        if owner.env.total_arity() == 0 && reads.is_none() {
             // A non-generic owner has no parameters to substitute: the sealed
             // template is already the exact closed type. Re-running the kernel
             // would only re-derive closed graph nominals it may not retain.
@@ -70,9 +112,28 @@ impl ValidatedFacts {
             },
             predicates: Arc::from([]),
         };
-        let substituted =
-            world.substitute_projected_schema(&schema, owner_arguments, self.env())?;
-        let Ty::Closure(actual) = substituted.signature.result else {
+        let substituted = match reads {
+            Some((context, engine)) => {
+                crate::compiler::nominal_realization::substitution::substitute_ty_with_scratch(
+                    &schema.signature.result,
+                    &schema.env,
+                    owner_arguments,
+                    ir::FactsCtx::Validated(self),
+                    context,
+                    &world.budget,
+                    Some(engine),
+                    &mut TraitScratch::default(),
+                )
+                .map_err(|error| FactsError::from_message(&world.budget, &error))?
+            }
+            None => {
+                world
+                    .substitute_projected_schema(&schema, owner_arguments, self.env())?
+                    .signature
+                    .result
+            }
+        };
+        let Ty::Closure(actual) = substituted else {
             return Err(FactsError::invalid(
                 &world.budget,
                 "closed closure reconstruction lost its sealed type",

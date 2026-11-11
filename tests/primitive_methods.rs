@@ -143,6 +143,74 @@ fn unused(){let _=Holder::<i32>::make([7i32]);} fn main(){}"#,
 }
 
 #[test]
+fn unchanged_vm_interpreter_matches_stock() {
+    parse_oracle(
+        "unchanged-vm-interpreter",
+        &[closure_oracle::Case {
+            name: "05_vm_interpreter",
+            source: include_str!("milestones/m3/05_vm_interpreter.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "milestones/m3/05_vm_interpreter.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn fn_item_callable_reference_result_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "fn-item-callable-reference-result",
+        &[
+            Case {
+                name: "fn_item_fnmut_str_result",
+                source: r#"
+fn first_word(s: &str) -> &str { s.split(' ').next().unwrap() }
+fn main() {
+    let v: Vec<&str> = "x y\nz w".lines().map(first_word).collect();
+    println!("{:?}", v);
+    let t: Vec<&str> = " p \n q ".lines().map(str::trim).collect();
+    println!("{:?}", t);
+    let n = "hello world\na b".lines().map(first_word).map(str::len).sum::<usize>();
+    println!("{}", n);
+}
+"#,
+                expect: Expect::Run("[\"x\", \"z\"]\n[\"p\", \"q\"]\n6\n"),
+            },
+            Case {
+                name: "fn_item_result_borrows_local_unused",
+                source: r#"
+fn first_word(s: &str) -> &str { s.split(' ').next().unwrap() }
+#[allow(dead_code)]
+fn leak() -> &'static str {
+    let local = String::from("hi there");
+    let v: Vec<&str> = local.lines().map(first_word).collect();
+    v[0]
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "fn_item_result_outlives_argument",
+                source: r#"
+fn first_word(s: &str) -> &str { s.split(' ').next().unwrap() }
+fn main() {
+    let words: Vec<&str>;
+    {
+        let s = String::from("a b");
+        words = s.lines().map(first_word).collect();
+    }
+    println!("{:?}", words);
+}
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unchanged_grid_bfs_matches_stock() {
     parse_oracle(
         "unchanged-grid-bfs",

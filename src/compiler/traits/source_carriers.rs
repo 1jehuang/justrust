@@ -2,6 +2,65 @@
 //! prove carrier topology and obligations, never executable nominal storage.
 use super::*;
 
+/// One node's completed canonical reconstructions, not signature verdicts.
+/// Every use still checks the actual signature and stored reference contract.
+#[derive(Default)]
+pub(super) struct CompletedSourceApplications {
+    rows: Vec<CompletedSourceApplication>,
+    storage: Vec<ir::PlanReservation>,
+}
+
+struct CompletedSourceApplication {
+    source: body_validation::SourceKey,
+    callee: Callee,
+    signature: Arc<Signature>,
+}
+
+impl CompletedSourceApplications {
+    fn find(
+        &self,
+        facts: &ValidatedFacts,
+        callee: &Callee,
+        inputs: &[Ty],
+    ) -> Result<Option<Arc<Signature>>> {
+        checked_module(
+            facts.budget(),
+            facts
+                .world
+                .catalog
+                .modules()
+                .budget()
+                .check()
+                .map_err(ModuleError::from),
+        )?;
+        for row in &self.rows {
+            charged(facts.budget(), facts.budget().charge_work(1))?;
+            if same_callee(&row.callee, callee) && row.source.matches(facts, inputs)? {
+                return Ok(Some(row.signature.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    fn retain(
+        &mut self,
+        facts: &ValidatedFacts,
+        callee: &Callee,
+        inputs: &[Ty],
+        signature: Arc<Signature>,
+    ) -> Result<()> {
+        if self.rows.len() < MAX_SCRATCH_OBLIGATIONS {
+            let row = CompletedSourceApplication {
+                source: body_validation::SourceKey::retain(facts, inputs)?,
+                callee: callee.clone(),
+                signature,
+            };
+            push_scratch_row(facts.budget(), &mut self.rows, &mut self.storage, row)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SourceCarrierAuthority {
     source: body_validation::SourceKey,
@@ -354,11 +413,10 @@ impl ValidatedFacts {
         self.validate_source_flow_signatures_with_scratch(subject, &[signature], scratch)
     }
 
-    /// One receipt operation may compare several realizations of the same
-    /// source call. Reconstruct its canonical application once only when the
-    /// complete ordered source-field receipts agree. Each operand still
-    /// authenticates its transport, type metadata and stored contract. Nothing
-    /// from this reconstruction survives the operation or admits another call.
+    /// One receipt operation may compare several realizations of one source call.
+    /// Canonical applications may be retained only by this node's complete
+    /// source context. Every operand still authenticates its transport, type
+    /// metadata, signature equality and stored reference contract on every use.
     pub(in crate::compiler) fn validate_source_flow_signatures_with_scratch(
         &self,
         subject: SignatureSubject<'_>,
@@ -367,7 +425,7 @@ impl ValidatedFacts {
     ) -> Result<()> {
         self.world.check_facts(self, true)?;
         let result_subject = self.world.equality_result_subject(subject, self)?;
-        let mut reconstruction: Option<(Vec<Ty>, InstantiatedSchema)> = None;
+        let mut reconstruction: Option<(Vec<Ty>, Arc<Signature>)> = None;
         for signature in signatures {
             self.world.check_facts(self, true)?;
             let inputs = match subject {
@@ -392,15 +450,36 @@ impl ValidatedFacts {
                 None => false,
             };
             if !same_inputs {
-                let (_, _, expected) = self.world.source_carrier_application(
-                    &result_subject,
-                    self,
-                    context,
-                    scratch.for_world(self.world.id),
-                )?;
+                let completed = match subject {
+                    SignatureSubject::Call(callee) => {
+                        scratch.source_applications.find(self, callee, &inputs)?
+                    }
+                    SignatureSubject::Body => None,
+                };
+                let expected = if let Some(expected) = completed {
+                    expected
+                } else {
+                    let (_, _, application) = self.world.source_carrier_application(
+                        &result_subject,
+                        self,
+                        context,
+                        scratch.for_world(self.world.id),
+                    )?;
+                    retain::<Signature>(self.budget(), 1)?;
+                    let expected = Arc::new(application.signature);
+                    if let SignatureSubject::Call(callee) = subject {
+                        scratch.source_applications.retain(
+                            self,
+                            callee,
+                            &inputs,
+                            expected.clone(),
+                        )?;
+                    }
+                    expected
+                };
                 reconstruction = Some((inputs, expected));
             }
-            let expected = &reconstruction.as_ref().unwrap().1.signature;
+            let expected = &reconstruction.as_ref().unwrap().1;
             if !self.world.eq_signature(expected, signature)? {
                 return Err(FactsError::invalid(
                     self.budget(),

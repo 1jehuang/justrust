@@ -104,6 +104,58 @@ fn closure_lowering_requires_exact_parent_body_and_mode() {
         .closure_callable_facts_for(original.ty.clone(), ir::ClosureKind::Fn)
         .unwrap();
     let source = original.body_for(ir::ClosureKind::Fn).unwrap();
+    let mut replay = tr::TraitScratch::default();
+    for _ in 0..2 {
+        facts
+            .validate_closure_body_source_with_scratch(
+                &original.ty,
+                ir::ClosureKind::Fn,
+                &source,
+                &mut replay,
+            )
+            .unwrap();
+    }
+    assert!(
+        facts
+            .validate_closure_body_source_with_scratch(
+                &original.ty,
+                ir::ClosureKind::FnOnce,
+                &source,
+                &mut replay,
+            )
+            .is_err()
+    );
+    let mut changed_source = source.as_ref().clone();
+    changed_source.result = ir::Ty::Bool;
+    assert!(
+        facts
+            .validate_closure_body_source_with_scratch(
+                &original.ty,
+                ir::ClosureKind::Fn,
+                &changed_source,
+                &mut replay,
+            )
+            .is_err()
+    );
+    let parent_facts = world.callable_facts(owner).unwrap();
+    assert!(
+        parent_facts
+            .validate_closure_body_source_with_scratch(
+                &original.ty,
+                ir::ClosureKind::Fn,
+                &source,
+                &mut replay,
+            )
+            .is_err()
+    );
+    facts
+        .validate_closure_body_source_with_scratch(
+            &original.ty,
+            ir::ClosureKind::Fn,
+            &source,
+            &mut replay,
+        )
+        .unwrap();
     let target = ir::CallTarget {
         declaration: provider,
         type_args: Arc::from([]),
@@ -202,6 +254,17 @@ fn closure_lowering_requires_exact_parent_body_and_mode() {
         lowered
             .function()
             .validate_provenance(&once, &budget)
+            .is_err()
+    );
+    assert!(budget.charge_work(usize::MAX).is_err());
+    assert!(
+        facts
+            .validate_closure_body_source_with_scratch(
+                &original.ty,
+                ir::ClosureKind::Fn,
+                &original.body_for(ir::ClosureKind::Fn).unwrap(),
+                &mut replay,
+            )
             .is_err()
     );
 }

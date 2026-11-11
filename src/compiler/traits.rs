@@ -3088,6 +3088,8 @@ pub struct TraitScratch {
     /// Successful call-signature validations (subject callee, signature).
     signatures: Vec<(Callee, Signature)>,
     signature_index: std::collections::HashMap<u64, Vec<usize>>,
+    /// Completed canonical source applications, separate from storage verdicts.
+    source_applications: source_carriers::CompletedSourceApplications,
     /// Successful direct-call discharges under the current facts subject.
     directs: Vec<CompletedDirectInvocation>,
     direct_index: std::collections::HashMap<u64, Vec<usize>>,
@@ -3135,6 +3137,7 @@ impl TraitScratch {
             self.copy_index.clear();
             self.signatures.clear();
             self.signature_index.clear();
+            self.source_applications = source_carriers::CompletedSourceApplications::default();
             self.directs.clear();
             self.direct_index.clear();
             self.formed_trait_signatures.clear();
@@ -5646,6 +5649,13 @@ impl ValidatedTraitWorld {
                 self.schema.validate_nominal_node(ty, env, &self.budget)?;
             }
         }
+        if let Ty::Closure(closure) = ty {
+            self.validate_closure_metadata_with(
+                closure,
+                env,
+                walk.component_replays(&self.budget)?,
+            )?;
+        }
         let logical_nominals = walk.logical_nominals;
         let maybe_unsized = walk.maybe_unsized;
         let mut height = 0usize;
@@ -5665,7 +5675,6 @@ impl ValidatedTraitWorld {
                 walk.has_opaque = true;
             }
             Ty::Closure(closure) => {
-                self.validate_closure_metadata(closure, env)?;
                 for ty in closure.types() {
                     child(ty, TypeUse::Root)?;
                 }
@@ -18253,6 +18262,47 @@ mod tests {
     }
 
     #[test]
+    fn completed_source_application_rechecks_original_module_issuer() {
+        let budget = PlanBudget::default();
+        let header = nested_header(&budget);
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
+        let target = CallTarget {
+            declaration: header.declaration,
+            type_args: Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let facts = world.instance_facts(&target).unwrap();
+        let mut scratch = TraitScratch::default();
+        let signature = world
+            .discharge_direct_with(&target, &facts, &mut scratch)
+            .unwrap()
+            .signature;
+        let callee = Callee::Direct(target);
+        facts
+            .validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(&callee),
+                &signature,
+                &mut scratch,
+            )
+            .unwrap();
+        assert!(
+            world
+                .catalog
+                .modules()
+                .budget()
+                .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX,)
+                .is_err()
+        );
+        assert!(budget.first_resource_failure().is_none());
+        assert!(matches!(
+            facts.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(&callee), &signature, &mut scratch,
+            ),
+            Err(error) if error.kind() == FactsErrorKind::Resource
+        ));
+    }
+
+    #[test]
     fn local_signature_proof_lifetime_rechecks_forgery_context_and_poison() {
         let budget = PlanBudget::default();
         let header = nested_header(&budget);
@@ -18376,6 +18426,58 @@ mod tests {
         assert!(
             warm_source < cold_source,
             "source carrier arena discarded: {warm_source}/{cold_source}"
+        );
+        let before = budget.usage_snapshot().work;
+        facts
+            .validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(&callee),
+                &signature,
+                &mut source_scratch,
+            )
+            .unwrap();
+        let cold_reconstruction = budget.usage_snapshot().work - before;
+        let before = budget.usage_snapshot().work;
+        facts
+            .validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(&callee),
+                &signature,
+                &mut source_scratch,
+            )
+            .unwrap();
+        let warm_reconstruction = budget.usage_snapshot().work - before;
+        assert!(
+            warm_reconstruction < cold_reconstruction,
+            "complete source application not retained: {warm_reconstruction}/{cold_reconstruction}"
+        );
+        for mutation in 0..3 {
+            let mut changed = signature.clone();
+            match mutation {
+                0 => changed.params.clear(),
+                1 => changed.result = Ty::Bool,
+                _ => Arc::make_mut(&mut changed.ref_contract).results = Arc::from([]),
+            }
+            assert!(
+                facts
+                    .validate_source_flow_signature_with_scratch(
+                        SignatureSubject::Call(&callee),
+                        &changed,
+                        &mut source_scratch,
+                    )
+                    .is_err()
+            );
+        }
+        let changed_actual = Callee::Direct(CallTarget {
+            declaration: target.declaration,
+            type_args: Arc::from([Ty::Int(IntTy::U32)]),
+        });
+        assert!(
+            facts
+                .validate_source_flow_signature_with_scratch(
+                    SignatureSubject::Call(&changed_actual),
+                    &signature,
+                    &mut source_scratch,
+                )
+                .is_err()
         );
         for _ in 0..3 {
             source_view.validate_for(&facts).unwrap();
@@ -18661,6 +18763,12 @@ mod tests {
                 .is_err()
         );
         let failure = facts.budget().first_resource_failure();
+        assert!(matches!(
+            facts.validate_source_flow_signature_with_scratch(
+                SignatureSubject::Call(&callee), &signature, &mut source_scratch,
+            ),
+            Err(error) if error.kind() == FactsErrorKind::Resource
+        ));
         assert!(matches!(
             facts.validate_source_flow_signatures_with_scratch(
                 SignatureSubject::Call(&callee),

@@ -261,6 +261,40 @@ pub(in crate::compiler) fn replay_closure(
     provider: ir::DeclId,
     owner_args: &[ir::Ty],
 ) -> Result<ir::Ty, String> {
+    replay_closure_inner(
+        context, templates, missing, budget, provider, owner_args, None,
+    )
+}
+
+pub(in crate::compiler) fn replay_closure_with_reads(
+    context: &frontend::PlanCtx,
+    templates: &ClosureTemplates,
+    missing: &std::cell::RefCell<Vec<ir::DeclId>>,
+    budget: &ir::PlanBudget,
+    provider: ir::DeclId,
+    owner_args: &[ir::Ty],
+    engine: crate::engine::EngineAuthority,
+) -> Result<ir::Ty, String> {
+    replay_closure_inner(
+        context,
+        templates,
+        missing,
+        budget,
+        provider,
+        owner_args,
+        Some(engine),
+    )
+}
+
+fn replay_closure_inner(
+    context: &frontend::PlanCtx,
+    templates: &ClosureTemplates,
+    missing: &std::cell::RefCell<Vec<ir::DeclId>>,
+    budget: &ir::PlanBudget,
+    provider: ir::DeclId,
+    owner_args: &[ir::Ty],
+    engine: Option<crate::engine::EngineAuthority>,
+) -> Result<ir::Ty, String> {
     let Some(template) = templates.get(&provider) else {
         missing.borrow_mut().push(provider);
         return Err("closure graph key template not yet read".into());
@@ -272,8 +306,16 @@ pub(in crate::compiler) fn replay_closure(
         declaration: template.owner(),
         type_args: Arc::from(owner_args),
     })?;
-    owner
-        .instantiate_closure_owner(template, owner_args)
+    let result = match engine {
+        Some(engine) => owner.instantiate_closure_owner_with_reads(
+            template,
+            owner_args,
+            &mut context.clone(),
+            engine,
+        ),
+        None => owner.instantiate_closure_owner(template, owner_args),
+    };
+    result
         .map(ir::Ty::Closure)
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }

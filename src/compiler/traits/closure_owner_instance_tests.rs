@@ -627,3 +627,320 @@ fn closure_actual_graph_key_roundtrips_through_template_replay() {
     // The plain decoder still refuses closure actuals without graph replay.
     assert!(graph_key::decode(&words, &f.plan, budget).is_err());
 }
+
+#[test]
+fn closed_owner_typed_reads_reject_foreign_engine_world_order_and_poison() {
+    use crate::compiler::nominal_realization::{RealizationKey, read_manifest};
+    use crate::compiler::{CompilerProvider, Input, SIGNATURES, Snapshot, TemplateBodyFact};
+    use crate::engine::{Context, Engine, EngineAuthority, Key, Provider, TaskFuture};
+
+    struct TypedOwnerProvider {
+        snapshot: Arc<Snapshot>,
+        signatures: Option<frontend::PlanCtx>,
+    }
+    struct IssuedOwner(frontend::PlanCtx, Arc<ir::ClosureTy>, Ty, EngineAuthority);
+    impl crate::engine::Fact for IssuedOwner {}
+    impl Provider for TypedOwnerProvider {
+        fn outputs(&self, key: &Key) -> usize {
+            if key.kind == 997 {
+                1
+            } else {
+                CompilerProvider(self.snapshot.clone()).outputs(key)
+            }
+        }
+        fn start(&self, cx: Context, key: Key) -> TaskFuture {
+            if key.kind == SIGNATURES
+                && let Some(plan) = self.signatures.clone()
+            {
+                return Box::pin(async move { cx.publish_fact(0, plan) });
+            }
+            if key.kind != 997 {
+                return CompilerProvider(self.snapshot.clone()).start(cx, key);
+            }
+            Box::pin(async move {
+                let handle = cx
+                    .request(crate::compiler::keys::SignaturesDebtRoot.key())
+                    .get(0);
+                let plan: Arc<frontend::PlanCtx> = cx.read_fact(handle).await?;
+                let provider = (0..plan.callable_count())
+                    .map(|index| plan.callable_decl(index).unwrap())
+                    .find(|provider| plan.stored_closure_owner(*provider).unwrap().is_some())
+                    .unwrap();
+                let anchor = (0..plan.callable_count())
+                    .map(|index| plan.callable_decl(index).unwrap())
+                    .find(|declaration| {
+                        matches!(
+                            plan.persistent_decl_path(*declaration).unwrap().item(),
+                            frontend::PersistentDeclItem::Name("anchor")
+                        )
+                    })
+                    .unwrap();
+                let world = plan.trait_world().unwrap();
+                let source = world
+                    .schema
+                    .declaration_schema(anchor)
+                    .unwrap()
+                    .signature
+                    .result;
+                let Ty::Struct(source) = source else {
+                    panic!("authored anchor result must be nominal")
+                };
+                let nominal = RealizationKey::encode(
+                    world.nominal_realization_world(),
+                    source.def().source_decl,
+                    &[],
+                    32,
+                )?;
+                let template_handle = cx
+                    .request(crate::compiler::keys::item(
+                        crate::compiler::TEMPLATE_BODY,
+                        plan.callable_index(provider).unwrap(),
+                    ))
+                    .get(0);
+                let mut reads = read_manifest(&cx, &[nominal], world.budget()).await?;
+                let template: Arc<TemplateBodyFact> = cx.read_fact(template_handle).await?;
+                let closure = template.closure.as_ref().unwrap().ty.clone();
+                cx.publish_fact(
+                    0,
+                    IssuedOwner(
+                        plan.as_ref().clone(),
+                        closure,
+                        reads.remove(0).definition()?,
+                        cx.authority(),
+                    ),
+                )
+            })
+        }
+    }
+    for workers in [1, 8] {
+        let budget = PlanBudget::default();
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text("struct Payload{value:u64}fn anchor()->Payload{Payload{value:1u64}}fn apply<T,U>(x:T,y:U)->u64{let f=move||{let _x=x;let _y=y;7u64};f()}fn main(){}".into()),
+            source_options: source::SourceOptions::default(),
+            budget: budget.clone(),
+        });
+        let engine = Engine::new(TypedOwnerProvider {
+            snapshot: snapshot.clone(),
+            signatures: None,
+        });
+        let request = engine.request(crate::compiler::keys::test_key(997, vec![]));
+        engine.run(workers).unwrap();
+        request.completion().unwrap();
+        let issued = request.fact::<IssuedOwner>(0).unwrap();
+        let IssuedOwner(plan, template, graph, authority) = issued.as_ref();
+        let arguments = [graph.clone(), Ty::Int(ir::IntTy::U64)];
+        let facts = plan
+            .instance_facts(&CallTarget {
+                declaration: template.owner(),
+                type_args: Arc::from(arguments.clone()),
+            })
+            .unwrap();
+        let mut context = plan.clone();
+        let actual = facts
+            .instantiate_closure_owner_with_reads(template, &arguments, &mut context, *authority)
+            .unwrap();
+        assert_eq!(actual.owner_args(), &arguments);
+        assert!(Arc::ptr_eq(
+            actual.shape_seal().unwrap(),
+            template.shape_seal().unwrap()
+        ));
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &arguments[..1],
+                    &mut context,
+                    *authority
+                )
+                .is_err()
+        );
+        let original_parameters = template.owner_args();
+        let changed = Arc::new(
+            template
+                .try_map::<String>(|ty| {
+                    Ok(if ty == &original_parameters[0] {
+                        original_parameters[1].clone()
+                    } else if ty == &original_parameters[1] {
+                        original_parameters[0].clone()
+                    } else {
+                        ty.clone()
+                    })
+                })
+                .unwrap(),
+        );
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    &changed,
+                    &arguments,
+                    &mut context,
+                    *authority
+                )
+                .is_err()
+        );
+        let foreign = Engine::new(TypedOwnerProvider {
+            snapshot,
+            signatures: Some(plan.clone()),
+        });
+        let foreign_request = foreign.request(crate::compiler::keys::test_key(997, vec![]));
+        foreign.run(workers).unwrap();
+        foreign_request.completion().unwrap();
+        let foreign_issued = foreign_request.fact::<IssuedOwner>(0).unwrap();
+        assert_ne!(*authority, foreign_issued.3);
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &arguments,
+                    &mut context,
+                    foreign_issued.3
+                )
+                .is_err()
+        );
+        let foreign_arguments = [foreign_issued.2.clone(), arguments[1].clone()];
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &foreign_arguments,
+                    &mut context,
+                    *authority
+                )
+                .is_err()
+        );
+        let foreign_actual = facts
+            .instantiate_closure_owner_with_reads(
+                template,
+                &foreign_arguments,
+                &mut context,
+                foreign_issued.3,
+            )
+            .unwrap();
+        for (local, foreign) in [
+            (
+                Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(graph.clone()),
+                },
+                Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(foreign_issued.2.clone()),
+                },
+            ),
+            (Ty::Closure(actual.clone()), Ty::Closure(foreign_actual)),
+        ] {
+            let local_arguments = [local, arguments[1].clone()];
+            let foreign_arguments = [foreign, arguments[1].clone()];
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &local_arguments,
+                    &mut context,
+                    *authority,
+                )
+                .unwrap();
+            assert!(
+                facts
+                    .instantiate_closure_owner_with_reads(
+                        template,
+                        &local_arguments,
+                        &mut context,
+                        foreign_issued.3
+                    )
+                    .is_err()
+            );
+            assert!(
+                facts
+                    .instantiate_closure_owner_with_reads(
+                        template,
+                        &foreign_arguments,
+                        &mut context,
+                        *authority
+                    )
+                    .is_err()
+            );
+        }
+        let foreign_options = source::SourceOptions {
+            prelude: false,
+            ..source::SourceOptions::default()
+        };
+        let mut foreign_assembler = source::SourceAssembler::new(&foreign_options);
+        let foreign_prepared = match foreign_assembler
+            .provide(Arc::new(source::prepare_text_unit(
+                "foreign-closed-owner-world.rs",
+                "fn apply<T,U>(x:T,y:U)->u64{let _f=move||{let _x=x;let _y=y;7u64};7u64}fn main(){}",
+                &foreign_options,
+            )))
+            .unwrap()
+        {
+            source::AssemblyStep::Done(prepared) => prepared,
+            source::AssemblyStep::Need(_) => panic!("minimal foreign world needs no modules"),
+        };
+        let foreign_program =
+            frontend::resolve(&frontend::parse_prepared(&foreign_prepared).unwrap()).unwrap();
+        let foreign_budget = PlanBudget::default();
+        let foreign_plan =
+            frontend::PlanCtx::from_program(&foreign_program, &foreign_budget).unwrap();
+        let foreign_provider = (0..foreign_plan.callable_count())
+            .map(|index| foreign_plan.callable_decl(index).unwrap())
+            .find(|provider| {
+                foreign_plan
+                    .stored_closure_owner(*provider)
+                    .unwrap()
+                    .is_some()
+            })
+            .unwrap();
+        let foreign_owner = foreign_plan
+            .stored_closure_owner(foreign_provider)
+            .unwrap()
+            .unwrap()
+            .0;
+        let foreign_constants = foreign_plan
+            .prepare_body_constants(foreign_owner, &foreign_budget)
+            .unwrap();
+        let foreign_constants = foreign_plan
+            .seal_body_constants(foreign_constants, Vec::new(), &foreign_budget)
+            .unwrap();
+        let (_, foreign_closures) = foreign_plan
+            .publish_callable_body_with_closures(foreign_owner, foreign_constants, &foreign_budget)
+            .unwrap();
+        assert!(
+            foreign_closures
+                .iter()
+                .any(|closure| closure.ty.provider() == foreign_provider)
+        );
+        let foreign_main = foreign_plan
+            .callable_decl(foreign_plan.closed_roots().unwrap()[0])
+            .unwrap();
+        foreign_plan
+            .instance_facts(&CallTarget {
+                declaration: foreign_main,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &arguments,
+                    &mut foreign_plan.clone(),
+                    *authority
+                )
+                .is_err()
+        );
+        facts
+            .instantiate_closure_owner_with_reads(template, &arguments, &mut context, *authority)
+            .unwrap();
+        assert!(budget.charge_work(usize::MAX).is_err());
+        assert!(
+            facts
+                .instantiate_closure_owner_with_reads(
+                    template,
+                    &arguments,
+                    &mut context,
+                    *authority
+                )
+                .is_err()
+        );
+    }
+}

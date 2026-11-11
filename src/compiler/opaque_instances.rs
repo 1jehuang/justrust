@@ -90,8 +90,14 @@ pub(super) async fn decode(
             types,
             budget,
             &|provider, args| {
-                instances::graph_key::replay_closure(
-                    types, &templates, &missing, budget, provider, args,
+                instances::graph_key::replay_closure_with_reads(
+                    types,
+                    &templates,
+                    &missing,
+                    budget,
+                    provider,
+                    args,
+                    facts.cx.authority(),
                 )
             },
         );

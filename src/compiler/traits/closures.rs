@@ -61,6 +61,21 @@ impl ValidatedFacts {
         mode: ir::ClosureKind,
         source: &ir::CheckedFunction,
     ) -> Result<()> {
+        self.validate_closure_body_source_with_scratch(
+            closure,
+            mode,
+            source,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    pub(in crate::compiler) fn validate_closure_body_source_with_scratch(
+        &self,
+        closure: &Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        source: &ir::CheckedFunction,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
         self.world.check_facts(self, true)?;
         if self.closure_mode != Some(mode) || self.declaration() != closure.provider() {
             return Err(FactsError::invalid(
@@ -84,7 +99,12 @@ impl ValidatedFacts {
                 "closure lowering changed canonical parent metadata",
             ));
         }
-        self.world.validate_closure_metadata(closure, self.env())?;
+        scratch.for_facts(self);
+        self.world.validate_closure_metadata_with(
+            closure,
+            self.env(),
+            &mut scratch.for_world(self.world.id).replays,
+        )?;
         let mut params = Vec::new();
         for local in &source.params {
             let ty = source.locals.get(local.0).ok_or_else(|| {
@@ -92,13 +112,14 @@ impl ValidatedFacts {
             })?;
             push(self.budget(), &mut params, ty.ty.clone())?;
         }
-        self.validate_signature(
+        self.validate_signature_with(
             SignatureSubject::Body,
             &Signature {
                 params,
                 result: source.result.clone(),
                 ref_contract: source.ref_contract.clone(),
             },
+            scratch,
         )?;
         if let Some(receipt) = closure.result_receipt() {
             super::super::frontend::closures::result_contract::validate_source(
@@ -108,7 +129,7 @@ impl ValidatedFacts {
         }
         charged(
             self.budget(),
-            source.validate_with_facts(ir::FactsCtx::from_validated(self)),
+            source.validate_with_facts_scratch(ir::FactsCtx::from_validated(self), scratch),
         )?;
         Ok(())
     }

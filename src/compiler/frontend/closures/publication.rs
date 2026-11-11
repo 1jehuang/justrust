@@ -27,6 +27,7 @@ impl CheckedClosureAuthority {
             .ok_or("checked closure has no final shape seal")?
             .clone();
         let world = plan.trait_world()?;
+        let mut scratch = tr::TraitScratch::default();
         let mut shapes = Vec::new();
         for mode in modes {
             if let Some(constants) = &constants {
@@ -42,7 +43,12 @@ impl CheckedClosureAuthority {
                 .closure_callable_facts_for(closure.clone(), mode.mode)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             facts
-                .validate_closure_body_source(closure, mode.mode, &mode.body)
+                .validate_closure_body_source_with_scratch(
+                    closure,
+                    mode.mode,
+                    &mode.body,
+                    &mut scratch,
+                )
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             cell::replay_checked_body(plan, closure.provider(), &mode.body, &plan.budget)?;
             let body = ir::ClosureBodyShape::capture(&mode.body, &facts, &plan.budget)?;
@@ -68,6 +74,7 @@ impl CheckedClosureAuthority {
             return Err("closure changed its parent-minted shape or receiver mode set".into());
         }
         let world = plan.trait_world()?;
+        let mut scratch = tr::TraitScratch::default();
         for mode in [
             ir::ClosureKind::Fn,
             ir::ClosureKind::FnMut,
@@ -92,7 +99,7 @@ impl CheckedClosureAuthority {
                 .closure_callable_facts_for(checked.ty.clone(), mode)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             facts
-                .validate_closure_body_source(&checked.ty, mode, &body)
+                .validate_closure_body_source_with_scratch(&checked.ty, mode, &body, &mut scratch)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
             cell::replay_checked_body(plan, checked.ty.provider(), &body, &plan.budget)?;
             shape.body.validate(&body, &facts, &plan.budget)?;
@@ -129,6 +136,7 @@ impl PublishedClosure {
             return Err("published closure changed its source shape receipt".into());
         }
         let world = plan.trait_world()?;
+        let mut scratch = tr::TraitScratch::default();
         let mut modes = Vec::new();
         for shape in self.authority.modes.iter() {
             if !self.ty.supports(shape.mode)
@@ -143,7 +151,12 @@ impl PublishedClosure {
                 .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
             let body = shape.body.restore(&facts, &plan.budget)?;
             facts
-                .validate_closure_body_source(&self.ty, shape.mode, &body)
+                .validate_closure_body_source_with_scratch(
+                    &self.ty,
+                    shape.mode,
+                    &body,
+                    &mut scratch,
+                )
                 .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
             modes.push(CheckedClosureBody {
                 mode: shape.mode,
