@@ -222,8 +222,7 @@ impl Checker<'_> {
                     let Some((template, free)) =
                         plan.open_trait_application(owner, trait_id, facts, &plan.budget)?
                     else {
-                        // No impl head of this trait matches the receiver.
-                        continue;
+                        return Err(super::super::trait_selection::trait_application_ambiguity());
                     };
                     match self.infer_open_trait_application(
                         &template, &free, item, explicit, arguments, expected,
