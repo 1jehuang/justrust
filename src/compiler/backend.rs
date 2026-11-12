@@ -2825,7 +2825,7 @@ impl<'a> Emitter<'a> {
             self.concrete.facts().budget(),
         )?)
         .map_err(|_| "invalid byte element layout")?;
-        if len > ir::MAX_ARRAY_TYPE_LEN {
+        if len > ir::MAX_ARRAY_STORAGE_LEN {
             return Err("byte repeat exceeds static data limit".into());
         }
         let size = len
@@ -3162,6 +3162,9 @@ impl<'a> Emitter<'a> {
                 self.literal_output(")", stream, false)?;
             }
             ir::Ty::Array { element, len } => {
+                if *len > ir::MAX_ARRAY_STORAGE_LEN {
+                    return Err("Debug formatting of an array exceeds the element limit".into());
+                }
                 self.literal_output("[", stream, false)?;
                 for index in 0..*len {
                     if index != 0 {

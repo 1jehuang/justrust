@@ -449,7 +449,20 @@ impl Collector<'_> {
                             return Err("unsupported: explicit source reference regions in dependent array elements".into());
                         }
                     }
+                    // Scalar elements carry no reference positions.
+                    (Type::Array(_, _), ir::Ty::Array { element, .. })
+                        if matches!(
+                            element.as_ref(),
+                            ir::Ty::Int(_)
+                                | ir::Ty::Float(_)
+                                | ir::Ty::Char
+                                | ir::Ty::Bool
+                                | ir::Ty::Unit
+                        ) => {}
                     (Type::Array(field, _), ir::Ty::Array { element, len }) => {
+                        if *len > ir::MAX_ARRAY_LEN {
+                            return Err("array carrier resource limit exceeded".into());
+                        }
                         for index in 0..*len {
                             path.push(ir::CarrierStep::ConstantIndex(index));
                             self.walk(field, element, parameter, path, 0, depth + 1)?;

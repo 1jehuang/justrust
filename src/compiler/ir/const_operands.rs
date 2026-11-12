@@ -208,8 +208,8 @@ impl RepeatLength {
         budget.retain_bytes(std::mem::size_of::<Ty>())?;
         match self {
             Self::Known(len) => {
-                if len > MAX_ARRAY_TYPE_LEN {
-                    return Err("array repeat exceeds supported length".into());
+                if len > MAX_ARRAY_STORAGE_LEN {
+                    return Err("array repeat exceeds supported length limit".into());
                 }
                 Ok(Ty::Array {
                     element: Arc::new(element),
@@ -235,8 +235,8 @@ impl RepeatLength {
     ) -> Result<Self, String> {
         match self {
             Self::Known(len) => {
-                if len > MAX_ARRAY_TYPE_LEN {
-                    return Err("array repeat exceeds supported length".into());
+                if len > MAX_ARRAY_STORAGE_LEN {
+                    return Err("array repeat exceeds supported length limit".into());
                 }
                 Ok(self)
             }
@@ -245,8 +245,8 @@ impl RepeatLength {
                     let len = value
                         .as_usize()
                         .ok_or("E0308: array repeat length must be usize")?;
-                    if len > MAX_ARRAY_TYPE_LEN {
-                        return Err("array repeat exceeds supported length".into());
+                    if len > MAX_ARRAY_STORAGE_LEN {
+                        return Err("array repeat exceeds supported length limit".into());
                     }
                     Ok(Self::Known(len))
                 }

@@ -12946,8 +12946,8 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Repeat { value, len } => {
-                if *len > ir::MAX_ARRAY_TYPE_LEN {
-                    return Err("array repeat exceeds supported length".into());
+                if *len > ir::MAX_ARRAY_STORAGE_LEN {
+                    return Err("array repeat exceeds supported length limit".into());
                 }
                 let hint = match expected {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),

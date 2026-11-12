@@ -94,6 +94,12 @@ pub(super) fn validate(
                 }
             }
         }
+        // Scalar elements carry no reference positions.
+        Ty::Array { element, .. }
+            if matches!(
+                element.as_ref(),
+                Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+            ) => {}
         Ty::Array { element, len } => {
             if *len > MAX_ARRAY_LEN {
                 return Err("array carrier resource limit exceeded".into());

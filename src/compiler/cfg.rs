@@ -6039,7 +6039,7 @@ impl Lowerer<'_> {
                 let Ty::Array { len: count, .. } = &expression.ty else {
                     return Err("checked repeat requires array type".into());
                 };
-                if len != count || *len > ir::MAX_ARRAY_TYPE_LEN {
+                if len != count || *len > ir::MAX_ARRAY_STORAGE_LEN {
                     return Err("checked array repeat length mismatch".into());
                 }
                 // The operand is evaluated and consumed exactly once, even

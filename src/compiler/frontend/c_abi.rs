@@ -180,7 +180,10 @@ impl Parser<'_, '_> {
                 self.target_feature_attribute()?;
             } else if self.eat("repr") {
                 self.expect("(")?;
-                if self.pending_repr_c || self.pending_repr_align.is_some() {
+                if self.pending_repr_c
+                    || self.pending_repr_align.is_some()
+                    || self.pending_repr_transparent
+                {
                     return Err(
                         self.unsupported("combined representation attributes are unsupported")
                     );
@@ -193,7 +196,17 @@ impl Parser<'_, '_> {
                             self.unsupported("duplicate representation hints are unsupported")
                         );
                     }
-                    if self.eat("C") {
+                    if self.is("transparent") {
+                        if self.pending_repr_c || self.pending_repr_align.is_some() {
+                            return Err(
+                                self.error("transparent struct cannot have other repr hints")
+                            );
+                        }
+                        self.cursor.bump();
+                        self.pending_repr_transparent = true;
+                    } else if self.pending_repr_transparent {
+                        return Err(self.error("transparent struct cannot have other repr hints"));
+                    } else if self.eat("C") {
                         self.pending_repr_c = true;
                     } else if self.eat("align") {
                         self.expect("(")?;

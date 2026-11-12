@@ -443,3 +443,53 @@ fn parenthesized_macro_rules_bodies_are_payload_match_stock() {
     )
     .assert_negative();
 }
+
+#[test]
+fn type_only_arrays_beyond_the_storage_limit_match_stock() {
+    let source = r#"
+        trait Len { fn len() -> usize; }
+        macro_rules! imp { ($($n:expr)+) => {$( impl Len for [u8; $n] { fn len() -> usize { $n } } )+} }
+        imp! { 4 33554432 4294967296 }
+        fn get<T: Len>() -> usize { T::len() }
+        fn main() { println!("{} {}", get::<[u8; 4]>(), get::<[u8; 4294967296]>()); }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    // Materializing such an array stays an explicit native limit.
+    assert!(
+        compiler::compile_observed(
+            "fn main(){ let a = [0u8; 33554432]; let _ = a[0]; }".into(),
+            1,
+            true
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn repr_transparent_single_field_structs_match_stock() {
+    let source = r#"
+        #[repr(transparent)]
+        #[derive(Clone, Copy)]
+        struct Meters(u32);
+        #[repr(transparent)]
+        struct Wrap<T> { inner: T }
+        fn main() {
+            let m = Meters(7);
+            let w = Wrap { inner: m.0 + 1 };
+            println!("{} {}", m.0, w.inner);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#[repr(transparent, C)] struct S(u8); fn main() {}",
+        "#[repr(transparent)] fn f() {} fn main() {}",
+    ] {
+        file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+    }
+    let error = source::prepare_text(
+        "repr.rs",
+        "#[repr(transparent)] struct S(u8); fn main() {}",
+        &SourceOptions::default(),
+    );
+    assert!(error.is_ok());
+}

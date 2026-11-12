@@ -876,7 +876,10 @@ impl Filter<'_> {
                     let valid = match (&*meta.name, &meta.value) {
                         ("repr", MetaValue::List(values)) => {
                             owner == Owner::FreeItem
-                                && matches!(values.len(), 1 | 2)
+                                && (values.len() == 1
+                                    && values[0].name == "transparent"
+                                    && matches!(values[0].value, MetaValue::Word)
+                                    || matches!(values.len(), 1 | 2)
                                 && values.iter().filter(|v| v.name == "C").count() <= 1
                                 && values.iter().filter(|v| v.name == "align").count() <= 1
                                 && values.iter().all(|value| {
@@ -885,7 +888,7 @@ impl Filter<'_> {
                                             && matches!(&value.value, MetaValue::List(args)
                                                 if args.len() == 1 && args[0].name.is_empty()
                                                     && matches!(args[0].value, MetaValue::OtherLiteral)))
-                                })
+                                }))
                         }
                         ("unsafe", MetaValue::List(values)) => {
                             owner == Owner::Function
@@ -902,7 +905,7 @@ impl Filter<'_> {
                         return Err(error(
                             AttributeErrorKind::Unsupported,
                             meta.range,
-                            "only original repr(C)/repr(align(N)) structs and unsafe(no_mangle) extern C functions are supported",
+                            "only original repr(C)/repr(align(N))/repr(transparent) structs and unsafe(no_mangle) extern C functions are supported",
                         ));
                     }
                     retained_abi.push(original.unwrap().range.clone());

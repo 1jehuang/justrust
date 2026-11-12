@@ -5563,6 +5563,9 @@ impl CarrierBuilder<'_, '_> {
                 ty: Ty::Array { len, .. },
                 value,
             } => {
+                if *len > ir::MAX_ARRAY_STORAGE_LEN {
+                    return Err(Exhausted);
+                }
                 let original = self.operand_value(state, value)?;
                 let mut output = Vec::new();
                 for index in 0..*len {
@@ -5609,6 +5612,9 @@ impl CarrierBuilder<'_, '_> {
                 let Ty::Array { len, .. } = self.place_ty(self.f, array)? else {
                     return Err(Exhausted);
                 };
+                if len > ir::MAX_ARRAY_STORAGE_LEN {
+                    return Err(Exhausted);
+                }
                 let mut output: Vec<(CarrierLocation, CarrierOrigins)> = Vec::new();
                 let known = match index {
                     Operand::Constant(cfg::Constant::Int(value)) => {

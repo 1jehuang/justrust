@@ -1277,6 +1277,12 @@ pub(super) fn source_carrier_inventory(
                             child(CarrierStep::Field(index), ty)?;
                         }
                     }
+                    // Scalar elements carry no reference positions.
+                    Ty::Array { element, .. }
+                        if matches!(
+                            element.as_ref(),
+                            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+                        ) => {}
                     Ty::Array { element, len } => {
                         if *len > MAX_ARRAY_LEN {
                             return Err("array carrier resource limit exceeded".into());
@@ -6188,9 +6194,13 @@ pub const MAX_MATCH_ARMS: usize = 4096;
 /// indices of reference-carrying elements).
 pub const MAX_ARRAY_LEN: usize = 65535;
 /// Bound for type-level validation that visits the element type once and
-/// never materializes per-element structure. Frame storage is limited
-/// separately by the backend.
-pub const MAX_ARRAY_TYPE_LEN: usize = 1 << 24;
+/// never materializes per-element structure (`impl Trait for [u8; 1 << 32]`).
+/// Frame storage is limited separately by the backend, and every site that
+/// materializes elements is bounded by `MAX_ARRAY_STORAGE_LEN`.
+pub const MAX_ARRAY_TYPE_LEN: usize = 1 << 40;
+/// Bound for array values whose elements are produced or visited one by one:
+/// repeat expressions, byte repeats and per-element analyses.
+pub const MAX_ARRAY_STORAGE_LEN: usize = 1 << 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntTy {
@@ -14274,7 +14284,7 @@ impl CheckedFunction {
                         return Err("array repeat requires array type".into());
                     };
                     if len != count
-                        || *len > MAX_ARRAY_TYPE_LEN
+                        || *len > MAX_ARRAY_STORAGE_LEN
                         || (*len > 1 && !facts.must_copy(element)?)
                     {
                         return Err("invalid array repeat type, length or Copy requirement".into());
@@ -14770,7 +14780,7 @@ impl CheckedFunction {
                 ExprKind::ByteRepeat { len, .. } => {
                     if value.ty != Ty::byte_string_ty(*len)
                         || value.completion != Completion::Returns
-                        || *len > MAX_ARRAY_TYPE_LEN
+                        || *len > MAX_ARRAY_STORAGE_LEN
                     {
                         return Err("byte repeat expression type mismatch".into());
                     }

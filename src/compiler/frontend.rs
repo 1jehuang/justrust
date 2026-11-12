@@ -12390,6 +12390,9 @@ struct Parser<'input, 'names> {
     pending_c_export: bool,
     pending_repr_c: bool,
     pending_repr_align: Option<super::token_session::SpanId>,
+    /// `#[repr(transparent)]` on the next struct. The private native layout
+    /// is never a public representation claim, so it is validated only.
+    pending_repr_transparent: bool,
     foreign_c: bool,
     debug_assertions: bool,
     input: &'input NativeTokenBuffer,
@@ -12592,6 +12595,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
+            pending_repr_transparent: false,
             foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: &buffer,
@@ -14143,6 +14147,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
+            pending_repr_transparent: false,
             foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: buffer,
@@ -14580,6 +14585,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
+            pending_repr_transparent: false,
             foreign_c: false,
             input: tokens,
             names,
@@ -16255,7 +16261,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             return self.c_foreign_block(module, module_path, parsed);
         }
-        if (self.pending_repr_c || self.pending_repr_align.is_some()) && !self.is("struct") {
+        if (self.pending_repr_c
+            || self.pending_repr_align.is_some()
+            || self.pending_repr_transparent)
+            && !self.is("struct")
+        {
             return Err(self.unsupported("representation attributes currently require a struct"));
         }
         if self.pending_c_export && !self.starts_qualified_function() {
@@ -16751,6 +16761,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 // constructors. Source-shape authority is retained separately.
                 StructShape::Record
             };
+            if std::mem::take(&mut self.pending_repr_transparent) && fields.len() != 1 {
+                return Err(self.unsupported(
+                    "repr(transparent) is supported only on a struct with exactly one field",
+                ));
+            }
             let declaration = parsed.program.structs.len();
             let repr_align = self
                 .pending_repr_align
@@ -21239,8 +21254,8 @@ mod inactive_item_syntax_tests {
     #[test]
     fn inactive_array_lengths_skip_the_semantic_length_limit() {
         for source in [
-            "fn unused(){ let a = [0u8; 33554432]; }",
-            "fn unused(){ let a = [0xffu8; 32 * 1024 * 1024 - 1024]; }",
+            "fn unused(){ let a = [0u8; 2199023255553]; }",
+            "fn unused(){ let a = [0xffu8; 2 * 1024 * 1024 * 1024 * 1024 + 1]; }",
         ] {
             validate_inactive_syntax(source, crate::compiler::token::Edition::E2024).unwrap();
             let active = format!("{source} fn main(){{}}");
