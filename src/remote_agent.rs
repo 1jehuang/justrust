@@ -512,13 +512,14 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                             root.display()
                         );
                     }
-                    if claim_periodic_collection(
+                    // Maintenance runs after the result is sent: the agent
+                    // waits on eviction, the client does not. The activity
+                    // above is already ended, so GC protection is unchanged.
+                    let collect = claim_periodic_collection(
                         &last_periodic_collection,
                         std::time::Instant::now(),
                         collection_interval(&env),
-                    ) {
-                        evict_now(&roots);
-                    }
+                    );
                     let finalized = received.elapsed();
                     let code = match result {
                         Ok(c) => c,
@@ -532,6 +533,9 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                                 },
                                 &[],
                             );
+                            if collect {
+                                evict_now(&roots);
+                            }
                             return;
                         }
                     };
@@ -559,6 +563,9 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         },
                         &summary,
                     );
+                    if collect {
+                        evict_now(&roots);
+                    }
                 });
             }
             Msg::Cancel { id } => {
