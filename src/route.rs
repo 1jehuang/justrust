@@ -597,6 +597,11 @@ fn say_local(why: &str) {
         }
         std::process::exit(1);
     }
+    // A prebuild is a guess: never worth the battery.
+    if crate::buildd::is_guess() && compiles() && crate::sys::battery_discharging() {
+        // Silent: the daemon must not replay this as a build result.
+        std::process::exit(crate::buildd::GUESS_DROPPED);
+    }
     let _ = LOCAL_REASON.set(why.to_string());
     if explain() {
         eprintln!("justrust: local ({why})");
@@ -662,7 +667,12 @@ pub fn maybe_remote(full: &[OsString]) {
     // A benchmark pins run ids and measures local builds on purpose. On
     // battery those runs drain the laptop (30 CPU-hours in two days), so
     // refuse them instead of compiling; JUSTRUST_BENCH_ON_BATTERY=1 allows.
-    if std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() && m != Mode::Force {
+    // The build daemon's prebuild also has its own run id, but it is a copy
+    // of an agent request and must go where that request goes.
+    if std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some()
+        && m != Mode::Force
+        && !crate::buildd::is_guess()
+    {
         if crate::sys::battery_discharging()
             && std::env::var_os("JUSTRUST_BENCH_ON_BATTERY").is_none()
         {
@@ -858,6 +868,11 @@ pub fn maybe_remote(full: &[OsString]) {
             if remote_required() || reason == ON_BATTERY {
                 eprintln!("justrust: remote required, refusing local fallback: {msg}");
                 std::process::exit(1);
+            }
+            // The agent's own request decides about a local fallback.
+            if crate::buildd::is_guess() {
+                // Silent: the daemon must not replay this as a build result.
+                std::process::exit(crate::buildd::GUESS_DROPPED);
             }
             if let Some(f) = fail_file().filter(|_| !Infra(msg.clone()).is_client_side()) {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));

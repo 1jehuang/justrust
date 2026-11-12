@@ -58,6 +58,11 @@ use std::time::{Duration, Instant};
 pub const DAEMON_ARG: &str = "__buildd";
 /// Set on the builds the daemon runs: they never go back to the daemon.
 const CHILD_ENV: &str = "JUSTRUST_BUILDD_CHILD";
+/// Set on a prebuild: a guess nobody waits for. It routes like the request
+/// it copies (hosted when that is where the request goes), never falls back
+/// to a local compile after a remote failure, never compiles locally on
+/// battery, and does not bring compile-only test executables back.
+pub const GUESS_ENV: &str = "JUSTRUST_BUILDD_GUESS";
 const IDLE_EXIT: Duration = Duration::from_secs(900);
 
 /// Variables that identify the agent or its terminal, not the build. Two
@@ -104,14 +109,29 @@ pub fn is_child() -> bool {
     std::env::var_os(CHILD_ENV).is_some()
 }
 
+/// Exit code of a guess that declined to build (no remote, or it would have
+/// compiled locally on battery). The daemon never hands it to a request as
+/// a result: the request builds for itself.
+pub const GUESS_DROPPED: i32 = 75;
+
+/// A prebuild that declined to run.
+fn dropped_guess(b: &Build, l: &Log) -> bool {
+    l.exit == Some(GUESS_DROPPED) && *b.prebuild.lock().unwrap()
+}
+
+/// This process is a prebuild: started on a guess, with nobody waiting.
+pub fn is_guess() -> bool {
+    std::env::var_os(GUESS_ENV).is_some()
+}
+
 /// On by default; `JUSTRUST_BUILDD=0` builds in the client as before.
+///
+/// `justrust local off` does not disable the daemon: its builds route like
+/// any other, so they (and their prebuilds) run on hosted machines, and the
+/// rustc shim still refuses every local compile.
 pub fn enabled() -> bool {
     // CI runs and test harnesses would leave a daemon behind per job.
     if std::env::var_os("CI").is_some() && std::env::var_os("JUSTRUST_BUILDD").is_none() {
-        return false;
-    }
-    // No resident local prebuilds while local compiles are switched off.
-    if crate::nolocal::disabled() {
         return false;
     }
     !matches!(
@@ -1219,6 +1239,11 @@ fn stream(
             return Ok(());
         }
         if let Some(code) = exit {
+            if dropped_guess(build, &build.log.lock().unwrap()) {
+                // Nothing was printed: the client builds for itself.
+                write_msg(s, b'F', b"the prebuild declined to run")?;
+                return Ok(());
+            }
             let x = Exit {
                 code,
                 attached,
@@ -1632,6 +1657,8 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             // Nobody waits for it: not an agent build in history and trend
             // statistics. The slot stays the agent's (JUSTRUST_SLOT_SESSION).
             req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
+            req.env.retain(|(k, _)| k != GUESS_ENV);
+            req.env.push((GUESS_ENV.into(), "1".into()));
             match start(&req, Some(stamp), &cwd) {
                 Ok(b) => {
                     *b.compile_only.lock().unwrap() = compile_only;
@@ -1670,8 +1697,10 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
     // Nobody saw it: keep it for the request it was started for.
     let l = b.log.lock().unwrap();
     let (claimed, early_served) = (l.claimed, l.early_served);
+    let dropped = dropped_guess(b, &l);
     drop(l);
-    if b.stamp.is_some() && ((!claimed && *b.prebuild.lock().unwrap()) || early_served) {
+    if b.stamp.is_some() && !dropped && ((!claimed && *b.prebuild.lock().unwrap()) || early_served)
+    {
         st.finished.insert(key.to_owned(), b.clone());
     }
     st.last_request = Some(Instant::now());
@@ -2082,6 +2111,26 @@ mod tests {
         let st = dm.state.lock().unwrap();
         assert!(Arc::ptr_eq(st.builds.get("key").unwrap(), &active));
         assert!(st.finished.is_empty());
+    }
+
+    #[test]
+    fn a_guess_that_declined_to_build_is_never_kept_as_a_result() {
+        let dm = Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            draining: std::sync::atomic::AtomicBool::new(false),
+        };
+        for (code, kept) in [(GUESS_DROPPED, false), (0, true), (101, true)] {
+            let b = fake_build();
+            *b.prebuild.lock().unwrap() = true;
+            b.log.lock().unwrap().exit = Some(code);
+            reap(&dm, "key", &Arc::new(b));
+            let mut st = dm.state.lock().unwrap();
+            assert_eq!(st.finished.contains_key("key"), kept, "exit {code}");
+            st.finished.clear();
+        }
     }
 
     fn fake_build() -> Build {

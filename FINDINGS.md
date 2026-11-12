@@ -9917,3 +9917,40 @@ unit's ledger therefore leaves out the background persist tail by design.
 Not covered yet: hosted runs until the build hosts get a compiler and client
 with the ledger, and the shipped default compiler `jr-ac20de5e7921`, which
 predates this.
+
+## 2026-11-11: prebuild on edit runs on hosted when local compiles are off
+
+`justrust local off` (386d06e8a, 2026-11-09) also switched the resident build
+daemon off, so prebuild on edit (FINDINGS 51) had not run on this machine
+since. The daemon is back on in that mode. A prebuild now carries
+`JUSTRUST_BUILDD_GUESS=1` and routes like the request it copies (same slot,
+`JUSTRUST_SLOT_SESSION` is forwarded), so it compiles on the hosted machine. A
+guess never compiles locally on battery and never falls back to local: it
+exits 75 and the daemon neither keeps nor replays that as a result. Routing
+moved after the daemon in `route_then_accelerate`, so a replay costs no
+admission round trip.
+
+A/B on this repo, hosted, `local off`, one appended comment line in
+`src/nolocal.rs` per sample, `JUSTRUST_BUILDD=0` against default, two
+alternating blocks, wall seconds seen by the caller:
+
+| command | think | off median (range) | on median (range) | n per arm |
+|---|---|---|---|---|
+| `check` | 4.6s | 3.37 (3.3-4.0) | 0.60 (0.42-0.88) | 8 |
+| `check` | 0.5s | 3.45 (3.30-3.83) | 3.97 (3.80-4.48) | 6 |
+| `test --lib nolocal` | 4.6s | 5.81 (5.41-7.61) | 4.65 (3.71-5.95) | 6 |
+| `test --lib nolocal` | 10s | 5.52 (5.29-8.89) | 1.81 (1.67-2.76) | 6 |
+
+All exits 0. At 4.6s every `check` was a replay. Tests are prebuilt as
+`--no-run`: at 4.6s the request still waited 1.7-4.3s for the compile to
+finish (prebuild runs 20261111-182604155-1369386-pre and neighbours), at 10s
+it found every unit fresh.
+
+The loss at 0.5s is the daemon's source stamp, 0.4-0.7s per request in this
+tree ("source validation" in `~/.justrust/buildd/daemon.log`), paid before a
+build that the prebuild had not started yet. Not fixed here.
+
+Scope: one repo, one edit shape, the agent repeating the same command. The
+daemon log before this change had 272 attach or replay hits in 7,401
+non-benchmark prebuilds, so the real hit rate is far below these loops. No
+`bench/suite.py` synth run: this is not a default promotion claim.

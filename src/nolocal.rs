@@ -5,9 +5,11 @@
 //! - every routed build is forced remote and never falls back to local
 //!   (`route::remote_required`), including builds through the `cargo` proxy
 //!   from plain shells;
-//! - the `rustc` shim refuses to compile a crate locally, which also stops
-//!   the resident build daemon's prebuilds and anything else that reaches
-//!   rustc through justrust. `rustc -vV` style probes still pass.
+//! - the `rustc` shim refuses to compile a crate locally, which stops
+//!   anything else that reaches rustc through justrust. `rustc -vV` style
+//!   probes still pass;
+//! - the resident build daemon keeps running: its builds and prebuilds are
+//!   routed like any other, so they compile on hosted machines.
 //!
 //! Hosted builds run their rustc on the build machine (with
 //! `JUSTRUST_ON_REMOTE_AGENT` set there), so they are unaffected.

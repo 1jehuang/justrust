@@ -71,6 +71,9 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_PASSES",
     "JUSTRUST_RECORD_PHASE_TRACE",
     "JUSTRUST_SLOT_WARM_REUSE",
+    // The agent that asked owns the slot on the machine too, so a prebuild
+    // (which drops JCODE_SESSION_ID) warms the target dir its request uses.
+    "JUSTRUST_SLOT_SESSION",
     "JUSTRUST_REMOTE_EVICT_INTERVAL_SECS",
     "JUSTRUST_DEPCACHE",
     "JUSTRUST_LOCALCACHE",
@@ -1571,7 +1574,9 @@ fn run_remote_inner(
                 hosted_run.finish("done", Some(code), failure.as_ref());
                 if compile_only {
                     compile_stdout.finish(&mut so, &mut se, json_output)?;
-                    if code == 0 {
+                    // A prebuild only warms the machine's target dir: the
+                    // request it guessed runs its tests there.
+                    if code == 0 && !crate::buildd::is_guess() {
                         compile_stdout.require_success()?;
                         diagnostic.stage = "remote_artifacts";
                         let (line, artifacts) = crate::remote_artifacts::fetch_tests(
@@ -2260,6 +2265,7 @@ mod tests {
             "JUSTRUST_TEST_JOBS",
             "JUSTRUST_TEST_SPLIT",
             "JUSTRUST_CARGO_SUBTREE_CACHE",
+            "JUSTRUST_SLOT_SESSION",
         ] {
             for value in ["1", "8", "0", "off", ""] {
                 assert_eq!(

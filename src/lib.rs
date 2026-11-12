@@ -783,18 +783,22 @@ fn cargo_shim_routes(agent: bool, nested: bool, setting: Option<&str>) -> bool {
     }
 }
 
-/// Remote routing must precede local early answers. A resident prebuild or
-/// shadow result must not override an explicit or default hosted route.
+/// The resident build daemon comes first: the build it runs is this same
+/// binary with the request's environment, so it routes exactly as the
+/// request would here (hosted by default when signed in) and its answer is
+/// the routed build's answer. That lets hosted builds share an identical
+/// run in flight and claim a prebuild started when the sources were edited.
+/// Without a daemon the build is routed here, then shadowed, as before.
 fn route_then_accelerate(
     full: &[OsString],
     route: impl FnOnce(&[OsString]),
     daemon: impl FnOnce(&[OsString]) -> Option<i32>,
     shadow: impl FnOnce(&[OsString]),
 ) -> Option<i32> {
-    route(full);
     if let Some(code) = daemon(full) {
         return Some(code);
     }
+    route(full);
     shadow(full);
     None
 }
@@ -851,8 +855,7 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
     if !rerun && let Some(code) = test_reuse::try_reuse(&full) {
         std::process::exit(code);
     }
-    // Hosted/forced remote runs exit before a local daemon can return a
-    // prebuild. Only a chosen local build may use local early answers.
+    // The daemon's build routes itself (hosted or local) like this one.
     if let Some(code) = route_then_accelerate(
         &full,
         route::maybe_remote,
@@ -1644,7 +1647,7 @@ mod passthrough_tests {
     }
 
     #[test]
-    fn routing_precedes_a_daemon_prebuild_answer() {
+    fn daemon_answer_skips_routing_here_because_its_build_routes_itself() {
         let calls = std::cell::RefCell::new(Vec::new());
         let args = [OsString::from("check")];
         let code = route_then_accelerate(
@@ -1660,11 +1663,11 @@ mod passthrough_tests {
             |_| calls.borrow_mut().push("shadow"),
         );
         assert_eq!(code, Some(23));
-        assert_eq!(*calls.borrow(), ["route", "daemon"]);
+        assert_eq!(*calls.borrow(), ["daemon"]);
     }
 
     #[test]
-    fn local_fallback_keeps_daemon_then_shadow_order_and_arguments() {
+    fn without_a_daemon_the_build_routes_then_shadows_with_its_arguments() {
         let calls = std::cell::RefCell::new(Vec::new());
         let args: Vec<OsString> = ["test", "--lib", "--", "fps_counter"]
             .into_iter()
@@ -1687,7 +1690,7 @@ mod passthrough_tests {
             },
         );
         assert_eq!(code, None);
-        assert_eq!(*calls.borrow(), ["route", "daemon", "shadow"]);
+        assert_eq!(*calls.borrow(), ["daemon", "route", "shadow"]);
     }
 
     #[test]
