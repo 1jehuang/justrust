@@ -162,39 +162,36 @@ info, and duplicate slots to measure what a zero-target-dir mode saves.
 
 ## Open source and licensing
 
-Decision: open core, licensed by layer. The exact rules and file layout are in
+Decision: open client, closed hosted service, licensed by layer. A
+self-hostable single-tenant server under FSL-1.1-ALv2 was planned in `server/`
+but was dropped on 2026-11-12 before any code was written. The exact rules and file layout are in
 [LICENSING.md](../LICENSING.md).
 
 | Layer | License | Why |
 |---|---|---|
 | Client and local tool (today's crate) | MIT | Adoption. Companies avoid restrictive licenses on build tools, and it is already public under MIT |
 | Wire protocol and cache key format | MIT | Third-party clients and integrations (CI, sccache or Bazel bridges) make justrust the standard |
-| Self-hostable single-tenant server (`server/`, future) | FSL-1.1-ALv2 | Readable, self-hostable, modifiable. Nobody may sell it as a competing service. Each release becomes Apache 2.0 after two years |
 | Multi-tenant cloud: global shared cache, prebuild fleet, isolation, poisoning defenses, scheduling, billing | Closed, separate private repo | Unproven security surface, and it is the revenue layer. Revisit FSL once it is hardened |
 
 Reasoning:
 
 - The value is in operations and in the network effect of the cache, not in
-  the code. A self-hosted copy starts empty.
-- FSL on the server blocks the one real threat: someone hosting our server as
-  a competing paid service.
+  the code.
 - Opening the poisoning and isolation layer before it is proven publishes the
   attack surface. Closing it is for security, not secrecy.
 - Comparable products follow this split: Databricks (Apache 2.0 Spark, Delta
   Lake, and MLflow, closed Photon and managed platform), Turborepo with Vercel
   Remote Cache, Nx with Nx Cloud, Bazel with BuildBuddy or EngFlow, and Sentry
   (FSL).
-- Contributing has no friction: no CLA, bot, or sign-off. Contributions to
-  `server/` come in under Apache 2.0 (stated in CONTRIBUTING.md and the pull
-  request template), so the maintainer can relicense them and use them in the
-  hosted service. Switch to a click-through CLA if legal review requires it.
+- Contributing has no friction: no CLA, bot, or sign-off. Switch to a
+  click-through CLA if legal review requires it.
 
 Share versus total: open source captures a smaller share of the value created
 but likely a larger total. Local build speedups were never chargeable. Hosted
 cache, compute, and team features are.
 
-Before launching the paid service, have a lawyer review the FSL text and its
-interaction with the MIT parts.
+Before launching the paid service, have a lawyer review the open questions in
+[legal-review.md](legal-review.md).
 
 ## Next steps
 

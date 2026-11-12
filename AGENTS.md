@@ -3,7 +3,7 @@
 ## Branch layout (2026-10-19)
 
 This checkout (`~/justrust`) is the `stable` branch: the shipping justrust
-client, `server/`, `toolchain/` and the release pipeline. The clean-room
+client, `toolchain/` and the release pipeline. The clean-room
 compiler rewrite became `main` on 2026-10-19 and lives in
 `~/justrust-clean-room`. Releases (`v*` tags) are cut from `stable` until the
 rewrite can replace the client. Fixes to the shipping client go to `stable`,
@@ -118,7 +118,6 @@ upstream rebasing. Build and source-import details are in
 | Piece | Location |
 |---|---|
 | This client, local depcache, cache key scheme, remote cache wire format (MIT) | here (`src/depcache.rs`, `src/depcache_remote.rs`) |
-| Self-hostable single-tenant server (FSL) | `server/` here |
 | **Multitenant cloud**: hosted build hosts, global shared dependency cache (R2), prebuild publish, tenant isolation, poisoning defenses | `~/justrust-cloud` (private, github.com/1jehuang/justrust-cloud, `build.jcode.sh`) |
 | Accounts, billing, API keys, `/internal/builds/*` | `~/solosystems-backend` (`api.jcode.sh`) |
 | Cargo (`jr-cargo`): owned source and build helper | `toolchain/cargo/`, `toolchain/cargo/build-jr.sh` |

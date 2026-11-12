@@ -179,6 +179,5 @@ See the [toolchain plan](docs/toolchain.md) for the roadmap.
 
 ## Contributing and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The client is MIT, and the self-hostable
-cache server in `server/` is FSL-1.1-ALv2. Vendored toolchain sources retain
+See [CONTRIBUTING.md](CONTRIBUTING.md). The client is MIT. Vendored toolchain sources retain
 their component licenses and third-party notices. See [LICENSING.md](LICENSING.md).

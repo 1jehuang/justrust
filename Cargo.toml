@@ -9,9 +9,8 @@ categories = ["development-tools", "development-tools::build-utils"]
 description = "Rust compile as a service for coding agents"
 license = "MIT"
 repository = "https://github.com/1jehuang/justrust"
-# server/ is FSL-licensed and must never ship inside the MIT crate.
 # toolchain/ holds the fully vendored compiler forks, built separately.
-exclude = ["/server/", "/toolchain/", "/.wrangler/"]
+exclude = ["/toolchain/", "/.wrangler/"]
 
 [dependencies]
 anyhow = "1"

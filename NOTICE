@@ -3,12 +3,11 @@ Copyright 2026 Jeremy Huang
 
 This product includes contributions from the people listed below. Each
 contribution remains under its author's copyright and is licensed to the
-project as described in LICENSING.md: MIT for our client and tooling,
-Apache License 2.0 for contributions to server/, and applicable
-component/file licenses for imported toolchain code.
+project as described in LICENSING.md: MIT for our client and tooling, and
+applicable component/file licenses for imported toolchain code.
 
 Keep this file in every copy of justrust, including the hosted service, as MIT
-and Apache 2.0 require. Update it when a pull request from a new contributor
+and Apache 2.0 (imported toolchain code) require. Update it when a pull request from a new contributor
 is merged: add their name, GitHub username, and the directories they changed.
 
 Contributors
