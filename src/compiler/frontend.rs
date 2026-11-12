@@ -17600,29 +17600,74 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(params)
     }
     /// Pre-2024 `-> impl Trait` captures only named lifetimes, edition 2024
-    /// captures every in-scope lifetime. With no lifetime or reference anywhere
-    /// in the signature up to `->` both rules capture exactly the type
-    /// parameters, so the edition 2024 implementation is exact.
+    /// captures every in-scope lifetime. The two agree when no lifetime can be
+    /// in scope or in a parameter type. This is decided conservatively on the
+    /// tokens of a free function header: after `fn name`, only primitive type
+    /// names, this function's own (unbounded) type parameters, parameter
+    /// binding names, integer literals and plain punctuation may appear before
+    /// `->`. Any path (`Chars`, `String`, `std::..`), bound, reference,
+    /// lifetime or `Self` may carry a hidden region, so it is refused.
     fn head_has_no_lifetime_inputs(&self) -> bool {
-        let mut at = 0usize;
+        const PRIMITIVES: &[&str] = &[
+            "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+            "f32", "f64", "bool", "char",
+        ];
+        // The enclosing item scope must declare no lifetimes: free functions
+        // outside any impl or trait only.
+        if !self.impl_regions.params.is_empty() || self.impl_regions.receiver.is_some() {
+            return false;
+        }
+        let mut generics: Vec<&str> = Vec::new();
+        let mut at = 1usize; // token 0 is the function name
+        if self.cursor.peek(at).is_some_and(|t| t.matches("<")) {
+            at += 1;
+            loop {
+                let Some(token) = self.cursor.peek(at) else {
+                    return false;
+                };
+                if token.matches(">") {
+                    at += 1;
+                    break;
+                }
+                if token.matches(",") {
+                    at += 1;
+                    continue;
+                }
+                if !token.is_ident() || token.is_lifetime() {
+                    return false;
+                }
+                generics.push(token.text);
+                at += 1;
+                if generics.len() > 32 {
+                    return false;
+                }
+            }
+        }
         let mut depth = 0usize;
+        let mut steps = 0usize;
         while let Some(token) = self.cursor.peek(at) {
-            if token.is_lifetime() || token.matches("&") || token.matches("&&") {
+            steps += 1;
+            if steps > 4096 || token.is_lifetime() || token.string {
                 return false;
             }
-            if token.matches("(") || token.matches("[") {
-                depth += 1;
-            } else if token.matches(")") || token.matches("]") {
-                depth = depth.saturating_sub(1);
-            } else if depth == 0
-                && (token.matches("->") || token.matches("{") || token.matches(";"))
-            {
-                return true;
+            let text = token.text;
+            if depth == 0 && (text == "->" || text == "{" || text == ";" || text == "where") {
+                return text == "->";
+            }
+            match text {
+                "(" | "[" => depth += 1,
+                ")" | "]" => depth = depth.saturating_sub(1),
+                "," | ";" | "_" | "mut" => {}
+                ":" => {}
+                _ if text.starts_with(|c: char| c.is_ascii_digit()) => {}
+                _ if PRIMITIVES.contains(&text) || generics.contains(&text) => {}
+                // A binding name: an identifier directly followed by `:`.
+                _ if token.is_ident()
+                    && self.cursor.peek(at + 1).is_some_and(|n| n.matches(":"))
+                    && !matches!(text, "self" | "Self") => {}
+                _ => return false,
             }
             at += 1;
-            if at > 4096 {
-                return false;
-            }
         }
         false
     }
