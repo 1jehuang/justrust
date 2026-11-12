@@ -641,13 +641,28 @@ impl<'s> Solver<'_, '_, 's> {
                     .checker
                     .nominal_decl(&path_id)
                     .map_err(|error| format!("{error} in partial local type {path_id:?}"))?;
+                let mut omitted = Vec::new();
                 if partial {
                     let argument_count = path
                         .segments
                         .iter()
                         .map(|segment| segment.args.len())
                         .sum::<usize>();
-                    if self.checker.signatures.plan()?.param_env(decl)?.arity() != argument_count
+                    let plan = self.checker.signatures.plan()?;
+                    let arity = plan.param_env(decl)?.arity();
+                    // Omitted trailing slots (`HashMap<_, _>` omits S) take
+                    // their declared defaults when those are closed. A default
+                    // depending on written slots stays explicitly unsupported.
+                    if argument_count < arity
+                        && let Some(defaults) = plan.closed_omitted_nominal_defaults(
+                            decl,
+                            argument_count,
+                            &plan.budget,
+                        )?
+                    {
+                        omitted = defaults;
+                    }
+                    if argument_count + omitted.len() != arity
                         || path
                             .segments
                             .iter()
@@ -659,12 +674,15 @@ impl<'s> Solver<'_, '_, 's> {
                         return Err("unsupported: partial nominal source application owner or arity changed".into());
                     }
                 }
-                let args = path
+                let mut args: Vec<Term> = path
                     .segments
                     .iter()
                     .flat_map(|s| &s.args)
                     .map(|ty| self.source_ty(ty))
                     .collect::<Result<_, _>>()?;
+                for default in omitted {
+                    args.push(self.fixed(default)?);
+                }
                 self.node(Domain::Nominal(decl, args))
             }
             Type::Ref { kind, referent, .. } => {

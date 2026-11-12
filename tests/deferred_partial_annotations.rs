@@ -64,3 +64,34 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn partial_annotations_with_omitted_defaults_match_stock() {
+    oracle::check(
+        "partial-omitted-defaults",
+        &[
+            Case {
+                name: "hashmap_partial_holes",
+                source: r#"use std::collections::HashMap;
+fn main() {
+    let mut m: HashMap<_, Vec<i32>> = HashMap::new();
+    m.insert("k", vec![1, 2]);
+    let mut n: HashMap<_, _> = HashMap::new();
+    n.insert(3u8, String::from("x"));
+    println!("{:?} {:?} {}", m["k"], n[&3], m.len() + n.len());
+}"#,
+                expect: Expect::Run("[1, 2] \"x\" 2\n"),
+            },
+            Case {
+                name: "hashmap_partial_value_mismatch",
+                source: r#"use std::collections::HashMap; fn main() { let mut m: HashMap<_, _> = HashMap::new(); m.insert(1u8, 2u8); let _: HashMap<u8, u8, u8> = m; }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "hashmap_too_few_arguments",
+                source: r#"use std::collections::HashMap; fn unused() { let m: HashMap<_> = HashMap::new(); let _ = m; } fn main() {}"#,
+                expect: Expect::Invalid("E0107"),
+            },
+        ],
+    );
+}

@@ -382,6 +382,61 @@ impl PlanState {
 }
 
 impl PlanCtx {
+    /// Closed actuals for the omitted defaulted slots `written..` of a
+    /// nominal, for partial source applications (`HashMap<_, _>`). `None`
+    /// when any omitted default depends on another parameter: such a default
+    /// needs solved written actuals and stays an explicit unsupported form.
+    pub(in crate::compiler::frontend) fn closed_omitted_nominal_defaults(
+        &self,
+        declaration: ir::DeclId,
+        written: usize,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        self.check_budget(budget)?;
+        self.registry.nominal_source_arity(declaration, written)?;
+        let info = self.registry.declaration(declaration)?;
+        let schema = self
+            .nominal_schemas
+            .get(&declaration)
+            .ok_or("missing nominal defaults schema")?;
+        let defaults = schema.defaults();
+        let bindings = HashMap::new();
+        let mut actuals = Vec::new();
+        for index in written..info.type_params.len() {
+            budget.charge_work(1)?;
+            let default = defaults[index]
+                .as_ref()
+                .ok_or("missing original nominal default")?;
+            let mut mentions_parameter = false;
+            let mut inspect = |node: &DepthNode<'_>, _| {
+                if let DepthNode::Type(Type::Param(_) | Type::SelfType | Type::Infer) = node {
+                    mentions_parameter = true;
+                }
+                Ok(())
+            };
+            walk_depth_inspecting(
+                DepthNode::Type(&default.ty),
+                None,
+                Some(self.registry.names.as_ref()),
+                Some(&mut inspect),
+            )?;
+            if mentions_parameter {
+                return Ok(None);
+            }
+            let actual = self.source_ty(
+                &default.ty,
+                &bindings,
+                ir::FactsCtx::Universal(&info.env),
+                budget,
+            )?;
+            if !ir::carrier_locations(&actual, budget)?.is_empty() {
+                return Ok(None);
+            }
+            actuals.push(actual);
+        }
+        Ok(Some(actuals))
+    }
+
     pub(super) fn complete_nominal_source_arguments(
         &self,
         declaration: ir::DeclId,

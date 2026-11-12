@@ -136,11 +136,27 @@ pub(in crate::compiler::frontend) fn matches_partial(
                 &path.path(registry.names.as_ref())?,
                 Namespace::Type,
             )?;
-            if registry.nominals.get(&key).copied() != Some(decl) || last.args.len() != args.len() {
+            if registry.nominals.get(&key).copied() != Some(decl) || last.args.len() > args.len() {
                 return mismatch();
             }
             for (arg, got) in last.args.iter().zip(args.iter()) {
                 matches_partial(arg, got, env)?;
+            }
+            if last.args.len() < args.len() {
+                // Omitted trailing slots (`HashMap<_, _>`) are their closed
+                // declared defaults, compared by semantic identity.
+                let Some(defaults) =
+                    plan.closed_omitted_nominal_defaults(decl, last.args.len(), &plan.budget)?
+                else {
+                    return Err("unsupported: omitted nominal defaults that depend on written arguments in a partial annotation".into());
+                };
+                if !plan
+                    .trait_world()?
+                    .types_equal(&defaults, &args[last.args.len()..])
+                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?
+                {
+                    return mismatch();
+                }
             }
             Ok(())
         }
