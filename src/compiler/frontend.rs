@@ -30501,6 +30501,7 @@ pub use native_sequence::{
 };
 mod impl_storage;
 mod nominal_declarations;
+mod nominal_field_wf;
 mod nominal_realization;
 mod nominal_schema;
 pub(in crate::compiler) use native_sequence::NativeSequenceBinding;
