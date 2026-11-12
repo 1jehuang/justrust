@@ -304,6 +304,10 @@ enum Command {
         /// Skip runs whose waterfall is reconstructed from older records.
         #[arg(long)]
         measured: bool,
+        /// Split into categories, e.g. `--by command,profile,scope`:
+        /// check/test/build, dev/release, and no-op/incremental/some-deps/cold.
+        #[arg(long, value_enum, value_delimiter = ',')]
+        by: Vec<profile::Dim>,
         #[arg(long)]
         json: bool,
     },
@@ -1136,8 +1140,9 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             remote,
             local,
             measured,
+            by,
             json,
-        } => profile::command(days, here, remote, local, measured, json)?,
+        } => profile::command(days, here, remote, local, measured, &by, json)?,
         Command::Status {
             json,
             waybar,
