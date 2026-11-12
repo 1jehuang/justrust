@@ -40,6 +40,7 @@ pub(super) mod closures;
 mod const_arguments;
 mod const_impl;
 mod const_parameters;
+mod constructor_values;
 mod extern_crate;
 mod local_consts;
 mod nominal_const;
@@ -10031,6 +10032,8 @@ pub struct StructDecl {
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
+    /// Compiler function item behind this tuple struct used as a value.
+    pub constructor: Option<AstPath>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructShape {
@@ -10059,6 +10062,8 @@ pub struct VariantDecl {
     pub fields: Vec<FieldDecl>,
     /// Explicit integer-literal discriminant (`A = -3`): (negative, magnitude).
     pub discriminant: Option<(bool, u128)>,
+    /// Compiler function item behind this tuple variant used as a value.
+    pub constructor: Option<AstPath>,
 }
 #[derive(Clone, Debug)]
 pub struct FieldDecl {
@@ -16211,6 +16216,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     shape,
                     fields,
                     discriminant,
+                    constructor: None,
                 });
                 if !self.eat(",") {
                     break;
@@ -16231,6 +16237,29 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
             let declaration = parsed.program.enums.len();
+            let enum_path = module_path
+                .push(self.names, name)
+                .map_err(native_adapter::name_error)?;
+            let owner = constructor_values::ConstructorOwner {
+                module,
+                path: &enum_path,
+                name,
+                type_params: &type_params,
+                region_params: &region_params,
+                has_const_params: !self.const_params.is_empty(),
+                bounds: &bounds,
+                visibility: &visibility,
+            };
+            for variant in &mut variants {
+                if variant.shape == ir::VariantShape::Tuple {
+                    variant.constructor = self.constructor_value_function(
+                        parsed,
+                        &owner,
+                        Some(variant.name),
+                        &variant.fields,
+                    )?;
+                }
+            }
             parsed.program.enums.push(EnumDecl {
                 const_params: std::mem::take(&mut self.const_params),
                 module,
@@ -16238,9 +16267,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 type_defaults,
                 bounds,
                 region_params,
-                name: module_path
-                    .push(self.names, name)
-                    .map_err(native_adapter::name_error)?,
+                name: enum_path,
                 visibility: visibility.clone(),
                 variants,
             });
@@ -16316,6 +16343,24 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .pending_repr_align
                 .take()
                 .map(|syntax| c_abi::SourceAlignment::parsed(syntax, module, name));
+            let struct_path = module_path
+                .push(self.names, name)
+                .map_err(native_adapter::name_error)?;
+            let constructor = if shape == StructShape::Tuple {
+                let owner = constructor_values::ConstructorOwner {
+                    module,
+                    path: &struct_path,
+                    name,
+                    type_params: &type_params,
+                    region_params: &region_params,
+                    has_const_params: !self.const_params.is_empty(),
+                    bounds: &bounds,
+                    visibility: &visibility,
+                };
+                self.constructor_value_function(parsed, &owner, None, &fields)?
+            } else {
+                None
+            };
             parsed.program.structs.push(StructDecl {
                 const_params: std::mem::take(&mut self.const_params),
                 repr_align,
@@ -16325,11 +16370,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 type_defaults,
                 bounds,
                 region_params,
-                name: module_path
-                    .push(self.names, name)
-                    .map_err(native_adapter::name_error)?,
+                name: struct_path,
                 visibility: visibility.clone(),
                 fields,
+                constructor,
             });
             (name, ItemKind::Struct(declaration))
         } else if self.is("impl") {

@@ -234,6 +234,117 @@ fn main() {}
 }
 
 #[test]
+fn callable_value_arity_codes_match_stock() {
+    // Stock: E0061 for function item and function pointer values (including
+    // tuple constructors), E0057 only for closures.
+    for (source, code) in [
+        (
+            "#[allow(dead_code)] enum E { A(i32) }\n#[allow(dead_code)] fn f() { let g = E::A; let _ = g(1, 2); }\nfn main() {}\n",
+            "E0061",
+        ),
+        (
+            "#[allow(dead_code)] fn g(x: i32) -> i32 { x }\n#[allow(dead_code)] fn f() { let h: fn(i32) -> i32 = g; let _ = h(1, 2); }\nfn main() {}\n",
+            "E0061",
+        ),
+        (
+            "#[allow(dead_code)] fn f() { let h = |x: i32| x; let _ = h(1, 2); }\nfn main() {}\n",
+            "E0057",
+        ),
+    ] {
+        let error = justrust_engine::compiler::compile_observed(source.to_string(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted invalid arity: {source}"));
+        let text = format!("{error:?}");
+        assert!(text.contains(code), "expected {code} for {source}: {text}");
+    }
+}
+
+#[test]
+fn tuple_constructor_values_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "tuple-constructor-values",
+        &[
+            Case {
+                name: "tuple_constructor_values",
+                source: r#"
+#[derive(Debug, Clone, PartialEq)]
+enum J { Num(f64), Str(String), Pair(i32, char) }
+#[derive(Debug)]
+struct W(i32, u8);
+#[derive(Debug)]
+enum G<T> { A(T), B }
+mod m { #[derive(Debug)] pub struct Id(pub u32); }
+fn num(s: &str) -> Result<J, String> { s.parse().map(J::Num).map_err(|e| format!("bad {e}")) }
+fn ap<F: Fn(i32) -> J>(f: F) -> J { f(7) }
+fn twice<A, B>(f: impl Fn(A) -> B, a: A, b: A) -> (B, B) { (f(a), f(b)) }
+fn main() {
+    println!("{:?} {:?}", num("1.5"), num("x"));
+    let v: Vec<Option<i32>> = vec![1, 2].into_iter().map(Some).collect();
+    println!("{v:?}");
+    let words: Vec<J> = ["a", "bc"].iter().map(|s| s.to_string()).map(J::Str).collect();
+    println!("{words:?}");
+    let mk = W;
+    let ws: Vec<W> = vec![(1, 2u8), (3, 4)].into_iter().map(|(a, b)| mk(a, b)).collect();
+    println!("{ws:?}");
+    let gs: Vec<G<String>> = vec!["x".to_string()].into_iter().map(G::A).collect();
+    println!("{gs:?} {:?}", G::<u8>::B);
+    let p: fn(i32, char) -> J = J::Pair;
+    println!("{:?} {:?}", p(3, 'z'), ap(|n| J::Num(n as f64)));
+    let ids: Vec<m::Id> = (1..4).map(m::Id).collect();
+    println!("{ids:?}");
+    println!("{:?}", twice(Some, 1, 2));
+    let r: Result<i32, String> = Err("e".into());
+    println!("{:?}", r.map_err(J::Str).unwrap_or_else(|j| if j == J::Str("e".into()) { -1 } else { 0 }));
+    let fs = [J::Num as fn(f64) -> J];
+    println!("{:?}", fs[0](2.5));
+}
+"#,
+                expect: Expect::Run(
+                    "Ok(Num(1.5)) Err(\"bad invalid float literal\")\n[Some(1), Some(2)]\n[Str(\"a\"), Str(\"bc\")]\n[W(1, 2), W(3, 4)]\n[A(\"x\")] B\nPair(3, 'z') Num(7.0)\n[Id(1), Id(2), Id(3)]\n(Some(1), Some(2))\n-1\nNum(2.5)\n",
+                ),
+            },
+            Case {
+                name: "constructor_value_wrong_arity_unused",
+                source: r#"
+#[allow(dead_code)] enum E { A(i32) }
+#[allow(dead_code)] fn f() { let g = E::A; let _ = g(1, 2); }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0061"),
+            },
+            Case {
+                name: "struct_variant_as_value_unused",
+                source: r#"
+#[allow(dead_code)] enum E { S { x: i32 } }
+#[allow(dead_code)] fn f() { let _g = E::S; }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0533"),
+            },
+            Case {
+                name: "private_tuple_struct_constructor_value_unused",
+                source: r#"
+mod m { pub struct P(i32); pub fn mk() -> P { P(1) } }
+#[allow(dead_code)] fn f() { let _g = m::P; }
+fn main() { let _ = m::mk(); }
+"#,
+                expect: Expect::Invalid("E0603"),
+            },
+            Case {
+                name: "constructor_value_wrong_pointer_type_unused",
+                source: r#"
+#[allow(dead_code)] enum E { A(i32) }
+#[allow(dead_code)] fn f() -> fn(u8) -> E { E::A }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unchanged_vm_interpreter_matches_stock() {
     parse_oracle(
         "unchanged-vm-interpreter",

@@ -308,7 +308,7 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             Domain::FnPointer(inputs, output) => {
                 if inputs.len() != args.len() {
                     return Err(
-                        self.user_error("E0057: wrong number of function pointer arguments")
+                        self.user_error("E0061: wrong number of function pointer arguments")
                     );
                 }
                 for (actual, expected) in args.iter().zip(inputs) {
@@ -349,7 +349,7 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
                     &self.checker.signatures.plan()?.budget,
                 )?;
                 if signature.params.len() != args.len() {
-                    return Err(self.user_error("E0057: wrong number of function arguments"));
+                    return Err(self.user_error("E0061: wrong number of function arguments"));
                 }
                 for (actual, expected) in args.iter().zip(&signature.params) {
                     let expected = self.fixed(expected.clone())?;

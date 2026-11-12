@@ -685,6 +685,36 @@ impl NameStoreBuilder {
         })
     }
 
+    /// Compiler-owned function item behind a tuple constructor used as a value
+    /// (`.map(Some)`). The `$` spelling is unspellable in source and is unique
+    /// per owning declaration and variant within its module.
+    pub(crate) fn anonymous_constructor(
+        &mut self,
+        origin: SpanId,
+        owner: AstIdent,
+        variant: Option<AstIdent>,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let text = match variant {
+            Some(variant) => format!(
+                "$ctor${}${}",
+                self.spelling(owner)?,
+                self.spelling(variant)?
+            ),
+            None => format!("$ctor${}", self.spelling(owner)?),
+        };
+        let spelling = self.store.session.intern_symbol(&text)?;
+        self.append(NameData {
+            atom: NameAtomId::new(&self.store.session, spelling)?,
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
     /// A source cannot name the anonymous generic introduced by argument
     /// `impl Trait`, even when it declares an ordinary parameter `impl_0`.
     pub(crate) fn anonymous_impl_parameter(

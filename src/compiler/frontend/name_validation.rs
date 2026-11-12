@@ -2284,6 +2284,7 @@ mod tests {
                 ty: Type::Unit,
                 visibility: ir::Visibility::Public,
             }],
+            constructor: None,
         });
         assert!(input.finish().is_err());
     }
@@ -2356,6 +2357,7 @@ mod tests {
             name,
             visibility: ir::Visibility::Public,
             fields: Vec::new(),
+            constructor: None,
         });
         let mut program = input.finish().unwrap();
         validate_program_names(&program).unwrap();
@@ -2881,6 +2883,7 @@ mod tests {
                     visibility: ir::Visibility::Public,
                 })
                 .collect(),
+            constructor: None,
         });
         let valid = input.finish().unwrap();
         validate_program_names(&valid).unwrap();

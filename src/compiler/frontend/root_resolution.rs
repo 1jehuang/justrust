@@ -3304,6 +3304,46 @@ impl Resolver<'_> {
         }
         Ok(false)
     }
+    /// The declaration-owned function item of a tuple constructor named in
+    /// value position, when its owner shape is supported.
+    fn constructor_value(
+        &self,
+        item: &ResolvedItem,
+        requester: ModuleId,
+    ) -> Result<Option<AstPath>, String> {
+        let ResolvedPath::Source(path) = &item.path else {
+            return Ok(None);
+        };
+        match item.kind {
+            ResolvedKind::Variant => {
+                if self.variant_shape(path)? != Some(ir::VariantShape::Tuple) {
+                    return Ok(None);
+                }
+                Ok(self.tuple_variant(path)?.constructor.clone())
+            }
+            ResolvedKind::Struct => {
+                let declaration = self.source_struct(path)?;
+                if declaration.shape != StructShape::Tuple {
+                    return Ok(None);
+                }
+                for field in &declaration.fields {
+                    self.alias_budget.charge_work(1)?;
+                    if !field
+                        .visibility
+                        .accessible_from(&self.program.modules, requester)
+                        .map_err(module_diagnostic)?
+                    {
+                        return Err(format!(
+                            "E0603: tuple struct constructor `{}` is private",
+                            self.display(path)?
+                        ));
+                    }
+                }
+                Ok(declaration.constructor.clone())
+            }
+            _ => Ok(None),
+        }
+    }
     fn tuple_variant(&self, path: &AstPath) -> Result<&VariantDecl, String> {
         let key = self.key(path)?;
         let owner = path
@@ -4447,6 +4487,18 @@ impl Resolver<'_> {
                 }
             }
             Expr::Var(name) => {
+                if !self.local_contains(name, locals)?
+                    && name.len() >= 2
+                    && let Ok(Some(item)) = self.path(name, module, true, false)
+                    && item.kind == ResolvedKind::Variant
+                    && let ResolvedPath::Source(target) = &item.path
+                    && self.variant_shape(target)? == Some(ir::VariantShape::Struct)
+                {
+                    return Err(format!(
+                        "E0533: expected value, found struct variant `{}`",
+                        self.display(name)?
+                    ));
+                }
                 if !self.local_contains(name, locals)? {
                     let path = self.alias_source_path(name)?;
                     if let Some((owner, name, actuals)) = self.associated_path(&path, module)? {
@@ -4515,6 +4567,14 @@ impl Resolver<'_> {
                     // Function item value: canonical declaration path, typed
                     // later as the zero-sized `Ty::FnItem` of that declaration.
                     *name = self.callable_use(item, name)?;
+                    return Ok(());
+                }
+                if let Some(item) = &value_item
+                    && let Some(constructor) = self.constructor_value(item, module)?
+                {
+                    // Tuple constructor value: the declaration-owned function
+                    // item, typed later as its exact zero-sized `Ty::FnItem`.
+                    *name = self.resolved_use(&constructor, name)?;
                     return Ok(());
                 }
                 if value_item
