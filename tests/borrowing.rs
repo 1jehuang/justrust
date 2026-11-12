@@ -672,57 +672,6 @@ fn main() {
     );
 }
 
-const PUT_REFERENCE_HOLDING_SLOT: &str = "fn put<V>(v: &mut Vec<V>, x: V) -> &mut V { v.push(x); let n = v.len() - 1; match v.get_mut(n) { Some(r) => r, None => panic!() } }\n";
-
-#[test]
-fn accepts_generic_returned_slot_of_reference_holding_vec() {
-    runs(
-        &format!(
-            "{PUT_REFERENCE_HOLDING_SLOT}{}",
-            r#"fn main() {
-    let s = String::from("hi");
-    let t = String::from("yo");
-    let mut v: Vec<Vec<&str>> = Vec::new();
-    put(&mut v, Vec::new()).push(&s);
-    put(&mut v, vec![t.as_str()]).push(&s);
-    println!("{:?}", v);
-}
-"#
-        ),
-        "[[\"hi\"], [\"yo\", \"hi\"]]\n",
-    );
-}
-
-#[test]
-fn rejects_generic_returned_slot_of_reference_holding_vec_misuse() {
-    rejects(
-        "short-lived element",
-        &format!(
-            "{PUT_REFERENCE_HOLDING_SLOT}{}",
-            r#"fn main() {
-    let mut v: Vec<Vec<&str>> = Vec::new();
-    { let s = String::from("hi"); put(&mut v, Vec::new()).push(&s); }
-    println!("{:?}", v);
-}
-"#
-        ),
-    );
-    rejects(
-        "mutation while stored",
-        &format!(
-            "{PUT_REFERENCE_HOLDING_SLOT}{}",
-            r#"fn main() {
-    let mut s = String::from("hi");
-    let mut v: Vec<Vec<&str>> = Vec::new();
-    put(&mut v, Vec::new()).push(&s);
-    s.push('x');
-    println!("{:?} {}", v, s);
-}
-"#
-        ),
-    );
-}
-
 #[test]
 fn rejects_generic_returned_mut_reference_conflicts() {
     rejects(

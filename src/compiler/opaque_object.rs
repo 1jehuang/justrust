@@ -171,17 +171,26 @@ pub(super) async fn produce(
         calls.push(authorization);
     }
     let closed = types.instance_facts(&target).map_err(Error::new)?;
-    let (physical, validation) = opaque_physical::PhysicalCfgDraft::normalize_sealed(
+    let mut physical = opaque_physical::normalize(
         publication,
         &target,
         original.function(),
         &representations,
         &calls,
         &types,
-        &closed,
         &provider.0.budget,
-        scale_task_work_by_cfg,
     )?;
+    scale_task_work_by_cfg(physical.function());
+    let validation = physical
+        .seal(
+            publication,
+            original.function(),
+            &representations,
+            &types,
+            &closed,
+            &provider.0.budget,
+        )
+        .map_err(Error::new)?;
     let demand: Arc<instances::DirectDemands> = cx.read_fact(cleanup).await?;
     demand
         .validate_cleanup(physical.function(), &provider.0.budget)

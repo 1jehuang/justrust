@@ -228,9 +228,45 @@ impl NativeEmptyResult {
 #[derive(Clone, Debug)]
 pub(super) struct CarrierEffectTable {
     templates: Arc<[VerifiedTemplateCfg]>,
+    /// The complete universal proof of the closed instance's OWN declaration,
+    /// read through its `UNIVERSAL_ANALYZE` handle. See
+    /// [`Self::generic_body_checked_for`].
+    generic_body: Option<VerifiedTemplateCfg>,
     budget: super::ir::PlanBudget,
 }
 impl CarrierEffectTable {
+    /// Attach the closed instance's own universal body proof. Only a complete,
+    /// diagnostic-free universal pass of exactly this declaration qualifies.
+    pub(super) fn with_generic_body(
+        table: &Arc<Self>,
+        generic: VerifiedTemplateCfg,
+    ) -> Result<Arc<Self>, String> {
+        Self::validate_template(&generic, &table.budget)?;
+        if let Some(first) = table.templates.first() {
+            Self::validate_pair(first, &generic)?;
+        }
+        Ok(Arc::new(Self {
+            templates: table.templates.clone(),
+            generic_body: Some(generic),
+            budget: table.budget.clone(),
+        }))
+    }
+    /// True only when this table carries a complete universal borrow/ownership
+    /// pass for the declaration that `facts` instantiates, in the same world.
+    pub(super) fn generic_body_checked_for(&self, facts: &ValidatedFacts) -> bool {
+        let Some(generic) = &self.generic_body else {
+            return false;
+        };
+        let Some(target) = facts.target() else {
+            return false;
+        };
+        facts.phase() == FactsPhase::Closed
+            && generic.facts().phase() == FactsPhase::Universal
+            && generic.analysis().passed()
+            && generic.facts().declaration() == target.declaration
+            && Arc::ptr_eq(generic.facts().world(), facts.world())
+            && generic.budget().same_authority(&self.budget)
+    }
     fn validate_template(
         template: &VerifiedTemplateCfg,
         budget: &super::ir::PlanBudget,
@@ -621,6 +657,7 @@ impl CarrierEffectTable {
         }
         Ok(Arc::new(Self {
             templates: Arc::from(templates),
+            generic_body: None,
             budget: budget.clone(),
         }))
     }

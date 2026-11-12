@@ -2720,10 +2720,25 @@ impl Provider for CompilerProvider {
                             callee_indices.push((callee, target.clone()));
                         }
                     }
+                    // This instance's own universal proof, requested before any
+                    // await. Closure bodies are keyed per mode and stay strict.
+                    let own_template = facts.template(instance_source).await?;
+                    let own_proof_handle = own_template.closure.is_none().then(|| {
+                        cx.request(function(UNIVERSAL_ANALYZE, instance_source))
+                            .get(0)
+                    });
                     let templates = facts.callee_templates(&types, callee_indices).await?;
-                    let effects =
+                    let mut effects =
                         ownership::CarrierEffectTable::for_callees(&templates, &this.0.budget)
                             .map_err(Error::new)?;
+                    if let Some(handle) = own_proof_handle {
+                        let own: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
+                        effects = ownership::CarrierEffectTable::with_generic_body(
+                            &effects,
+                            own.verified.clone(),
+                        )
+                        .map_err(Error::new)?;
+                    }
                     let const_context = types
                         .callable_constness(instance_target.declaration)
                         .map_err(Error::new)?

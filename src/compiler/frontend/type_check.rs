@@ -10836,20 +10836,6 @@ impl<'a> Checker<'a> {
                 ReceiverAdjustment::MutAutoref,
             ) => ir::BorrowKind::Mut,
             _ => {
-                // An owned `Box<T>` place receiver whose method takes `self`
-                // by value (`left.insert(x)` with `left: Box<Tree<T>>`) is the
-                // builtin move-out `(*left).insert(x)`, exactly as rustc
-                // autoderefs it. Other by-value overloaded Deref receivers
-                // stay explicitly unsupported.
-                if matches!(selected.mode, ReceiverKind::Value { .. })
-                    && selected.depth == 0
-                    && ty.owned_box_pointee().is_some()
-                {
-                    let explicit = Expr::Deref {
-                        value: Box::new(receiver.clone()),
-                    };
-                    return self.method_expression(&explicit, name, type_args, args, expected);
-                }
                 return Err(
                     "unsupported: by-value or multi-step receiver through an overloaded Deref"
                         .into(),

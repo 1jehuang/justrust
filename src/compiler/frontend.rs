@@ -12411,8 +12411,6 @@ struct Parser<'input, 'names> {
     /// Bounds of the enclosing impl and of the current parameter list, read
     /// by `Param::Item` shorthand projections.
     visible_bounds: Vec<TypeBound>,
-    /// Nonzero while scanning forward where predicates for shorthand bounds.
-    forward_bounds_depth: usize,
     /// Indices of type parameters written `= Self` by the last parameter list.
     pending_self_defaults: Vec<usize>,
     pending_type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
@@ -12427,9 +12425,6 @@ struct Parser<'input, 'names> {
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
     opaque_return_sites: Option<u32>,
-    /// Pre-2024 function whose signature has no lifetime inputs, so its
-    /// `impl Trait` capture set equals the edition 2024 one.
-    pre_2024_capture_agrees: bool,
     cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
@@ -12623,10 +12618,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_const_params: Vec::new(),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
-            forward_bounds_depth: 0,
             impl_trait_params: None,
             opaque_return_sites: None,
-            pre_2024_capture_agrees: false,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
             allow_struct: true,
@@ -14177,10 +14170,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_const_params: std::mem::take(&mut self.impl_const_params),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
-            forward_bounds_depth: 0,
             impl_trait_params: None,
             opaque_return_sites: None,
-            pre_2024_capture_agrees: false,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
@@ -14616,10 +14607,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_const_params: Vec::new(),
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
-            forward_bounds_depth: 0,
             impl_trait_params: None,
             opaque_return_sites: None,
-            pre_2024_capture_agrees: false,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
             allow_struct: true,
@@ -17257,58 +17246,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(bounds)
     }
-    /// A where predicate may use `T::Item` before the predicate that bounds
-    /// `T` (`where F: FnMut(&T::Item), T: Array`). The bound list is an
-    /// unordered set, so a predicate failing only for a missing shorthand bound
-    /// is reparsed with the later predicates of the same clause visible.
     fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
-        let mark = self.cursor.checkpoint();
-        let pending = self.pending_bounds.len();
-        let first = self.where_type_predicate_once(bounds);
-        match first {
-            Err(error) if error.message.starts_with("E0220") && self.forward_bounds_depth == 0 => {
-                if !self.cursor.restore(mark) {
-                    return Err(error);
-                }
-                // Scan the remaining predicates of this clause once, without
-                // retaining them, to learn the forward bounds.
-                let mut forward = Vec::new();
-                self.forward_bounds_depth += 1;
-                let scanned = (|| -> Result<(), ParseError> {
-                    let saved = self.cursor.checkpoint();
-                    // Skip the failing predicate syntactically.
-                    while !(self.is(",") || self.is("{") || self.is(";") || self.is("")) {
-                        self.cursor.bump();
-                    }
-                    while self.eat(",") && !(self.is("{") || self.is(";")) {
-                        if self.token().is_lifetime() {
-                            break;
-                        }
-                        if self.where_type_predicate_once(&mut forward).is_err() {
-                            break;
-                        }
-                    }
-                    self.cursor.restore(saved);
-                    Ok(())
-                })();
-                self.forward_bounds_depth -= 1;
-                scanned?;
-                if !self.cursor.restore(mark) {
-                    return Err(error);
-                }
-                let mut visible = std::mem::take(&mut self.pending_bounds);
-                self.reserve_parser_items(&mut visible, bounds.len() + forward.len())?;
-                visible.extend(bounds.iter().cloned());
-                visible.extend(forward);
-                self.pending_bounds = visible;
-                let second = self.where_type_predicate_once(bounds);
-                self.pending_bounds.truncate(pending);
-                second
-            }
-            other => other,
-        }
-    }
-    fn where_type_predicate_once(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
         if self.is("for") {
             return Err(self.unsupported("higher-ranked where predicates are unsupported"));
         }
@@ -17599,78 +17537,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.close_angle()?;
         Ok(params)
     }
-    /// Pre-2024 `-> impl Trait` captures only named lifetimes, edition 2024
-    /// captures every in-scope lifetime. The two agree when no lifetime can be
-    /// in scope or in a parameter type. This is decided conservatively on the
-    /// tokens of a free function header: after `fn name`, only primitive type
-    /// names, this function's own (unbounded) type parameters, parameter
-    /// binding names, integer literals and plain punctuation may appear before
-    /// `->`. Any path (`Chars`, `String`, `std::..`), bound, reference,
-    /// lifetime or `Self` may carry a hidden region, so it is refused.
-    fn head_has_no_lifetime_inputs(&self) -> bool {
-        const PRIMITIVES: &[&str] = &[
-            "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-            "f32", "f64", "bool", "char",
-        ];
-        // The enclosing item scope must declare no lifetimes: free functions
-        // outside any impl or trait only.
-        if !self.impl_regions.params.is_empty() || self.impl_regions.receiver.is_some() {
-            return false;
-        }
-        let mut generics: Vec<&str> = Vec::new();
-        let mut at = 1usize; // token 0 is the function name
-        if self.cursor.peek(at).is_some_and(|t| t.matches("<")) {
-            at += 1;
-            loop {
-                let Some(token) = self.cursor.peek(at) else {
-                    return false;
-                };
-                if token.matches(">") {
-                    at += 1;
-                    break;
-                }
-                if token.matches(",") {
-                    at += 1;
-                    continue;
-                }
-                if !token.is_ident() || token.is_lifetime() {
-                    return false;
-                }
-                generics.push(token.text);
-                at += 1;
-                if generics.len() > 32 {
-                    return false;
-                }
-            }
-        }
-        let mut depth = 0usize;
-        let mut steps = 0usize;
-        while let Some(token) = self.cursor.peek(at) {
-            steps += 1;
-            if steps > 4096 || token.is_lifetime() || token.string {
-                return false;
-            }
-            let text = token.text;
-            if depth == 0 && (text == "->" || text == "{" || text == ";" || text == "where") {
-                return text == "->";
-            }
-            match text {
-                "(" | "[" => depth += 1,
-                ")" | "]" => depth = depth.saturating_sub(1),
-                "," | ";" | "_" | "mut" => {}
-                ":" => {}
-                _ if text.starts_with(|c: char| c.is_ascii_digit()) => {}
-                _ if PRIMITIVES.contains(&text) || generics.contains(&text) => {}
-                // A binding name: an identifier directly followed by `:`.
-                _ if token.is_ident()
-                    && self.cursor.peek(at + 1).is_some_and(|n| n.matches(":"))
-                    && !matches!(text, "self" | "Self") => {}
-                _ => return false,
-            }
-            at += 1;
-        }
-        false
-    }
     fn function_head(
         &mut self,
         inherited: &[AstIdent],
@@ -17685,9 +17551,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.lexical.pending_param_patterns.clear();
         let (constness, unsafety) = self.function_qualifiers(associated)?;
         self.expect("fn")?;
-        self.pre_2024_capture_agrees = self.names.edition() != super::token::Edition::E2024
-            && !associated
-            && self.head_has_no_lifetime_inputs();
         let name = self.ident()?;
         let mut regions = if associated {
             self.impl_regions.clone()
@@ -17838,9 +17701,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.reserve_parser_items(&mut bounds, impl_bounds.len())?;
         bounds.extend(impl_bounds);
         self.expect(")")?;
-        let result = self.opaque_function_result();
-        self.pre_2024_capture_agrees = false;
-        let result = result?;
+        let result = self.opaque_function_result()?;
         if self.eat("where") {
             loop {
                 if self.token().is_lifetime() {

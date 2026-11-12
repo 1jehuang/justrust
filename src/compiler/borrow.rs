@@ -3211,6 +3211,7 @@ impl CarrierBuilder<'_, '_> {
                     .ok_or(Exhausted)?;
                 if relation.entails(AnalysisRegionId(a_new), AnalysisRegionId(b_new))
                     && !rigid.entails(AnalysisRegionId(a), AnalysisRegionId(b))
+                    && !self.generic_body_family_exempt(None, None, &[key_a, key_b])
                 {
                     self.problem(block, None, Problem::Invalid("call carrier occurrence requires an undeclared rigid lifetime or invariant relation".into()))?;
                 }
@@ -4935,6 +4936,83 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(value)
     }
+    /// rustc borrow-checks the generic MIR of a function once, against its
+    /// declared bounds, and never re-checks monomorphized copies: a relation
+    /// between two type-parameter families is a generic-body fact. Callers are
+    /// separately checked against the adapter/closure signatures (that is what
+    /// rejects a closure returning a borrow of its own local, or mixing
+    /// unrelated caller lifetimes). Closed instances here lose lifetime
+    /// identity in their type arguments, so substituted family components
+    /// can look unrelated. Exempt such a diagnostic ONLY when (1) this body's
+    /// own universal proof, read through its `UNIVERSAL_ANALYZE` handle, is a
+    /// complete pass for this exact declaration, and (2) every endpoint is a
+    /// substituted family component: no reference/local origin, no `'static`,
+    /// no fixed or named signature region.
+    fn generic_body_family_exempt(
+        &self,
+        origins: Option<&CarrierOrigins>,
+        destination: Option<&InputCarrier>,
+        keys: &[&RegionKey],
+    ) -> bool {
+        let (Some(table), Some(authority)) = (&self.effect_table, &self.authority) else {
+            return false;
+        };
+        if !table.generic_body_checked_for(authority) {
+            return false;
+        }
+        // A substituted family component is an input slot that
+        // `initialize_regions` composed from an original family carrier and
+        // bound to a `RegionKey::Family` region. Nothing else qualifies.
+        let family_component = |input: &InputCarrier| {
+            !self.static_inputs.contains(input)
+                && self.input_regions.iter().any(|(candidate, region)| {
+                    candidate == input
+                        && matches!(self.regions.keys[region.0], RegionKey::Family { .. })
+                })
+        };
+        if let Some(origins) = origins {
+            if origins.references.0.count() + origins.families.0.count() == 0 {
+                return false;
+            }
+            for family in origins.families.0.members() {
+                let input = &self.family_inputs[family].input;
+                if input.location.channel.family().is_none() || self.static_inputs.contains(input) {
+                    return false;
+                }
+            }
+            for origin in origins.references.0.members() {
+                if self.static_origin == Some(ReferenceOriginId(origin))
+                    || self.targets[origin].is_empty()
+                {
+                    return false;
+                }
+                for target in &self.targets[origin] {
+                    let CanonicalRoot::ParameterReferent(local, location) = &target.place.root
+                    else {
+                        return false;
+                    };
+                    let Some(param) = self.f.params.iter().position(|p| p == local) else {
+                        return false;
+                    };
+                    if !target.place.projection.is_empty()
+                        || !family_component(&InputCarrier {
+                            param,
+                            location: location.clone(),
+                        })
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        if let Some(destination) = destination
+            && !family_component(destination)
+        {
+            return false;
+        }
+        keys.iter()
+            .all(|key| matches!(key, RegionKey::Family { .. }))
+    }
     fn origin_allowed(
         &mut self,
         value: &CarrierOrigins,
@@ -5277,7 +5355,13 @@ impl CarrierBuilder<'_, '_> {
                         .find(|row| row.destination == *input)
                         .map(|row| row.sources.clone());
                     if let Some(allowed) = allowed {
-                        if !self.origin_allowed(origins, &allowed)? {
+                        if !self.origin_allowed(origins, &allowed)?
+                            && !self.generic_body_family_exempt(
+                                Some(origins),
+                                self.cells[index].input.clone().as_ref(),
+                                &[],
+                            )
+                        {
                             self.problem(block, statement, Problem::Invalid("carrier store would escape its declared input lifetime/family envelope".into()))?;
                         }
                     } else {
@@ -6592,7 +6676,13 @@ impl CarrierBuilder<'_, '_> {
                             .iter()
                             .find(|row| row.destination == destination)
                         {
-                            if !self.origin_allowed(&value, &envelope.sources)? {
+                            if !self.origin_allowed(&value, &envelope.sources)?
+                                && !self.generic_body_family_exempt(
+                                    Some(&value),
+                                    Some(&destination),
+                                    &[],
+                                )
+                            {
                                 self.problem(block, None, Problem::Invalid("callee writes origins outside the caller declaration envelope".into()))?;
                             }
                         } else {
@@ -7710,32 +7800,8 @@ impl CarrierBuilder<'_, '_> {
         let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
             return Ok(false);
         };
-        // The by-value parameter and the substituted family actual may carry
-        // the same closed nominal under different realization indices. Use
-        // the world's canonical comparator, never structural identity.
-        let Some(parameter_ty) = params.get(owned.param) else {
+        if params.get(owned.param) != Some(actual) {
             return Ok(false);
-        };
-        if parameter_ty != actual {
-            let Some(facts) = authority
-                .or(self.authority.as_deref())
-                .or(match self.facts {
-                    FactsCtx::Validated(facts) => Some(facts),
-                    _ => None,
-                })
-            else {
-                return Ok(false);
-            };
-            if !facts
-                .world()
-                .types_equal(
-                    std::slice::from_ref(parameter_ty),
-                    std::slice::from_ref(actual),
-                )
-                .unwrap_or(false)
-            {
-                return Ok(false);
-            }
         }
         let Some(locations) = self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
         else {

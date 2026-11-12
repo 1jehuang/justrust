@@ -1179,10 +1179,10 @@ impl ValidatedTraitWorld {
                 ));
             };
             if goal.declaration != self.catalog.id(CatalogItem::Sized) || !goal.args.is_empty() {
-                // Other trait bounds (`T: Ord`) are well-formedness bounds,
-                // proved where the type is used. They carry no size or
-                // nominal dependency content for the realization component.
-                continue;
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "recursive symbolic non-Sized obligation",
+                ));
             }
             push(&self.budget, &mut requirements, goal.self_ty.clone())?;
         }

@@ -597,3 +597,48 @@ fn mut_slice_of_mut_refs_elements() {
         }
     }
 }
+
+#[test]
+fn flat_map_owned_inner_iterator_collects_into_vec() {
+    oracle::stock_native(
+        r#"
+fn main() {
+    let v = vec![1u8, 2, 3];
+    let flat: Vec<u8> = v.iter().flat_map(|w| vec![*w; *w as usize]).collect();
+    println!("{:?}", flat);
+    let nested: Vec<i32> = vec![vec![1, 2], vec![], vec![3]].into_iter().flat_map(|v| v).collect();
+    println!("{:?} {}", nested, nested.len());
+}
+"#,
+    );
+    for source in [
+        "fn main() { let v = vec![1u8, 2]; let flat: Vec<u8> = v.iter().flat_map(|w| *w).collect(); println!(\"{:?}\", flat); }",
+        "fn unused(v: Vec<u8>) -> Vec<i32> { v.into_iter().flat_map(|w| vec![w]).collect() } fn main() {}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn flat_map_borrowed_inner_iterator_matches_stock() {
+    oracle::stock_native(
+        r#"
+fn main() {
+    let words = ["alpha", "beta", "gamma"];
+    let flat: Vec<char> = words.iter().flat_map(|w| w.chars().take(2)).collect();
+    println!("{}", flat.iter().collect::<String>());
+    let all: Vec<char> = words.iter().flat_map(|w| w.chars()).collect();
+    println!("{:?} {}", all.len(), all.iter().rev().collect::<String>());
+}
+"#,
+    );
+    // Soundness of the generic-body exemption rests on these caller checks.
+    for source in [
+        "fn main() { let words = [\"ab\", \"c\"]; let flat: Vec<char> = words.iter().flat_map(|w| { let s = w.to_string(); s.chars() }).collect(); println!(\"{:?}\", flat); }",
+        "fn main() { let words = [\"ab\", \"c\"]; let flat: Vec<char> = words.iter().flat_map(|w| w.to_uppercase().chars()).collect(); println!(\"{:?}\", flat); }",
+        "fn f<'a, 'b>(_x: &[&'a str], y: &[&'b str]) -> Vec<&'a str> { y.iter().flat_map(|w| w.split(',')).collect() } fn main() { println!(\"{:?}\", f(&[\"q\"], &[\"a,b\"])); }",
+        "fn unused<'a, 'b>(x: &'a [&'b str]) -> Vec<&'static str> { x.iter().flat_map(|w| w.split(',')).collect() } fn main() {}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
