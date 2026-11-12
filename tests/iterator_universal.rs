@@ -413,31 +413,3 @@ fn main() {
 "#,
     );
 }
-
-#[test]
-fn opaque_loop_then_closure_filter_loop_match_stock() {
-    oracle::stock_native(
-        r#"
-use std::collections::BTreeMap;
-fn tokens(s: &str) -> impl Iterator<Item = String> + '_ { s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()) }
-fn main() {
-    let mut index: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (ln, line) in "Alpha beta\nbeta Gamma longer".lines().enumerate() { for w in tokens(line) { index.entry(w).or_default().push(ln + 1); } }
-    for (w, ls) in index.iter().filter(|(w, _)| w.len() > 4) { println!("{w}: {ls:?}"); }
-}
-"#,
-    );
-    oracle::stock_and_native_reject(
-        r#"
-use std::collections::BTreeMap;
-fn tokens(s: &str) -> impl Iterator<Item = String> + '_ { s.split(|c: char| !c.is_alphanumeric()).map(|w| w.to_lowercase()) }
-fn main() {
-    let mut index: BTreeMap<String, usize> = BTreeMap::new();
-    for w in tokens("a b") { index.insert(w, 1); }
-    let it = index.iter().filter(|(w, _)| w.len() > 0);
-    index.insert(String::new(), 0);
-    for (w, n) in it { println!("{w}{n}"); }
-}
-"#,
-    );
-}

@@ -67,9 +67,9 @@ impl ValidatedTraitWorld {
         self.validate_declaration_schema(item.declaration, &item.schema)?;
         // Validate original source-region identity before capability rejection.
         self.validate_source_regions(item.declaration, &item.schema.signature)?;
-        self.validate_predicates(&item.schema.predicates, &item.schema.env, None)?;
+        self.validate_declaration_predicates(&item.schema.predicates, &item.schema.env, None)?;
         if !self.signature_contains_projection(&item.schema.signature)? {
-            return self.validate_schema_signature(
+            return self.validate_declaration_signature(
                 item.declaration,
                 &item.schema.signature,
                 &item.schema.env,
@@ -84,9 +84,9 @@ impl ValidatedTraitWorld {
                 .iter()
                 .chain(std::iter::once(&item.schema.signature.result))
             {
-                self.validate_universal_projection_type(ty, &item.schema.env, 0)?;
+                self.validate_declaration_type(ty, &item.schema.env)?;
             }
-            return self.validate_schema_signature(
+            return self.validate_declaration_signature(
                 item.declaration,
                 &item.schema.signature,
                 &item.schema.env,
@@ -153,6 +153,79 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
+    // Predicate operands identify nominal declarations and ordered actuals,
+    // not the physical fields of those declarations. Full source metadata
+    // validation remains mandatory before this capability classification.
+    fn logical_operand_contains_projection(&self, ty: &Ty, depth: usize) -> Result<bool> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        match ty {
+            Ty::AssociatedType(_) => Ok(true),
+            Ty::Struct(value) => {
+                self.logical_operands_contain_projection(value.def().type_args.iter(), depth + 1)
+            }
+            Ty::Enum(value) => {
+                self.logical_operands_contain_projection(value.def().type_args.iter(), depth + 1)
+            }
+            Ty::Tuple(values) => self.logical_operands_contain_projection(values.iter(), depth + 1),
+            Ty::Ref { referent, .. }
+            | Ty::RawPtr {
+                pointee: referent, ..
+            }
+            | Ty::Array {
+                element: referent, ..
+            }
+            | Ty::DependentArray {
+                element: referent, ..
+            }
+            | Ty::Slice { element: referent } => {
+                self.logical_operand_contains_projection(referent, depth + 1)
+            }
+            Ty::Cell(value) => {
+                self.logical_operand_contains_projection(value.argument(), depth + 1)
+            }
+            Ty::ManuallyDrop(value) => {
+                self.logical_operand_contains_projection(value.argument(), depth + 1)
+            }
+            Ty::PhantomData(value) => {
+                self.logical_operand_contains_projection(value.argument(), depth + 1)
+            }
+            Ty::FnItem(value) => {
+                self.logical_operands_contain_projection(value.type_args.iter(), depth + 1)
+            }
+            Ty::FnPointer(value) => {
+                self.logical_operands_contain_projection(value.types(), depth + 1)
+            }
+            Ty::Closure(value) => {
+                self.logical_operands_contain_projection(value.types(), depth + 1)
+            }
+            Ty::Opaque(value) => self.logical_operands_contain_projection(value.types(), depth + 1),
+            Ty::Dyn(value) => self.logical_operands_contain_projection(value.types(), depth + 1),
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Char
+            | Ty::Str
+            | Ty::Float(_)
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never
+            | Ty::Const(_) => Ok(false),
+        }
+    }
+
+    fn logical_operands_contain_projection<'a>(
+        &self,
+        values: impl Iterator<Item = &'a Ty>,
+        depth: usize,
+    ) -> Result<bool> {
+        for value in values {
+            if self.logical_operand_contains_projection(value, depth)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Admit only source-authenticated marker obligations on one exact projection.
     /// This is a capability check, not evidence that its RHS is Copy or Sized.
     /// Substituted applications must normalize and prove these predicates below.
@@ -168,14 +241,14 @@ impl ValidatedTraitWorld {
                 continue;
             };
             for argument in goal.args.iter() {
-                if self.type_contains_projection(argument, 0)? {
+                if self.logical_operand_contains_projection(argument, 0)? {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: projected method associated bounds",
                     ));
                 }
             }
-            if !self.type_contains_projection(&goal.self_ty, 0)? {
+            if !self.logical_operand_contains_projection(&goal.self_ty, 0)? {
                 continue;
             }
             if !goal.args.is_empty()
@@ -387,17 +460,13 @@ impl ValidatedTraitWorld {
         {
             return Ok(());
         }
-        for ty in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            if charged(
-                &self.budget,
-                ir::contains_associated_types(ty, &self.budget),
-            )? {
-                return Ok(());
-            }
+        // Projected input tails use the original region-qualified envelopes in
+        // derive_return_contracts. Only an unresolved result delays its shape.
+        if charged(
+            &self.budget,
+            ir::contains_associated_types(&signature.result, &self.budget),
+        )? {
+            return Ok(());
         }
         let results = charged(
             &self.budget,
@@ -1140,7 +1209,7 @@ impl ValidatedTraitWorld {
                 if implementation.associated_types.is_empty()
                     && let Some(normalized) = self.normalize_universal_callable_schema(schema)?
                 {
-                    self.validate_schema_signature(
+                    self.validate_declaration_signature(
                         declaration,
                         &normalized.signature,
                         &normalized.env,
@@ -1167,7 +1236,7 @@ impl ValidatedTraitWorld {
                 false,
             )?;
             self.complete_projected_contract(&mut normalized.signature)?;
-            self.validate_schema_signature(
+            self.validate_declaration_signature(
                 declaration,
                 &normalized.signature,
                 &normalized.env,
@@ -1544,11 +1613,14 @@ impl ValidatedTraitWorld {
         self.complete_projected_contract(&mut value.signature)?;
         // Independently establish the required declaration's contract in the real
         // implementation environment. Never copy the provided target's topology.
-        self.validate_schema_signature(
+        self.validate_schema_signature_for_use(
             item.declaration,
             &value.signature,
             &implementation.schema_env,
             None,
+            None,
+            None,
+            false,
         )?;
         let source = self.owner_applied_source_regions(item, implementation, &value.signature)?;
         charged(
@@ -2870,6 +2942,136 @@ mod tests {
             .unwrap()
             .trait_world()
             .unwrap()
+    }
+
+    #[test]
+    fn projected_input_reference_contract_uses_original_receiver_region() {
+        let world = world(
+            "trait Family{type Value;}struct Packet<T:Family>{value:T,other:T::Value}trait View<T>{fn view(&self)->&T;}impl<T:Family> View<T> for Packet<T>{fn view(&self)->&T{&self.value}}fn main(){}",
+        );
+        let header = world.headers.callables.iter().find(|header| {
+            matches!(header.schema.signature.params.first(), Some(Ty::Ref { referent, .. }) if matches!(referent.as_ref(), Ty::Struct(_)))
+        }).unwrap();
+        let schema = world.callable_schema(header.declaration).unwrap();
+        assert!(
+            world
+                .type_contains_projection(&schema.signature.params[0], 0)
+                .unwrap()
+        );
+        assert!(
+            !world
+                .type_contains_projection(&schema.signature.result, 0)
+                .unwrap()
+        );
+        assert!(matches!(
+            schema.signature.ref_contract.results[0].returns,
+            ir::ReturnContract::SharedInputEnvelopes(_)
+        ));
+        let mut completed = schema.signature.clone();
+        Arc::make_mut(&mut Arc::make_mut(&mut completed.ref_contract).results)[0].returns =
+            ir::ReturnContract::NoReference;
+        world.complete_projected_contract(&mut completed).unwrap();
+        assert!(world.eq_signature(&completed, &schema.signature).unwrap());
+        world
+            .validate_schema_signature(header.declaration, &completed, &schema.env, None)
+            .unwrap();
+        for change in 0..3 {
+            let mut forged = completed.clone();
+            let contract = Arc::make_mut(&mut forged.ref_contract);
+            match change {
+                0 => {
+                    Arc::make_mut(&mut contract.results)[0].region =
+                        ir::RegionParamId(contract.region_count)
+                }
+                1 => contract.input_regions = Arc::from([]),
+                _ => {
+                    Arc::make_mut(&mut contract.results)[0].returns =
+                        ir::ReturnContract::SharedInputEnvelopes(Arc::from([]))
+                }
+            }
+            assert!(
+                matches!(world.validate_schema_signature(header.declaration, &forged, &schema.env, None), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                "forged receiver origin {change}"
+            );
+        }
+    }
+
+    #[test]
+    fn projected_input_reference_contract_keeps_result_projection_pending() {
+        let world =
+            world("trait Project{type Output;fn project(&self)->&Self::Output;}fn main(){}");
+        let header = world
+            .headers
+            .items
+            .iter()
+            .find(|header| {
+                world
+                    .type_contains_projection(&header.schema.signature.result, 0)
+                    .unwrap()
+            })
+            .unwrap();
+        let mut signature = header.schema.signature.clone();
+        assert!(
+            signature
+                .ref_contract
+                .results
+                .iter()
+                .any(|row| matches!(row.returns, ir::ReturnContract::NoReference))
+        );
+        let before = signature.ref_contract.clone();
+        world.complete_projected_contract(&mut signature).unwrap();
+        assert!(world.eq_contract(&before, &signature.ref_contract).unwrap());
+    }
+
+    #[test]
+    fn logical_operand_projection_classification_preserves_nominal_actuals() {
+        let world = world(
+            "trait Family{type Value;}struct Packet<T:Family>{value:T::Value}enum Envelope<T:Family>{Owned(T::Value)}struct Holder<T>{value:T}fn generic<T:Family>(_:Packet<T>,_:Envelope<T>){}fn projected<T:Family>(_:Holder<T::Value>){}fn main(){}",
+        );
+        let mut logical_nominals = 0;
+        let mut projected_actuals = 0;
+        for callable in world.headers.callables.iter() {
+            for ty in callable.schema.signature.params.iter() {
+                if !matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+                    continue;
+                }
+                assert!(world.type_contains_projection(ty, 0).unwrap());
+                if type_arguments(ty)
+                    .iter()
+                    .any(|argument| matches!(argument, Ty::AssociatedType(_)))
+                {
+                    assert!(world.logical_operand_contains_projection(ty, 0).unwrap());
+                    projected_actuals += 1;
+                } else {
+                    assert!(!world.logical_operand_contains_projection(ty, 0).unwrap());
+                    logical_nominals += 1;
+                }
+            }
+        }
+        assert_eq!(logical_nominals, 2);
+        assert_eq!(projected_actuals, 1);
+    }
+
+    #[test]
+    fn logical_operand_projection_classification_keeps_projected_argument_boundary() {
+        let world = world(
+            "trait Family{type Value;}trait Argument<A>{}struct Holder<T>{value:T}fn generic<T:Family>()where ():Argument<Holder<T::Value>>{}fn main(){}",
+        );
+        let schema = &world
+            .headers
+            .callables
+            .iter()
+            .find(|callable| {
+                callable
+                    .schema
+                    .predicates
+                    .iter()
+                    .any(|predicate| !predicate.trait_ref().args.is_empty())
+            })
+            .unwrap()
+            .schema;
+        let error = world.projected_marker_predicates(schema).unwrap_err();
+        assert!(format!("{error:?}").contains("unsupported: projected method associated bounds"));
     }
 
     #[test]
