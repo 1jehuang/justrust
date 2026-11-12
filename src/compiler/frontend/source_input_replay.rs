@@ -2919,6 +2919,48 @@ impl Replay<'_> {
                     },
                 )?
             }
+            (_, ir::ExprKind::RefToDyn { reference }) => {
+                // Reference unsizing at an argument coercion site. The wrapper
+                // must be the recorded original occurrence, its operand must
+                // replay to a reference of the same kind, and the concrete
+                // referent must again prove the dynamic principal.
+                sr::work(self.budget, self.original.unsize_mapping.len())?;
+                if !self
+                    .original
+                    .unsize_mapping
+                    .iter()
+                    .any(|row| row.wrapper == id && row.reference == *reference)
+                {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input object coercion lacks original correspondence",
+                    ));
+                }
+                let Some((want_kind, object)) = super::type_check::trait_object_target(&actual.ty)
+                else {
+                    return Err(FactsError::unsupported(
+                        self.budget,
+                        "input object coercion requires a reference target",
+                    ));
+                };
+                let source_ty = self.expression(source, node, *reference, None, depth + 1)?;
+                let ir::Ty::Ref { kind, referent } = &source_ty else {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input object coercion source is not a reference",
+                    ));
+                };
+                if *kind != want_kind || matches!(referent.as_ref(), ir::Ty::Dyn(_)) {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input object coercion changed reference kind or source",
+                    ));
+                }
+                self.original
+                    .facts
+                    .prove_dynamic_unsize(referent, &object)?;
+                self.reference(want_kind, ir::Ty::Dyn(object.clone()))?
+            }
             (source @ Expr::Borrow { place, .. }, ir::ExprKind::Block(block))
                 if !place.fields.is_empty() =>
             {

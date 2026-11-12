@@ -420,6 +420,25 @@ fn main() { let s = Stack { items: vec![1, 2] }; println!("{:?} {:?}", show_all(
 }
 
 #[test]
+fn vec_macro_elements_unsize_to_expected_dyn() {
+    const AB: &str = "trait A { fn n(&self) -> i32; } #[derive(Clone)] struct X(i32); struct Y; struct Z; impl A for X { fn n(&self) -> i32 { self.0 } } impl A for Y { fn n(&self) -> i32 { 9 } }\n";
+    for body in [
+        "fn main(){ let x=X(1); let y=Y; let v: Vec<&dyn A> = vec![&x, &y]; for e in v { println!(\"{}\", e.n()); } }",
+        "fn main(){ let x=X(1); let xs=vec![x.clone()]; let v: Vec<&dyn A> = vec![&x, &xs[0]]; for e in v { println!(\"{}\", e.n()); } }",
+        "fn main(){ let x=X(1); let y=Y; let a: [&dyn A; 2] = [&x, &y]; for e in a { println!(\"{}\", e.n()); } }",
+        "fn main(){ let v: Vec<Box<dyn A>> = vec![Box::new(X(1)), Box::new(Y)]; for e in &v { println!(\"{}\", e.n()); } }",
+    ] {
+        oracle::stock_native(&format!("{AB}{body}"));
+    }
+    for body in [
+        "fn main(){ let x=X(1); let z=Z; let v: Vec<&dyn A> = vec![&x, &z]; println!(\"{}\", v.len()); }",
+        "fn main(){ let x=X(1); let y=Y; let v = vec![&x, &y]; println!(\"{}\", v.len()); }",
+    ] {
+        oracle::stock_and_native_reject(&format!("{AB}{body}"));
+    }
+}
+
+#[test]
 fn vec_of_mut_refs_element_receivers() {
     oracle::stock_native(
         "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut b=S{n:4}; let mut v: Vec<&mut S> = vec![&mut a, &mut b]; v[0].bump(); v[1].bump(); v[1].n += 3; drop(v); println!(\"{:?} {:?}\", a, b); }",

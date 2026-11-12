@@ -10177,7 +10177,18 @@ impl<'a> Checker<'a> {
                         ir::CallExpectation::NoFirmReference
                     ))
             {
-                (self.expr(source)?, None)
+                // A bare-parameter formal instantiated to `&dyn Tr` or `&[T]`
+                // (`vec![&a, &b]` into `Vec<&dyn Tr>`) is still a coercion
+                // site: rustc unsizes each argument to the solved formal.
+                // Only unsizing targets carry the expectation; the reference
+                // itself stays argument-owned, as for any other bare formal.
+                let unsizing = !identity
+                    && (trait_object_target(ty).is_some() || ty.slice_ref_element().is_some());
+                if unsizing {
+                    (self.expr_expected(source, Some(ty))?, None)
+                } else {
+                    (self.expr(source)?, None)
+                }
             } else {
                 self.call_argument(source, ty, self.reachable && completes)?
             };

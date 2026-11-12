@@ -1294,7 +1294,16 @@ impl<'s> Solver<'_, '_, 's> {
             self.coercions.push((actual, expected));
             return Ok(());
         }
-        if (matches!(self.domain(actual), Domain::Ref(_, inner)
+        // `&?R` whose referent is still a pending producer result (`&xs[0]`)
+        // into an unknown target: a later `&dyn P` expectation
+        // (`vec![&x, &xs[0]]` into `Vec<&dyn P>`) must fix the target first.
+        // Quiescence still falls back to equality.
+        let pending_referent = match self.domain(actual) {
+            Domain::Ref(_, inner) => self.deferred_coercion(inner)?,
+            _ => false,
+        };
+        if (pending_referent
+            || matches!(self.domain(actual), Domain::Ref(_, inner)
                 if !matches!(self.domain(inner), Domain::Unknown))
             || matches!(self.domain(actual), Domain::Nominal(_, ref xs)
                 if xs.len() == 1 && !matches!(self.domain(xs[0]), Domain::Unknown | Domain::Fixed(ir::Ty::Dyn(_)))))
