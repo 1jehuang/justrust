@@ -30,6 +30,8 @@ jobs:
       - run: cargo test --locked
       - name: Test portable bundle validation
         run: python3 -m unittest discover -s tests -p test_cross_test_bundle.py -v
+      - name: Test production dogfood validation
+        run: python3 -m unittest discover -s scripts -p test_production_dogfood.py -v
       - name: Native test bundle handoff
         run: bash ci/check-test-bundle.sh "$PWD/target/debug/justrust"
       # Dogfood: the freshly built binary checks and tests a scratch crate.
