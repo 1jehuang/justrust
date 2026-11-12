@@ -231,6 +231,7 @@ fn inspect_with_opaque_hint(
         pattern_bindings: None,
         replaying_pattern: false,
         closure_terms: Vec::new(),
+        let_bound_closures: Vec::new(),
         local_context: None,
         stored_constants: None,
         return_terms: Vec::new(),

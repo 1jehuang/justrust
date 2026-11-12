@@ -156,6 +156,9 @@ struct Solver<'a: 's, 'b: 's, 's> {
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,
     closure_terms: Vec<(PathKey, Term)>,
+    /// Closures bound by `let` before use: rustc deduces no signature for
+    /// them, so each inferred parameter has one fixed (not late-bound) type.
+    let_bound_closures: Vec<(PathKey, Vec<bool>)>,
     local_context: Option<Option<super::super::super::semantic_scope::ScopeId>>,
     stored_constants: Option<Option<closures::constant_inputs::StoredConstantAccess>>,
     return_terms: Vec<Term>,
@@ -288,6 +291,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         pattern_bindings: None,
         replaying_pattern: false,
         closure_terms: Vec::new(),
+        let_bound_closures: Vec::new(),
         local_context: None,
         stored_constants: None,
         return_terms: Vec::new(),
@@ -2849,6 +2853,7 @@ impl<'s> Solver<'_, '_, 's> {
                 Stmt::Let {
                     name, ty, value, ..
                 } => {
+                    self.note_let_bound_closure(value)?;
                     let mut term = self.expr(value, depth + 1)?;
                     if !matches!(ty, Type::Infer) {
                         let ty = self.source_ty(ty)?;

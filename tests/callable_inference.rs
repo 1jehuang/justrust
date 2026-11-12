@@ -25,6 +25,10 @@ fn local_callable_signatures_match_stock() {
             "fn main(){let f=|x|x+1;println!(\"{}\",f(2));}",
         ),
         (
+            "let_bound_closure_annotated_reference",
+            "fn thing(x:impl FnOnce(&u32)){x(&4)} fn t<'a,F:Fn(&'a u32)>(f:F,x:&'a u32){f(x)} fn main(){let f=|y:&u32|println!(\"{}\",y);thing(f);let g=|y|println!(\"{}\",y);t(g,&5);let h=|_|println!(\"v\");thing_v(h);} fn thing_v(x:impl FnOnce(u32)){x(1)}",
+        ),
+        (
             "result_context",
             "fn main(){let f=|x|x;let value:u8=f(7);println!(\"{}\",value);}",
         ),
@@ -145,6 +149,16 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
         ("unresolved", "fn main(){let f=|x|x;}", "E0282"),
         ("unresolved_owner", "fn main(){let f=Vec::new;}", "E0282"),
         ("arity", "fn main(){let f=|x|x+1;f();}", "E0057"),
+        (
+            "let_bound_closure_not_general",
+            "fn thing(x:impl FnOnce(&u32)){} fn unused(){let f=|_|();thing(f);} fn main(){}",
+            "E0277",
+        ),
+        (
+            "let_bound_closure_not_general_mixed",
+            "fn thing(x:impl FnOnce(&u32,&u32,u32)){} fn unused(){let f=|_,y:&u32,z|();thing(f);} fn main(){}",
+            "E0277",
+        ),
         (
             "fn_item_unresolved_arguments",
             "fn id<T>(x:T)->T{x} fn main(){let f=id;}",

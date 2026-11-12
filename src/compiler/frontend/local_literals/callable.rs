@@ -368,7 +368,88 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
     ) -> Result<(), String> {
         let plan = self.checker.signatures.plan()?;
         let facts = plan.callable_facts(declaration)?;
+        // Without named lifetime parameters every reference written in a
+        // callable bound is elided, hence late-bound (higher-ranked).
+        if !self.let_bound_closures.is_empty()
+            && plan.declaration(declaration)?.path.associated.is_none()
+            && plan
+                .callable_body(&plan.program, declaration)
+                .is_ok_and(|function| function.regions.params.is_empty())
+        {
+            let world = plan.trait_world()?;
+            for predicate in facts.predicates().predicates() {
+                let trait_ref = predicate.trait_ref();
+                if world
+                    .closure_trait_kind(trait_ref.declaration)
+                    .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+                    .is_none()
+                {
+                    continue;
+                }
+                let term = self.schema(&trait_ref.self_ty, params, 0)?;
+                let peeled = self.peel_refs(term);
+                if let Domain::Callable(callable) = self.domain(peeled)
+                    && let CallableKey::Closure(key) = &callable.key
+                {
+                    self.reject_fixed_closure_inputs(key, trait_ref.args.first())?;
+                }
+            }
+        }
         self.callable_predicates(facts.predicates().predicates(), params)
+    }
+
+    /// Record `let f = |x, ..| ..;`: which parameters are written without a
+    /// type. rustc gives such a closure no expected signature, so an inferred
+    /// parameter gets one fixed type and can never be higher-ranked.
+    pub(super) fn note_let_bound_closure(&mut self, value: &Expr) -> Result<(), String> {
+        let Expr::Var(path) = value else {
+            return Ok(());
+        };
+        let plan = self.checker.signatures.plan()?;
+        let Some(syntax) = plan.stored_closure_syntax(path)? else {
+            return Ok(());
+        };
+        let inferred: Vec<bool> = syntax
+            .params
+            .iter()
+            .map(|(_, ty)| matches!(ty, Type::Infer))
+            .collect();
+        if !inferred.iter().any(|i| *i) {
+            return Ok(());
+        }
+        let key = self.checker.path_key(path, Namespace::Value)?;
+        self.checker.infer_storage(1)?;
+        self.let_bound_closures.push((key, inferred));
+        Ok(())
+    }
+
+    /// A callable bound `F: Fn(&T)` quantifies over the reference lifetime.
+    /// A let-bound closure whose matching parameter was inferred has a single
+    /// lifetime instead, so the bound is "not general enough" (stock rustc).
+    fn reject_fixed_closure_inputs(
+        &self,
+        key: &PathKey,
+        arguments: Option<&ir::Ty>,
+    ) -> Result<(), String> {
+        let Some((_, inferred)) = self.let_bound_closures.iter().find(|(k, _)| k == key) else {
+            return Ok(());
+        };
+        let inputs: &[ir::Ty] = match arguments {
+            Some(ir::Ty::Tuple(inputs)) => inputs,
+            Some(other) => std::slice::from_ref(other),
+            None => return Ok(()),
+        };
+        if matches!(arguments, Some(ir::Ty::Unit)) {
+            return Ok(());
+        }
+        for (input, inferred) in inputs.iter().zip(inferred) {
+            if *inferred && mentions_reference(input, 0) {
+                return Err(self.user_error(
+                    "E0277: expected an `FnOnce(&..)` closure: implementation of `FnOnce` is not general enough: a closure bound by `let` before use infers one lifetime for an unannotated reference parameter",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn callable_predicates(
@@ -521,5 +602,27 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
             return Err("closure inference binding belongs to another body".into());
         }
         Ok(Some(key))
+    }
+}
+
+/// Whether a bound's written input type contains a reference.
+fn mentions_reference(ty: &ir::Ty, depth: usize) -> bool {
+    if depth > 64 {
+        return true;
+    }
+    match ty {
+        ir::Ty::Ref { .. } => true,
+        ir::Ty::Tuple(items) => items.iter().any(|t| mentions_reference(t, depth + 1)),
+        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+            mentions_reference(element, depth + 1)
+        }
+        ir::Ty::FnPointer(pointer) => {
+            pointer
+                .inputs
+                .iter()
+                .any(|t| mentions_reference(t, depth + 1))
+                || mentions_reference(&pointer.output, depth + 1)
+        }
+        _ => false,
     }
 }
