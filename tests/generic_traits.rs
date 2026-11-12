@@ -12,6 +12,41 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod coherence_oracle;
 
 #[test]
+fn array_map_moves_each_element_once_in_index_order() {
+    coherence_oracle::stock_native(include_str!("milestones/m2/09_enums_matching.rs"));
+    coherence_oracle::stock_native(
+        r#"
+struct Noisy(i32);
+impl Drop for Noisy { fn drop(&mut self) { println!("drop {}", self.0); } }
+fn classify(n: i32) -> &'static str { if n < 0 { "neg" } else if n == 0 { "zero" } else { "pos" } }
+fn main() {
+    println!("{:?}", [-5, 0, 2, 8, 9].map(classify));
+    let names = [String::from("a"), String::from("bcd")];
+    println!("{:?}", names.map(|s| s.len()));
+    let mut calls = Vec::new();
+    let doubled = [1u8, 2u8, 3u8].map(|x| { calls.push(x); u32::from(x) * 2 });
+    println!("{:?} {:?}", doubled, calls);
+    let owned = [Noisy(1), Noisy(2), Noisy(3)].map(|n| { println!("map {}", n.0); n.0 * 10 });
+    println!("{:?}", owned);
+    let wrapped = [4i32, 5].map(|n| Noisy(n));
+    println!("built {}", wrapped.len());
+    let empty: [String; 0] = [];
+    println!("{}", empty.map(|s| s.len()).len());
+    let sum: i32 = [1i32, 2, 3].iter().map(|x| x * 2).sum();
+    println!("{} {:?}", sum, Some(4i32).map(|x| x + 1));
+}
+"#,
+    );
+    for source in [
+        r#"fn main(){let a=[String::from("a")];let _b=a.map(|s|s.len());println!("{}",a[0]);}"#,
+        r#"fn unused(){let _b=[1i32,2].map(|x,y|x+y);}fn main(){}"#,
+        r#"fn unused(){let _b:[bool;3]=[1i32,2].map(|x|x>0);}fn main(){}"#,
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn const_impl_owned_array_iteration_collection_milestone() {
     coherence_oracle::stock_native(include_str!("milestones/m2/03_collections.rs"));
     coherence_oracle::stock_native(

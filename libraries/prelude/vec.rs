@@ -313,6 +313,31 @@ impl<'a, T> super::iter::IntoIterator for &'a mut Vec<T> {
     }
 }
 
+/// `[T; N]::map`: stock's inherent array method, injected through the prelude
+/// as a trait so the length stays the impl's const parameter. Each element is
+/// moved out exactly once, front to back, and `f` runs in index order.
+pub trait ArrayMap<T, U> {
+    type Output;
+    fn map<F: super::ops::FnMut(T) -> U>(self, f: F) -> Self::Output;
+}
+
+impl<T, U, const N: usize> ArrayMap<T, U> for [T; N] {
+    type Output = [U; N];
+    fn map<F: super::ops::FnMut(T) -> U>(self, mut f: F) -> [U; N] {
+        let mut values: Vec<U> = Vec::with_capacity(N);
+        for value in self {
+            values.push(f(value));
+        }
+        // The buffer now owns exactly N initialized elements. Move them out
+        // as one array and leave only the allocation for the Vec to free.
+        // `as_ptr` is aligned and non-null even for the empty buffer.
+        let source = values.as_ptr() as *const [U; N] as *mut [U; N];
+        let array = unsafe { *source };
+        values.len = 0usize;
+        array
+    }
+}
+
 // Elements drop front to back, as stock, then the buffer is released.
 /// Owning iteration: moves elements out front to back. Unyielded elements
 /// drop with the iterator, then the buffer is released, as in std.

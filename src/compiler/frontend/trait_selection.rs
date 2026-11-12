@@ -525,8 +525,9 @@ impl PlanCtx {
     /// are each closed, bound by the self match, or a bare impl parameter the
     /// self type leaves free (`U` in `impl<T, U> Map<T, U> for [T; N]`).
     /// Returns the partial application, with free parameters left as
-    /// `Ty::Param`, and those parameters. `None` for any other shape or for
-    /// several matching impls: the caller keeps the ordinary boundary. This is
+    /// `Ty::Param`, and those parameters. `None` only when no impl head
+    /// matches; any other shape or several matching impls keep the explicit
+    /// boundary as an error, so no candidate is silently dropped. This is
     /// only an inference template. The completed application is proved again.
     pub(super) fn open_trait_application(
         &self,
@@ -555,7 +556,7 @@ impl PlanCtx {
                 continue;
             }
             if found.is_some() {
-                return Ok(None);
+                return Err(trait_application_ambiguity());
             }
             let mut args = self.selection_arguments(implementation.trait_ref.args.len(), budget)?;
             let mut free = Vec::new();
@@ -570,7 +571,7 @@ impl PlanCtx {
                                     != Some(ir::GenericParamKind::Type)
                                     || free.contains(parameter)
                                 {
-                                    return Ok(None);
+                                    return Err(trait_application_ambiguity());
                                 }
                                 free.push(*parameter);
                                 args.push(argument.clone());
@@ -578,11 +579,11 @@ impl PlanCtx {
                         }
                     }
                     closed if !mentions_param(closed) => args.push(closed.clone()),
-                    _ => return Ok(None),
+                    _ => return Err(trait_application_ambiguity()),
                 }
             }
             if free.is_empty() {
-                return Ok(None);
+                return Err(trait_application_ambiguity());
             }
             found = Some((
                 ir::TraitRef {
