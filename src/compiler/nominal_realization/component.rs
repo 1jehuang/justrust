@@ -1202,6 +1202,10 @@ impl ReadComponent {
     pub(super) fn same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.fact, &other.fact)
     }
+    /// The pinned immutable component allocation compared by `same`.
+    pub(super) fn fact_address(&self) -> usize {
+        Arc::as_ptr(&self.fact) as usize
+    }
 }
 
 /// A finite drop query over an already authenticated component. Queue

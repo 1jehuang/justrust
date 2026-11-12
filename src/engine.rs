@@ -68,6 +68,9 @@ pub struct Meter {
     ledger_failure: AtomicBool,
     /// Typed per-node budget ledgers (see [`with_ledger`]).
     pub ledgers: Ledgers,
+    /// Node-local computation scratch (see [`with_node_local`]). Cleared when
+    /// the node completes or fails, never reachable from another node.
+    locals: NodeLocals,
 }
 impl Meter {
     #[doc(hidden)]
@@ -116,6 +119,23 @@ impl Meter {
             }
         }
         Err(used)
+    }
+}
+
+/// Typed scratch values owned by one node computation, keyed by type. Only
+/// the node's own polls reach it, through [`with_node_local`]. It lives
+/// across the node's awaits and is dropped when the node completes or fails.
+#[derive(Default)]
+struct NodeLocals(Mutex<Vec<(std::any::TypeId, Box<dyn Any + Send>)>>);
+impl fmt::Debug for NodeLocals {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("NodeLocals")
+    }
+}
+impl NodeLocals {
+    fn clear(&self) {
+        let values = std::mem::take(&mut *lock(&self.0));
+        drop(values);
     }
 }
 
@@ -312,6 +332,32 @@ pub fn scale_task_work(work: u64) {
             meter.work_allowance.fetch_max(work, Ordering::Relaxed);
         }
     });
+}
+
+/// Run `f` on the polled node's computation-local `T`, created on first use.
+/// Returns `None` outside graph polling. The value is private to this node,
+/// survives its awaits and is dropped when the node completes or fails, so it
+/// may hold memoized intermediate answers of this computation but never a
+/// fact. `f` must not reenter `with_node_local` for the same node.
+pub fn with_node_local<T: Default + Send + 'static, R>(f: impl FnOnce(&mut T) -> R) -> Option<R> {
+    CURRENT_NODE.with(|node| {
+        let node = node.borrow();
+        let node = node.as_ref()?;
+        let mut slots = lock(&node.meter.locals.0);
+        let id = std::any::TypeId::of::<T>();
+        let index = match slots.iter().position(|(slot, _)| *slot == id) {
+            Some(index) => index,
+            None => {
+                slots.push((id, Box::new(T::default())));
+                slots.len() - 1
+            }
+        };
+        let value = slots[index]
+            .1
+            .downcast_mut::<T>()
+            .expect("node local type checked");
+        Some(f(value))
+    })
 }
 
 /// Run `f` with the meter of the node whose task is being polled on this
@@ -1802,6 +1848,7 @@ impl Shared {
             return;
         }
         state.error = Some(error.clone());
+        node.meter.locals.clear();
         let mut waiters = Vec::new();
         for slot in &node.slots {
             let mut slot = lock(slot);
@@ -1828,6 +1875,7 @@ impl Shared {
             return;
         }
         state.completed = true;
+        node.meter.locals.clear();
         let missing: Vec<_> = node
             .slots
             .iter()

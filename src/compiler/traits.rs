@@ -4470,6 +4470,9 @@ impl ValidatedTraitWorld {
     pub fn budget(&self) -> &PlanBudget {
         &self.budget
     }
+    pub(in crate::compiler) fn owner_normalization_is_finalized(&self) -> bool {
+        self.owner_normalization_finalized
+    }
     pub(super) fn signatures_equal(&self, left: &Signature, right: &Signature) -> Result<bool> {
         self.eq_signature(left, right)
     }

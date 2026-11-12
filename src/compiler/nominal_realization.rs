@@ -6,6 +6,7 @@ pub(super) use preparation::shape as source_shape;
 mod component;
 mod component_key;
 mod materialization;
+mod node_replays;
 mod producer;
 mod reads;
 pub(super) mod substitution;
@@ -723,6 +724,10 @@ impl AcyclicRead {
     /// Same retained immutable fact allocation (node-local replay dedup only).
     pub(super) fn same_fact(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.fact, &other.fact)
+    }
+    /// The pinned immutable payload allocation compared by `same_fact`.
+    pub(super) fn fact_address(&self) -> usize {
+        Arc::as_ptr(&self.fact) as usize
     }
 
     pub(super) fn source_application(&self) -> ir::NominalAppId {

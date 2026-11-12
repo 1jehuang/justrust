@@ -185,6 +185,13 @@ impl ReadNominal {
             _ => false,
         }
     }
+    /// Address of the pinned allocation that `same_replay_fact` compares.
+    pub(super) fn replay_fact_address(&self) -> usize {
+        match self {
+            Self::Acyclic(read) => read.fact_address(),
+            Self::Component(read) => read.replay_fact_address(),
+        }
+    }
     pub(in crate::compiler) fn replay(
         &self,
         ty: &ir::Ty,
@@ -222,10 +229,20 @@ impl ReadNominal {
         if completed {
             return Ok(());
         }
-        match self {
-            Self::Acyclic(read) => read.replay_uncached(world, replays)?,
-            Self::Component(read) => read.replay_at_with(ty, world, depth, replays)?,
-        }
+        // The same immutable proof already ran in another arena of this node
+        // computation. Its full answer, success or failure, is reused.
+        let result = match super::node_replays::NodeReplayMemo::lookup(self, world, depth) {
+            Some(result) => result,
+            None => {
+                let result = match self {
+                    Self::Acyclic(read) => read.replay_uncached(world, replays),
+                    Self::Component(read) => read.replay_at_with(ty, world, depth, replays),
+                };
+                super::node_replays::NodeReplayMemo::record(self, world, depth, &result);
+                result
+            }
+        };
+        result?;
         // Only a COMPLETELY validated component is recorded. Internal members
         // never borrow success from an in-progress replay marker.
         replays

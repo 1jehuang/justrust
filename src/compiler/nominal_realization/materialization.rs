@@ -166,6 +166,9 @@ impl RootedNominal {
     pub(super) fn same_replay_fact(&self, other: &Self) -> bool {
         self.read.same(&other.read)
     }
+    pub(super) fn replay_fact_address(&self) -> usize {
+        self.read.fact_address()
+    }
     pub(super) fn check(&self, ty: &ir::Ty) -> Result<(), Error> {
         let source = self.read.source(self.member)?;
         let expected_index =
