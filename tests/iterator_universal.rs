@@ -434,3 +434,25 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn fold_over_opaque_iterator_with_closure_matches_stock() {
+    oracle::stock_native(
+        r#"
+use std::collections::HashMap;
+fn toks(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').map(|w| w.to_lowercase()) }
+fn main() {
+    let n = toks("a Bb ccc").fold(0usize, |acc, w| acc + w.len());
+    let m: HashMap<String, usize> = toks("x Y x").fold(HashMap::new(), |mut m, w| { *m.entry(w).or_insert(0) += 1; m });
+    let mut v: Vec<_> = m.into_iter().collect(); v.sort();
+    println!("{n} {v:?}");
+}
+"#,
+    );
+    for source in [
+        "fn toks(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').map(|w| w.to_lowercase()) } fn main(){ let it = toks(\"a b\"); let n = it.fold(0usize, |a, w| a + w.len()); let k = it.count(); println!(\"{n}{k}\"); }",
+        "fn toks(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').map(|w| w.to_lowercase()) } fn main(){ let n: usize = toks(\"a b\").fold(0usize, |a, w| a + w); println!(\"{n}\"); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

@@ -49,6 +49,10 @@ pub(super) struct OpaqueCallAuthorization {
     public: ir::TraitCall,
     public_signature: ir::Signature,
     receiver: ir::Ty,
+    /// Every type the physical signature normalizes: the receiver and the
+    /// specialized source signature (closure arguments such as `fold`'s `F`
+    /// live only here). Representation reads are rooted on all of them.
+    roots: Arc<[ir::Ty]>,
     hidden: ir::Ty,
     transport: target_transport::Transport,
     selected_signature: ir::Signature,
@@ -396,7 +400,12 @@ pub(super) async fn extend_instance_demands(
     let (mut roots, _root_storage) = provider.scratch_vec(pending.len())?;
     for (site, handle) in pending {
         let authorization: Arc<OpaqueCallAuthorization> = cx.read_fact(handle).await?;
-        roots.push(authorization.receiver.clone());
+        provider
+            .0
+            .budget
+            .retain_bytes(authorization.roots.len() * std::mem::size_of::<ir::Ty>())
+            .map_err(Error::new)?;
+        roots.extend(authorization.roots.iter().cloned());
         proofs.push((site, authorization));
     }
     let representations = opaque_instances::read(&Facts { cx }, &roots, &provider.0.budget).await?;
@@ -514,12 +523,12 @@ pub(super) async fn produce(
         ir::FactsCtx::from_validated(publication.facts()),
     )
     .map_err(|error| Error::new(error.to_string()))?;
-    let representations = opaque_instances::read(
-        &facts,
-        std::slice::from_ref(&specialized.trait_ref.self_ty),
+    let roots = signature_roots(
+        &specialized.trait_ref.self_ty,
+        &specialized_signature,
         &provider.0.budget,
-    )
-    .await?;
+    )?;
+    let representations = opaque_instances::read(&facts, &roots, &provider.0.budget).await?;
     let hidden = physical_receiver(
         &specialized.trait_ref.self_ty,
         &representations,
@@ -579,6 +588,7 @@ pub(super) async fn produce(
         public: public.clone(),
         public_signature: signature.clone(),
         receiver: specialized.trait_ref.self_ty.clone(),
+        roots,
         hidden,
         physical_signature: mapped_physical_signature(
             &specialized_signature,
@@ -639,6 +649,26 @@ pub(super) async fn produce(
         ));
     }
     cx.publish_fact(1, PhysicalCalleeReady { target: physical })
+}
+
+fn signature_roots(
+    receiver: &ir::Ty,
+    signature: &ir::Signature,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<[ir::Ty]>, Error> {
+    let count = signature.params.len() + 2;
+    budget.charge_nodes(count).map_err(Error::new)?;
+    budget
+        .retain_bytes(count * std::mem::size_of::<ir::Ty>())
+        .map_err(Error::new)?;
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(count)
+        .map_err(|_| Error::new("opaque representation root allocation failed"))?;
+    roots.push(receiver.clone());
+    roots.extend(signature.params.iter().cloned());
+    roots.push(signature.result.clone());
+    Ok(roots.into())
 }
 
 /// Map the original substituted ABI, retaining its current-engine nominal reads.
