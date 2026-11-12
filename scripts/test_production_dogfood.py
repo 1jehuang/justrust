@@ -85,6 +85,28 @@ class ProductionDogfoodTests(unittest.TestCase):
             self.assertEqual(binary.read_bytes(), b"release")
             self.assertTrue(os.access(binary, os.X_OK))
 
+    def test_cargo_proxy_to_another_client_is_found_and_repointed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ("release", "source", "rustup", "proxy", "same", "real"):
+                (root / name).mkdir()
+            release = root / "release/justrust"
+            source = root / "source/justrust"
+            release.write_bytes(b"release")
+            source.write_bytes(b"source")
+            (root / "rustup/rustup").write_bytes(b"rustup")
+            (root / "real/cargo").write_bytes(b"cargo")
+            os.symlink(source, root / "proxy/cargo")
+            os.symlink(release, root / "same/cargo")
+            os.symlink(root / "rustup/rustup", root / "rustup/cargo")
+            path = os.pathsep.join(str(root / name) for name in ("proxy", "same", "rustup", "real", "proxy", "missing"))
+            self.assertEqual(M.stale_proxies(release, path), [root / "proxy/cargo"])
+            M.repoint(root / "proxy/cargo", release)
+            self.assertEqual((root / "proxy/cargo").resolve(), release)
+            self.assertEqual(M.stale_proxies(release, path), [])
+            self.assertEqual(source.read_bytes(), b"source")
+            self.assertEqual(sorted(p.name for p in (root / "proxy").iterdir()), ["cargo"])
+
 
 if __name__ == "__main__":
     unittest.main()

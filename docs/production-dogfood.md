@@ -31,6 +31,13 @@ a production release.
    hosted smoke test before replacing the PATH-selected executable atomically,
    retains the old executable, and repeats hosted acceptance through the
    installed path. Local compilation and local fallback are not accepted.
+
+   Activation also repoints any `cargo` link on PATH that proxies to a
+   different justrust executable (for example `~/.local/bin/cargo` still
+   pointing at a source build in `~/.cargo/bin`), and verification without
+   `--activate` fails while one exists. Two client builds in use at once each
+   install themselves as the hosted agent and start their own sync daemon, so
+   they keep replacing each other's agent and restarting the daemon.
 6. Run representative real workloads with the installed client, inspect
    `justrust show <id>` for `remote on hosted`, and cite the recorded run IDs.
    A scratch-crate smoke test is not a substitute for those workloads or the

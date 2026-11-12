@@ -142,6 +142,38 @@ def activate(binary, data):
     return backup
 
 
+def stale_proxies(binary, path=None):
+    """`cargo` links on PATH that proxy to a different justrust executable.
+
+    Plain `cargo` then runs another client build than `justrust`. Each build
+    installs itself as the hosted agent and starts its own sync daemon, so the
+    two keep replacing each other (seen 2026-11-12: 23 daemon restarts and 17
+    agent reinstalls in three hours, alternating between the two builds).
+    """
+    path = os.environ.get("PATH", "") if path is None else path
+    stale = []
+    for directory in dict.fromkeys(filter(None, path.split(os.pathsep))):
+        link = Path(directory) / "cargo"
+        if not link.is_symlink():
+            continue
+        target = link.resolve()
+        if target.name == "justrust" and target != binary:
+            stale.append(link)
+    return stale
+
+
+def repoint(link, binary):
+    fd, name = tempfile.mkstemp(prefix=".cargo-proxy-", dir=link.parent)
+    os.close(fd)
+    os.unlink(name)
+    try:
+        os.symlink(binary, name)
+        os.replace(name, link)
+    finally:
+        if os.path.lexists(name):
+            os.unlink(name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expect", required=True, help="exact published production tag")
@@ -157,6 +189,10 @@ def main():
         validate_release(binary, args.expect[1:])
         if binary.read_bytes() != verified_binary(info, triple):
             raise ValueError("installed executable differs from production artifact, use --activate")
+        stale = stale_proxies(binary)
+        if stale:
+            raise ValueError("cargo proxy runs a different justrust than PATH selects, use --activate: "
+                             + ", ".join(f"{link} -> {link.resolve()}" for link in stale))
         print(f"Verified production artifact: {binary} ({args.expect})")
         return
     data = verified_binary(info, triple)
@@ -170,6 +206,10 @@ def main():
         release_info(args.expect, triple)
         backup = activate(binary, data)
         print(f"Activated {binary}. Previous executable retained at {backup}")
+        for link in stale_proxies(binary):
+            previous = link.resolve()
+            repoint(link, binary)
+            print(f"Repointed cargo proxy {link} from {previous} to {binary}")
         # Do not silently roll back after failure: leave the failure visible and
         # the backup available, with no claim that production acceptance passed.
         validate_release(binary, args.expect[1:])
