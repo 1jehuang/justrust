@@ -388,3 +388,31 @@ fn separator_free_literal_expr_repetitions_match_stock() {
     )
     .assert_negative();
 }
+
+#[test]
+fn local_impl_member_attributes_pass_source_preparation() {
+    // Attribute admission only: parsing local impls is a separate feature.
+    let ok = "struct G(u32); trait S { fn s(&self) -> u32; } fn run() -> u32 { \
+        impl S for G { #[inline] fn s(&self) -> u32 { self.0 } } \
+        impl G { #[cold] fn slow(&self) -> u32 { self.0 } #[cfg(any())] fn gone() { missing() } \
+        #[allow(dead_code)] const K: u32 = 5; } 0 } fn main() { run(); }";
+    let prepared = source::prepare_text("local.rs", ok, &SourceOptions::default()).unwrap();
+    assert!(!prepared.text.contains("missing"));
+    for bad in [
+        "struct S; fn main() { impl S { #[inline(bogus)] fn f() {} } }",
+        "struct S; fn main() { impl S { #[bogus_attr] fn f() {} } }",
+    ] {
+        assert!(
+            source::prepare_text("local.rs", bad, &SourceOptions::default()).is_err(),
+            "{bad}"
+        );
+    }
+    // Stock warns (unused inline on a const); natively unsupported, not accepted.
+    let error = source::prepare_text(
+        "local.rs",
+        "struct S; fn main() { impl S { #[inline] const K: u8 = 1; } }",
+        &SourceOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, SourceErrorKind::Unsupported);
+}

@@ -1538,8 +1538,23 @@ impl Filter<'_> {
         end: usize,
         fields: bool,
     ) -> Result<(), AttributeError> {
-        for i in start..end {
-            if let Some((a, _)) = self.attr(i, end)? {
+        let mut i = start;
+        while i < end {
+            // A local `impl`/`trait` item in a body: its members carry the
+            // same attribute positions as at module level, so walk them with
+            // the associated-member walker (inactive members are masked,
+            // hints validated). Members never contribute documentation facts.
+            if !fields
+                && (i == start || matches!(self.tokens[i - 1].text(self.text), "{" | ";" | "}"))
+                && let Some(next) = self.local_associated_container(i, end)?
+            {
+                i = next;
+                continue;
+            }
+            let at = i;
+            i += 1;
+            if let Some((a, _)) = self.attr(at, end)? {
+                let i = at;
                 if self.consumed.contains(&a.range.start) {
                     continue;
                 }
@@ -1565,6 +1580,57 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// If tokens at `i` start an attribute-free local `impl`/`trait` item
+    /// (optionally `unsafe`), walk its members and return the index after the
+    /// item. Attributed local items keep the existing nested policy.
+    fn local_associated_container(
+        &mut self,
+        i: usize,
+        end: usize,
+    ) -> Result<Option<usize>, AttributeError> {
+        let mut k = i;
+        if k < end && self.tokens[k].text(self.text) == "unsafe" {
+            k += 1;
+        }
+        if k >= end || !matches!(self.tokens[k].text(self.text), "impl" | "trait") {
+            return Ok(None);
+        }
+        let kind = self.tokens[k].text(self.text);
+        // Header: up to the first top-level `{` of this item.
+        let mut open = None;
+        let mut j = k + 1;
+        while j < end {
+            match self.tokens[j].text(self.text) {
+                "{" => {
+                    open = Some(j);
+                    break;
+                }
+                ";" => return Ok(None),
+                _ => {}
+            }
+            j = self.tokens[j].close.map_or(j + 1, |close| close + 1);
+        }
+        let Some(open) = open else {
+            return Ok(None);
+        };
+        let Some(close) = self.tokens[open].close else {
+            return Ok(None);
+        };
+        self.reject_nested(i, open)?;
+        let trait_impl = kind == "impl"
+            && (k + 1..open).any(|t| {
+                self.tokens[t].text(self.text) == "for"
+                    && self.tokens.get(t + 1).map(|n| n.text(self.text)) != Some("<")
+            });
+        let saved_naming = std::mem::replace(&mut self.associated_naming, !trait_impl);
+        let saved = self.assoc_container.take();
+        let result = self.associated_function_attributes(open + 1, close);
+        self.assoc_container = saved;
+        self.associated_naming = saved_naming;
+        result?;
+        Ok(Some(close + 1))
     }
 
     /// `#[allow|warn|expect|deny|forbid(..)]` on a statement, block tail,
