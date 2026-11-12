@@ -96,6 +96,7 @@ impl Checker<'_> {
             let formal = solver.schema(formal, 0)?;
             solver.constrain(&formal, &evidence, 0)?;
         }
+        self.constrain_owner_closure_bounds(&mut solver, &schema, &impl_env)?;
         let actuals = solver.finish(true)?.ok_or(
             "unsupported generic inference: insufficient evidence for the owner type; write explicit type arguments",
         )?;
@@ -126,6 +127,69 @@ impl Checker<'_> {
             }
         }
         plan.intern_nominal(decl, &concrete, self.facts(), &plan.budget)
+    }
+
+    /// `Cache::new(|x: &u64| ..)` under `impl<K, V, F: Fn(&K) -> V>`: an owner
+    /// parameter bound to a closure argument makes its callable bound evidence
+    /// (`(&K,) = closure inputs`, `V = closure output`), exactly as for a
+    /// generic function call. Evidence only; every bound is still proven
+    /// against the final actuals by ordinary associated selection.
+    fn constrain_owner_closure_bounds(
+        &self,
+        solver: &mut Inference<'_, '_>,
+        schema: &ir::GenericSignature,
+        impl_env: &Arc<ir::ParamEnv>,
+    ) -> Result<(), String> {
+        let plan = self.signatures.plan()?;
+        for predicate in schema.predicates.predicates() {
+            self.infer_work(0)?;
+            let application = predicate.trait_ref();
+            let ir::Ty::Param(parameter) = &application.self_ty else {
+                continue;
+            };
+            if parameter.owner != impl_env.binder() {
+                continue;
+            }
+            let Some(term) = solver
+                .core
+                .slots()
+                .get(parameter.index as usize)
+                .cloned()
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(ir::Ty::Closure(closure)) = solver.resolve(&term, false, 0)? else {
+                continue;
+            };
+            let world = plan.trait_world()?;
+            let Some(kind) = world
+                .closure_trait_kind(application.declaration)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+            else {
+                continue;
+            };
+            if !closure.supports(kind) {
+                continue;
+            }
+            if let Some(formal) = application.args.first() {
+                self.infer_storage(closure.params().len())?;
+                let arguments = if closure.params().is_empty() {
+                    ir::Ty::Unit
+                } else {
+                    ir::Ty::Tuple(closure.params().into())
+                };
+                let formal = solver.schema(formal, 0)?;
+                let actual = self.infer_type_term(&arguments, None, 0)?;
+                solver.constrain(&formal, &actual, 0)?;
+            }
+            if let ir::Predicate::ProjectionEq { ty, .. } = predicate {
+                let formal = solver.schema(ty, 0)?;
+                let actual = self.infer_type_term(closure.result(), None, 0)?;
+                solver.constrain(&formal, &actual, 0)?;
+            }
+        }
+        Ok(())
     }
 
     fn infer_source_trait_owner(

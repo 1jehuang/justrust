@@ -107,3 +107,50 @@ fn trait_method_constraints_do_not_choose_ambiguous_or_invalid_calls() {
         ],
     );
 }
+
+#[test]
+fn inferred_owner_uses_impl_closure_bounds() {
+    oracle::check(
+        "inferred_owner_closure_bounds",
+        &[
+            Case {
+                name: "memo_cache",
+                source: r#"use std::collections::HashMap;
+use std::hash::Hash;
+struct Cache<K, V, F: Fn(&K) -> V> { f: F, map: HashMap<K, V> }
+impl<K: Eq + Hash + Clone, V: Clone, F: Fn(&K) -> V> Cache<K, V, F> {
+    fn new(f: F) -> Self { Cache { f, map: HashMap::new() } }
+    fn get(&mut self, k: K) -> V { if let Some(v) = self.map.get(&k) { return v.clone(); } let v = (self.f)(&k); self.map.insert(k, v.clone()); v }
+}
+struct Apply<A, B, F: FnMut(A) -> B> { f: F, last: Option<B>, _a: std::marker::PhantomData<A> }
+impl<A, B: Copy, F: FnMut(A) -> B> Apply<A, B, F> {
+    fn new(f: F) -> Self { Apply { f, last: None, _a: std::marker::PhantomData } }
+    fn run(&mut self, a: A) -> B { let b = (self.f)(a); self.last = Some(b); b }
+}
+fn main() {
+    let mut c = Cache::new(|x: &u64| (1..=*x).product::<u64>());
+    for k in [5, 10, 5, 3] { print!("{} ", c.get(k)); }
+    println!("{}", c.map.len());
+    let mut s = Cache::new(|s: &String| s.len());
+    println!("{} {}", s.get(String::from("abc")), s.get(String::from("abc")));
+    let mut n = 0;
+    let mut a = Apply::new(|x: i32| { n += 1; x * 2 });
+    println!("{} {}", a.run(3), a.run(4));
+    println!("{:?}", a.last);
+}
+"#,
+                expect: Expect::Run("120 3628800 120 6 3\n3 3\n6 8\nSome(8)\n"),
+            },
+            Case {
+                name: "closure_bound_not_satisfied",
+                source: "struct C<K, V, F: Fn(&K) -> V> { f: F, k: Option<K>, v: Option<V> } impl<K, V, F: Fn(&K) -> V> C<K, V, F> { fn new(f: F) -> Self { C { f, k: None, v: None } } } fn unused() { let _c = C::new(|x: u64| x); } fn main() {}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "closure_result_mismatch",
+                source: "struct C<K, V: Copy, F: Fn(&K) -> V> { f: F, k: Option<K>, v: Option<V> } impl<K, V: Copy, F: Fn(&K) -> V> C<K, V, F> { fn new(f: F) -> Self { C { f, k: None, v: None } } } fn unused() { let _c = C::new(|x: &u64| String::new()); } fn main() {}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
