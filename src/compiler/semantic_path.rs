@@ -61,6 +61,8 @@ pub use dollar_crate::{DollarCrateAnchor, RetainedDollarCrateAnchor};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PathAnchor {
     Relative,
+    /// A leading `::`: the first segment names an extern-prelude crate only.
+    ExternPrelude,
     Crate,
     DefiningCrate(RetainedDollarCrateAnchor),
     SelfModule,
@@ -617,7 +619,7 @@ impl AstPath {
     pub fn display(&self, names: &impl NameAccess) -> Result<PathDisplay, NameError> {
         self.check(names)?;
         let prefix = match self.anchor {
-            PathAnchor::Relative => 0,
+            PathAnchor::Relative | PathAnchor::ExternPrelude => 0,
             PathAnchor::Crate => 5,
             PathAnchor::DefiningCrate(_) => 6,
             PathAnchor::SelfModule | PathAnchor::SelfType => 4,
@@ -655,7 +657,7 @@ impl AstPath {
             output.capacity().saturating_sub(capacity) as u64,
         )?;
         match self.anchor {
-            PathAnchor::Relative => {}
+            PathAnchor::Relative | PathAnchor::ExternPrelude => {}
             PathAnchor::Crate => output.push_str("crate"),
             PathAnchor::DefiningCrate(_) => output.push_str("$crate"),
             PathAnchor::SelfModule => output.push_str("self"),

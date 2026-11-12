@@ -264,3 +264,41 @@ fn associated_docs_keep_source_span_offsets_and_literal_macro_fences() {
         );
     }
 }
+
+#[test]
+fn deprecated_metadata_and_global_extern_paths_match_stock() {
+    let source = r#"
+        use ::std::collections::HashMap;
+        struct W<'a> { inner: ::core::slice::Iter<'a, u8> }
+        #[deprecated]
+        fn old() -> i32 { 1 }
+        #[deprecated(since = "1.0.0", note = "use new")]
+        struct Legacy;
+        struct S;
+        impl S {
+            #[deprecated = "gone"]
+            #[inline]
+            fn f(&self) -> i32 { 2 }
+            #[deprecated]
+            const C: i32 = 3;
+        }
+        #[allow(deprecated)]
+        fn main() {
+            let v = [1u8, 2, 3];
+            let w = W { inner: v.iter() };
+            let mut m: HashMap<i32, i32> = ::std::collections::HashMap::new();
+            m.insert(4, ::core::cmp::max(5, 6));
+            let _ = Legacy;
+            println!("{} {} {} {} {}", old(), S.f(), S::C, w.inner.count(), m[&4]);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "mod foo { pub fn f() {} } fn main() { ::foo::f(); }",
+        "fn main() { let _ = ::missing::x(); }",
+        "#[deprecated(bogus = \"x\")] fn f() {} fn main() { f(); }",
+        "#[deprecated] fn f() -> u8 { true } fn main() {}",
+    ] {
+        file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+    }
+}

@@ -683,6 +683,7 @@ impl Filter<'_> {
                 // meaning is decided by `lint_level` like at any other owner.
                 if lint_level_attribute(&self.text[attr.content.clone()])
                     || cfg_attribute(&self.text[attr.content.clone()])
+                    || deprecated_attribute(&self.text[attr.content.clone()])
                     || (owner == Owner::AssociatedFunction
                         && function_hint_attribute(&self.text[attr.content.clone()]))
                 {
@@ -808,6 +809,7 @@ impl Filter<'_> {
                 "doc"
                     | "inline"
                     | "must_use"
+                    | "deprecated"
                     | "target_feature"
                     | "repr"
                     | "unsafe"
@@ -1015,6 +1017,19 @@ impl Filter<'_> {
                         ));
                     }
                 }
+                // `deprecated` only drives the `deprecated` lint, which warns
+                // by default; denying it is rejected as unenforced, so the
+                // attribute never changes acceptance. Validate its form only.
+                "deprecated"
+                    if !matches!(owner, Owner::Crate | Owner::Unsupported)
+                        && match &meta.value {
+                            MetaValue::Word | MetaValue::String(_) => true,
+                            MetaValue::List(items) => items.iter().all(|item| {
+                                matches!(item.name.as_str(), "since" | "note" | "suggestion")
+                                    && matches!(item.value, MetaValue::String(_))
+                            }),
+                            MetaValue::OtherLiteral => false,
+                        } => {}
                 // Codegen hints: `cold` only affects layout, and
                 // `track_caller` only the reported panic location on stderr.
                 "cold" | "track_caller"
@@ -1827,6 +1842,16 @@ fn valid_identity_metadata(meta: &Meta) -> bool {
 /// Bare `#[cold]` / `#[track_caller]` hints on a function.
 fn function_hint_attribute(content: &str) -> bool {
     matches!(content.trim(), "cold" | "track_caller")
+}
+
+/// `#[deprecated]` in any form; its shape is validated by `attributes`.
+fn deprecated_attribute(content: &str) -> bool {
+    let name = content
+        .trim_start()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("");
+    name == "deprecated"
 }
 
 /// Lint-level attribute names (`#[allow(..)]` and friends).

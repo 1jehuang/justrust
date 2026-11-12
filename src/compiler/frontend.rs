@@ -11522,7 +11522,7 @@ fn path_text_len(
 ) -> Result<usize, super::semantic_name::NameError> {
     path.check(names)?;
     let anchor = match path.anchor() {
-        PathAnchor::Relative => 0,
+        PathAnchor::Relative | PathAnchor::ExternPrelude => 0,
         PathAnchor::Crate => 5,
         PathAnchor::DefiningCrate(_) => 6,
         PathAnchor::SelfModule | PathAnchor::SelfType => 4,
@@ -14947,11 +14947,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         let anchor = self.path_anchor()?;
         let mut segments = Vec::new();
         let mut count = match anchor {
-            PathAnchor::Relative => 0,
+            PathAnchor::Relative | PathAnchor::ExternPrelude => 0,
             PathAnchor::Super(n) => usize::from(n),
             _ => 1,
         };
-        if anchor != PathAnchor::Relative && !self.eat("::") {
+        if !matches!(anchor, PathAnchor::Relative | PathAnchor::ExternPrelude) && !self.eat("::") {
             if matches!(anchor, PathAnchor::DefiningCrate(_)) {
                 return Err(self.error("expected a path after $crate"));
             }
@@ -15366,6 +15366,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.eat("crate") {
             return Ok(PathAnchor::Crate);
         }
+        if self.is("::") && self.cursor.peek(1).is_some_and(|t| t.is_ident()) {
+            self.cursor.bump();
+            // Edition 2015: `::name` is crate-root relative, where the
+            // standard crates are root `extern crate` items.
+            if self.names.edition() == super::token::Edition::E2015 {
+                return Ok(if matches!(self.token().text, "std" | "core" | "alloc") {
+                    PathAnchor::Relative
+                } else {
+                    PathAnchor::Crate
+                });
+            }
+            return Ok(PathAnchor::ExternPrelude);
+        }
         if self.eat("self") {
             return Ok(PathAnchor::SelfModule);
         }
@@ -15392,7 +15405,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             super::expansion_budget::Storage::Temporary,
         )
         .map_err(native_adapter::transport_error)?;
-        if anchor == PathAnchor::Relative {
+        if matches!(anchor, PathAnchor::Relative | PathAnchor::ExternPrelude) {
             parts
                 .push(self.ident()?)
                 .map_err(native_adapter::transport_error)?;
@@ -15424,8 +15437,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         if *work > 4096 {
             return Err(self.limit("use tree work exceeds limit 4096"));
         }
+        let mut extern_anchor = None;
         if self.is("::") {
-            return Err(self.unsupported("absolute extern crate use paths are unsupported"));
+            if depth != 0
+                || prefix.anchor() != PathAnchor::Relative
+                || !prefix.is_empty()
+                || !self.cursor.peek(1).is_some_and(|t| t.is_ident())
+            {
+                return Err(self.unsupported("absolute extern crate use paths are unsupported"));
+            }
+            extern_anchor = Some(self.path_anchor()?);
         }
         if self.eat("*") {
             if prefix.anchor() == PathAnchor::Relative && prefix.is_empty() {
@@ -15436,7 +15457,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             imports.push((None, prefix.clone(), true));
             return Ok(());
         }
-        let mut path = prefix.clone();
+        let mut path = match extern_anchor {
+            Some(anchor) => prefix.with_anchor(anchor),
+            None => prefix.clone(),
+        };
         let prefix_bytes = path_text_len(self.names, prefix).map_err(native_adapter::name_error)?;
         *bytes += if prefix_bytes == 0 {
             0

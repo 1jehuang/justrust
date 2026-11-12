@@ -563,7 +563,7 @@ impl PlanState {
         let names = registry.names.as_ref();
         let mut text = String::new();
         match path.anchor() {
-            PathAnchor::Relative | PathAnchor::Super(0) => {}
+            PathAnchor::Relative | PathAnchor::ExternPrelude | PathAnchor::Super(0) => {}
             PathAnchor::Crate => text.push_str("crate"),
             PathAnchor::DefiningCrate(_) => text.push_str("$crate"),
             PathAnchor::SelfModule => text.push_str("self"),

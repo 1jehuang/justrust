@@ -2025,7 +2025,7 @@ impl Resolver<'_> {
                 }
                 return Ok(result.filter(|item| item.module == namespace));
             }
-            PathAnchor::Relative => None,
+            PathAnchor::Relative | PathAnchor::ExternPrelude => None,
         };
         let mut current = if let Some(module) = initial_module {
             let canonical = self.module_path(module)?;
@@ -2059,11 +2059,34 @@ impl Resolver<'_> {
                 return Ok(None);
             };
             at = 1;
-            let full = self.semantic_append(&self.module_path(from)?, *ident)?;
             let type_namespace = if parts.len() == 1 { namespace } else { true };
-            if let Some(item) =
+            // A leading `::` names only extern-prelude crates: dependency
+            // mounts, root `extern crate` aliases, and `core`/`std`. Local
+            // items and the language prelude are never consulted.
+            let extern_only = path.anchor() == PathAnchor::ExternPrelude;
+            if extern_only {
+                if let Some(found) = self.extern_path(path, from, namespace)? {
+                    return Ok(found);
+                }
+                if self.prelude_root_of(from)?.is_none()
+                    && let Some(found) = self.extern_crate_alias(path, from, namespace)?
+                {
+                    return Ok(found);
+                }
+                if !(type_namespace
+                    && (self.atom_is(*ident, BuiltinAtom::Core, Namespace::Type)?
+                        || self.atom_is(*ident, BuiltinAtom::Std, Namespace::Type)?))
+                {
+                    return Ok(None);
+                }
+            }
+            let full = self.semantic_append(&self.module_path(from)?, *ident)?;
+            let local = if extern_only {
+                None
+            } else {
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
-            {
+            };
+            if let Some(item) = local {
                 item
             } else if let Some(found) = self.extern_path(path, from, namespace)? {
                 return Ok(found);
