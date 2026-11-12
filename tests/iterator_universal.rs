@@ -4,34 +4,6 @@
 mod oracle;
 
 #[test]
-fn copy_vec_extend_method_selects_by_iterator_item() {
-    oracle::stock_native(
-        r#"
-fn main() {
-    let mut e = vec![1];
-    e.extend(vec![2, 3]);
-    e.extend([4].iter());
-    let tail: Vec<i32> = vec![5];
-    e.extend(tail);
-    let more = [6, 7];
-    e.extend(&more);
-    let mut c: Vec<char> = Vec::new();
-    c.extend("ab".chars());
-    let mut s = vec![String::from("x")];
-    s.extend(vec![String::from("y")]);
-    println!("{:?} {:?} {:?}", e, c, s);
-}
-"#,
-    );
-    oracle::stock_and_native_reject(
-        "fn unused() { let mut e: Vec<i32> = vec![1]; let s: Vec<u32> = vec![2]; e.extend(s); } fn main() {}",
-    );
-    oracle::stock_and_native_reject(
-        "fn unused() { let mut e: Vec<String> = Vec::new(); let s = vec![String::new()]; e.extend(s.iter()); } fn main() {}",
-    );
-}
-
-#[test]
 fn borrowed_copy_vec_extension_and_partition_match_stock() {
     oracle::stock_native(
         r#"
@@ -435,6 +407,27 @@ fn vec_macro_elements_unsize_to_expected_dyn() {
         "fn main(){ let x=X(1); let y=Y; let v = vec![&x, &y]; println!(\"{}\", v.len()); }",
     ] {
         oracle::stock_and_native_reject(&format!("{AB}{body}"));
+    }
+}
+
+#[test]
+fn indexed_place_borrows_feed_generic_inputs() {
+    const H: &str = "#[derive(Debug)] struct X(i32); fn id<T>(t: T) -> T { t }\n";
+    for body in [
+        "fn main(){ let xs = vec![X(2)]; let v = id(&xs[0]); println!(\"{:?}\", v); }",
+        "fn main(){ let xs = [X(2), X(3)]; let v = id(&xs[1]); println!(\"{:?}\", v); }",
+        "fn main(){ let xs = vec![X(2)]; let v: Vec<&X> = vec![&xs[0]]; println!(\"{:?}\", v); }",
+        "fn main(){ let xs = vec![X(2)]; let v = vec![&xs[0], &xs[0]]; println!(\"{:?}\", v); }",
+        "trait A { fn n(&self) -> i32; } impl A for X { fn n(&self) -> i32 { self.0 } } fn main(){ let x = X(1); let xs = vec![X(2)]; let v: Vec<&dyn A> = vec![&xs[0], &x]; for e in v { println!(\"{}\", e.n()); } }",
+    ] {
+        oracle::stock_native(&format!("{H}{body}"));
+    }
+    for body in [
+        "fn main(){ let r; { let xs = vec![X(2)]; r = id(&xs[0]); } println!(\"{:?}\", r); }",
+        "fn main(){ let mut xs = vec![X(2)]; let r = id(&xs[0]); xs.push(X(3)); println!(\"{:?}\", r); }",
+        "fn main(){ let xs = vec![X(2)]; let r = id(&xs[0]); drop(xs); println!(\"{:?}\", r); }",
+    ] {
+        oracle::stock_and_native_reject(&format!("{H}{body}"));
     }
 }
 

@@ -6,6 +6,7 @@ mod associated_method;
 mod borrow_coercion;
 mod closure_value;
 mod generic_method;
+mod indexed_borrow;
 mod lexical_block;
 mod projected_borrow;
 mod shared_deref;
@@ -394,6 +395,9 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
             return Ok(is_local_shaped_path(path) || path.anchor() == PathAnchor::Crate);
         }
         Expr::Borrow { .. } | Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => return Ok(true),
+        Expr::BorrowValue { .. } if indexed_borrow::authored_index_borrow(source).is_some() => {
+            return Ok(true);
+        }
         Expr::BorrowValue { .. } => {
             return explicit_field_borrow::authored_static_borrow(source, budget)
                 .map(|source| source.is_some())
@@ -626,6 +630,24 @@ pub(super) fn supported(
         || closure_value::provider(plan, source, budget)?.is_some()
     {
         return Ok(true);
+    }
+    if indexed_borrow::authored_index_borrow(source).is_some() {
+        return supported(
+            match source {
+                Expr::BorrowValue { value, .. } => match value.as_ref() {
+                    Expr::Index { base, .. } => base,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
+            &indexed_borrow::root_node(node, budget)?,
+            plan,
+            function,
+            inventory,
+            original,
+            budget,
+            depth + 1,
+        );
     }
     if matches!(source, Expr::BorrowValue { .. }) {
         let Some((kind, place)) = explicit_field_borrow::authored_static_borrow(source, budget)
@@ -2965,6 +2987,11 @@ impl Replay<'_> {
                 if !place.fields.is_empty() =>
             {
                 self.projected_borrow(source, node, id, block, depth + 1)?
+            }
+            (source @ Expr::BorrowValue { .. }, _)
+                if indexed_borrow::authored_index_borrow(source).is_some() =>
+            {
+                self.index_borrow(source, node, id, depth + 1)?
             }
             (source @ Expr::BorrowValue { .. }, ir::ExprKind::Block(block)) => {
                 self.projected_borrow(source, node, id, block, depth + 1)?
