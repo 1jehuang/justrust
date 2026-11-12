@@ -4265,8 +4265,20 @@ impl Transfer<'_> {
                     // snapshot. A singleton address or RefMut type alone is not
                     // access permission: live children and parent authority are
                     // checked by the same transfer gate as source assignments.
-                    for target in loans.call_write_targets(self.block, self.budget)? {
+                    for mut target in loans.call_write_targets(self.block, self.budget)? {
                         self.check_access(&target, Access::Write)?;
+                        // A family effect into a variant payload is a possible
+                        // write, not a proof that the variant is selected. Read
+                        // the whole enclosing enum owner instead (still fully
+                        // initialized before argument moves), never guessing.
+                        if let Some(first) = target
+                            .place
+                            .projection
+                            .iter()
+                            .position(|step| matches!(step, Projection::Downcast(_)))
+                        {
+                            target.place.projection.truncate(first);
+                        }
                         self.read_canonical(state, &target.place)?;
                     }
                 }

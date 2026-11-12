@@ -683,3 +683,35 @@ fn rejects_generic_returned_mut_reference_conflicts() {
         "fn pick<T>(v: &mut Vec<T>) -> &mut Vec<T> { v } fn unused<T>(v: &mut Vec<T>, x: T) { let r = pick(v); let n = v.len(); r.push(x); let _ = n; } fn main() {}",
     );
 }
+
+#[test]
+fn accepts_generic_recursive_enum_boxing_its_owner() {
+    runs(
+        r#"#[derive(Debug)]
+enum L<X> { Nil, Cons(Box<L<X>>, X) }
+impl<X: std::fmt::Debug> L<X> {
+    fn wrap(self, x: X) -> L<X> { L::Cons(Box::new(self), x) }
+    fn len(&self) -> usize { match self { L::Nil => 0, L::Cons(rest, _) => 1 + rest.len() } }
+}
+fn boxed<X>(l: L<X>) -> Box<L<X>> { Box::new(l) }
+fn main() {
+    let l = L::Nil.wrap(String::from("a")).wrap(String::from("b"));
+    println!("{} {:?}", l.len(), l);
+    println!("{:?}", boxed(L::Nil.wrap(3u8)));
+}
+"#,
+        "2 Cons(Cons(Nil, \"a\"), \"b\")\nCons(Nil, 3)\n",
+    );
+}
+
+#[test]
+fn rejects_generic_recursive_enum_owner_reuse() {
+    rejects(
+        "generic_recursive_enum_e0382",
+        "enum L<X> { Nil, Cons(Box<L<X>>, X) } fn unused<X>(l: L<X>, x: X, y: X) -> (L<X>, L<X>) { (L::Cons(Box::new(l), x), L::Cons(Box::new(l), y)) } fn main() {}",
+    );
+    rejects(
+        "generic_recursive_enum_e0382_payload",
+        "enum L<X> { Nil, Cons(Box<L<X>>, X) } fn unused<X>(l: L<X>, x: X) -> (L<X>, X) { (L::Cons(Box::new(l), x), x) } fn main() {}",
+    );
+}
