@@ -302,6 +302,34 @@ fn struct_patterns_move_fields_with_destructors() {
 }
 
 #[test]
+fn static_str_fields_accept_static_parameters() {
+    oracle::check(
+        "static_str_field_parameters",
+        &[Case {
+            name: "static_parameter_into_static_field",
+            source: "struct D(&'static str);struct N{s:&'static str}fn mk(s:&'static str)->N{N{s}}fn main(){let d=D(\"a\");let n=mk(\"b\");let f=D;let e=f(\"c\");let v:Vec<D>=[\"x\",\"y\"].into_iter().map(D).collect();println!(\"{} {} {} {}\",d.0,n.s,e.0,v[1].0);}",
+            expect: Expect::Run("a b c y\n"),
+        }],
+    );
+}
+#[test]
+fn unused_invalid_elided_parameter_into_static_field() {
+    invalid(
+        "elided_parameter_into_static_field",
+        "struct N{s:&'static str}fn unused(s:&str)->N{N{s}}fn main(){}",
+        "lifetime may not live long enough",
+    );
+}
+#[test]
+fn unused_invalid_local_borrow_into_static_tuple_field() {
+    invalid(
+        "local_borrow_into_static_tuple_field",
+        "struct D(&'static str);fn unused(){let s=String::new();let _d=D(&s);}fn main(){}",
+        "E0597",
+    );
+}
+
+#[test]
 fn unused_invalid_refutable_enum_function_parameter() {
     invalid(
         "refutable_enum_function_parameter",

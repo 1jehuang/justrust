@@ -3744,6 +3744,20 @@ impl CarrierBuilder<'_, '_> {
             }
         }
     }
+    /// True when every region these origins can reach is a `'static` input
+    /// region of this body (for example a `&'static str` parameter), so the
+    /// value may be stored where `'static` is required.
+    fn origins_outlive_static(&mut self, origins: &CarrierOrigins) -> Result<bool, Exhausted> {
+        let own_static = self
+            .body
+            .as_ref()
+            .map_or(0, |body| body.ref_contract().static_regions);
+        let sources = self.origin_regions(origins)?;
+        Ok(sources.iter().all(|region| {
+            matches!(self.regions.keys[region.0], RegionKey::Fixed(id)
+                if own_static & (1u64 << id.0) != 0)
+        }))
+    }
     fn origin_regions(
         &mut self,
         origins: &CarrierOrigins,
@@ -5505,6 +5519,7 @@ impl CarrierBuilder<'_, '_> {
                                 .0
                                 .members()
                                 .any(|origin| !self.targets[origin].is_empty())
+                            && !self.origins_outlive_static(&origins)?
                         {
                             self.problem(
                                 block,
