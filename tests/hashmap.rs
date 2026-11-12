@@ -900,3 +900,36 @@ fn main() {
         }],
     );
 }
+
+#[test]
+fn map_collect_and_extend_match_stock() {
+    closure_oracle::check(
+        "map-collect-extend",
+        &[
+            Case {
+                name: "collect_and_extend_keep_last_duplicate",
+                source: r#"use std::collections::{BTreeMap, HashMap};
+fn main() {
+    let pairs: Vec<(String, usize)> = vec![("a".into(), 1), ("b".into(), 2), ("a".into(), 3)];
+    let lookup: HashMap<String, usize> = pairs.clone().into_iter().collect();
+    let any: HashMap<_, _> = pairs.clone().into_iter().collect();
+    let sorted: BTreeMap<usize, String> = pairs.clone().into_iter().map(|(k, v)| (v, k)).collect();
+    println!("{} {} {} {:?}", lookup.len(), lookup["a"], any["b"], sorted);
+    let mut b: BTreeMap<String, usize> = pairs.into_iter().collect();
+    b.extend(vec![("c".to_string(), 9usize), ("a".to_string(), 0usize)]);
+    let mut h: HashMap<u8, u8> = HashMap::new();
+    h.extend([(1u8, 1u8), (1, 2)]);
+    println!("{:?} {} {}", b, h[&1], h.len());
+}"#,
+                expect: Expect::Run(
+                    "2 3 2 {1: \"a\", 2: \"b\", 3: \"a\"}\n{\"a\": 0, \"b\": 2, \"c\": 9} 2 1\n",
+                ),
+            },
+            Case {
+                name: "collect_non_tuple_items_into_map",
+                source: r#"use std::collections::HashMap; fn unused() { let m: HashMap<u8, u8> = vec![1u8, 2].into_iter().collect(); let _ = m; } fn main() {}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}

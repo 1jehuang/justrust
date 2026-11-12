@@ -804,6 +804,72 @@ impl<K, V> super::default::Default for BTreeMap<K, V> {
     }
 }
 
+impl<K: Hash + Eq, V, S: BuildHasher + super::default::Default> super::iter::FromIterator<(K, V)>
+    for HashMap<K, V, S>
+{
+    fn from_iter<I: super::iter::IntoIterator<Item = (K, V)>>(source: I) -> HashMap<K, V, S> {
+        let mut map = HashMap::with_hasher(S::default());
+        let mut iterator = source.into_iter();
+        loop {
+            match iterator.next() {
+                Option::Some((key, value)) => {
+                    map.insert(key, value);
+                }
+                Option::None => return map,
+            }
+        }
+    }
+}
+
+impl<K: super::cmp::Ord, V> super::iter::FromIterator<(K, V)> for BTreeMap<K, V> {
+    fn from_iter<I: super::iter::IntoIterator<Item = (K, V)>>(source: I) -> BTreeMap<K, V> {
+        let mut map = BTreeMap::new();
+        let mut iterator = source.into_iter();
+        loop {
+            match iterator.next() {
+                Option::Some((key, value)) => {
+                    map.insert(key, value);
+                }
+                Option::None => return map,
+            }
+        }
+    }
+}
+
+impl<K: Hash + Eq, V, S: BuildHasher> super::iter::Extend<(K, V)> for HashMap<K, V, S> {
+    fn extend<I: super::iter::IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        let mut iterator = iter.into_iter();
+        loop {
+            match iterator.next() {
+                Option::Some((key, value)) => {
+                    self.insert(key, value);
+                }
+                Option::None => return,
+            }
+        }
+    }
+    fn extend_one(&mut self, item: (K, V)) {
+        self.insert(item.0, item.1);
+    }
+}
+
+impl<K: super::cmp::Ord, V> super::iter::Extend<(K, V)> for BTreeMap<K, V> {
+    fn extend<I: super::iter::IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        let mut iterator = iter.into_iter();
+        loop {
+            match iterator.next() {
+                Option::Some((key, value)) => {
+                    self.insert(key, value);
+                }
+                Option::None => return,
+            }
+        }
+    }
+    fn extend_one(&mut self, item: (K, V)) {
+        self.insert(item.0, item.1);
+    }
+}
+
 /// `{key: value, ..}` in ascending key order, as std prints it.
 impl<K: super::fmt::Debug, V: super::fmt::Debug> super::fmt::Debug for BTreeMap<K, V> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {

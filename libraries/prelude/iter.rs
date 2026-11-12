@@ -1251,7 +1251,9 @@ impl<I: DoubleEndedIterator> DoubleEndedIterator for &mut I {
 
 pub trait Extend<A> {
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T);
-    fn extend_one(&mut self, item: A);
+    fn extend_one(&mut self, item: A) {
+        self.extend(Some(item));
+    }
 }
 
 pub trait FromIterator<A>: Sized {
