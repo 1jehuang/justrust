@@ -286,7 +286,13 @@ pub(super) fn capture_array_borrows(
 }
 
 fn precedes(binding: &sr::SourceNode, operand: &sr::SourceNode) -> bool {
-    let Some((ordinal, parent)) = binding.path.split_last() else {
+    precedes_path(&binding.path, binding, operand)
+}
+
+/// As `precedes`, for a binder whose statement occurrence is the given path
+/// (a tuple-pattern binder's node extends its `let` statement path).
+fn precedes_path(path: &[u32], binding: &sr::SourceNode, operand: &sr::SourceNode) -> bool {
+    let Some((ordinal, parent)) = path.split_last() else {
         return false;
     };
     let Some((2, block)) = parent.split_last() else {
@@ -671,6 +677,24 @@ pub(super) fn supported(
             let site = &inventory.bindings[index];
             if site.parameter.is_some() || site.annotation.is_some() {
                 return Ok(true);
+            }
+            if site.pattern.is_some() {
+                let Some(leaf) = pattern_source_leaf(function, site, budget)? else {
+                    return Ok(false);
+                };
+                if leaf.annotation.is_some() {
+                    return Ok(true);
+                }
+                return supported(
+                    leaf.value,
+                    &leaf.node,
+                    plan,
+                    function,
+                    inventory,
+                    original,
+                    budget,
+                    depth + 1,
+                );
             }
             let Some(Stmt::Let { value, .. }) =
                 source_statement(function, inventory, &site.node, budget)?
@@ -1554,6 +1578,9 @@ impl Replay<'_> {
             .plan
             .callable_body(&self.original.plan.program, self.original.declaration)
             .map_err(|e| source_error(self.budget, &e))?;
+        if let Some((_, path)) = &site.pattern {
+            return self.pattern_binding(function, index, path, depth + 1);
+        }
         let Some(Stmt::Let {
             value: source,
             mutable,
@@ -1638,6 +1665,67 @@ impl Replay<'_> {
         }
         Ok((local, ty))
     }
+    /// A root tuple-pattern binder: the root type is the replayed initializer
+    /// element (or written annotation element) selected by the binder's exact
+    /// tuple path, checked against the authenticated pattern correspondence.
+    fn pattern_binding(
+        &self,
+        function: &Function,
+        index: usize,
+        path: &[usize],
+        depth: usize,
+    ) -> Result<(ir::LocalId, ir::Ty), FactsError> {
+        sr::depth(self.budget, depth)?;
+        let site = &self.original.bindings[index];
+        let leaf = pattern_source_leaf(function, site, self.budget)?.ok_or_else(|| {
+            FactsError::unsupported(
+                self.budget,
+                "input evidence requires a tuple initializer for a pattern binder",
+            )
+        })?;
+        let local = mapped_source_binding(self.original, index, self.budget)?;
+        let declaration = self
+            .checked
+            .locals
+            .get(local.0)
+            .ok_or_else(|| FactsError::invalid(self.budget, "input checked local missing"))?;
+        if declaration.mutable != leaf.mutable {
+            return Err(FactsError::invalid(
+                self.budget,
+                "input pattern binding mutability changed",
+            ));
+        }
+        let value = checked_pattern_leaf_id(self.checked, local, path, self.budget)?;
+        let annotation = leaf
+            .annotation
+            .map(|ty| {
+                checked_local_ty(ty, self.signatures).map_err(|e| source_error(self.budget, &e))
+            })
+            .transpose()?;
+        let ty = match annotation {
+            Some(annotation)
+                if ir::carrier_locations(&annotation, self.budget)
+                    .map_err(|e| source_error(self.budget, &e))?
+                    .is_empty() =>
+            {
+                annotation
+            }
+            annotation => self.expression(
+                leaf.value,
+                &leaf.node,
+                value,
+                annotation.as_ref(),
+                depth + 1,
+            )?,
+        };
+        if !self.equal(&ty, &declaration.ty)? {
+            return Err(FactsError::invalid(
+                self.budget,
+                "input pattern initializer type changed",
+            ));
+        }
+        Ok((local, ty))
+    }
     fn operand(
         &self,
         node: &sr::SourceNode,
@@ -1656,7 +1744,11 @@ impl Replay<'_> {
         let index = source_binding_index(&self.original.bindings, binding, self.budget)?
             .ok_or_else(|| FactsError::invalid(self.budget, "input lexical binding missing"))?;
         let site = &self.original.bindings[index];
-        if site.parameter.is_none() && !precedes(&site.node, node) {
+        let statement_path = match &site.pattern {
+            Some(_) if site.node.path.len() >= 4 => &site.node.path[..4],
+            _ => &site.node.path[..],
+        };
+        if site.parameter.is_none() && !precedes_path(statement_path, &site.node, node) {
             return Err(FactsError::invalid(
                 self.budget,
                 "input initializer refers to a later binding",

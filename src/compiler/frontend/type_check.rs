@@ -8247,6 +8247,9 @@ impl<'a> Checker<'a> {
                             borrow: binding.borrow,
                         });
                     }
+                    if let Some(cap) = self.canonical {
+                        cap.record_pattern_bindings(s, &bindings)?;
+                    }
                     (
                         ir::TypedStmt::LetPattern {
                             value,

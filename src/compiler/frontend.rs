@@ -2786,6 +2786,7 @@ mod canonical_source_replay_tests {
             unsizes: Default::default(),
             scoped_bindings: Default::default(),
             bindings: Default::default(),
+            pattern_bindings: Default::default(),
             narrow: Default::default(),
             emissions: Default::default(),
             error: Default::default(),
@@ -2892,6 +2893,9 @@ struct SourceBindingSite {
     is_declare: bool,
     parameter: Option<usize>,
     statement: Option<usize>,
+    /// Root `let` tuple-pattern binder: (root statement index, ordered tuple
+    /// field path from the pattern root to this by-value binding).
+    pattern: Option<(usize, Vec<usize>)>,
     // Exact initializer occurrence and the binding selected while that
     // immutable AST occurrence's lexical scope is active, before this let binds.
     shared_borrow_origin: Option<(sr::SourceNode, sr::SourceNode)>,
@@ -2945,6 +2949,8 @@ struct SourceInventory {
     for_pointers: HashMap<usize, usize>,
     iterator_pointers: HashMap<usize, usize>,
     statement_pointers: HashMap<usize, usize>,
+    /// Root tuple-pattern `let` statement -> (first binder index, binder count).
+    pattern_pointers: HashMap<usize, (usize, usize)>,
     scopes: Vec<HashMap<LocalKey, sr::SourceNode>>,
     root_block_pointer: usize,
 }
@@ -3049,6 +3055,39 @@ fn store_shared_local_inputs(
     Ok(())
 }
 
+/// Ordered by-value binder paths of a pattern built only from tuples,
+/// plain bindings and wildcards. Any other shape returns false: such binders
+/// keep no root correspondence.
+fn tuple_binder_paths(
+    pattern: &Pattern,
+    path: &mut Vec<usize>,
+    out: &mut Vec<Vec<usize>>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match pattern {
+        Pattern::Binding { by_ref: None, .. } => {
+            sr::retain(budget, path.len() * std::mem::size_of::<usize>() + 32)?;
+            out.push(path.clone());
+            Ok(true)
+        }
+        Pattern::Wildcard => Ok(true),
+        Pattern::Tuple(fields) => {
+            for (index, field) in fields.iter().enumerate() {
+                path.push(index);
+                let ok = tuple_binder_paths(field, path, out, budget, depth + 1)?;
+                path.pop();
+                if !ok {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
 fn insert_source_pointer(
     map: &mut HashMap<usize, usize>,
     key: usize,
@@ -3668,6 +3707,7 @@ impl SourceInventory {
             for_pointers: HashMap::new(),
             iterator_pointers: HashMap::new(),
             statement_pointers: HashMap::new(),
+            pattern_pointers: HashMap::new(),
             scopes,
             root_block_pointer: body as *const Block as usize,
         };
@@ -3713,6 +3753,7 @@ impl SourceInventory {
                 statement,
                 required: parameter.is_some(),
                 is_declare: false,
+                pattern: None,
                 shared_borrow_origin: None,
             },
             budget,
@@ -4033,7 +4074,31 @@ impl SourceInventory {
                         budget,
                         depth + 1,
                     )?;
+                    let first = self.bindings.len();
                     self.shadow_pattern(pattern, &here, budget, depth + 1)?;
+                    if top {
+                        let mut paths = Vec::new();
+                        if tuple_binder_paths(pattern, &mut Vec::new(), &mut paths, budget, 0)?
+                            && paths.len() == self.bindings.len() - first
+                        {
+                            let count = paths.len();
+                            for (offset, path) in paths.into_iter().enumerate() {
+                                self.bindings[first + offset].pattern = Some((index, path));
+                            }
+                            sr::retain(budget, 64)?;
+                            reserve_source_map(&mut self.pattern_pointers, budget)?;
+                            if self
+                                .pattern_pointers
+                                .insert(statement as *const Stmt as usize, (first, count))
+                                .is_some()
+                            {
+                                return Err(FactsError::invalid(
+                                    budget,
+                                    "duplicate original pattern pointer",
+                                ));
+                            }
+                        }
+                    }
                 }
                 Stmt::AssignDeref {
                     carrier,
@@ -5180,6 +5245,7 @@ pub(super) struct CanonicalSourceCapability {
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     scoped_bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
+    pattern_bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
     emissions: std::cell::RefCell<Vec<(usize, usize)>>,
     error: std::cell::RefCell<Option<FactsError>>,
@@ -5207,6 +5273,7 @@ pub(super) struct OriginalSource {
     unsize_mapping: Vec<UnsizeOccurrence>,
     scoped_initializers: Vec<(usize, ir::LocalId, ir::ExprId)>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
+    pattern_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
     root_positions: Vec<Option<usize>>,
 }
@@ -5553,6 +5620,54 @@ impl CanonicalSourceCapability {
             }
             sr::push(&mut self.bindings.borrow_mut(), (*index, local), budget)
                 .map_err(|e| self.render(e))?;
+        }
+        Ok(())
+    }
+    /// Records the checked local of every by-value tuple-pattern binder of a
+    /// root `let`, authenticated by its exact field projection path.
+    fn record_pattern_bindings(
+        &self,
+        statement: &Stmt,
+        bindings: &[ir::PatternBinding],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let Some(&(first, count)) = self
+            .inventory
+            .pattern_pointers
+            .get(&(statement as *const Stmt as usize))
+        else {
+            return Ok(());
+        };
+        // Default binding modes (a tuple pattern through a reference) or any
+        // other checked shape keep no correspondence: their binders simply
+        // stay outside root replay.
+        if bindings.len() != count {
+            return Ok(());
+        }
+        for (offset, binding) in bindings.iter().enumerate() {
+            let Some((_, path)) = &self.inventory.bindings[first + offset].pattern else {
+                return Ok(());
+            };
+            sr::work(budget, path.len()).map_err(|e| self.render(e))?;
+            if binding.borrow.is_some()
+                || binding.projection.len() != path.len()
+                || binding
+                    .projection
+                    .iter()
+                    .zip(path)
+                    .any(|(step, field)| *step != ir::Projection::Field(*field))
+            {
+                return Ok(());
+            }
+        }
+        for (offset, binding) in bindings.iter().enumerate() {
+            sr::push(
+                &mut self.pattern_bindings.borrow_mut(),
+                (first + offset, binding.local),
+                budget,
+            )
+            .map_err(|e| self.render(e))?;
         }
         Ok(())
     }
@@ -6375,6 +6490,25 @@ fn mapped_source_binding(
     index: usize,
     budget: &ir::PlanBudget,
 ) -> Result<ir::LocalId, FactsError> {
+    if original
+        .bindings
+        .get(index)
+        .is_some_and(|site| site.pattern.is_some())
+    {
+        sr::work(budget, original.pattern_mapping.len())?;
+        let mut found = None;
+        for (source, local) in &original.pattern_mapping {
+            if *source == index && found.replace(*local).is_some() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "duplicate pattern binding correspondence",
+                ));
+            }
+        }
+        return found.ok_or_else(|| {
+            FactsError::unsupported(budget, "pattern binder has no root correspondence")
+        });
+    }
     sr::work(budget, original.binding_mapping.len())?;
     let mut found = None;
     for (source, local) in &original.binding_mapping {
@@ -6488,7 +6622,9 @@ fn root_borrow_origin(
     budget: &ir::PlanBudget,
 ) -> Result<RootBorrowOrigin, FactsError> {
     sr::work(budget, 1)?;
-    let origin = if let Some(parameter) = site.parameter {
+    let origin = if site.pattern.is_some() {
+        pattern_root_borrow_origin(function, site, signatures, budget)?
+    } else if let Some(parameter) = site.parameter {
         let index = u32::try_from(parameter)
             .map_err(|_| FactsError::resource(budget, "borrow parameter index overflow"))?;
         if site.node.path.as_ref() != [0, index] {
@@ -6566,6 +6702,206 @@ fn root_borrow_origin(
     Ok(origin)
 }
 
+/// A root tuple-pattern binder: the root `let` initializer (or annotation) is
+/// projected through the binder's exact tuple path to a scalar leaf.
+fn pattern_root_borrow_origin(
+    function: &Function,
+    site: &SourceBindingSite,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<RootBorrowOrigin, FactsError> {
+    let leaf = pattern_source_leaf(function, site, budget)?.ok_or_else(|| {
+        FactsError::unsupported(
+            budget,
+            "unsupported: fresh borrow of a pattern binder requires a tuple initializer",
+        )
+    })?;
+    let (ty, literal) = if let Some(ty) = leaf.annotation {
+        (
+            checked_local_ty(ty, signatures).map_err(|e| source_error(budget, &e))?,
+            None,
+        )
+    } else {
+        match leaf.value {
+            Expr::Integer(literal) if literal.suffix.is_some() => {
+                let value =
+                    resolve_integer(literal, false, None).map_err(|e| source_error(budget, &e))?;
+                (ir::Ty::Int(value.ty), Some(RootBorrowLiteral::Int(value)))
+            }
+            Expr::Bool(value) => (ir::Ty::Bool, Some(RootBorrowLiteral::Bool(*value))),
+            Expr::Char(value) => (ir::Ty::Char, Some(RootBorrowLiteral::Char(*value))),
+            _ => {
+                return Err(FactsError::unsupported(
+                    budget,
+                    "unsupported: fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
+                ));
+            }
+        }
+    };
+    Ok(RootBorrowOrigin {
+        ty,
+        mutable: leaf.mutable,
+        literal,
+    })
+}
+
+/// A root tuple-pattern binder's authored source: the initializer element
+/// (and annotation element, when written) selected by the binder's exact
+/// tuple path, with the initializer element's source node and the binder's
+/// mutability. `None` when the initializer is not a tuple expression along
+/// the whole path.
+pub(super) struct PatternSourceLeaf<'a> {
+    pub(super) value: &'a Expr,
+    pub(super) node: sr::SourceNode,
+    pub(super) annotation: Option<&'a Type>,
+    pub(super) mutable: bool,
+}
+pub(super) fn pattern_source_leaf<'a>(
+    function: &'a Function,
+    site: &SourceBindingSite,
+    budget: &ir::PlanBudget,
+) -> Result<Option<PatternSourceLeaf<'a>>, FactsError> {
+    let Some((statement, path)) = &site.pattern else {
+        return Ok(None);
+    };
+    sr::work(budget, path.len().saturating_add(1))?;
+    let index = u32::try_from(*statement)
+        .map_err(|_| FactsError::resource(budget, "pattern statement index overflow"))?;
+    if site.node.path.len() < 4 || site.node.path[..4] != [1, 0, 2, index] {
+        return Err(FactsError::invalid(
+            budget,
+            "pattern root statement occurrence changed",
+        ));
+    }
+    let Some(Stmt::LetPattern {
+        pattern, ty, value, ..
+    }) = function.body.statements.get(*statement)
+    else {
+        return Err(FactsError::invalid(
+            budget,
+            "pattern root statement changed",
+        ));
+    };
+    let mut leaf = pattern;
+    let mut value = value;
+    let mut node = sr::SourceNode {
+        owner: site.node.owner.clone(),
+        path: Arc::from(&site.node.path[..4]),
+    }
+    .child(3, 0, budget)?;
+    let mut annotation = (!matches!(ty, Type::Infer)).then_some(ty);
+    for field in path {
+        let Pattern::Tuple(fields) = leaf else {
+            return Err(FactsError::invalid(budget, "pattern binder path changed"));
+        };
+        leaf = fields
+            .get(*field)
+            .ok_or_else(|| FactsError::invalid(budget, "pattern binder path changed"))?;
+        if let Some(written) = annotation {
+            let Type::Tuple(fields) = written else {
+                return Ok(None);
+            };
+            annotation =
+                Some(fields.get(*field).ok_or_else(|| {
+                    FactsError::invalid(budget, "pattern annotation arity changed")
+                })?);
+        }
+        let Expr::Tuple(fields) = value else {
+            return Ok(None);
+        };
+        value = fields
+            .get(*field)
+            .ok_or_else(|| FactsError::invalid(budget, "pattern initializer arity changed"))?;
+        node = node.child(12, *field, budget)?;
+    }
+    let Pattern::Binding {
+        mutable,
+        by_ref: None,
+        ..
+    } = leaf
+    else {
+        return Err(FactsError::invalid(budget, "pattern binder leaf changed"));
+    };
+    Ok(Some(PatternSourceLeaf {
+        value,
+        node,
+        annotation,
+        mutable: *mutable,
+    }))
+}
+
+/// The checked initializer leaf a root tuple-pattern binder takes its value
+/// from: the unique root `LetPattern` binding `local` at exactly `path`, its
+/// initializer projected through checked tuple expressions.
+pub(super) fn checked_pattern_leaf_id(
+    checked: &ir::CheckedFunction,
+    local: ir::LocalId,
+    path: &[usize],
+    budget: &ir::PlanBudget,
+) -> Result<ir::ExprId, FactsError> {
+    sr::work(budget, checked.body.statements.len())?;
+    let mut found = None;
+    for statement in &checked.body.statements {
+        let ir::TypedStmt::LetPattern {
+            value, bindings, ..
+        } = statement
+        else {
+            continue;
+        };
+        sr::work(budget, bindings.len())?;
+        for binding in bindings {
+            if binding.local != local {
+                continue;
+            }
+            if binding.borrow.is_some()
+                || binding.projection.len() != path.len()
+                || binding
+                    .projection
+                    .iter()
+                    .zip(path)
+                    .any(|(step, field)| *step != ir::Projection::Field(*field))
+                || found.replace(*value).is_some()
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "pattern binder changed checked projection",
+                ));
+            }
+        }
+    }
+    let mut value = found
+        .ok_or_else(|| FactsError::invalid(budget, "pattern binder lost checked statement"))?;
+    for field in path {
+        sr::work(budget, 1)?;
+        let expr = checked
+            .exprs
+            .get(value.0)
+            .ok_or_else(|| FactsError::invalid(budget, "pattern initializer outside arena"))?;
+        let ir::ExprKind::Tuple(fields) = &expr.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "pattern initializer changed tuple shape",
+            ));
+        };
+        value = *fields
+            .get(*field)
+            .ok_or_else(|| FactsError::invalid(budget, "pattern initializer arity changed"))?;
+    }
+    Ok(value)
+}
+fn checked_pattern_leaf<'c>(
+    checked: &'c ir::CheckedFunction,
+    local: ir::LocalId,
+    path: &[usize],
+    budget: &ir::PlanBudget,
+) -> Result<&'c ir::TypedExpr, FactsError> {
+    let value = checked_pattern_leaf_id(checked, local, path, budget)?;
+    checked
+        .exprs
+        .get(value.0)
+        .ok_or_else(|| FactsError::invalid(budget, "pattern leaf outside arena"))
+}
+
 fn source_root_borrow_type(
     original: &OriginalSource,
     index: usize,
@@ -6594,6 +6930,29 @@ fn source_root_borrow_type(
             budget,
             "borrow root type or mutable capability changed",
         ));
+    }
+    if let Some((_, path)) = &site.pattern
+        && origin.literal.is_some()
+    {
+        let literal = origin
+            .literal
+            .ok_or_else(|| FactsError::invalid(budget, "pattern literal initializer changed"))?;
+        let value = checked_pattern_leaf(checked, local, path, budget)?;
+        let same = match (literal, &value.kind) {
+            (RootBorrowLiteral::Int(expected), ir::ExprKind::Int(actual)) => expected == *actual,
+            (RootBorrowLiteral::Bool(expected), ir::ExprKind::Bool(actual)) => expected == *actual,
+            (RootBorrowLiteral::Char(expected), ir::ExprKind::Char(actual)) => {
+                expected as u32 == actual.value
+            }
+            _ => false,
+        };
+        if !same || !replay_type_equal(&value.ty, &origin.ty, budget)? {
+            return Err(FactsError::invalid(
+                budget,
+                "pattern literal initializer changed",
+            ));
+        }
+        return Ok((local, origin.ty));
     }
     if let Some(literal) = origin.literal {
         let position = original.root_positions[index]
@@ -8015,6 +8374,7 @@ pub(super) fn replay_source_body_with_scratch(
             .map_err(|e| source_error(budget, &e))?
             || fresh.parameter != retained.parameter
             || fresh.statement != retained.statement
+            || fresh.pattern != retained.pattern
             || fresh.required != retained.required
             || fresh.is_declare != retained.is_declare
         {
@@ -9114,6 +9474,7 @@ impl PlanCtx {
                     unsizes: Default::default(),
                     scoped_bindings: Default::default(),
                     bindings: Default::default(),
+                    pattern_bindings: Default::default(),
                     narrow: Default::default(),
                     emissions: Default::default(),
                     error: Default::default(),
@@ -9232,6 +9593,7 @@ impl PlanCtx {
                     unsize_mapping: cap.unsizes.take(),
                     scoped_initializers,
                     binding_mapping: cap.bindings.take(),
+                    pattern_mapping: cap.pattern_bindings.take(),
                     narrow: cap.narrow.take(),
                     root_positions,
                 };
@@ -31154,6 +31516,7 @@ mod const_declaration_tests {
             unsizes: Default::default(),
             scoped_bindings: Default::default(),
             bindings: Default::default(),
+            pattern_bindings: Default::default(),
             narrow: Default::default(),
             emissions: Default::default(),
             error: Default::default(),

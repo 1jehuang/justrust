@@ -330,6 +330,34 @@ fn unused_invalid_local_borrow_into_static_tuple_field() {
 }
 
 #[test]
+fn tuple_pattern_binders_feed_inferred_borrows() {
+    oracle::check(
+        "tuple_pattern_borrows",
+        &[Case {
+            name: "identity_and_vec_of_pattern_binders",
+            source: "fn id<T>(x:T)->T{x}fn main(){let (n,m)=(3usize,7usize);let r=id(&n);let v=vec![&n,&m];let (p,(q,b)):(i64,(u8,bool))=(5,(9,true));let s=id(&q);let t=id(&b);let (mut k,_)=(1i32,2i32);let u=id(&mut k);*u+=1;let (a,c)=(String::from(\"x\"),2u8);let w=vec![&a];println!(\"{} {} {} {} {} {} {} {} {}\",r,v[0],v[1],s,t,p,k,w[0],c);}",
+            expect: Expect::Run("3 3 7 9 true 5 2 x 2\n"),
+        }],
+    );
+}
+#[test]
+fn unused_invalid_move_of_borrowed_pattern_binder() {
+    invalid(
+        "move_borrowed_pattern_binder",
+        "fn unused(){let (a,b)=(String::from(\"x\"),2u8);let v=vec![&a];drop(a);println!(\"{} {}\",v[0],b);}fn main(){}",
+        "E0505",
+    );
+}
+#[test]
+fn unused_invalid_assign_of_borrowed_pattern_binder() {
+    invalid(
+        "assign_borrowed_pattern_binder",
+        "fn id<T>(x:T)->T{x}fn unused(){let (mut n,m)=(3i32,7i32);let r=id(&n);n=5;println!(\"{} {} {}\",r,n,m);}fn main(){}",
+        "E0506",
+    );
+}
+
+#[test]
 fn unused_invalid_refutable_enum_function_parameter() {
     invalid(
         "refutable_enum_function_parameter",
