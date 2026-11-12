@@ -94,7 +94,7 @@ fn closure_argument_call_aggregate_results() {
             Case {
                 name: "unused_owned_argument_escape",
                 source: "fn unused(){let _f=|s:String|s.split_once('=');}fn main(){}",
-                expect: Expect::Invalid("lifetime may not live long enough"),
+                expect: Expect::Invalid("E0515"),
             },
             Case {
                 name: "unused_argument_result_type",
@@ -154,7 +154,7 @@ fn generic_iterator_closure_projection_rejects_invalid_sources() {
             Case {
                 name: "unused_generic_result_local_escape",
                 source: "use std::ops::Add;fn unused<'a,T:Add<Output=T>+Copy>(x:T)->&'a T{let f=|a:T,b:T|a+b;let value=f(x,x);&value}fn main(){}",
-                expect: Expect::Invalid("lifetime may not live long enough"),
+                expect: Expect::Invalid("E0515"),
             },
         ],
     );
