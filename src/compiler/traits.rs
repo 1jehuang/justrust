@@ -3985,6 +3985,7 @@ pub struct ValidatedTraitWorld {
     trait_header_index: DeclIndex,
     item_header_index: DeclIndex,
     impl_header_index: DeclIndex,
+    associated_header_index: DeclIndex,
     callable_header_index: DeclIndex,
     /// Whole-world impl overlap at build time; the graph defers it to
     /// per-impl coherence nodes.
@@ -4174,6 +4175,7 @@ impl ValidatedTraitWorld {
             trait_header_index: DeclIndex::default(),
             item_header_index: DeclIndex::default(),
             impl_header_index: DeclIndex::default(),
+            associated_header_index: DeclIndex::default(),
             callable_header_index: DeclIndex::default(),
             eager_coherence,
         };
@@ -4190,6 +4192,11 @@ impl ValidatedTraitWorld {
         for (position, h) in world.headers.impls.iter().enumerate() {
             world
                 .impl_header_index
+                .note(budget, h.declaration, position)?;
+        }
+        for (position, h) in world.headers.associated_types.iter().enumerate() {
+            world
+                .associated_header_index
                 .note(budget, h.declaration, position)?;
         }
         for (position, h) in world.headers.callables.iter().enumerate() {
@@ -12923,10 +12930,25 @@ impl ValidatedTraitWorld {
             if implementation.trait_ref.declaration != goal.declaration {
                 continue;
             }
-            let mut slots = Vec::new();
-            for _ in implementation.schema_env.ordered_params() {
-                push(&self.budget, &mut slots, None)?;
-            }
+            // Per-candidate scratch: charged while live and released when the
+            // candidate is rejected, never retained as world metadata.
+            let arity = implementation.schema_env.ordered_params().count();
+            let _slots_storage = charged(
+                &self.budget,
+                self.budget.reserve_bytes(
+                    arity
+                        .checked_mul(std::mem::size_of::<Option<Ty>>())
+                        .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+                        .ok_or_else(|| {
+                            FactsError::resource(&self.budget, "candidate slot size overflow")
+                        })?,
+                ),
+            )?;
+            let mut slots: Vec<Option<Ty>> = Vec::new();
+            slots.try_reserve_exact(arity).map_err(|_| {
+                FactsError::resource(&self.budget, "candidate slot allocation failed")
+            })?;
+            slots.resize(arity, None);
             if !self.match_head(
                 &implementation.trait_ref.self_ty,
                 &goal.self_ty,

@@ -710,16 +710,46 @@ impl Solver<'_, '_, '_> {
                     // exact candidate beside it, contributes equations;
                     // the checked call still selects and proves it.
                     open_trait = true;
-                    if open.len() == 1 && candidates.as_slice().is_empty() {
-                        let (trait_id, item) = open[0];
+                    // Same-named methods of unrelated traits (`Iterator::map`)
+                    // are candidates only when their application is proved.
+                    let mut exact = false;
+                    for (application, item) in candidates.as_slice() {
+                        checker.infer_work(0)?;
+                        if receiver_mode(plan.declaration(*item)?.receiver) != receiver_mode(mode) {
+                            continue;
+                        }
+                        exact |= !matches!(
+                            facts
+                                .service()
+                                .prove_goal_with(
+                                    &ir::Predicate::Implements(application.clone()),
+                                    facts,
+                                    &mut checker.trait_scratch.borrow_mut()
+                                )
+                                .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
+                            tr::ProofOutcome::NotProven
+                        );
+                    }
+                    // An open trait whose impl head does not match this
+                    // receiver in this mode contributes nothing; ordinary
+                    // candidates proceed as without it.
+                    let mut templates = Vec::new();
+                    for (trait_id, item) in open {
+                        checker.infer_work(0)?;
                         if receiver_mode(plan.declaration(item)?.receiver) == receiver_mode(mode)
                             && let Some(template) =
                                 plan.open_trait_application(owner, trait_id, facts, &plan.budget)?
                         {
-                            open_template = Some((template, item));
+                            templates.push((template, item));
                         }
                     }
-                    return Ok(MethodArguments::Deferred);
+                    if !templates.is_empty() {
+                        if templates.len() == 1 && !exact {
+                            open_template = templates.pop();
+                        }
+                        return Ok(MethodArguments::Deferred);
+                    }
+                    open_trait = false;
                 }
                 let mut applicable = None;
                 let mut collected: Vec<_> = Vec::new();

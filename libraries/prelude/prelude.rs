@@ -23,7 +23,7 @@ pub mod v1 {
     pub use super::super::option::Option::{None, Some};
     pub use super::super::result::Result;
     pub use super::super::result::Result::{Err, Ok};
-    pub use super::super::vec::Vec;
+    pub use super::super::vec::{ArrayMap, Vec};
     pub use super::super::boxed::Box;
     pub use super::super::string::{SliceJoin, StrChars, StrMethods, StrToString, String, ToString};
     pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};
@@ -62,7 +62,7 @@ pub mod v1_2018 {
     pub use super::super::option::Option::{None, Some};
     pub use super::super::result::Result;
     pub use super::super::result::Result::{Err, Ok};
-    pub use super::super::vec::Vec;
+    pub use super::super::vec::{ArrayMap, Vec};
     pub use super::super::boxed::Box;
     pub use super::super::string::{SliceJoin, StrChars, StrMethods, StrToString, String, ToString};
     pub use super::super::slice::{SliceChunks, SliceContains, SliceIter, SliceIterMut, SliceMethods, SliceSort, SliceMutRefMethods, SliceRefMethods, SliceToVec};

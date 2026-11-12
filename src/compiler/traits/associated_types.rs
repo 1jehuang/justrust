@@ -1006,11 +1006,11 @@ impl ValidatedTraitWorld {
     }
 
     pub(super) fn associated_header(&self, declaration: DeclId) -> Result<&AssociatedTypeHeader> {
-        for header in self.headers.associated_types.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if header.declaration == declaration {
-                return Ok(header);
-            }
+        if let Some(position) = self
+            .associated_header_index
+            .get(&self.budget, declaration)?
+        {
+            return Ok(&self.headers.associated_types[position]);
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -1023,16 +1023,14 @@ impl ValidatedTraitWorld {
         implementation: DeclId,
         associated: DeclId,
     ) -> Result<&AssociatedTypeValue> {
-        for header in self.headers.impls.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if header.declaration == implementation {
-                for value in header.associated_types.iter() {
-                    charged(&self.budget, self.budget.charge_work(1))?;
-                    if value.associated == associated && value.implementation == implementation {
-                        return Ok(value);
-                    }
+        // First header of this implementation, exactly as the former scan.
+        if let Some(position) = self.impl_header_index.get(&self.budget, implementation)? {
+            let header = &self.headers.impls[position];
+            for value in header.associated_types.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if value.associated == associated && value.implementation == implementation {
+                    return Ok(value);
                 }
-                break;
             }
         }
         Err(FactsError::invalid(

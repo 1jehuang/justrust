@@ -22729,6 +22729,11 @@ pub struct DeclRegistry {
     /// registry is sealed. Replaces O(callables) scans per lookup.
     function_positions: HashMap<ir::DeclId, usize>,
     function_positions_sealed: bool,
+    /// Trait positions declaring a source member, keyed by member name and
+    /// sealed with `function_positions`. Catalog-named items are listed in
+    /// `catalog_member_traits` and always considered.
+    trait_member_index: HashMap<NameKey, Vec<usize>>,
+    catalog_member_traits: Vec<usize>,
     /// Canonical owner of each stored closure provider, authenticated once at
     /// seal time by `closure_source_owner` (immutable thereafter).
     closure_owner_sites: HashMap<ir::DeclId, ir::DeclId>,
@@ -23185,6 +23190,40 @@ impl DeclRegistry {
         }
         found.ok_or_else(|| "extra or unknown associated type item".into())
     }
+    /// Ascending trait positions that may declare member `key`. `None` before
+    /// the registry is sealed: callers then scan every trait.
+    pub(super) fn traits_with_member(&self, key: NameKey) -> Option<Vec<usize>> {
+        if !self.function_positions_sealed {
+            return None;
+        }
+        let source = self.trait_member_index.get(&key).map_or(&[][..], |v| v);
+        let mut merged = Vec::with_capacity(source.len() + self.catalog_member_traits.len());
+        let (mut i, mut j) = (0, 0);
+        while i < source.len() || j < self.catalog_member_traits.len() {
+            let next = match (source.get(i), self.catalog_member_traits.get(j)) {
+                (Some(a), Some(b)) if a == b => {
+                    i += 1;
+                    j += 1;
+                    *a
+                }
+                (Some(a), Some(b)) if a < b => {
+                    i += 1;
+                    *a
+                }
+                (Some(a), None) => {
+                    i += 1;
+                    *a
+                }
+                (_, Some(b)) => {
+                    j += 1;
+                    *b
+                }
+                (None, None) => unreachable!(),
+            };
+            merged.push(next);
+        }
+        Some(merged)
+    }
     fn source_member_equal(&self, left: DeclItemName, right: AstIdent) -> Result<bool, String> {
         self.names
             .check(right)
@@ -23374,6 +23413,8 @@ impl DeclRegistry {
             trait_imports: Vec::new(),
             function_positions: HashMap::new(),
             function_positions_sealed: false,
+            trait_member_index: HashMap::new(),
+            catalog_member_traits: Vec::new(),
             closure_owner_sites: HashMap::new(),
         }
     }
@@ -24147,6 +24188,8 @@ impl PlanCtx {
             trait_imports: program.trait_imports.clone(),
             function_positions: HashMap::new(),
             function_positions_sealed: false,
+            trait_member_index: HashMap::new(),
+            catalog_member_traits: Vec::new(),
             closure_owner_sites: HashMap::new(),
         };
         reserve_registry_map(
@@ -25422,6 +25465,33 @@ impl PlanCtx {
             }
         }
         registry_mut.inherent_peers = peers;
+        let mut member_index: HashMap<NameKey, Vec<usize>> = HashMap::new();
+        let mut catalog_members = Vec::new();
+        for (trait_index, items) in registry_mut.trait_items.iter().enumerate() {
+            for item in items {
+                budget.charge_work(1)?;
+                match registry_mut.declaration(*item)?.path.item {
+                    DeclItemName::Source(source) => {
+                        let key = registry_mut
+                            .names
+                            .key(source, LookupClass::Member)
+                            .map_err(native_adapter::name_diagnostic)?;
+                        let positions = member_index.entry(key).or_default();
+                        if positions.last() != Some(&trait_index) {
+                            positions.push(trait_index);
+                        }
+                    }
+                    DeclItemName::Catalog(_) => {
+                        if catalog_members.last() != Some(&trait_index) {
+                            catalog_members.push(trait_index);
+                        }
+                    }
+                    DeclItemName::Impl => {}
+                }
+            }
+        }
+        registry_mut.trait_member_index = member_index;
+        registry_mut.catalog_member_traits = catalog_members;
         registry_mut.function_positions_sealed = true;
         let mut owner_sites = HashMap::new();
         for provider in registry_mut.closure_recipes.keys() {
