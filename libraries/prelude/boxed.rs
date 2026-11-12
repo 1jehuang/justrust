@@ -65,6 +65,21 @@ impl<T: ?Sized> super::ops::DerefMut for Box<T> {
     }
 }
 
+/// Clones the pointee into a fresh allocation, as std does.
+impl<T: Clone> Clone for Box<T> {
+    fn clone(&self) -> Box<T> {
+        Box::new(<T as Clone>::clone(unsafe { &*self.ptr }))
+    }
+}
+
+impl<T: ?Sized + super::cmp::PartialEq> super::cmp::PartialEq for Box<T> {
+    fn eq(&self, other: &Box<T>) -> bool {
+        <T as super::cmp::PartialEq>::eq(unsafe { &*self.ptr }, unsafe { &*other.ptr })
+    }
+}
+
+impl<T: ?Sized + super::cmp::Eq> super::cmp::Eq for Box<T> {}
+
 impl<T: super::fmt::Debug + ?Sized> super::fmt::Debug for Box<T> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
         <T as super::fmt::Debug>::fmt(unsafe { &*self.ptr }, f)

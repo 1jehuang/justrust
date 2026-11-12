@@ -606,13 +606,11 @@ impl Solver<'_, '_, '_> {
         explicit: &[Term],
         expected: Term,
     ) -> Result<Option<Term>, String> {
-        if self.preparation.is_none()
-            && !arguments.iter().any(|argument| {
-                matches!(self.domain(self.peel_refs(*argument)), Domain::Callable(_))
-            })
-        {
-            return Ok(None);
-        }
+        // Method bodies, generic and opaque-result callables use the ordinary
+        // solver rather than nominal preparation. Their trait-method results
+        // (`s.parse()` -> `Result<F, F::Err>`) need the same canonical schema
+        // constraints, or closure inputs downstream (`.map_err(|e| ..)`)
+        // stay uninferable. Selection below still proves every application.
         let checker = self.checker;
         let plan = checker.signatures.plan()?;
         let ir::FactsCtx::Validated(facts) = checker.facts() else {

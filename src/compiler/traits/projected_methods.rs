@@ -417,18 +417,35 @@ impl ValidatedTraitWorld {
     }
 
     pub(super) fn reject_projected_references(&self, ty: &Ty, depth: usize) -> Result<()> {
-        self.projected_reference_walk(ty, depth, &mut TypeWalk::default())
+        self.projected_reference_walk(ty, depth, &mut TypeWalk::default(), &mut Vec::new())
             .map(|_| ())
     }
 
+    /// `active` holds the canonical nominal applications being expanded in
+    /// this one walk. A finite recursive type reached through indirection
+    /// (`enum J { A(Vec<J>) }`) re-enters an ancestor whose fields are already
+    /// being checked: any reference there is reported by that ancestor, so
+    /// the back edge contributes nothing instead of unfolding to the limit.
     fn projected_reference_walk(
         &self,
         ty: &Ty,
         depth: usize,
         walk: &mut TypeWalk,
+        active: &mut Vec<ir::NominalAppId>,
     ) -> Result<usize> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
+        let nominal = match ty {
+            Ty::Struct(value) => Some(value.id()),
+            Ty::Enum(value) => Some(value.id()),
+            _ => None,
+        };
+        if let Some(id) = nominal {
+            charged(&self.budget, self.budget.charge_work(active.len()))?;
+            if active.contains(&id) {
+                return Ok(0);
+            }
+        }
         let key = TypeWalk::key(ty).map(|key| (key, TypeUse::Root));
         if let Some(key) = key
             && let Some(height) = walk.lookup(key, ty, &self.budget)?
@@ -439,10 +456,32 @@ impl ValidatedTraitWorld {
             )?;
             return Ok(height);
         }
+        if let Some(id) = nominal {
+            retain::<ir::NominalAppId>(&self.budget, 1)?;
+            active.push(id);
+        }
+        let result = self.projected_reference_children(ty, depth, walk, active);
+        if nominal.is_some() {
+            active.pop();
+        }
+        let height = result?;
+        if let Some(key) = key {
+            walk.insert(key, height, ty, &self.budget)?;
+        }
+        Ok(height)
+    }
+
+    fn projected_reference_children(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        walk: &mut TypeWalk,
+        active: &mut Vec<ir::NominalAppId>,
+    ) -> Result<usize> {
         let mut height = 0usize;
         let mut child = |ty: &Ty| -> Result<()> {
             height = height.max(
-                self.projected_reference_walk(ty, depth + 1, walk)?
+                self.projected_reference_walk(ty, depth + 1, walk, active)?
                     .saturating_add(1),
             );
             Ok(())
@@ -472,9 +511,6 @@ impl ValidatedTraitWorld {
         }
         for argument in type_arguments(ty) {
             child(argument)?;
-        }
-        if let Some(key) = key {
-            walk.insert(key, height, ty, &self.budget)?;
         }
         Ok(height)
     }

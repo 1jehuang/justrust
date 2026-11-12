@@ -234,6 +234,202 @@ fn main() {}
 }
 
 #[test]
+fn unchanged_json_parser_matches_stock() {
+    parse_oracle(
+        "unchanged-json-parser",
+        &[closure_oracle::Case {
+            name: "03_json_parser",
+            source: include_str!("milestones/m3/03_json_parser.rs"),
+            expect: closure_oracle::Expect::Run(include_str!(
+                "milestones/m3/03_json_parser.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn container_clone_and_equality_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "container-clone-equality",
+        &[
+            Case {
+                name: "recursive_box_btreemap_hashmap_clone_eq",
+                source: r#"
+use std::collections::{BTreeMap, HashMap};
+#[derive(Debug, Clone, PartialEq)]
+enum J { N, B(bool), A(Vec<J>), O(BTreeMap<String, J>), X(Box<J>) }
+fn main() {
+    let mut m = BTreeMap::new();
+    m.insert("k".to_string(), J::A(vec![J::N, J::B(true)]));
+    m.insert("a".to_string(), J::X(Box::new(J::N)));
+    let j = J::O(m);
+    let k = j.clone();
+    println!("{:?} {}", k, k == j);
+    let mut m2 = BTreeMap::new();
+    m2.insert("k".to_string(), J::N);
+    println!("{} {}", J::O(m2) == j, J::X(Box::new(J::B(false))) != J::X(Box::new(J::B(true))));
+    let b: Box<i32> = Box::new(5);
+    let c = b.clone();
+    println!("{} {}", c, b == c);
+    let mut h: HashMap<u8, String> = HashMap::new();
+    h.insert(1, "x".to_string());
+    h.insert(2, "y".to_string());
+    let g = h.clone();
+    let mut d = HashMap::new();
+    d.insert(2u8, "y".to_string());
+    d.insert(1u8, "x".to_string());
+    println!("{} {} {}", g == h, d == h, g.len());
+    d.insert(3, "z".to_string());
+    println!("{}", d == h);
+}
+"#,
+                expect: Expect::Run(
+                    "O({\"a\": X(N), \"k\": A([N, B(true)])}) true\nfalse true\n5 true\ntrue true 2\nfalse\n",
+                ),
+            },
+            Case {
+                name: "derive_clone_non_clone_field_unused",
+                source: r#"
+struct NoClone;
+#[derive(Clone)]
+struct S { a: i32, b: NoClone }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "box_eq_without_partial_eq_unused",
+                source: r#"
+struct NoEq;
+fn unused(a: Box<NoEq>, b: Box<NoEq>) -> bool { a == b }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "btreemap_clone_non_clone_value_unused",
+                source: r#"
+use std::collections::BTreeMap;
+struct NoClone;
+fn unused(m: &BTreeMap<i32, NoClone>) -> BTreeMap<i32, NoClone> { m.clone() }
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn method_body_parse_inference_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "method-body-parse-inference",
+        &[
+            Case {
+                name: "method_body_parse_chains",
+                source: r#"
+#[derive(Debug)]
+enum J { Num(f64), Int(i64) }
+struct P { s: String }
+impl P {
+    fn num(&self) -> Result<J, String> { self.s.as_str().parse().map(J::Num).map_err(|e| format!("bad {e}")) }
+    fn int(&self, t: &str) -> Result<J, String> { t.parse().map(|n| J::Int(n)).map_err(|e| format!("int {e}")) }
+    fn float(t: &str) -> Result<f64, String> { t.parse().map_err(|e| format!("f {e}")) }
+}
+fn main() {
+    let p = P { s: "2.5".into() };
+    println!("{:?} {:?}", p.num(), P { s: "z".into() }.num());
+    println!("{:?} {:?}", p.int("7"), p.int("x"));
+    println!("{:?} {:?}", P::float("1e2"), P::float(""));
+}
+"#,
+                expect: Expect::Run(
+                    "Ok(Num(2.5)) Err(\"bad invalid float literal\")\nOk(Int(7)) Err(\"int invalid digit found in string\")\nOk(100.0) Err(\"f cannot parse float from empty string\")\n",
+                ),
+            },
+            Case {
+                name: "method_body_parse_recursive_enum",
+                source: r#"
+#[derive(Debug)]
+enum T { Leaf(i64), Node(Vec<T>) }
+struct R<'a> { parts: Vec<&'a str> }
+impl<'a> R<'a> {
+    fn tree(&self) -> Result<T, String> {
+        let mut kids = Vec::new();
+        for p in &self.parts { kids.push(p.parse().map(T::Leaf).map_err(|e| format!("{p}: {e}"))?); }
+        Ok(T::Node(kids))
+    }
+}
+fn main() {
+    println!("{:?}", R { parts: vec!["1", "2"] }.tree());
+    println!("{:?}", R { parts: vec!["1", "x"] }.tree());
+}
+"#,
+                expect: Expect::Run(
+                    "Ok(Node([Leaf(1), Leaf(2)]))\nErr(\"x: invalid digit found in string\")\n",
+                ),
+            },
+            Case {
+                name: "reference_carrying_recursive_enum_outlived_unused",
+                source: r#"
+#[allow(dead_code)]
+enum L<'a> { Nil, C(&'a str, Box<L<'a>>) }
+#[allow(dead_code)]
+fn f() -> usize {
+    let l;
+    { let s = String::from("x"); l = L::C(&s, Box::new(L::Nil)); }
+    match l { L::C(w, _) => w.len(), L::Nil => 0 }
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "char_from_u32_and_slice_affixes",
+                source: r#"
+fn main() {
+    println!("{:?} {:?} {:?}", char::from_u32(0xe9), char::from_u32(0xD800), char::from_u32(0x110000));
+    println!("{:?} {:?}", char::from_u32(u32::from_str_radix("0041", 16).unwrap()), char::from_digit(11, 16));
+    let b: &[u8] = b"null,";
+    println!("{} {} {} {}", b.starts_with(b"nul"), b.ends_with(b","), b.starts_with(b"nulll,"), [1, 2, 3].ends_with(&[2, 3]));
+}
+"#,
+                expect: Expect::Run(
+                    "Some('é') None None\nSome('A') Some('b')\ntrue true false true\n",
+                ),
+            },
+            Case {
+                name: "char_from_u32_wrong_argument_type_unused",
+                source: "fn main() { let _ = char::from_u32(65u64); }\n",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "method_body_parse_error_type_mismatch_unused",
+                source: "struct P;\n#[allow(dead_code)]\nimpl P { fn a(&self, s: &str) -> Result<u8, String> { s.parse().map_err(|e| e) } }\nfn main() {}\n",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "method_body_parse_unit_target_unused",
+                source: "struct P;\n#[allow(dead_code)]\nimpl P { fn a(&self, s: &str) -> Result<(), String> { s.parse().map_err(|e| format!(\"{e}\")) } }\nfn main() {}\n",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "method_body_parse_unconstrained_unused",
+                source: "struct P;\n#[allow(dead_code)]\nimpl P { fn a(&self, s: &str) { let _x = s.parse().unwrap(); } }\nfn main() {}\n",
+                expect: Expect::Invalid("E0284"),
+            },
+            Case {
+                name: "method_body_parse_annotated_mismatch_unused",
+                source: "struct P;\n#[allow(dead_code)]\nimpl P { fn a(&self, s: &str) -> Result<f64, String> { let r: Result<i32, String> = s.parse().map_err(|e| format!(\"{e}\")); r } }\nfn main() {}\n",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn callable_value_arity_codes_match_stock() {
     // Stock: E0061 for function item and function pointer values (including
     // tuple constructors), E0057 only for closures.

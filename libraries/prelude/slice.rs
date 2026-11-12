@@ -236,9 +236,11 @@ impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
     }
 }
 
-/// `[T]::contains` (element-wise `PartialEq`, front to back).
+/// `[T]::contains`, `starts_with` and `ends_with` (element-wise `PartialEq`).
 pub trait SliceContains<'a, T> {
     fn contains(self, value: &T) -> bool;
+    fn starts_with(self, needle: &[T]) -> bool;
+    fn ends_with(self, needle: &[T]) -> bool;
 }
 
 impl<'a, T: super::cmp::PartialEq> SliceContains<'a, T> for &'a [T] {
@@ -251,6 +253,35 @@ impl<'a, T: super::cmp::PartialEq> SliceContains<'a, T> for &'a [T] {
             i += 1usize;
         }
         false
+    }
+    fn starts_with(self, needle: &[T]) -> bool {
+        let n = needle.len();
+        if n > self.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < n {
+            if self[i] != needle[i] {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
+    }
+    fn ends_with(self, needle: &[T]) -> bool {
+        let n = needle.len();
+        let m = self.len();
+        if n > m {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < n {
+            if self[m - n + i] != needle[i] {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
     }
 }
 

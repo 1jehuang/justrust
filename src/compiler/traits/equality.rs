@@ -794,6 +794,19 @@ impl ValidatedTraitWorld {
     // Keep mutable and nested references outside this domain until their
     // associated equality carrier contract is implemented.
     fn validate_equality_reference_domain(&self, ty: &Ty, depth: usize) -> Result<()> {
+        self.equality_reference_domain(ty, depth, &mut Vec::new())
+    }
+
+    /// `active` holds the canonical nominal applications being expanded. A
+    /// finite recursive type through indirection (`enum J { A(Vec<J>) }`)
+    /// re-enters an ancestor whose fields are already being validated, so
+    /// the back edge adds nothing instead of unfolding to the depth limit.
+    fn equality_reference_domain(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        active: &mut Vec<ir::NominalAppId>,
+    ) -> Result<()> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
@@ -818,7 +831,7 @@ impl ValidatedTraitWorld {
                         ..
                     }
                 ) {
-                    return self.validate_equality_reference_domain(referent, depth + 1);
+                    return self.equality_reference_domain(referent, depth + 1, active);
                 }
                 self.reject_projected_references(referent, depth + 1)
             }
@@ -837,35 +850,58 @@ impl ValidatedTraitWorld {
                 "unsupported: mutable or nested reference associated equality",
             )),
             Ty::DependentArray { element, .. } | Ty::Array { element, .. } => {
-                self.validate_equality_reference_domain(element, depth + 1)
+                self.equality_reference_domain(element, depth + 1, active)
             }
-            Ty::Struct(value) => {
-                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
-                    self.validate_equality_reference_domain(&field.ty, depth + 1)?;
+            Ty::Struct(_) | Ty::Enum(_) => {
+                let id = match ty {
+                    Ty::Struct(value) => value.id(),
+                    Ty::Enum(value) => value.id(),
+                    _ => unreachable!("matched nominal"),
+                };
+                charged(&self.budget, self.budget.charge_work(active.len()))?;
+                if active.contains(&id) {
+                    return Ok(());
                 }
-                for argument in type_arguments(ty) {
-                    self.validate_equality_reference_domain(argument, depth + 1)?;
-                }
-                Ok(())
-            }
-            Ty::Enum(value) => {
-                for variant in value.def().variants.iter() {
-                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
-                        self.validate_equality_reference_domain(&field.ty, depth + 1)?;
-                    }
-                }
-                for argument in type_arguments(ty) {
-                    self.validate_equality_reference_domain(argument, depth + 1)?;
-                }
-                Ok(())
+                retain::<ir::NominalAppId>(&self.budget, 1)?;
+                active.push(id);
+                let result = self.equality_reference_fields(ty, depth, active);
+                active.pop();
+                result
             }
             _ => {
                 for argument in type_arguments(ty) {
-                    self.validate_equality_reference_domain(argument, depth + 1)?;
+                    self.equality_reference_domain(argument, depth + 1, active)?;
                 }
                 Ok(())
             }
         }
+    }
+
+    fn equality_reference_fields(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        active: &mut Vec<ir::NominalAppId>,
+    ) -> Result<()> {
+        match ty {
+            Ty::Struct(value) => {
+                for field in nominal_fields(&value.def().fields, &self.budget)?.iter() {
+                    self.equality_reference_domain(&field.ty, depth + 1, active)?;
+                }
+            }
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in nominal_fields(&variant.fields, &self.budget)?.iter() {
+                        self.equality_reference_domain(&field.ty, depth + 1, active)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        for argument in type_arguments(ty) {
+            self.equality_reference_domain(argument, depth + 1, active)?;
+        }
+        Ok(())
     }
 
     pub(super) fn checked_assignment_source(

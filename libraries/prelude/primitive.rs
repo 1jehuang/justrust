@@ -109,6 +109,26 @@ pub fn char_from_digit(num: u32, radix: u32) -> Option<char> {
     Option::Some(code as u8 as char)
 }
 
+/// `char::from_u32` and `char::from_digit`, reached as `char::name(..)`
+/// through this prelude trait like `u32::from_str_radix` via `RadixParse`.
+pub trait CharFrom: Sized {
+    fn from_u32(code: u32) -> Option<Self>;
+    fn from_digit(num: u32, radix: u32) -> Option<Self>;
+}
+
+impl CharFrom for char {
+    fn from_u32(code: u32) -> Option<char> {
+        // Unicode scalar values: below 0x110000, excluding the surrogates.
+        if code >= 0x110000u32 || (code >= 0xD800u32 && code <= 0xDFFFu32) {
+            return Option::None;
+        }
+        Option::Some(super::string::unsafe_char(code))
+    }
+    fn from_digit(num: u32, radix: u32) -> Option<char> {
+        char_from_digit(num, radix)
+    }
+}
+
 // ---- integers ----
 
 pub trait IntMethods: Sized {

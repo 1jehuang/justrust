@@ -732,6 +732,72 @@ impl<K, V, S: super::default::Default> super::default::Default for HashMap<K, V,
     }
 }
 
+impl<K: Clone, V: Clone> Clone for BTreeMap<K, V> {
+    fn clone(&self) -> BTreeMap<K, V> {
+        BTreeMap { keys: self.keys.clone(), values: self.values.clone() }
+    }
+}
+
+/// Equal length, then entries pairwise in ascending key order (key before
+/// value), stopping at the first difference, as std's iterator comparison.
+impl<K: super::cmp::PartialEq, V: super::cmp::PartialEq> super::cmp::PartialEq for BTreeMap<K, V> {
+    fn eq(&self, other: &BTreeMap<K, V>) -> bool {
+        if self.keys.len() != other.keys.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.keys.len() {
+            if !self.keys.get_ref(i).eq(other.keys.get_ref(i))
+                || !self.values.get_ref(i).eq(other.values.get_ref(i))
+            {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
+    }
+}
+
+impl<K: super::cmp::Eq, V: super::cmp::Eq> super::cmp::Eq for BTreeMap<K, V> {}
+
+impl<K: Clone, V: Clone, S: Clone> Clone for HashMap<K, V, S> {
+    fn clone(&self) -> HashMap<K, V, S> {
+        HashMap {
+            hashes: self.hashes.clone(),
+            keys: self.keys.clone(),
+            values: self.values.clone(),
+            hash_builder: self.hash_builder.clone(),
+        }
+    }
+}
+
+/// Equal length and every entry of `self` found in `other` (by `other`'s
+/// hasher) with an equal value, as std.
+impl<K: Hash + Eq, V: super::cmp::PartialEq, S: BuildHasher> super::cmp::PartialEq
+    for HashMap<K, V, S>
+{
+    fn eq(&self, other: &HashMap<K, V, S>) -> bool {
+        if self.keys.len() != other.keys.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.keys.len() {
+            match other.find_key(self.keys.get_ref(i)) {
+                Option::Some(j) => {
+                    if !self.values.get_ref(i).eq(other.values.get_ref(j)) {
+                        return false;
+                    }
+                }
+                Option::None => return false,
+            }
+            i += 1usize;
+        }
+        true
+    }
+}
+
+impl<K: Hash + Eq, V: super::cmp::Eq, S: BuildHasher> super::cmp::Eq for HashMap<K, V, S> {}
+
 impl<K, V> super::default::Default for BTreeMap<K, V> {
     fn default() -> BTreeMap<K, V> {
         BTreeMap { keys: Vec::new(), values: Vec::new() }
