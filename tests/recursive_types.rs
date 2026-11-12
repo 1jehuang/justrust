@@ -227,3 +227,59 @@ fn references_behind_box_are_explicitly_unsupported() {
 fn boxed_static_references_run() {
     runs("box_static_refs");
 }
+
+/// A trait bound on a recursive type's parameter is a well-formedness bound:
+/// it never blocks layout, and it is still enforced where the type is used.
+#[test]
+fn bounded_recursive_type_runs() {
+    runs("bounded_box_list");
+}
+
+#[test]
+fn bounded_recursive_type_rejects_unsatisfied_bound() {
+    for source in [
+        "struct NoOrd; enum Tree<T: Ord> { Leaf, Node(Box<Tree<T>>, T, Box<Tree<T>>) } fn unused() { let _t: Tree<NoOrd> = Tree::Leaf; } fn main() {}",
+        "struct W<T: Ord> { v: T, next: Option<Box<W<T>>> } fn unused(_w: W<f64>) {} fn main() {}",
+        "struct W<T: Ord> { v: T, next: Option<Box<W<T>>> } struct Holder { w: Option<Box<W<f64>>> } fn unused(_h: Holder) {} fn main() {}",
+    ] {
+        for workers in [1, 8] {
+            let dir = scratch();
+            let input = dir.join("input.rs");
+            std::fs::write(&input, source).unwrap();
+            let out = jr(&input, workers).arg("--check").output().unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "accepted {source}: {stderr}");
+            assert!(stderr.contains("E0277"), "{source}: {stderr}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+/// A by-value `self` method on an owned Box receiver moves the pointee out
+/// (`b.take()` is `(*b).take()`), consuming the Box.
+#[test]
+fn box_by_value_receiver_moves_out() {
+    runs("box_by_value_receiver");
+}
+
+#[test]
+fn box_by_value_receiver_rejects_reuse_and_shared_move() {
+    for source in [
+        "struct N { v: i32 } impl N { fn take(self) -> i32 { self.v } } fn unused() { let b = Box::new(N { v: 4 }); let n = b.take(); let m = b.take(); println!(\"{n} {m}\"); } fn main() {}",
+        "struct N { v: i32 } impl N { fn take(self) -> i32 { self.v } } fn unused() { let b = Box::new(N { v: 4 }); let n = (*b).take(); let m = (*b).take(); println!(\"{n} {m}\"); } fn main() {}",
+        "struct N { v: i32 } impl N { fn take(self) -> i32 { self.v } } fn unused(b: &Box<N>) -> i32 { b.take() } fn main() {}",
+    ] {
+        for workers in [1, 8] {
+            let dir = scratch();
+            let input = dir.join("input.rs");
+            std::fs::write(&input, source).unwrap();
+            let out = jr(&input, workers).arg("--check").output().unwrap();
+            assert!(
+                !out.status.success(),
+                "accepted {source}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
