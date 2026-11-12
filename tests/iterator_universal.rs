@@ -369,3 +369,19 @@ fn rigid_projection_obligations_reject_unimplemented_or_mismatched_items() {
         });
     }
 }
+
+#[test]
+fn vec_of_mut_refs_element_receivers() {
+    oracle::stock_native(
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut b=S{n:4}; let mut v: Vec<&mut S> = vec![&mut a, &mut b]; v[0].bump(); v[1].bump(); v[1].n += 3; drop(v); println!(\"{:?} {:?}\", a, b); }",
+    );
+    for source in [
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let x = &mut v[0]; let y = &mut v[0]; x.bump(); y.bump(); }",
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let x = &mut v[0]; println!(\"{}\", v.len()); x.bump(); }",
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; v[0].bump(); println!(\"{:?}\", a); v[0].bump(); }",
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let m: S = *v[0]; println!(\"{:?}\", m); }",
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; { let mut b=S{n:2}; v[0] = &mut b; } v[0].bump(); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

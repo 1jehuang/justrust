@@ -6879,7 +6879,19 @@ impl CarrierBuilder<'_, '_> {
         else {
             return Ok(false);
         };
-        if sealed_actual != actual.as_ref() || view.component_mappings().len() != 1 {
+        // A graph-realized caller signature names the same nominal through
+        // different application ids than the view's sealed actuals. Compare
+        // against the view's own instantiated signature for the same row.
+        let consistent = sealed_actual == actual.as_ref()
+            || matches!(
+                view.signature_for_replay().params.get(owner),
+                Some(Ty::Ref { kind: BorrowKind::Mut, referent: own })
+                    if own.owned_sequence_element() == Some(sealed_actual)
+            ) && matches!(
+                &view.signature_for_replay().result,
+                Ty::Ref { kind: BorrowKind::Mut, referent: own } if own.as_ref() == sealed_actual
+            );
+        if !consistent || view.component_mappings().len() != 1 {
             return Ok(false);
         }
         let mapping = &view.component_mappings()[0];
@@ -6907,13 +6919,15 @@ impl CarrierBuilder<'_, '_> {
         if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
             return Ok(false);
         }
-        // The mutable reference itself stays affine. Only the reference-free
-        // pointee must be Copy, excluding nested or hidden carrier families.
+        // The mutable reference itself stays affine. The pointee must be
+        // carrier-free (no nested or hidden families), so the slot holds no
+        // loans beyond the reference itself. Moves out of the pointee are
+        // rejected independently by move checking, so Copy is not needed.
         let Some(locations) = self.metadata_value(ir::carrier_locations(leaf, &self.ledger))?
         else {
             return Ok(false);
         };
-        Ok(locations.is_empty() && self.copy_permission_in(leaf, authority)?)
+        Ok(locations.is_empty())
     }
     /// The authored envelope of a generic declaration may add the carrier
     /// family of a type parameter to an otherwise identity row. A family whose
