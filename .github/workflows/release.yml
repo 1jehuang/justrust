@@ -10,6 +10,7 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: write
 
 env:
@@ -17,8 +18,7 @@ env:
   # Marks the binaries as release builds: they update themselves
   # (src/update.rs). Source builds never do.
   JUSTRUST_RELEASE_BUILD: "1"
-  # Enable JUSTRUST_HOSTED_RELEASES=1 only after the nonpublishing hosted
-  # Linux validation workflow passes with the repository's JCODE_API_KEY.
+  # Immutable bootstrap client with fail-closed hosted routing support.
   HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
@@ -27,11 +27,60 @@ env:
     --config profile.release.strip=true
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+
+      - name: Verify release tag, stable ancestry, and version
+        id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" == v* ]]
+          git check-ref-format "refs/tags/$TAG"
+          sha=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/stable
+          git show "$sha:Cargo.toml" > "$RUNNER_TEMP/release-Cargo.toml"
+          version=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$RUNNER_TEMP/release-Cargo.toml")
+          [[ "$TAG" == "v$version" ]] || { echo "Tag $TAG does not match package version $version" >&2; exit 1; }
+          printf 'sha=%s\ntag=%s\n' "$sha" "$TAG" >> "$GITHUB_OUTPUT"
+
+      # Reuse CI's existing push run, not a PR merge commit's result.
+      - name: Require successful CI for exact tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3600))
+          while (( SECONDS < deadline )); do
+            runs=$(timeout 45s gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f head_sha="$SHA" -f event=push -f status=success -f per_page=100)
+            if jq -e --arg sha "$SHA" '.workflow_runs | any(.head_sha == $sha and .event == "push" and .status == "completed" and .conclusion == "success")' <<< "$runs" >/dev/null; then
+              echo "CI passed for $SHA"
+              exit 0
+            fi
+            echo "Waiting for successful CI for $SHA (up to 60 minutes)"
+            sleep 30
+          done
+          echo "Timed out waiting for successful CI for $SHA" >&2
+          exit 1
+
   build:
+    needs: preflight
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     concurrency:
-      group: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
+      group: ${{ matrix.zig && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -55,40 +104,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.sha }}
 
       - name: Install Rust
-        if: ${{ !matrix.zig || vars.JUSTRUST_HOSTED_RELEASES != '1' }}
+        if: ${{ !matrix.zig }}
         run: |
           rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
           rustup default stable
 
-      - name: Install zig and cargo-zigbuild
-        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES != '1' }}
-        run: |
-          python3 -m pip install --user ziglang
-          cargo install cargo-zigbuild --locked
-
       - name: Build
-        if: ${{ !matrix.zig || vars.JUSTRUST_HOSTED_RELEASES != '1' }}
+        if: ${{ !matrix.zig }}
         shell: bash
         run: |
-          if [ "${{ matrix.zig }}" = "true" ]; then
-            # shellcheck disable=SC2086
-            cargo zigbuild --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
-          else
-            # shellcheck disable=SC2086
-            cargo build --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
-          fi
+          # shellcheck disable=SC2086
+          cargo build --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
 
       - name: Require hosted Linux credentials
-        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        if: ${{ matrix.zig }}
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
-        run: ': "${JCODE_API_KEY:?Configure JCODE_API_KEY before enabling JUSTRUST_HOSTED_RELEASES}"'
+        run: ': "${JCODE_API_KEY:?Configure JCODE_API_KEY for hosted Linux releases}"'
 
       - name: Install hosted Linux prerequisites
-        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        if: ${{ matrix.zig }}
         run: |
           rustup toolchain install 1.99.0 --profile minimal
           rustup default 1.99.0
@@ -100,7 +138,7 @@ jobs:
           bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
 
       - name: Build and verify hosted Linux release
-        if: ${{ matrix.zig && vars.JUSTRUST_HOSTED_RELEASES == '1' }}
+        if: ${{ matrix.zig }}
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
           JUSTRUST_TOOLCHAIN: 1.99.0
@@ -139,7 +177,7 @@ jobs:
             dist/*.sha256
 
   release:
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -150,8 +188,14 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          SHA: ${{ needs.preflight.outputs.sha }}
         run: |
+          set -euo pipefail
+          # Builds are pinned to SHA. Refuse a moved/deleted tag before upload.
+          ref=$(jq -rn --arg ref "refs/tags/$TAG" '$ref | @uri')
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+          [[ "$current" == "$SHA" ]] || { echo "Release tag moved after preflight" >&2; exit 1; }
           ls -l dist
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
