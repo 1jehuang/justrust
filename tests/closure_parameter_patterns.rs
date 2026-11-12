@@ -94,7 +94,7 @@ fn closure_argument_call_aggregate_results() {
             Case {
                 name: "unused_owned_argument_escape",
                 source: "fn unused(){let _f=|s:String|s.split_once('=');}fn main(){}",
-                expect: Expect::Invalid("E0515"),
+                expect: Expect::Invalid("lifetime may not live long enough"),
             },
             Case {
                 name: "unused_argument_result_type",
@@ -154,7 +154,7 @@ fn generic_iterator_closure_projection_rejects_invalid_sources() {
             Case {
                 name: "unused_generic_result_local_escape",
                 source: "use std::ops::Add;fn unused<'a,T:Add<Output=T>+Copy>(x:T)->&'a T{let f=|a:T,b:T|a+b;let value=f(x,x);&value}fn main(){}",
-                expect: Expect::Invalid("E0515"),
+                expect: Expect::Invalid("lifetime may not live long enough"),
             },
         ],
     );
@@ -363,5 +363,29 @@ fn unused_invalid_bodiless_trait_method_pattern() {
         "bodiless_trait_method_pattern",
         "trait T{fn f(&self,(a,b):(i32,i32));}fn main(){}",
         "E0642",
+    );
+}
+
+#[test]
+fn default_binding_reborrow_result_outlives_closure() {
+    oracle::check(
+        "default-binding-reborrow-result",
+        &[
+            Case {
+                name: "tuple_field_as_str",
+                source: "fn main(){let v:Vec<(String,String)>=vec![(\"the\".to_string(),\"cat\".to_string()),(\"a\".to_string(),\"dog\".to_string())];let mut s:Vec<&str>=v.iter().filter(|(a,_)|a==\"the\").map(|(_,b)|b.as_str()).collect();s.sort();println!(\"{s:?} {}\",v.iter().map(|(a,_)|a.as_str()).collect::<Vec<_>>().join(\",\"));}",
+                expect: Expect::Run("[\"cat\"] the,a\n"),
+            },
+            Case {
+                name: "by_value_capture_reference_escapes",
+                source: "fn main(){let v:Vec<(String,String)>=vec![(\"a\".to_string(),\"b\".to_string())];let s=String::from(\"x\");let f=move|(_,_):&(String,String)|->&str{s.as_str()};println!(\"{:?}\",v.iter().map(f).count());}",
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "reborrow_result_outlives_vec",
+                source: "fn main(){let s:Vec<&str>;{let v:Vec<(String,String)>=vec![(\"a\".to_string(),\"b\".to_string())];s=v.iter().map(|(_,b)|b.as_str()).collect();}println!(\"{s:?}\");}",
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
     );
 }

@@ -86,6 +86,7 @@ pub(super) fn value_origin(
             local: place.local,
             value: tail,
             projection: projection.into(),
+            reborrow: false,
         };
         let mut local_ty = input.projected_type(parameters, budget)?;
         if let Some(kind) = borrow {
@@ -108,6 +109,12 @@ pub(super) fn value_origin(
                 if place.projection.first() == Some(&ir::Projection::Deref) =>
             {
                 &place.projection[1..]
+            }
+            // The binding itself is read: a shared default-binding-mode
+            // reborrow of the argument place, e.g. `|(_, b)| b.as_str()`.
+            Some(ir::BorrowKind::Shared) if place.projection.is_empty() => {
+                input.reborrow = true;
+                &[]
             }
             _ => {
                 return Err(
