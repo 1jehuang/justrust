@@ -1215,9 +1215,16 @@ pub fn run_remote(
         // An admitted run that never produced an exit status died on our
         // side. Say where, instead of leaving a bare "abandoned" row.
         if let Some(run) = hosted_run.as_mut() {
+            let refused = match &result {
+                Ok(Err(Infra(msg))) => service_refusal(msg),
+                _ => None,
+            };
             let why = (
                 crate::failure::Class::Infra,
-                format!("hosted attempt failed at {}", diagnostic.stage),
+                match refused {
+                    Some(cause) => format!("hosted service refused the run: {cause}"),
+                    None => format!("hosted attempt failed at {}", diagnostic.stage),
+                },
             );
             run.finish("abandoned", None, Some(&why));
         }
@@ -1281,6 +1288,24 @@ impl Default for RemoteDiagnostic {
             may_have_started: false,
             exit: None,
         }
+    }
+}
+
+/// A fixed label when the hosted service answered and refused the run, so
+/// the run row does not blame the transport for a service-side outage (the
+/// 2026-11-12 storage outage showed as 56 "remote_transport" failures).
+/// Never the server's text: the label is shown to operators.
+fn service_refusal(msg: &str) -> Option<&'static str> {
+    if msg.contains(crate::remote_hosted::AT_CAPACITY) {
+        Some("fleet at capacity")
+    } else if msg.contains("Hosted storage") || msg.contains("workspace host") {
+        Some("host storage unavailable")
+    } else if msg.contains("workspace filesystem") {
+        Some("workspace storage needs recovery")
+    } else if msg.contains(crate::remote_hosted::UNAVAILABLE) {
+        Some("service unavailable")
+    } else {
+        None
     }
 }
 
@@ -2103,6 +2128,25 @@ mod tests {
         run.running();
         assert!(run.heartbeat.is_none());
         run.finish("done", Some(101), None);
+    }
+
+    #[test]
+    fn service_refusals_are_labeled_apart_from_transport_failures() {
+        use crate::remote_hosted::{AT_CAPACITY, UNAVAILABLE};
+        let storage = format!(
+            "{UNAVAILABLE} (server: Hosted storage capacity is being verified. Retry shortly.)"
+        );
+        assert_eq!(service_refusal(&storage), Some("host storage unavailable"));
+        let corrupt =
+            format!("{UNAVAILABLE} (server: Your workspace filesystem requires recovery.)");
+        assert_eq!(
+            service_refusal(&corrupt),
+            Some("workspace storage needs recovery")
+        );
+        assert_eq!(service_refusal(AT_CAPACITY), Some("fleet at capacity"));
+        assert_eq!(service_refusal(UNAVAILABLE), Some("service unavailable"));
+        assert_eq!(service_refusal("sync daemon closed the connection"), None);
+        assert_eq!(service_refusal("ssh: connection refused"), None);
     }
 
     #[test]
