@@ -837,6 +837,27 @@ impl ValidatedTraitWorld {
                 ) {
                     return self.equality_reference_domain(referent, depth + 1, active);
                 }
+                // A shared aggregate of shared layers (`&(&A, &B)`, the item
+                // of a slice of reference pairs passed through Take/Skip/...)
+                // is the same read-only type row per element. Elements that
+                // are not shared references keep the original boundary, so
+                // no mutable layer is admitted beneath a shared one.
+                if let Ty::Tuple(elements) = referent {
+                    for element in elements.iter() {
+                        if matches!(
+                            element,
+                            Ty::Ref {
+                                kind: ir::BorrowKind::Shared,
+                                ..
+                            }
+                        ) {
+                            self.equality_reference_domain(element, depth + 2, active)?;
+                        } else {
+                            self.reject_projected_references(element, depth + 2)?;
+                        }
+                    }
+                    return Ok(());
+                }
                 self.reject_projected_references(referent, depth + 1)
             }
             // `Item = &'a mut T` is likewise a type row, not a loan. The value

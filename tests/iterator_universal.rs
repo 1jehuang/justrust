@@ -413,3 +413,24 @@ fn main() {
 "#,
     );
 }
+
+#[test]
+fn take_over_slice_of_reference_pairs_matches_stock() {
+    oracle::stock_native(
+        r#"
+fn main() {
+    let a = String::from("alpha"); let b = String::from("be");
+    let n = 3usize; let m = 7usize;
+    let top: Vec<(&String, &usize)> = vec![(&a, &n), (&b, &m), (&a, &m)];
+    println!("{:?}", top.iter().take(2).map(|(w, c)| format!("{w}={c}")).collect::<Vec<_>>());
+    for (w, c) in top.iter().skip(1) { println!("{} {}", w.len(), c); }
+}
+"#,
+    );
+    for source in [
+        "fn main(){ let shown; { let a=String::from(\"x\"); let n=1usize; let top: Vec<(&String,&usize)> = vec![(&a,&n)]; shown = top.iter().take(1).map(|(w, _)| *w).collect::<Vec<&String>>(); } println!(\"{shown:?}\"); }",
+        "fn main(){ let mut a=String::from(\"x\"); let n=1usize; let top: Vec<(&String,&usize)> = vec![(&a,&n)]; let mut it = top.iter().take(1); a.push('y'); println!(\"{:?}\", it.next()); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
