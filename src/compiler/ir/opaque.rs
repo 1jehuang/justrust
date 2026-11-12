@@ -301,6 +301,9 @@ fn pack_capture_sources_at(
         if aggregate_captures::validate(opaque, hidden, &locations, budget, depth)? {
             return Ok(locations);
         }
+        if structural_capture_sources(opaque, &locations, budget)? {
+            return Ok(locations);
+        }
         return Err("unsupported: opaque pack requires explicit captured carrier mapping for non-closure hidden types".into());
     };
     if closure.owner() != opaque.owner() || closure.owner_args() != opaque.owner_args() {
@@ -376,6 +379,36 @@ fn pack_capture_sources_at(
         }
     }
     Ok(locations)
+}
+
+/// Any other hidden representation (`Map<Split<'a, P>, F>`, `Iter<'a, T>`)
+/// packs its complete typed carrier inventory unchanged. The borrow checker
+/// merges the origins of every row into the one public opaque family, so the
+/// returned value keeps every loan its hidden value held (edition 2024 opaques
+/// capture all in-scope lifetimes). Each symbolic row must name the defining
+/// callable's own parameter or an already authenticated opaque family.
+fn structural_capture_sources(
+    opaque: &OpaqueTy,
+    locations: &[CarrierLocation],
+    budget: &PlanBudget,
+) -> Result<bool, String> {
+    for location in locations {
+        budget.charge_work(opaque.owner_args().len().saturating_add(1))?;
+        match &location.channel {
+            CarrierChannel::Fixed(_) | CarrierChannel::OpaqueTail { .. } => {}
+            CarrierChannel::ParamTail { parameter, .. } => {
+                if parameter.owner.declaration != opaque.owner()
+                    || !opaque.owner_args().contains(&Ty::Param(*parameter))
+                {
+                    return Ok(false);
+                }
+            }
+            CarrierChannel::ProjectionTail { .. } | CarrierChannel::ArrayTail { .. } => {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// A defining-body pack retaining exact ordered symbolic capture origins.

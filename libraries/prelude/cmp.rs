@@ -49,6 +49,12 @@ impl Ordering {
             o => o,
         }
     }
+    pub fn then_with<F: FnOnce() -> Ordering>(self, f: F) -> Ordering {
+        match self {
+            Ordering::Equal => f(),
+            o => o,
+        }
+    }
 }
 
 impl Clone for Ordering {

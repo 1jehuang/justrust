@@ -99,7 +99,14 @@ pub(super) fn attach(
                 "unsupported: multiple opaque outlives bounds require a region intersection".into(),
             );
         }
-        if let Some(region) = source.regions.first() {
+        if let Some(region) = source.regions.first().copied().or_else(|| {
+            // Edition 2024 captures every in-scope lifetime. With a single
+            // elidable input lifetime that is exactly the `+ '_` contract.
+            // Several candidates keep no row: the body check then rejects any
+            // hidden value carrying a borrow (fail closed, never widened).
+            (!signature.ref_contract.input_regions.is_empty()).then_some(RegionName::Infer)
+        }) {
+            let implicit = source.regions.is_empty();
             let term = if matches!(region, RegionName::Infer) {
                 // Apply ordinary output elision: a borrowed receiver wins,
                 // otherwise exactly one input lifetime must be available.
@@ -123,12 +130,16 @@ pub(super) fn attach(
                         first
                     }
                 };
-                ir::CarrierRegionTerm::Fixed(candidate.ok_or(
-                    "E0106: opaque inferred lifetime requires one input lifetime or a borrowed receiver",
-                )?)
+                match candidate {
+                    Some(candidate) => ir::CarrierRegionTerm::Fixed(candidate),
+                    None if implicit => ir::CarrierRegionTerm::Static,
+                    None => {
+                        return Err("E0106: opaque inferred lifetime requires one input lifetime or a borrowed receiver".into());
+                    }
+                }
             } else {
                 collector
-                    .term(Some(*region), None, &[], 0)?
+                    .term(Some(region), None, &[], 0)?
                     .ok_or("opaque outlives bound has no source region")?
             };
             budget.retain_bytes(std::mem::size_of::<ir::SourceCarrierRegion>())?;

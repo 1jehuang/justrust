@@ -278,3 +278,38 @@ fn peekable_over_references_and_producer_slot_writes() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn non_closure_opaque_iterator_returns_match_stock() {
+    oracle::stock_native(
+        r#"
+fn tokens(s: &str) -> impl Iterator<Item = String> + '_ {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase())
+}
+fn bumped(v: &[u8]) -> impl Iterator<Item = u8> { v.iter().copied().map(|x| x + 1) }
+fn main() {
+    for w in tokens("It was, the BEST") { println!("{w}"); }
+    let all: Vec<String> = tokens("a-b c").collect();
+    println!("{all:?}");
+    let v = vec![1u8, 2];
+    println!("{:?}", bumped(&v).collect::<Vec<_>>());
+}
+"#,
+    );
+}
+
+#[test]
+fn non_closure_opaque_iterator_borrow_errors_match_stock() {
+    oracle::stock_and_native_reject(
+        r#"
+fn words(s: &str) -> impl Iterator<Item = &str> + '_ { s.split(' ') }
+fn main() { let it; { let owned = String::from("a b"); it = words(&owned); } for w in it { println!("{w}"); } }
+"#,
+    );
+    oracle::stock_and_native_reject(
+        r#"
+fn bumped(v: &[u8]) -> impl Iterator<Item = u8> + '_ { v.iter().map(|x| *x + 1) }
+fn main() { let v = vec![1u8, 2]; let it = bumped(&v); drop(v); for w in it { println!("{w}"); } }
+"#,
+    );
+}

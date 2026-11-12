@@ -137,6 +137,29 @@ impl Checker<'_> {
             let ir::Ty::Enum(option) = self.flow(next).ty else {
                 return Err("checked Iterator::next must return Option<Item>".into());
             };
+            // The bound item uses the same realized payload identity, after
+            // proving it equal to the source item type.
+            let item_ty = {
+                let payload = option
+                    .def()
+                    .variants
+                    .get(some)
+                    .ok_or("checked Iterator::next lost Option::Some")?
+                    .fields
+                    .read(&plan.budget)?
+                    .first()
+                    .ok_or("checked Option::Some lost its payload")?
+                    .ty
+                    .clone();
+                self.require(
+                    &Flow {
+                        ty: payload.clone(),
+                        completes: true,
+                    },
+                    &item_ty,
+                )?;
+                payload
+            };
             if let Some(cap) = self.canonical {
                 cap.record_for_iterator_call(source, true, next, &self.exprs[next.0].kind)?;
             }
