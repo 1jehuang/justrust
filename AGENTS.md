@@ -155,8 +155,20 @@ billing, private caches) and never weaken the security invariants in
 
 - Use justrust on itself: `justrust check`, `justrust test`, `justrust clippy`.
 - `cargo fmt` before committing. Keep `justrust clippy` warning-free.
-- After a change that affects behavior, reinstall so every agent on the machine
-  gets it: `cargo install --path . --locked`.
+- Keep the default installed client on the service-selected **published release**.
+  Do not run `cargo install --path . --locked` as the default final step: it
+  replaces production dogfooding with an unpublished source build, and can
+  update a different executable from the one selected by PATH.
+- After publishing a release, activate and verify it with
+  `python3 scripts/production-dogfood.py --expect vX --activate`. This downloads
+  the published artifact, verifies its checksum and release marker, tests it on
+  hosted, atomically replaces the PATH-selected executable with a backup, and
+  tests the installed executable on hosted again. It does not compile locally.
+  See `docs/production-dogfood.md` for release gates, rollback, and limitations.
+- Unpublished source builds are candidates, not production. Exercise them by
+  explicit path without replacing the default client, and report their identity.
+  Never claim an installed source build is production merely because its
+  package version matches a release tag.
 - Verify on a real workload, not only unit tests. The main targets are
   `~/jcode-desktop` (`justrust test -p jcode-desktop-ui --lib -- fps_counter`
   after a one-line edit) and this repo (`bench/edit-loop.sh`). Restore any file
