@@ -313,3 +313,59 @@ fn main() { let v = vec![1u8, 2]; let it = bumped(&v); drop(v); for w in it { pr
 "#,
     );
 }
+
+const RIGID_CONTAINER: &str = r#"
+trait Container { type Item; fn get(&self, i: usize) -> Option<&Self::Item>; fn len(&self) -> usize; fn own(&self) -> Self::Item where Self::Item: Clone { self.get(0).unwrap().clone() } }
+struct Stack<T> { items: Vec<T> }
+impl<T> Container for Stack<T> { type Item = T; fn get(&self, i: usize) -> Option<&T> { self.items.get(i) } fn len(&self) -> usize { self.items.len() } }
+struct Bytes(Vec<u8>);
+impl Container for Bytes { type Item = u8; fn get(&self, i: usize) -> Option<&u8> { self.0.get(i) } fn len(&self) -> usize { self.0.len() } }
+"#;
+
+#[test]
+fn rigid_reference_projections_in_generic_callers_match_stock() {
+    for body in [
+        // `&C::Item` results stay rigid in the universal body and are read
+        // through Option without a complete physical cell table.
+        r#"fn present<C: Container>(c: &C) -> bool { c.get(0).is_some() }
+fn first<C: Container>(c: &C) -> bool { let _o = c.get(0); true }
+fn main() { println!("{} {}", present(&Stack { items: vec![1i32] }), present(&Bytes(vec![]))); println!("{}", first(&Bytes(vec![3]))); }"#,
+        // A closure parameter typed by a caller projection, instantiated on a
+        // closed implementation.
+        r#"fn show<C: Container>(c: &C) -> String where C::Item: std::fmt::Debug + Clone { let x = c.own(); let g = |y: &C::Item| format!("{y:?}"); g(&x) }
+fn main() { println!("{}", show(&Bytes(vec![7, 2]))); println!("{}", show(&Stack { items: vec![String::from("s")] })); }"#,
+        r#"fn render<C: Container>(c: &C) -> Vec<String> where C::Item: std::fmt::Debug { let mut v = Vec::new(); for i in 0..c.len() { if let Some(x) = c.get(i) { v.push(format!("{x:?}")); } } v }
+fn main() { println!("{:?}", render(&Stack { items: vec![1i64, 2] })); println!("{:?}", render(&Bytes(vec![9]))); }"#,
+        r#"fn pick<C: Container>(c: &C) -> Option<&C::Item> { let r = c.get(1); r.or(c.get(0)) }
+fn count<C: Container>(c: &C) -> usize where C::Item: std::fmt::Debug { let mut n = 0; let f = |x: &C::Item| format!("{x:?}").len(); if let Some(x) = pick(c) { n += f(x); } n }
+fn main() { let s = Stack { items: vec![10u32, 200] }; println!("{:?} {}", pick(&s), count(&s)); let e: Stack<String> = Stack { items: vec![] }; println!("{:?} {}", pick(&e), count(&e)); }"#,
+    ] {
+        oracle::stock_native(&format!("{RIGID_CONTAINER}{body}"));
+    }
+}
+
+#[test]
+fn rigid_projection_obligations_reject_unimplemented_or_mismatched_items() {
+    for (body, code) in [
+        (
+            "struct Plain; fn show<C: Container>(c: &C) -> bool { c.get(0).is_some() } fn main() { println!(\"{}\", show(&Plain)); }",
+            "E0277",
+        ),
+        (
+            "fn want<C: Container<Item = u8>>(c: &C) -> bool { c.get(0).is_some() } fn main() { println!(\"{}\", want(&Stack { items: vec![1i32] })); }",
+            "E0271",
+        ),
+        (
+            "fn unused<C: Container>(c: &C) -> bool { let x: &u8 = c.get(0).unwrap(); *x > 0 } fn main() {}",
+            "E0308",
+        ),
+    ] {
+        let source = format!("{RIGID_CONTAINER}{body}");
+        oracle::stock_and_native_reject_observed(&source, |workers, check, failure| {
+            assert!(
+                failure.to_string().contains(code),
+                "workers={workers} check={check}: expected {code}: {failure}"
+            );
+        });
+    }
+}

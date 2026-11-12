@@ -1026,6 +1026,7 @@ impl ValidatedTraitWorld {
         // Complete the origins from the declaration's existing input regions,
         // as in closed projected applications, before validating the schema.
         self.complete_projected_contract(&mut instantiated.signature)?;
+        self.complete_rigid_projected_contract(&mut instantiated.signature)?;
         instantiated.predicates = self.normalize_instantiated_projection_predicates(
             &instantiated.predicates,
             context,

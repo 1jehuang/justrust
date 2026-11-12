@@ -35,7 +35,9 @@ impl ValidatedTraitWorld {
                 source_metadata: None,
                 predicates: &caller,
                 executable_storage: true,
-                phase: FactsPhase::Schema,
+                // The caller's own generic predicates: its parameter families
+                // stay rigid exactly as in that caller's universal body.
+                phase: FactsPhase::Universal,
             };
             let mut active = ProofScratch::default();
             let arguments = self.map_universal_projection_type(

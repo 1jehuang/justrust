@@ -11299,6 +11299,7 @@ impl ValidatedTraitWorld {
         }
         if purpose == ScratchInstantiationPurpose::Callable {
             self.complete_projected_contract(&mut result.signature)?;
+            self.complete_rigid_projected_contract(&mut result.signature)?;
         } else if !self.eq_contract(&result.signature.ref_contract, &ir::RefContract::default())? {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -12211,7 +12212,7 @@ impl ValidatedTraitWorld {
             ProofOutcome::NotProven if matches!(predicate, Predicate::ProjectionEq { .. }) => {
                 Err(FactsError::invalid(
                     &self.budget,
-                    "associated equality obligation does not match the caller or selected implementation",
+                    "E0271: associated equality obligation does not match the caller or selected implementation",
                 ))
             }
             ProofOutcome::NotProven => Err(FactsError::unproved(

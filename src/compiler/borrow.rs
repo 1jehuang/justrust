@@ -641,6 +641,10 @@ fn read_cell_cover_with_ledger(
                 Ok(true)
             }
             Ty::DependentArray { .. } | Ty::Param(_) => Ok(false),
+            // Rigid or erased layouts have no complete physical cell table.
+            Ty::AssociatedType(_) | Ty::Opaque(_) | Ty::Dyn(_) | Ty::Closure(_) => Ok(false),
+            // Code addresses and zero-sized carriers hold no reference cells.
+            Ty::FnItem(_) | Ty::FnPointer(_) | Ty::PhantomData(_) => Ok(true),
             Ty::Int(_)
             | Ty::Float(_)
             | Ty::Char
@@ -1245,6 +1249,38 @@ impl FlowState {
         let before = self.overwritten.clone();
         self.overwritten.intersect(&other.overwritten, budget)?;
         Ok(changed || before != self.overwritten)
+    }
+}
+
+/// Generic actuals are never references (ir validate_argument), so a
+/// type-parameter family carries no loan origins. A rigid projection whose
+/// trait application is built only from such parameters inherits that: impl
+/// parameters are constrained by the self type and trait arguments, so its
+/// normal form can name no non-static region either.
+fn reference_free_family_channel(channel: &CellChannel) -> bool {
+    fn parameter_built(ty: &Ty, depth: usize) -> bool {
+        if depth > ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return false;
+        }
+        match ty {
+            Ty::Param(_) => true,
+            Ty::AssociatedType(projection) => {
+                parameter_built(&projection.trait_ref.self_ty, depth + 1)
+                    && projection
+                        .trait_ref
+                        .args
+                        .iter()
+                        .all(|argument| parameter_built(argument, depth + 1))
+            }
+            _ => false,
+        }
+    }
+    match channel {
+        CellChannel::Family(ir::CarrierFamily::Parameter(_)) => true,
+        CellChannel::Family(ir::CarrierFamily::Projection(projection)) => {
+            parameter_built(&Ty::AssociatedType(projection.clone()), 0)
+        }
+        _ => false,
     }
 }
 
@@ -3978,10 +4014,7 @@ impl CarrierBuilder<'_, '_> {
             if !matched_cell && failure.is_none() {
                 failure = Some(ResolutionFailure::EmptyOrigins);
             }
-            if matches!(
-                channel,
-                CellChannel::Family(ir::CarrierFamily::Parameter(_))
-            ) {
+            if reference_free_family_channel(&channel) {
                 failure = None;
             }
             if let Some(failure) = failure.filter(|_| self.diagnosing) {
@@ -4684,10 +4717,7 @@ impl CarrierBuilder<'_, '_> {
         // Generic actuals are never references (ir validate_argument), so a
         // type-parameter family carries no loan origins; a missing family
         // cell behind a borrowed or returned reference is simply empty.
-        if matches!(
-            channel,
-            CellChannel::Family(ir::CarrierFamily::Parameter(_))
-        ) {
+        if reference_free_family_channel(&channel) {
             failure = None;
         }
         if let Some(failure) = failure.filter(|_| self.diagnosing) {

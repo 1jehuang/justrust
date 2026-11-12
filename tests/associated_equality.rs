@@ -512,8 +512,8 @@ fn main() { let x = forward(S); if x == [] { println!("ok"); } }
             source_fingerprint: 17131078335978388802,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ArrayComparison,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 c5172e3e823b38121711f6321bc341069e3fec0349085598d5bb0ed220245727
         Case {
@@ -851,7 +851,7 @@ fn associated_equality_frozen_stock_partition_and_source_bytes() {
             case.name
         );
     }
-    assert_eq!(partition, [35, 7, 4, 0]);
+    assert_eq!(partition, [36, 7, 3, 0]);
     assert_eq!(stock, [39, 7]);
     assert_eq!(
         cases[..10]
@@ -1190,13 +1190,13 @@ fn native_associated_equality_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(cells, 184);
-    assert_eq!(modes, [[70, 70], [14, 14], [8, 8], [0, 0]]);
+    assert_eq!(modes, [[72, 72], [14, 14], [6, 6], [0, 0]]);
     failures.check("native CLI successful runtime count", || {
-        assert_eq!(runtimes, 70)
+        assert_eq!(runtimes, 72)
     });
     failures.finish();
     eprintln!(
-        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},70 native ELF payloads;35 Runtime,7 Invalid,4 stock-valid Unsupported,0 stock-invalid Unsupported"
+        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},72 native ELF payloads;36 Runtime,7 Invalid,3 stock-valid Unsupported,0 stock-invalid Unsupported"
     );
 }
 fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
@@ -1401,7 +1401,7 @@ fn all_body_graph() {
             }
         }
     }
-    assert_eq!(modes, [[70, 70], [14, 14], [8, 8], [0, 0]]);
+    assert_eq!(modes, [[72, 72], [14, 14], [6, 6], [0, 0]]);
     failures.check("native graph unused universal rejection count", || {
         assert_eq!(unused_failures, 8)
     });

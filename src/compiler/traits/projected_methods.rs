@@ -230,6 +230,78 @@ impl ValidatedTraitWorld {
 
     // This is a value-oriented stage, including references hidden in nominals.
     // Do not ask the IR carrier walker to interpret an unreduced projection.
+    /// A universal caller's projection (`&C::Item` with `C: Container`) is
+    /// rigid: it never normalizes in that body. Its deferred `NoReference`
+    /// rows take the opaque input envelopes the canonical derivation assigns
+    /// to an uninterpreted referent (every eligible input loan, the most
+    /// conservative origin set). Any other derived shape fails closed.
+    pub(super) fn complete_rigid_projected_contract(
+        &self,
+        signature: &mut Signature,
+    ) -> Result<()> {
+        if !signature
+            .ref_contract
+            .results
+            .iter()
+            .any(|r| matches!(r.returns, ir::ReturnContract::NoReference))
+            || !charged(
+                &self.budget,
+                ir::contains_associated_types(&signature.result, &self.budget),
+            )?
+        {
+            return Ok(());
+        }
+        let derived = charged(
+            &self.budget,
+            ir::derive_return_contracts(
+                &signature.params,
+                &signature.result,
+                &signature.ref_contract,
+                &self.budget,
+            ),
+        )?;
+        if derived.len() != signature.ref_contract.results.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "rigid projected result changed its reference positions",
+            ));
+        }
+        retain::<ir::ResultReference>(&self.budget, derived.len())?;
+        let mut results = Vec::new();
+        results
+            .try_reserve_exact(derived.len())
+            .map_err(|_| FactsError::resource(&self.budget, "rigid projected result rows"))?;
+        for (raw, derived) in signature.ref_contract.results.iter().zip(derived.iter()) {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if raw.position != derived.position || raw.region != derived.region {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "rigid projected result changed its reference positions",
+                ));
+            }
+            match (&raw.returns, &derived.returns) {
+                (
+                    ir::ReturnContract::NoReference,
+                    ir::ReturnContract::SharedInputEnvelopes(_)
+                    | ir::ReturnContract::MutInputEnvelopes(_),
+                ) => results.push(derived.clone()),
+                (ir::ReturnContract::NoReference, _) => {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: rigid projected reference result without opaque input envelopes",
+                    ));
+                }
+                _ => results.push(raw.clone()),
+            }
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        signature.ref_contract = Arc::new(ir::RefContract {
+            results: results.into(),
+            ..(*signature.ref_contract).clone()
+        });
+        Ok(())
+    }
+
     /// After normalizing a projected declaration (`&Self::Target`), derive the
     /// return origins the raw schema deliberately left unresolved.
     pub(super) fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {

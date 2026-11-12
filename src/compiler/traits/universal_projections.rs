@@ -210,7 +210,9 @@ impl ValidatedTraitWorld {
                             source_metadata: None,
                             predicates: &caller,
                             executable_storage: true,
-                            phase: FactsPhase::Schema,
+                            // Caller predicates: its parameter families stay
+                            // rigid exactly as in that caller's universal body.
+                            phase: FactsPhase::Universal,
                         },
                         active,
                     )?,

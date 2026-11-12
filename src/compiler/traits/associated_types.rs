@@ -1630,6 +1630,25 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
+    /// A rigid parameter self type unifies only with a blanket impl head.
+    fn trait_has_parameter_self_impl(&self, trait_decl: DeclId) -> Result<bool> {
+        let Some(positions) = self.trait_impl_index.get(&trait_decl) else {
+            return Ok(false);
+        };
+        for &position in positions {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let header = self.headers.impls.get(position).ok_or_else(|| {
+                FactsError::invalid(&self.budget, "trait impl index names a missing header")
+            })?;
+            // Only a blanket head `impl<T> Trait for T` unifies with a rigid
+            // parameter; every other head has a fixed outer constructor.
+            if matches!(header.trait_ref.self_ty, Ty::Param(_)) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn normalize_type_in(
         &self,
         ty: &Ty,
@@ -1647,6 +1666,31 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
+                // A rigid parameter self type unifies only with a blanket impl
+                // head. Without one, selection cannot succeed, so take the
+                // same rigid-family admission as an unproved selection below
+                // without materializing that failed proof's diagnostic.
+                if context.proof.phase == FactsPhase::Universal
+                    && matches!(projection.trait_ref.self_ty, Ty::Param(_))
+                    && !self.trait_has_parameter_self_impl(projection.trait_ref.declaration)?
+                    && !self.goal_is_closed(&projection.trait_ref, context.proof.env())?
+                    && self
+                        .declared_equality_rhs(
+                            projection,
+                            &context.proof.predicates.predicates,
+                            context.proof.env(),
+                        )?
+                        .is_none()
+                    && self
+                        .validate_universal_projection_with(
+                            projection,
+                            context.proof.env(),
+                            &mut stack.obligations,
+                        )
+                        .is_ok()
+                {
+                    return Ok(ty.clone());
+                }
                 // Try a genuine implementation assignment before retaining a
                 // rigid family. Blanket impls can normalize a parameter's
                 // projection from its bounds (for example IntoIter = I).
@@ -1812,6 +1856,14 @@ impl ValidatedTraitWorld {
                 );
                 stack.obligations.nominal_operations = operations;
                 result
+            }
+            // A closed closure instance carries closed associated families in
+            // its sealed signature; reduce them like any other closed term.
+            // Open owner actuals keep their rigid caller projections.
+            Ty::Closure(closure) if self.raw_associated_ty_is_closed(ty, depth + 1)? => {
+                Ok(Ty::Closure(Arc::new(closure.try_map(|child| {
+                    self.normalize_type_in(child, context, stack, dependencies, depth + 1)
+                })?)))
             }
             _ => Ok(ty.clone()),
         }
@@ -2286,6 +2338,57 @@ impl ValidatedTraitWorld {
         result
     }
 
+    /// A raw projection whose ordered actuals are all closed substitutes to a
+    /// closed projection. Its only admissible replacement is that projection's
+    /// solver-selected normal form, proved without caller assumptions.
+    fn closed_projection_substitution_matches(
+        &self,
+        raw: &Ty,
+        actual: &Ty,
+        env: &GenericEnv,
+        arguments: &[Ty],
+    ) -> Result<bool> {
+        if self.type_contains_projection(actual, 0)? {
+            return Ok(false);
+        }
+        for argument in arguments {
+            if !self.raw_associated_ty_is_closed(argument, 0)? {
+                return Ok(false);
+            }
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: Arc::new(env.clone()),
+            signature: Signature {
+                params: Vec::new(),
+                result: raw.clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates: Arc::from([]),
+        };
+        let instance = self.substitute_projected_schema(&schema, arguments, &self.empty.env)?;
+        let substituted = instance.signature.result;
+        if !instance.predicates.is_empty()
+            || !self.raw_associated_ty_is_closed(&substituted, 0)?
+            || !matches!(&substituted, Ty::AssociatedType(_))
+        {
+            return Ok(false);
+        }
+        let (normal, _) = self.normalize_closed_projected_type(
+            &substituted,
+            ProofContext {
+                transport: ParentLocalTransport::default(),
+                original: None,
+                source_metadata: None,
+                predicates: &self.empty,
+                executable_storage: true,
+                phase: FactsPhase::Closed,
+            },
+            false,
+        )?;
+        self.eq_ty(&normal, actual, 0)
+    }
+
     pub(super) fn validate_rhs_substitution(
         &self,
         raw: &Ty,
@@ -2517,6 +2620,11 @@ impl ValidatedTraitWorld {
                 if left.def().source_decl == right.def().source_decl => {}
             _ => {
                 if self.eq_ty(raw, actual, depth + 1)? {
+                    return Ok(());
+                }
+                if let Ty::AssociatedType(_) = raw
+                    && self.closed_projection_substitution_matches(raw, actual, env, arguments)?
+                {
                     return Ok(());
                 }
                 return Err(FactsError::invalid(
