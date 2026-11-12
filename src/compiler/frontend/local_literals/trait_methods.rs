@@ -169,6 +169,9 @@ impl Solver<'_, '_, '_> {
                     if !header.schema_env.contains(parameter) {
                         return Ok(None);
                     }
+                    if self.blanket_bound_excludes_nominal(header, parameter, declaration)? {
+                        continue;
+                    }
                     self.checker.infer_storage(1)?;
                     if selected.replace(header.clone()).is_some() {
                         return Ok(None);
@@ -196,6 +199,53 @@ impl Solver<'_, '_, '_> {
             }
         }
         Ok(selected)
+    }
+
+    /// A blanket head `impl<I: Bound> Trait for I` cannot apply to a nominal
+    /// that no implementation of `Bound` can ever cover: no `Bound` impl has
+    /// that nominal or a bare parameter as its Self type. Such a head is no
+    /// competitor, so `impl<I: Iterator> IntoIterator for I` does not hide
+    /// `impl<T> IntoIterator for Vec<T>` while `T` is still open. This only
+    /// removes a candidate for inference equations. Catalog (built-in and
+    /// auto) bounds are never used as exclusion evidence, and checked lowering
+    /// still proves the selected implementation.
+    fn blanket_bound_excludes_nominal(
+        &self,
+        header: &tr::ImplHeader,
+        parameter: ir::ParamId,
+        nominal: ir::DeclId,
+    ) -> Result<bool, String> {
+        let plan = self.checker.signatures.plan()?;
+        let world = plan.trait_world()?;
+        for predicate in header.predicates.iter() {
+            self.checker.infer_work(0)?;
+            let ir::Predicate::Implements(bound) = predicate else {
+                continue;
+            };
+            if bound.self_ty != ir::Ty::Param(parameter)
+                || plan.catalog.declaration(bound.declaration).is_some()
+            {
+                continue;
+            }
+            let mut possible = false;
+            for candidate in world.impl_headers() {
+                self.checker.infer_work(0)?;
+                if candidate.trait_ref.declaration != bound.declaration {
+                    continue;
+                }
+                possible = match &candidate.trait_ref.self_ty {
+                    ir::Ty::Param(_) | ir::Ty::AssociatedType(_) | ir::Ty::Opaque(_) => true,
+                    self_ty => nominal_parts(self_ty).is_some_and(|(owner, _)| owner == nominal),
+                };
+                if possible {
+                    break;
+                }
+            }
+            if !possible {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn structural_impl_with_arguments(

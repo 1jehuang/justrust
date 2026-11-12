@@ -316,6 +316,55 @@ fn main() {}"#,
 fn main() {}"#,
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "open_error_payload_inferred_through_into_iter",
+                source: r#"fn main() {
+    let s: Result<i32, i32> = vec![Ok(2), Ok(3)].into_iter().sum();
+    println!("{:?}", s);
+    let c: Result<Vec<i64>, String> = vec![Ok(4), Ok(5)].into_iter().collect();
+    println!("{:?}", c);
+}"#,
+                expect: Expect::Run("Ok(5)\nOk([4, 5])\n"),
+            },
+            Case {
+                name: "blanket_head_with_bound_implemented_for_nominal",
+                source: r#"trait Shape { fn area(&self) -> u32; }
+trait Marker {}
+struct W<T>(T);
+impl Marker for W<u16> {}
+impl<P: Marker> Shape for P { fn area(&self) -> u32 { 1 } }
+impl Shape for W<u8> { fn area(&self) -> u32 { 2 } }
+fn main() {
+    let a = W(5u8);
+    let b = W(5u16);
+    println!("{} {}", a.area(), b.area());
+    let c = vec![W(7u16)];
+    println!("{}", c.into_iter().map(|w| w.area()).sum::<u32>());
+}"#,
+                expect: Expect::Run("2 1\n1\n"),
+            },
+            Case {
+                name: "blanket_head_bound_covers_nominal_stays_candidate",
+                source: r#"trait Shape { fn area(&self) -> u32; }
+trait Marker {}
+struct W<T>(T);
+impl Marker for W<u16> {}
+impl<P: Marker> Shape for P { fn area(&self) -> u32 { 1 } }
+impl Shape for W<u8> { fn area(&self) -> u32 { 2 } }
+fn main() {
+    let w = W(3);
+    println!("{}", w.area());
+}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "open_error_payload_mismatched_annotation",
+                source: r#"fn main() {
+    let s: Result<i32, i32> = vec![Ok(2), Err("x")].into_iter().sum();
+    println!("{:?}", s);
+}"#,
+                expect: Expect::Invalid("E0277"),
+            },
         ],
     );
 }
