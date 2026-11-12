@@ -493,3 +493,31 @@ fn repr_transparent_single_field_structs_match_stock() {
     );
     assert!(error.is_ok());
 }
+
+#[test]
+fn where_shorthand_sees_other_predicates_and_edition_2018_impl_trait_without_lifetimes() {
+    // smallvec: a cfg'd-out struct whose where clause uses `T::Item` before
+    // (or after) the predicate bounding `T`. Valid syntax in either order.
+    for text in [
+        "trait Array { type Item; } #[cfg(any())] struct D<T, F> where F: FnMut(&mut T::Item) -> bool, T: Array { t: T, f: F } fn main() {}",
+        "trait Array { type Item; } #[cfg(any())] struct D<T, F> where T: Array, F: FnMut(&mut T::Item) -> bool { t: T, f: F } fn main() {}",
+    ] {
+        compiler::compile_observed(text.into(), 1, true).unwrap_or_else(|e| panic!("{text}: {e}"));
+    }
+    file_oracle::Fixture::new(
+        "trait A { type Item; } struct S<T, F> where F: Fn(&T::Item), T: Clone { t: T, f: F } fn main() {}",
+        &[],
+        None,
+    )
+    .assert_negative();
+    let options = SourceOptions {
+        edition: source::Edition::E2018,
+        ..SourceOptions::default()
+    };
+    let ok = "fn pairs(n: usize) -> impl Iterator<Item = (usize, usize)> { (0..n).map(|i| (i, i + 1)) } fn main() { let _ = pairs(2); }";
+    compiler::compile_observed_with_options(ok.into(), 1, true, options.clone()).unwrap();
+    // A lifetime input makes pre-2024 capture differ: stays unsupported.
+    let borrowed =
+        "fn first<'a>(x: &'a [u8]) -> impl Iterator<Item = &'a u8> { x.iter() } fn main() {}";
+    assert!(compiler::compile_observed_with_options(borrowed.into(), 1, true, options).is_err());
+}

@@ -543,7 +543,9 @@ impl Parser<'_, '_> {
     /// Only function result parsing enables this context. Closure annotations,
     /// item fields and local annotations retain the ordinary E0562 rejection.
     pub(super) fn opaque_return_type(&mut self) -> Result<Type, ParseError> {
-        if self.names.edition() != super::super::token::Edition::E2024 {
+        if self.names.edition() != super::super::token::Edition::E2024
+            && !self.pre_2024_capture_agrees
+        {
             return Err(self.unsupported(
                 "pre-2024 `impl Trait` return lifetime capture rules are unsupported; the native compiler implements only edition 2024 capture",
             ));
