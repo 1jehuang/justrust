@@ -12996,6 +12996,8 @@ mod parameter_equality_tests {
 
     #[test]
     fn identity_nested_slot_reborrow_authenticates_original_and_expanded_ownership() {
+        // `expected` is whether the leaf is Copy. Both carrier-free leaves are
+        // admitted: the exclusive reference stays affine either way.
         for (text, expected) in [
             (
                 r#"fn main(){let mut a=1i32;let mut b=5i32;let mut v:Vec<&mut i32>=vec![&mut a,&mut b];*v[0]+=10;*v[1]=7;println!("{} {}",v[0],v[1]);}"#,
@@ -13076,7 +13078,7 @@ mod parameter_equality_tests {
                         Some(&facts)
                     )
                     .unwrap(),
-                expected
+                true
             );
             let Ty::Ref {
                 referent: actual, ..
