@@ -1553,6 +1553,10 @@ impl Filter<'_> {
                 if !fields && !a.inner && self.nested_cfg(&a, i, end)? {
                     continue;
                 }
+                if !a.inner && self.nested_lint_level(&a, i, start, fields)? {
+                    self.mask(a.range.clone());
+                    continue;
+                }
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     a.range,
@@ -1561,6 +1565,77 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `#[allow|warn|expect|deny|forbid(..)]` on a statement, block tail,
+    /// match arm, or field. The native compiler emits no warnings, so a level
+    /// is admitted only when it cannot change acceptance: it names no lint the
+    /// native compiler enforces, or the crate caps lints at allow, and
+    /// deny/forbid name only tool lints. Expression positions after `(`, `,`,
+    /// `=` and similar are left to the explicit unsupported diagnostic.
+    fn nested_lint_level(
+        &mut self,
+        a: &Attr,
+        i: usize,
+        start: usize,
+        fields: bool,
+    ) -> Result<bool, AttributeError> {
+        let content = &self.text[a.content.clone()];
+        if !lint_level_attribute(content) {
+            return Ok(false);
+        }
+        let position = i == start
+            || matches!(self.tokens[i - 1].text(self.text), "{" | ";" | "}" | "]")
+            || (fields && self.tokens[i - 1].text(self.text) == ",");
+        if !position {
+            return Ok(false);
+        }
+        let meta = parse_meta(content, a.content.start)?;
+        let MetaValue::List(items) = &meta.value else {
+            return Err(error(
+                AttributeErrorKind::Syntax,
+                a.range.clone(),
+                &format!("malformed `{}` attribute input", meta.name),
+            ));
+        };
+        let raising = matches!(meta.name.as_str(), "deny" | "forbid");
+        for (index, item) in items.iter().enumerate() {
+            match &item.value {
+                MetaValue::Word => {}
+                MetaValue::String(_) if item.name == "reason" && index + 1 == items.len() => {
+                    continue;
+                }
+                _ => {
+                    return Err(error(
+                        AttributeErrorKind::Syntax,
+                        a.range.clone(),
+                        &format!("malformed `{}` attribute input", meta.name),
+                    ));
+                }
+            }
+            if self.cap_lints_allow {
+                continue;
+            }
+            let lint = item.name.as_str();
+            if let Some((tool, rest)) = lint.split_once("::") {
+                if !matches!(tool, "clippy" | "rustdoc") || rest.is_empty() {
+                    return Err(error(
+                        AttributeErrorKind::Syntax,
+                        a.range.clone(),
+                        &format!("unknown tool name `{tool}` found in scoped lint: `{lint}`"),
+                    ));
+                }
+                continue;
+            }
+            let lint = lint_names::canonical(lint);
+            let touches_enforced = lint == "unsafe_code"
+                || lint_names::enforced(lint).is_some()
+                || lint_names::GROUPS.iter().any(|(group, _)| *group == lint);
+            if raising || touches_enforced {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// A lone `#[cfg(pred)]` on a comma-separated element (call/macro

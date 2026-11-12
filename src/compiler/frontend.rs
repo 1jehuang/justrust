@@ -20230,8 +20230,11 @@ fn parse_syntax_unit(
 pub(super) fn parse_syntax_unprepared(source: &str) -> Result<ParsedProgram, ParseError> {
     parse_syntax_tokens(lex(source)?)
 }
+/// Inactive item syntax in the owning crate's edition: a configured-out
+/// item still lexes keywords exactly as its crate does.
 pub(super) fn validate_inactive_syntax(
     source: &str,
+    edition: super::token::Edition,
 ) -> Result<InactiveSyntaxCertificate, ParseError> {
     let budget = super::expansion_budget::ExpansionBudget::default();
     let projection = super::source::PreparedLexInput::identity(
@@ -20254,7 +20257,7 @@ pub(super) fn validate_inactive_syntax(
         owner,
     )
     .map_err(native_adapter::transport_error)?;
-    let lexed = super::lexer::lex_prepared(&projection, super::token::Edition::E2024, &mut session)
+    let lexed = super::lexer::lex_prepared(&projection, edition, &mut session)
         .map_err(native_adapter::lex_error)?;
     let input = NativeParserInput::new_inactive(lexed, session, cap, &projection)?;
     Ok(InactiveSyntaxCertificate {
@@ -21206,9 +21209,11 @@ mod inactive_item_syntax_tests {
 
     #[test]
     fn inactive_unknown_macro_retains_nonplannable_syntax_without_expansion() {
-        let certificate =
-            validate_inactive_syntax("undefined!(); fn unused(){ undefined!(); } fn main(){}")
-                .unwrap();
+        let certificate = validate_inactive_syntax(
+            "undefined!(); fn unused(){ undefined!(); } fn main(){}",
+            crate::compiler::token::Edition::E2024,
+        )
+        .unwrap();
         let items = certificate._unit._inactive_items.as_ref().unwrap();
         assert_eq!(items.len(), 1);
         assert!(certificate._unit.scopes.is_none());
@@ -21237,21 +21242,31 @@ mod inactive_item_syntax_tests {
             "fn unused(){ let a = [0u8; 33554432]; }",
             "fn unused(){ let a = [0xffu8; 32 * 1024 * 1024 - 1024]; }",
         ] {
-            validate_inactive_syntax(source).unwrap();
+            validate_inactive_syntax(source, crate::compiler::token::Edition::E2024).unwrap();
             let active = format!("{source} fn main(){{}}");
             assert!(parse(&active).is_err(), "{active}");
         }
-        assert!(validate_inactive_syntax("fn unused(){ let a = [0u8; ]; }").is_err());
+        assert!(
+            validate_inactive_syntax(
+                "fn unused(){ let a = [0u8; ]; }",
+                crate::compiler::token::Edition::E2024
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn inactive_block_local_items_are_syntax_checked_only() {
         validate_inactive_syntax(
             "fn unused(){ use std::io::BufReader; fn inner(x: &[u8]) -> usize { x.len() } inner(&[]); }",
+            crate::compiler::token::Edition::E2024,
         )
         .unwrap();
         for bad in ["fn unused(){ use ; }", "fn unused(){ fn inner( { } }"] {
-            assert!(validate_inactive_syntax(bad).is_err(), "{bad}");
+            assert!(
+                validate_inactive_syntax(bad, crate::compiler::token::Edition::E2024).is_err(),
+                "{bad}"
+            );
         }
         assert!(parse("fn main(){ use std::io::BufReader; }").is_err());
     }
@@ -21264,7 +21279,9 @@ mod inactive_item_syntax_tests {
             "macro_rules! bad { ($x:ident) => }",
         ] {
             assert_eq!(
-                validate_inactive_syntax(source).unwrap_err().kind,
+                validate_inactive_syntax(source, crate::compiler::token::Edition::E2024)
+                    .unwrap_err()
+                    .kind,
                 super::super::source::SourceErrorKind::Syntax
             );
         }

@@ -165,8 +165,6 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "trait T { #[doc(foo)] fn f(); }",
         "struct S{v:i32} impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
         "trait T { #[doc=\"prefix\"] #[inline] fn f(); }",
-        "struct S{v:i32} impl S { #[cfg(any())] #[doc=\"prefix\"] fn f(){} }",
-        "trait T { #[cfg_attr(any(),doc=42)] fn f(); }",
         "trait T { #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[inline] #[inline(never)] fn f(){} }",
         "struct S{v:i32} impl S { #[inline] #[target_feature(enable=\"sse2\")] unsafe fn f(){} }",
@@ -222,7 +220,6 @@ fn malformed_or_misplaced_docs_are_not_masked_into_valid_programs() {
         "trait T { #[doc=\"dangling\"] }fn main(){}",
         "trait T { fn #[doc=\"header\"] f(); }fn main(){}",
         "trait T { fn f(#[doc=\"parameter\"] x:i32); }fn main(){}",
-        "struct S{#[doc=\"field\"]v:i32}fn main(){}",
         "trait T { #[doc=\"valid\"] fn f(x:i32 ->i32; }fn main(){}",
         "#[cfg(any())] trait T { #[doc=] fn f(); }fn main(){}",
         "#[cfg(any())] trait T { #[doc=\"\\q\"] fn f(); }fn main(){}",
@@ -301,4 +298,93 @@ fn deprecated_metadata_and_global_extern_paths_match_stock() {
     ] {
         file_oracle::Fixture::new(invalid, &[], None).assert_negative();
     }
+}
+
+#[test]
+fn stock_valid_cfg_docs_and_field_docs_are_accepted() {
+    for text in [
+        "struct S{v:i32} impl S { #[cfg(any())] #[doc=\"prefix\"] fn f(){} } fn main(){let _=S{v:1}.v;}",
+        "struct S{#[doc=\"field\"]v:i32}fn main(){let _=S{v:1}.v;}",
+        "trait T { #[cfg_attr(any(),doc=42)] fn f(); } fn main(){}",
+    ] {
+        file_oracle::Fixture::new(text, &[], None).assert_positive();
+    }
+}
+
+#[test]
+fn statement_and_field_lint_levels_match_stock() {
+    let source = r#"
+        struct P {
+            #[allow(dead_code)]
+            x: i32,
+            #[allow(unused)]
+            y: i32,
+        }
+        fn max() -> usize {
+            #[allow(deprecated)]
+            usize::MAX
+        }
+        fn main() {
+            #[allow(unused_variables)]
+            let unused = 1;
+            let p = P { x: 2, y: 3 };
+            let v = match p.y {
+                #[allow(unreachable_patterns)]
+                3 => { #[allow(unused, reason = "demo")] 4 }
+                _ => 0,
+            };
+            #[allow(clippy::all)]
+            println!("{} {} {}", p.y, v, max() > 1);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "fn main() { #[allow(unused)] let x: u8 = true; }",
+        "fn main() { #[allow(bogus::x)] let x = 1; }",
+        "fn main() { #[allow = 1] let x = 1; }",
+    ] {
+        file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+    }
+    for unsupported in [
+        "fn main() { #[deny(unused)] let x = 1; }",
+        "fn main() { #[allow(non_camel_case_types)] let x = 1; }",
+    ] {
+        let error =
+            source::prepare_text("lint.rs", unsupported, &SourceOptions::default()).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported, "{unsupported}");
+    }
+}
+
+#[test]
+fn inactive_items_lex_with_the_crate_edition() {
+    let text = "#[cfg(any())] fn unused(gen: u8) -> u8 { gen } fn main(){}";
+    let options = SourceOptions {
+        edition: source::Edition::E2021,
+        ..SourceOptions::default()
+    };
+    source::prepare_text("e2021.rs", text, &options).unwrap();
+    assert!(source::prepare_text("e2024.rs", text, &SourceOptions::default()).is_err());
+}
+
+#[test]
+fn separator_free_literal_expr_repetitions_match_stock() {
+    let source = r#"
+        trait Z { fn z() -> usize; }
+        macro_rules! imp {
+            ($($len:expr)+) => {$( impl Z for [u8; $len] { fn z() -> usize { $len } } )+}
+        }
+        imp! { 1 2 3 }
+        macro_rules! sum { ($($x:expr)+) => { 0 $(+ $x)+ } }
+        fn get<T: Z>() -> usize { T::z() }
+        fn main() {
+            println!("{} {} {}", get::<[u8; 2]>() + get::<[u8; 3]>(), sum!(1 -2 3), sum!(4));
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    file_oracle::Fixture::new(
+        "macro_rules! s { ($($x:expr)+) => { 0 $(+ $x)+ } } fn main() { let _: u8 = s!(1 \"a\"); }",
+        &[],
+        None,
+    )
+    .assert_negative();
 }

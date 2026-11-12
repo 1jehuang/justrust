@@ -1961,7 +1961,8 @@ mod tests {
         let checked = original(&session, character.span).unwrap();
         assert_eq!(checked.lo as usize, start);
         assert_eq!(checked.hi as usize, start + 3);
-        super::super::validate_inactive_syntax(text).unwrap();
+        super::super::validate_inactive_syntax(text, crate::compiler::token::Edition::E2024)
+            .unwrap();
         let lifetime = super::super::lex("'label").unwrap();
         assert!(
             super::super::TokenCursor::new(&lifetime)

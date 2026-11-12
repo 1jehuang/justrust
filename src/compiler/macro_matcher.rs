@@ -612,16 +612,33 @@ fn literal_expr_boundary(
     let Some(next) = events.get(end) else {
         return Ok(None);
     };
+    // A literal operand is complete before another literal or a non-`as`
+    // identifier: neither can continue an expression (`$($e:expr)+` over
+    // `1 2 3` is three expressions).
     Ok((accepted
-        && matches!(
+        && (matches!(
+            next.kind,
+            EventKind::Atom(LogicalToken::Leaf(Token {
+                kind: TokenKind::Literal { .. },
+                ..
+            }))
+        ) || (matches!(
             next.kind,
             EventKind::Atom(LogicalToken::Leaf(Token {
                 kind: TokenKind::Ident(_),
                 ..
             }))
-        )
-        && ident_of(next, session)? != Some("as"))
+        ) && ident_of(next, session)? != Some("as"))))
     .then_some(end))
+}
+fn is_literal(event: &Event) -> bool {
+    matches!(
+        event.kind,
+        EventKind::Atom(LogicalToken::Leaf(Token {
+            kind: TokenKind::Literal { .. },
+            ..
+        }))
+    )
 }
 /// Token-tree level recognizer for syntactic fragments. FOLLOW delimiters are
 /// not generally expression boundaries (notably in separator-free repeats).
@@ -714,6 +731,15 @@ fn syntactic(
             while let Some(event) = events.get(end) {
                 work(session)?;
                 if literal_end == Some(end) {
+                    break;
+                }
+                // Two adjacent top-level literals never continue one
+                // expression: `1 -2 3` is `1 -2` then `3`.
+                if matches!(kind, FragmentKind::Expr | FragmentKind::Expr2021)
+                    && end > position
+                    && is_literal(event)
+                    && is_literal(&events[end - 1])
+                {
                     break;
                 }
                 if matches!(event.kind, EventKind::Close(_)) {

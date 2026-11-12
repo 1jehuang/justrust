@@ -1834,19 +1834,21 @@ impl<'a> Loader<'a> {
                     message,
                 )
             })?;
-            super::frontend::validate_inactive_syntax(&syntax).map_err(|e| {
-                Self::error(
-                    e.kind,
-                    e.has_location.then(|| {
-                        Self::span(
-                            id,
-                            inactive.range.start + e.bytes.start
-                                ..inactive.range.start + e.bytes.end,
-                        )
-                    }),
-                    format!("inactive item: {}", e.message),
-                )
-            })?;
+            super::frontend::validate_inactive_syntax(&syntax, self.options.edition).map_err(
+                |e| {
+                    Self::error(
+                        e.kind,
+                        e.has_location.then(|| {
+                            Self::span(
+                                id,
+                                inactive.range.start + e.bytes.start
+                                    ..inactive.range.start + e.bytes.end,
+                            )
+                        }),
+                        format!("inactive item: {}", e.message),
+                    )
+                },
+            )?;
         }
         self.has_item_macro_invocations |= filtered.has_item_macro_invocations;
         self.has_root_use_items |= filtered.has_root_use_items;
