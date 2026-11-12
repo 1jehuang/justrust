@@ -819,3 +819,38 @@ fn string_from_utf8_lossy_sequences_match_stock() {
         }],
     );
 }
+
+#[test]
+fn cow_borrowed_unsizes_array_reference_field() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "cow-borrowed-array-unsize",
+        &[
+            Case {
+                name: "cow_borrowed_array_reference",
+                source: "use std::borrow::Cow;\nfn main(){let bytes=[7u8,8,9];let data:Cow<'_,[u8]>=Cow::Borrowed(&bytes);println!(\"{:?} {}\",data,data.len());let owned:Vec<u8>=data.into_owned();println!(\"{:?}\",owned);}",
+                expect: Expect::Run("[7, 8, 9] 3\n[7, 8, 9]\n"),
+            },
+            Case {
+                name: "user_deref_to_slice_and_str_methods",
+                source: "struct C<'a,B:?Sized>{b:&'a B}\nimpl<'a,B:?Sized> std::ops::Deref for C<'a,B>{type Target=B;fn deref(&self)->&B{self.b}}\nfn main(){let a=[1u8,2,3];let c:C<'_,[u8]>=C{b:&a[..]};println!(\"{} {:?} {:?}\",c.len(),c.first(),&*c);let s:&[u8]=&c;println!(\"{:?}\",s);let t:C<'_,str>=C{b:\"abc\"};println!(\"{} {}\",t.len(),t.to_uppercase());let o:std::borrow::Cow<'_,[u8]>=std::borrow::Cow::Owned(vec![4,5]);println!(\"{} {:?}\",o.len(),o.first());}",
+                expect: Expect::Run("3 Some(1) [1, 2, 3]\n[1, 2, 3]\n3 ABC\n2 Some(4)\n"),
+            },
+            Case {
+                name: "sized_parameter_rejects_slice_actual",
+                source: "trait T{fn go(&self)->usize;}struct C<'a,B:?Sized>{b:&'a B}impl<'a,B> T for C<'a,B>{fn go(&self)->usize{1}}fn bad()->usize{let a=[1u8];let c=C{b:&a[..]};c.go()}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "deref_target_lacks_method",
+                source: "struct C<'a,B:?Sized>{b:&'a B}impl<'a,B:?Sized> std::ops::Deref for C<'a,B>{type Target=B;fn deref(&self)->&B{self.b}}fn bad(){let a=[1u8];let c=C{b:&a[..]};c.nope();}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "cow_borrowed_scalar_reference_for_slice",
+                source: "use std::borrow::Cow;fn bad()->usize{let data=Cow::<[u8]>::Borrowed(&5u8);data.len()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

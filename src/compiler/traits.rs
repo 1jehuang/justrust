@@ -12957,18 +12957,17 @@ impl ValidatedTraitWorld {
             {
                 continue;
             }
-            // Generic impl parameters bind unsized actuals only when declared
-            // `?Sized`, and only `str` among unsized actuals so far. An
-            // implicitly-Sized parameter cannot bind `str`/`[T]`/`dyn`, so
-            // such a candidate does not apply rather than erroring.
+            // Generic impl parameters bind unsized actuals (`str`, `[T]`,
+            // `dyn`) only when declared `?Sized`. An implicitly-Sized
+            // parameter cannot bind them, so such a candidate does not apply
+            // rather than erroring.
             if slots
                 .iter()
                 .zip(implementation.schema_env.ordered_params())
                 .any(|(actual, parameter)| match actual {
-                    Some(Ty::Str | Ty::Dyn(_)) => {
+                    Some(Ty::Str | Ty::Dyn(_) | Ty::Slice { .. }) => {
                         !implementation.schema_env.relaxed_sized(parameter)
                     }
-                    Some(Ty::Slice { .. }) => true,
                     _ => false,
                 })
             {

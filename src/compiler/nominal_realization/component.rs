@@ -786,6 +786,20 @@ impl SliceInventory<'_> {
             }
             Term::Tuple(children) | Term::Nominal(_, children) => {
                 for child in children {
+                    // An unsized `[E]` nominal actual is stored only behind the
+                    // member's own field carriers. Its element must itself be
+                    // reference-free storage.
+                    if let (Term::Nominal(..), Term::Slice(element)) = (term, child) {
+                        let allow = std::mem::replace(&mut self.allow_references, false);
+                        let element = self.term(element, depth + 2);
+                        self.allow_references = allow;
+                        height = height.max(
+                            element?
+                                .checked_add(2)
+                                .ok_or_else(|| Error::new("slice type depth overflow"))?,
+                        );
+                        continue;
+                    }
                     height = height.max(
                         self.term(child, depth + 1)?
                             .checked_add(1)

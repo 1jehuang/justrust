@@ -54,6 +54,10 @@ pub unsafe fn from_raw_parts_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T]
 /// `StrMethods`, until inherent `impl<T> [T]` blocks are supported.
 pub trait SliceMethods {
     type Element;
+    /// Selectable like stock's inherent `[T]::len`, so every autoderef path
+    /// (`Deref<Target = [T]>`) finds it. A direct slice receiver still uses
+    /// the builtin descriptor length.
+    fn len(&self) -> usize;
     fn as_mut_ptr(&mut self) -> *mut Self::Element;
     fn is_empty(&self) -> bool;
     fn swap(&mut self, a: usize, b: usize);
@@ -95,6 +99,10 @@ impl<T> SliceSort<T> for [T] {
 
 impl<T> SliceMethods for [T] {
     type Element = T;
+    fn len(&self) -> usize {
+        let view: &[T] = self;
+        view.len()
+    }
     fn as_mut_ptr(&mut self) -> *mut T {
         __justrust_slice_as_mut_ptr!(self)
     }

@@ -9443,6 +9443,26 @@ fn slice_boundary_walk_inner(
                 let finish = pending.values.len();
                 pending.push(Frame::Finish(key, at, 0), budget)?;
                 let next = at.checked_add(1).ok_or("slice type depth overflow")?;
+                // An unsized `[E]` nominal actual is stored only behind the
+                // nominal's own field carriers, which are walked as fields.
+                // Its element itself must be reference-free storage.
+                let unsized_actuals: &[Ty] = match node {
+                    Ty::Struct(value) => &value.def().type_args,
+                    Ty::Enum(value) => &value.def().type_args,
+                    _ => &[],
+                };
+                for argument in unsized_actuals {
+                    if let Ty::Slice { element } = argument {
+                        slice_boundary_walk(
+                            element,
+                            false,
+                            allow_universal_projections,
+                            budget,
+                            next.checked_add(1).ok_or("slice type depth overflow")?,
+                            work,
+                        )?;
+                    }
+                }
                 let mut count = 0usize;
                 let mut child = |ty: &Ty, shared_components: bool| -> Result<(), String> {
                     charge(budget, work)?;
@@ -9470,7 +9490,11 @@ fn slice_boundary_walk_inner(
                             // Actuals do not acquire permission from their
                             // substituted shape. Only declared physical fields
                             // retain the bounded shared-leaf carrier policy.
-                            child(argument, false)?;
+                            // An unsized `[E]` actual (`Cow<'_, [u8]>`) is
+                            // checked before this frame, reference-free.
+                            if !matches!(argument, Ty::Slice { .. }) {
+                                child(argument, false)?;
+                            }
                         }
                         for field in value.def().fields.read_optional(budget)?.iter() {
                             child(&field.ty, tuple_components)?;
@@ -9478,7 +9502,9 @@ fn slice_boundary_walk_inner(
                     }
                     Ty::Enum(value) => {
                         for argument in value.def().type_args.iter() {
-                            child(argument, false)?;
+                            if !matches!(argument, Ty::Slice { .. }) {
+                                child(argument, false)?;
+                            }
                         }
                         for variant in value.def().variants.iter() {
                             for field in variant.fields.read_optional(budget)?.iter() {
