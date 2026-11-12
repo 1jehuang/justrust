@@ -2722,6 +2722,29 @@ impl BodySubstitutionProof {
                     }
                     let mut leaf = actual;
                     let mut references = 0;
+                    // One exclusive layer over a carrier-free scalar or nominal
+                    // leaf (`Vec<&mut S>` element) has exactly one reference
+                    // cell: the element itself. Its loans and writes are still
+                    // checked through that cell, never widened.
+                    if let Ty::Ref {
+                        kind: BorrowKind::Mut,
+                        referent,
+                    } = actual
+                        && matches!(
+                            referent.as_ref(),
+                            Ty::Int(_)
+                                | Ty::Bool
+                                | Ty::Char
+                                | Ty::Float(_)
+                                | Ty::Unit
+                                | Ty::Struct(_)
+                                | Ty::Enum(_)
+                        )
+                        && referent.is_closed_shallow()
+                        && carrier_locations(referent, budget)?.is_empty()
+                    {
+                        return Ok(Some(actual.clone()));
+                    }
                     while let Ty::Ref {
                         kind: BorrowKind::Shared,
                         referent,
@@ -9356,6 +9379,27 @@ fn slice_boundary_walk_inner(
                         continue;
                     }
                 }
+                // A shared slice of `&mut L` elements (`&[&mut S]`) only reads
+                // its elements: every access is `&&mut L`, i.e. shared. Only the
+                // element itself, never a `&mut` nested in a tuple element.
+                if tuple_components
+                    && at == depth
+                    && let Some(referent) = mut_ref_leaf_element(node)
+                {
+                    let height = slice_boundary_walk(
+                        referent,
+                        false,
+                        allow_universal_projections,
+                        budget,
+                        at.checked_add(1).ok_or("slice type depth overflow")?,
+                        work,
+                    )?;
+                    heights.push(
+                        height.checked_add(1).ok_or("slice type depth overflow")?,
+                        budget,
+                    )?;
+                    continue;
+                }
                 if tuple_components
                     && let Ty::Ref {
                         kind: BorrowKind::Shared,
@@ -9382,10 +9426,29 @@ fn slice_boundary_walk_inner(
                     // Aggregate position does not change a slice descriptor's ABI.
                     // Its element storage still has the strict reference-free policy
                     // below, independently of enclosing tuple or nominal carriers.
+                    // `&mut [&mut L]` with a reference-free scalar or nominal leaf is
+                    // one invariant element family. Any other reference-bearing
+                    // element stays unsupported.
                     if kind == BorrowKind::Mut && matches!(element, Ty::Ref { .. }) {
-                        return Err(
-                            "unsupported: mutable slice elements containing references".into()
-                        );
+                        let Some(referent) = mut_ref_leaf_element(element) else {
+                            return Err(
+                                "unsupported: mutable slice elements containing references".into(),
+                            );
+                        };
+                        let leaf = slice_boundary_walk(
+                            referent,
+                            false,
+                            allow_universal_projections,
+                            budget,
+                            at.checked_add(3).ok_or("slice type depth overflow")?,
+                            work,
+                        )
+                        .map_err(|_| "unsupported: mutable slice elements containing references")?;
+                        heights.push(
+                            leaf.checked_add(3).ok_or("slice type depth overflow")?,
+                            budget,
+                        )?;
+                        continue;
                     }
                     let height = if kind == BorrowKind::Shared {
                         shared_slice_tuple_walk(
@@ -9569,16 +9632,40 @@ fn validate_shared_slice_element_inner(
     } else {
         facts.validate_value_ty(element)?;
     }
-    shared_slice_tuple_walk(
-        element,
-        facts
-            .validated()
-            .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),
-        budget,
-        0,
-        &mut 0,
-    )
-    .map(|_| ())
+    let universal = facts
+        .validated()
+        .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal);
+    // `&mut L` with a reference-free nominal or scalar leaf is one affine
+    // element family. Its loans go through the slice place (DynamicIndex)
+    // and writes through the invariant element family.
+    if let Some(referent) = mut_ref_leaf_element(element) {
+        return slice_boundary_walk(referent, false, universal, budget, 1, &mut 0).map(|_| ());
+    }
+    shared_slice_tuple_walk(element, universal, budget, 0, &mut 0).map(|_| ())
+}
+
+/// The referent of a `&mut L` slice element whose leaf is a scalar or a
+/// nominal. The leaf must still pass the reference-free boundary walk.
+fn mut_ref_leaf_element(element: &Ty) -> Option<&Ty> {
+    match element {
+        Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent,
+        } if matches!(
+            referent.as_ref(),
+            Ty::Int(_)
+                | Ty::Bool
+                | Ty::Char
+                | Ty::Float(_)
+                | Ty::Unit
+                | Ty::Struct(_)
+                | Ty::Enum(_)
+        ) =>
+        {
+            Some(referent)
+        }
+        _ => None,
+    }
 }
 
 /// Validate exact element metadata and Sized obligations. Admit reference-free
@@ -9613,7 +9700,12 @@ pub(super) fn validate_slice_carrier_with_facts(
         // pointees; element regions stay invariant through the carrier.
         let shared_ref_element = match element {
             Ty::Ref { kind, .. } if *kind == BorrowKind::Mut => {
-                return Err("unsupported: mutable slices with mutable reference elements".into());
+                if mut_ref_leaf_element(element).is_none() {
+                    return Err(
+                        "unsupported: mutable slices with mutable reference elements".into(),
+                    );
+                }
+                true
             }
             Ty::Ref { .. } => true,
             _ => false,

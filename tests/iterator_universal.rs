@@ -544,3 +544,35 @@ fn vec_of_mut_refs_option_element_access() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn mut_slice_of_mut_refs_elements() {
+    oracle::stock_native(
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn all(s: &mut [&mut S]) { for r in s.iter_mut() { r.bump(); } } fn main(){ let mut a=S{n:1}; let mut b=S{n:4}; let mut x=1i32; let mut y=2i32; { let mut v: Vec<&mut S> = vec![&mut a, &mut b]; for r in v.iter_mut() { r.bump(); } for r in &mut v { r.n *= 2; } all(&mut v); if let Some(r) = v.last_mut() { r.bump(); } } { let mut w: Vec<&mut i32> = vec![&mut x, &mut y]; for r in w.iter_mut() { **r += 10; } for r in &mut w { **r *= 2; } } println!(\"{:?} {:?} {} {}\", a, b, x, y); }",
+    );
+    for source in [
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let p: &mut &mut S; { let mut it = v.iter_mut(); p = it.next().unwrap(); } let q = &mut v; p.n += 1; q.len(); }",
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut b=S{n:2}; let mut v: Vec<&mut S> = vec![&mut a, &mut b]; let mut it = v.iter_mut(); let p = it.next().unwrap(); println!(\"{}\", v.len()); p.n += 1; }",
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let mut it = v.iter_mut(); let p = it.next().unwrap(); drop(v); p.n += 1; }",
+        "struct S { n: i32 } fn main(){ let r; { let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let mut it = v.iter_mut(); r = it.next().unwrap(); } r.n += 1; }",
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; for x in v.iter_mut() { x.n += 1; } a.n += 1; v[0].n += 1; }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+    // Writing a shorter-lived `&mut` into a `[&'long mut T]` element (stock
+    // E0597) stays an explicit unsupported diagnostic, never an executable.
+    for source in [
+        "fn main(){ let mut a=1i32; let mut v: Vec<&mut i32> = vec![&mut a]; { let mut b=2i32; for x in v.iter_mut() { *x = &mut b; } } *v[0] += 1; }",
+        "fn put(s: &mut [&mut i32]) { let mut b = 5i32; for x in s.iter_mut() { *x = &mut b; } } fn main(){ let mut a=1i32; let mut v: Vec<&mut i32> = vec![&mut a]; put(&mut v); }",
+    ] {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                assert!(
+                    justrust_engine::compiler::compile_observed(source.into(), workers, check)
+                        .is_err(),
+                    "{source}"
+                );
+            }
+        }
+    }
+}

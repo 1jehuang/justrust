@@ -7066,6 +7066,299 @@ impl CarrierBuilder<'_, '_> {
         Ok(self.copy_permission_in(actual, authority)?
             && self.copy_permission_in(element, authority)?)
     }
+    /// `&mut Vec<&mut L>` -> `&mut [&mut L]` (DerefMut, as_mut_slice). The
+    /// element family moves through an exact identity write, so no affine
+    /// authority is duplicated: every element stays reachable only through the
+    /// returned slice loan, which reborrows the input. `L` must be carrier-free
+    /// so the element holds no loans beyond the reference itself.
+    fn identity_affine_slice_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        result: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent,
+        } = result
+        else {
+            return Ok(false);
+        };
+        let Ty::Slice { element } = referent.as_ref() else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: leaf,
+        } = element.as_ref()
+        else {
+            return Ok(false);
+        };
+        let Some(parameter) =
+            identity_slice_reborrow_rows(view.original_contract(), view.contract(), self.budget)?
+        else {
+            return Ok(false);
+        };
+        let original = &view.original_contract().writes[0].destination;
+        let expanded = &view.contract().writes[0].destination;
+        let Some(Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: input,
+        }) = params.get(original.param)
+        else {
+            return Ok(false);
+        };
+        if !input
+            .owned_sequence_element()
+            .is_some_and(|stored| canonical_same_type(stored, element))
+        {
+            return Ok(false);
+        }
+        let mut mapped = 0usize;
+        for mapping in view.component_mappings() {
+            if self.identity_slice_component_matches(
+                parameter,
+                &original.location,
+                &expanded.location,
+                mapping,
+                view.nominal_mappings(),
+            )? {
+                mapped += 1;
+            }
+        }
+        if mapped != 1 || view.component_mappings().len() != 1 {
+            return Ok(false);
+        }
+        let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+            return Ok(false);
+        };
+        if !canonical_same_type(actual, element) {
+            return Ok(false);
+        }
+        let facts = authority
+            .or(self.authority.as_deref())
+            .or(match self.facts {
+                FactsCtx::Validated(facts) => Some(facts),
+                _ => None,
+            });
+        if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
+            return Ok(false);
+        }
+        let Some(locations) = self.metadata_value(ir::carrier_locations(leaf, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        Ok(locations.is_empty())
+    }
+    /// `IterMut::next` over `[&mut L]`: one `&mut &mut L` result reborrowing
+    /// the cursor's current element, plus the cursor advance. Exact rows:
+    /// expanded inputs `root`, cursor `C` (a `&mut [&mut L]` field) and its
+    /// element `E`; results `P@0 <- C` and `P@1 <- E` under one payload
+    /// prefix `P`; one identity write `C <- C`. The original declares the
+    /// element as the type-parameter family at `E`, mapped to depth 0. The
+    /// returned outer loan comes from `C` alone, so element reborrows stay
+    /// under the cursor (and therefore the slice) loan.
+    fn cursor_element_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        result: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        self.budget.spend(64)?;
+        let fixed = |depth| CarrierChannel::Fixed(ReferencePosition { depth });
+        let original = view.original_contract();
+        let expanded = view.contract();
+        if expanded.inputs.len() != 3
+            || expanded.results.len() != 2
+            || expanded.writes.len() != 1
+            || original.inputs.len() != 3
+            || original.results.len() != 2
+            || original.writes.len() != 1
+        {
+            return Ok(false);
+        }
+        // Cursor write: identity in the expansion.
+        let write = &expanded.writes[0];
+        let cursor = write.destination.clone();
+        if write.sources.as_ref() != std::slice::from_ref(&cursor)
+            || cursor.location.channel != fixed(0)
+            || cursor.location.path.0.first() != Some(&CarrierStep::Referent)
+            || !cursor.location.path.0[1..]
+                .iter()
+                .all(|step| matches!(step, CarrierStep::Field(_)))
+        {
+            return Ok(false);
+        }
+        let mut element_path = cursor.location.path.0.to_vec();
+        element_path.push(CarrierStep::Referent);
+        element_path.push(CarrierStep::SliceElement);
+        let element = InputCarrier {
+            param: cursor.param,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from(element_path.as_slice())),
+                channel: fixed(0),
+            },
+        };
+        let root = InputCarrier {
+            param: cursor.param,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([])),
+                channel: fixed(0),
+            },
+        };
+        if !expanded.inputs.contains(&root)
+            || !expanded.inputs.contains(&cursor)
+            || !expanded.inputs.contains(&element)
+        {
+            return Ok(false);
+        }
+        // Results: P@0 <- [C], P@1 <- [E], same payload prefix.
+        let (outer, inner) = (&expanded.results[0], &expanded.results[1]);
+        if outer.location.path != inner.location.path
+            || outer.location.channel != fixed(0)
+            || inner.location.channel != fixed(1)
+            || outer.sources.as_ref() != std::slice::from_ref(&cursor)
+            || inner.sources.as_ref() != std::slice::from_ref(&element)
+            || !outer.location.path.0.iter().all(|step| {
+                matches!(
+                    step,
+                    CarrierStep::Field(_) | CarrierStep::VariantField { .. }
+                )
+            })
+        {
+            return Ok(false);
+        }
+        // Original: the element is one parameter family at the same path.
+        let Some(family) = original.inputs.iter().find(|input| {
+            input.param == cursor.param && input.location.path == element.location.path
+        }) else {
+            return Ok(false);
+        };
+        let CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = family.location.channel
+        else {
+            return Ok(false);
+        };
+        if !original.inputs.contains(&root) || !original.inputs.contains(&cursor) {
+            return Ok(false);
+        }
+        let owrite = &original.writes[0];
+        if owrite.destination != cursor
+            || owrite.sources.len() != 2
+            || !owrite.sources.contains(&cursor)
+            || !owrite.sources.contains(family)
+        {
+            return Ok(false);
+        }
+        let (oouter, oinner) = (&original.results[0], &original.results[1]);
+        let same_prefix = |a: &CarrierPath, b: &CarrierPath| {
+            a.0.len() == b.0.len()
+                && a.0.iter().zip(b.0.iter()).all(|(x, y)| match (x, y) {
+                    (CarrierStep::Field(x), CarrierStep::Field(y)) => x == y,
+                    (
+                        CarrierStep::VariantField {
+                            variant: va,
+                            field: fa,
+                        },
+                        CarrierStep::VariantField {
+                            variant: vb,
+                            field: fb,
+                        },
+                    ) => va.index == vb.index && fa == fb,
+                    _ => false,
+                })
+        };
+        if !same_prefix(&oouter.location.path, &outer.location.path)
+            || oinner.location.path != oouter.location.path
+            || oouter.location.channel != fixed(0)
+            || oinner.location.channel
+                != (CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 1,
+                })
+            || oouter.sources.len() != 2
+            || !oouter.sources.contains(&cursor)
+            || !oouter.sources.contains(family)
+            || oinner.sources.as_ref() != std::slice::from_ref(family)
+        {
+            return Ok(false);
+        }
+        // The family maps to exactly the element's single depth-0 carrier.
+        if view.component_mappings().len() != 1
+            || !self.identity_slice_component_matches(
+                parameter,
+                &family.location,
+                &element.location,
+                &view.component_mappings()[0],
+                view.nominal_mappings(),
+            )?
+        {
+            return Ok(false);
+        }
+        // Types: the cursor is a `[&mut L]` slice ref, the result `&mut &mut L`,
+        // and the sealed actual that same `&mut L` with carrier-free `L`.
+        let Some(param) = params.get(cursor.param) else {
+            return Ok(false);
+        };
+        let Some(cursor_ty) =
+            self.metadata_value(ir::carrier_at(param, &cursor.location, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        // IterMut keeps its cursor as `marker: &'a [T]`; the returned outer
+        // loan still descends from the `&mut` slice loan the iterator holds.
+        let Some((_, stored)) = cursor_ty.slice_ref_element() else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: leaf,
+        } = stored
+        else {
+            return Ok(false);
+        };
+        let Some(own_result) = peel_payload(
+            &view.signature_for_replay().result,
+            &outer.location.path.0,
+            &self.ledger,
+        ) else {
+            return Ok(false);
+        };
+        let caller_result = peel_payload(result, &outer.location.path.0, &self.ledger);
+        let reborrow_of_stored = |ty: &Ty| {
+            matches!(ty, Ty::Ref { kind: BorrowKind::Mut, referent }
+                if canonical_same_type(referent, stored))
+        };
+        if !reborrow_of_stored(&own_result)
+            || !caller_result.as_ref().is_none_or(reborrow_of_stored)
+        {
+            return Ok(false);
+        }
+        let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+            return Ok(false);
+        };
+        if !canonical_same_type(actual, stored) {
+            return Ok(false);
+        }
+        let facts = authority
+            .or(self.authority.as_deref())
+            .or(match self.facts {
+                FactsCtx::Validated(facts) => Some(facts),
+                _ => None,
+            });
+        if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
+            return Ok(false);
+        }
+        let Some(locations) = self.metadata_value(ir::carrier_locations(leaf, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        Ok(locations.is_empty())
+    }
     fn identity_nested_slot_reborrow_admitted(
         &mut self,
         params: &[Ty],
@@ -7855,6 +8148,14 @@ impl CarrierBuilder<'_, '_> {
             return Ok(true);
         }
         if affine_results == 1
+            && result_channels == 1
+            && affine_writes == 0
+            && write_channels == 1
+            && self.cursor_element_reborrow_admitted(params, result, view, authority)?
+        {
+            return Ok(true);
+        }
+        if affine_results == 1
             && affine_writes == 0
             && write_channels == 1
             && result_channels <= 2
@@ -7866,7 +8167,9 @@ impl CarrierBuilder<'_, '_> {
             && result_channels == 1
             && affine_writes == 0
             && (self.identity_copy_reborrow_admitted(params, result, view, authority)?
-                || self.identity_nested_slot_reborrow_admitted(params, result, view, authority)?))
+                || self.identity_nested_slot_reborrow_admitted(params, result, view, authority)?
+                || self
+                    .identity_affine_slice_reborrow_admitted(params, result, view, authority)?))
     }
     fn audit_call_admission(&mut self) -> Result<(), Exhausted> {
         for index in 0..self.f.blocks.len() {

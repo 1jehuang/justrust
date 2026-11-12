@@ -130,13 +130,20 @@ fn generic_slice_family_keeps_exact_path_and_bounded_substitution() {
         );
         assert_eq!(carrier_locations(&result, &budget).unwrap().len(), 2);
     }
-    for element in [
-        shared(shared(Ty::Bool)),
-        Ty::Ref {
+    // A single `&mut` scalar leaf is one invariant element family.
+    substitute_ty(
+        &slice,
+        facts.env(),
+        &[Ty::Ref {
             kind: BorrowKind::Mut,
             referent: Arc::new(Ty::Bool),
-        },
-    ] {
+        }],
+        FactsCtx::Concrete,
+        &mut plan,
+        &budget,
+    )
+    .unwrap();
+    for element in [shared(shared(Ty::Bool))] {
         assert!(
             substitute_ty(
                 &slice,
@@ -418,7 +425,7 @@ fn nested_mutable_slice_observers_keep_exact_carrier_depth_and_affine_exclusions
         },
         shared(mutable_slice(Ty::Ref {
             kind: BorrowKind::Mut,
-            referent: Arc::new(Ty::Bool),
+            referent: Arc::new(shared(Ty::Bool)),
         })),
         shared(mutable_slice(shared(shared(Ty::Bool)))),
         shared(mutable_slice(Ty::Tuple(Arc::from([shared(Ty::Bool)])))),
@@ -456,17 +463,19 @@ fn shared_slice_carrier_domain_is_typed_and_cannot_be_forged_into_an_array() {
     forged.path = locations[1].path.clone();
     forged.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
     assert!(carrier_at(&slice, &forged, &budget).is_err());
-    let mutable = Ty::Ref {
+    let leaf_slice = |leaf: Ty| Ty::Ref {
         kind: BorrowKind::Mut,
         referent: Arc::new(Ty::Slice {
             element: Arc::new(Ty::Ref {
                 kind: BorrowKind::Mut,
-                referent: Arc::new(Ty::Bool),
+                referent: Arc::new(leaf),
             }),
         }),
     };
+    validate_slice_carrier_with_facts(&leaf_slice(Ty::Bool), FactsCtx::Concrete).unwrap();
+    let nested = leaf_slice(shared(Ty::Bool));
     assert!(
-        validate_slice_carrier_with_facts(&mutable, FactsCtx::Concrete)
+        validate_slice_carrier_with_facts(&nested, FactsCtx::Concrete)
             .unwrap_err()
             .contains("mutable slices")
     );
@@ -511,10 +520,19 @@ fn universal_element_permission_is_rechecked_at_the_shared_reference_boundary() 
         &budget,
     )
     .unwrap();
+    validate_shared_slice_element(
+        &Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Bool),
+        },
+        FactsCtx::Concrete,
+        &budget,
+    )
+    .unwrap();
     for concrete in [
         Ty::Ref {
             kind: BorrowKind::Mut,
-            referent: Arc::new(Ty::Bool),
+            referent: Arc::new(shared(Ty::Bool)),
         },
         shared(shared(Ty::Bool)),
         Ty::Tuple(

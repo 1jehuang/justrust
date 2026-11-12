@@ -870,6 +870,24 @@ impl ValidatedTraitWorld {
             } if !matches!(referent.as_ref(), Ty::Slice { .. } | Ty::Ref { .. }) => {
                 self.reject_projected_references(referent, depth + 1)
             }
+            // `Item = &'a mut &'b mut L` (`IterMut` over `[&mut L]`) is the
+            // same type row one layer deeper. The inner layer must reach a
+            // reference-free leaf. Loans and the invariant element family
+            // still come from the callable carrier proof.
+            Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            } if matches!(
+                referent.as_ref(),
+                Ty::Ref { referent: leaf, .. }
+                    if !matches!(leaf.as_ref(), Ty::Slice { .. } | Ty::Ref { .. })
+            ) =>
+            {
+                let Ty::Ref { referent: leaf, .. } = referent.as_ref() else {
+                    unreachable!("matched nested reference")
+                };
+                self.reject_projected_references(leaf, depth + 2)
+            }
             Ty::Ref { .. } | Ty::Slice { .. } => Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: mutable or nested reference associated equality",
