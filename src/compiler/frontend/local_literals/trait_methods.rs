@@ -918,19 +918,50 @@ impl Solver<'_, '_, '_> {
                 );
             }
             let mut fits = true;
+            let own = plan.param_env(*item)?;
+            let mut bound_own = false;
             for (argument, formal) in arguments.iter().zip(schema.signature.params.iter().skip(1)) {
                 let formal =
                     super::super::trait_method_hint::bind_owner(formal, &bindings, &plan.budget)?;
-                if super::super::inferred_owner::mentions_param(&formal) {
-                    return Ok(None);
-                }
-                let Domain::Fixed(actual) = self.domain(*argument) else {
-                    return Ok(None);
+                let actual = match self.domain(*argument) {
+                    Domain::Fixed(actual) => actual,
+                    _ => match self.resolve(*argument, 0)? {
+                        Some(actual) => actual,
+                        None => {
+                            return Ok(None);
+                        }
+                    },
                 };
                 if super::super::inferred_owner::mentions_param(&actual) {
                     return Ok(None);
                 }
+                if let Some(fit) = super::super::trait_method_hint::bind_own_formal(
+                    &formal,
+                    own.binder(),
+                    &actual,
+                    &mut bindings,
+                ) {
+                    self.checker.infer_storage(1)?;
+                    fits &= fit;
+                    bound_own = true;
+                    continue;
+                }
+                if super::super::inferred_owner::mentions_param(&formal) {
+                    return Ok(None);
+                }
                 fits &= actual == formal;
+            }
+            if fits && bound_own {
+                let ir::FactsCtx::Validated(facts) = self.checker.facts() else {
+                    return Ok(None);
+                };
+                fits = super::super::trait_method_hint::own_bounds_hold(
+                    &schema.predicates,
+                    &bindings,
+                    facts,
+                    &self.checker.trait_scratch,
+                    &plan.budget,
+                )?;
             }
             if fits && chosen.replace((application.clone(), *item)).is_some() {
                 return Ok(None);

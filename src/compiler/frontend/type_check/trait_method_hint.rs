@@ -169,13 +169,12 @@ impl Checker<'_> {
             );
         }
         let solver = Inference::empty(self)?;
+        let own = plan.param_env(item)?;
         let mut fits = true;
+        let mut bound_own = false;
         for (formal, argument) in schema.signature.params[1..].iter().zip(arguments) {
             plan.budget.charge_work(1)?;
             let formal = bind_owner(formal, &bindings, &plan.budget)?;
-            if inferred_owner::mentions_param(&formal) {
-                return Ok(None);
-            }
             let evidence = self.inference_evidence(argument, 0)?;
             let Some(actual) = solver.resolve(&evidence, false, 0)? else {
                 return Ok(None);
@@ -183,7 +182,28 @@ impl Checker<'_> {
             if inferred_owner::mentions_param(&actual) {
                 return Ok(None);
             }
+            if let Some(fit) = bind_own_formal(&formal, own.binder(), &actual, &mut bindings) {
+                self.infer_storage(1)?;
+                fits &= fit;
+                bound_own = true;
+                continue;
+            }
+            if inferred_owner::mentions_param(&formal) {
+                return Ok(None);
+            }
             fits &= actual == formal || self.nominal_input_types_equal(&actual, &formal)?;
+        }
+        if fits && bound_own {
+            let ir::FactsCtx::Validated(facts) = self.facts() else {
+                return Ok(None);
+            };
+            fits = own_bounds_hold(
+                &schema.predicates,
+                &bindings,
+                facts,
+                &self.trait_scratch,
+                &plan.budget,
+            )?;
         }
         Ok(Some(fits))
     }
@@ -470,4 +490,82 @@ pub(super) fn bind_owner(
         }
         other => other.clone(),
     })
+}
+
+/// Binds a bare method-own formal (`I` in `extend<I: IntoIterator<Item = A>>(
+/// iter: I)`) to its fixed argument type. Returns `Some(fits)` when `formal`
+/// is such a parameter, `None` otherwise.
+pub(in crate::compiler::frontend) fn bind_own_formal(
+    formal: &ir::Ty,
+    own: ir::BinderId,
+    actual: &ir::Ty,
+    bindings: &mut HashMap<ir::ParamId, ir::Ty>,
+) -> Option<bool> {
+    let ir::Ty::Param(parameter) = formal else {
+        return None;
+    };
+    if parameter.owner != own {
+        return None;
+    }
+    Some(match bindings.get(parameter) {
+        Some(previous) => previous == actual,
+        None => {
+            bindings.insert(*parameter, actual.clone());
+            true
+        }
+    })
+}
+
+/// Whether every method bound closed by `bindings` is provable. This decides
+/// between several applications of one trait (`Vec<i32>: Extend<i32>` and
+/// `Extend<&i32>`) whose formals are method-own parameters: the argument
+/// fixes `I`, and `I: IntoIterator<Item = A>` holds for exactly one `A`.
+/// Bounds still naming unbound parameters decide nothing. Final selection
+/// proves the chosen application again.
+pub(in crate::compiler::frontend) fn own_bounds_hold(
+    predicates: &[ir::Predicate],
+    bindings: &HashMap<ir::ParamId, ir::Ty>,
+    facts: &tr::ValidatedFacts,
+    scratch: &std::cell::RefCell<tr::TraitScratch>,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    let bind_ref = |application: &ir::TraitRef| -> Result<ir::TraitRef, String> {
+        let mut args = Vec::with_capacity(application.args.len());
+        for argument in application.args.iter() {
+            args.push(bind_owner(argument, bindings, budget)?);
+        }
+        Ok(ir::TraitRef {
+            declaration: application.declaration,
+            self_ty: bind_owner(&application.self_ty, bindings, budget)?,
+            args: args.into(),
+        })
+    };
+    for predicate in predicates {
+        budget.charge_work(1)?;
+        let goal = match predicate {
+            ir::Predicate::Implements(application) => {
+                ir::Predicate::Implements(bind_ref(application)?)
+            }
+            ir::Predicate::ProjectionEq { projection, ty } => ir::Predicate::ProjectionEq {
+                projection: ir::AssociatedTypeProjection {
+                    trait_ref: bind_ref(&projection.trait_ref)?,
+                    item: projection.item,
+                },
+                ty: bind_owner(ty, bindings, budget)?,
+            },
+        };
+        if goal.metadata_types().any(inferred_owner::mentions_param) {
+            continue;
+        }
+        if matches!(
+            facts
+                .service()
+                .prove_goal_with(&goal, facts, &mut scratch.borrow_mut())
+                .map_err(|error| error.into_legacy_diagnostic(budget))?,
+            tr::ProofOutcome::NotProven
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

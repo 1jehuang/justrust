@@ -4,6 +4,34 @@
 mod oracle;
 
 #[test]
+fn copy_vec_extend_method_selects_by_iterator_item() {
+    oracle::stock_native(
+        r#"
+fn main() {
+    let mut e = vec![1];
+    e.extend(vec![2, 3]);
+    e.extend([4].iter());
+    let tail: Vec<i32> = vec![5];
+    e.extend(tail);
+    let more = [6, 7];
+    e.extend(&more);
+    let mut c: Vec<char> = Vec::new();
+    c.extend("ab".chars());
+    let mut s = vec![String::from("x")];
+    s.extend(vec![String::from("y")]);
+    println!("{:?} {:?} {:?}", e, c, s);
+}
+"#,
+    );
+    oracle::stock_and_native_reject(
+        "fn unused() { let mut e: Vec<i32> = vec![1]; let s: Vec<u32> = vec![2]; e.extend(s); } fn main() {}",
+    );
+    oracle::stock_and_native_reject(
+        "fn unused() { let mut e: Vec<String> = Vec::new(); let s = vec![String::new()]; e.extend(s.iter()); } fn main() {}",
+    );
+}
+
+#[test]
 fn borrowed_copy_vec_extension_and_partition_match_stock() {
     oracle::stock_native(
         r#"
