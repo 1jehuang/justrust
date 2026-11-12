@@ -976,6 +976,138 @@ mod tests {
     }
 
     #[test]
+    fn graph_invocation_transport_requires_current_engine_and_exact_read() {
+        let budget = ir::PlanBudget::default();
+        let program = super::super::frontend::parse("struct Empty;fn main(){}").unwrap();
+        let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let proof = plan.publish_nominal_declaration(declaration).unwrap();
+        let source = plan.nominal_realization_template(declaration).unwrap();
+        let world = plan.trait_world().unwrap();
+        let input = world.close_nominal_input(declaration, &proof, &[]).unwrap();
+        let key = RealizationKey::encode(world.nominal_realization_world(), declaration, &[], 32)
+            .unwrap();
+        let provider = FactProvider {
+            key,
+            source: source.clone(),
+            proof,
+            input,
+            stolen: None,
+            mutate: |_| {},
+            fields: Arc::from([]),
+        };
+        let engine = crate::engine::Engine::new(provider.clone());
+        let demand = engine.request(crate::compiler::keys::params(998, 0, vec![]));
+        engine.run(1).unwrap();
+        demand.completion().unwrap();
+        let read = demand.fact::<ReadNominal>(0).unwrap();
+        let definition = read.definition().unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let mut scratch = traits::TraitScratch::default();
+        assert!(
+            traits::GraphInvocationInputs::new(
+                vec![definition.clone()],
+                None,
+                &facts,
+                &mut scratch
+            )
+            .is_err()
+        );
+        // Existing parent-local admission is deliberately not widened.
+        assert!(
+            traits::ParentLocalTransport::new(std::slice::from_ref(&definition))
+                .validate(&world, &facts)
+                .is_err()
+        );
+        let inputs = traits::GraphInvocationInputs::new(
+            vec![definition.clone()],
+            Some(engine.authority()),
+            &facts,
+            &mut scratch,
+        )
+        .unwrap();
+        for _ in 0..3 {
+            let selected = inputs.select_for_tests(&source, &facts).unwrap().unwrap();
+            read.check_definition(&selected).unwrap();
+            read.check_definition(
+                &inputs
+                    .select_for_tests(&definition, &facts)
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        let foreign = crate::engine::Engine::new(provider);
+        let other = foreign.request(crate::compiler::keys::params(998, 0, vec![]));
+        foreign.run(1).unwrap();
+        other.completion().unwrap();
+        let foreign_read = other.fact::<ReadNominal>(0).unwrap();
+        let foreign_definition = foreign_read.definition().unwrap();
+        assert!(
+            traits::GraphInvocationInputs::new(
+                vec![foreign_definition.clone()],
+                Some(engine.authority()),
+                &facts,
+                &mut scratch
+            )
+            .is_err()
+        );
+        assert!(
+            traits::GraphInvocationInputs::new(
+                vec![definition.clone(), foreign_definition.clone()],
+                Some(engine.authority()),
+                &facts,
+                &mut scratch
+            )
+            .is_err()
+        );
+        let foreign_inputs = traits::GraphInvocationInputs::new(
+            vec![foreign_definition],
+            Some(foreign.authority()),
+            &facts,
+            &mut scratch,
+        )
+        .unwrap();
+        assert!(
+            foreign_inputs
+                .select_for_tests(&definition, &facts)
+                .is_err()
+        );
+        let ir::Ty::Struct(value) = &definition else {
+            unreachable!()
+        };
+        let mut changed = value.def().clone();
+        changed.type_args = Arc::from([ir::Ty::Bool]);
+        let forged =
+            ir::Ty::Struct(ir::StructTy::new(changed).with_realization(read.as_ref().clone()));
+        assert!(
+            traits::GraphInvocationInputs::new(
+                vec![forged],
+                Some(engine.authority()),
+                &facts,
+                &mut scratch
+            )
+            .is_err()
+        );
+        assert!(
+            traits::GraphInvocationInputs::new(
+                vec![source],
+                Some(engine.authority()),
+                &facts,
+                &mut scratch
+            )
+            .is_err()
+        );
+        read.check_definition(
+            &inputs
+                .select_for_tests(&definition, &facts)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn current_engine_substitution_replays_typed_read_and_rejects_foreign_engine() {
         let budget = ir::PlanBudget::default();
         let program = super::super::frontend::parse("struct Empty;fn main(){}").unwrap();

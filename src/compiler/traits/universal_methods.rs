@@ -669,7 +669,9 @@ impl ValidatedTraitWorld {
                     parameter,
                     context.env(),
                     0,
-                    context.original.map(|facts| (facts, context.transport)),
+                    context
+                        .metadata_facts()
+                        .map(|facts| (facts, context.metadata_transport())),
                     executable_storage,
                     &operations,
                     &mut normalize,
@@ -679,7 +681,9 @@ impl ValidatedTraitWorld {
                 &signature.result,
                 context.env(),
                 0,
-                context.original.map(|facts| (facts, context.transport)),
+                context
+                    .metadata_facts()
+                    .map(|facts| (facts, context.metadata_transport())),
                 executable_storage,
                 &operations,
                 &mut normalize,
@@ -764,7 +768,9 @@ impl ValidatedTraitWorld {
                             argument,
                             context.env(),
                             0,
-                            context.original.map(|facts| (facts, context.transport)),
+                            context
+                                .metadata_facts()
+                                .map(|facts| (facts, context.metadata_transport())),
                             false,
                             &operations,
                             &mut normalize,
@@ -777,7 +783,9 @@ impl ValidatedTraitWorld {
                         &goal.self_ty,
                         context.env(),
                         0,
-                        context.original.map(|facts| (facts, context.transport)),
+                        context
+                            .metadata_facts()
+                            .map(|facts| (facts, context.metadata_transport())),
                         false,
                         &operations,
                         &mut normalize,
@@ -795,7 +803,9 @@ impl ValidatedTraitWorld {
                             ty,
                             context.env(),
                             0,
-                            context.original.map(|facts| (facts, context.transport)),
+                            context
+                                .metadata_facts()
+                                .map(|facts| (facts, context.metadata_transport())),
                             false,
                             &operations,
                             &mut normalize,

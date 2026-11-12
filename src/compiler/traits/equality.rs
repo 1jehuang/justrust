@@ -306,7 +306,11 @@ impl ValidatedTraitWorld {
     pub(super) fn validate_final_declared_contexts(&self) -> Result<()> {
         for context in &self.declared_callables {
             let env = self.predicate_env(context.declaration)?;
-            self.validate_predicates(&env.predicates, &env.env, None)?;
+            self.validate_original_declaration_predicates(
+                context.declaration,
+                &env.predicates,
+                &env.env,
+            )?;
             self.validate_declared_equality_domains(&env.predicates, &env.env)?;
             let mut canonical = Vec::new();
             for row in context.predicates.iter() {
@@ -1902,8 +1906,8 @@ impl ValidatedTraitWorld {
                 )?;
             }
             self.implicit_sized(&callable.schema.env, &mut rows)?;
-            self.validate_predicates(&rows, &callable.schema.env, None)?;
-            self.close_predicates(&mut rows, &callable.schema.env)?;
+            self.validate_declaration_predicates(&rows, &callable.schema.env, None)?;
+            self.close_declaration_predicates(&mut rows, &callable.schema.env)?;
             self.validate_declared_equality_domains(&rows, &callable.schema.env)?;
             retain::<DeclaredCallableContext>(&self.budget, 1)?;
             self.declared_callable_index.note(
@@ -1968,7 +1972,7 @@ impl ValidatedTraitWorld {
         }
         schema.signature.result =
             self.normalize_declared_type(&schema.signature.result, context, &mut reductions, 0)?;
-        self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
+        self.validate_declaration_signature(declaration, &schema.signature, &schema.env, None)?;
         Ok(DeclaredCallableNormalization {
             schema,
             world: self.id,
@@ -2161,13 +2165,14 @@ impl ValidatedTraitWorld {
                 None => self.projection_type(projection),
             };
             let application = predicate.trait_ref();
-            let self_ty = self.map_equality_type(&application.self_ty, env, 0, &mut reduce)?;
+            let self_ty =
+                self.map_equality_type_for_use(&application.self_ty, env, 0, false, &mut reduce)?;
             let mut args = Vec::new();
             for argument in application.args.iter() {
                 push(
                     &self.budget,
                     &mut args,
-                    self.map_equality_type(argument, env, 0, &mut reduce)?,
+                    self.map_equality_type_for_use(argument, env, 0, false, &mut reduce)?,
                 )?;
             }
             let application = TraitRef {
@@ -2184,7 +2189,7 @@ impl ValidatedTraitWorld {
                         trait_ref: application,
                         item: projection.item,
                     },
-                    ty: self.map_equality_type(ty, env, 0, &mut reduce)?,
+                    ty: self.map_equality_type_for_use(ty, env, 0, false, &mut reduce)?,
                 },
             };
             push(&self.budget, &mut rows, row)?;

@@ -186,12 +186,34 @@ impl PlanCtx {
                     )
                 }
             }
-            Type::SelfType => Shape::Leaf(
-                bindings
-                    .get(&GenericBindingKey::SelfType)
-                    .cloned()
-                    .ok_or("unsupported: source nominal recipe needs exact impl Self metadata")?,
-            ),
+            Type::SelfType => {
+                if let Some(bound) = bindings.get(&GenericBindingKey::SelfType) {
+                    Shape::Leaf(bound.clone())
+                } else {
+                    // An impl item's `Self` is the impl's written self type,
+                    // whose parameters are the callable's own impl binders.
+                    let self_ty = self
+                        .registry
+                        .function_position(declaration)
+                        .and_then(|index| self.registry.callable_sources.get(index).copied())
+                        .and_then(|source| match source {
+                            CallableSource::Associated { implementation, .. } => self
+                                .registry
+                                .program
+                                .impls
+                                .get(implementation)
+                                .map(|block| &block.self_ty),
+                            _ => None,
+                        })
+                        .ok_or(
+                            "unsupported: source nominal recipe needs exact impl Self metadata",
+                        )?;
+                    if matches!(self_ty, Type::SelfType) {
+                        return Err("invalid metadata: impl self type names Self".into());
+                    }
+                    child(self_ty)?
+                }
+            }
             Type::Ref { kind, referent, .. } => Shape::Ref(*kind, Arc::new(child(referent)?)),
             Type::RawPtr { kind, pointee } => Shape::RawPtr(*kind, Arc::new(child(pointee)?)),
             Type::Array(element, len) => Shape::Array(Arc::new(child(element)?), *len),

@@ -3,6 +3,270 @@ use super::*;
 use crate::compiler::frontend::{self, PlanCtx};
 
 #[test]
+fn logical_nominal_header_formation_does_not_authorize_executable_storage() {
+    let program = frontend::parse(
+        "trait Family{type Value;}struct Key;impl Family for Key{type Value=i32;}struct Packet<T:Family>{value:T::Value}fn generic<T:Family>(_:Packet<T>){}fn main(){}",
+    ).unwrap();
+    let budget = PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let world = plan.trait_world().unwrap();
+    let declaration = world
+        .headers
+        .callables
+        .iter()
+        .find_map(|header| match header.schema.signature.params.first() {
+            Some(Ty::Struct(owner)) => Some(owner.def().source_decl),
+            _ => None,
+        })
+        .unwrap();
+    let key = world
+        .headers
+        .impls
+        .iter()
+        .find(|header| !header.associated_types.is_empty())
+        .unwrap()
+        .trait_ref
+        .self_ty
+        .clone();
+    let nominal = plan
+        .intern_nominal(declaration, &[key], ir::FactsCtx::Concrete, &budget)
+        .unwrap();
+    assert!(ir::contains_associated_types(&nominal, &budget).unwrap());
+    let predicates = [Predicate::Implements(TraitRef {
+        declaration: world.catalog.id(CatalogItem::Sized),
+        self_ty: nominal,
+        args: Arc::from([]),
+    })];
+    let mut active = ProofScratch::default();
+    world
+        .validate_predicates_with_active_for_use(
+            &predicates,
+            world.empty.env(),
+            None,
+            &mut active,
+            None,
+            false,
+        )
+        .unwrap();
+    let error = world
+        .validate_predicates_with_active_for_use(
+            &predicates,
+            world.empty.env(),
+            None,
+            &mut active,
+            None,
+            true,
+        )
+        .unwrap_err();
+    assert!(
+        format!("{error:?}")
+            .contains("closed associated projection must normalize before execution")
+    );
+    // A failed executable walk cannot invalidate or relabel the independently
+    // authenticated logical formation in the same invocation-local scratch.
+    world
+        .validate_predicates_with_active_for_use(
+            &predicates,
+            world.empty.env(),
+            None,
+            &mut active,
+            None,
+            false,
+        )
+        .unwrap();
+}
+
+#[test]
+fn logical_declaration_signature_does_not_authorize_executable_storage() {
+    let source = "trait Family{type Value;}struct Key;impl Family for Key{type Value=i32;}struct Packet<T:Family>{value:T::Value}trait Enabled{}trait Candidate<X>{}impl<T:Enabled> Candidate<T> for Packet<Key>{}fn header(value:Packet<Key>)->Packet<Key>{value}fn other<T>(){}fn main(){}";
+    let program = frontend::parse(source).unwrap();
+    let budget = PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let world = plan.trait_world().unwrap();
+    let header = world
+        .headers
+        .callables
+        .iter()
+        .find(|header| matches!(header.schema.signature.params.first(), Some(Ty::Struct(_))))
+        .unwrap();
+    let signature = &header.schema.signature;
+    let facts = world.callable_facts(header.declaration).unwrap();
+    let candidate = world
+        .headers
+        .impls
+        .iter()
+        .find(|candidate| {
+            world
+                .eq_ty(&candidate.trait_ref.self_ty, &signature.params[0], 0)
+                .unwrap()
+        })
+        .unwrap();
+    let mut discovery = TraitScratch::default();
+    let candidate_self = world
+        .original_implementation_self_for_discovery(
+            candidate.declaration,
+            &[Ty::Int(ir::IntTy::I32)],
+            &facts,
+            &mut discovery,
+        )
+        .unwrap();
+    assert!(
+        world
+            .eq_ty(&candidate_self, &candidate.trait_ref.self_ty, 0)
+            .unwrap()
+    );
+    assert!(world.type_contains_projection(&candidate_self, 0).unwrap());
+    assert!(
+        !world
+            .prove_original_declaration_predicates(
+                candidate.declaration,
+                &[Ty::Int(ir::IntTy::I32)],
+                &facts,
+                &mut discovery
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        world
+            .original_implementation_self_for_discovery(
+                candidate.declaration,
+                &[Ty::Int(ir::IntTy::I32), Ty::Int(ir::IntTy::I32)],
+                &facts,
+                &mut discovery
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    assert_eq!(
+        world
+            .original_implementation_self_for_discovery(
+                header.declaration,
+                &[],
+                &facts,
+                &mut discovery
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    assert_eq!(
+        world
+            .require_original_impl_wf(header.declaration)
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    world
+        .validate_declaration_signature(header.declaration, signature, &header.schema.env, None)
+        .unwrap();
+    let error = world
+        .validate_schema_signature(header.declaration, signature, &header.schema.env, None)
+        .unwrap_err();
+    assert!(
+        format!("{error:?}")
+            .contains("closed associated projection must normalize before execution")
+    );
+    let other = world
+        .headers
+        .callables
+        .iter()
+        .find(|header| header.schema.env.total_arity() != 0)
+        .unwrap();
+    assert_eq!(
+        world
+            .validate_declaration_signature(header.declaration, signature, &other.schema.env, None)
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    let mut predicates = header.schema.predicates.to_vec();
+    world
+        .close_original_declaration_predicates(
+            header.declaration,
+            &mut predicates,
+            &header.schema.env,
+        )
+        .unwrap();
+    assert_eq!(
+        world
+            .close_original_declaration_predicates(
+                header.declaration,
+                &mut predicates,
+                &other.schema.env
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    assert_eq!(
+        world
+            .validate_original_declaration_predicates(
+                other.declaration,
+                &predicates,
+                &header.schema.env
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    let foreign_program = frontend::parse(source).unwrap();
+    let foreign_plan = PlanCtx::from_program(&foreign_program, &PlanBudget::default()).unwrap();
+    let foreign = foreign_plan.trait_world().unwrap();
+    let foreign_facts = foreign
+        .callable_facts(
+            foreign
+                .headers
+                .callables
+                .iter()
+                .find(|h| matches!(h.schema.signature.params.first(), Some(Ty::Struct(_))))
+                .unwrap()
+                .declaration,
+        )
+        .unwrap();
+    assert_eq!(
+        world
+            .original_implementation_self_for_discovery(
+                candidate.declaration,
+                &[Ty::Int(ir::IntTy::I32)],
+                &foreign_facts,
+                &mut discovery
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    assert_eq!(
+        world
+            .require_original_impl_wf(foreign.headers.impls[0].declaration)
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    let foreign_header = foreign
+        .headers
+        .callables
+        .iter()
+        .find(|header| matches!(header.schema.signature.params.first(), Some(Ty::Struct(_))))
+        .unwrap();
+    assert_eq!(
+        world
+            .validate_declaration_signature(
+                header.declaration,
+                &foreign_header.schema.signature,
+                &header.schema.env,
+                None
+            )
+            .unwrap_err()
+            .kind(),
+        FactsErrorKind::InvalidMetadata
+    );
+    world
+        .validate_declaration_signature(header.declaration, signature, &header.schema.env, None)
+        .unwrap();
+}
+
+#[test]
 fn generic_projected_signature_does_not_invent_an_implementation() {
     let world =
         source_world("trait Required{type Item;fn run<F>(self,value:Self::Item,f:F);}fn main(){}");

@@ -4,6 +4,26 @@
 mod oracle;
 
 #[test]
+fn concrete_callable_headers_preserve_projected_nominal_fields() {
+    oracle::stock_native(
+        r#"trait Base{}trait Family:Base{type Value:Clone;}struct Key;impl Base for Key{}impl Family for Key{type Value=String;}struct Packet<T:Family>{value:T::Value}enum Envelope<T:Family>{Owned(T::Value),Empty}fn forward(value:Packet<Key>)->Packet<Key>{value}fn extract(value:Envelope<Key>)->String{match value{Envelope::Owned(value)=>value,Envelope::Empty=>String::from("empty")}}fn main(){let packet=forward(Packet::<Key>{value:String::from("packet")});let value=extract(Envelope::<Key>::Owned(String::from("enum")));println!("{} {}",packet.value,value);}"#,
+    );
+}
+
+#[test]
+fn projected_nominal_headers_reject_unused_invalid_declarations() {
+    oracle::stock_and_native_reject(
+        "trait Family{type Value;}struct Key;impl Family for Key{type Value=i32;}struct Packet<T:Family>{value:T::Value}fn wrong()->Packet<Key>{Packet::<Key>{value:false}}fn main(){}",
+    );
+    oracle::stock_and_native_reject(
+        "trait Family{type Value;}struct Packet<T:Family>{value:T::Value}fn wrong(_:Packet<bool>){}fn main(){}",
+    );
+    oracle::stock_and_native_reject(
+        "trait Family{type Value;}struct Packet<T:Family>{value:T::Missing}fn main(){}",
+    );
+}
+
+#[test]
 fn nested_struct_projection_executes() {
     oracle::stock_native(
         "trait It{type Item;}struct C;impl It for C{type Item=i32;}struct Peek<I:It>{item:Option<Option<I::Item>>}fn main(){let p:Peek<C>=Peek{item:Some(Some(7))};if let Some(Some(n))=p.item{println!(\"{}\",n);}}",

@@ -1365,3 +1365,41 @@ pub fn str_from_utf8(v: &[u8]) -> Result<&str, Utf8Error> {
     let ptr = &v[0] as *const u8 as usize;
     Result::Ok(str_from_raw_parts(ptr, n))
 }
+
+impl String {
+    /// Preserve a borrowed valid input, replacing each maximal invalid UTF-8
+    /// subsequence with one U+FFFD when an owned result is necessary.
+    pub fn from_utf8_lossy(bytes: &[u8]) -> super::borrow::Cow<'_, str> {
+        match str_from_utf8(bytes) {
+            Result::Ok(text) => super::borrow::Cow::Borrowed(text),
+            Result::Err(_) => {
+                let mut output = String::with_capacity(bytes.len());
+                let mut position = 0usize;
+                while position < bytes.len() {
+                    let remaining = &bytes[position..];
+                    match str_from_utf8(remaining) {
+                        Result::Ok(text) => {
+                            output.push_str(text);
+                            break;
+                        }
+                        Result::Err(error) => {
+                            let valid = error.valid_up_to();
+                            if valid != 0usize {
+                                // The validator proved this exact byte prefix.
+                                let pointer = &remaining[0] as *const u8 as usize;
+                                output.push_str(str_from_raw_parts(pointer, valid));
+                            }
+                            output.push('�');
+                            position += valid;
+                            match error.error_len() {
+                                Option::Some(length) => position += length,
+                                Option::None => break,
+                            }
+                        }
+                    }
+                }
+                super::borrow::Cow::Owned(output)
+            }
+        }
+    }
+}

@@ -2004,11 +2004,15 @@ impl Provider for CompilerProvider {
                                 .result,
                             ir::Ty::Opaque(_)
                         )
-                        && types
-                            .callable_context(declaration)
-                            .map_err(Error::new)?
-                            .self_ty
-                            .is_none();
+                        && {
+                            // Receiver-less associated functions of a closed impl
+                            // (`String::from_utf8_lossy`) take no receiver recipe,
+                            // so they read closed graph nominals like free ones.
+                            let context =
+                                types.callable_context(declaration).map_err(Error::new)?;
+                            context.self_ty.is_none()
+                                || context.receiver == frontend::ReceiverKind::None
+                        };
                     let (body, closures, hidden) = if closed_source {
                         nominal_realization::publish_callable(
                             &cx,

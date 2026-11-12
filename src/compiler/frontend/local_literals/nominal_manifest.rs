@@ -198,6 +198,7 @@ impl DeclarationRecipe {
 }
 
 pub(in crate::compiler) struct Inputs<'a> {
+    pub engine: Option<crate::engine::EngineAuthority>,
     pub declaration_schema: &'a dyn Fn(ir::DeclId) -> Result<Option<DeclarationRecipe>, String>,
     pub source_type: &'a dyn Fn(&Type) -> Result<Option<Shape>, String>,
     pub nominal_type: &'a dyn Fn(&Demand) -> Result<Option<ir::Ty>, String>,
@@ -210,10 +211,19 @@ impl<'a> Inputs<'a> {
         nominal_type: &'a dyn Fn(&Demand) -> Result<Option<ir::Ty>, String>,
     ) -> Self {
         Self {
+            engine: None,
             declaration_schema,
             source_type,
             nominal_type,
         }
+    }
+
+    pub(in crate::compiler) fn with_engine(
+        mut self,
+        engine: crate::engine::EngineAuthority,
+    ) -> Self {
+        self.engine = Some(engine);
+        self
     }
 }
 

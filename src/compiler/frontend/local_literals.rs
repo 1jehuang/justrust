@@ -1372,6 +1372,18 @@ impl<'s> Solver<'_, '_, 's> {
                         _ => return Ok(()),
                     }
                 }
+                // `&[T; N]` into a still-unknown referent (`Cow::Borrowed(&a)`
+                // under `Cow<'_, [T]>`) may be an unsizing site. Defer only the
+                // inner edge: a later slice expectation coerces, quiescence
+                // still unifies to the array exactly as before.
+                if matches!(
+                    self.domain(a),
+                    Domain::Array(..) | Domain::DependentArray(..)
+                ) && matches!(self.domain(b), Domain::Unknown)
+                {
+                    self.lazy_coercions.push((a, b));
+                    return Ok(());
+                }
                 // `&T -> &dyn P` unsizing is proven by the checker.
                 if matches!(self.domain(b), Domain::Fixed(ir::Ty::Dyn(_))) {
                     return self.dyn_callable_hint(a, b);

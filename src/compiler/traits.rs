@@ -83,7 +83,7 @@ pub use constant_members::{ConstantMemberType, SelectedAssociatedConstant};
 pub use equality::NormalizedProjectionEquality;
 pub use inherent_constants::InherentConstantType;
 pub(in crate::compiler) use nominal_normalization::{
-    ParentLocalContext, ParentLocalField, ParentLocalTransport,
+    GraphInvocationInputs, ParentLocalContext, ParentLocalField, ParentLocalTransport,
 };
 pub use normal_drop::{DropGlue, NormalDropPlan, ValidatedDestructor};
 
@@ -4240,26 +4240,7 @@ impl ValidatedTraitWorld {
             world.validate_impl(h)?;
         }
         for h in world.headers.impls.iter() {
-            let env = world.predicate_env(h.declaration)?;
-            let context = ProofContext {
-                transport: ParentLocalTransport::default(),
-                original: None,
-                source_metadata: None,
-                predicates: &env,
-                executable_storage: true,
-                phase: FactsPhase::Universal,
-            };
-            let mut arguments = Vec::new();
-            for parameter in h.schema_env.ordered_params() {
-                push(budget, &mut arguments, Ty::Param(parameter))?;
-            }
-            world.require_impl_wf(
-                h,
-                &h.trait_ref,
-                &arguments,
-                context,
-                &mut ProofScratch::default(),
-            )?;
+            world.require_original_impl_wf(h.declaration)?;
         }
         world.build_environments()?;
         world.build_constant_environments()?;
@@ -4678,6 +4659,38 @@ impl ValidatedTraitWorld {
             self_ty: Ty::Param(header.self_param),
             args: args.into(),
         })
+    }
+    // Original declarations form logical obligations before owner normalization.
+    // This validates canonical metadata and domains, never executable storage.
+    fn validate_declaration_ref(
+        &self,
+        goal: &TraitRef,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+    ) -> Result<()> {
+        self.validate_ref_with_facts_for_use(
+            goal,
+            env,
+            maybe_unsized,
+            &mut NominalReplays::default(),
+            None,
+            false,
+        )
+    }
+    fn validate_declaration_predicates(
+        &self,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+    ) -> Result<()> {
+        self.validate_predicates_with_active_for_use(
+            predicates,
+            env,
+            maybe_unsized,
+            &mut ProofScratch::default(),
+            None,
+            false,
+        )
     }
     fn validate_ref_in(
         &self,
@@ -6034,20 +6047,45 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
         caller: Option<&ValidatedFacts>,
+        formations: Option<&mut body_validation::Validated>,
+    ) -> Result<()> {
+        self.validate_signature_shape_for_use(
+            signature,
+            env,
+            maybe_unsized,
+            caller,
+            formations,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn validate_signature_shape_for_use(
+        &self,
+        signature: &Signature,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        caller: Option<&ValidatedFacts>,
         mut formations: Option<&mut body_validation::Validated>,
+        executable_storage: bool,
     ) -> Result<()> {
         // This validates formation and stored metadata, never deriving new
         // origins from coincident types after specialization.
         let mut walk = TypeWalk {
             maybe_unsized,
+            logical_nominals: !executable_storage,
             ..TypeWalk::default()
         };
+        let mut metadata = NominalReplays::default();
         for t in signature
             .params
             .iter()
             .chain(std::iter::once(&signature.result))
         {
-            if maybe_unsized.is_none()
+            if !executable_storage {
+                self.validate_ty_metadata_with_facts(t, env, 0, &mut metadata, caller)?;
+            }
+            if executable_storage
+                && maybe_unsized.is_none()
                 && let (Some(facts), Some(cache)) = (caller, formations.as_deref_mut())
                 && self.same_env(env, facts.env())?
             {
@@ -6075,6 +6113,44 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         self.validate_schema_signature_with_facts(declaration, signature, env, maybe_unsized, None)
     }
+    // Source schemas retain canonical declaration metadata and return origins.
+    // Their field layout is independently graph-realized before executable use.
+    fn validate_declaration_signature(
+        &self,
+        declaration: DeclId,
+        signature: &Signature,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+    ) -> Result<()> {
+        if !self.same_env(&self.info(declaration)?.env, env)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "declaration signature requires its exact original environment",
+            ));
+        }
+        self.validate_schema_signature_for_use(
+            declaration,
+            signature,
+            env,
+            maybe_unsized,
+            None,
+            None,
+            false,
+        )
+    }
+    fn validate_declaration_type(&self, ty: &Ty, env: &GenericEnv) -> Result<()> {
+        let mut replays = NominalReplays::default();
+        self.validate_ty_metadata_with_facts(ty, env, 0, &mut replays, None)?;
+        self.validate_predicate_formation_for_use(
+            ty,
+            env,
+            TypeUse::Root,
+            None,
+            &mut replays,
+            None,
+            false,
+        )
+    }
     fn validate_schema_signature_with_facts(
         &self,
         declaration: DeclId,
@@ -6100,6 +6176,27 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         caller: Option<&ValidatedFacts>,
         formations: Option<&mut body_validation::Validated>,
+    ) -> Result<()> {
+        self.validate_schema_signature_for_use(
+            declaration,
+            signature,
+            env,
+            maybe_unsized,
+            caller,
+            formations,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn validate_schema_signature_for_use(
+        &self,
+        declaration: DeclId,
+        signature: &Signature,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+        caller: Option<&ValidatedFacts>,
+        formations: Option<&mut body_validation::Validated>,
+        executable_storage: bool,
     ) -> Result<()> {
         let info = self.info(declaration)?;
         if info.region_contract_mode == RegionContractMode::LegacyUnnamedFreeNoReturn {
@@ -6127,12 +6224,13 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            return self.validate_signature_shape_with_scratch(
+            return self.validate_signature_shape_for_use(
                 signature,
                 env,
                 maybe_unsized,
                 caller,
                 formations,
+                executable_storage,
             );
         }
         self.validate_position_coverage(signature)?;
@@ -6170,12 +6268,13 @@ impl ValidatedTraitWorld {
                 ),
             ));
         }
-        self.validate_signature_shape_with_scratch(
+        self.validate_signature_shape_for_use(
             signature,
             env,
             maybe_unsized,
             caller,
             formations,
+            executable_storage,
         )
     }
     fn validate_declaration_schema(
@@ -6915,7 +7014,7 @@ impl ValidatedTraitWorld {
                 ));
             }
             for goal in h.supertraits.iter() {
-                self.validate_ref_in(goal, &h.env, Some(h.self_param))?;
+                self.validate_declaration_ref(goal, &h.env, Some(h.self_param))?;
             }
             if h.supertrait_equalities.len() > MAX_PREDICATES {
                 return Err(FactsError::resource(
@@ -7030,14 +7129,18 @@ impl ValidatedTraitWorld {
                 &item.schema.env,
             )?;
             if !projected {
-                self.validate_schema_signature(
+                self.validate_declaration_signature(
                     item.declaration,
                     &item.schema.signature,
                     &item.schema.env,
                     maybe_unsized,
                 )?;
             }
-            self.validate_predicates(&item.schema.predicates, &item.schema.env, maybe_unsized)?;
+            self.validate_declaration_predicates(
+                &item.schema.predicates,
+                &item.schema.env,
+                maybe_unsized,
+            )?;
             if item.receiver == ReceiverMode::Value
                 && !matches!(item.schema.signature.params.first(), Some(Ty::Param(p)) if *p == trait_header.self_param)
             {
@@ -7078,7 +7181,7 @@ impl ValidatedTraitWorld {
                 None => None,
             };
             if !self.signature_contains_projection(&callable.schema.signature)? {
-                self.validate_schema_signature(
+                self.validate_declaration_signature(
                     callable.declaration,
                     &callable.schema.signature,
                     &callable.schema.env,
@@ -7104,7 +7207,7 @@ impl ValidatedTraitWorld {
                     "borrowed callable receiver disagrees with canonical parameter zero",
                 ));
             }
-            self.validate_predicates(
+            self.validate_declaration_predicates(
                 &callable.schema.predicates,
                 &callable.schema.env,
                 default_self,
@@ -7402,8 +7505,8 @@ impl ValidatedTraitWorld {
                 "explicit canonical Sized implementations are invalid",
             ));
         }
-        self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
-        self.validate_predicates(&h.predicates, &h.schema_env, None)?;
+        self.validate_declaration_ref(&h.trait_ref, &h.schema_env, None)?;
+        self.validate_declaration_predicates(&h.predicates, &h.schema_env, None)?;
         self.require_trait_static_self(&h.trait_ref, &h.schema_env, &h.predicates)?;
         self.validate_impl_parameter_constraints(h)?;
         if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sync) {
@@ -7533,7 +7636,8 @@ impl ValidatedTraitWorld {
                 original: None,
                 source_metadata: None,
                 predicates: &env,
-                executable_storage: true,
+                // Original declaration obligations, not executable field storage.
+                executable_storage: false,
                 phase: FactsPhase::Universal,
             };
             let mut expected = if !method_arguments.is_empty() {
@@ -7546,7 +7650,7 @@ impl ValidatedTraitWorld {
             } else if self.schema_contains_projection(&item.schema)? {
                 self.instantiate_owner_item(item, h, context)?
             } else {
-                self.instantiate_item(item, &h.trait_ref, context)?.0
+                self.instantiate_original_owner_conformance_item(item, h, context)?
             };
             if !method_arguments.is_empty()
                 && self.signature_contains_projection(&expected.signature)?
@@ -7558,8 +7662,15 @@ impl ValidatedTraitWorld {
             }
             expected.predicates =
                 self.normalize_required_owner_predicates(*callable_id, &expected.predicates)?;
-            self.validate_signature_shape(&expected.signature, &target.schema.env, None)?;
-            self.validate_predicates(&expected.predicates, &target.schema.env, None)?;
+            self.validate_signature_shape_for_use(
+                &expected.signature,
+                &target.schema.env,
+                None,
+                None,
+                None,
+                false,
+            )?;
+            self.validate_declaration_predicates(&expected.predicates, &target.schema.env, None)?;
             if !self.eq_types(
                 &expected.signature.params,
                 &target.schema.signature.params,
@@ -7750,6 +7861,74 @@ impl ValidatedTraitWorld {
         }
         Ok(result)
     }
+    fn validate_original_declaration_environment(
+        &self,
+        declaration: DeclId,
+        env: &GenericEnv,
+    ) -> Result<()> {
+        if !self.same_env(&self.info(declaration)?.env, env)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "logical declaration context changed its canonical original environment",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_original_declaration_predicates(
+        &self,
+        declaration: DeclId,
+        predicates: &[Predicate],
+        env: &GenericEnv,
+    ) -> Result<()> {
+        self.validate_original_declaration_environment(declaration, env)?;
+        self.validate_declaration_predicates(predicates, env, None)
+    }
+
+    fn close_original_declaration_predicates(
+        &self,
+        declaration: DeclId,
+        predicates: &mut Vec<Predicate>,
+        env: &GenericEnv,
+    ) -> Result<()> {
+        self.validate_original_declaration_predicates(declaration, predicates, env)?;
+        self.close_declaration_predicates(predicates, env)
+    }
+
+    fn close_declaration_predicates(
+        &self,
+        predicates: &mut Vec<Predicate>,
+        caller: &GenericEnv,
+    ) -> Result<()> {
+        let mut index = 0;
+        let mut active = ProofScratch::default();
+        while index < predicates.len() {
+            let Predicate::Implements(goal) = &predicates[index] else {
+                index += 1;
+                continue;
+            };
+            self.validate_declaration_predicates(
+                std::slice::from_ref(&predicates[index]),
+                caller,
+                None,
+            )?;
+            let mut supers = self.substitute_supertrait_predicates(goal, caller, false)?;
+            for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
+                for row in self
+                    .associated_bounds_for_raw_with(*associated, goal, caller, &mut active)?
+                    .iter()
+                {
+                    self.append_predicate(&mut supers, row)?;
+                }
+            }
+            self.validate_declaration_predicates(&supers, caller, None)?;
+            for row in supers {
+                self.append_predicate(predicates, &row)?;
+            }
+            index += 1;
+        }
+        Ok(())
+    }
     fn close_predicates(&self, predicates: &mut Vec<Predicate>, caller: &GenericEnv) -> Result<()> {
         let mut index = 0;
         while index < predicates.len() {
@@ -7795,14 +7974,14 @@ impl ValidatedTraitWorld {
                     "impl bounds have foreign declaration authority",
                 ));
             }
-            self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
-            self.validate_predicates(&h.predicates, &h.schema_env, None)?;
+            self.validate_declaration_ref(&h.trait_ref, &h.schema_env, None)?;
+            self.validate_declaration_predicates(&h.predicates, &h.schema_env, None)?;
             let mut predicates = Vec::new();
             for p in h.predicates.iter() {
                 self.append_predicate(&mut predicates, p)?;
             }
             self.implicit_sized(&h.schema_env, &mut predicates)?;
-            self.close_predicates(&mut predicates, &h.schema_env)?;
+            self.close_declaration_predicates(&mut predicates, &h.schema_env)?;
             self.validate_declared_equality_domains(&predicates, &h.schema_env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let index = self.environments.len();
@@ -10049,7 +10228,7 @@ impl ValidatedTraitWorld {
                     .iter()
                     .chain(std::iter::once(&raw.signature.result))
                 {
-                    self.validate_universal_projection_type(ty, &raw.env, 0)?;
+                    self.validate_declaration_type(ty, &raw.env)?;
                 }
                 self.validate_source_regions(declaration, &raw.signature)?;
             }
@@ -10086,6 +10265,54 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
+    fn require_original_impl_wf(&self, declaration: DeclId) -> Result<()> {
+        let position = self
+            .impl_header_index
+            .get(&self.budget, declaration)?
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "original implementation declaration is absent",
+                )
+            })?;
+        let h = &self.headers.impls[position];
+        self.validate_original_declaration_environment(declaration, &h.schema_env)?;
+        if self.info(declaration)?.kind != DeclKind::TraitImpl || h.declaration != declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "original implementation declaration changed kind",
+            ));
+        }
+        let env = self.predicate_env(declaration)?;
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &env,
+            executable_storage: false,
+            phase: FactsPhase::Universal,
+        };
+        self.check_context(context)?;
+        if !self.same_env(context.env(), &h.schema_env)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "original implementation proof changed environment",
+            ));
+        }
+        let mut arguments = Vec::new();
+        for parameter in h.schema_env.ordered_params() {
+            push(&self.budget, &mut arguments, Ty::Param(parameter))?;
+        }
+        self.require_impl_wf_for_role(
+            h,
+            &h.trait_ref,
+            &arguments,
+            context,
+            &mut ProofScratch::default(),
+            true,
+        )
+    }
+
     fn require_impl_wf(
         &self,
         h: &ImplHeader,
@@ -10102,6 +10329,19 @@ impl ValidatedTraitWorld {
                 "implementation well-formedness changed trait identity or argument arity",
             ));
         }
+        self.require_impl_wf_for_role(h, goal, arguments, context, active, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn require_impl_wf_for_role(
+        &self,
+        h: &ImplHeader,
+        goal: &TraitRef,
+        arguments: &[Ty],
+        context: ProofContext<'_>,
+        active: &mut ProofScratch,
+        declaration_role: bool,
+    ) -> Result<()> {
         // Only original projected marker obligations need an owner-binder
         // reduction. Other traits keep their direct instantiated-goal proof
         // path, without replaying an unrelated implementation schema.
@@ -10128,7 +10368,14 @@ impl ValidatedTraitWorld {
                 &h.schema_env,
                 arguments,
             )?;
-            let mut predicates = self.supertrait_predicates_for(&h.trait_ref, &h.schema_env)?;
+            let mut predicates = if declaration_role {
+                let rows =
+                    self.substitute_supertrait_predicates(&h.trait_ref, &h.schema_env, false)?;
+                self.validate_declaration_predicates(&rows, &h.schema_env, None)?;
+                rows
+            } else {
+                self.supertrait_predicates_for(&h.trait_ref, &h.schema_env)?
+            };
             if !predicates.is_empty() {
                 let owner = self.owner_context(h)?;
                 for predicate in &mut predicates {
@@ -10177,7 +10424,14 @@ impl ValidatedTraitWorld {
                 }
             }
         } else {
-            for predicate in self.supertrait_predicates_in(goal, context, active)? {
+            let predicates = if declaration_role {
+                let rows = self.substitute_supertrait_predicates(goal, context.env(), false)?;
+                self.validate_declaration_predicates(&rows, context.env(), None)?;
+                rows
+            } else {
+                self.supertrait_predicates_in(goal, context, active)?
+            };
+            for predicate in predicates {
                 self.require_in(&predicate, context, active)?;
             }
         }
@@ -10266,7 +10520,11 @@ impl ValidatedTraitWorld {
                 &mut predicates,
                 &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
             )?;
-            self.close_predicates(&mut predicates, &item.schema.env)?;
+            self.close_original_declaration_predicates(
+                item.declaration,
+                &mut predicates,
+                &item.schema.env,
+            )?;
             self.validate_declared_equality_domains(&predicates, &item.schema.env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
@@ -10307,7 +10565,11 @@ impl ValidatedTraitWorld {
                     self.append_predicate(&mut requirements, p)?;
                 }
             }
-            self.close_predicates(&mut requirements, &callable.schema.env)?;
+            self.close_original_declaration_predicates(
+                callable.declaration,
+                &mut requirements,
+                &callable.schema.env,
+            )?;
             retain::<Predicate>(&self.budget, requirements.len())?;
             let declared: Arc<[Predicate]> = requirements.clone().into();
             self.requirement_index.note(
@@ -10326,7 +10588,11 @@ impl ValidatedTraitWorld {
                     &Predicate::Implements(h.trait_ref.clone()),
                 )?;
             }
-            self.close_predicates(&mut requirements, &callable.schema.env)?;
+            self.close_original_declaration_predicates(
+                callable.declaration,
+                &mut requirements,
+                &callable.schema.env,
+            )?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -10877,7 +11143,7 @@ impl ValidatedTraitWorld {
         let original = &self.original_callable_header(target.declaration)?.schema;
         self.validate_declaration_schema(target.declaration, original)?;
         let normalized = &self.callable_header(target.declaration)?.schema;
-        self.validate_schema_signature(
+        self.validate_declaration_signature(
             target.declaration,
             &normalized.signature,
             &normalized.env,
@@ -11470,7 +11736,7 @@ impl ValidatedTraitWorld {
                     "legacy topology differs from its exact callable declaration",
                 ));
             }
-            self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
+            self.validate_declaration_signature(declaration, &schema.signature, &schema.env, None)?;
             // A nonempty positioned contract must cover every original fixed
             // input, including references with no parameter-carrier tail.
             for (param, ty) in schema.signature.params.iter().enumerate() {
@@ -11720,6 +11986,38 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
+    fn instantiate_original_owner_conformance_item(
+        &self,
+        item: &TraitItemHeader,
+        implementation: &ImplHeader,
+        context: ProofContext<'_>,
+    ) -> Result<InstantiatedSchema> {
+        self.validate_declaration_schema(item.declaration, &item.schema)?;
+        self.validate_source_regions(item.declaration, &item.schema.signature)?;
+        self.owner_context(implementation)?;
+        self.check_context(context)?;
+        if context.executable_storage
+            || context.phase != FactsPhase::Universal
+            || item.trait_decl != implementation.trait_ref.declaration
+            || !self.same_env(context.env(), &implementation.schema_env)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "original owner conformance changed declaration environment or storage role",
+            ));
+        }
+        let arguments = self.trait_arguments(&implementation.trait_ref)?;
+        self.instantiate_scratch_for_use(
+            &item.schema,
+            &arguments,
+            context,
+            Some(item.declaration),
+            &mut ProofScratch::default(),
+            None,
+            false,
+        )
+    }
+
     fn instantiate_item(
         &self,
         item: &TraitItemHeader,
@@ -13152,6 +13450,45 @@ impl ValidatedTraitWorld {
         nominals: &[Ty],
         scratch: &mut TraitScratch,
     ) -> Result<DirectCallProof> {
+        self.discharge_direct_exact_with_transport(
+            target,
+            facts,
+            ParentLocalTransport::new(nominals),
+            scratch,
+        )
+    }
+
+    pub(in crate::compiler) fn discharge_direct_with_graph_inputs(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+        inputs: &GraphInvocationInputs,
+        scratch: &mut TraitScratch,
+    ) -> Result<DirectCallProof> {
+        self.discharge_direct_exact_with_transport(target, facts, inputs.transport(), scratch)
+    }
+
+    /// Trait-call resolution against exact typed graph reads of the call's
+    /// own nominal applications. Selection replays each row; nothing here
+    /// remints a nominal's executable fields.
+    pub(in crate::compiler) fn resolve_trait_call_with_graph_inputs(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        inputs: &GraphInvocationInputs,
+        scratch: &mut TraitScratch,
+    ) -> Result<ResolvedTraitCall> {
+        self.resolve_trait_call_with_transport(call, facts, inputs.transport(), scratch)
+    }
+
+    fn discharge_direct_exact_with_transport(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+        transport: ParentLocalTransport<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<DirectCallProof> {
+        let nominals = transport.definitions();
         self.check_normalization_budget()?;
         self.check_facts(facts, true)?;
         checked_module(
@@ -13165,7 +13502,7 @@ impl ValidatedTraitWorld {
         scratch.for_facts(facts);
         let validation =
             std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
-        let transport = ParentLocalTransport::new(nominals).with_validation(&validation);
+        let transport = transport.with_validation(&validation);
         transport.validate_with_scratch(self, facts, scratch)?;
         let context = ProofContext {
             transport,
@@ -13900,6 +14237,47 @@ impl ValidatedTraitWorld {
         scratch: &mut TraitScratch,
     ) -> Result<()> {
         let nominals = facts.parent_local_signature_inputs_with_scratch(signature, scratch)?;
+        self.validate_signature_uncached_in(subject, signature, facts, &nominals, None, scratch)
+    }
+
+    /// Validates a direct call signature resolved against exact typed graph
+    /// reads. The expected signature is re-derived through the same exact
+    /// transport the resolution used, then compared exactly. Parent-local
+    /// seals are not mixed with graph rows. The completed-signature memo is
+    /// neither consulted nor filled, so a transport-free validation never
+    /// reuses this result.
+    pub(in crate::compiler) fn validate_signature_with_graph_inputs(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+        inputs: &GraphInvocationInputs,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        self.check_facts(facts, true)?;
+        let nominals = facts.parent_local_signature_inputs_with_scratch(signature, scratch)?;
+        if !nominals.is_empty() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "graph invocation cannot replace a parent-local source seal",
+            ));
+        }
+        self.validate_signature_uncached_in(subject, signature, facts, &[], Some(inputs), scratch)
+    }
+
+    fn validate_signature_uncached_in(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+        nominals: &[Ty],
+        graph: Option<&GraphInvocationInputs>,
+        scratch: &mut TraitScratch,
+    ) -> Result<()> {
+        let transport = match graph {
+            Some(inputs) => inputs.transport(),
+            None => ParentLocalTransport::new(nominals),
+        };
         let validation =
             std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
         let expected = match subject {
@@ -13913,7 +14291,7 @@ impl ValidatedTraitWorld {
                     signature.clone()
                 }
                 FactsSubject::ClosedInstance(target) => {
-                    self.discharge_direct_with_nominals(target, facts, &nominals, scratch)?
+                    self.discharge_direct_exact_with_transport(target, facts, transport, scratch)?
                         .signature
                 }
                 FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
@@ -13924,7 +14302,7 @@ impl ValidatedTraitWorld {
                 }
             },
             SignatureSubject::Call(Callee::Direct(target)) => {
-                self.discharge_direct_with_nominals(target, facts, &nominals, scratch)?
+                self.discharge_direct_exact_with_transport(target, facts, transport, scratch)?
                     .signature
             }
             SignatureSubject::Call(
@@ -13937,13 +14315,18 @@ impl ValidatedTraitWorld {
                 self.trait_signature_scratch(
                     call,
                     ProofContext {
-                        transport: ParentLocalTransport::new(&nominals)
-                            .with_validation(&validation),
+                        transport: transport.with_validation(&validation),
                         ..ProofContext::from_facts(facts)
                     },
                     scratch.for_world(self.id),
                 )?
                 .0
+            }
+            _ if graph.is_some() => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: graph-input signature validation for this subject",
+                ));
             }
             _ => return TraitCx::validate_signature(self, subject, signature, facts),
         };
@@ -14349,9 +14732,26 @@ impl TraitCx for ValidatedTraitWorld {
         nominals: &[Ty],
         scratch: &mut TraitScratch,
     ) -> Result<ResolvedTraitCall> {
+        self.resolve_trait_call_with_transport(
+            call,
+            facts,
+            ParentLocalTransport::new(nominals),
+            scratch,
+        )
+    }
+}
+
+impl ValidatedTraitWorld {
+    fn resolve_trait_call_with_transport(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        transport: ParentLocalTransport<'_>,
+        scratch: &mut TraitScratch,
+    ) -> Result<ResolvedTraitCall> {
         let validation =
             std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
-        let transport = ParentLocalTransport::new(nominals).with_validation(&validation);
+        let transport = transport.with_validation(&validation);
         transport.validate_with_scratch(self, facts, scratch)?;
         let scratch = scratch.for_world(self.id);
         self.check_facts(facts, true)?;

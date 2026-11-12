@@ -2,10 +2,17 @@
 use super::*;
 use std::borrow::Cow;
 
+pub(super) type PrepareInputs<'a> =
+    &'a dyn Fn(&ir::CallTarget) -> Result<tr::GraphInvocationInputs, String>;
+
 pub(super) enum MethodArguments<'a> {
     Missing,
     Deferred,
     Ready(Cow<'a, [ir::Ty]>),
+    /// Ready actuals whose selected direct target resolves against the exact
+    /// typed graph reads `prepare` returns for that target, through the same
+    /// prepared associated lookup as path-call syntax.
+    ReadyPrepared(Cow<'a, [ir::Ty]>, PrepareInputs<'a>),
     /// One application of a trait with several in-scope applications
     /// (`Into<T>`), chosen by the caller from the expected result type.
     /// Selection proves exactly this application instead of re-enumerating.
@@ -157,6 +164,19 @@ impl PlanCtx {
                                     )?
                                 }
                             }
+                            MethodArguments::ReadyPrepared(actuals, prepare) => self
+                                .lookup_associated_with_preparation(
+                                    owner,
+                                    name,
+                                    actuals.as_ref(),
+                                    caller,
+                                    module,
+                                    Some(mode),
+                                    traits_only,
+                                    budget,
+                                    &mut scratch.borrow_mut(),
+                                    prepare,
+                                )?,
                             MethodArguments::Ready(actuals) => self
                                 .lookup_associated_with_scratch(
                                     owner,
