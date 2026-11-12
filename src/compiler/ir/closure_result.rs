@@ -80,6 +80,7 @@ pub struct ClosureResultReceipt {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ResultCallWitness {
     StaticStr,
+    InputValue(ClosureInputValueOrigin),
     Required {
         item: DeclId,
         trait_decl: DeclId,
@@ -126,6 +127,32 @@ impl ClosureResultReceipt {
     pub(in crate::compiler) fn is_static_str(&self) -> bool {
         matches!(self.call, ResultCallWitness::StaticStr)
     }
+    pub(in crate::compiler) fn input_value(
+        owner: DeclId,
+        provider: DeclId,
+        site: u32,
+        origin: ClosureInputValueOrigin,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        Ok(Self {
+            owner,
+            provider,
+            site,
+            tail: origin.value,
+            call: ResultCallWitness::InputValue(origin),
+            result: ResultTypeWitness::ProjectedInput,
+            arguments: Arc::from([]),
+        })
+    }
+
+    pub(in crate::compiler) fn input_value_origin(&self) -> Option<&ClosureInputValueOrigin> {
+        match &self.call {
+            ResultCallWitness::InputValue(origin) => Some(origin),
+            _ => None,
+        }
+    }
+
     pub(in crate::compiler) fn captured(
         owner: DeclId,
         provider: DeclId,

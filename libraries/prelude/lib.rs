@@ -6,6 +6,7 @@
 // src/compiler/source_prelude.rs.
 
 pub mod alloc_surface {
+    pub use super::borrow;
     pub use super::boxed;
     pub use super::string;
     pub use super::vec;

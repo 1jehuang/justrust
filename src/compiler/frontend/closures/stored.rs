@@ -71,10 +71,17 @@ impl Parser<'_, '_> {
         self.lexical.closure_serial = serial
             .checked_add(1)
             .ok_or_else(|| self.limit("closure identity exhausted"))?;
-        let ident = self
-            .names
-            .anonymous_closure(origin, serial)
-            .map_err(native_adapter::name_error)?;
+        let expansion = self
+            .expansion
+            .map(Into::into)
+            .or_else(|| self.item_expansion.map(Into::into));
+        let ident = match &expansion {
+            Some(admission) => self
+                .names
+                .anonymous_closure_in_expansion(origin, serial, admission),
+            None => self.names.anonymous_closure(origin, serial),
+        }
+        .map_err(native_adapter::name_error)?;
         let name = self.closure_path(ident)?;
         // Legacy immediate-closure parent metadata names only genuine whole
         // bindings. Destructured parameters have no invented root source name.
@@ -92,12 +99,23 @@ impl Parser<'_, '_> {
             name: name.clone(),
             params: parent_params,
         });
-        let previous = self.lexical.function.take();
+        // Inside a lexically scoped parent (one that owns a macro driver),
+        // the closure body is a nested lexical scope of that same function:
+        // captures resolve to the parent's anchored bindings and the closure
+        // parameters bind in a fresh child scope, exactly like a block.
+        let inherited = self.frontier();
+        let previous = if inherited.is_some() {
+            None
+        } else {
+            self.lexical.function.take()
+        };
         let async_start = self.lexical.async_serial;
         let previous_owner = self.lexical.async_owner.replace(ident);
         let previous_async = self.lexical.async_boundary.take();
         self.lexical.closure_depth += 1;
-        let body = if self.is("{") {
+        let body = if let Some(frontier) = inherited {
+            self.nested_closure_body(frontier, &params)
+        } else if self.is("{") {
             self.function_body_parameters(&[], Some(&params))
         } else {
             self.nested_expr().map(|value| {
@@ -113,7 +131,9 @@ impl Parser<'_, '_> {
         self.lexical.closure_depth -= 1;
         self.lexical.async_boundary = previous_async;
         self.lexical.async_owner = previous_owner;
-        self.lexical.function = previous;
+        if inherited.is_none() {
+            self.lexical.function = previous;
+        }
         self.lexical.closure_parent = parent.clone();
         let (body, lexical_scope) = body?;
         let site =
@@ -121,9 +141,15 @@ impl Parser<'_, '_> {
         let mut slots = Vec::new();
         for field in 0..5 {
             slots.push(
-                self.names
-                    .anonymous_closure_environment(origin, serial, field)
-                    .map_err(native_adapter::name_error)?,
+                match &expansion {
+                    Some(admission) => self.names.anonymous_closure_environment_in_expansion(
+                        origin, serial, field, admission,
+                    ),
+                    None => self
+                        .names
+                        .anonymous_closure_environment(origin, serial, field),
+                }
+                .map_err(native_adapter::name_error)?,
             );
         }
         // The callable declaration describes the adapter ABI, never guessed
@@ -186,5 +212,45 @@ impl Parser<'_, '_> {
         });
         self.lexical.closure_sources = sources;
         Ok(Expr::Var(name))
+    }
+
+    /// Closure body nested in the enclosing function's lexical arena. The
+    /// parameters bind in a child scope of the closure site's frontier, so
+    /// they shadow (never mutate) the parent's bindings, and every written
+    /// capture resolves to the parent's anchored declaration.
+    fn nested_closure_body(
+        &mut self,
+        frontier: super::super::super::semantic_scope::FrontierId,
+        params: &[(Pattern, Type)],
+    ) -> Result<(Block, Option<super::super::super::semantic_scope::ScopeId>), ParseError> {
+        let previous = self.enter_lexical()?;
+        let result = (|| {
+            for (pattern, _) in params {
+                self.bind_pattern_lexical(pattern)?;
+            }
+            if self.is("{") {
+                self.block()
+            } else {
+                self.nested_expr().map(|value| Block {
+                    statements: Vec::new(),
+                    tail: Some(Box::new(value)),
+                })
+            }
+        })();
+        self.restore_frontier(previous);
+        let owner = self
+            .lexical
+            .scopes
+            .as_ref()
+            .ok_or_else(|| {
+                native_adapter::transport_error(
+                    super::super::super::token_session::TokenError::InvalidInput(
+                        "missing parser lexical owner",
+                    ),
+                )
+            })?
+            .function(frontier)
+            .map_err(scope_parse_error)?;
+        Ok((result?, Some(owner)))
     }
 }

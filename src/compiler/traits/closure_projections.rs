@@ -29,14 +29,25 @@ impl ValidatedTraitWorld {
                 )
             })?;
             let caller = self.predicate_env(scope.binder().declaration)?;
+            if !self.same_env(&caller.env, env)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure projection changed its canonical caller environment",
+                ));
+            }
+            // This tuple is checked in the source declaration's universal
+            // domain. Nested caller-bound families remain rigid there, even
+            // when an enclosing iterator assignment has a concrete impl head.
+            // The raw context grants no original caller or source receipt.
             let context = ProofContext {
                 transport: ParentLocalTransport::default(),
                 original: None,
                 source_metadata: None,
                 predicates: &caller,
                 executable_storage: true,
-                phase: FactsPhase::Schema,
+                phase: FactsPhase::Universal,
             };
+            self.check_context(context)?;
             let mut active = ProofScratch::default();
             let arguments = self.map_universal_projection_type(
                 &projection.trait_ref.args[0],

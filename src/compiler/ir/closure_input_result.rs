@@ -45,6 +45,36 @@ impl ClosureInputValueOrigin {
         Ok(ty)
     }
 
+    pub(in crate::compiler) fn result(
+        &self,
+        parameters: &[Ty],
+        budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        let ty = self.projected_type(parameters, budget)?;
+        if !matches!(
+            ty,
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                ..
+            }
+        ) {
+            return Err("closure input value result is not an original shared reference".into());
+        }
+        Ok(ty)
+    }
+
+    /// Map each result component back to its exact original input component.
+    /// In particular, copying `*s` from `s: &&str` selects depth one, not the
+    /// outer borrow of the iterator's element storage.
+    pub(in crate::compiler) fn carriers(
+        &self,
+        parameters: &[Ty],
+        budget: &PlanBudget,
+    ) -> Result<Arc<[CarrierReturn]>, String> {
+        self.result(parameters, budget)?;
+        self.value_carriers(parameters, budget)
+    }
+
     pub(in crate::compiler) fn value_carriers(
         &self,
         parameters: &[Ty],

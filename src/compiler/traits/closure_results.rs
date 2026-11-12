@@ -258,6 +258,7 @@ impl ValidatedTraitWorld {
             )
         })?;
         if receipt.argument_origin().is_none()
+            && receipt.input_value_origin().is_none()
             && receipt.capture_witness().is_none()
             && !receipt.is_static_str()
         {
@@ -395,6 +396,30 @@ impl ValidatedTraitWorld {
                             "capture result source is outside the actual receiver carrier domain",
                         ));
                     }
+                }
+            }
+            contract.results = results;
+        }
+        if let Some(input) = receipt.input_value_origin() {
+            let expected = charged(&self.budget, input.result(closure.params(), &self.budget))?;
+            if !self.eq_ty(&expected, &signature.result, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure input value result changed canonical argument projection",
+                ));
+            }
+            let results = charged(&self.budget, input.carriers(closure.params(), &self.budget))?;
+            for returned in results.iter() {
+                charged(&self.budget, self.budget.charge_work(contract.inputs.len()))?;
+                if returned
+                    .sources
+                    .iter()
+                    .any(|source| !contract.inputs.contains(source))
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "closure input value result is outside the actual tuple carrier domain",
+                    ));
                 }
             }
             contract.results = results;

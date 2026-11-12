@@ -229,6 +229,69 @@ fn native_box_application_fixture() -> (PlanCtx, Arc<tr::ValidatedFacts>) {
 }
 
 #[test]
+fn raw_empty_environment_projection_replays_exact_nominal_payload_only() {
+    let program = native_box_source_program_text(
+        "trait Family{type Item;}impl Family for u64{type Item=i32;}struct Carrier<'a,T>{values:&'a[T]}fn source<'a,C:Family>(x:Carrier<'a,C::Item>){}fn main(){}",
+    );
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = plan
+        .registry
+        .function_ids
+        .iter()
+        .copied()
+        .find(|id| {
+            let info = plan.registry.declaration(*id).unwrap();
+            plan.program.functions[info.source_index]
+                .name
+                .segments()
+                .last()
+                .is_some_and(|name| plan.program.names.spelling(*name).unwrap() == "source")
+        })
+        .unwrap();
+    let schema = plan.function_schema(declaration).unwrap();
+    let ir::Ty::Struct(template) = &schema.signature.params[0] else {
+        panic!("authored nominal parameter");
+    };
+    let ir::Ty::AssociatedType(projection) = &template.def().type_args[0] else {
+        panic!("authored family argument");
+    };
+    let mut projection = projection.as_ref().clone();
+    projection.trait_ref.self_ty = ir::Ty::Int(ir::IntTy::U64);
+    let env = ir::GenericEnv::new(&[], &budget).unwrap();
+    let raw = plan
+        .intern_nominal(
+            template.def().source_decl,
+            &[ir::Ty::AssociatedType(Arc::new(projection))],
+            ir::FactsCtx::Universal(&env),
+            &budget,
+        )
+        .unwrap();
+    let world = plan.trait_world().unwrap();
+    let adapter = world.schema_for_tests();
+    tr::SchemaCx::validate_nominal(adapter, &raw, &env, &budget).unwrap();
+    assert!(
+        ir::FactsCtx::Concrete
+            .validate_ty_with_budget(&raw, &budget)
+            .is_err(),
+        "source payload replay must not authorize unnormalized executable values"
+    );
+    let ir::Ty::Struct(value) = &raw else {
+        panic!("source nominal");
+    };
+    let mut changed = value.def().clone();
+    let mut fields = changed.fields.read(&budget).unwrap().to_vec();
+    fields[0].ty = ir::Ty::Bool;
+    changed.fields = fields.into();
+    let forged = ir::Ty::Struct(ir::StructTy::new(changed));
+    assert!(tr::SchemaCx::validate_nominal(adapter, &forged, &env, &budget).is_err());
+    let mut changed = value.def().clone();
+    changed.type_args = Arc::from([ir::Ty::Bool]);
+    let forged = ir::Ty::Struct(ir::StructTy::new(changed));
+    assert!(tr::SchemaCx::validate_nominal(adapter, &forged, &env, &budget).is_err());
+}
+
+#[test]
 fn native_box_application_replays_parent_local_source_and_exact_facts() {
     use crate::compiler::{
         CompilerProvider, Input, Snapshot, TEMPLATE_BODY, TemplateBodyFact, keys,

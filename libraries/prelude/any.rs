@@ -1,6 +1,6 @@
 // Runtime type identity is a compiler-owned observation of a canonical type.
 // Equality, ordering, and hashing remain ordinary library source operations.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct TypeId {
     value: usize,
 }

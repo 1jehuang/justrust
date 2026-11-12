@@ -18760,6 +18760,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn group_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.is("|") || self.is("||") || self.is("move") {
+            // The legacy immediate form never admits expanded tokens. Inside
+            // an authenticated expansion the parenthesized closure is an
+            // ordinary stored closure (`(||7)()` from a macro body).
+            if self.expansion.is_some() || self.item_expansion.is_some() {
+                let closure = self.stored_closure()?;
+                self.expect(")")?;
+                return Ok(closure);
+            }
             return self.immediate_closure();
         }
         if self.eat(")") {
@@ -27851,6 +27859,12 @@ impl tr::SchemaCx for SchemaAdapter {
         self.nominal_source_schema(declaration)
             .map_err(|error| self.error(error))
     }
+    fn declaration_predicate_domains(
+        &self,
+    ) -> Result<Vec<tr::DeclarationPredicateDomain>, tr::FactsError> {
+        self.source_declaration_predicate_domains()
+            .map_err(|error| self.error(error))
+    }
     fn validate_nominal(
         &self,
         ty: &ir::Ty,
@@ -28065,9 +28079,12 @@ impl SchemaAdapter {
                         None => {
                             let caller = if let Some(facts) = facts {
                                 ir::FactsCtx::Validated(facts)
-                            } else if env.total_arity() == 0 {
-                                ir::FactsCtx::Concrete
                             } else {
+                                // This reconstructs the exact source payload,
+                                // not executable storage. An empty binder set
+                                // does not turn raw projection metadata into a
+                                // closed value proof. Storage consumers still
+                                // require world normalization independently.
                                 ir::FactsCtx::Universal(env)
                             };
                             let (decl, args) = match ty {
@@ -30813,6 +30830,100 @@ mod const_declaration_tests {
     use super::*;
 
     #[test]
+    fn const_argument_literals_resolve_contextually_and_canonically() {
+        let argument = |spelling: &str| {
+            let source = format!("fn f<const N:usize>(){{}}fn main(){{f::<{spelling}>()}}");
+            let program = parse(&source).unwrap();
+            let Expr::Apply { path, .. } = program.functions[1].body.tail.as_deref().unwrap()
+            else {
+                panic!("generic application");
+            };
+            let (_, arguments) = path.application().unwrap();
+            let Type::ConstArgument(argument) = &arguments[0] else {
+                panic!("const argument");
+            };
+            argument.clone()
+        };
+        let usize_kind = ir::ConstType::Int(ir::IntTy::Usize);
+        let canonical = argument("3")
+            .resolve(usize_kind)
+            .unwrap()
+            .closed_key()
+            .unwrap();
+        for spelling in ["0x3", "0b11", "0o3", "{ 3 }", "{ 0x3 }"] {
+            assert_eq!(
+                argument(spelling)
+                    .resolve(usize_kind)
+                    .unwrap()
+                    .closed_key()
+                    .unwrap(),
+                canonical
+            );
+        }
+        for ty in [
+            ir::IntTy::I8,
+            ir::IntTy::I16,
+            ir::IntTy::I32,
+            ir::IntTy::I64,
+            ir::IntTy::I128,
+            ir::IntTy::Isize,
+            ir::IntTy::U8,
+            ir::IntTy::U16,
+            ir::IntTy::U32,
+            ir::IntTy::U64,
+            ir::IntTy::U128,
+            ir::IntTy::Usize,
+        ] {
+            assert_eq!(
+                argument("3").resolve(ir::ConstType::Int(ty)).unwrap(),
+                ir::ConstArgument::Integer { ty, bits: 3 }
+            );
+        }
+        assert_eq!(
+            argument("{ -128 }")
+                .resolve(ir::ConstType::Int(ir::IntTy::I8))
+                .unwrap(),
+            ir::ConstArgument::Integer {
+                ty: ir::IntTy::I8,
+                bits: 128
+            }
+        );
+        assert!(
+            argument("-129")
+                .resolve(ir::ConstType::Int(ir::IntTy::I8))
+                .is_err()
+        );
+        assert!(argument("-1").resolve(usize_kind).is_err());
+        assert!(
+            argument("3u8")
+                .resolve(usize_kind)
+                .unwrap_err()
+                .contains("E0308")
+        );
+        assert_eq!(
+            argument("{ true }").resolve(ir::ConstType::Bool).unwrap(),
+            ir::ConstArgument::Bool(true)
+        );
+        assert_eq!(
+            argument("'λ'").resolve(ir::ConstType::Char).unwrap(),
+            ir::ConstArgument::Char('λ')
+        );
+        assert!(
+            argument("true")
+                .resolve(usize_kind)
+                .unwrap_err()
+                .contains("E0308")
+        );
+        for expression in ["{ N + 1 }", "{ 3 + 1 }", "{ 1 << 2 }", "{ f() }"] {
+            let source = format!("fn f<const N:usize>(){{}}fn main(){{f::<{expression}>()}}");
+            let error = parse(&source)
+                .err()
+                .expect("const expression must be unsupported");
+            assert!(error.to_string().contains("unsupported"), "{error}");
+        }
+    }
+
+    #[test]
     fn const_call_staging_rejects_changed_source_caller_and_stale_occurrence() {
         let source = "fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn unused(){identity::<true>([7i32,11i32,24i32])}fn main(){}";
         let program = parse(source).unwrap();
@@ -30950,6 +31061,8 @@ mod const_declaration_tests {
         std::fs::create_dir_all(&scratch).unwrap();
         for (index, (source, expected)) in [
             ("fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn main(){}", ""),
+            ("fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn unused(){let _=identity::<3>([7i32,11i32,24i32]);}fn main(){}", ""),
+            ("fn identity<const B:bool>(value:i32)->i32{value}fn unused(){let _=identity::<true>(7i32);}fn main(){}", ""),
             ("fn identity<T>(value:T)->T{value}fn main(){let value=identity::<i32>(7i32);println!(\"{}\",value);}", "7\n"),
         ].into_iter().enumerate() {
             let stock_image = scratch.join(format!("stock-{index}"));
@@ -30987,29 +31100,6 @@ mod const_declaration_tests {
                         assert!(ran.status.success(), "{ran:?}");
                         assert_eq!(ran.stdout, expected.as_bytes());
                     }
-                }
-            }
-        }
-        for source in [
-            "fn identity<const N:usize>(value:[i32;N])->[i32;N]{value}fn unused(){let _=identity::<3>([7i32,11i32,24i32]);}fn main(){}",
-            "fn identity<const B:bool>(value:i32)->i32{value}fn unused(){let _=identity::<true>(7i32);}fn main(){}",
-        ] {
-            let stock = super::parser_tests::stock_compile(
-                source,
-                &scratch.join("valid-unsupported"),
-                true,
-            );
-            assert!(
-                stock.status.success(),
-                "{}",
-                String::from_utf8_lossy(&stock.stderr)
-            );
-            for workers in [1, 8] {
-                for check_only in [true, false] {
-                    let error = super::super::compile(source.into(), workers, check_only)
-                        .err()
-                        .expect("valid const instantiation remains explicitly unsupported");
-                    assert!(error.to_string().contains("unsupported"), "{error}");
                 }
             }
         }

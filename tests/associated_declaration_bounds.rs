@@ -4,6 +4,73 @@
 mod oracle;
 
 #[test]
+fn declaration_predicates_keep_projected_nominal_fields_logical() {
+    oracle::stock_native(
+        r#"
+trait Family { type Owned; }
+struct Source;
+impl Family for Source { type Owned = i32; }
+struct Holder<T: Family> { value: T::Owned }
+trait Tagged {}
+impl Tagged for Holder<Source> {}
+fn unused<T>() where Holder<Source>: Tagged {}
+fn main() { println!("41"); }
+"#,
+    );
+    for source in [
+        // A logical nominal application still requires its exact declared bound.
+        r#"trait Family { type Owned; }
+struct Holder<T: Family> { value: T::Owned }
+trait Tagged {}
+fn unused<T>() where Holder<T>: Tagged {}
+fn main() {}"#,
+        // A direct projected predicate cannot invent source trait membership.
+        r#"trait Family { type Owned; }
+struct Other;
+trait Tagged {}
+fn unused<T>() where <Other as Family>::Owned: Tagged {}
+fn main() {}"#,
+        // Declaration predicates do not authorize invalid physical field types.
+        r#"trait Family { type Owned; }
+struct Source;
+impl Family for Source { type Owned = str; }
+struct Holder<T: Family> { value: [T::Owned; 1] }
+trait Tagged {}
+fn unused<T>() where Holder<Source>: Tagged {}
+fn main() {}"#,
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn unused_declaration_domains_require_original_nominal_bounds() {
+    for declaration in [
+        "trait Broken<T> where Holder<T>: Tagged {}",
+        "trait Broken<T> {} struct Marker; impl<T> Broken<T> for Marker where Holder<T>: Tagged {}",
+        "struct Broken<T> where Holder<T>: Tagged { value: T }",
+    ] {
+        let source = format!(
+            "trait Family {{ type Owned; }} struct Holder<T: Family> {{ value: T::Owned }} trait Tagged {{}} {declaration} fn main() {{}}"
+        );
+        oracle::stock_and_native_reject(&source);
+    }
+    for declaration in [
+        "trait Valid<T: Family> where Holder<T>: Tagged {}",
+        "trait Valid<T> {} struct Marker; impl<T: Family> Valid<T> for Marker where Holder<T>: Tagged {}",
+        "struct Valid<T: Family> where Holder<T>: Tagged { value: T }",
+        "trait Valid where Holder<Source>: Tagged {}",
+        "trait Valid {} struct Marker; impl Valid for Marker where Holder<Source>: Tagged {}",
+        "struct Valid where Holder<Source>: Tagged { value: Source }",
+    ] {
+        let source = format!(
+            "trait Family {{ type Owned; }} struct Holder<T: Family> {{ value: T::Owned }} trait Tagged {{}} struct Source; impl Family for Source {{ type Owned = i32; }} impl Tagged for Holder<Source> {{}} {declaration} fn main() {{ println!(\"41\"); }}"
+        );
+        oracle::stock_native(&source);
+    }
+}
+
+#[test]
 fn associated_subject_blanket_bounds_format_and_dispatch() {
     oracle::stock_native(
         r#"

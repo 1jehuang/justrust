@@ -1,8 +1,55 @@
 //! Bounded primitive structural Debug. This is not std::fmt trait dispatch.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/iterator_oracle.rs"]
+mod cell_oracle;
 #[path = "support/oracle.rs"]
 mod oracle;
 use std::{fs, path::PathBuf, process::Command};
+
+#[test]
+fn cell_debug_covers_supported_scalar_payloads() {
+    cell_oracle::stock_native(
+        r#"
+use std::cell::Cell;
+#[derive(Debug)]
+struct State { count: Cell<u32>, marked: Cell<bool> }
+fn main() {
+    let state = State { count: Cell::new(3u32), marked: Cell::new(false) };
+    println!("{:?}", state);
+    state.count.set(4);
+    state.marked.set(true);
+    println!("{:#?}", state);
+    println!("{:?} {:?}", Cell::new(-128i8), Cell::new(255u8));
+    println!("{:?} {:?}", Cell::new(-32768i16), Cell::new(65535u16));
+    println!("{:?} {:?}", Cell::new(-2147483648i32), Cell::new(4294967295u32));
+    println!("{:?} {:?}", Cell::new(-9223372036854775808i64), Cell::new(18446744073709551615u64));
+    println!("{:?} {:?}", Cell::new(-170141183460469231731687303715884105728i128), Cell::new(340282366920938463463374607431768211455u128));
+    println!("{:?} {:?}", Cell::new(-7isize), Cell::new(9usize));
+    println!("{:?} {:?}", Cell::new(1.25f32), Cell::new(-0.0f64));
+    println!("{:?} {:?}", Cell::new('λ'), Cell::new('\n'));
+    println!("{:?} {:?}", Cell::new(false), Cell::new(true));
+}
+"#,
+    );
+    for source in [
+        "use std::cell::Cell; fn unused(value:Cell<String>){println!(\"{:?}\",value);} fn main(){}",
+        "use std::cell::Cell; fn unused<T>(value:Cell<T>){println!(\"{:?}\",value);} fn main(){}",
+    ] {
+        cell_oracle::stock_and_native_reject(source);
+    }
+    // Formatting support must not admit generic Cell schemas into source code.
+    let unsupported = "use std::cell::Cell; fn unused<T:Copy+std::fmt::Debug>(value:&Cell<T>){println!(\"{:?}\",value);} fn main(){}";
+    for workers in [1, 8] {
+        let failure = justrust_engine::compiler::compile(unsupported.into(), workers, true)
+            .err()
+            .expect("generic Cell payload remains explicitly unsupported");
+        let diagnostic = failure.to_string();
+        assert!(
+            diagnostic.contains("unsupported") && diagnostic.contains("Cell"),
+            "{diagnostic}"
+        );
+    }
+}
 
 struct Scratch(PathBuf);
 impl Scratch {

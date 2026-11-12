@@ -1593,7 +1593,7 @@ impl ValidatedTraitWorld {
                     &mut dependencies,
                     0,
                 )?;
-                self.validate_schema_signature(
+                self.validate_logical_schema_signature(
                     callable.declaration,
                     &schema.signature,
                     &schema.env,
@@ -1647,6 +1647,31 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_nodes(1))?;
         match ty {
             Ty::AssociatedType(projection) => {
+                // A declared parameter family need not have an implementation
+                // assignment in this universal domain. Prove that distinction
+                // before normalization, rather than repeatedly constructing an
+                // Unproved diagnostic merely to retain the same rigid family.
+                // A real blanket assignment still takes the normal evidence path.
+                if context.proof.phase == FactsPhase::Universal
+                    && matches!(projection.trait_ref.self_ty, Ty::Param(_))
+                    && !self.goal_is_closed(&projection.trait_ref, context.proof.env())?
+                {
+                    if matches!(
+                        self.prove_implementation_in(
+                            &Predicate::Implements(projection.trait_ref.clone()),
+                            context.proof,
+                            &mut stack.obligations,
+                        )?,
+                        ProofOutcome::NotProven
+                    ) {
+                        self.validate_universal_projection_with(
+                            projection,
+                            context.proof.env(),
+                            &mut stack.obligations,
+                        )?;
+                        return Ok(ty.clone());
+                    }
+                }
                 // Try a genuine implementation assignment before retaining a
                 // rigid family. Blanket impls can normalize a parameter's
                 // projection from its bounds (for example IntoIter = I).
@@ -1787,7 +1812,6 @@ impl ValidatedTraitWorld {
             }
             Ty::Struct(_) | Ty::Enum(_) => {
                 if !context.proof.metadata_transport().is_empty()
-                    && self.type_contains_projection(ty, depth + 1)?
                     && let Some(facts) = context.proof.metadata_facts()
                     && let Some(realized) = context.proof.metadata_transport().select_with_replays(
                         self,
@@ -3121,11 +3145,11 @@ pub(super) fn implementation_application_self(ty: &Ty) -> bool {
         || matches!(
             ty,
             Ty::Param(_)
+                | Ty::Opaque(_)
                 | Ty::Ref { .. }
                 | Ty::Slice { .. }
                 | Ty::Array { .. }
                 | Ty::Tuple(_)
-                | Ty::Opaque(_)
         )
 }
 

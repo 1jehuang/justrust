@@ -247,7 +247,6 @@ impl ValidatedTraitWorld {
         if let Some((facts, transport)) = invocation
             && !transport.is_empty()
             && matches!(ty, Ty::Struct(_) | Ty::Enum(_))
-            && self.type_contains_projection(ty, depth + 1)?
             && let Some(realized) = operations.select(transport, self, ty, facts)?
         {
             return Ok(realized);
@@ -604,7 +603,7 @@ impl ValidatedTraitWorld {
         self.check_context(context)?;
         let operations = std::mem::take(&mut active.nominal_operations);
         let result = (|| {
-            if !self.signature_contains_projection(signature)? {
+            if context.transport.is_empty() && !self.signature_contains_projection(signature)? {
                 return Ok(());
             }
             let context = ProofContext {

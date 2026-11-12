@@ -6,7 +6,87 @@ use super::*;
 #[path = "nominal_impl_match.rs"]
 mod nominal_match;
 
+pub(super) enum MethodConstraint {
+    Missing,
+    Pending,
+    Ready(Term),
+}
+
 impl Solver<'_, '_, '_> {
+    /// An omitted `Self` is an inference variable, including for static trait
+    /// constructors. The trait item's schema contributes equations only.
+    /// Checked lowering still selects and proves the concrete implementation.
+    pub(super) fn inferred_trait_call_constraints(
+        &mut self,
+        owner: Term,
+        path: &TraitPath,
+        name: AstIdent,
+        arguments: &[Term],
+        explicit: &[Term],
+    ) -> Result<Option<Term>, String> {
+        let plan = self.checker.signatures.plan()?;
+        let trait_id = plan.resolve_trait_path(path)?;
+        let Some(item) = plan.trait_item(trait_id, &name, &plan.budget)? else {
+            return Ok(None);
+        };
+        let schema = plan.raw_schema(item)?;
+        let own = plan.param_env(item)?;
+        if schema.signature.params.len() != arguments.len()
+            || (!explicit.is_empty() && explicit.len() != own.arity())
+        {
+            return Ok(None);
+        }
+        let written = match path {
+            TraitPath::Source(path) => {
+                let Some(segment) = path.segments.last() else {
+                    return Ok(None);
+                };
+                if !segment.associated_types.is_empty() {
+                    return Ok(None);
+                }
+                segment.args.as_slice()
+            }
+            TraitPath::Builtin(_) => &[],
+        };
+        let trait_env = plan.param_env(trait_id)?;
+        if trait_env.arity() != written.len() + 1 {
+            return Ok(None);
+        }
+        let mut params = self.parameters(&schema.env)?;
+        params.insert(
+            ir::ParamId {
+                owner: trait_env.binder(),
+                index: 0,
+            },
+            owner,
+        );
+        for (index, argument) in written.iter().enumerate() {
+            let argument = self.source_ty(argument)?;
+            params.insert(
+                ir::ParamId {
+                    owner: trait_env.binder(),
+                    index: index as u16 + 1,
+                },
+                argument,
+            );
+        }
+        for (index, argument) in explicit.iter().enumerate() {
+            params.insert(
+                ir::ParamId {
+                    owner: own.binder(),
+                    index: index as u16,
+                },
+                *argument,
+            );
+        }
+        for (argument, formal) in arguments.iter().zip(schema.signature.params.iter()) {
+            let formal = self.schema(formal, &params, 0)?;
+            self.coerce(*argument, formal)?;
+        }
+        self.callable_predicates(&schema.predicates, &params)?;
+        self.schema(&schema.signature.result, &params, 0).map(Some)
+    }
+
     /// Infer arguments only from a unique unspecialized nominal implementation.
     /// These are equations, not selection authority: checked lowering must still
     /// prove the fully instantiated application and all implementation bounds.
@@ -596,22 +676,23 @@ impl Solver<'_, '_, '_> {
         arguments: &[Term],
         explicit: &[Term],
         expected: Term,
-    ) -> Result<Option<Term>, String> {
+    ) -> Result<MethodConstraint, String> {
         if self.preparation.is_none()
             && !arguments.iter().any(|argument| {
                 matches!(self.domain(self.peel_refs(*argument)), Domain::Callable(_))
             })
         {
-            return Ok(None);
+            return Ok(MethodConstraint::Missing);
         }
         let checker = self.checker;
         let plan = checker.signatures.plan()?;
         let ir::FactsCtx::Validated(facts) = checker.facts() else {
-            return Ok(None);
+            return Ok(MethodConstraint::Missing);
         };
         let expected_type = self.expected_method_result(expected)?;
         let mut discovered = None;
         let mut unproved_expected = false;
+        let mut deferred_applications = false;
         let mut deferred_inherent = false;
         let mut same_trait: Vec<(ir::TraitRef, ir::DeclId)> = Vec::new();
         // Reuse the ordinary receiver/adjustment and inherent-before-trait order.
@@ -633,7 +714,7 @@ impl Solver<'_, '_, '_> {
                     }
                     return Ok(MethodArguments::Missing);
                 }
-                let (candidates, unproved) = plan.method_trait_candidates_expected(
+                let discovery = plan.method_trait_candidates_inferred(
                     owner,
                     &name,
                     checker.facts(),
@@ -641,7 +722,14 @@ impl Solver<'_, '_, '_> {
                     &plan.budget,
                     expected_type.as_ref().map(|result| (result, mode)),
                 )?;
-                unproved_expected |= unproved;
+                unproved_expected |= discovery.unproved_expected;
+                if discovery.pending {
+                    // Stop at this receiver frontier. An open hint cannot
+                    // select a lower-priority method or establish membership.
+                    deferred_applications = true;
+                    return Ok(MethodArguments::Deferred);
+                }
+                let candidates = discovery.applications;
                 let mut applicable = None;
                 let mut collected: Vec<_> = Vec::new();
                 for (application, item) in candidates.as_slice() {
@@ -683,11 +771,15 @@ impl Solver<'_, '_, '_> {
             },
             |_, _| Ok(None),
         )?;
+        if deferred_applications {
+            self.trait_application_pending = true;
+            return Ok(MethodConstraint::Pending);
+        }
         if !same_trait.is_empty() {
             discovered = self.select_application_by_expected(&same_trait, expected)?;
             if discovered.is_none() {
                 self.trait_application_pending = true;
-                return Ok(None);
+                return Ok(MethodConstraint::Pending);
             }
         }
         let Some((application, item)) = discovered else {
@@ -696,7 +788,7 @@ impl Solver<'_, '_, '_> {
                     "E0277: expected method result requires an unsatisfied trait application",
                 ));
             }
-            return Ok(None);
+            return Ok(MethodConstraint::Missing);
         };
         let schema = plan.raw_schema(item)?;
         if schema.signature.params.len() != arguments.len() + 1 {
@@ -738,7 +830,8 @@ impl Solver<'_, '_, '_> {
             self.coerce(*argument, formal)?;
         }
         self.callable_predicates(&schema.predicates, &params)?;
-        self.schema(&schema.signature.result, &params, 0).map(Some)
+        self.schema(&schema.signature.result, &params, 0)
+            .map(MethodConstraint::Ready)
     }
 
     fn expected_method_result(&mut self, expected: Term) -> Result<Option<ir::Ty>, String> {

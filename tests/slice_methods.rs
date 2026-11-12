@@ -1263,6 +1263,47 @@ fn promoted_large_byte_repeats_match_stock() {
 }
 
 #[test]
+fn array_map_has_an_explicit_unsupported_diagnostic() {
+    for source in [
+        "fn main(){let a=[1,2,3].map(|x|x+1);println!(\"{}\",a[0]);}",
+        "fn main(){let a=[String::from(\"x\")].map(|s|s.len());println!(\"{}\",a[0]);}",
+        "fn unused(){let mut total=0;let _=[1,2].map(|x|{total+=x;total});}fn main(){}",
+    ] {
+        for workers in [1, 8] {
+            let error = justrust_engine::compiler::compile(source.into(), workers, true)
+                .err()
+                .expect("array map must not stall in nominal inference")
+                .to_string();
+            assert!(
+                error
+                    .contains("unsupported: array map requires const-generic array method support"),
+                "{source}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn owned_array_into_iter_has_an_explicit_unsupported_diagnostic() {
+    for source in [
+        "fn main(){let _:Vec<i32>=[1,2,3].into_iter().collect();}",
+        "fn main(){let a=[String::from(\"x\")];let _:Vec<String>=a.into_iter().collect();}",
+        "fn unused(){let a=[1,2];let _=a.into_iter();}fn main(){}",
+    ] {
+        for workers in [1, 8] {
+            let error = justrust_engine::compiler::compile(source.into(), workers, true)
+                .err()
+                .expect("owned array iterator must not be approximated by a borrow")
+                .to_string();
+            assert!(
+                error.contains("unsupported: owned array into_iter"),
+                "{source}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn unpromoted_large_arrays_remain_explicitly_unsupported() {
     for (name, source) in [
         (

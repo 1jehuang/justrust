@@ -525,8 +525,8 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
                 let program = native_prelude::parse(source).unwrap();
-                let plan = compiler::frontend::PlanCtx::from_program(
-                    &program,
+                let plan = compiler::frontend::PlanCtx::from_shared_program(
+                    std::sync::Arc::new(program),
                     &compiler::ir::PlanBudget::default(),
                 )
                 .unwrap();

@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod inference;
 mod reference_bounds;
 
 fn selection_token_error(error: super::super::token_session::TokenError) -> String {
@@ -757,6 +758,8 @@ impl PlanCtx {
             ir::Ty::Dyn(object) => Some(object.principal),
             _ => nominal_parts(owner).map(|(id, _)| id),
         };
+        // A loader-owned primitive has no nominal declaration. Its registered
+        // impl identity supplies ownership, never the member's spelling.
         let mut selected: Option<(ir::Callee, ir::Signature, ReceiverKind)> = None;
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;
@@ -896,7 +899,7 @@ impl PlanCtx {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn method_trait_candidates_expected(
+    fn method_trait_candidates_discovery(
         &self,
         owner: &ir::Ty,
         name: &AstIdent,
@@ -904,6 +907,7 @@ impl PlanCtx {
         module: &ModuleId,
         budget: &ir::PlanBudget,
         expected: Option<(&ir::Ty, ReceiverKind)>,
+        mut deferred: Option<&mut bool>,
     ) -> Result<
         (
             super::super::token_session::BudgetVec<(ir::TraitRef, ir::DeclId)>,
@@ -1004,11 +1008,16 @@ impl PlanCtx {
                     continue;
                 }
             }
-            for application in self
-                .trait_applications(owner, *trait_id, facts, budget)
-                .map_err(|error| format!("method application discovery: {error}"))?
-                .as_slice()
-            {
+            let applications = if let Some(pending) = deferred.as_deref_mut() {
+                let (applications, open) =
+                    self.inferred_trait_applications(owner, *trait_id, facts, budget)?;
+                *pending |= open;
+                applications
+            } else {
+                self.trait_applications(owner, *trait_id, facts, budget)
+                    .map_err(|error| format!("method application discovery: {error}"))?
+            };
+            for application in applications.as_slice() {
                 candidates
                     .push((application.clone(), item))
                     .map_err(selection_token_error)?;
@@ -1247,7 +1256,131 @@ mod tests {
     }
 
     #[test]
+    fn reference_application_arguments_replay_original_referent_bound() {
+        let program = parse("struct Base;struct Missing;trait Inner<A>{type Output;}trait Outer<A>{fn get(&self)->A;}impl Inner<i32> for Base{type Output=bool;}impl<A,R,F:Inner<A,Output=R>> Outer<A> for &F{fn get(&self)->A{panic!(\"unused\")}}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let callable = plan.function_decl(0).unwrap();
+        let facts = plan.callable_facts(callable).unwrap();
+        let module = plan.callable_body(&plan.program, callable).unwrap().module;
+        let item = plan.registry.trait_items[1][0];
+        let DeclItemName::Source(name) = plan.declaration(item).unwrap().path.item else {
+            panic!("source member identity missing")
+        };
+        for (index, count) in [(0, 1), (1, 0)] {
+            let declaration = plan.nominal_declaration(index).unwrap();
+            let value = plan
+                .intern_nominal(declaration, &[], ir::FactsCtx::Validated(&facts), &budget)
+                .unwrap();
+            let receiver = ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(value),
+            };
+            let (applications, unproved) = plan
+                .method_trait_candidates_expected(
+                    &receiver,
+                    &name,
+                    ir::FactsCtx::Validated(&facts),
+                    &module,
+                    &budget,
+                    None,
+                )
+                .unwrap();
+            assert!(!unproved);
+            assert_eq!(applications.as_slice().len(), count);
+            if let Some((application, _)) = applications.as_slice().first() {
+                assert_eq!(application.args.as_ref(), &[ir::Ty::Int(ir::IntTy::I32)]);
+                assert!(matches!(
+                    facts
+                        .service()
+                        .prove_goal(&ir::Predicate::Implements(application.clone()), &facts,)
+                        .unwrap(),
+                    tr::ProofOutcome::Proved(_)
+                ));
+                let mut wrong = application.clone();
+                wrong.args = Arc::from([ir::Ty::Bool]);
+                assert!(matches!(
+                    facts
+                        .service()
+                        .prove_goal(&ir::Predicate::Implements(wrong), &facts,)
+                        .unwrap(),
+                    tr::ProofOutcome::NotProven
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn expected_result_absence_is_proved_trait_failure_not_ambiguity() {
+        {
+            let program = parse("struct Token;trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Token{fn convert(self)->T{panic!(\"unset\")}}fn main(){}").unwrap();
+            let budget = ir::PlanBudget::default();
+            let mut plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let callable = plan.function_decl(0).unwrap();
+            let facts = plan.callable_facts(callable).unwrap();
+            let module = plan.callable_body(&plan.program, callable).unwrap().module;
+            let declaration = plan.nominal_declaration(0).unwrap();
+            let token = plan
+                .intern_nominal(declaration, &[], ir::FactsCtx::Validated(&facts), &budget)
+                .unwrap();
+            let item = plan.registry.trait_items[0][0];
+            let DeclItemName::Source(name) = plan.declaration(item).unwrap().path.item else {
+                panic!("source trait method lost its canonical occurrence")
+            };
+            let inferred = plan
+                .method_trait_candidates_inferred(
+                    &token,
+                    &name,
+                    ir::FactsCtx::Validated(&facts),
+                    &module,
+                    &budget,
+                    None,
+                )
+                .unwrap();
+            assert!(inferred.pending);
+            assert!(inferred.applications.as_slice().is_empty());
+            // Inference deferral does not weaken ordinary final selection.
+            let strict = plan
+                .method_trait_candidates_expected(
+                    &token,
+                    &name,
+                    ir::FactsCtx::Validated(&facts),
+                    &module,
+                    &budget,
+                    None,
+                )
+                .err()
+                .unwrap();
+            assert!(strict.contains("multiple trait applications require explicit UFCS"));
+            let expected = ir::Ty::Int(ir::IntTy::I32);
+            let inferred = plan
+                .method_trait_candidates_inferred(
+                    &token,
+                    &name,
+                    ir::FactsCtx::Validated(&facts),
+                    &module,
+                    &budget,
+                    Some((&expected, ReceiverKind::Value { mutable: false })),
+                )
+                .unwrap();
+            assert!(!inferred.pending);
+            assert!(!inferred.unproved_expected);
+            assert_eq!(inferred.applications.as_slice().len(), 1);
+        }
+        // Parking a hint must not turn an unresolved unused call into a
+        // successful CHECK or executable at the solver's final quiescence.
+        let ambiguous = "struct Token;trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Token{fn convert(self)->T{panic!(\"unset\")}}fn unused(){let _=Token.convert();}fn main(){}";
+        let stock = super::super::parser_tests::stock_compile(
+            ambiguous,
+            std::path::Path::new("unused_ambiguous"),
+            true,
+        );
+        assert!(!stock.status.success());
+        for workers in [1, 8] {
+            for check in [true, false] {
+                assert!(crate::compiler::compile(ambiguous.into(), workers, check).is_err());
+            }
+        }
         let source = "struct Token;struct N;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn unused(){let _n:N=Token.convert();}fn main(){}";
         let stock =
             super::super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);

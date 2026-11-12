@@ -20,6 +20,26 @@ fn opaque_body_existing_cleanup_explicit_drop_matches_stock() {
 }
 
 #[test]
+fn output_macro_closure_bodies_infer_unit() {
+    use output_oracle::{Case, Expect};
+    output_oracle::check(
+        "output-macro-closure-bodies",
+        &[
+            Case {
+                name: "literal_println_body",
+                source: r#"fn twice<F:Fn()>(f:F){f();f();}fn main(){let f=||println!("done");f();twice(||print!("a"));twice(||eprintln!("e"));println!();}"#,
+                expect: Expect::Run("done\naa\n"),
+            },
+            Case {
+                name: "unused_println_closure_is_not_i32",
+                source: r#"fn bad(){let f=||println!("x");let _n:i32=f();}fn main(){}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_cleanup_unused_invalids_are_rejected() {
     use output_oracle::{Case, Expect};
     output_oracle::check(

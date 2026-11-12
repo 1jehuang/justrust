@@ -9,6 +9,75 @@ mod iterator_oracle;
 use iterator_oracle::closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn owned_array_into_iterator_is_a_generic_collection_producer() {
+    iterator_oracle::stock_native(
+        r#"
+use std::collections::BTreeSet;
+fn collect<T, I: IntoIterator<Item = T>>(source: I) -> Vec<T> { source.into_iter().collect() }
+fn total<I: IntoIterator<Item = i32>>(source: I) -> i32 {
+    let mut total = 0;
+    for value in source { total += value; }
+    total
+}
+fn forwarded<const N: usize>(values: [i32; N]) -> Vec<i32> { values.into_iter().collect() }
+fn main() {
+    let empty: [i32; 0] = [];
+    println!("{:?} {:?} {:?}", collect(empty), collect([7i32]), forwarded::<3>([2, 4, 6]));
+    let set: BTreeSet<_> = [5, 1, 9, 1, 3].into_iter().collect();
+    println!("{:?} {}", set, total([1, 2, 3, 4, 5]));
+    println!("{:?}", collect([String::from("one"), String::from("two")]));
+    let a = 7i32;
+    let b = 12i32;
+    let references = collect([&a, &b, &a]);
+    println!("{} {} {}", *references[0], *references[1], *references[2]);
+    let mut left = 1i32;
+    let mut right = 4i32;
+    for value in [&mut left, &mut right] { *value += 2; }
+    println!("{} {}", left, right);
+}
+"#,
+    );
+}
+
+#[test]
+fn owned_array_into_iterator_moves_and_drops_affine_elements_once() {
+    iterator_oracle::stock_native(
+        r#"
+struct Item { id: i32, text: String }
+impl Drop for Item { fn drop(&mut self) { println!("drop {} {}", self.id, self.text); } }
+fn item(id: i32) -> Item { Item { id, text: String::from("owned") } }
+struct Z;
+impl Drop for Z { fn drop(&mut self) { println!("zero"); } }
+fn main() {
+    let mut iterator = [item(1), item(2), item(3), item(4)].into_iter();
+    drop(iterator.next().unwrap());
+    println!("middle");
+    drop(iterator.next_back().unwrap());
+    drop(iterator);
+    println!("break");
+    for value in [item(5), item(6), item(7)] { println!("yield {}", value.id); break; }
+    println!("nested");
+    let nested = [[item(8), item(9)], [item(10), item(11)]];
+    let mut iterator = nested.into_iter();
+    drop(iterator.next().unwrap());
+    drop(iterator);
+    for _value in [Z, Z, Z] {}
+}
+"#,
+    );
+    for source in [
+        r#"fn unused(){let a=[String::from("a")];let i=a.into_iter();drop(a);}fn main(){}"#,
+        r#"fn unused(){let a=[String::from("a")];let r=&a;let i=a.into_iter();println!("{}",r.len());}fn main(){}"#,
+        "fn take<I:IntoIterator<Item=i32>>(_:I){}fn unused(){take([true,false]);}fn main(){}",
+        "fn take(_: [i32;2]){}fn unused(){let values=[1i32,2,3];take(values);}fn main(){}",
+        "fn bad()->Vec<&'static i32>{let local=1i32;[&local].into_iter().collect()}fn main(){}",
+        "fn unused(){let mut local=1i32;let values=[&mut local];let iterator=values.into_iter();local=2;drop(iterator);}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn retain_preserves_order_and_predicate_calls_match_stock() {
     iterator_oracle::stock_native(
         r#"

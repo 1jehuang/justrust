@@ -1908,6 +1908,82 @@ mod tests {
     }
 
     #[test]
+    fn anonymous_closure_identity_requires_exact_expansion_admission() {
+        let mut f = nested_fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let root = scopes.function_root(&f.names).unwrap();
+        let parent = scopes
+            .anchor_expansion(&f.names, f.parent.0, root, root)
+            .unwrap();
+        let proof = ExpansionTokenAdmission::from(parent);
+        assert!(f.names.anonymous_closure(f.parent.1.span, 0).is_err());
+        assert!(
+            f.names
+                .anonymous_closure_environment(f.parent.1.span, 0, 0)
+                .is_err()
+        );
+        let closure = f
+            .names
+            .anonymous_closure_in_expansion(f.parent.1.span, 0, &proof)
+            .unwrap();
+        let environment = f
+            .names
+            .anonymous_closure_environment_in_expansion(f.parent.1.span, 0, 0, &proof)
+            .unwrap();
+        assert_eq!(f.names.spelling(closure).unwrap(), "$closure$0");
+        let identity = f
+            .names
+            .session()
+            .span(f.names.span(closure).unwrap())
+            .unwrap();
+        assert_eq!(identity.expansion, None);
+        assert!(matches!(identity.origin,
+            crate::compiler::expansion_span::SpanOrigin::Synthetic {
+                anchor,
+                reason: crate::compiler::expansion_span::SyntheticReason::CompilerIdentity,
+            } if anchor == f.parent.1.span
+        ));
+        assert_eq!(f.names.spelling(environment).unwrap(), "$closure_env$0$0");
+        for origin in [f.original, f.child.1.span, f.sibling.1.span] {
+            assert!(
+                f.names
+                    .anonymous_closure_in_expansion(origin, 1, &proof)
+                    .is_err()
+            );
+            assert!(
+                f.names
+                    .anonymous_closure_environment_in_expansion(origin, 1, 0, &proof)
+                    .is_err()
+            );
+        }
+        let mut foreign = nested_fixture();
+        assert!(
+            foreign
+                .names
+                .anonymous_closure_in_expansion(f.parent.1.span, 0, &proof)
+                .is_err()
+        );
+        let failure = f
+            .names
+            .budget()
+            .charge(Counter::Work, u64::MAX)
+            .unwrap_err();
+        assert!(matches!(
+            f.names.anonymous_closure_in_expansion(f.parent.1.span, 2, &proof),
+            Err(crate::compiler::semantic_name::NameError::Token(TokenError::Budget(actual)))
+                if actual == failure
+        ));
+    }
+
+    #[test]
     fn nested_anchor_checks_exact_parent_arena_call_and_function() {
         let f = nested_fixture();
         let mut scopes = ScopeArenaBuilder::for_names(

@@ -5228,6 +5228,14 @@ impl<'a> Checker<'a> {
         if !matches!(owner, Type::Infer) {
             return checked_local_ty(owner, self.signatures);
         }
+        if let Some(hint) = self
+            .associated_owner_hints
+            .get(&(owner as *const Type as usize))
+        {
+            // A solved source equation only. Associated lowering still proves
+            // this exact owner against the written trait and item.
+            return Ok(hint.clone());
+        }
         let first = args
             .first()
             .ok_or("unsupported: trait path call without arguments needs `<T as Trait>::`")?;
@@ -11564,6 +11572,17 @@ impl<'a> Checker<'a> {
                 None => self.expr_expected(source, expected.as_ref())?,
             };
             let flow = self.flow(value);
+            if matches!(
+                &flow.ty,
+                ir::Ty::Array { .. } | ir::Ty::DependentArray { .. }
+            ) && self
+                .signatures
+                .plan()?
+                .iterator_into_iter_type(&flow.ty, self.facts())?
+                .is_some()
+            {
+                return self.for_iterator_statement(label, pattern, for_source, value, body);
+            }
             let builtin = match &flow.ty {
                 ir::Ty::Array { .. } => true,
                 ir::Ty::Ref { kind, referent } => {

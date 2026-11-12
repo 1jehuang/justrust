@@ -18,6 +18,7 @@ pub mod core_v1 {
 }
 
 pub mod v1 {
+    pub use super::super::borrow::ToOwned;
     pub use super::super::iter::{Iterator, IntoIterator, FromIterator, DoubleEndedIterator, Extend};
     pub use super::super::option::Option;
     pub use super::super::option::Option::{None, Some};
@@ -57,6 +58,7 @@ pub mod core_v1_2018 {
 
 // Editions 2015/2018: the 2021 additions (FromIterator) are absent.
 pub mod v1_2018 {
+    pub use super::super::borrow::ToOwned;
     pub use super::super::iter::{Iterator, IntoIterator, DoubleEndedIterator};
     pub use super::super::option::Option;
     pub use super::super::option::Option::{None, Some};

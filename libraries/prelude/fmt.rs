@@ -1714,6 +1714,104 @@ impl StrDebugArg for str {
     }
 }
 
+// Cell's sealed representation currently accepts only primitive scalars. Keep
+// these implementations concrete instead of admitting an unchecked Cell<T>.
+impl Debug for super::cell::Cell<i8> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<i16> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<i32> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<i64> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<i128> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<isize> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<u8> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<u16> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<u32> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<u64> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<u128> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<usize> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<f32> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<f64> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<bool> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
+impl Debug for super::cell::Cell<char> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.debug_struct("Cell").field("value", &self.get()).finish()
+    }
+}
+
 impl Debug for super::cmp::Ordering {
     fn fmt(&self, f: &mut Formatter) -> Result {
         f.write_str(match self {

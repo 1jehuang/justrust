@@ -53,8 +53,23 @@ impl ValidatedTraitWorld {
                 "closure body substitution used a foreign source recipe",
             ));
         }
+        let mut closed_arguments = true;
+        for argument in arguments {
+            closed_arguments &= self.raw_associated_ty_is_closed(argument, depth + 1)?;
+        }
+        let mut substitutions = schema_instantiation::Substitutions::default();
         for (left, right) in raw.types().zip(actual.types()) {
-            self.validate_rhs_substitution(left, right, env, arguments, depth + 1)?;
+            if closed_arguments && self.type_contains_projection(left, depth + 1)? {
+                self.validate_closed_closure_owner_type(
+                    left,
+                    right,
+                    env,
+                    arguments,
+                    &mut substitutions,
+                )?;
+            } else {
+                self.validate_rhs_substitution(left, right, env, arguments, depth + 1)?;
+            }
         }
         Ok(())
     }
@@ -113,8 +128,88 @@ impl ValidatedTraitWorld {
         // Replaying the retained unsealed template is deliberately different
         // from trusting try_map's callback. Only this exact canonical owner
         // substitution may change a sealed signature or capture type.
+        // A closed owner remains closed when inspected from its provider's
+        // generic declaration domain. No caller assumptions enter its replay.
+        let mut closed_owner = true;
+        for argument in closure.owner_args() {
+            closed_owner &= self.raw_associated_ty_is_closed(argument, 0)?;
+        }
+        let mut substitutions = schema_instantiation::Substitutions::default();
         for (raw, actual) in template.types().zip(closure.types()) {
-            self.validate_rhs_substitution(raw, actual, env, closure.owner_args(), 0)?;
+            if closed_owner && self.type_contains_projection(raw, 0)? {
+                self.validate_closed_closure_owner_type(
+                    raw,
+                    actual,
+                    env,
+                    closure.owner_args(),
+                    &mut substitutions,
+                )?;
+            } else {
+                self.validate_rhs_substitution(raw, actual, env, closure.owner_args(), 0)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Replay the retained raw recipe before comparing its independently
+    /// normalized closed metadata. This cannot grant Fn or storage authority.
+    fn validate_closed_closure_owner_type(
+        &self,
+        raw: &Ty,
+        actual: &Ty,
+        env: &GenericEnv,
+        arguments: &[Ty],
+        substitutions: &mut schema_instantiation::Substitutions,
+    ) -> Result<()> {
+        let context = ProofContext {
+            transport: ParentLocalTransport::default(),
+            original: None,
+            source_metadata: None,
+            predicates: &self.empty,
+            executable_storage: false,
+            phase: FactsPhase::Closed,
+        };
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        retain::<GenericEnv>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: Arc::new(env.clone()),
+            signature: Signature {
+                params: Vec::new(),
+                result: raw.clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates: Arc::from([]),
+        };
+        let replay =
+            self.instantiate_raw_cached(&schema, arguments, context, None, substitutions)?;
+        self.validate_rhs_substitution(raw, &replay.signature.result, env, arguments, 0)?;
+        if !replay.signature.params.is_empty()
+            || !replay.predicates.is_empty()
+            || !self.eq_contract(
+                &schema.signature.ref_contract,
+                &replay.signature.ref_contract,
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closed closure owner replay changed its structural schema",
+            ));
+        }
+        if self.eq_ty(&replay.signature.result, actual, 0)? {
+            return Ok(());
+        }
+        let (normal, _) = self.normalize_closed_projected_type_for_use(
+            &replay.signature.result,
+            context,
+            false,
+            &mut ProofScratch::default(),
+            false,
+        )?;
+        if !self.eq_ty(&normal, actual, 0)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closed closure owner projection changed its canonical source result",
+            ));
         }
         Ok(())
     }

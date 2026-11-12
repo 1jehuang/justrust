@@ -69,6 +69,26 @@ fn local_callable_signatures_match_stock() {
             "fn main(){let a:Vec<Result<i32,std::num::ParseIntError>>=vec![\"1\",\"2\"].into_iter().map(str::parse::<i32>).collect();let b:Result<Vec<i32>,std::num::ParseIntError>=\"3 4\".split_whitespace().map(str::parse::<i32>).collect();println!(\"{:?} {:?}\",a,b);}",
         ),
         (
+            "fn_item_reference_result_adapters",
+            "fn keep(s:&str)->&str{s}fn main(){let s=vec![String::from(\" a \"),String::from(\" b\")];let a:Vec<&str>=s.iter().map(String::as_str).collect();let b:Vec<&str>=a.iter().copied().map(str::trim).collect();let c:Vec<&str>=b.iter().copied().map(keep).collect();println!(\"{:?} {:?} {:?}\",a,b,c);}",
+        ),
+        (
+            "closure_copied_reference_adapter",
+            "fn main(){let v:Vec<&str>=vec![\"a\",\"c\"];let r:Vec<&str>=v.iter().map(|s|*s).collect();println!(\"{:?}\",r);}",
+        ),
+        (
+            "closure_tuple_reference_adapter",
+            "fn main(){let v=vec![(1,\"a\"),(2,\"b\")];let r:Vec<&str>=v.iter().map(|(_,s)|*s).collect();println!(\"{:?}\",r);}",
+        ),
+        (
+            "closure_map_reference_adapter",
+            "use std::collections::BTreeMap;fn main(){let mut m=BTreeMap::new();m.insert(1,\"a\");m.insert(2,\"c\");let r:Vec<&str>=m.iter().map(|(_,s)|*s).collect();println!(\"{:?}\",r);}",
+        ),
+        (
+            "closure_map_borrowed_string_adapter",
+            "use std::collections::BTreeMap;fn main(){let mut m=BTreeMap::new();m.insert(1,String::from(\"a\"));m.insert(2,String::from(\"c\"));let r:Vec<&String>=m.iter().map(|(_,s)|s).collect();println!(\"{:?}\",r);}",
+        ),
+        (
             "fn_item_result_error_inference",
             "fn main(){let a:Result<Vec<i32>,_>=\"1 2\".split_whitespace().map(str::parse::<i32>).collect();let b:Result<Vec<i32>,_>=\"1 x\".split_whitespace().map(str::parse::<i32>).collect();println!(\"{:?} {}\",a,b.is_err());}",
         ),
@@ -174,6 +194,26 @@ fn unresolved_or_conflicting_callable_signatures_are_rejected() {
             "non_generic_function_arguments",
             "fn inc(x:i32)->i32{x+1} fn unused(){let f=inc::<u8>;} fn main(){}",
             "E0107",
+        ),
+        (
+            "fn_item_reference_outlives_owner",
+            "fn main(){let r:Vec<&str>;{let v=vec![String::from(\"x\")];r=v.iter().map(String::as_str).collect();}println!(\"{:?}\",r);}",
+            "E0597",
+        ),
+        (
+            "closure_reference_to_local",
+            "fn main(){let r:Vec<&str>=(0..1).map(|_|{let s=String::from(\"x\");s.as_str()}).collect();println!(\"{:?}\",r);}",
+            "E0515",
+        ),
+        (
+            "closure_reference_capture_dropped",
+            "fn main(){let s=String::from(\"x\");let r:Vec<&str>=(0..1).map(|_|s.as_str()).collect();drop(s);println!(\"{:?}\",r);}",
+            "E0505",
+        ),
+        (
+            "closure_reference_outlives_owner",
+            "fn main(){let r:Vec<&String>;{let v=vec![String::from(\"x\")];r=v.iter().map(|s|s).collect();}println!(\"{:?}\",r);}",
+            "E0597",
         ),
         (
             "fn_item_wrong_result_error",

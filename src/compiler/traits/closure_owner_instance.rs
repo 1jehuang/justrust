@@ -86,6 +86,21 @@ impl ValidatedFacts {
             0,
         )?;
         world.validate_closure_metadata(&actual, self.env())?;
+        // Graph keys retain only the provider and ordered owner actuals. Replay
+        // the raw source first, then publish the same canonical metadata that
+        // source-closing substitution computes before executable consumers.
+        let normal = self.normalize_substituted_projection_metadata(
+            &Ty::Closure(actual),
+            &world.budget,
+            &mut TraitScratch::default(),
+        )?;
+        let Ty::Closure(actual) = normal else {
+            return Err(FactsError::invalid(
+                &world.budget,
+                "closed closure normalization changed its source type kind",
+            ));
+        };
+        world.validate_closure_metadata(&actual, self.env())?;
         world.require_closure_owner_predicates(
             &actual,
             ProofContext::from_facts(self),
