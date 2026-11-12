@@ -107,9 +107,32 @@ describes each one.
 Edition 2024, Linux x86-64, oracle in `tests/support/stock_rustc.rs`. Valid
 supported programs behave exactly as stock rustc. Invalid programs are rejected.
 Unsupported constructs get an explicit diagnostic, never an approximate
-translation. CHECK must not demand codegen. Do not embed rustc, Cargo, LLVM or
-their vendored implementations. Std-library Rust source in `libraries/` is
-compiled by our compiler.
+translation. CHECK must not demand codegen. Do not link, call or ship rustc,
+Cargo or LLVM as part of the compiler. Std-library Rust source in `libraries/`
+is compiled by our compiler.
+
+### Using the vendored toolchain source
+
+The vendored Rust toolchain in the stable checkout
+(`~/justrust/toolchain/rustc`: `compiler/`, `library/`) may be used to speed up
+development:
+
+- Read it freely to learn exact language rules and algorithms (method lookup,
+  autoderef, coercions, inference defaults, trait selection, closure capture,
+  borrow checking). Implement them in our own graph-shaped code. rustc's
+  whole-program inference context does not fit the graph rules, so port the
+  rule, not the data structures.
+- Std library code (`library/core`, `library/alloc`, `library/std`) may be
+  copied or adapted into `libraries/`. Keep the upstream license: add a header
+  comment on each adapted item or file naming the source path and
+  "MIT OR Apache-2.0, Rust Project Contributors" (license texts are in
+  `libraries/rust-upstream-licenses/`). The `LICENSING.md` row covers every
+  file carrying that header. Only port what our compiler can actually compile; a port
+  that needs an unsupported feature must still fail with an explicit
+  diagnostic.
+- Compiler code (`compiler/rustc_*`) may be adapted under the same attribution
+  rule when it fits the graph rules. Graph integrity rules still apply to
+  everything.
 
 ## Working in the shared checkout
 

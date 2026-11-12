@@ -11,6 +11,7 @@ outbound.
 | Everything not listed below | [FSL-1.1-ALv2](LICENSE) | The compiler, engine, prelude library, tests, benchmarks, tooling, and docs |
 | `fixtures/adler2_adapted/upstream/` | 0BSD ([upstream/LICENSE-0BSD](fixtures/adler2_adapted/upstream/LICENSE-0BSD)), original copyright retained | Unmodified Adler2 sources used only as a stock-rustc oracle |
 | `libraries/probes/*/` | MIT OR Apache-2.0, Rust Project Contributors (`LICENSE-MIT`, `LICENSE-APACHE`, `COPYRIGHT` in each directory) | Source-locked original `core` items, pinned in `libraries/source-lock.json` |
+| Items in `libraries/` and `src/` marked with a "MIT OR Apache-2.0, Rust Project Contributors" header | MIT OR Apache-2.0, Rust Project Contributors (portions adapted from the Rust toolchain `library/` and `compiler/` sources; texts in [libraries/rust-upstream-licenses/](libraries/rust-upstream-licenses/)) | Adapted std library and compiler code; the header names the upstream path |
 | Third-party crates (`unicode-ident`) | Their own licenses, see [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) | Utility dependencies |
 
 FSL does not relicense third-party code. Preserve the original `LICENSE*`,
