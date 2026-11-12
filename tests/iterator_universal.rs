@@ -456,3 +456,23 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn vec_of_mut_refs_option_element_access() {
+    oracle::stock_native(
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; { let mut v: Vec<&mut S> = vec![&mut a]; if let Some(s) = v.last_mut() { s.n += 1; } } println!(\"{}\", a.n); }",
+    );
+    oracle::stock_native(
+        "fn main(){ let mut x=1i32; { let mut w: Vec<&mut i32> = vec![&mut x]; if let Some(r) = w.get_mut(0) { **r += 5; } } println!(\"{}\", x); }",
+    );
+    oracle::stock_native(
+        "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut b=S{n:4}; let mut x=1i32; let mut y=2i32; { let mut v: Vec<&mut S> = vec![&mut a, &mut b]; if let Some(s) = v.last_mut() { s.bump(); } if let Some(s) = v.get_mut(0) { s.n += 10; } println!(\"{}\", v.get_mut(5).is_none()); v.swap(0, 1); v[0].bump(); } { let mut w: Vec<&mut i32> = vec![&mut x, &mut y]; if let Some(r) = w.last_mut() { **r += 5; } if let Some(r) = w.get_mut(0) { **r *= 3; } } println!(\"{:?} {:?} {} {}\", a, b, x, y); }",
+    );
+    for source in [
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let p = v.last_mut().unwrap(); let q = v.get_mut(0).unwrap(); p.n += 1; q.n += 1; }",
+        "struct S { n: i32 } fn main(){ let mut a=S{n:1}; let mut v: Vec<&mut S> = vec![&mut a]; let p = v.last_mut().unwrap(); println!(\"{}\", v.len()); p.n += 1; }",
+        "fn main(){ let mut a=1i32; let r; { let mut v: Vec<&mut i32> = vec![&mut a]; r = v.last_mut().unwrap(); } **r += 1; }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

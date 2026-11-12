@@ -1660,7 +1660,105 @@ fn identity_nested_slot_reborrow_rows(
     expanded: &ir::CarrierContract,
     budget: &mut Budget,
 ) -> Result<Option<ir::ParamId>, Exhausted> {
+    Ok(
+        identity_nested_slot_reborrow_prefixed_rows(original, expanded, budget)?.and_then(|rows| {
+            (rows.original_prefix.is_empty() && rows.expanded_prefix.is_empty())
+                .then_some(rows.parameter)
+        }),
+    )
+}
+
+/// Splits a result location under a shared payload prefix made only of
+/// struct/variant field steps (`Option<&mut &mut T>`'s `Some.0`). The
+/// remainder must be exactly the unprefixed nested-slot result row.
+fn strip_payload_prefix(
+    location: &CarrierLocation,
+    prefix: &[CarrierStep],
+) -> Option<CarrierLocation> {
+    let path = location.path.0.as_ref();
+    if path.len() < prefix.len() || &path[..prefix.len()] != prefix {
+        return None;
+    }
+    Some(CarrierLocation {
+        path: CarrierPath(Arc::from(&path[prefix.len()..])),
+        channel: location.channel.clone(),
+    })
+}
+
+fn payload_prefix(location: &CarrierLocation) -> Option<Vec<CarrierStep>> {
+    let mut prefix = Vec::new();
+    for step in location.path.0.iter() {
+        match step {
+            CarrierStep::Field(_) | CarrierStep::VariantField { .. } => prefix.push(step.clone()),
+            _ => break,
+        }
+    }
+    Some(prefix)
+}
+
+/// Nested-slot reborrow rows, optionally under one shared payload prefix on
+/// every result (original and expanded prefixes may name the payload owner
+/// through different nominal applications, but must agree step for step on
+/// variant and field indices). Writes and inputs carry no prefix.
+fn identity_nested_slot_reborrow_prefixed_rows(
+    original: &ir::CarrierContract,
+    expanded: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<Option<NestedSlotRows>, Exhausted> {
     budget.spend(96)?;
+    if original.results.len() != 2 || expanded.results.len() != 2 {
+        return Ok(None);
+    }
+    let (Some(original_prefix), Some(expanded_prefix)) = (
+        payload_prefix(&original.results[0].location),
+        payload_prefix(&expanded.results[0].location),
+    ) else {
+        return Ok(None);
+    };
+    if original_prefix.len() != expanded_prefix.len()
+        || original_prefix
+            .iter()
+            .zip(expanded_prefix.iter())
+            .any(|(a, b)| match (a, b) {
+                (CarrierStep::Field(x), CarrierStep::Field(y)) => x != y,
+                (
+                    CarrierStep::VariantField {
+                        variant: va,
+                        field: fa,
+                    },
+                    CarrierStep::VariantField {
+                        variant: vb,
+                        field: fb,
+                    },
+                ) => va.index != vb.index || fa != fb,
+                _ => true,
+            })
+    {
+        return Ok(None);
+    }
+    let strip =
+        |contract: &ir::CarrierContract, prefix: &[CarrierStep]| -> Option<ir::CarrierContract> {
+            let mut results = Vec::new();
+            for row in contract.results.iter() {
+                results.push(ir::CarrierReturn {
+                    location: strip_payload_prefix(&row.location, prefix)?,
+                    sources: row.sources.clone(),
+                });
+            }
+            Some(ir::CarrierContract {
+                inputs: contract.inputs.clone(),
+                results: results.into(),
+                writes: contract.writes.clone(),
+            })
+        };
+    let (Some(original), Some(expanded)) = (
+        strip(original, &original_prefix),
+        strip(expanded, &expanded_prefix),
+    ) else {
+        return Ok(None);
+    };
+    let original = &original;
+    let expanded = &expanded;
     if original.inputs.len() != 2
         || original.results.len() != 2
         || original.writes.len() != 1
@@ -1714,7 +1812,93 @@ fn identity_nested_slot_reborrow_rows(
     {
         return Ok(None);
     }
-    Ok(Some(parameter))
+    Ok(Some(NestedSlotRows {
+        parameter,
+        original_prefix,
+        expanded_prefix,
+        original: original.clone(),
+        expanded: expanded.clone(),
+    }))
+}
+
+/// Canonical type identity: nominals compare by resolved declaration and
+/// ordered type arguments, not by which graph node realized the application
+/// (a sealed family actual may name `S` by source slot while the instantiated
+/// signature names it by graph realization). Anything else must be equal.
+fn canonical_same_type(a: &Ty, b: &Ty) -> bool {
+    fn all(a: &[Ty], b: &[Ty]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| canonical_same_type(a, b))
+    }
+    match (a, b) {
+        (Ty::Struct(x), Ty::Struct(y)) => {
+            x.id() == y.id()
+                || (!x.is_back_edge()
+                    && !y.is_back_edge()
+                    && x.def().source_decl == y.def().source_decl
+                    && all(&x.def().type_args, &y.def().type_args))
+        }
+        (Ty::Enum(x), Ty::Enum(y)) => {
+            x.id() == y.id()
+                || (!x.is_back_edge()
+                    && !y.is_back_edge()
+                    && x.def().source_decl == y.def().source_decl
+                    && all(&x.def().type_args, &y.def().type_args))
+        }
+        (
+            Ty::Ref {
+                kind: ka,
+                referent: ra,
+            },
+            Ty::Ref {
+                kind: kb,
+                referent: rb,
+            },
+        ) => ka == kb && canonical_same_type(ra, rb),
+        (Ty::Tuple(x), Ty::Tuple(y)) => all(x, y),
+        (
+            Ty::Array {
+                element: ea,
+                len: la,
+            },
+            Ty::Array {
+                element: eb,
+                len: lb,
+            },
+        ) => la == lb && canonical_same_type(ea, eb),
+        (Ty::Slice { element: ea }, Ty::Slice { element: eb }) => canonical_same_type(ea, eb),
+        _ => a == b,
+    }
+}
+
+struct NestedSlotRows {
+    parameter: ir::ParamId,
+    original_prefix: Vec<CarrierStep>,
+    expanded_prefix: Vec<CarrierStep>,
+    original: ir::CarrierContract,
+    expanded: ir::CarrierContract,
+}
+
+/// Walks a payload prefix through struct fields and enum variant fields by
+/// index only (the caller's realized nominal may use another application id).
+fn peel_payload(ty: &Ty, prefix: &[CarrierStep], budget: &ir::PlanBudget) -> Option<Ty> {
+    let mut ty = ty.clone();
+    for step in prefix {
+        ty = match (step, &ty) {
+            (CarrierStep::VariantField { variant, field }, Ty::Enum(value)) => value
+                .def()
+                .variants
+                .get(variant.index)?
+                .fields
+                .read(budget)
+                .ok()?
+                .get(*field)?
+                .ty
+                .clone(),
+            (CarrierStep::Field(index), _) => ty.field_ty(*index, budget).ok()??,
+            _ => return None,
+        };
+    }
+    Some(ty)
 }
 
 /// An identity envelope is a no-replacement proof only when its one source is
@@ -6868,10 +7052,31 @@ impl CarrierBuilder<'_, '_> {
         view: &super::traits::CarrierContractView,
         authority: Option<&super::traits::ValidatedFacts>,
     ) -> Result<bool, Exhausted> {
+        let Some(rows) = identity_nested_slot_reborrow_prefixed_rows(
+            view.original_contract(),
+            view.contract(),
+            self.budget,
+        )?
+        else {
+            return Ok(false);
+        };
+        // `Option<&mut &mut T>` (get_mut/last_mut) carries the same nested
+        // slot rows under the payload prefix. Peel it from both the caller's
+        // result and the view's own signature result by variant/field index.
+        let Some(result) = peel_payload(result, &rows.expanded_prefix, &self.ledger) else {
+            return Ok(false);
+        };
+        let Some(own_result) = peel_payload(
+            &view.signature_for_replay().result,
+            &rows.expanded_prefix,
+            &self.ledger,
+        ) else {
+            return Ok(false);
+        };
         let Ty::Ref {
             kind: BorrowKind::Mut,
             referent: actual,
-        } = result
+        } = &result
         else {
             return Ok(false);
         };
@@ -6882,16 +7087,9 @@ impl CarrierBuilder<'_, '_> {
         else {
             return Ok(false);
         };
-        let Some(parameter) = identity_nested_slot_reborrow_rows(
-            view.original_contract(),
-            view.contract(),
-            self.budget,
-        )?
-        else {
-            return Ok(false);
-        };
-        let original = view.original_contract();
-        let expanded = view.contract();
+        let parameter = rows.parameter;
+        let original = &rows.original;
+        let expanded = &rows.expanded;
         let owner = original.writes[0].destination.param;
         let Some(Ty::Ref {
             kind: BorrowKind::Mut,
@@ -6914,10 +7112,12 @@ impl CarrierBuilder<'_, '_> {
             || matches!(
                 view.signature_for_replay().params.get(owner),
                 Some(Ty::Ref { kind: BorrowKind::Mut, referent: own })
-                    if own.owned_sequence_element() == Some(sealed_actual)
+                    if own.owned_sequence_element()
+                        .is_some_and(|element| canonical_same_type(element, sealed_actual))
             ) && matches!(
-                &view.signature_for_replay().result,
-                Ty::Ref { kind: BorrowKind::Mut, referent: own } if own.as_ref() == sealed_actual
+                &own_result,
+                Ty::Ref { kind: BorrowKind::Mut, referent: own }
+                    if canonical_same_type(own.as_ref(), sealed_actual)
             );
         if !consistent || view.component_mappings().len() != 1 {
             return Ok(false);
@@ -7307,10 +7507,19 @@ impl CarrierBuilder<'_, '_> {
                     + view.original_contract().results.len()
                     + 1,
             )?;
-            let Some(semantic) =
-                self.metadata_value(ir::carrier_at(result, &row.location, &self.ledger))?
-            else {
-                return Ok(false);
+            // Expanded rows may name a generic payload owner (`Option<&mut
+            // &mut T>` from `last_mut`) that this shape does not cover. A
+            // mismatched path only means this proof does not apply; the
+            // nested-slot reborrow proof is tried next.
+            let semantic = match ir::carrier_at(result, &row.location, &self.ledger) {
+                Ok(semantic) => semantic,
+                Err(message) => {
+                    if super::traits::FactsError::from_message(&self.ledger, &message).is_resource()
+                    {
+                        return Err(Exhausted);
+                    }
+                    return Ok(false);
+                }
             };
             if self.copy_permission_in(&semantic, authority)? {
                 continue;
