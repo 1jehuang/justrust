@@ -4902,6 +4902,16 @@ impl CarrierBuilder<'_, '_> {
             self.write_native_exchange(state, value, block, statement, diagnose)?;
             return Ok(());
         }
+        if diagnose && self.box_pointee_write_unsupported(destination, value)? {
+            self.problem(
+                block,
+                statement,
+                Problem::Unsupported(
+                    "unsupported: borrowed data stored behind an owned Box has no tracked provenance"
+                        .into(),
+                ),
+            )?;
+        }
         let ty = self.place_ty(self.f, destination)?.clone();
         for (location, origins) in value {
             let semantic = ir::carrier_at(&ty, location, &self.ledger)
@@ -5618,6 +5628,16 @@ impl CarrierBuilder<'_, '_> {
             args.len() + 1,
         )?;
         let entry = state.clone();
+        if diagnose && self.box_ingress_unsupported(&entry, &args, &destination)? {
+            self.problem(
+                block,
+                None,
+                Problem::Unsupported(
+                    "unsupported: borrowed data moved into an owned Box has no tracked provenance"
+                        .into(),
+                ),
+            )?;
+        }
         if diagnose
             && let Some(view) = self.calls[block.0].clone()
             && let Some(binding) =

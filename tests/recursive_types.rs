@@ -177,6 +177,11 @@ fn references_behind_box_are_explicitly_unsupported() {
         "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn len(l: &L) -> usize { match l { L::Nil => 0, L::C(_, r) => 1 + len(r) } } fn main() { let s = String::from(\"ab\"); let l = L::C(&s, Box::new(L::Nil)); println!(\"{}\", len(&l)); }",
     ];
     let invalid = [
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn main() { let s = String::from(\"ab\"); let l = L::C(\"x\", Box::new(L::C(&s, Box::new(L::Nil)))); drop(s); if let L::C(w, _) = &l { println!(\"{w}\"); } }",
+        "fn main() { let s = String::from(\"ab\"); let b: Box<&str> = Box::new(&s); drop(s); let _keep = b; println!(\"done\"); }",
+        "fn main() { let mut b: Box<&str> = Box::new(\"x\"); { let s = String::from(\"y\"); *b = &s; } println!(\"{}\", b); }",
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn main() { let mut l = L::C(\"x\", Box::new(L::Nil)); { let s = String::from(\"y\"); if let L::C(_, r) = &mut l { **r = L::C(&s, Box::new(L::Nil)); } } if let L::C(w, _) = &l { println!(\"{w}\"); } }",
+        "fn mk<'a>() -> Box<&'a str> { let s = String::from(\"ab\"); Box::new(&s) } fn main() { let _ = mk(); }",
         "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn len(l: &L) -> usize { match l { L::Nil => 0, L::C(_, r) => 1 + len(r) } } fn unused() { let s = String::from(\"ab\"); let l = L::C(&s, Box::new(L::Nil)); let t = s; println!(\"{} {}\", len(&l), t); } fn main() {}",
         "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn unused() -> usize { let l; { let s = String::from(\"ab\"); l = L::C(&s, Box::new(L::Nil)); } match l { L::Nil => 0, L::C(w, _) => w.len() } } fn main() {}",
     ];
@@ -215,4 +220,10 @@ fn references_behind_box_are_explicitly_unsupported() {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
+}
+
+/// Static string data (no issued loan) may still be stored behind a Box.
+#[test]
+fn boxed_static_references_run() {
+    runs("box_static_refs");
 }
