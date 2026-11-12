@@ -9749,6 +9749,28 @@ impl ValidatedTraitWorld {
         let mut all_mutable = true;
         for step in location.path.0.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
+            // A substituted signature can name a component through a closed
+            // projection (`Option<<Chars as IntoIterator>::IntoIter>`). The
+            // lens walks the same type, so reduce it to its exact normal form
+            // under the empty closed environment. Open families stay rigid.
+            if matches!(ty, Ty::AssociatedType(_)) && self.raw_associated_ty_is_closed(&ty, 0)? {
+                let context = ProofContext {
+                    transport: ParentLocalTransport::default(),
+                    original: None,
+                    source_metadata: None,
+                    predicates: &self.empty,
+                    executable_storage: false,
+                    phase: FactsPhase::Closed,
+                };
+                let (normal, _) = self.normalize_closed_projected_type_for_use(
+                    &ty,
+                    context,
+                    false,
+                    &mut ProofScratch::default(),
+                    false,
+                )?;
+                ty = normal;
+            }
             ty = match (step, &ty) {
                 (ir::CarrierStep::Referent, Ty::Ref { kind, referent }) => {
                     saw_deref = true;
