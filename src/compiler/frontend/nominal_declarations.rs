@@ -266,8 +266,15 @@ impl PlanCtx {
         declaration: ir::DeclId,
     ) -> Result<tr::NominalDeclarationProof, String> {
         let world = self.trait_world()?;
-        world
+        let proof = world
             .nominal_declaration_wellformed(declaration)
-            .map_err(|error| error.into_legacy_diagnostic(&self.budget))
+            .map_err(|error| error.into_legacy_diagnostic(&self.budget))?;
+        // Field types are checked once, by this per-declaration producer,
+        // in the declaration's own bounds. Replays do not repeat it.
+        let obligations = self.nominal_field_obligations_source(declaration)?;
+        world
+            .prove_nominal_field_obligations(declaration, proof.schema(), &obligations)
+            .map_err(|error| error.into_legacy_diagnostic(&self.budget))?;
+        Ok(proof)
     }
 }

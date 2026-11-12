@@ -376,6 +376,43 @@ fn main() { let s = Sorted { v: 3 }; let e: E<i32> = E::A(4); let n = match e { 
 }
 
 #[test]
+fn struct_and_enum_field_types_are_well_formed() {
+    // Stock rustc 1.98.1: "3 1 2 9 11 x".
+    run(
+        "use std::fmt::Display;
+struct Sorted<T: Ord> { v: T }
+struct Pair<U: Ord + Display> { a: Sorted<U>, many: Vec<Sorted<U>>, t: (u8, Option<Sorted<i32>>) }
+enum Slot<K: Ord> { Empty, Full(Box<Sorted<K>>, [Sorted<K>; 1]) }
+struct Holder { w: Option<Box<Sorted<String>>> }
+fn main() {
+    let p = Pair { a: Sorted { v: 3 }, many: vec![Sorted { v: 1 }], t: (2, Some(Sorted { v: 9 })) };
+    let s: Slot<i32> = Slot::Full(Box::new(Sorted { v: 5 }), [Sorted { v: 6 }]);
+    let h = Holder { w: Some(Box::new(Sorted { v: String::from(\"x\") })) };
+    let n = match s { Slot::Full(b, arr) => b.v + arr[0].v, Slot::Empty => 0 };
+    let t = match p.t.1 { Some(x) => x.v, None => 0 };
+    println!(\"{} {} {} {} {} {}\", p.a.v, p.many[0].v, p.t.0, t, n, h.w.unwrap().v);
+}",
+        "3 1 2 9 11 x\n",
+    );
+    // Each is stock E0277 at the declaration, although nothing uses it.
+    for source in [
+        "struct W<T: Ord> { v: T }\nstruct Holder { w: W<f64> }\nfn main() {}",
+        "struct W<T: Ord> { v: T }\nstruct Holder { w: Option<Box<W<f64>>> }\nfn main() {}",
+        "struct W<T: Ord> { v: T }\nenum E { A(W<f64>) }\nfn main() {}",
+        "struct W<T: Ord> { v: T }\nstruct Tp(W<f64>);\nfn main() {}",
+        "struct W<T: Ord> { v: T }\nstruct G<U> { w: W<U> }\nfn main() {}",
+        "struct W<T: Copy> { v: T }\nenum E<U> { A(Vec<W<U>>), B }\nfn main() {}",
+        "struct Holder { w: [str; 1] }\nfn main() {}",
+        "struct Holder<T: ?Sized> { a: T, b: u8 }\nfn main() {}",
+    ] {
+        let error = compiler::compile(source.into(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted ill-formed field type: {source}"));
+        assert!(error.to_string().contains("E0277"), "{source}: {error}");
+    }
+}
+
+#[test]
 fn explicit_deref_of_nominal_target() {
     // `*p`, `(*p).field`, `&*p` with a struct Target (stock: "4 4 4").
     run(

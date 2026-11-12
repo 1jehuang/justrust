@@ -100,6 +100,99 @@ impl ValidatedTraitWorld {
         Ok(None)
     }
 
+    /// Field types are well formed in the declaration's own bounds (stock
+    /// E0277 even for unused types). Closed rows use the canonical empty
+    /// context, open rows must follow from declared bounds, and anything a
+    /// conditional implementation would need is an explicit boundary.
+    pub(in crate::compiler) fn prove_nominal_field_obligations(
+        &self,
+        declaration: DeclId,
+        schema: &NominalDeclarationSchema,
+        obligations: &[Predicate],
+    ) -> Result<()> {
+        if schema.declaration != declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nominal field obligations belong to another declaration",
+            ));
+        }
+        let sized = self.catalog.id(CatalogItem::Sized);
+        for goal in obligations {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            self.validate_predicate_metadata(goal, &schema.env)?;
+            if let Predicate::Implements(trait_ref) = goal {
+                if trait_ref.declaration == sized
+                    && let Ty::AssociatedType(projection) = &trait_ref.self_ty
+                    && !self.raw_associated_ty_is_closed(&trait_ref.self_ty, 0)?
+                {
+                    if self.associated_header(projection.item)?.relaxed_sized {
+                        return Err(FactsError::unproved(
+                            &self.budget,
+                            "E0277: the size for values of a `?Sized` associated type cannot be known at compilation time",
+                        ));
+                    }
+                    continue;
+                }
+                if self.goal_is_closed(trait_ref, &schema.env)? {
+                    self.require_in(
+                        goal,
+                        ProofContext {
+                            transport: ParentLocalTransport::default(),
+                            original: None,
+                            source_metadata: None,
+                            predicates: &self.empty,
+                            executable_storage: true,
+                            phase: FactsPhase::Schema,
+                        },
+                        &mut ProofScratch::default(),
+                    )?;
+                    continue;
+                }
+            }
+            if let Predicate::ProjectionEq { projection, ty } = goal
+                && self.goal_is_closed(&projection.trait_ref, &schema.env)?
+                && self.goal_is_closed(
+                    &TraitRef {
+                        declaration: sized,
+                        self_ty: ty.clone(),
+                        args: Arc::from([]),
+                    },
+                    &schema.env,
+                )?
+            {
+                self.require_in(
+                    goal,
+                    ProofContext {
+                        transport: ParentLocalTransport::default(),
+                        original: None,
+                        source_metadata: None,
+                        predicates: &self.empty,
+                        executable_storage: true,
+                        phase: FactsPhase::Schema,
+                    },
+                    &mut ProofScratch::default(),
+                )?;
+                continue;
+            }
+            if self.nominal_declared_membership(schema, goal)?.is_some() {
+                continue;
+            }
+            if let Predicate::Implements(trait_ref) = goal
+                && (trait_ref.declaration == sized || matches!(trait_ref.self_ty, Ty::Param(_)))
+            {
+                return Err(FactsError::unproved(
+                    &self.budget,
+                    "E0277: a field type requires a bound that the declaration does not declare",
+                ));
+            }
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: field type bounds that need a conditional implementation in a generic declaration",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn nominal_declaration_wellformed(
         &self,
         declaration: DeclId,
