@@ -63,6 +63,8 @@ pub struct AdmitState {
     sources: List<(PathBuf, Arc<str>)>,
     admitted: List<Vec<u64>>,
     tests: List<TestItem>,
+    /// User-crate `missing_docs` facts: (file, its module path, its entries).
+    docs: List<super::FileDocs>,
     /// The first error in assembly order. Nothing after it is admitted.
     error: Option<Arc<SourceError>>,
     /// Synthesized crate entry (test harness or inert library `main`), set
@@ -291,6 +293,17 @@ pub(crate) fn admit(
             }
         }
     }
+    let docs_file = FileId(state.next_id);
+    if user && !unit.docs.is_empty() {
+        state.docs = push(
+            &state.docs,
+            (
+                docs_file,
+                Arc::from(unit.module.as_slice()),
+                Arc::from(unit.docs.as_slice()),
+            ),
+        );
+    }
     let id = FileId(state.next_id);
     state.id = state.next_id;
     state.next_id += 1;
@@ -352,6 +365,13 @@ pub(crate) fn finish(
         }
     }
     if ordinal == [0] {
+        let docs = in_order(&state.docs)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(error) = super::check_missing_docs(&docs) {
+            return state.fail(error);
+        }
         let entry = if harness(options) {
             let tests = in_order(&state.tests).into_iter().cloned().collect();
             Some(test_harness(tests, &options.test_filter))

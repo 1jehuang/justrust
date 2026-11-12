@@ -297,7 +297,11 @@ pub(super) const RENAMED: &[(&str, &str)] = &[
 
 /// Lints whose deny/forbid level the native compiler enforces exactly. Any
 /// other known lint at deny/forbid is explicitly unsupported (uncapped).
-pub(super) const ENFORCED: &[&str] = &["non_camel_case_types", "non_upper_case_globals"];
+pub(super) const ENFORCED: &[&str] = &[
+    "missing_docs",
+    "non_camel_case_types",
+    "non_upper_case_globals",
+];
 
 /// Builtin lint groups whose members include an enforced lint, with the full
 /// member list. A group can be raised to deny/forbid only when every member
@@ -321,7 +325,7 @@ pub(super) enum Level {
 
 /// Effective levels of the enforced lints at one source position. Absent
 /// lints are at their default (`warn`).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Levels(Vec<(&'static str, Level)>);
 
 impl Levels {

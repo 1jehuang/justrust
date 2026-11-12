@@ -10,8 +10,15 @@ use std::ops::Range;
 mod doc_metadata;
 #[path = "source_attrs/lint_names.rs"]
 mod lint_names;
+#[path = "source_attrs/missing_docs.rs"]
+pub(super) mod missing_docs;
 #[path = "source_attrs/naming_lints.rs"]
 mod naming_lints;
+
+/// Lint levels in effect at a `mod name;` declaration, inherited by the
+/// child file's top level.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InheritedLints(lint_names::Levels);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttributeErrorKind {
@@ -83,6 +90,10 @@ pub struct AttributeOutput {
     pub derives: Vec<(usize, String)>,
     /// `#[path = "..."]` on `mod name;`: (offset of the `mod` keyword, path).
     pub module_paths: Vec<(usize, String)>,
+    /// Lint levels at each `mod name;`: (offset of the `mod` keyword, levels).
+    pub module_lints: Vec<(usize, InheritedLints)>,
+    /// `missing_docs` facts of this file's configured items.
+    pub docs: Vec<missing_docs::DocEntry>,
     pub attributes: Vec<AttributeRecord>,
     pub inactive_items: Vec<InactiveItem>,
 }
@@ -149,7 +160,7 @@ enum Owner {
 }
 
 pub fn prepare(text: &str, cfg: &CfgSet) -> Result<AttributeOutput, AttributeError> {
-    prepare_with_context(text, cfg, None, false)
+    prepare_with_context(text, cfg, None, false, &InheritedLints::default())
 }
 
 /// `prepare` for a crate compiled with lints capped at allow.
@@ -157,8 +168,9 @@ pub fn prepare_capped(
     text: &str,
     cfg: &CfgSet,
     cap_lints_allow: bool,
+    inherited: &InheritedLints,
 ) -> Result<AttributeOutput, AttributeError> {
-    prepare_with_context(text, cfg, None, cap_lints_allow)
+    prepare_with_context(text, cfg, None, cap_lints_allow, inherited)
 }
 
 /// A verified source snapshot may retain these specific inert metadata forms.
@@ -169,7 +181,7 @@ pub(super) fn prepare_verified_identity(
     cfg: &CfgSet,
     context: &VerifiedIdentityContext,
 ) -> Result<AttributeOutput, AttributeError> {
-    prepare_with_context(text, cfg, Some(context), false)
+    prepare_with_context(text, cfg, Some(context), false, &InheritedLints::default())
 }
 
 fn prepare_with_context(
@@ -177,6 +189,7 @@ fn prepare_with_context(
     cfg: &CfgSet,
     identity_metadata: Option<&VerifiedIdentityContext>,
     cap_lints_allow: bool,
+    inherited: &InheritedLints,
 ) -> Result<AttributeOutput, AttributeError> {
     if text.len() > 8 * 1024 * 1024 {
         return Err(error(
@@ -208,10 +221,15 @@ fn prepare_with_context(
         deny_unsafe_code: false,
         unsafe_code_relaxed: false,
         cap_lints_allow,
-        levels: lint_names::Levels::default(),
+        levels: inherited.0.clone(),
         associated_naming: true,
         pending_path: None,
         module_paths: Vec::new(),
+        module_lints: Vec::new(),
+        docs: Vec::new(),
+        doc_state: Default::default(),
+        pending_export: false,
+        assoc_container: None,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
@@ -247,6 +265,8 @@ fn prepare_with_context(
         tests: filter.tests,
         test_main: filter.test_main,
         module_paths: filter.module_paths,
+        module_lints: filter.module_lints,
+        docs: filter.docs,
     })
 }
 struct Filter<'a> {
@@ -284,6 +304,14 @@ struct Filter<'a> {
     /// `#[path]` admitted on the module item being walked.
     pending_path: Option<String>,
     module_paths: Vec<(usize, String)>,
+    module_lints: Vec<(usize, InheritedLints)>,
+    docs: Vec<missing_docs::DocEntry>,
+    /// Documentation on the attributes most recently admitted.
+    doc_state: missing_docs::DocState,
+    /// The attributes most recently admitted include `macro_export`.
+    pending_export: bool,
+    /// Documentation container of the impl/trait body being walked.
+    assoc_container: Option<missing_docs::Container>,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -673,6 +701,8 @@ impl Filter<'_> {
         }
         let record_start = self.records.len();
         self.pending = PendingTest::default();
+        self.doc_state = Default::default();
+        self.pending_export = false;
         self.work = self.work.saturating_add(attrs.len());
         if self.work > MAX_WORK {
             return Err(error(
@@ -702,6 +732,7 @@ impl Filter<'_> {
                 continue;
             }
             if attr.doc {
+                self.doc_state.documented = true;
                 self.records.push(AttributeRecord {
                     range: attr.range.clone(),
                     name: "doc".into(),
@@ -910,6 +941,7 @@ impl Filter<'_> {
                             "macro_export requires an original macro declaration",
                         )
                     })?;
+                    self.pending_export = true;
                     // Stock warns about repeated attributes on one declaration.
                     if !self.macro_exports.iter().any(|export| export.item == item) {
                         self.macro_exports.push(MacroExport {
@@ -919,7 +951,19 @@ impl Filter<'_> {
                     }
                 }
                 "derive" => self.derive(&meta, owner, item.clone())?,
-                "doc" => doc_metadata::validate(&meta, owner)?,
+                "doc" => {
+                    doc_metadata::validate(&meta, owner)?;
+                    match &meta.value {
+                        MetaValue::String(_) => self.doc_state.documented = true,
+                        MetaValue::List(settings)
+                            if settings.iter().any(|s| s.name == "hidden") =>
+                        {
+                            self.doc_state.documented = true;
+                            self.doc_state.hidden = true;
+                        }
+                        _ => {}
+                    }
+                }
                 "must_use" => {
                     if !matches!(owner, Owner::Function | Owner::AssociatedFunction)
                         || !matches!(meta.value, MetaValue::Word | MetaValue::String(_))
@@ -1064,6 +1108,7 @@ impl Filter<'_> {
             self.mask(region);
             return Ok(());
         }
+        self.record_inner_docs(region.start..region.start);
         while i < end {
             if self.tokens[i].text(self.text) == ";" {
                 i += 1;
@@ -1204,6 +1249,14 @@ impl Filter<'_> {
                 // reexports. Until configured import bindings are admitted,
                 // they cannot establish export absence or uniqueness.
                 self.has_root_use_items |= kind == "use" && self.module_path.is_empty();
+                let exported_macro = self.pending_export;
+                self.record_item_docs(kind, item_start, keyword, body, exported_macro);
+                if kind == "mod" && body.is_none() {
+                    self.module_lints.push((
+                        self.tokens[keyword].range.start,
+                        InheritedLints(self.levels.clone()),
+                    ));
+                }
                 self.admit_test_item(kind, item_start, keyword);
                 // Only modules introduce supported nested item attachment positions.
                 let header_end = body.map_or(stop, |(open, _)| open);
@@ -1236,7 +1289,11 @@ impl Filter<'_> {
                                         != Some("<")
                             });
                         self.associated_naming = !trait_impl;
-                        self.associated_function_attributes(open + 1, close)?;
+                        let container = self.doc_container(kind, item_start, keyword, open);
+                        let saved = std::mem::replace(&mut self.assoc_container, container);
+                        let result = self.associated_function_attributes(open + 1, close);
+                        self.assoc_container = saved;
+                        result?;
                     } else if kind != "macro_rules" {
                         let fields = matches!(kind, "struct" | "enum" | "union");
                         self.reject_nested_with(open + 1, close, fields)?;
@@ -1624,6 +1681,7 @@ impl Filter<'_> {
             }
             let member = i;
             let (kind, mut cursor) = self.item_kind(i, end);
+            let keyword = cursor;
             let owner = match kind {
                 "fn" => Owner::AssociatedFunction,
                 "const" | "type" => Owner::AssociatedDeclaration,
@@ -1711,6 +1769,7 @@ impl Filter<'_> {
             }
             let saved_levels = self.levels.clone();
             let mut active = true;
+            self.doc_state = Default::default();
             if !attrs.is_empty() {
                 let item = self.tokens[member].range.start..self.tokens[stop - 1].range.end;
                 if !self.attributes(&attrs, owner, Some(item.clone()))? {
@@ -1734,6 +1793,9 @@ impl Filter<'_> {
             } else {
                 Ok(())
             };
+            if active {
+                self.record_assoc_docs(kind, member, keyword);
+            }
             self.levels = saved_levels;
             naming?;
             i = stop;
@@ -2380,12 +2442,12 @@ mod tests {
         for source in [
             "#![allow(foo::bar)] fn main(){}",
             "#![allow(dead_code reason)] fn main(){}",
-            "#![deny(missing_docs)] fn main(){}",
+            "#![deny(missing_debug_implementations)] fn main(){}",
             "#![forbid(unsafe_code)] #[allow(unsafe_code)] fn main(){}",
         ] {
             assert!(prep(source).is_err(), "accepted {source}");
         }
-        let capped = |s| prepare_capped(s, &CfgSet::default(), true);
+        let capped = |s| prepare_capped(s, &CfgSet::default(), true, &InheritedLints::default());
         assert!(capped("#![deny(missing_docs)] fn main(){}").is_ok());
         assert!(capped("#![allow(foo::bar)] fn main(){}").is_err());
     }
@@ -2418,7 +2480,7 @@ mod tests {
         ] {
             assert!(prep(source).is_err(), "accepted {source}");
         }
-        let capped = |s| prepare_capped(s, &CfgSet::default(), true);
+        let capped = |s| prepare_capped(s, &CfgSet::default(), true, &InheritedLints::default());
         assert!(capped("#![forbid(non_camel_case_types)] struct a; fn main(){}").is_ok());
     }
 
@@ -2629,7 +2691,7 @@ mod tests {
             "forbid(unused)",
             "must_use(foo)",
             "stable(feature=\"x\",since=\"1.0\")",
-            "deny(missing_docs)",
+            "deny(missing_debug_implementations)",
             "forbid(dead_code)",
             "custom",
         ] {

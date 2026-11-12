@@ -742,6 +742,8 @@ pub struct ChildModule {
     pub depth: usize,
     /// Module path of the child file below the crate root.
     pub module: Vec<String>,
+    /// Lint levels at the declaration, inherited by the child file.
+    pub lints: source_attrs::InheritedLints,
 }
 
 /// Prepared form of exactly one source file: original bytes, configured and
@@ -772,6 +774,8 @@ pub struct FileUnit {
     pub module: Vec<String>,
     /// `#[test]` functions declared in this file (paths relative to `module`).
     pub tests: Vec<source_attrs::TestItem>,
+    /// `missing_docs` facts of this file (modules relative to `module`).
+    pub docs: Vec<source_attrs::missing_docs::DocEntry>,
     /// The first error found in this file, reported after every child that
     /// precedes it in source order, exactly where sequential loading stopped.
     pub terminal: Option<SourceError>,
@@ -833,7 +837,17 @@ fn root_unit_with(
         unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
     })?;
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    file_unit(Vec::new(), path, directory, 0, &[], options, reader, budget)
+    file_unit(
+        Vec::new(),
+        path,
+        directory,
+        0,
+        &[],
+        options,
+        reader,
+        budget,
+        &Default::default(),
+    )
 }
 /// Child `index` of an already prepared parent unit.
 pub fn prepare_child_unit(
@@ -893,6 +907,7 @@ pub fn prepare_prelude_unit(
         options,
         Some(&mut source_prelude::PreludeReader),
         budget,
+        &Default::default(),
     )?;
     unit.embedded = Some(
         source_embedded::EmbeddedUnit::issue(&unit, budget).map_err(|error| UnitFailure {
@@ -926,6 +941,7 @@ fn child_unit_with(
         options,
         Some(reader),
         budget,
+        &child.lints,
     )
 }
 /// Unit of an in-memory text input. It has no filesystem capability.
@@ -954,6 +970,7 @@ pub fn prepare_text_unit(
         options,
         None,
         &super::expansion_budget::ExpansionBudget::default(),
+        &Default::default(),
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -966,10 +983,11 @@ fn file_unit(
     options: &SourceOptions,
     reader: Option<&mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
+    inherited: &source_attrs::InheritedLints,
 ) -> UnitResult {
     let Some(reader) = reader else {
         return file_unit_inner(
-            module, path, directory, depth, ancestors, options, None, budget,
+            module, path, directory, depth, ancestors, options, None, budget, inherited,
         );
     };
     let mut tracked = source_inputs::TrackingReader::new(reader, options);
@@ -982,6 +1000,7 @@ fn file_unit(
         options,
         Some(&mut tracked),
         budget,
+        inherited,
     );
     let inputs = tracked.finish();
     result.and_then(|mut unit| {
@@ -1005,6 +1024,7 @@ fn file_unit_inner(
     options: &SourceOptions,
     reader: Option<&mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
+    inherited: &source_attrs::InheritedLints,
 ) -> UnitResult {
     let anchored = |kind, message: String| UnitFailure {
         error: Loader::error(kind, None, message),
@@ -1065,6 +1085,7 @@ fn file_unit_inner(
         options,
         Some(reader),
         budget,
+        inherited,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -1078,6 +1099,7 @@ fn snapshot_unit<'a>(
     options: &'a SourceOptions,
     reader: Option<&'a mut dyn SourceReader>,
     budget: &super::expansion_budget::ExpansionBudget,
+    inherited: &source_attrs::InheritedLints,
 ) -> UnitResult {
     if text.len() > MAX_BYTES {
         return Err(UnitFailure {
@@ -1093,6 +1115,7 @@ fn snapshot_unit<'a>(
     let root = chain.len() <= 1 && depth == 0;
     let mut builder = Loader::new(options, reader, LOCAL_FILE, contents.clone(), root);
     builder.lexical_budget = budget.clone();
+    builder.inherited = inherited.clone();
     builder.file_directory = path.parent().map(Path::to_path_buf);
     let terminal = builder.snapshot(directory, depth).err();
     Ok(FileUnit {
@@ -1113,6 +1136,7 @@ fn snapshot_unit<'a>(
         children: builder.children,
         module,
         tests: builder.tests,
+        docs: builder.docs,
         terminal,
     })
 }
@@ -1145,6 +1169,8 @@ pub struct SourceAssembler {
     in_prelude: bool,
     /// `cfg(test)`: synthesize the native test harness entry after the crate.
     harness: Option<Vec<source_attrs::TestItem>>,
+    /// User-crate `missing_docs` facts, checked when the user crate ends.
+    docs: Vec<FileDocs>,
     test_filter: TestFilter,
     /// Library target without a harness: append an inert entry.
     library: bool,
@@ -1168,6 +1194,35 @@ fn remap_span(span: SourceSpan, id: FileId) -> SourceSpan {
         },
         ..span
     }
+}
+/// One user file's `missing_docs` facts: (assembled file, module path, entries).
+pub(super) type FileDocs = (
+    FileId,
+    Arc<[String]>,
+    Arc<[source_attrs::missing_docs::DocEntry]>,
+);
+/// Crate-wide `missing_docs` decision over the user crate's files.
+pub(super) fn check_missing_docs(files: &[FileDocs]) -> Result<(), SourceError> {
+    let mut entries = Vec::new();
+    let mut owners = Vec::new();
+    for (id, module, docs) in files {
+        for entry in docs.iter() {
+            entries.push((&module[..], entry));
+            owners.push(*id);
+        }
+    }
+    source_attrs::missing_docs::check(&entries).map_err(|violation| {
+        let entry = entries[violation.index].1;
+        Loader::error(
+            if violation.unsupported {
+                SourceErrorKind::Unsupported
+            } else {
+                SourceErrorKind::Syntax
+            },
+            Some(Loader::span(owners[violation.index], entry.range.clone())),
+            violation.message,
+        )
+    })
 }
 pub(super) fn copy_error(error: &SourceError, primary: Option<SourceSpan>) -> SourceError {
     SourceError {
@@ -1194,6 +1249,7 @@ impl SourceAssembler {
             prelude: options.prelude,
             in_prelude: false,
             harness: options.cfg.names.contains("test").then(Vec::new),
+            docs: Vec::new(),
             library: options.library && !options.cfg.names.contains("test"),
             test_filter: options.test_filter.clone(),
             externs: options.externs.iter().map(|e| e.name.clone()).collect(),
@@ -1278,6 +1334,13 @@ impl SourceAssembler {
             .prepared
             .sources
             .add(unit.path.clone(), unit.contents.clone());
+        if !self.in_prelude && !self.in_extern && !unit.docs.is_empty() {
+            self.docs.push((
+                id,
+                Arc::from(unit.module.as_slice()),
+                Arc::from(unit.docs.as_slice()),
+            ));
+        }
         if let Some(attachment) = source_embedded::EmbeddedFile::attach(id, &unit)? {
             self.prepared.embedded_files.push(attachment);
         }
@@ -1356,6 +1419,7 @@ impl SourceAssembler {
                     children: unit.children.clone(),
                     module: unit.module.clone(),
                     tests: unit.tests.clone(),
+                    docs: unit.docs.clone(),
                     terminal: unit.terminal.as_ref().map(|e| copy_error(e, e.primary)),
                 }
             }
@@ -1370,6 +1434,10 @@ impl SourceAssembler {
                     hi: 0,
                 };
                 if !self.in_prelude && !self.in_extern {
+                    let docs = std::mem::take(&mut self.docs);
+                    if let Err(error) = check_missing_docs(&docs) {
+                        return Err(self.fail(error));
+                    }
                     let entry = match self.harness.take() {
                         Some(tests) => Some(test_harness(tests, &self.test_filter)),
                         None if std::mem::take(&mut self.library) => {
@@ -1639,6 +1707,10 @@ struct Loader<'a> {
     no_std: bool,
     forbid_unsafe_code: bool,
     tests: Vec<source_attrs::TestItem>,
+    docs: Vec<source_attrs::missing_docs::DocEntry>,
+    module_lints: Vec<(usize, source_attrs::InheritedLints)>,
+    /// Lint levels inherited from the declaring `mod name;`.
+    inherited: source_attrs::InheritedLints,
 }
 impl<'a> Loader<'a> {
     fn new(
@@ -1669,6 +1741,9 @@ impl<'a> Loader<'a> {
             no_std: false,
             forbid_unsafe_code: false,
             tests: Vec::new(),
+            docs: Vec::new(),
+            module_lints: Vec::new(),
+            inherited: Default::default(),
         }
     }
     fn error(
@@ -1691,6 +1766,12 @@ impl<'a> Loader<'a> {
             hi: r.end as u32,
         }
     }
+    fn declared_lints(&self, at: usize) -> source_attrs::InheritedLints {
+        self.module_lints
+            .iter()
+            .find(|(offset, _)| *offset == at)
+            .map_or_else(|| self.inherited.clone(), |(_, lints)| lints.clone())
+    }
     fn snapshot(&mut self, directory: &Path, depth: usize) -> Result<(), SourceError> {
         let id = self.id;
         let original = self.contents.clone();
@@ -1699,6 +1780,7 @@ impl<'a> Loader<'a> {
             &original,
             &self.options.cfg,
             self.options.cap_lints_allow,
+            &self.inherited,
         )
         .map_err(|e| {
             Self::error(
@@ -1785,6 +1867,8 @@ impl<'a> Loader<'a> {
         self.derives = filtered.derives;
         self.module_paths = filtered.module_paths;
         self.tests = filtered.tests;
+        self.docs = filtered.docs;
+        self.module_lints = filtered.module_lints;
         let mut text = filtered.text;
         if self.root
             && let Some(name) = filtered.test_main
@@ -1986,7 +2070,9 @@ impl<'a> Loader<'a> {
                             .map_or_else(|| file_directory.clone(), Path::to_path_buf);
                         self.copy(text, base, copied..tokens[head + 2].start)?;
                         self.append("{\n", decl, true)?;
+                        let lints = self.declared_lints(base + tokens[head].start);
                         self.children.push(ChildModule {
+                            lints,
                             at: self.text.len(),
                             decl,
                             path,
@@ -2047,7 +2133,9 @@ impl<'a> Loader<'a> {
                     };
                     self.copy(text, base, copied..tokens[head + 2].start)?;
                     self.append("{\n", decl, true)?;
+                    let lints = self.declared_lints(base + tokens[head].start);
                     self.children.push(ChildModule {
+                        lints,
                         at: self.text.len(),
                         decl,
                         path,
@@ -2568,6 +2656,46 @@ mod tests {
         let mut reader = RecordingReader::default();
         assert!(prepare_with_reader(Path::new("main.rs"), &options, &mut reader).is_err());
         assert!(reader.calls.is_empty());
+    }
+
+    #[test]
+    fn deny_missing_docs_checks_exported_items() {
+        let options = SourceOptions::default();
+        let ok = [
+            "//! c\n#![deny(missing_docs)]\n/// f\npub fn f(){} fn g(){} fn main(){}",
+            "//! c\n#![deny(missing_docs)]\nmod m { pub fn h(){} } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// S\npub struct S { /// a\n pub a: u8, b: u8 }\nimpl Clone for S { fn clone(&self)->S{S{a:0,b:0}} }\nimpl S { fn p(&self){} }\nfn main(){}",
+            "//! c\n#![deny(missing_docs)]\n#[allow(missing_docs)] pub fn f(){} fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n#[doc(hidden)] pub struct H; impl H { pub fn x(&self){} } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// E\npub enum E { /// A\n A } fn main(){}",
+        ];
+        for source in ok {
+            assert!(
+                prepare_text("main.rs", source, &options).is_ok(),
+                "rejected {source}"
+            );
+        }
+        let bad = [
+            "#![deny(missing_docs)] fn main(){}",
+            "//! c\n#![deny(missing_docs)]\npub fn f(){} fn main(){}",
+            "//! c\n#![forbid(missing_docs)]\n/// S\npub struct S { pub a: u8 } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// E\npub enum E { A } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// T\npub trait T { fn t(&self); } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// S\npub struct S; impl S { pub fn x(&self){} } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\npub mod m { //! m\n pub fn h(){} } fn main(){}",
+            "//! c\n#![deny(missing_docs)]\n/// m\npub mod m { #[macro_export] macro_rules! z { () => {} } } fn main(){}",
+        ];
+        for source in bad {
+            assert!(
+                prepare_text("main.rs", source, &options).is_err(),
+                "accepted {source}"
+            );
+        }
+        // A private module whose item a reexport names stays undecided.
+        let reexport =
+            "//! c\n#![deny(missing_docs)]\nmod m { pub fn h(){} } pub use m::h; fn main(){}";
+        let error = prepare_text("main.rs", reexport, &options).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported);
     }
 
     #[test]
