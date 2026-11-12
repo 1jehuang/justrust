@@ -16,6 +16,12 @@ impl Solver<'_, '_, '_> {
             self.checker.infer_work(0)?;
             let mut unresolved = false;
             for argument in &arguments {
+                // A projection argument (`Extend<Self::Item>`) whose inputs are
+                // now known normalizes to its exact assignment, so impl heads
+                // are matched against it rather than an opaque frontier.
+                if self.reduce_associated_projection(*argument)? {
+                    progress = true;
+                }
                 // An unsuffixed literal is still open: defaulting must not
                 // preempt an impl that fixes the argument (`u32: Borrow<?Q>`).
                 unresolved |= self.resolve(*argument, 0)?.is_none()

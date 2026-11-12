@@ -8157,7 +8157,12 @@ impl<'a> Checker<'a> {
                     let written = ty;
                     let ty = if partial { &Type::Infer } else { ty };
                     // Resolve/check every initializer against the complete old scope.
-                    let annotation = if matches!(ty, Type::Infer) {
+                    // A partial annotation (`(Vec<_>, Vec<_>)`) is completed by
+                    // the solver exactly like a plain let; the written shape is
+                    // still checked against the result below.
+                    let annotation = if partial {
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
+                    } else if matches!(ty, Type::Infer) {
                         None
                     } else {
                         Some(self.source_local_ty(ty)?)

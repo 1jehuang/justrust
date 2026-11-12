@@ -29,3 +29,38 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn partial_pattern_annotations_match_stock() {
+    oracle::check(
+        "partial-pattern-annotations",
+        &[
+            Case {
+                name: "partition_into_partial_tuple_pattern",
+                source: r#"fn num(s: &str) -> Result<u8, String> { s.parse().map_err(|e: std::num::ParseIntError| e.to_string()) }
+fn main() {
+    let (big, small): (Vec<_>, Vec<_>) = vec![1u8, 5, 2, 9].into_iter().partition(|x| *x > 3);
+    println!("{big:?} {small:?}");
+    for e in small.iter().map(|x| *x + 1) { println!("{e}"); }
+    let (ok, bad): (Vec<_>, Vec<_>) = "1 x 3".split(' ').map(num).partition(Result::is_ok);
+    let ok: Vec<u8> = ok.into_iter().map(Result::unwrap).collect();
+    for e in bad.into_iter().map(|r| r.unwrap_err()) { println!("error: {e}"); }
+    println!("{ok:?}");
+}"#,
+                expect: Expect::Run(
+                    "[5, 9] [1, 2]\n2\n3\nerror: invalid digit found in string\n[1, 3]\n",
+                ),
+            },
+            Case {
+                name: "partial_pattern_element_mismatch",
+                source: r#"fn main() { let (a, b): (Vec<_>, Vec<_>) = vec![1u8, 2].into_iter().partition(|x| *x > 1); let c: Vec<u16> = a; println!("{c:?}{b:?}"); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "partial_pattern_shape_mismatch",
+                source: r#"fn main() { let (a, b): (Vec<_>, String) = vec![1u8, 2].into_iter().partition(|x| *x > 1); println!("{a:?}{b}"); }"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

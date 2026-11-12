@@ -88,6 +88,9 @@ impl<'s> Solver<'_, '_, 's> {
     fn open_iterator_item(&mut self, source: Term) -> Result<Option<Term>, String> {
         if self.projection_defaults
             || !matches!(self.domain(source), Domain::Nominal(..))
+            // Closure-bearing sources (`Map<I, {closure}>`) are typed by
+            // checked lowering from the finalized closure, not structurally.
+            || self.contains_callable(source, 0)?
             || self.manifest_ready_with_defaults(&[source], 0, false)?
         {
             return Ok(None);
