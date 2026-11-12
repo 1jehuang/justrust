@@ -635,3 +635,51 @@ fn main() { let mut m: HashMap<&'static str, Vec<i32>> = HashMap::new(); let s =
 "#,
     );
 }
+
+#[test]
+fn accepts_generic_method_through_returned_mut_reference() {
+    runs(
+        r#"use std::collections::HashMap;
+fn pick<T>(v: &mut Vec<T>) -> &mut Vec<T> { v }
+fn reset<T>(v: &mut Vec<T>) { pick(v).clear(); }
+fn add<T>(v: &mut Vec<T>, x: T) { pick(v).push(x); }
+fn group<T: Clone>(xs: &[(u8, T)]) -> HashMap<u8, Vec<T>> {
+    let mut m: HashMap<u8, Vec<T>> = HashMap::new();
+    for (k, v) in xs { m.entry(*k).or_default().push(v.clone()); }
+    m
+}
+fn group_with<T: Clone>(xs: &[(u8, T)]) -> HashMap<u8, Vec<T>> {
+    let mut m: HashMap<u8, Vec<T>> = HashMap::new();
+    for (k, v) in xs { m.entry(*k).or_insert_with(Vec::new).push(v.clone()); }
+    m
+}
+fn main() {
+    let mut v = vec![1, 2];
+    add(&mut v, 3);
+    println!("{:?}", v);
+    reset(&mut v);
+    println!("{:?}", v);
+    let mut s = vec![String::from("a")];
+    add(&mut s, String::from("b"));
+    println!("{:?}", s);
+    let g = group(&[(1u8, 10i32), (2, 20), (1, 30)]);
+    println!("{:?} {:?}", g[&1], g[&2]);
+    let h = group_with(&[(3u8, String::from("x")), (3, String::from("y"))]);
+    println!("{:?}", h[&3]);
+}
+"#,
+        "[1, 2, 3]\n[]\n[\"a\", \"b\"]\n[10, 30] [20]\n[\"x\", \"y\"]\n",
+    );
+}
+
+#[test]
+fn rejects_generic_returned_mut_reference_conflicts() {
+    rejects(
+        "generic_returned_mut_e0499",
+        "fn pick<T>(v: &mut Vec<T>) -> &mut Vec<T> { v } fn unused<T>(v: &mut Vec<T>, x: T) { let r = pick(v); v.clear(); r.push(x); } fn main() {}",
+    );
+    rejects(
+        "generic_returned_mut_e0502",
+        "fn pick<T>(v: &mut Vec<T>) -> &mut Vec<T> { v } fn unused<T>(v: &mut Vec<T>, x: T) { let r = pick(v); let n = v.len(); r.push(x); let _ = n; } fn main() {}",
+    );
+}

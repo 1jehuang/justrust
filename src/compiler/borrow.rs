@@ -3623,6 +3623,42 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(())
     }
+    /// Every already-issued cell of `channel` inside each subtree target.
+    /// Used only for weak joins (OLD retained, nothing overwritten, nothing
+    /// minted), when a generic original shape cannot be walked structurally.
+    /// `None` unless every target is a subtree covering at least one cell.
+    fn issued_subtree_cells(
+        &mut self,
+        targets: &[Target],
+        channel: &CellChannel,
+    ) -> Result<Option<Vec<usize>>, Exhausted> {
+        let mut covered = Vec::new();
+        for target in targets {
+            if target.precision != TargetPrecision::Subtree {
+                return Ok(None);
+            }
+            self.budget.spend(self.cells.len() + 1)?;
+            let before = covered.len();
+            for (index, cell) in self.cells.iter().enumerate() {
+                if cell.key.channel == *channel
+                    && cell.key.storage.root == target.place.root
+                    && cell
+                        .key
+                        .storage
+                        .projection
+                        .starts_with(&target.place.projection)
+                    && !covered.contains(&index)
+                {
+                    checked_vec_growth(&mut covered, self.budget)?;
+                    covered.push(index);
+                }
+            }
+            if covered.len() == before {
+                return Ok(None);
+            }
+        }
+        Ok((!covered.is_empty()).then_some(covered))
+    }
     fn cell(&mut self, key: &CellKey) -> Result<Option<usize>, Exhausted> {
         self.budget.spend(key.storage.projection.len() + 1)?;
         Ok(self.cell_index.get(key).copied())
@@ -6230,6 +6266,18 @@ impl CarrierBuilder<'_, '_> {
                         weak_cover = true;
                     }
                 }
+                // A call through a reborrowed result (`pick(v).clear()`) names
+                // its parameter referent only as a subtree. Its family write
+                // weakly joins every already-issued cell of that channel inside
+                // the subtree: OLD is preserved, nothing is overwritten and no
+                // cell is minted, so origins only grow (never hiding a conflict).
+                if !weak_cover
+                    && indices.len() != targets.len()
+                    && let Some(covered) = self.issued_subtree_cells(&targets, &channel)?
+                {
+                    indices = covered;
+                    weak_cover = true;
+                }
                 if diagnose
                     && !weak_cover
                     && (indices.len() != targets.len() || (!copy && indices.len() != 1))
@@ -6361,7 +6409,7 @@ impl CarrierBuilder<'_, '_> {
                         continue;
                     }
                     for target in targets {
-                        let Some(cover) = read_cell_cover_with_ledger(
+                        let cover = match read_cell_cover_with_ledger(
                             self.family_cover_locals
                                 .as_deref()
                                 .unwrap_or(&self.original_locals),
@@ -6370,8 +6418,13 @@ impl CarrierBuilder<'_, '_> {
                             &channel,
                             Some(&self.ledger),
                             self.budget,
-                        )?
-                        else {
+                        )? {
+                            Some(cover) => Some(cover),
+                            None => {
+                                self.issued_subtree_cells(std::slice::from_ref(&target), &channel)?
+                            }
+                        };
+                        let Some(cover) = cover else {
                             if diagnose {
                                 self.problem(
                                     block,
