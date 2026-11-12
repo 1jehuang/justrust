@@ -165,3 +165,54 @@ fn by_value_recursion_is_rejected() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// References stored behind an owned `Box` have no tracked cell yet. Reading
+/// them is an explicit unsupported diagnostic, never an invalid-program
+/// verdict and never an executable. Lifetime errors on the same shapes are
+/// still rejected.
+#[test]
+fn references_behind_box_are_explicitly_unsupported() {
+    let unsupported = [
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn main() { let l = L::C(\"xy\", Box::new(L::C(\"abc\", Box::new(L::Nil)))); if let L::C(_, r) = &l { if let L::C(s, _) = &**r { println!(\"{s}\"); } } }",
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn len(l: &L) -> usize { match l { L::Nil => 0, L::C(_, r) => 1 + len(r) } } fn main() { let s = String::from(\"ab\"); let l = L::C(&s, Box::new(L::Nil)); println!(\"{}\", len(&l)); }",
+    ];
+    let invalid = [
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn len(l: &L) -> usize { match l { L::Nil => 0, L::C(_, r) => 1 + len(r) } } fn unused() { let s = String::from(\"ab\"); let l = L::C(&s, Box::new(L::Nil)); let t = s; println!(\"{} {}\", len(&l), t); } fn main() {}",
+        "enum L<'a> { Nil, C(&'a str, Box<L<'a>>) } fn unused() -> usize { let l; { let s = String::from(\"ab\"); l = L::C(&s, Box::new(L::Nil)); } match l { L::Nil => 0, L::C(w, _) => w.len() } } fn main() {}",
+    ];
+    for (source, must_be_unsupported) in unsupported
+        .iter()
+        .map(|s| (s, true))
+        .chain(invalid.iter().map(|s| (s, false)))
+    {
+        for workers in [1, 8] {
+            let dir = scratch();
+            let input = dir.join("input.rs");
+            std::fs::write(&input, source).unwrap();
+            let exe = dir.join("program");
+            for build in [false, true] {
+                let mut command = jr(&input, workers);
+                if build {
+                    command.arg("-o").arg(&exe);
+                } else {
+                    command.arg("--check");
+                }
+                let out = command.output().unwrap();
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert!(!out.status.success(), "accepted {source}: {stderr}");
+                assert!(!exe.exists(), "published executable for {source}");
+                if must_be_unsupported {
+                    assert!(
+                        stderr.to_ascii_lowercase().contains("unsupported"),
+                        "{source}: {stderr}"
+                    );
+                    assert!(
+                        !stderr.contains("no initialized issued provenance"),
+                        "{source}: {stderr}"
+                    );
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 mod aggregate_reborrow;
 mod aggregate_result;
+mod box_summary;
 mod cell_access;
 mod correlation;
 mod indexed_write;
@@ -622,6 +623,13 @@ fn read_cell_cover_with_ledger(
         }
         budget.nodes(1)?;
         budget.spend(add(storage.projection.len(), 1)?)?;
+        // References behind an owned Box have no materialized cell. The
+        // cover is incomplete, never an empty (uninitialized) one.
+        if let Some(pointee) = ty.owned_box_pointee()
+            && box_summary::box_pointee_carries_references(pointee, ledger, budget)?
+        {
+            return Ok(false);
+        }
         match ty {
             Ty::Ref { .. } => {
                 budget.reserve_bytes(mul(storage.projection.len(), size_of::<Projection>())?)?;
