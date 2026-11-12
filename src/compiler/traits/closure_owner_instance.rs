@@ -139,6 +139,29 @@ impl ValidatedFacts {
                 "closed closure reconstruction lost its sealed type",
             ));
         };
+        // Substituting a caller projection (`&C::Item` with `C := S`) leaves a
+        // closed family `<S as K>::Item` in the closure's signature/captures.
+        // A closed instance names the solver-selected normal form, exactly as
+        // every closed call contract does. Residual or open families stay as
+        // they are and remain rejected by realization.
+        let actual = if world.type_contains_projection(&Ty::Closure(actual.clone()), 0)?
+            && world.raw_associated_ty_is_closed(&Ty::Closure(actual.clone()), 0)?
+        {
+            let (normal, _) = world.normalize_closed_projected_type(
+                &Ty::Closure(actual.clone()),
+                ProofContext::from_facts(self).closed_selection(world),
+                false,
+            )?;
+            let Ty::Closure(normal) = normal else {
+                return Err(FactsError::invalid(
+                    &world.budget,
+                    "closed closure normalization changed its type kind",
+                ));
+            };
+            normal
+        } else {
+            actual
+        };
         world.validate_closure_rhs_substitution(
             original,
             &actual,

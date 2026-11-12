@@ -63,6 +63,7 @@ mod parameter_equality;
 mod physical_carriers;
 mod predicate_subjects;
 mod projected_methods;
+mod reference_actual_dispatch;
 pub(in crate::compiler) mod schema_instantiation;
 mod source_carriers;
 mod source_dispatch;
@@ -1162,15 +1163,16 @@ impl OriginalCallableView {
         &self.schema.predicates
     }
     pub(super) fn inference_predicates(&self, facts: &ValidatedFacts) -> Result<&[Predicate]> {
-        self.validate_for(facts)?;
-        let (env, predicates) = match &self.required {
-            Some((call, _)) => {
-                let (application, _) = facts
-                    .world
-                    .instantiate_universal_required_item(call, facts)?;
-                (facts.env().clone(), application.predicates)
+        let replayed = self.validate_for_replay(facts)?;
+        let (env, predicates) = match (&self.required, replayed) {
+            (Some(_), Some(application)) => (facts.env().clone(), application.predicates),
+            (Some(_), None) => {
+                return Err(FactsError::invalid(
+                    facts.budget(),
+                    "original required view lost its replayed application",
+                ));
             }
-            None => {
+            (None, _) => {
                 let schema = facts.world.callable_schema(self.declaration)?;
                 (schema.env, schema.predicates)
             }
@@ -1206,6 +1208,11 @@ impl OriginalCallableView {
         &self.facts
     }
     pub(super) fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
+        self.validate_for_replay(facts).map(|_| ())
+    }
+    /// Validates this view and returns the required application it replayed,
+    /// so a consumer needing it does not instantiate it a second time.
+    fn validate_for_replay(&self, facts: &ValidatedFacts) -> Result<Option<InstantiatedSchema>> {
         facts.world.check_original_context_for_use(facts, false)?;
         if !std::ptr::eq(self.facts.as_ref(), facts) {
             return Err(FactsError::invalid(
@@ -1221,10 +1228,15 @@ impl OriginalCallableView {
             ));
         }
         if let Some((call, view)) = &self.required {
-            view.validate_for(facts)?;
-            let (application, _) = facts
-                .world
-                .instantiate_universal_required_item(call, facts)?;
+            // Contract validation and the replayed application share one
+            // world-local proof scratch, as in their original construction.
+            let mut scratch = TraitScratch::default();
+            view.validate_for_with_scratch(facts, &mut scratch)?;
+            let (application, _) = facts.world.instantiate_universal_required_item_with(
+                call,
+                facts,
+                scratch.for_world(facts.world.id),
+            )?;
             if !facts.world.same_env(&self.schema.env, facts.env())?
                 || !facts
                     .world
@@ -1236,8 +1248,9 @@ impl OriginalCallableView {
                     "original required replay changed its exact caller application",
                 ));
             }
+            return Ok(Some(application));
         }
-        Ok(())
+        Ok(None)
     }
 }
 impl ValidatedFacts {
@@ -1557,9 +1570,9 @@ impl ValidatedFacts {
         let declaration = match subject {
             OriginalCallableSubject::Direct(declaration) => declaration,
             OriginalCallableSubject::TraitItem(call) => {
-                let (application, _) =
-                    self.world.instantiate_universal_required_item(call, self)?;
-                let required = self.world.universal_required_carrier_contract(call, self)?;
+                let (application, required) = self
+                    .world
+                    .universal_required_application_and_contract(call, self)?;
                 retain::<OriginalCallableView>(self.budget(), 1)?;
                 return Ok(Arc::new(OriginalCallableView {
                     facts: self.clone(),
@@ -2204,6 +2217,9 @@ struct ProofScratch {
     normalization_validation_storage: Vec<ir::PlanReservation>,
     closedness: Vec<ClosednessValidation>,
     closedness_storage: Vec<ir::PlanReservation>,
+    /// Closure metadata already validated in this scratch, by world, exact
+    /// environment allocation and exact closure value. Node-local only.
+    validated_closures: Vec<(WorldId, Arc<GenericEnv>, Arc<ir::ClosureTy>)>,
     /// Successful raw substitutions only; all normalization and proof work
     /// remains outside this node-local retained-input cache.
     instantiations: schema_instantiation::Substitutions,
@@ -14808,8 +14824,8 @@ impl ValidatedTraitWorld {
                 || !self.method_args_are_closed_in(call, caller)?)
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
-            let (application, _) = self.instantiate_universal_required_item(call, facts)?;
-            let required = self.universal_required_carrier_contract(call, facts)?;
+            let (application, required) =
+                self.universal_required_application_and_contract(call, facts)?;
             let evidence = self.require_in(
                 &Predicate::Implements(call.trait_ref.clone()),
                 caller,

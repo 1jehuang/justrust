@@ -2945,7 +2945,25 @@ impl ValidatedTraitWorld {
                     "closure normalization lost environment metadata",
                 ));
             };
-            self.validate_closure_metadata(closure, context.proof.env())?;
+            // Validation depends only on this world, environment and exact
+            // closure, so a success is reused within this proof scratch.
+            let env = context.proof.env();
+            charged(
+                &self.budget,
+                self.budget.charge_work(proofs.validated_closures.len()),
+            )?;
+            let seen = proofs.validated_closures.iter().any(|(world, e, c)| {
+                *world == self.id && Arc::ptr_eq(e, env) && Arc::ptr_eq(c, closure)
+            });
+            if !seen {
+                self.validate_closure_metadata(closure, env)?;
+                if proofs.validated_closures.len() < MAX_SCRATCH_OBLIGATIONS {
+                    retain::<(WorldId, Arc<GenericEnv>, Arc<ir::ClosureTy>)>(&self.budget, 1)?;
+                    proofs
+                        .validated_closures
+                        .push((self.id, env.clone(), closure.clone()));
+                }
+            }
             if self
                 .schema
                 .closure_trait_kind(evidence.selected_goal.declaration)?

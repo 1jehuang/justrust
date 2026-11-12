@@ -2828,7 +2828,7 @@ impl ValidatedTraitWorld {
             ));
         }
         if let Some(authority) = &evidence.universal {
-            return self.validate_universal_required_carrier(view, authority, facts);
+            return self.validate_universal_required_carrier(view, authority, facts, scratch);
         }
         let application = self.instantiate_projected_item_with_scratch(
             self.item_header(evidence.item)?,

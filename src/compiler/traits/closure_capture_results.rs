@@ -123,9 +123,13 @@ impl ValidatedFacts {
                 "capture call result changed its canonical type",
             ));
         }
+        // The flow's location may name variants through another realization
+        // of the same nominal (graph vs source slot). `actual` is proved equal
+        // to the canonical result above, so relabel structurally onto it.
+        let location = self.world.relabel_source_location(location, actual)?;
         let canonical =
             self.world
-                .rebase_source_location(location, actual, &view.result_signature.result)?;
+                .rebase_source_location(&location, actual, &view.result_signature.result)?;
         for row in view.contract.results.iter() {
             if self.world.same_location(&row.location, &canonical)? {
                 return Ok(row.sources.clone());
@@ -305,7 +309,31 @@ impl ValidatedTraitWorld {
             ProofContext::from_facts(facts),
             &mut ProofScratch::default(),
         )?;
-        Ok(instantiated.signature.params)
+        if facts.phase() != FactsPhase::Closed {
+            return Ok(instantiated.signature.params);
+        }
+        // A closed owner instance resolves each closed projection occurrence
+        // (`&<S as K>::Item`) exactly as the call contract it is compared to
+        // does. Open or residual families are left unchanged and still fail
+        // closed against the canonical contract.
+        let mut normalized = Vec::new();
+        for ty in instantiated.signature.params {
+            let ty = if self.type_contains_projection(&ty, 0)?
+                && self.raw_associated_ty_is_closed(&ty, 0)?
+            {
+                let (normal, _) = self.normalize_closed_projected_type(
+                    &ty,
+                    ProofContext::from_facts(facts).closed_selection(self),
+                    false,
+                )?;
+                facts.validate_ty_metadata(&normal)?;
+                normal
+            } else {
+                ty
+            };
+            push(&self.budget, &mut normalized, ty)?;
+        }
+        Ok(normalized)
     }
 
     fn capture_call_signature(&self, target: &Callee, facts: &ValidatedFacts) -> Result<Signature> {

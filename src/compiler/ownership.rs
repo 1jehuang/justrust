@@ -296,9 +296,14 @@ impl CarrierEffectTable {
             if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
                 continue;
             }
-            let super::ir::Callee::Direct(target) = target else {
+            let Some(target) = caller
+                .facts()
+                .reference_actual_dispatch_target(target)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+            else {
                 return Err("unsupported abstract method reference-actual body admission".into());
             };
+            let target = &target;
             budget.charge_work(templates.len())?;
             let mut callee = None;
             for candidate in std::iter::once(caller).chain(templates.iter()) {

@@ -371,6 +371,27 @@ fn rigid_projection_obligations_reject_unimplemented_or_mismatched_items() {
 }
 
 #[test]
+fn rigid_reference_actual_trait_calls_in_closures_match_stock() {
+    // `c.get(i)` inside a closure argument is a TraitItem call whose method
+    // actual is a reference; it is admitted through the selected provider's
+    // carrier contract, and chained adapters stay within the work budget.
+    for body in [
+        r#"fn count<C: Container>(c: &C) -> usize { (0..c.len()).filter_map(|i| c.get(i)).count() }
+fn main() { println!("{} {}", count(&Stack { items: vec![1i32, 2] }), count(&Bytes(vec![]))); }"#,
+        r#"fn show_all<C: Container>(c: &C) -> Vec<String> where C::Item: std::fmt::Debug { (0..c.len()).filter_map(|i| c.get(i)).map(|x| format!("{x:?}")).collect() }
+fn main() { let s = Stack { items: vec![1, 2] }; println!("{:?} {:?}", show_all(&s), show_all(&Bytes(vec![7]))); }"#,
+    ] {
+        oracle::stock_native(&format!("{RIGID_CONTAINER}{body}"));
+    }
+    for body in [
+        "fn firsts<C: Container>(c: &C) -> Vec<&C::Item> { (0..c.len()).filter_map(|i| c.get(i)).collect() } fn main() { let r; { let s = Stack { items: vec![1, 2] }; r = firsts(&s); } println!(\"{}\", r.len()); }",
+        "fn firsts<C: Container>(c: &C) -> Vec<&C::Item> { (0..c.len()).filter_map(|i| c.get(i)).collect() } fn main() { let s = Stack { items: vec![1, 2] }; let r = firsts(&s); drop(s); println!(\"{}\", r.len()); }",
+    ] {
+        oracle::stock_and_native_reject(&format!("{RIGID_CONTAINER}{body}"));
+    }
+}
+
+#[test]
 fn vec_of_mut_refs_element_receivers() {
     oracle::stock_native(
         "#[derive(Debug)] struct S { n: i32 } impl S { fn bump(&mut self) { self.n += 1; } } fn main(){ let mut a=S{n:1}; let mut b=S{n:4}; let mut v: Vec<&mut S> = vec![&mut a, &mut b]; v[0].bump(); v[1].bump(); v[1].n += 3; drop(v); println!(\"{:?} {:?}\", a, b); }",

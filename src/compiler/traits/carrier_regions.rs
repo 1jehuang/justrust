@@ -900,6 +900,73 @@ impl ValidatedTraitWorld {
         }
         Ok(rows.into())
     }
+    /// Rename every variant step of `location` to the enum application
+    /// reached in `ty` at that step. Indices and fields must exist, so a
+    /// location of a structurally different type fails closed. Callers must
+    /// have proved `ty` canonically equal to the location's own type.
+    pub(super) fn relabel_source_location(
+        &self,
+        location: &ir::CarrierLocation,
+        ty: &Ty,
+    ) -> Result<ir::CarrierLocation> {
+        let mut current = ty.clone();
+        let mut path = Vec::new();
+        for step in location.path.0.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let (step, next) = match (step, &current) {
+                (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value)) => {
+                    let next = match value.def().variants.get(variant.index) {
+                        Some(row) => nominal_fields(&row.fields, &self.budget)?
+                            .get(*field)
+                            .map(|f| f.ty.clone()),
+                        None => None,
+                    };
+                    (
+                        ir::CarrierStep::VariantField {
+                            variant: ir::VariantId {
+                                owner: value.def().id,
+                                index: variant.index,
+                            },
+                            field: *field,
+                        },
+                        next,
+                    )
+                }
+                (ir::CarrierStep::VariantField { .. }, _) => (step.clone(), None),
+                (ir::CarrierStep::Referent, Ty::Ref { referent, .. }) => {
+                    (step.clone(), Some(referent.as_ref().clone()))
+                }
+                (ir::CarrierStep::Field(index), _) => (
+                    step.clone(),
+                    charged(&self.budget, current.field_ty(*index, &self.budget))?,
+                ),
+                (ir::CarrierStep::ConstantIndex(index), Ty::Array { element, len })
+                    if *index < *len =>
+                {
+                    (step.clone(), Some(element.as_ref().clone()))
+                }
+                (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
+                    (step.clone(), Some(element.as_ref().clone()))
+                }
+                (ir::CarrierStep::SliceElement, _) => {
+                    (step.clone(), current.owned_sequence_element().cloned())
+                }
+                _ => (step.clone(), None),
+            };
+            let Some(next) = next else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source carrier path does not fit its proved-equal type",
+                ));
+            };
+            current = next;
+            push(&self.budget, &mut path, step)?;
+        }
+        Ok(ir::CarrierLocation {
+            path: ir::CarrierPath(path.into()),
+            channel: location.channel.clone(),
+        })
+    }
     pub(super) fn rebase_source_location(
         &self,
         location: &ir::CarrierLocation,

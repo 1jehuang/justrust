@@ -2289,7 +2289,16 @@ impl Provider for CompilerProvider {
                         if !actuals.iter().any(|ty| matches!(ty, ir::Ty::Ref { .. })) {
                             continue;
                         }
-                        let ir::Callee::Direct(target) = target else {
+                        // Trait item calls admit through their unique selected
+                        // executable provider, exactly like Direct callees.
+                        let Some(target) = proof
+                            .verified
+                            .facts()
+                            .reference_actual_dispatch_target(target)
+                            .map_err(|error| {
+                                Error::new(error.into_legacy_diagnostic(&this.0.budget))
+                            })?
+                        else {
                             return Err(Error::new(
                                 "unsupported abstract method reference-actual body admission",
                             ));
@@ -2303,7 +2312,7 @@ impl Provider for CompilerProvider {
                             .callable_index(target.declaration)
                             .map_err(Error::new)?;
                         if callee != index {
-                            callee_indices.push((callee, target.clone()));
+                            callee_indices.push((callee, target));
                         }
                     }
                     let templates = facts.callee_templates(&types, callee_indices).await?;

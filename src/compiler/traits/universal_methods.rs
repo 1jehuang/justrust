@@ -1073,11 +1073,28 @@ impl ValidatedTraitWorld {
         call: &TraitCall,
         facts: &ValidatedFacts,
     ) -> Result<Arc<CarrierContractView>> {
-        let (application, authority) = self.instantiate_universal_required_item(call, facts)?;
-        let mut view = self.universal_required_carrier_parts(application, authority, facts)?;
-        self.seal_equality_results(&mut view, facts)?;
-        view.validate_for(facts)?;
-        Ok(Arc::new(view))
+        self.universal_required_application_and_contract(call, facts)
+            .map(|(_, view)| view)
+    }
+
+    /// The exact universal application together with its carrier contract,
+    /// derived from one instantiation instead of repeating it per consumer.
+    pub(super) fn universal_required_application_and_contract(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+    ) -> Result<(InstantiatedSchema, Arc<CarrierContractView>)> {
+        // One world-local scratch shares proof memoization across the
+        // instantiation, sealing and validation of this same contract.
+        let mut scratch = TraitScratch::default();
+        let (application, authority) =
+            self.instantiate_universal_required_item_with(call, facts, scratch.for_world(self.id))?;
+        retain::<InstantiatedSchema>(&self.budget, 1)?;
+        let mut view =
+            self.universal_required_carrier_parts(application.clone(), authority, facts)?;
+        self.seal_equality_results_with_scratch(&mut view, facts, &mut scratch)?;
+        view.validate_for_with_scratch(facts, &mut scratch)?;
+        Ok((application, Arc::new(view)))
     }
 
     /// Carriers of a universal required application. An associated type is
@@ -1212,8 +1229,10 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         authority: &UniversalMethodEvidence,
         facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
     ) -> Result<()> {
-        let (application, replay) = self.validate_universal_required_evidence(authority, facts)?;
+        let (application, replay) =
+            self.validate_universal_required_evidence_with(authority, facts, scratch)?;
         let parameter_equality::EqualityResultSubject::Required(subject) = &view.result_subject
         else {
             return Err(FactsError::invalid(
@@ -1322,8 +1341,26 @@ impl ValidatedTraitWorld {
         evidence: &UniversalMethodEvidence,
         facts: &ValidatedFacts,
     ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
-        let (application, replay) =
-            self.instantiate_universal_required_item(&evidence.call, facts)?;
+        self.validate_universal_required_evidence_with(
+            evidence,
+            facts,
+            &mut TraitScratch::default(),
+        )
+    }
+
+    /// As above, sharing the caller's world-local proof scratch with the
+    /// enclosing contract validation of the same facts.
+    pub(super) fn validate_universal_required_evidence_with(
+        &self,
+        evidence: &UniversalMethodEvidence,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<(InstantiatedSchema, Arc<UniversalMethodEvidence>)> {
+        let (application, replay) = self.instantiate_universal_required_item_with(
+            &evidence.call,
+            facts,
+            scratch.for_world(self.id),
+        )?;
         if evidence.dependencies.len() != replay.dependencies.len() {
             return Err(FactsError::invalid(
                 &self.budget,
