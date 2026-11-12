@@ -199,12 +199,41 @@ impl Solver<'_, '_, '_> {
                 _ => return Ok(false),
             }
         }
+        // `&A == &B` is `impl PartialEq<&B> for &A where A: PartialEq<B>`.
+        // Peel equal reference depth on both sides so the referents select
+        // their own `PartialEq<Rhs>` impl (`&String == &str`). The checker
+        // still proves the final application against canonical impls.
+        let (left, right) = match (kind, right) {
+            (Kind::Binary(op), Some(r)) if comparison(op) => {
+                let (mut l, mut r) = (left, r);
+                for _ in 0..8 {
+                    let (Domain::Ref(_, a), Domain::Ref(_, b)) = (self.domain(l), self.domain(r))
+                    else {
+                        break;
+                    };
+                    l = a;
+                    r = b;
+                }
+                if matches!(self.domain(l), Domain::Nominal(..))
+                    || (matches!(self.domain(l), Domain::Fixed(ir::Ty::Str))
+                        && matches!(self.domain(r), Domain::Nominal(..)))
+                {
+                    (l, Some(r))
+                } else {
+                    (left, right)
+                }
+            }
+            _ => (left, right),
+        };
         let overloaded = matches!(
             self.domain(left),
             Domain::Nominal(..) | Domain::Tuple(..) | Domain::Fixed(ir::Ty::Param(_))
         ) || (matches!(kind, Kind::Binary(op) if comparison(op))
-            && matches!(self.domain(left), Domain::Ref(..))
-            && right.is_some_and(|right| matches!(self.domain(right), Domain::Nominal(..))));
+            && matches!(self.domain(left), Domain::Fixed(ir::Ty::Str))
+            && right.is_some_and(|right| matches!(self.domain(right), Domain::Nominal(..))))
+            || (matches!(kind, Kind::Binary(op) if comparison(op))
+                && matches!(self.domain(left), Domain::Ref(..))
+                && right.is_some_and(|right| matches!(self.domain(right), Domain::Nominal(..))));
         if !overloaded {
             if matches!(kind, Kind::Index(_)) {
                 let element = match self.domain(left) {

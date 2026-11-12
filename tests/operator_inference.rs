@@ -148,3 +148,19 @@ fn owned_string_ordering_matches_stock() {
 fn main(){compare("","");compare("","a");compare("a","");compare("abc","abc");compare("ab","abc");compare("abc","ab");compare("a\0b","a\0c");compare("é","z");compare("日","é");compare("🙂","🦀");compare("e\u{301}","é");}"#,
     );
 }
+
+#[test]
+fn borrowed_string_and_str_comparisons_match_stock() {
+    oracle::stock_native(
+        r#"fn main(){
+    let a=String::from("the");let r=&a;
+    println!("{} {} {} {} {}",a=="the",r=="the",&a=="x","the"==a,&1==&1);
+    let s:&str="b";let t=String::from("b");
+    println!("{} {}",s==t,t==s);
+}"#,
+    );
+    oracle::stock_and_native_reject("fn main(){let x=1i32;println!(\"{}\",x==\"a\");}");
+    oracle::stock_and_native_reject(
+        "fn main(){let s=String::new();let r=&s;println!(\"{}\",r==3);}",
+    );
+}

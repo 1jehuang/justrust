@@ -452,6 +452,18 @@ impl super::cmp::PartialEq<&str> for String {
     }
 }
 
+impl super::cmp::PartialEq<str> for String {
+    fn eq(&self, other: &str) -> bool {
+        str_eq(self.as_str(), other)
+    }
+}
+
+impl super::cmp::PartialEq<String> for str {
+    fn eq(&self, other: &String) -> bool {
+        str_eq(self, other.as_str())
+    }
+}
+
 impl super::cmp::PartialEq<String> for &str {
     fn eq(&self, other: &String) -> bool {
         str_eq(*self, other.as_str())

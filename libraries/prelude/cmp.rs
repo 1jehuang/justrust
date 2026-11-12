@@ -73,9 +73,9 @@ pub trait PartialEq<Rhs: ?Sized = Self> {
 
 pub trait Eq: PartialEq {}
 
-impl<T: PartialEq + ?Sized> PartialEq for &T {
-    fn eq(&self, other: &&T) -> bool {
-        <T as PartialEq>::eq(*self, *other)
+impl<A: PartialEq<B> + ?Sized, B: ?Sized> PartialEq<&B> for &A {
+    fn eq(&self, other: &&B) -> bool {
+        <A as PartialEq<B>>::eq(*self, *other)
     }
 }
 
