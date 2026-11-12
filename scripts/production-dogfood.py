@@ -147,8 +147,8 @@ def stale_proxies(binary, path=None):
 
     Plain `cargo` then runs another client build than `justrust`. Each build
     installs itself as the hosted agent and starts its own sync daemon, so the
-    two keep replacing each other (seen 2026-11-12: 23 daemon restarts and 17
-    agent reinstalls in three hours, alternating between the two builds).
+    two keep replacing each other (seen 2026-11-12: 24 daemon starts between
+    02:00 and 06:00 local, alternating between the two builds).
     """
     path = os.environ.get("PATH", "") if path is None else path
     stale = []
