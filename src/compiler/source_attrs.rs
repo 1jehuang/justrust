@@ -1275,6 +1275,15 @@ impl Filter<'_> {
                 self.admit_test_item(kind, item_start, keyword);
                 // Only modules introduce supported nested item attachment positions.
                 let header_end = body.map_or(stop, |(open, _)| open);
+                // `macro_rules! m ( .. );` / `[ .. ];`: like a braced body,
+                // the rules are token payload, checked after expansion.
+                let header_end = if kind == "macro_rules" && body.is_none() {
+                    (keyword..header_end)
+                        .find(|&t| matches!(self.tokens[t].text(self.text), "(" | "["))
+                        .unwrap_or(header_end)
+                } else {
+                    header_end
+                };
                 self.reject_nested(item_start, header_end)?;
                 if let Some((open, close)) = body {
                     if kind == "mod" {

@@ -410,6 +410,9 @@ pub(super) enum Value {
     Doc(Doc),
     Hidden,
     Derive(Vec<AstIdent>),
+    /// `inline`, `inline(always|never)`, `cold`, `track_caller` on a
+    /// generated function: codegen hints with no semantic effect.
+    FunctionHint,
 }
 
 #[derive(Clone, Debug)]
@@ -610,6 +613,28 @@ impl Parser<'_, '_> {
         }
         Ok(())
     }
+    /// `[pub[(..)]] [const] [async] [unsafe] [extern "abi"] fn` ahead.
+    fn generated_function_owner_ahead(&self) -> bool {
+        let mut at = 0;
+        if self.cursor.peek(at).is_some_and(|t| t.matches("pub")) {
+            at += 1;
+            if self.cursor.peek(at).is_some_and(|t| t.matches("(")) {
+                while self.cursor.peek(at).is_some_and(|t| !t.matches(")")) {
+                    at += 1;
+                }
+                at += 1;
+            }
+        }
+        while self.cursor.peek(at).is_some_and(|t| {
+            t.matches("const") || t.matches("async") || t.matches("unsafe") || t.matches("extern")
+        }) {
+            at += 1;
+            if self.cursor.peek(at).is_some_and(|t| t.string) {
+                at += 1;
+            }
+        }
+        self.cursor.peek(at).is_some_and(|t| t.matches("fn"))
+    }
     fn generated_attribute_start(&self) -> bool {
         self.is("#") || (self.token().is_deferred_unsupported() && self.token().text == "#")
     }
@@ -629,6 +654,13 @@ impl Parser<'_, '_> {
                         .is_some_and(|token| token.matches("struct")))
         {
             return Err(self.unsupported("generated Copy currently requires a unit struct item"));
+        }
+        if attributes
+            .iter()
+            .any(|attribute| matches!(attribute.value, Value::FunctionHint))
+            && !self.generated_function_owner_ahead()
+        {
+            return Err(self.error("inline, cold and track_caller require a function owner"));
         }
         let owner = self.token().span;
         if self.is("") || self.is("}") || self.is(";") {
@@ -689,6 +721,8 @@ impl Parser<'_, '_> {
             self.expect("[")?;
             let doc = self.is("doc");
             let derive = self.is("derive");
+            let hint = self.is("inline") || self.is("cold") || self.is("track_caller");
+            let inline = self.is("inline");
             let name = self.ident()?;
             let value = if doc {
                 if self.eat("=") {
@@ -720,6 +754,14 @@ impl Parser<'_, '_> {
                 }
                 self.expect(")")?;
                 Value::Derive(names)
+            } else if hint {
+                if inline && self.eat("(") {
+                    if !(self.eat("always") || self.eat("never")) {
+                        return Err(self.error("expected inline, inline(always), or inline(never)"));
+                    }
+                    self.expect(")")?;
+                }
+                Value::FunctionHint
             } else {
                 return Err(self.unsupported("unsupported active attribute in item macro output"));
             };

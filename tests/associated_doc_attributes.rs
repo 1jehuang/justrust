@@ -416,3 +416,30 @@ fn local_impl_member_attributes_pass_source_preparation() {
     .unwrap_err();
     assert_eq!(error.kind, SourceErrorKind::Unsupported);
 }
+
+#[test]
+fn parenthesized_macro_rules_bodies_are_payload_match_stock() {
+    let source = r#"
+        trait Size { fn size() -> usize; }
+        macro_rules! impl_size(
+            ($($n:expr),+) => {
+                $(
+                    impl Size for [u8; $n] {
+                        #[inline]
+                        fn size() -> usize { $n }
+                    }
+                )+
+            }
+        );
+        impl_size!(1, 4);
+        fn get<T: Size>() -> usize { T::size() }
+        fn main() { println!("{}", get::<[u8; 1]>() + get::<[u8; 4]>()); }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    file_oracle::Fixture::new(
+        "macro_rules! m( () => { fn f() -> u8 { #[inline] true } } ); m!(); fn main() {}",
+        &[],
+        None,
+    )
+    .assert_negative();
+}
