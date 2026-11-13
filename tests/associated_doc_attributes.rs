@@ -163,7 +163,6 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "struct S{v:i32} impl S { #![doc=\"inner\"] fn f(){} }",
         "trait T { #[doc=42] fn f(); }",
         "trait T { #[doc(foo)] fn f(); }",
-        "struct S{v:i32} impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
         "trait T { #[doc=\"prefix\"] #[inline] fn f(); }",
         "trait T { #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[inline] #[inline(never)] fn f(){} }",
@@ -559,6 +558,48 @@ fn where_shorthand_sees_other_predicates_and_edition_2018_impl_trait_without_lif
 }
 
 #[test]
+fn body_statement_and_local_item_attributes_match_stock() {
+    file_oracle::stock_native(
+        r#"
+        fn pick(x: u8) -> u8 {
+            #[inline(always)]
+            fn twice(v: u8) -> u8 { v * 2 }
+            /// Local mode type with derived comparisons.
+            #[derive(Clone, Copy, PartialEq, Debug)]
+            enum Mode { Low, High }
+            #[allow(unused_variables)]
+            let limit: u8 = 10;
+            #[rustfmt::skip]
+            let m = if x < limit { Mode::Low } else { Mode::High };
+            /// statement documentation
+            let doubled = twice(x);
+            #[cfg(any())]
+            if true { return 99; }
+            #[cfg(all())]
+            if m == Mode::High { return doubled; }
+            #[cfg(any())]
+            fn missing_body() -> u8 { not_defined() }
+            #[cfg_attr(all(), allow(unused_variables))]
+            let unused = m;
+            #[cold]
+            #[track_caller]
+            fn slow() -> u8 { 1 }
+            slow() + x
+        }
+        fn main() { println!("{} {}", pick(3), pick(20)); }
+    "#,
+    );
+    for invalid in [
+        "fn f(){ #[inline] struct S; } fn main(){}",
+        "fn f(){ #[repr(C)] fn g(){} } fn main(){}",
+        "fn f(){ #[inline] let x = 1; } fn main(){}",
+        "fn f()->u8{ #[rustfmt::skip] 1 } fn main(){}",
+        "fn f(){ #[cfg(all())] fn g()->u8{ 1u16 } } fn main(){}",
+        "fn f()->u8{ #[cfg(any())] if true { return 1; } } fn main(){}",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}
 fn inactive_unions_are_syntax_only_and_active_unions_stay_explicit() {
     let source = r#"
         #[cfg(any())]

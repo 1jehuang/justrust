@@ -1577,6 +1577,15 @@ impl Filter<'_> {
                 i = next;
                 continue;
             }
+            if !fields
+                && (i == start || matches!(self.tokens[i - 1].text(self.text), "{" | ";" | "}"))
+                && (self.tokens[i].doc.is_some() || self.tokens[i].text(self.text) == "#")
+                && !self.in_macro_payload(i)
+                && let Some(next) = self.local_attributed_item(i, end)?
+            {
+                i = next;
+                continue;
+            }
             let at = i;
             i += 1;
             if let Some((a, _)) = self.attr(at, end)? {
@@ -1591,10 +1600,30 @@ impl Filter<'_> {
                     self.mask(a.range.clone());
                     continue;
                 }
+                // The same inert attributes on a statement (never on an
+                // expression, which stock rejects as experimental).
+                if !fields
+                    && !a.inner
+                    && i >= start
+                    && (i == start || matches!(self.tokens[i - 1].text(self.text), "{" | ";" | "}"))
+                    && !self.in_macro_payload(i)
+                    && inert_nested_attribute(self.text, &a)?
+                    && self.attributed_statement(&a, end)
+                {
+                    self.mask(a.range.clone());
+                    continue;
+                }
                 if !fields && !a.inner && self.nested_cfg(&a, i, end)? {
                     continue;
                 }
                 if !a.inner && self.nested_lint_level(&a, i, start, fields)? {
+                    self.mask(a.range.clone());
+                    continue;
+                }
+                if !a.inner
+                    && (fields || !self.in_macro_payload(i))
+                    && self.nested_cfg_attr(&a, i, start, fields)?
+                {
                     self.mask(a.range.clone());
                     continue;
                 }
@@ -1606,6 +1635,187 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `#[cfg_attr(pred, attrs..)]` at a nested position. Expanded exactly
+    /// like an item `cfg_attr`; every active payload must itself be a lint
+    /// level admitted at this position (`nested_lint_level`), or `doc` /
+    /// tool attributes on a statement. `cfg` payloads and every other
+    /// attribute keep the explicit unsupported diagnostic.
+    fn nested_cfg_attr(
+        &mut self,
+        a: &Attr,
+        i: usize,
+        start: usize,
+        fields: bool,
+    ) -> Result<bool, AttributeError> {
+        let content = &self.text[a.content.clone()];
+        if content
+            .trim_start()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            != Some("cfg_attr")
+        {
+            return Ok(false);
+        }
+        let mut effective = Vec::new();
+        let mut keep = true;
+        let records = self.records.len();
+        self.expand(a.content.clone(), 0, &mut effective, &mut keep)?;
+        if !keep {
+            self.records.truncate(records);
+            return Ok(false); // a `cfg` payload would remove the element
+        }
+        for meta in effective {
+            let payload = Attr {
+                range: meta.range.clone(),
+                content: meta.range.clone(),
+                inner: false,
+                doc: false,
+                path: AttributePath::Other,
+            };
+            if self.nested_lint_level(&payload, i, start, fields)? {
+                continue;
+            }
+            if inert_nested_attribute(self.text, &payload)?
+                && (fields || self.attributed_statement(a, self.tokens.len()))
+            {
+                continue;
+            }
+            self.records.truncate(records);
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Whether token `i` sits directly inside a macro invocation's token
+    /// payload (`m! { .. }`, `m!( .. )`), whose attributes are token data
+    /// checked only after expansion. Only the immediately preceding group
+    /// opener matters: statement positions follow `{`, `;` or `}` of the
+    /// same group, so `i - 1` (or that group's opener) decides.
+    fn in_macro_payload(&self, i: usize) -> bool {
+        let mut k = i;
+        // The innermost opener is the nearest earlier token whose recorded
+        // close is at or after `i`; called only at attribute positions.
+        while k > 0 {
+            k -= 1;
+            if let Some(close) = self.tokens[k].close {
+                if close >= i {
+                    return k > 0 && self.tokens[k - 1].text(self.text) == "!";
+                }
+            }
+        }
+        false
+    }
+
+    /// An attributed item declared in a function body (`#[inline] fn`,
+    /// `#[derive(..)] enum`, `#[cfg(..)] const`, ...). Its attributes follow
+    /// exactly the item policy of `attributes` for the same owner, and its
+    /// own nested positions are walked like a module-level item. Shapes with
+    /// module-only meaning (`mod`, `macro_rules`, test functions, item
+    /// macros) keep the explicit nested diagnostic.
+    fn local_attributed_item(
+        &mut self,
+        i: usize,
+        end: usize,
+    ) -> Result<Option<usize>, AttributeError> {
+        let mut attrs = Vec::new();
+        let mut k = i;
+        while k < end {
+            let Some((attr, next)) = self.attr(k, end)? else {
+                break;
+            };
+            if attr.inner {
+                return Ok(None);
+            }
+            attrs.push(attr);
+            k = next;
+        }
+        if attrs.is_empty() || k >= end {
+            return Ok(None);
+        }
+        let (kind, keyword) = self.item_kind(k, end);
+        let owner = match kind {
+            "fn" => Owner::Function,
+            "struct" | "enum" | "union" | "impl" | "trait" | "const" | "static" | "type"
+            | "use" => Owner::FreeItem,
+            _ => return Ok(None),
+        };
+        // `const` / `static` also start expressions (`const { .. }` blocks):
+        // only a named declaration is an item.
+        if matches!(kind, "const" | "static")
+            && !self.tokens.get(keyword + 1).is_some_and(|t| {
+                t.text(self.text)
+                    .starts_with(|c: char| c == '_' || c.is_alphabetic())
+            })
+        {
+            return Ok(None);
+        }
+        let mut cursor = keyword;
+        let mut body = None;
+        let mut stop = None;
+        while cursor < end {
+            let token = self.tokens[cursor].text(self.text);
+            if token == ";" {
+                stop = Some(cursor + 1);
+                break;
+            }
+            if token == "{" && !matches!(kind, "const" | "static" | "use") {
+                let close = self.tokens[cursor].close.unwrap();
+                body = Some((cursor, close));
+                stop = Some(close + 1);
+                break;
+            }
+            cursor = self.tokens[cursor]
+                .close
+                .map_or(cursor + 1, |close| close + 1);
+        }
+        let Some(stop) = stop else {
+            return Ok(None);
+        };
+        let range = self.tokens[k].range.start..self.tokens[stop - 1].range.end;
+        let saved_levels = self.levels.clone();
+        let saved_docs = self.doc_state.clone();
+        let result = (|| {
+            if !self.attributes(&attrs, owner, Some(range.clone()))? {
+                self.inactive(range.clone())?;
+                self.mask(self.tokens[i].range.start..range.end);
+                return Ok(());
+            }
+            let pending = std::mem::take(&mut self.pending);
+            if pending.test || pending.ignore || pending.should_panic.is_some() {
+                return Err(error(
+                    AttributeErrorKind::Unsupported,
+                    attrs[0].range.clone(),
+                    "test attributes on items inside function bodies are unsupported",
+                ));
+            }
+            let header_end = body.map_or(stop, |(open, _)| open);
+            self.reject_nested(k, header_end)?;
+            if let Some((open, close)) = body {
+                if matches!(kind, "impl" | "trait") {
+                    let trait_impl = kind == "impl"
+                        && (keyword + 1..open).any(|t| {
+                            self.tokens[t].text(self.text) == "for"
+                                && self.tokens.get(t + 1).map(|n| n.text(self.text)) != Some("<")
+                        });
+                    let saved_naming = std::mem::replace(&mut self.associated_naming, !trait_impl);
+                    let saved = self.assoc_container.take();
+                    let result = self.associated_function_attributes(open + 1, close);
+                    self.assoc_container = saved;
+                    self.associated_naming = saved_naming;
+                    result?;
+                } else {
+                    let fields = matches!(kind, "struct" | "enum" | "union");
+                    self.reject_nested_with(open + 1, close, fields)?;
+                }
+            }
+            Ok(())
+        })();
+        self.levels = saved_levels;
+        self.doc_state = saved_docs;
+        result?;
+        Ok(Some(stop))
     }
 
     /// If tokens at `i` start an attribute-free local `impl`/`trait` item
@@ -1789,6 +1999,20 @@ impl Filter<'_> {
             return Ok(true);
         }
         let is_let = first < end && self.tokens[first].text(self.text) == "let";
+        if !is_let
+            && first < end
+            && i > 0
+            && matches!(self.tokens[i - 1].text(self.text), "{" | ";" | "}")
+            && let Some(stop) = self.statement_extent(first, end)
+        {
+            if active {
+                self.mask(a.range.clone());
+            } else {
+                self.mask(a.range.start..stop);
+            }
+            self.consumed.push(a.range.start);
+            return Ok(true);
+        }
         let mut stop = None;
         while j < end {
             let t = self.tokens[j].text(self.text);
@@ -1826,6 +2050,117 @@ impl Filter<'_> {
         }
         self.consumed.push(a.range.start);
         Ok(true)
+    }
+
+    /// Whether the tokens after attribute `a` form a statement (a `let`, or
+    /// an expression statement ending in `;` or a block-like construct), as
+    /// opposed to a block's tail expression.
+    fn attributed_statement(&self, a: &Attr, end: usize) -> bool {
+        let mut j = self.tokens.partition_point(|t| t.range.end <= a.range.end);
+        while j < end && self.tokens[j].text(self.text) == "#" {
+            let Ok(Some((_, next))) = self.attr(j, end) else {
+                return false;
+            };
+            j = next;
+        }
+        if j >= end {
+            return false;
+        }
+        if self.tokens[j].text(self.text) == "let" {
+            return true;
+        }
+        let Some(stop) = self.statement_extent(j, end) else {
+            return false;
+        };
+        // Block-like constructs at statement start are statements in stock's
+        // parser; any other expression is one only when `;` ends it.
+        let block_like = matches!(
+            self.tokens[j].text(self.text),
+            "if" | "match" | "loop" | "while" | "for" | "unsafe"
+        );
+        let last = self.tokens.partition_point(|t| t.range.end < stop);
+        block_like || (last < end && self.tokens[last].text(self.text) == ";")
+    }
+
+    /// Byte end of the expression statement starting at token `first` in a
+    /// block, or `None` when the position is not clearly a statement (a
+    /// struct-literal field `name: v` / `name,`, or an unbalanced shape).
+    /// Block-like expressions (`if`/`match`/`loop`/`while`/`for`/`unsafe`)
+    /// end at their final block, as stock's statement parser does; others
+    /// end at the first top-level `;` (inclusive) or before the closer of a
+    /// tail expression.
+    fn statement_extent(&self, first: usize, end: usize) -> Option<usize> {
+        let text = |k: usize| self.tokens[k].text(self.text);
+        let ident = |s: &str| s.starts_with(|c: char| c == '_' || c.is_alphabetic());
+        let head = text(first);
+        if ident(head)
+            && first + 1 < end
+            && matches!(text(first + 1), ":" | "," | "}")
+            && !matches!(head, "break" | "continue" | "return")
+        {
+            return None;
+        }
+        // The block of the construct starting at `k`: first top-level `{`.
+        let block_after = |mut k: usize| -> Option<usize> {
+            while k < end {
+                match text(k) {
+                    "{" => return self.tokens[k].close,
+                    ";" => return None,
+                    _ => {}
+                }
+                k = self.tokens[k].close.map_or(k + 1, |c| c + 1);
+            }
+            None
+        };
+        let mut k = first;
+        if head.starts_with('\'') && k + 1 < end && text(k + 1) == ":" {
+            k += 2;
+        }
+        let block_like = k < end
+            && matches!(
+                text(k),
+                "if" | "match" | "loop" | "while" | "for" | "unsafe"
+            );
+        if block_like {
+            let mut close = block_after(k + 1)?;
+            if text(k) == "if" {
+                while close + 1 < end && text(close + 1) == "else" {
+                    close = if close + 2 < end && text(close + 2) == "if" {
+                        block_after(close + 3)?
+                    } else {
+                        block_after(close + 2)?
+                    };
+                }
+            }
+            let mut stop = close + 1;
+            if stop < end && text(stop) == ";" {
+                stop += 1;
+            }
+            return Some(self.tokens[stop - 1].range.end);
+        }
+        let mut j = first;
+        while j < end {
+            if let Some(c) = self.tokens[j].close {
+                j = c + 1;
+                continue;
+            }
+            match text(j) {
+                ";" => return Some(self.tokens[j].range.end),
+                // A match arm, not a statement: left to the arm policy.
+                "," => return None,
+                "=" if j + 1 < end
+                    && text(j + 1) == ">"
+                    && self.tokens[j].range.end == self.tokens[j + 1].range.start =>
+                {
+                    return None;
+                }
+                ")" | "]" | "}" => {
+                    return (j > first).then(|| self.tokens[j - 1].range.end);
+                }
+                _ => j += 1,
+            }
+        }
+        None
     }
 
     /// Walk only immediate members of one original balanced impl/trait group.
@@ -2849,12 +3184,8 @@ mod tests {
                 .kind,
             AttributeErrorKind::Syntax
         );
-        assert_eq!(
-            prep("fn outer() { #[doc=\"stmt\"] let x = 1; }")
-                .unwrap_err()
-                .kind,
-            AttributeErrorKind::Unsupported
-        );
+        // Statement documentation is inert, as in stock.
+        assert!(prep("fn outer() { #[doc=\"stmt\"] let x = 1; }").is_ok());
     }
 
     #[test]
@@ -2903,7 +3234,6 @@ mod tests {
             "impl S { #![doc=\"inner\"] fn f(){} }",
             "impl S { fn f(#[doc=\"param\"] x:i32){} }",
             "impl S { fn #[doc=\"header\"] f(){} }",
-            "impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
             "impl S { m!{#[doc=\"generated\"] fn f(){}} }",
         ] {
             assert_eq!(
@@ -3582,6 +3912,40 @@ mod nested_inert_tests {
         assert_eq!(squash(&out.text), "fnf(){{a();}}");
         assert!(prep("fn f(){ #[inline] { a(); } }").is_err());
         assert!(prep("fn f(){ #[cfg(any())] #[cfg(all())] { a(); } }").is_err());
+        let out = prep(
+            "fn f()->i32{ #[cfg(any())] if c { return 5; } else { g(); } #[cfg(any())] h(1); 7 }",
+        )
+        .unwrap();
+        assert_eq!(squash(&out.text), "fnf()->i32{7}");
+        let out = prep("fn f(x:u8)->u8{ match x { #[cfg(all())] 1 => 2, _ => 3 } }");
+        assert!(out.is_err() || squash(&out.unwrap().text).contains("1=>2"));
+    }
+    #[test]
+    fn attributed_local_items_follow_item_policy() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        for text in [
+            "fn f(){ #[inline(always)] fn g(){} g(); }",
+            "fn f(){ #[derive(Clone, Copy, PartialEq)] enum M { A, B } }",
+            "fn f(){ /// docs\n #[allow(dead_code)] struct S; }",
+            "fn f(){ #[rustfmt::skip] let x = 1; /// d\n let y = 2; }",
+            "fn f(){ #[cold] #[track_caller] fn g(){} }",
+            "fn f(){ #[cfg_attr(all(), inline)] fn g(){} }",
+        ] {
+            assert!(prep(text).is_ok(), "{text}: {:?}", prep(text).err());
+        }
+        let out =
+            prep("fn f(){ #[cfg(any())] fn g(){ missing() } #[cfg(any())] const C: u8 = 1; }")
+                .unwrap();
+        assert_eq!(squash(&out.text), "fnf(){}");
+        for text in [
+            "fn f(){ #[inline] struct S; }",
+            "fn f(){ #[inline] let x = 1; }",
+            "fn f()->u8{ #[rustfmt::skip] 1 }",
+            "fn f(){ #[repr(C)] fn g(){} }",
+            "fn f(){ #[unknown_attr] fn g(){} }",
+        ] {
+            assert!(prep(text).is_err(), "{text}");
+        }
     }
     #[test]
     fn field_docs_and_tool_attributes_are_inert() {
@@ -3598,7 +3962,7 @@ mod nested_inert_tests {
         assert!(!out.text.contains("gone"));
         for text in [
             "struct S { #[repr(C)] f: u8 }",
-            "fn f() { #[doc = \"x\"] let x = 1; }",
+            "fn f() -> u8 { #[doc = \"x\"] 1 }",
             "impl S { #[cfg_attr(all(), no_panic)] fn f() {} }",
         ] {
             assert!(prep(text).is_err(), "{text}");
