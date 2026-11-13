@@ -3758,7 +3758,11 @@ impl Emitter<'_> {
                             local: site.place.local,
                             projection: carrier.to_vec(),
                         })?;
+                        // An owned `Box<dyn P>` is the same (data, vtable)
+                        // pair; `&*b` must copy both words, not read the
+                        // pointee as if it were the carrier.
                         trait_object_ref(&carrier).is_some()
+                            || carrier.owned_box_object().is_some()
                             || carrier.slice_ref_element().is_some()
                             || carrier.is_shared_str()
                     }

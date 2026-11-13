@@ -134,3 +134,29 @@ fn main(){let n=N;println!("{}",read(&n));}
         ],
     );
 }
+
+#[test]
+fn boxed_object_whole_reborrow() {
+    oracle::check(
+        "boxed-object-whole-reborrow",
+        &[Case {
+            name: "boxed_object_method_through_deref",
+            source: r#"
+trait T { fn a(&self) -> i32; }
+impl T for i32 { fn a(&self) -> i32 { *self } }
+impl<X: T + ?Sized> T for Box<X> { fn a(&self) -> i32 { (**self).a() + 100 } }
+struct W<X: ?Sized>(Box<X>);
+impl<X: T + ?Sized> W<X> { fn g(&self) -> i32 { (*self.0).a() } }
+fn g<X: T + ?Sized>(b: Box<X>) -> i32 { (*b).a() }
+fn main() {
+    let b: Box<dyn T> = Box::new(4);
+    println!("{}", b.a());
+    println!("{}", W(b).g());
+    let c: Box<dyn T> = Box::new(5);
+    println!("{}", g(c));
+}
+"#,
+            expect: Expect::Run("104\n4\n5\n"),
+        }],
+    );
+}
