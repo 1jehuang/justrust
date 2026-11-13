@@ -108,6 +108,7 @@ mod tests {
             span: definition,
             edition: Edition::E2024,
             defining_crate: root,
+            local_inner_macros: false,
         };
         assert!(validate_definition(&session, site).is_ok());
         assert!(matches!(
@@ -273,6 +274,7 @@ mod tests {
             span: definition,
             edition: Edition::E2024,
             defining_crate,
+            local_inner_macros: false,
         };
         assert_eq!(
             validate_definition(reader.session(), site).unwrap(),

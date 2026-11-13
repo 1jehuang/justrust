@@ -560,6 +560,7 @@ mod tests {
                     span: definition,
                     edition: Edition::E2024,
                     defining_crate: krate,
+                    local_inner_macros: false,
                 },
             )
             .unwrap();
@@ -792,6 +793,7 @@ mod tests {
                     span: definition,
                     edition: Edition::E2024,
                     defining_crate,
+                    local_inner_macros: false,
                 },
             )
             .unwrap();

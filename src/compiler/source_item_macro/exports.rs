@@ -507,6 +507,7 @@ impl LocalExports {
                 span: token.span,
                 edition: source.edition(),
                 defining_crate: crate_id,
+                local_inner_macros: export.local_inner_macros(),
             };
             super::super::source_macro_binding::validate_definition(names.session(), site)
                 .map_err(token_error)?;
@@ -591,6 +592,7 @@ fn macro_use_rules(
         span: token.span,
         edition: source.edition(),
         defining_crate: crate_id,
+        local_inner_macros: false,
     };
     super::super::source_macro_binding::validate_definition(names.session(), site)
         .map_err(token_error)?;

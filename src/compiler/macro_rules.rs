@@ -15,6 +15,9 @@ pub struct DefinitionSite {
     pub span: SpanId,
     pub edition: Edition,
     pub defining_crate: CrateId,
+    /// `#[macro_export(local_inner_macros)]`: unqualified `name!` calls in
+    /// transcribers resolve as `$crate::name!`.
+    pub local_inner_macros: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct CallSite {
@@ -660,6 +663,7 @@ mod tests {
                 span: tokens.eof().span,
                 edition: Edition::E2024,
                 defining_crate,
+                local_inner_macros: false,
             };
             Self {
                 session,

@@ -323,6 +323,7 @@ mod tests {
                 span,
                 edition: Edition::E2024,
                 defining_crate,
+                local_inner_macros: false,
             },
             name,
             at,

@@ -553,6 +553,7 @@ mod tests {
             span: span0,
             edition: Edition::E2024,
             defining_crate: crate0,
+            local_inner_macros: false,
         };
         let site1 = DefinitionSite {
             span: span1,
@@ -670,6 +671,7 @@ mod tests {
             span,
             edition: Edition::E2024,
             defining_crate,
+            local_inner_macros: false,
         };
         driver
             .define(name, first.clone(), site, point, &mut names)

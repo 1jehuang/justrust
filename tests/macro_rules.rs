@@ -722,6 +722,7 @@ impl Fixture {
                 span: self.span,
                 edition: Edition::E2024,
                 defining_crate: self.krate,
+                local_inner_macros: false,
             },
             &mut self.session,
         )
@@ -1153,7 +1154,8 @@ fn utility_foreign_definition_arguments_call_and_output_fail_closed() {
             DefinitionSite {
                 span: a.span,
                 edition: Edition::E2024,
-                defining_crate: b.krate
+                defining_crate: b.krate,
+                local_inner_macros: false,
             },
             &mut b.session
         ),
@@ -1165,7 +1167,8 @@ fn utility_foreign_definition_arguments_call_and_output_fail_closed() {
             DefinitionSite {
                 span: b.span,
                 edition: Edition::E2024,
-                defining_crate: a.krate
+                defining_crate: a.krate,
+                local_inner_macros: false,
             },
             &mut b.session
         ),

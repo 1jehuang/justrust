@@ -69,8 +69,12 @@ pub struct InactiveItem {
 pub(super) struct MacroExport {
     attribute: Range<usize>,
     item: Range<usize>,
+    local_inner_macros: bool,
 }
 impl MacroExport {
+    pub(super) fn local_inner_macros(&self) -> bool {
+        self.local_inner_macros
+    }
     pub(super) fn attribute(&self) -> Range<usize> {
         self.attribute.clone()
     }
@@ -1059,18 +1063,14 @@ impl Filter<'_> {
                             "macro_export requires a macro_rules declaration",
                         ));
                     }
-                    match &meta.value {
-                        MetaValue::Word => {}
+                    let local_inner_macros = match &meta.value {
+                        MetaValue::Word => false,
                         MetaValue::List(values)
                             if values.len() == 1
                                 && values[0].name == "local_inner_macros"
                                 && matches!(values[0].value, MetaValue::Word) =>
                         {
-                            return Err(error(
-                                AttributeErrorKind::Unsupported,
-                                meta.range,
-                                "macro_export(local_inner_macros) is unsupported",
-                            ));
+                            true
                         }
                         _ => {
                             return Err(error(
@@ -1079,7 +1079,7 @@ impl Filter<'_> {
                                 "malformed macro_export attribute",
                             ));
                         }
-                    }
+                    };
                     let item = item.clone().ok_or_else(|| {
                         error(
                             AttributeErrorKind::Syntax,
@@ -1093,6 +1093,7 @@ impl Filter<'_> {
                         self.macro_exports.push(MacroExport {
                             attribute: meta.range,
                             item,
+                            local_inner_macros,
                         });
                     }
                 }

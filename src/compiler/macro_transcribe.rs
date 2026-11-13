@@ -4,12 +4,13 @@ use std::ops::Range;
 use super::expansion_budget::{InvocationBudget, Storage};
 use super::expansion_span::{ExpansionId, SpanId};
 use super::hygiene::Transparency;
+use super::macro_cursor::LogicalToken;
 use super::macro_cursor::TokenSlice;
 use super::macro_matcher::{CaptureValue, Captures, PathComponent};
 use super::macro_rules::{
     Atom, DefinitionSite, Element, MacroError, RepeatOp, Syntax, syntax, work,
 };
-use super::token::{Delimiter, InputToken, Token, TokenKind};
+use super::token::{Delimiter, InputToken, Spacing, Token, TokenKind};
 use super::token_session::{BudgetVec, SymbolId, TokenError, TokenSession};
 use super::token_tree::{GroupPolicy, Node, TokenStream, group};
 
@@ -233,6 +234,50 @@ enum Task {
     },
 }
 #[allow(clippy::too_many_arguments)]
+/// A single-segment macro call `name!` in a `local_inner_macros`
+/// transcriber: the identifier's span, when `atom` is such a name.
+fn local_inner_call(
+    template: &Syntax,
+    sequence: &[usize],
+    at: usize,
+    atom: &super::macro_rules::Atom,
+    session: &TokenSession,
+) -> Result<Option<SpanId>, MacroError> {
+    let LogicalToken::Leaf(Token {
+        kind: TokenKind::Ident(ident),
+        span,
+    }) = atom.logical
+    else {
+        return Ok(None);
+    };
+    if ident.raw || session.symbol(ident.symbol)? == "macro_rules" {
+        return Ok(None);
+    }
+    let bang = sequence.get(at + 1).map(|&i| &template.nodes.as_slice()[i]);
+    if !matches!(
+        bang,
+        Some(Element::Atom(super::macro_rules::Atom {
+            logical: LogicalToken::Leaf(Token {
+                kind: TokenKind::Punct { ch: '!', .. },
+                ..
+            }),
+            ..
+        }))
+    ) {
+        return Ok(None);
+    }
+    // Already a path segment (`a::name!`, `$crate::name!`).
+    if let Some(&prev) = at.checked_sub(1).and_then(|p| sequence.get(p))
+        && let Element::Atom(super::macro_rules::Atom {
+            logical: LogicalToken::Operator { chars, len: 2, .. },
+            ..
+        }) = &template.nodes.as_slice()[prev]
+        && chars[..2] == [':', ':']
+    {
+        return Ok(None);
+    }
+    Ok(Some(span))
+}
 pub(super) fn transcribe(
     template: &Syntax,
     schema: &Syntax,
@@ -298,14 +343,46 @@ pub(super) fn transcribe(
                 let node = &template.nodes.as_slice()[sequence[at]];
                 tasks.push(Task::Sequence { range, at: at + 1 })?;
                 match node {
-                    Element::Atom(atom) => emit_slice(
-                        atom.tokens.clone(),
-                        true,
-                        expansion,
-                        invocation,
-                        &mut output,
-                        session,
-                    )?,
+                    Element::Atom(atom) => {
+                        if site.local_inner_macros
+                            && let Some(span) =
+                                local_inner_call(template, sequence, at, atom, session)?
+                        {
+                            // `name!` → `$crate::name!` (local_inner_macros).
+                            emit_leaf(
+                                Token {
+                                    kind: TokenKind::DollarCrate(site.defining_crate),
+                                    span,
+                                },
+                                true,
+                                expansion,
+                                invocation,
+                                &mut output,
+                                session,
+                            )?;
+                            for spacing in [Spacing::Joint, Spacing::Alone] {
+                                emit_leaf(
+                                    Token {
+                                        kind: TokenKind::Punct { ch: ':', spacing },
+                                        span,
+                                    },
+                                    true,
+                                    expansion,
+                                    invocation,
+                                    &mut output,
+                                    session,
+                                )?;
+                            }
+                        }
+                        emit_slice(
+                            atom.tokens.clone(),
+                            true,
+                            expansion,
+                            invocation,
+                            &mut output,
+                            session,
+                        )?
+                    }
                     Element::Variable { name, span } => {
                         if session.symbol(*name)? == "crate" {
                             emit_leaf(

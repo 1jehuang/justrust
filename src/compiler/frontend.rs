@@ -13130,10 +13130,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             .names
             .register_crate_root(file)
             .map_err(native_adapter::transport_error)?;
+        let local_inner_macros = match &self.lexical.exports {
+            Some(exports) if self.item_expansion.is_none() && self.expansion.is_none() => exports
+                .local_inner_at(span, self.names.session())
+                .map_err(native_adapter::transport_error)?,
+            _ => false,
+        };
         let site = super::macro_rules::DefinitionSite {
             span,
             edition: self.names.edition(),
             defining_crate,
+            local_inner_macros,
         };
         Ok((name, body, site))
     }

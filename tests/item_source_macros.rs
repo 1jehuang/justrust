@@ -39,6 +39,20 @@ struct Case {
 fn cases() -> Vec<Case> {
     vec![
         Case {
+            name: "local_inner_macros_calls_resolve_through_crate",
+            source: r#"#[macro_export] macro_rules! helper { ($x:expr) => { $x + 1 } } #[macro_export(local_inner_macros)] macro_rules! outer { ($x:expr) => { helper!($x) * 2 } } mod m { pub fn f() -> i32 { crate::outer!(4) } } fn main() { println!("{} {}", outer!(1), m::f()); }"#,
+            stdout: Some("4 10\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "local_inner_macros_unexported_helper",
+            source: r#"macro_rules! helper { ($x:expr) => { $x + 1 } } #[macro_export(local_inner_macros)] macro_rules! outer { ($x:expr) => { helper!($x) } } fn main() { println!("{}", outer!(1)); }"#,
+            stdout: None,
+            stock_diagnostic: Some("cannot find `helper` in `$crate`"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
             name: "macro_use_inline_module_extends_textual_scope",
             source: r#"#[macro_use] mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } pub fn inner() -> i32 { double!(4) } } mod later { pub fn use_it() -> i32 { double!(10) } } fn main() { println!("{} {} {}", macros::inner(), later::use_it(), double!(1)); }"#,
             stdout: Some("8 20 2\n"),
@@ -595,8 +609,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (29, 21));
-    assert_eq!(partition, (24, 8, 12, 6));
+    assert_eq!(counts, (30, 22));
+    assert_eq!(partition, (25, 9, 12, 6));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -651,7 +665,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (8, 6, 2));
+    assert_eq!(counts, (9, 6, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")
@@ -790,8 +804,8 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 200);
-    assert_eq!(modes, (48, 48, 40, 40, 12, 12));
+    assert_eq!(gates, 208);
+    assert_eq!(modes, (50, 50, 42, 42, 12, 12));
     eprintln!(
         "NATIVE ITEM SOURCE:176 cells, modes{modes:?};42 executed native images;28 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );

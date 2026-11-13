@@ -142,6 +142,32 @@ impl Namespace {
         }
         Ok(tree.child(index))
     }
+    /// Whether this file's original exported declaration whose name is at
+    /// `name` (an original span in the parser's session) is
+    /// `#[macro_export(local_inner_macros)]`.
+    pub(in crate::compiler) fn local_inner_at(
+        &self,
+        name: crate::compiler::expansion_span::SpanId,
+        session: &crate::compiler::token_session::TokenSession,
+    ) -> Result<bool, TokenError> {
+        let wanted = session
+            .sources()
+            .render_span(session.original(name, 512)?)?;
+        for declaration in self.local.declarations.as_slice() {
+            session.budget().charge(Counter::Work, 1)?;
+            if !declaration.site.local_inner_macros {
+                continue;
+            }
+            let own = self.local.names.session();
+            let at = own
+                .sources()
+                .render_span(own.original(declaration.site.span, 512)?)?;
+            if at.lo == wanted.lo && at.hi == wanted.hi {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     pub(in crate::compiler) fn select<'a>(
         &'a self,
         path: &AstPath,

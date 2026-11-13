@@ -282,8 +282,12 @@ pub(super) struct MacroExport {
     attribute: SourceSpan,
     item: SourceSpan,
     original: Arc<str>,
+    local_inner_macros: bool,
 }
 impl MacroExport {
+    pub(super) fn local_inner_macros(&self) -> bool {
+        self.local_inner_macros
+    }
     pub(super) fn spans(
         &self,
         source: &PreparedSource,
@@ -324,6 +328,7 @@ impl MacroExport {
             attribute: remap_span(self.attribute, file),
             item: remap_span(self.item, file),
             original: self.original.clone(),
+            local_inner_macros: self.local_inner_macros,
         }
     }
 }
@@ -2016,6 +2021,7 @@ impl<'a> Loader<'a> {
                 attribute: Self::span(id, export.attribute()),
                 item: Self::span(id, export.item()),
                 original: self.contents.clone(),
+                local_inner_macros: export.local_inner_macros(),
             });
         }
         for a in filtered.attributes {
@@ -2078,6 +2084,7 @@ impl<'a> Loader<'a> {
                     attribute: Self::span(id, range.start..range.start),
                     item: Self::span(id, range),
                     original: self.contents.clone(),
+                    local_inner_macros: false,
                 })
             });
         }
