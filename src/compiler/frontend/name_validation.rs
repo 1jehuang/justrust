@@ -1975,6 +1975,7 @@ mod tests {
                 traits: vec![bound],
                 maybe_unsized: false,
                 outlives_static: false,
+                outlives: Vec::new(),
             }],
             supertraits: vec![parent],
             name,

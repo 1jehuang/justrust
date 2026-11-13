@@ -324,6 +324,7 @@ impl ValidatedTraitWorld {
             region_count: count,
             normalized: normalized.into(),
             outlives: edges.into(),
+            type_outlives: Arc::from([]),
             carriers: rows.into(),
         }))
     }

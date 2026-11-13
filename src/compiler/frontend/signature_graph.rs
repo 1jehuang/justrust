@@ -818,6 +818,12 @@ pub(crate) fn compute_callable_signature(
             &signature.ref_contract,
             context.receiver,
         )?,
+        &match registry.callable_sources[index] {
+            CallableSource::Associated { implementation, .. } => {
+                vec![&program.impls[implementation].bounds[..], &f.bounds[..]]
+            }
+            _ => vec![&f.bounds[..]],
+        },
         budget,
     )?;
     let mut rows = Vec::new();

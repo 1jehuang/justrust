@@ -124,6 +124,7 @@ pub(super) fn application(
             &signature.ref_contract,
             ReceiverKind::None,
         )?,
+        &[],
         budget,
     )?;
     budget.retain_bytes(std::mem::size_of::<tr::OwnerRegionApplication>())?;

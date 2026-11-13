@@ -394,6 +394,7 @@ fn source_schemas_mixed_snapshot_rows_regions_and_region_keys_are_rejected() {
                 declaration: id(foreign, 0),
                 region_count: 0,
                 outlives: Arc::from([]),
+                type_outlives: Arc::from([]),
                 normalized: Arc::from([]),
             }),
             &b,

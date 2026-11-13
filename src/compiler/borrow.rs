@@ -3152,17 +3152,50 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
+        let callee_env = view.source_region_env().clone();
+        // A named callee lifetime that occurs in the positional contract is
+        // bound under its fixed contract region, so match it by that term.
+        let normalize = |term: &ir::CarrierRegionTerm| match term {
+            ir::CarrierRegionTerm::Named(region)
+                if region.declaration == callee_env.declaration
+                    && region.index < callee_env.region_count =>
+            {
+                callee_env.normalized[usize::from(region.index)]
+                    .map(ir::CarrierRegionTerm::Fixed)
+                    .unwrap_or_else(|| term.clone())
+            }
+            _ => term.clone(),
+        };
         for constraint in view.region_schema().constraints.iter() {
+            let longer_term = normalize(&constraint.longer);
+            let shorter_term = normalize(&constraint.shorter);
             let longer: Vec<_> = regions
                 .iter()
-                .filter(|row| row.schema == constraint.longer)
+                .filter(|row| row.schema == longer_term || row.schema == constraint.longer)
                 .cloned()
                 .collect();
             let shorter: Vec<_> = regions
                 .iter()
-                .filter(|row| row.schema == constraint.shorter)
+                .filter(|row| row.schema == shorter_term || row.schema == constraint.shorter)
                 .cloned()
                 .collect();
+            // `T: 'a` must reach a bound occurrence of `'a` whenever the
+            // parameter carries borrowed data at this call. Dropping it
+            // silently would accept unsound instantiations.
+            if self.diagnosing
+                && matches!(constraint.longer, ir::CarrierRegionTerm::Family { .. })
+                && matches!(constraint.shorter, ir::CarrierRegionTerm::Named(_))
+                && !longer.is_empty()
+                && shorter.is_empty()
+            {
+                self.problem(
+                    block,
+                    None,
+                    Problem::Invalid(
+                        "unsupported: type outlives bound on a lifetime without a call-site binding".into(),
+                    ),
+                )?;
+            }
             for a in &longer {
                 for b in &shorter {
                     if a.component.is_some() && b.component.is_some() && a.component != b.component

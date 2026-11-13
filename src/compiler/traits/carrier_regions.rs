@@ -231,6 +231,16 @@ impl ValidatedTraitWorld {
                 ),
             )?;
         }
+        for &(parameter, region) in source.type_outlives.iter() {
+            push(
+                &self.budget,
+                &mut edges,
+                (
+                    ir::CarrierRegionTerm::Family { parameter },
+                    ir::CarrierRegionTerm::Named(region),
+                ),
+            )?;
+        }
         for &(a, b) in signature.ref_contract.outlives.iter() {
             push(
                 &self.budget,
@@ -529,7 +539,25 @@ impl ValidatedTraitWorld {
             .carriers
             .iter()
             .find(|row| row.parameter == Some(input.param) && row.location == input.location);
-        let Some(incoming) = incoming else {
+        let family_term;
+        let incoming = match incoming {
+            Some(row) => Some(&row.region),
+            // A bare type parameter family has no carrier row. Its region
+            // relates to a named output only through a declared `T: 'a`.
+            None => match input.location.channel {
+                ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                } if input.location.path.0.is_empty()
+                    && source.type_outlives.iter().any(|row| row.0 == parameter) =>
+                {
+                    family_term = ir::CarrierRegionTerm::Family { parameter };
+                    Some(&family_term)
+                }
+                _ => None,
+            },
+        };
+        let Some(incoming_region) = incoming else {
             // Missing source metadata cannot prove a named output lifetime.
             // A symbolic generic tail remains governed by its family schema.
             return Ok(Some(false));
@@ -547,7 +575,7 @@ impl ValidatedTraitWorld {
             },
         ) = (
             &output.region,
-            &incoming.region,
+            incoming_region,
             &destination.channel,
             &input.location.channel,
         ) {
@@ -563,7 +591,7 @@ impl ValidatedTraitWorld {
                 .carrier_source_eligible(signature, destination, &signature.result, input, None)
                 .map(Some);
         }
-        if !self.source_carrier_outlives(source, signature, &incoming.region, &output.region)? {
+        if !self.source_carrier_outlives(source, signature, incoming_region, &output.region)? {
             return Ok(Some(false));
         }
         // A carrier stored behind a returned `&mut` is invariant: the caller
@@ -591,7 +619,7 @@ impl ValidatedTraitWorld {
             }
         }
         if invariant
-            && !self.source_carrier_outlives(source, signature, &output.region, &incoming.region)?
+            && !self.source_carrier_outlives(source, signature, &output.region, incoming_region)?
         {
             return Ok(Some(false));
         }

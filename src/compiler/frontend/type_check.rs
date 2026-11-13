@@ -2637,6 +2637,7 @@ pub(super) fn original_source_regions(
         declaration,
         region_count: regions.params.len() as u16,
         outlives: outlives.into(),
+        type_outlives: Arc::from([]),
         normalized: normalized.into(),
         carriers: Arc::from([]),
     }))

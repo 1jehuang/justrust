@@ -10330,6 +10330,9 @@ pub struct TypeBound {
     pub maybe_unsized: bool,
     /// Written `+ 'static`: every actual must be free of non-`'static` borrows.
     pub outlives_static: bool,
+    /// Written `+ 'a` for named lifetimes: every borrow in an actual must
+    /// outlive `'a`. Enforced as a region-schema constraint on the family.
+    pub outlives: Vec<RegionName>,
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
@@ -15178,13 +15181,22 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.cursor.bump();
         let mut traits = Vec::new();
         let mut outlives_static = false;
+        let mut outlives = Vec::new();
         let parsed = (|| {
             loop {
                 if traits.len() >= 256 {
                     return Err(self.limit("predicate limit exceeded"));
                 }
-                if self.static_type_bound()? {
-                    outlives_static = true;
+                if let Some(region) = self.type_region_bound()? {
+                    match region {
+                        RegionName::Static => outlives_static = true,
+                        region => {
+                            if outlives.len() >= 64 {
+                                return Err(self.limit("outlives bound limit exceeded"));
+                            }
+                            outlives.push(region);
+                        }
+                    }
                 } else {
                     let path = self.trait_path()?;
                     self.reserve_parser_items(&mut traits, 1)?;
@@ -15213,6 +15225,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             traits,
             maybe_unsized: false,
             outlives_static,
+            outlives,
         });
         self.pending_bounds = bounds;
         Ok(Type::Param(name))
@@ -15482,11 +15495,20 @@ impl<'input, 'names> Parser<'input, 'names> {
                 let mut traits = Vec::new();
                 let mut maybe_unsized = false;
                 let mut outlives_static = false;
+                let mut outlives = Vec::new();
                 loop {
                     if self.relaxed_sized()? {
                         maybe_unsized = true;
-                    } else if self.static_type_bound()? {
-                        outlives_static = true;
+                    } else if let Some(region) = self.type_region_bound()? {
+                        match region {
+                            RegionName::Static => outlives_static = true,
+                            region => {
+                                if outlives.len() >= 64 {
+                                    return Err(self.limit("outlives bound limit exceeded"));
+                                }
+                                outlives.push(region);
+                            }
+                        }
                     } else {
                         let path = self.trait_path()?;
                         self.reserve_parser_items(&mut traits, 1)?;
@@ -15506,6 +15528,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     traits,
                     maybe_unsized,
                     outlives_static,
+                    outlives,
                 });
                 self.pending_bounds = bounds;
             }
@@ -16392,6 +16415,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             traits: Vec::new(),
                             maybe_unsized: false,
                             outlives_static: true,
+                            outlives: Vec::new(),
                         });
                     } else {
                         let path = self.trait_path()?;
@@ -17226,6 +17250,17 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(true)
     }
+    /// One lifetime in a type parameter bound list: `'static` or a named
+    /// lifetime (`T: 'a`). `'_` stays rejected by [`Self::lifetime`].
+    fn type_region_bound(&mut self) -> Result<Option<RegionName>, ParseError> {
+        if !self.token().is_lifetime() || self.token().string {
+            return Ok(None);
+        }
+        if self.eat("'static") {
+            return Ok(Some(RegionName::Static));
+        }
+        Ok(Some(self.lifetime()?))
+    }
     fn region_bounds(
         &mut self,
         long: RegionName,
@@ -17327,6 +17362,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut traits = Vec::new();
         let mut maybe_unsized = false;
         let mut outlives_static = false;
+        let mut outlives = Vec::new();
         while !(self.is(",") || self.is("{") || self.is(";")) {
             if self.relaxed_sized()? {
                 maybe_unsized = true;
@@ -17335,8 +17371,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 continue;
             }
-            if self.static_type_bound()? {
-                outlives_static = true;
+            if let Some(region) = self.type_region_bound()? {
+                match region {
+                    RegionName::Static => outlives_static = true,
+                    region => {
+                        if outlives.len() >= 64 {
+                            return Err(self.limit("outlives bound limit exceeded"));
+                        }
+                        outlives.push(region);
+                    }
+                }
                 if !self.eat("+") {
                     break;
                 }
@@ -17355,9 +17399,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if maybe_unsized && !matches!(subject, Type::Param(_)) {
             return Err(self.error("this relaxed bound is not permitted here"));
         }
-        if outlives_static && !matches!(subject, Type::Param(_)) {
+        if (outlives_static || !outlives.is_empty()) && !matches!(subject, Type::Param(_)) {
             return Err(self.unsupported(
-                "`'static` bounds on a subject other than a type parameter are unsupported",
+                "outlives bounds on a subject other than a type parameter are unsupported",
             ));
         }
         if bounds.len() >= 4096 {
@@ -17369,6 +17413,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             traits,
             maybe_unsized,
             outlives_static,
+            outlives,
         });
         Ok(())
     }
@@ -17571,14 +17616,23 @@ impl<'input, 'names> Parser<'input, 'names> {
                     let mut traits = Vec::new();
                     let mut maybe_unsized = false;
                     let mut outlives_static = false;
+                    let mut outlives = Vec::new();
                     loop {
                         if traits.len() >= 256 {
                             return Err(self.limit("predicate limit exceeded"));
                         }
                         if self.relaxed_sized()? {
                             maybe_unsized = true;
-                        } else if self.static_type_bound()? {
-                            outlives_static = true;
+                        } else if let Some(region) = self.type_region_bound()? {
+                            match region {
+                                RegionName::Static => outlives_static = true,
+                                region => {
+                                    if outlives.len() >= 64 {
+                                        return Err(self.limit("outlives bound limit exceeded"));
+                                    }
+                                    outlives.push(region);
+                                }
+                            }
                         } else {
                             let path = self.trait_path()?;
                             self.reserve_parser_items(&mut traits, 1)?;
@@ -17595,6 +17649,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         traits,
                         maybe_unsized,
                         outlives_static,
+                        outlives,
                     });
                     self.pending_bounds = bounds;
                 }
@@ -25021,6 +25076,17 @@ impl PlanCtx {
                     }
                 }
             }
+            // `T: 'a` (named lifetime) is enforced through the callable region
+            // schema. Declarations whose callers do not see that schema (types,
+            // traits, trait items and trait impls) keep an explicit diagnostic.
+            if bounds.iter().any(|bound| !bound.outlives.is_empty())
+                && !matches!(
+                    kind,
+                    ir::DeclKind::Function | ir::DeclKind::AssociatedFunction | ir::DeclKind::Impl
+                )
+            {
+                return Err("unsupported: type outlives bounds other than `'static` on this declaration kind".into());
+            }
             // `T: 'static` is a caller obligation recorded on the binder.
             let mut outlives_static = 0u32;
             for bound in bounds.iter().filter(|bound| bound.outlives_static) {
@@ -25350,7 +25416,7 @@ impl PlanCtx {
                         .function
                         .bounds
                         .iter()
-                        .any(|bound| bound.outlives_static)
+                        .any(|bound| bound.outlives_static || !bound.outlives.is_empty())
                 {
                     return Err("unsupported: trait implementation method outlives bounds require trait obligation refinement".into());
                 }
@@ -26184,6 +26250,7 @@ impl PlanCtx {
                             &signature.ref_contract,
                             item.receiver,
                         )?,
+                        &[&h.bounds],
                         budget,
                     )?,
                     budget,

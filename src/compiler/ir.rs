@@ -1511,6 +1511,10 @@ pub struct SourceRegionEnv {
     pub declaration: DeclId,
     pub region_count: u16,
     pub outlives: Arc<[(SourceRegionId, SourceRegionId)]>,
+    /// Declared `T: 'a` bounds (named lifetimes only; `'static` stays on the
+    /// parameter environment). Each row becomes a region-schema constraint
+    /// `Family(T): 'a`, assumed by the body and owed by every caller.
+    pub type_outlives: Arc<[(ParamId, SourceRegionId)]>,
     pub normalized: Arc<[Option<RegionParamId>]>,
     pub carriers: Arc<[SourceCarrierRegion]>,
 }

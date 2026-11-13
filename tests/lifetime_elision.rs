@@ -412,6 +412,62 @@ fn main() { let a = 3; let b = 4; let f = pair((&a, &b)); println!("{}", f()); }
 }
 
 #[test]
+fn accepts_named_type_outlives_bounds() {
+    runs(
+        r#"use std::fmt::Display;
+fn tie<'a, T: Display + 'a>(label: &'a str, value: T) -> &'a str { println!("{} {}", label, value); label }
+fn longest<'a, T>(items: &'a [T], fallback: &'a T) -> &'a T where T: PartialOrd + 'a {
+    let mut best = fallback;
+    for item in items { if item > best { best = item; } }
+    best
+}
+fn store<'a, T: 'a>(slot: &mut Vec<T>, t: T) { slot.push(t); }
+fn main() {
+    let name = String::from("count");
+    let n = 4;
+    let r = tie(name.as_str(), &n);
+    let words = vec![String::from("b"), String::from("zz")];
+    let zero = String::from("a");
+    let s = String::from("q"); let mut v: Vec<&str> = Vec::new(); store(&mut v, s.as_str());
+    println!("{} {} {:?}", r, longest(&words, &zero), v);
+}
+"#,
+        "count 4\ncount zz [\"q\"]\n",
+    );
+}
+
+#[test]
+fn rejects_named_type_outlives_violations() {
+    rejects(
+        "struct result tied to a shorter type argument",
+        r#"struct W<'a> { s: &'a () }
+fn wrap<'a, T: 'a>(s: &'a (), _t: T) -> W<'a> { W { s } }
+fn make<'a, 'b>(s: &'a (), t: &'b u8) -> W<'a> { wrap(s, t) }
+fn main() {}
+"#,
+    );
+    rejects(
+        "reference result tied to a shorter type argument",
+        r#"fn wrap<'a, T: 'a>(s: &'a (), _t: T) -> &'a () { s }
+fn make<'a, 'b>(s: &'a (), t: &'b u8) -> &'a () { wrap(s, t) }
+fn main() {}
+"#,
+    );
+    rejects(
+        "type argument borrow ends before the bounded result",
+        r#"fn tie<'a, T: 'a>(s: &'a i32, _t: T) -> &'a i32 { s }
+fn main() { let a = 1; let r; { let b = 2; r = tie(&a, &b); } println!("{}", r); }
+"#,
+    );
+    rejects(
+        "undeclared lifetime in a type outlives bound",
+        r#"fn tie<T: 'x>(t: T) -> T { t }
+fn main() {}
+"#,
+    );
+}
+
+#[test]
 fn rejects_static_type_bound_on_borrowed_actual() {
     rejects(
         "static generic actual",

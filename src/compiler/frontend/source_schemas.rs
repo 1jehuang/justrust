@@ -757,6 +757,7 @@ impl SourceSchemas {
             declaration: id,
             region_count: 0,
             outlives: Arc::from([]),
+            type_outlives: Arc::from([]),
             normalized: Arc::from([]),
             carriers: Arc::from([]),
         }))

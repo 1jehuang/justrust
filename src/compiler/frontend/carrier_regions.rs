@@ -12,8 +12,10 @@ pub(super) fn attach(
     signature: &ir::Signature,
     receiver: ReceiverKind,
     original: Arc<ir::SourceRegionEnv>,
+    bounds: &[&[TypeBound]],
     budget: &ir::PlanBudget,
 ) -> Result<Arc<ir::SourceRegionEnv>, String> {
+    let type_outlives = declared_type_outlives(registry, regions, &original, bounds, budget)?;
     let mut collector = Collector {
         registry,
         regions,
@@ -170,8 +172,86 @@ pub(super) fn attach(
         carriers: collector.rows.into(),
         region_count: collector.next_region,
         normalized: normalized.into(),
+        type_outlives,
         ..original.as_ref().clone()
     }))
+}
+
+/// Canonical `(T, 'a)` rows for every written `T: 'a` with a named lifetime.
+/// The subject resolves through the declaration's own generic bindings, the
+/// lifetime through its declared lifetime parameters. Anything else (an
+/// undeclared name, `'_`) is an error, never a dropped bound.
+fn declared_type_outlives(
+    registry: &DeclRegistry,
+    regions: &RegionDecls,
+    original: &ir::SourceRegionEnv,
+    bounds: &[&[TypeBound]],
+    budget: &ir::PlanBudget,
+) -> Result<Arc<[(ir::ParamId, ir::SourceRegionId)]>, String> {
+    if bounds
+        .iter()
+        .all(|list| list.iter().all(|bound| bound.outlives.is_empty()))
+    {
+        return Ok(Arc::from([]));
+    }
+    let env = &registry.declaration(original.declaration)?.env;
+    let bindings = generic_bindings(registry, env, budget)?;
+    let mut rows: Vec<(ir::ParamId, ir::SourceRegionId)> = Vec::new();
+    for bound in bounds.iter().flat_map(|list| list.iter()) {
+        if bound.outlives.is_empty() {
+            continue;
+        }
+        let Type::Param(subject) = &bound.subject else {
+            return Err(
+                "unsupported: outlives bounds on a subject other than a type parameter".into(),
+            );
+        };
+        let key = registry
+            .names
+            .key(*subject, LookupClass::TypeParameter)
+            .map_err(native_adapter::name_diagnostic)?;
+        let Some(ir::Ty::Param(parameter)) = bindings.get(&GenericBindingKey::Param(key)) else {
+            return Err("type outlives bound subject is not a declared type parameter".into());
+        };
+        for region in &bound.outlives {
+            budget.charge_work(regions.params.len() + rows.len() + 1)?;
+            let RegionName::Named(name) = region else {
+                return Err("unsupported: inferred lifetime in a type outlives bound".into());
+            };
+            let wanted = registry
+                .names
+                .key(*name, LookupClass::LifetimeParameter)
+                .map_err(native_adapter::name_diagnostic)?;
+            let mut found = None;
+            for (index, binder) in regions.params.iter().enumerate() {
+                if registry
+                    .names
+                    .key(*binder, LookupClass::LifetimeParameter)
+                    .map_err(native_adapter::name_diagnostic)?
+                    == wanted
+                {
+                    found = Some(index);
+                    break;
+                }
+            }
+            let index = found.ok_or("E0261: use of undeclared lifetime name")?;
+            let row = (
+                *parameter,
+                ir::SourceRegionId {
+                    declaration: original.declaration,
+                    index: u16::try_from(index).map_err(|_| "lifetime ordinal overflow")?,
+                },
+            );
+            if !rows.contains(&row) {
+                if rows.len() >= 4096 {
+                    return Err("type outlives bound limit exceeded".into());
+                }
+                budget.retain_bytes(std::mem::size_of_val(&row))?;
+                rows.push(row);
+            }
+        }
+    }
+    Ok(rows.into())
 }
 
 fn explicit_array_reference(

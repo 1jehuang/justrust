@@ -8394,6 +8394,7 @@ impl ValidatedTraitWorld {
                     facts,
                     scratch,
                     &actuals,
+                    &retained.source_regions.type_outlives,
                 )?;
                 push(
                     &self.budget,
@@ -8456,6 +8457,7 @@ impl ValidatedTraitWorld {
                     facts,
                     scratch,
                     &actuals,
+                    &[],
                 )?;
                 push(
                     &self.budget,
@@ -8543,6 +8545,7 @@ impl ValidatedTraitWorld {
             declaration,
             region_count: retained.source_regions.region_count,
             outlives: retained.source_regions.outlives.clone(),
+            type_outlives: retained.source_regions.type_outlives.clone(),
             normalized: normalized.into(),
             carriers: carrier_regions.into(),
         });
@@ -8668,6 +8671,7 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<Arc<[ir::InputCarrier]>> {
+        let type_outlives = facts.source_region_env(declaration)?.type_outlives.clone();
         self.expand_result_sources_in(
             declaration,
             result,
@@ -8679,6 +8683,7 @@ impl ValidatedTraitWorld {
             facts,
             scratch,
             &nominal_carriers::CarrierFamilyActuals::default(),
+            &type_outlives,
         )
     }
 
@@ -8695,6 +8700,7 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
         actuals: &nominal_carriers::CarrierFamilyActuals,
+        type_outlives: &[(ir::ParamId, ir::SourceRegionId)],
     ) -> Result<Arc<[ir::InputCarrier]>> {
         let env = raw.env.as_ref();
         if result.sources.is_empty()
@@ -8785,6 +8791,7 @@ impl ValidatedTraitWorld {
             facts,
             scratch,
             actuals,
+            type_outlives,
         )?;
         // A callable argument can return what its own inputs or captures
         // carry. Those sources join, never replace, the declared ones.
@@ -8822,6 +8829,7 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
         actuals: &nominal_carriers::CarrierFamilyActuals,
+        type_outlives: &[(ir::ParamId, ir::SourceRegionId)],
     ) -> Result<Arc<[ir::InputCarrier]>> {
         let mut output = Vec::new();
         for source in sources {
@@ -8939,6 +8947,19 @@ impl ValidatedTraitWorld {
                             )?
                     }
                     (None, None) => true,
+                    // A fixed output retaining a whole parameter family
+                    // (declared `T: 'a`) keeps every component's origins.
+                    (None, Some(_))
+                        if matches!(destination, ir::CarrierChannel::Fixed(_))
+                            && source.location.path.0.is_empty()
+                            && matches!(
+                                source.location.channel,
+                                ir::CarrierChannel::ParamTail { parameter, prefix: 0 }
+                                    if type_outlives.iter().any(|row| row.0 == parameter)
+                            ) =>
+                    {
+                        true
+                    }
                     _ => false,
                 };
                 if matches {
@@ -10051,6 +10072,28 @@ impl ValidatedTraitWorld {
                 ir::CarrierRegionConstraint {
                     longer: ir::CarrierRegionTerm::Named(longer),
                     shorter: ir::CarrierRegionTerm::Named(shorter),
+                },
+            )?;
+        }
+        // `T: 'a`: every carrier of the parameter family outlives `'a`. The
+        // body assumes it; each call relates the actual's loans to the
+        // caller-side region bound to `'a`.
+        for &(parameter, region) in source.type_outlives.iter() {
+            if region.declaration != source.declaration
+                || region.index >= source.region_count
+                || !env.contains(parameter)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "type outlives bound outside its declaration",
+                ));
+            }
+            push(
+                &self.budget,
+                &mut constraints,
+                ir::CarrierRegionConstraint {
+                    longer: ir::CarrierRegionTerm::Family { parameter },
+                    shorter: ir::CarrierRegionTerm::Named(region),
                 },
             )?;
         }
@@ -15538,6 +15581,7 @@ pub(crate) mod test_support {
                 declaration: id,
                 region_count: 0,
                 outlives: Arc::from([]),
+                type_outlives: Arc::from([]),
                 normalized: Arc::from([]),
                 carriers: Arc::from([]),
             }))
@@ -24323,6 +24367,7 @@ mod tests {
                     normalized: vec![None; usize::from(self.count)].into(),
                     carriers: Arc::from([]),
                     outlives: Arc::from([]),
+                    type_outlives: Arc::from([]),
                 }))
             }
             fn instantiate_schema(
