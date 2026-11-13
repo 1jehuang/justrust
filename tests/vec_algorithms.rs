@@ -1312,14 +1312,23 @@ fn reference_free_leaf_reborrow_excludes_noncopy_carrier_referents() {
             .expect("escaping owner must fail CHECK");
         assert!(checked.resource_usage.first_failure.is_none());
         iterator_oracle::validate_native_rejection(&checked).unwrap();
-        // BUILD also reaches a deliberately unsupported closed generic family.
-        // That is a fail-closed exclusion, not semantic rejection evidence.
         let failure = compiler::compile_observed(source.into(), workers, false)
+            .err()
+            .expect("escaping owner must fail BUILD");
+        assert!(failure.resource_usage.first_failure.is_none());
+        iterator_oracle::validate_native_rejection(&failure).unwrap();
+        // A valid caller still reaches the deliberately unsupported closed
+        // generic family. That fail-closed exclusion is not semantic
+        // rejection evidence, and the leaf must never be admitted as
+        // reference-free.
+        let valid = r#"struct Owner<'a,T>{token:&'a (),value:T}fn leaf<'a,'b,T>(o:&'b mut Owner<'a,T>)->&'b mut T{&mut o.value}fn main(){let t=();let x=5;let mut o=Owner{token:&t,value:vec![&x]};leaf(&mut o).push(&x);println!("{}",o.value.len());}"#;
+        let failure = compiler::compile_observed(valid.into(), workers, false)
             .err()
             .unwrap_or_else(|| {
                 panic!("carrier-bearing non-Copy leaf must not use reference-free admission")
             });
         assert!(failure.resource_usage.first_failure.is_none());
+        assert!(iterator_oracle::validate_native_rejection(&failure).is_err());
         let report = failure.report.as_ref().expect("completed graph report");
         assert!(
             report.node_errors.iter().any(|(_, error)| {
