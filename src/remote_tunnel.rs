@@ -174,13 +174,14 @@ mod wake {
     }
 }
 
-/// Windows has no poll over a socket and a pipe: a short socket read timeout
-/// is the wait.
+/// Windows has no poll over a socket and a pipe, so the socket wait is a
+/// short WSAPoll and stdin is noticed on the next turn. The socket must be
+/// nonblocking like on unix: a blocking write deadlocks against a peer that
+/// is itself blocked writing to us.
 #[cfg(not(unix))]
 mod wake {
     use std::io;
     use std::net::TcpStream;
-    use std::time::Duration;
 
     pub struct Waker;
 
@@ -193,8 +194,7 @@ mod wake {
 
     impl Waker {
         pub fn new(socket: &TcpStream) -> io::Result<Waker> {
-            socket.set_read_timeout(Some(Duration::from_millis(5)))?;
-            socket.set_write_timeout(None)?;
+            socket.set_nonblocking(true)?;
             Ok(Waker)
         }
 
@@ -202,7 +202,27 @@ mod wake {
             Sender
         }
 
-        pub fn wait(&self, _socket: &TcpStream, _output_pending: bool) {}
+        pub fn wait(&self, socket: &TcpStream, output_pending: bool) {
+            use std::os::windows::io::AsRawSocket;
+            use windows_sys::Win32::Networking::WinSock::{
+                POLLRDNORM, POLLWRNORM, WSAPOLLFD, WSAPoll,
+            };
+            let mut events = POLLRDNORM as i32;
+            if output_pending {
+                events |= POLLWRNORM as i32;
+            }
+            let mut fd = WSAPOLLFD {
+                fd: socket.as_raw_socket() as usize,
+                events: events as _,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd for a socket we own.
+            let ready = unsafe { WSAPoll(&mut fd, 1, 5) };
+            if ready < 0 {
+                // Never spin if the poll itself fails.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
     }
 }
 
