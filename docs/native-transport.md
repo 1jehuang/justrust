@@ -115,16 +115,31 @@ never starts or resubmits a build (the existing rule in `remote_session`).
 
 ### Mirror verification without rsync
 
-The agent keeps a manifest (path, size, mtime, content hash) of each mirror.
-On connect the daemon sends its manifest digest. A match means no transfer
-and no per-file checksum pass. A mismatch exchanges the manifest and sends
-only differing files as `Write` frames. This removes rsync from the reconnect
-path, which is the 51 minutes above. It does not depend on the new stream and
-can ship first over ssh.
+Shipped as link checkpoints (`src/remote_checkpoint.rs`, opt-in with
+`JUSTRUST_REMOTE_CHECKPOINT=1`, negotiated through `Hello.caps`). It does not
+depend on the new stream and runs over the ssh link.
+
+- Once a root is in sync the daemon sends `Checkpoint{path, token}`. The agent
+  applies it in frame order, after every earlier write, and stores the token
+  in `<root>/.justrust/mirror-token`. It refuses while a write or delete
+  under that root is still failed.
+- The daemon records every path it sends after the checkpoint.
+- After a reconnect the daemon sends `Verify` with the token and the size of
+  every file it had not sent since. The agent checks the token and each size,
+  then replaces the token. On success the daemon resends the recorded paths
+  plus local changes. On any failure the token is forgotten and the checksum
+  mirror runs.
+- A write or delete from any other connection removes the token, and the
+  connection that held it reports the root as lost at the next barrier, so
+  the daemon stops trusting it and the build does not start.
 
 The rule "the daemon never guesses that the machine is in sync" stays: the
-manifest is the machine's own record of applied writes, verified by digest,
-and a missing or unreadable manifest falls back to a full comparison.
+token is the machine's own record that a checkpoint was applied and that
+nothing else has written since, and the sizes are read from the machine's
+disk. What it does not do is hash content: a file changed on the machine to
+the same size by something other than an agent is not detected, where the
+checksum rsync would repair it. That gap is the reason this is still opt-in.
+A per-file content hash kept by the agent would close it.
 
 ### Fallback and versioning
 
@@ -139,9 +154,11 @@ and a missing or unreadable manifest falls back to a full comparison.
 Each stage ships behind an opt-in setting and is promoted only on
 before/after numbers.
 
-1. **Manifest-based mirror verification over the existing ssh link.** No
-   server changes beyond the agent. Measure reconnect sync time on this repo
-   (today 10.8 to 22.3 s) before and after.
+1. **Mirror verification over the existing ssh link.** Done as link
+   checkpoints, opt-in. Reconnect sync on a 94k-file copy of this repo went
+   from 11.4 to 47.7 s (checksum rsync) to 0.8 to 1.3 s (`FINDINGS.md`,
+   2026-11-13). Promotion to default needs the content-hash gap above closed
+   and a fleet agent that advertises the capability.
 2. **Native stream for the daemon link**, in the guest and the host router,
    with pinned server key, signed client proof and resume. ssh remains for
    setup commands and first mirrors. Measure link time (today median 2.46 s)

@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-11-13: link checkpoints replace the checksum rsync after a reconnect (opt-in)
+
+Stage 1 of `docs/native-transport.md`. After the daemon's connection to the
+agent is replaced, it used to run a checksum rsync over every tracked root
+before the next build. With `JUSTRUST_REMOTE_CHECKPOINT=1` and an agent that
+advertises the capability, the agent confirms a token and the size of every
+settled file instead, and the daemon resends only the paths it sent after
+the checkpoint (`src/remote_checkpoint.rs`).
+
+Measured on hosted with a candidate build of `93cbf89a0` as both client and
+agent, an isolated daemon, and a private copy of this repo (94,295 files).
+The link was dropped by killing the daemon's transport process.
+
+| reconnect | mirror step | whole sync |
+|---|---|---|
+| checksum rsync, this session (3 runs, same machine) | 13.0 s, 17.4 s, 48.3 s | 20.0 s to 50.8 s |
+| checkpoint confirmed (4 drops) | 0.82 s, 1.04 s, 1.26 s, 1.27 s | 1.23 s to 1.75 s |
+
+The confirm itself took 0.63 to 1.01 s for 94,294 files. Each run resent the
+one path sent since the checkpoint. The remaining 0.35 to 0.43 s is opening
+the link.
+
+Limits, stated so the numbers are not over-read:
+
+- Four drops on one machine and one network. The rsync runs were not taken
+  under identical load (the 48.3 s one was a first mirror of a new path).
+- A fifth attempt, on the real checkout while the production daemon was also
+  serving it, was correctly not confirmed ("checkpoint token missing or
+  replaced", 1.1 s) and fell back to the 16.4 s rsync. Two daemons on one
+  root never keep a checkpoint.
+- Sizes are compared, not content. A same-size change made on the machine
+  outside an agent is not detected. Not a default until that is closed.
+- The fleet agent does not advertise the capability yet, so the setting has
+  no effect on a published client today.
+
 ## 2026-11-08: test result reuse, in-stream artifact deltas, mirror resume
 
 Three changes target the parts of agent wait the client owns, sized from
