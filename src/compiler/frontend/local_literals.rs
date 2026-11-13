@@ -1244,13 +1244,51 @@ impl<'s> Solver<'_, '_, 's> {
             let owner_term = self.peel_refs(owner_term);
             self.unify(owner_term, owner)?;
         }
-        let instantiated = self.projection_call_signature(decl, &schema, &params)?;
+        let mut instantiated = self.projection_call_signature(decl, &schema, &params)?;
+        let mut coerced = vec![false; args.len()];
+        if instantiated.is_none()
+            && (ir::contains_associated_types(&schema.signature.result, &plan.budget)?
+                || schema
+                    .signature
+                    .params
+                    .iter()
+                    .try_fold(false, |any, param| {
+                        Ok::<_, String>(any || ir::contains_associated_types(param, &plan.budget)?)
+                    })?)
+        {
+            // Method-own parameters (`T` in `fn from_hex<T: AsRef<[u8]>>`)
+            // are fixed only by the arguments. Equate projection-free formals
+            // first, then instantiate the projected signature (`Self::Error`
+            // under the owning impl's assignment) from the solved actuals.
+            let mut formals = schema.signature.params.iter();
+            if receiver.is_some() {
+                formals.next();
+            }
+            for ((arg, formal), done) in args.iter().zip(formals).zip(coerced.iter_mut()) {
+                if !ir::contains_associated_types(formal, &plan.budget)? {
+                    let bare = matches!(formal, ir::Ty::Param(_));
+                    let formal = self.schema(formal, &params, 0)?;
+                    // An inference-variable formal is not a coercion site:
+                    // `T` takes the argument's exact type.
+                    if bare && matches!(self.domain(formal), Domain::Unknown) {
+                        self.unify(*arg, formal)?;
+                    } else {
+                        self.coerce(*arg, formal)?;
+                    }
+                    *done = true;
+                }
+            }
+            instantiated = self.projection_call_signature(decl, &schema, &params)?;
+        }
         let signature = instantiated.as_ref().unwrap_or(&schema.signature);
         let mut formals = signature.params.iter();
         if receiver.is_some() {
             formals.next();
         }
-        for (arg, formal) in args.iter().zip(formals) {
+        for ((arg, formal), done) in args.iter().zip(formals).zip(coerced) {
+            if done {
+                continue;
+            }
             let formal = self.schema(formal, &params, 0)?;
             self.coerce(*arg, formal)?;
         }
@@ -3459,6 +3497,7 @@ impl<'s> Solver<'_, '_, 's> {
                 // (T::from_str). Reuse ordinary selection only after its owner
                 // and all written type arguments are known. No unresolved slot
                 // may choose an implementation or supply projection authority.
+                let owner_term = owner;
                 if let Some(owner) = self.resolve(owner, 0)? {
                     let resolved = actuals
                         .iter()
@@ -3530,6 +3569,15 @@ impl<'s> Solver<'_, '_, 's> {
                         {
                             return self.fixed(result);
                         }
+                    }
+                    // Exact selection needs the method's own parameters
+                    // (`fn from_hex<T>`), which only the arguments fix. The
+                    // trait item schema still contributes equations; checked
+                    // selection later authenticates the implementation.
+                    if let Some(result) = self
+                        .associated_trait_receiver_constraints(owner_term, *name, &args, &actuals)?
+                    {
+                        return Ok(result);
                     }
                 }
                 self.fresh()

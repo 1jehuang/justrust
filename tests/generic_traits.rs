@@ -1327,3 +1327,61 @@ fn main() {
         r#"struct Dog; fn unused() { let d: Dog = "rex".into(); } fn main() {}"#,
     );
 }
+
+#[test]
+fn generic_trait_methods_with_projected_results() {
+    coherence_oracle::stock_native(
+        r#"
+#[derive(Debug)]
+enum HexError { Odd, Bad(char) }
+trait FromHex: Sized {
+    type Error;
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error>;
+}
+impl FromHex for Vec<u8> {
+    type Error = HexError;
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        let bytes = hex.as_ref();
+        if bytes.len() % 2 != 0 { return Err(HexError::Odd); }
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut v = 0u8;
+            for b in &bytes[i..i + 2] {
+                let d = match *b { b'0'..=b'9' => b - b'0', b'a'..=b'f' => b - b'a' + 10, c => return Err(HexError::Bad(c as char)) };
+                v = v * 16 + d;
+            }
+            out.push(v);
+            i += 2;
+        }
+        Ok(out)
+    }
+}
+struct P(u8);
+impl FromHex for P { type Error = HexError; fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> { Ok(P(hex.as_ref()[0])) } }
+fn main() {
+    println!("{:?}", Vec::<u8>::from_hex("0aff"));
+    println!("{:?}", Vec::<u8>::from_hex(b"abc"));
+    println!("{:?}", <Vec<u8> as FromHex>::from_hex(String::from("zz")));
+    println!("{:?}", P::from_hex(b"a").map(|p| p.0));
+    let r = P::from_hex("b");
+    println!("{}", r.is_ok());
+}
+"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"trait FromHex: Sized { type Error; fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error>; }
+impl FromHex for Vec<u8> { type Error = String; fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> { let _ = hex; Err(5u32) } }
+fn main() {}"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"trait FromHex: Sized { type Error; fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error>; }
+impl FromHex for Vec<u8> { fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> { let _ = hex; Ok(Vec::new()) } }
+fn main() {}"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"trait FromHex: Sized { type Error; fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error>; }
+struct P; impl FromHex for P { type Error = (); fn from_hex<T: AsRef<[u8]>>(_: T) -> Result<Self, ()> { Ok(P) } }
+fn unused() { let _ = P::from_hex(5u32); } fn main() {}"#,
+    );
+}

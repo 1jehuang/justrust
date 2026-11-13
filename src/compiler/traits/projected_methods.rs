@@ -1234,6 +1234,55 @@ impl ValidatedTraitWorld {
                     self.validate_source_regions(declaration, &normalized.signature)?;
                     return Ok(Some(normalized));
                 }
+                // A method with its own binders (`fn from_hex<T: AsRef<[u8]>>
+                // (..) -> Result<Self, Self::Error>`): only projections on the
+                // owning impl's exact trait application (`Self::Error`) take
+                // the impl's assignment. Projections over method-own
+                // parameters stay raw and keep the callable's bounds.
+                if !implementation.associated_types.is_empty() {
+                    let mut normalized = clone_schema(schema, &self.budget)?;
+                    let mut reduce = |projection: &ir::AssociatedTypeProjection| {
+                        if self.eq_predicate(
+                            &Predicate::Implements(projection.trait_ref.clone()),
+                            &Predicate::Implements(implementation.trait_ref.clone()),
+                        )? {
+                            retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                            let ty = Ty::AssociatedType(Arc::new(projection.clone()));
+                            return self.normalize_owner_type_for_use(
+                                &ty,
+                                &owner,
+                                &mut Vec::new(),
+                                0,
+                                false,
+                            );
+                        }
+                        retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+                        Ok(Ty::AssociatedType(Arc::new(projection.clone())))
+                    };
+                    for ty in &mut normalized.signature.params {
+                        *ty = self.map_equality_type(ty, &schema.env, 0, &mut reduce)?;
+                    }
+                    normalized.signature.result = self.map_equality_type(
+                        &schema.signature.result,
+                        &schema.env,
+                        0,
+                        &mut reduce,
+                    )?;
+                    let normalized = match self.normalize_universal_callable_schema(&normalized)? {
+                        Some(universal) => universal,
+                        None => normalized,
+                    };
+                    let mut normalized = normalized;
+                    self.complete_projected_contract(&mut normalized.signature)?;
+                    self.validate_declaration_signature(
+                        declaration,
+                        &normalized.signature,
+                        &normalized.env,
+                        None,
+                    )?;
+                    self.validate_source_regions(declaration, &normalized.signature)?;
+                    return Ok(Some(normalized));
+                }
                 return Err(FactsError::unsupported(
                     &self.budget,
                     "unsupported: generic projected implementation method",
