@@ -403,7 +403,7 @@ fn collect_hosted(probe: bool) -> Status {
         && let Some(t) = crate::remote_hosted::cached_target()
     {
         let cached = cached_probe_file(HOSTED_PROBE).filter(|p| p.dest.as_deref() == Some(&t.dest));
-        out.probe = if probe && cached.as_ref().is_none_or(|p| now() - p.at >= PROBE_TTL) {
+        out.probe = if probe && cached.as_ref().is_none_or(|p| !probe_fresh(p)) {
             let p = run_probe_ssh(&t);
             save_probe(HOSTED_PROBE, &p);
             Some(p)
@@ -468,7 +468,7 @@ fn collect_aws(probe: bool) -> Status {
         }
         if let Some(ip) = &d.ip {
             out.probe = match cached_probe() {
-                Some(p) if !probe || now() - p.at < PROBE_TTL => Some(p),
+                Some(p) if !probe || probe_fresh(&p) => Some(p),
                 _ if probe => {
                     let p = run_probe(ip);
                     // A timeout usually means our public IP changed (new
@@ -550,7 +550,7 @@ fn collect_ssh(host: &str, opts: &[String], probe: bool) -> Status {
     };
     let cached = cached_probe_file(SSH_PROBE).filter(|p| p.dest.as_deref() == Some(host));
     let p = match cached {
-        Some(p) if !probe || now() - p.at < PROBE_TTL => Some(p),
+        Some(p) if !probe || probe_fresh(&p) => Some(p),
         _ if probe => match crate::remote_backend::ssh_target(host, opts) {
             Ok(t) => {
                 let p = run_probe_ssh(&t);
@@ -576,6 +576,13 @@ fn collect_ssh(host: &str, opts: &[String], probe: bool) -> Status {
     }
     out.probe = p;
     out
+}
+
+/// A cached probe this client can show as is. One written by an older
+/// client (a status bar still on the previous release) has no versions:
+/// every successful probe from this client reports at least the kernel.
+fn probe_fresh(p: &Probe) -> bool {
+    now() - p.at < PROBE_TTL && !(p.ok && p.versions.is_empty())
 }
 
 fn cached_probe() -> Option<Probe> {
@@ -2291,6 +2298,29 @@ mod tests {
         assert!(t.contains("    system     rustc 1.99.1"), "{t}");
         assert!(!t.contains("  toolchain rustc 1.99.1"), "{t}");
         assert!(t.contains("client: justrust 9.9.9 (source build)\n"), "{t}");
+    }
+
+    #[test]
+    fn a_probe_cached_by_an_older_client_is_refreshed() {
+        let mut p = Probe {
+            at: now(),
+            ok: true,
+            ..Default::default()
+        };
+        assert!(!probe_fresh(&p), "no versions: written by an old client");
+        p.versions = vec![Version {
+            name: "kernel".into(),
+            value: "6.1".into(),
+        }];
+        assert!(probe_fresh(&p));
+        p.at -= PROBE_TTL + 1.0;
+        assert!(!probe_fresh(&p));
+        // A failed probe has nothing to add: do not hammer an unreachable host.
+        let failed = Probe {
+            at: now(),
+            ..Default::default()
+        };
+        assert!(probe_fresh(&failed));
     }
 
     // The version lines come after everything the positional parser reads.
