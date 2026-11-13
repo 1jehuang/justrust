@@ -31,6 +31,10 @@ use std::process::{Command, Stdio};
 /// Toolchain protocols this justrust can drive. Raise the upper bound when
 /// justrust learns a new one, the lower when it drops an old one.
 pub const SUPPORTED: std::ops::RangeInclusive<u32> = 1..=1;
+
+/// Present in every refusal from [`Policy::check`]. The client stops on it
+/// instead of treating the agent's error as an outage.
+pub const REFUSED: &str = "for the hosted toolchain";
 /// A cached answer younger than this is used without asking again.
 const FRESH_SECS: f64 = 60.0;
 const FILE: &str = "toolchain-policy.json";
@@ -71,7 +75,7 @@ impl Policy {
             )
         };
         Err(format!(
-            "justrust {} is {what} for the hosted toolchain {}: it speaks toolchain protocol {}, \
+            "justrust {} is {what} {REFUSED} {}: it speaks toolchain protocol {}, \
              this justrust supports {}-{}. {fix}.",
             crate::update::VERSION,
             self.toolchain,
@@ -238,6 +242,12 @@ mod tests {
             .check()
             .unwrap_err();
         assert!(newer.contains("too old"), "{newer}");
+        // The client recognizes a refusal by this text and does not fall back.
+        assert!(newer.contains(REFUSED), "{newer}");
+        let older = p("jr-ac20de5e7921", SUPPORTED.start() - 1)
+            .check()
+            .unwrap_err();
+        assert!(older.contains(REFUSED), "{older}");
         assert!(newer.contains("jr-ac20de5e7921"), "{newer}");
         assert!(newer.contains("`justrust update`"), "{newer}");
         assert!(newer.contains(crate::update::VERSION), "{newer}");

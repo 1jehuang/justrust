@@ -1712,6 +1712,11 @@ fn run_remote_inner(
                     run_id: run_id.to_owned(),
                 }));
             }
+            // A refusal is the answer, not an outage: a local build would
+            // hide the instruction to update behind a different compiler.
+            (Msg::Error { msg, .. }, _) if msg.contains(crate::toolchain_policy::REFUSED) => {
+                bail!("{msg}")
+            }
             (Msg::Error { msg, .. }, _) if fallback_safe(sync.is_some(), submitted) => {
                 return infra(msg);
             }
