@@ -756,3 +756,83 @@ fn write_macros_use_core_fmt_write_in_no_std_crates() {
         );
     }
 }
+
+#[test]
+fn alloc_borrow_names_resolve_in_no_std_crates() {
+    let root = project(
+        "alloc-borrow",
+        "#![no_std]\nextern crate alloc;\nmod kebab {\n    #[allow(unused_imports)]\n    use alloc::{borrow::ToOwned, fmt, string::{String, ToString}};\n    pub trait Upper: ToOwned { fn up(&self) -> String; }\n    impl Upper for str { fn up(&self) -> String { let mut s = self.to_owned().to_string(); s.push('!'); s } }\n}\nuse kebab::Upper;\npub fn value() -> i32 { \"ab\".up().len() as i32 }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    assert_eq!(stock.stdout, b"3\n");
+    for workers in ["1", "8"] {
+        let out = native(&root, "run", workers);
+        assert!(
+            out.status.success(),
+            "{workers}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, stock.stdout);
+    }
+    // A missing borrow item is still unresolved.
+    let root = project(
+        "alloc-borrow-missing",
+        "#![no_std]\nextern crate alloc;\nuse alloc::borrow::Missing;\npub fn value() -> i32 { 3i32 }\n",
+    );
+    assert_eq!(native(&root, "check", "1").status.code(), Some(101));
+}
+
+#[test]
+fn cfg_macro_expressions_match_stock() {
+    let root = project(
+        "cfg-macro",
+        "#![no_std]\nmacro_rules! pick { () => { pick!(1) }; ($v:expr) => { if cfg!(debug_assertions) { $v + 10 } else { $v } }; }\npub fn value() -> i32 { let u = cfg!(unix) as i32; let w = cfg![any(windows, target_os = \"macos\")] as i32; let a = cfg!{all(target_pointer_width = \"64\", not(target_endian = \"big\"))} as i32; pick!() * 0 + u * 100 + w * 10 + a }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    assert_eq!(stock.stdout, b"101\n");
+    for workers in ["1", "8"] {
+        let out = native(&root, "run", workers);
+        assert!(
+            out.status.success(),
+            "{workers}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, stock.stdout);
+    }
+    // Malformed predicates are rejected; feature predicates are unsupported.
+    for (name, body) in [
+        ("cfg-macro-bad", "cfg!(not(unix, windows)) as i32"),
+        ("cfg-macro-empty", "cfg!() as i32"),
+        ("cfg-macro-feature", "cfg!(feature = \"x\") as i32"),
+    ] {
+        let root = project(
+            name,
+            &format!("#![no_std]\npub fn value() -> i32 {{ {body} }}\n"),
+        );
+        assert_eq!(
+            native(&root, "check", "1").status.code(),
+            Some(101),
+            "{name}"
+        );
+    }
+}

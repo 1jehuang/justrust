@@ -9,6 +9,12 @@ pub mod alloc_surface {
     pub use super::boxed;
     pub use super::string;
     pub use super::vec;
+    pub mod borrow {
+        pub use super::super::borrow::{Borrow, Cow, ToOwned};
+    }
+    pub mod fmt {
+        pub use super::super::fmt::{Debug, Display, Error, Formatter, LowerExp, Result, UpperExp, Write, __jr_write_buffer};
+    }
 }
 
 pub mod core_surface {

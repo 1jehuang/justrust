@@ -787,6 +787,8 @@ pub struct FileUnit {
     pub tests: Vec<source_attrs::TestItem>,
     /// `missing_docs` facts of this file (modules relative to `module`).
     pub docs: Vec<source_attrs::missing_docs::DocEntry>,
+    /// `unused_extern_crates` facts when the lint is denied in this file.
+    pub extern_facts: Option<Arc<source_attrs::unused_extern_crates::ExternFacts>>,
     /// The first error found in this file, reported after every child that
     /// precedes it in source order, exactly where sequential loading stopped.
     pub terminal: Option<SourceError>,
@@ -1149,6 +1151,7 @@ fn snapshot_unit<'a>(
         module,
         tests: builder.tests,
         docs: builder.docs,
+        extern_facts: builder.extern_facts,
         terminal,
     })
 }
@@ -1183,6 +1186,14 @@ pub struct SourceAssembler {
     harness: Option<Vec<source_attrs::TestItem>>,
     /// User-crate `missing_docs` facts, checked when the user crate ends.
     docs: Vec<FileDocs>,
+    /// `unused_extern_crates` facts of the crate being attached:
+    /// (file, is crate root, facts), and the crate's `no_std`.
+    extern_facts: Vec<(
+        FileId,
+        bool,
+        Arc<source_attrs::unused_extern_crates::ExternFacts>,
+    )>,
+    crate_no_std: bool,
     test_filter: TestFilter,
     /// Library target without a harness: append an inert entry.
     library: bool,
@@ -1236,6 +1247,36 @@ pub(super) fn check_missing_docs(files: &[FileDocs]) -> Result<(), SourceError> 
         )
     })
 }
+/// Crate-wide `unused_extern_crates` decision over one crate's files.
+pub(super) fn check_unused_extern_crates(
+    files: &[(
+        FileId,
+        bool,
+        Arc<source_attrs::unused_extern_crates::ExternFacts>,
+    )],
+    no_std: bool,
+) -> Result<(), SourceError> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let views: Vec<_> = files
+        .iter()
+        .map(|(_, root, f)| (*root, f.as_ref()))
+        .collect();
+    source_attrs::unused_extern_crates::check(&views, no_std).map_err(|violation| {
+        let (file, index) = violation.at;
+        let (id, _, facts) = &files[file];
+        Loader::error(
+            if violation.unsupported {
+                SourceErrorKind::Unsupported
+            } else {
+                SourceErrorKind::Syntax
+            },
+            Some(Loader::span(*id, facts.entries[index].range.clone())),
+            violation.message,
+        )
+    })
+}
 pub(super) fn copy_error(error: &SourceError, primary: Option<SourceSpan>) -> SourceError {
     SourceError {
         kind: error.kind,
@@ -1262,6 +1303,8 @@ impl SourceAssembler {
             in_prelude: false,
             harness: options.cfg.names.contains("test").then(Vec::new),
             docs: Vec::new(),
+            extern_facts: Vec::new(),
+            crate_no_std: false,
             library: options.library && !options.cfg.names.contains("test"),
             test_filter: options.test_filter.clone(),
             externs: options.externs.iter().map(|e| e.name.clone()).collect(),
@@ -1361,6 +1404,13 @@ impl SourceAssembler {
         let crate_root = self.frames.first().map_or(id, |frame| frame.id);
         self.prepared.crate_roots.push(crate_root);
         if crate_root == id {
+            self.crate_no_std = unit.no_std;
+        }
+        if let Some(facts) = &unit.extern_facts {
+            self.extern_facts
+                .push((id, crate_root == id, facts.clone()));
+        }
+        if crate_root == id {
             self.prepared.crate_policies.push(CratePolicy {
                 root: id,
                 original: unit.contents.clone(),
@@ -1434,6 +1484,7 @@ impl SourceAssembler {
                     module: unit.module.clone(),
                     tests: unit.tests.clone(),
                     docs: unit.docs.clone(),
+                    extern_facts: unit.extern_facts.clone(),
                     terminal: unit.terminal.as_ref().map(|e| copy_error(e, e.primary)),
                 }
             }
@@ -1447,6 +1498,10 @@ impl SourceAssembler {
                     lo: 0,
                     hi: 0,
                 };
+                let facts = std::mem::take(&mut self.extern_facts);
+                if let Err(error) = check_unused_extern_crates(&facts, self.crate_no_std) {
+                    return Err(self.fail(error));
+                }
                 if !self.in_prelude && !self.in_extern {
                     let docs = std::mem::take(&mut self.docs);
                     if let Err(error) = check_missing_docs(&docs) {
@@ -1723,6 +1778,7 @@ struct Loader<'a> {
     denied_lints: u8,
     tests: Vec<source_attrs::TestItem>,
     docs: Vec<source_attrs::missing_docs::DocEntry>,
+    extern_facts: Option<Arc<source_attrs::unused_extern_crates::ExternFacts>>,
     module_lints: Vec<(usize, source_attrs::InheritedLints)>,
     /// Lint levels inherited from the declaring `mod name;`.
     inherited: source_attrs::InheritedLints,
@@ -1758,6 +1814,7 @@ impl<'a> Loader<'a> {
             denied_lints: 0,
             tests: Vec::new(),
             docs: Vec::new(),
+            extern_facts: None,
             module_lints: Vec::new(),
             inherited: Default::default(),
         }
@@ -1888,6 +1945,7 @@ impl<'a> Loader<'a> {
         self.module_paths = filtered.module_paths;
         self.tests = filtered.tests;
         self.docs = filtered.docs;
+        self.extern_facts = filtered.extern_facts.map(Arc::new);
         self.module_lints = filtered.module_lints;
         let mut text = filtered.text;
         if self.root
@@ -2682,6 +2740,48 @@ mod tests {
         let mut reader = RecordingReader::default();
         assert!(prepare_with_reader(Path::new("main.rs"), &options, &mut reader).is_err());
         assert!(reader.calls.is_empty());
+    }
+
+    #[test]
+    fn deny_unused_extern_crates_decides_per_crate() {
+        let options = SourceOptions::default();
+        for (source, ok) in [
+            (
+                "#![deny(unused_extern_crates)] extern crate alloc; fn f() -> alloc::vec::Vec<u8> { alloc::vec::Vec::new() } fn main(){ f(); }",
+                true,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate alloc; mod m { pub fn f() { let _ = crate::alloc::vec::Vec::<u8>::new(); } } fn main(){}",
+                true,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate core as kernel; fn main(){ kernel::mem::drop(1); }",
+                true,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate alloc; fn main() {}",
+                false,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate core; fn main() { core::mem::drop(1); }",
+                false,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate std; fn main() {}",
+                false,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate alloc as a; fn main() {}",
+                false,
+            ),
+            (
+                "#![deny(unused_extern_crates)] extern crate alloc; fn f(alloc: u8) -> u8 { alloc } fn main() { f(1); }",
+                false,
+            ),
+        ] {
+            let result = prepare_text("main.rs", source, &options);
+            assert_eq!(result.is_ok(), ok, "{source}: {:?}", result.err());
+        }
     }
 
     #[test]

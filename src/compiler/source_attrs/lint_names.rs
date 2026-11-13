@@ -302,6 +302,7 @@ pub(super) const ENFORCED: &[&str] = &[
     "missing_docs",
     "non_camel_case_types",
     "non_upper_case_globals",
+    "unused_extern_crates",
     "unused_macros",
 ];
 

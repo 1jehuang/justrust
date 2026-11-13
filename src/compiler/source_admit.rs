@@ -65,6 +65,15 @@ pub struct AdmitState {
     tests: List<TestItem>,
     /// User-crate `missing_docs` facts: (file, its module path, its entries).
     docs: List<super::FileDocs>,
+    /// `unused_extern_crates` facts of the crate being admitted: (file, is
+    /// crate root, facts). Reset at each crate root.
+    extern_facts: List<(
+        FileId,
+        bool,
+        Arc<super::source_attrs::unused_extern_crates::ExternFacts>,
+    )>,
+    /// `#![no_std]` of the crate being admitted.
+    crate_no_std: bool,
     /// The first error in assembly order. Nothing after it is admitted.
     error: Option<Arc<SourceError>>,
     /// Synthesized crate entry (test harness or inert library `main`), set
@@ -294,6 +303,14 @@ pub(crate) fn admit(
         }
     }
     let docs_file = FileId(state.next_id);
+    let crate_root = ordinal.len() == 1;
+    if crate_root {
+        state.extern_facts = None;
+        state.crate_no_std = unit.no_std;
+    }
+    if let Some(facts) = &unit.extern_facts {
+        state.extern_facts = push(&state.extern_facts, (docs_file, crate_root, facts.clone()));
+    }
     if user && !unit.docs.is_empty() {
         state.docs = push(
             &state.docs,
@@ -362,6 +379,15 @@ pub(crate) fn finish(
         };
         if !state.append(3, anchor, true) {
             return;
+        }
+    }
+    if ordinal.len() == 1 {
+        let facts = in_order(&state.extern_facts)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(error) = super::check_unused_extern_crates(&facts, state.crate_no_std) {
+            return state.fail(error);
         }
     }
     if ordinal == [0] {

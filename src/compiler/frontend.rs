@@ -35,6 +35,7 @@ mod assignment_expr;
 mod break_prefix;
 mod c_abi;
 mod carrier_regions;
+mod cfg_macro;
 mod char_literal;
 pub(super) mod closures;
 mod const_arguments;
@@ -13157,6 +13158,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("vec")? {
             return self.vec_expression();
+        }
+        if self.builtin_macro_ahead("cfg")? {
+            return self.cfg_macro_expression();
         }
         if self.builtin_macro_ahead("assert")? {
             return self.assert_expression();

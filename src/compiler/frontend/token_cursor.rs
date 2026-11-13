@@ -45,6 +45,9 @@ impl TokenView<'_> {
     pub(super) fn is_ident(&self) -> bool {
         self.kind == ParserTokenKind::Ident
     }
+    pub(super) fn is_string(&self) -> bool {
+        self.kind == ParserTokenKind::String
+    }
     pub(super) fn is_char(&self) -> bool {
         self.kind == ParserTokenKind::Char
     }

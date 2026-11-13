@@ -14,6 +14,8 @@ mod lint_names;
 pub(super) mod missing_docs;
 #[path = "source_attrs/naming_lints.rs"]
 mod naming_lints;
+#[path = "source_attrs/unused_extern_crates.rs"]
+pub(super) mod unused_extern_crates;
 #[path = "source_attrs/unused_macros.rs"]
 mod unused_macros;
 
@@ -99,6 +101,8 @@ pub struct AttributeOutput {
     pub module_lints: Vec<(usize, InheritedLints)>,
     /// `missing_docs` facts of this file's configured items.
     pub docs: Vec<missing_docs::DocEntry>,
+    /// `unused_extern_crates` facts, when the lint is denied in this file.
+    pub extern_facts: Option<unused_extern_crates::ExternFacts>,
     pub attributes: Vec<AttributeRecord>,
     pub inactive_items: Vec<InactiveItem>,
 }
@@ -245,11 +249,14 @@ fn prepare_with_context(
         assoc_container: None,
         macro_defs: Vec::new(),
         unused_macros_denied: inherited.0.denied("unused_macros"),
+        extern_crates: Vec::new(),
+        unused_extern_denied: inherited.0.denied("unused_extern_crates"),
         debug_impls: Vec::new(),
         denied_lints: 0,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     filter.check_unused_macros()?;
+    let extern_facts = filter.extern_facts()?;
     filter.record_unplaced_debug_impls();
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
         // E0453: a lower level cannot override `forbid`.
@@ -287,6 +294,7 @@ fn prepare_with_context(
         module_paths: filter.module_paths,
         module_lints: filter.module_lints,
         docs: filter.docs,
+        extern_facts,
     })
 }
 struct Filter<'a> {
@@ -340,6 +348,10 @@ struct Filter<'a> {
     debug_impls: Vec<usize>,
     /// Crate lints denied at the crate root (`CRATE_LINTS` bits).
     denied_lints: u8,
+    /// Configured `extern crate` items of this file.
+    extern_crates: Vec<unused_extern_crates::ExternEntry>,
+    /// `unused_extern_crates` is at deny/forbid somewhere in this file.
+    unused_extern_denied: bool,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -1413,6 +1425,12 @@ impl Filter<'_> {
                 let exported_macro = self.pending_export;
                 if kind == "macro_rules" {
                     self.record_macro_definition(keyword, exported_macro);
+                }
+                if kind == "extern" {
+                    let attributed = attrs
+                        .iter()
+                        .any(|attr| !attr.doc && !cfg_attribute(&self.text[attr.content.clone()]));
+                    self.record_extern_crate(item_start, keyword, stop, attributed);
                 }
                 self.record_item_docs(kind, item_start, keyword, body, exported_macro);
                 if kind == "mod" && body.is_none() {

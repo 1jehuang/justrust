@@ -832,3 +832,32 @@ fn static_associated_type_bounds_match_stock() {
         file_oracle::stock_and_native_reject(invalid);
     }
 }
+
+#[test]
+fn denied_unused_extern_crates_matches_stock() {
+    let source = r#"
+        #![deny(unused_extern_crates)]
+        extern crate alloc;
+        extern crate core as kernel;
+        #[cfg(any())]
+        extern crate missing;
+        pub extern crate alloc as reexported;
+        mod inner {
+            pub fn make() -> alloc::vec::Vec<u8> { let mut v = alloc::vec::Vec::new(); v.push(1u8); v.push(2); v }
+        }
+        fn main() {
+            let v = inner::make();
+            println!("{} {}", v.len(), kernel::cmp::max(3, 4));
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#![deny(unused_extern_crates)] extern crate alloc; fn main() {}",
+        "#![deny(unused_extern_crates)] extern crate core; fn main() { core::mem::drop(1); }",
+        "#![deny(unused_extern_crates)] extern crate std; fn main() {}",
+        "#![deny(unused_extern_crates)] extern crate alloc as a; fn main() {}",
+        "#![deny(unused_extern_crates)] extern crate alloc; fn f(alloc: u8) -> u8 { alloc } fn main() { f(1); }",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}
