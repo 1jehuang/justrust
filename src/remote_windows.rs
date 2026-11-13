@@ -1189,6 +1189,8 @@ mod tests {
             "a/b.",
             "a/b ",
             "a/C:/file",
+            // A separator on Windows, so it is two valid components there.
+            #[cfg(not(windows))]
             "a\\b",
             "a?b",
             "a\nb",
@@ -1250,9 +1252,12 @@ mod tests {
                 .contains("DO_NOT_UPLOAD")
         );
         assert!(!paths.contains(&"app/.env"));
-        std::fs::create_dir(app.join("Src")).unwrap();
-        std::fs::write(app.join("Src/other.rs"), "").unwrap();
-        assert!(bundle("check", &[], "test-run", &app, std::slice::from_ref(&app)).is_err());
+        // Case-colliding names only exist on case-sensitive filesystems
+        // (not default macOS or Windows volumes).
+        if std::fs::create_dir(app.join("Src")).is_ok() {
+            std::fs::write(app.join("Src/other.rs"), "").unwrap();
+            assert!(bundle("check", &[], "test-run", &app, std::slice::from_ref(&app)).is_err());
+        }
     }
 
     #[test]

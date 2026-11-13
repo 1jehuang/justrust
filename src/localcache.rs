@@ -561,7 +561,10 @@ mod tests {
             std::fs::write(&input, "pub const VALUE: u8 = 2;").unwrap();
             // Controlled timestamps avoid sleeps and filesystem clock resolution
             // assumptions. Build scripts finish before this rustc starts at 1500.
-            std::fs::File::open(&input)
+            // Windows needs write access to set file times.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&input)
                 .unwrap()
                 .set_times(
                     std::fs::FileTimes::new().set_modified(

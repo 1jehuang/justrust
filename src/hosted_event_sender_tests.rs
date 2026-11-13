@@ -260,6 +260,9 @@ fn accept(listener: &TcpListener) -> TcpStream {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
+                // BSD and Windows accepted sockets inherit the listener's
+                // nonblocking mode. Linux ones do not.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(TIMEOUT)).unwrap();
                 stream.set_write_timeout(Some(TIMEOUT)).unwrap();
                 return stream;

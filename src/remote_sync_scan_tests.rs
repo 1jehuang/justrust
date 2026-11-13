@@ -160,7 +160,8 @@ fn filtered_walk_does_not_follow_file_or_directory_symlinks() {
     assert_locks(&tree.0, vec!["real/Cargo.lock".into()]);
 }
 
-#[cfg(unix)]
+// APFS rejects non-UTF-8 names (EILSEQ).
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn filtered_walk_preserves_non_utf8_paths_and_exact_names() {
     use std::ffi::OsString;
