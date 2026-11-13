@@ -841,6 +841,48 @@ fn start_run(
     state.pid = Some(child.id() as i32);
     track_pgid(child.id() as i32);
     drop(states);
+    let watchdog_done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
+    let watchdog = {
+        let done = watchdog_done.clone();
+        let out = out.clone();
+        let pgid = child.id() as i32;
+        let limit = max_run_duration();
+        std::thread::spawn(move || {
+            let guard = done.0.lock().unwrap();
+            let (guard, timeout) = done
+                .1
+                .wait_timeout_while(guard, limit, |finished| !*finished)
+                .unwrap();
+            if !timeout.timed_out() || *guard {
+                return;
+            }
+            drop(guard);
+            send(
+                &out,
+                &Msg::Out { id, stream: 2 },
+                format!(
+                    "\njustrust: hosted run exceeded the {} min wall-clock limit and was stopped\n",
+                    limit.as_secs() / 60
+                )
+                .as_bytes(),
+            );
+            // SAFETY: signalling our own child's process group.
+            unsafe {
+                libc::kill(-pgid, libc::SIGINT);
+            }
+            let guard = done.0.lock().unwrap();
+            let (guard, _) = done
+                .1
+                .wait_timeout_while(guard, RUN_KILL_GRACE, |finished| !*finished)
+                .unwrap();
+            if !*guard {
+                // SAFETY: as above; the group ignored SIGINT.
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+            }
+        })
+    };
     let cpu_done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
     let cpu_pump = if env
         .iter()
@@ -923,11 +965,37 @@ fn start_run(
     if let Some(pump) = cpu_pump {
         let _ = pump.join();
     }
-    let st = child.wait()?;
+    let st = child.wait();
+    *watchdog_done.0.lock().unwrap() = true;
+    watchdog_done.1.notify_all();
+    let _ = watchdog.join();
+    let st = st?;
     pids.lock().unwrap().remove(&id);
     untrack_pgid(child.id() as i32);
     use std::os::unix::process::ExitStatusExt;
     Ok(st.code().unwrap_or_else(|| 128 + st.signal().unwrap_or(0)))
+}
+
+/// Default wall-clock cap for one hosted run. A hung test or runaway build
+/// otherwise holds a shared machine (and its billing) indefinitely: one run
+/// went for an hour on 2026-11-12. The host operator overrides it with
+/// `JUSTRUST_REMOTE_MAX_RUN_SECS`. The client cannot raise it.
+const DEFAULT_MAX_RUN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const RUN_KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn max_run_duration() -> std::time::Duration {
+    parse_max_run(
+        std::env::var("JUSTRUST_REMOTE_MAX_RUN_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_max_run(v: Option<&str>) -> std::time::Duration {
+    v.and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(DEFAULT_MAX_RUN)
 }
 
 /// A detached recorder is still owned by this agent. Normal disconnects
@@ -958,6 +1026,17 @@ fn own_run_lifetime(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn max_run_defaults_and_overrides() {
+        assert_eq!(super::parse_max_run(None), super::DEFAULT_MAX_RUN);
+        assert_eq!(super::parse_max_run(Some("0")), super::DEFAULT_MAX_RUN);
+        assert_eq!(super::parse_max_run(Some("x")), super::DEFAULT_MAX_RUN);
+        assert_eq!(
+            super::parse_max_run(Some(" 90 ")),
+            std::time::Duration::from_secs(90)
+        );
+    }
+
     #[test]
     fn periodic_collection_is_bounded_and_zero_restores_every_run() {
         let last = std::sync::Mutex::new(None);
