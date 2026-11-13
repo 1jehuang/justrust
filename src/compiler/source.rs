@@ -1844,13 +1844,14 @@ impl<'a> Loader<'a> {
         self.forbid_unsafe_code = filtered.forbid_unsafe_code;
         self.denied_lints = if self.root { filtered.denied_lints } else { 0 };
         for inactive in filtered.inactive_items {
-            let syntax = inactive_syntax(&inactive.text).map_err(|message| {
-                Self::error(
-                    SourceErrorKind::Syntax,
-                    Some(Self::span(id, inactive.range.clone())),
-                    message,
-                )
-            })?;
+            let syntax =
+                inactive_syntax(&inactive.text, self.options.edition).map_err(|message| {
+                    Self::error(
+                        SourceErrorKind::Syntax,
+                        Some(Self::span(id, inactive.range.clone())),
+                        message,
+                    )
+                })?;
             super::frontend::validate_inactive_syntax(&syntax, self.options.edition).map_err(
                 |e| {
                     Self::error(
@@ -2032,7 +2033,7 @@ impl<'a> Loader<'a> {
             }
             if tokens.get(head).is_some_and(|t| t.text(text) == "mod")
                 && head + 2 < tokens.len()
-                && syntactic_identifier(tokens[head + 1].text(text))
+                && module_name(tokens[head + 1].text(text), self.options.edition)
             {
                 let name = tokens[head + 1].text(text);
                 let delimiter = tokens[head + 2].text(text);
@@ -2227,7 +2228,7 @@ fn close_group(tokens: &[Token], text: &str, start: usize) -> usize {
 
 /// Strip structurally complete external declarations from inactive syntax only.
 /// Their grammar is validated here, but no module resolution or IO is possible.
-fn inactive_syntax(text: &str) -> Result<String, String> {
+fn inactive_syntax(text: &str, edition: Edition) -> Result<String, String> {
     let tokens = tokens(text)?;
     let mut closing = Vec::new();
     for t in &tokens {
@@ -2251,6 +2252,7 @@ fn inactive_syntax(text: &str) -> Result<String, String> {
         end: usize,
         depth: usize,
         out: &mut [u8],
+        edition: Edition,
     ) -> Result<(), String> {
         if depth > MAX_MODULE_DEPTH {
             return Err(format!("module nesting exceeds limit {MAX_MODULE_DEPTH}"));
@@ -2274,7 +2276,7 @@ fn inactive_syntax(text: &str) -> Result<String, String> {
             }
             if head + 2 < end
                 && tokens[head].text(text) == "mod"
-                && syntactic_identifier(tokens[head + 1].text(text))
+                && module_name(tokens[head + 1].text(text), edition)
             {
                 if tokens[head + 2].text(text) == ";" {
                     inactive_visibility(tokens, text, i, head)?;
@@ -2288,7 +2290,7 @@ fn inactive_syntax(text: &str) -> Result<String, String> {
                 }
                 if tokens[head + 2].text(text) == "{" {
                     let close = close_group(tokens, text, head + 2);
-                    items(tokens, text, head + 3, close, depth + 1, out)?;
+                    items(tokens, text, head + 3, close, depth + 1, out, edition)?;
                     i = close + 1;
                     continue;
                 }
@@ -2329,7 +2331,7 @@ fn inactive_syntax(text: &str) -> Result<String, String> {
             out[token.start] = b'0';
         }
     }
-    items(&tokens, text, 0, tokens.len(), 0, &mut out)?;
+    items(&tokens, text, 0, tokens.len(), 0, &mut out, edition)?;
     Ok(String::from_utf8(out).expect("masking complete token ranges preserves UTF-8"))
 }
 
@@ -2381,6 +2383,11 @@ fn inactive_visibility(
 
 // Match the existing bounded frontend's identifier contract before stripping any
 // inactive declaration. Lexical ASCII shape alone must not hide reserved keywords.
+/// A module declaration name: `gen` is reserved only from edition 2024 on.
+fn module_name(s: &str, edition: Edition) -> bool {
+    syntactic_identifier(s) || (s == "gen" && edition != Edition::E2024)
+}
+
 fn syntactic_identifier(s: &str) -> bool {
     identifier(s)
         && s != "_"

@@ -197,8 +197,14 @@ fn fixtures() -> Vec<Fixture> {
             .child("src/child.rs", "pub fn unused() {}"),
         case("inactive_path", "#[cfg_attr(any(), path = \"absent.rs\")] mod child;", Supported, "")
             .child("src/child.rs", "pub fn unused() {}"),
-        case("active_path_boundary", "#[cfg_attr(all(), path = \"other.rs\")] mod child;", Unsupported, "")
+        case("active_cfg_attr_path", "#[cfg_attr(all(), path = \"other.rs\")] mod child;", Supported, "")
             .child("src/other.rs", "pub fn unused() {}"),
+        case("nested_path_relative_to_file", "#[path = \"sub/other.rs\"] mod child;", Supported, "")
+            .source("#[path = \"sub/other.rs\"] mod child;\nfn main() { if child::value() == 7 { println!(\"configuration ok\"); } }")
+            .child("src/sub/other.rs", "#[path = \"gen/inner.rs\"] mod inner;\npub fn value() -> i32 { inner::seven() }")
+            .child("src/sub/gen/inner.rs", "pub fn seven() -> i32 { 7 }"),
+        case("active_missing_path", "#[path = \"absent.rs\"] mod child;", Invalid, "couldn't find file")
+            .child("src/child.rs", "pub fn unused() {}"),
         case("inactive_semantic", "#[cfg_attr(any(), track_caller)] fn unused() {}", Supported, ""),
         case("nested_inactive_semantic", "#[cfg_attr(all(), cfg_attr(any(), track_caller))] fn unused() {}", Supported, ""),
         case("inactive_unknown", "#[cfg_attr(any(), unknown_attr)] fn unused() {}", Supported, ""),
@@ -243,7 +249,7 @@ fn fixtures() -> Vec<Fixture> {
         case("unknown_attribute", "#[unknown_attr] fn unused() {}", Invalid, "cannot find attribute"),
         case("doc_unknown_policy", "#[doc(unknown)] fn unused() {}", PolicyBoundary, "unknown `doc` attribute"),
         case("doc_numeric_policy", "#[doc = 42] fn unused() {}", PolicyBoundary, "malformed `doc`"),
-        case("semantic_track_caller", "#[track_caller] fn unused() {}", Unsupported, ""),
+        case("semantic_track_caller", "#[track_caller] fn unused() {}", Supported, ""),
         case("semantic_repr", "#[repr(C)] struct Thing { value: i32 }", Supported, ""),
         case("semantic_derive", "#[derive(Clone)] struct Thing { value: i32 }", Supported, ""),
         case("semantic_lint_control", "#[allow(dead_code)] fn unused() {}", Supported, ""),
@@ -251,8 +257,8 @@ fn fixtures() -> Vec<Fixture> {
         case("lint_unknown_tool", "#[allow(foo::bar)] fn unused() {}", Invalid, ""),
         case("cfg_field_position", "struct Thing { #[cfg(all())] value: i32 }", Unsupported, ""),
         case("cfg_variant_position", "enum Thing { #[cfg(all())] Value }", Unsupported, ""),
-        case("cfg_parameter_position", "fn unused(#[cfg(all())] value: i32) {}", Unsupported, ""),
-        case("cfg_statement_position", "fn unused() { #[cfg(any())] missing(); }", Unsupported, ""),
+        case("cfg_parameter_position", "fn unused(#[cfg(all())] value: i32) {}", Supported, ""),
+        case("cfg_statement_position", "fn unused() { #[cfg(any())] missing(); }", Supported, ""),
         case("doc_detached", "", Invalid, "expected item")
             .source("fn main() {}\n#[doc = \"detached\"]"),
         case("inner_inline_wrong_owner", "#![inline]\nfn unused() {}", Invalid, "cannot be used on crates"),

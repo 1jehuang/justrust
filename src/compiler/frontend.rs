@@ -19961,6 +19961,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 let end = self.nested_expr()?;
                 self.expect(")")?;
+                let mut general = false;
                 while self.eat(".") {
                     let name = self.token().text;
                     let adapter = match name {
@@ -19969,18 +19970,31 @@ impl<'input, 'names> Parser<'input, 'names> {
                         "into_iter" => ForAdapter::IntoIter,
                         "iter" => ForAdapter::Iter,
                         _ => {
-                            return Err(self.unsupported(
-                                "unsupported: for-loop range adapter (supported: rev, enumerate, into_iter)",
-                            ));
+                            general = true;
+                            break;
                         }
                     };
                     self.cursor.bump();
+                    if !(self.is("(") && self.cursor.peek(1).is_some_and(|t| t.text == ")")) {
+                        general = true;
+                        break;
+                    }
                     self.expect("(")?;
                     self.expect(")")?;
                     if adapters.len() >= 16 {
                         return Err(self.limit("for-loop adapter count exceeds limit 16"));
                     }
                     adapters.push(adapter);
+                }
+                if general {
+                    // Any other method chain on the range is an ordinary
+                    // value expression (`(0..n).zip(..)`, `.step_by(2)`, ...).
+                    if !self.cursor.restore(mark) {
+                        return Err(self.error("for-loop iterable checkpoint lost"));
+                    }
+                    adapters.clear();
+                    let iterable = self.for_value_iterable(&mut adapters)?;
+                    return self.finish_for_statement(label, pattern, iterable, adapters);
                 }
                 ForIterable::Range {
                     start,
@@ -20017,6 +20031,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ForIterable::Value(start)
             }
         };
+        self.finish_for_statement(label, pattern, iterable, adapters)
+    }
+    fn finish_for_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: Pattern,
+        iterable: ForIterable,
+        adapters: Vec<ForAdapter>,
+    ) -> Result<Stmt, ParseError> {
         let pattern = self
             .names
             .try_parser_box(pattern)

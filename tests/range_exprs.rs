@@ -64,6 +64,24 @@ fn main() {
                 expect: Expect::Run("5 4 1 7 1 3\n8\n9\n0 1 \n3 3\n"),
             },
             Case {
+                name: "range_method_chains_in_for",
+                source: r#"fn main() {
+    let mut t = 0;
+    for i in (0..10).step_by(4) { t += i; }
+    print!("{} ", t);
+    for (a, b) in (0..3).zip(5..8) { t += a * b; }
+    print!("{} ", t);
+    for (a, b) in (1..=2).rev().zip(5..7) { t += a * b; }
+    println!("{}", t);
+}"#,
+                expect: Expect::Run("12 32 48\n"),
+            },
+            Case {
+                name: "range_method_chain_needs_call",
+                source: r#"fn main() { for i in (0..3).zip { let _ = i; } }"#,
+                expect: Expect::Invalid("E0615"),
+            },
+            Case {
                 name: "inclusive_needs_end",
                 source: r#"fn main() { let r = 1..=; }"#,
                 expect: Expect::Invalid("E0586"),
