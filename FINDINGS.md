@@ -9954,3 +9954,45 @@ Scope: one repo, one edit shape, the agent repeating the same command. The
 daemon log before this change had 272 attach or replay hits in 7,401
 non-benchmark prebuilds, so the real hit rate is far below these loops. No
 `bench/suite.py` synth run: this is not a default promotion claim.
+
+## 2026-11-13: hosted builds default to justrust's own compiler
+
+Hosted machines built unpinned projects with stock `nightly-2026-10-08`
+(`STORE_TOOLCHAIN`, FINDINGS 55) while this laptop defaulted to
+`jr-ac20de5e7921`. The 2026-10-13 comparison kept nightly and the 2026-10-14
+promotion run was discarded as noisy, so the hosted default never moved.
+
+Now `HOSTED_TOOLCHAIN = jr-ac20de5e7921` is the hosted default
+(`remote_agent::store_toolchain`). The stock nightly stays the default for
+builds jr cannot serve: a `--target` or `CARGO_BUILD_TARGET` other than the
+host (the jr bundle has the host standard library only, and
+`toolchain::add_target` refuses to mix upstream std into it), and machines
+where the jr prefix is neither installed nor downloadable
+(`JUSTRUST_TOOLCHAIN_DIST` unset or automatic installs off). Pins and
+`JUSTRUST_REMOTE_TOOLCHAIN` behave as before.
+
+This is a direction decision, not a speed claim. On my hosted slot (16
+cores, other tenants' load falling from 19 to 9 during the run), this repo,
+`touch src/nolocal.rs` before each command, warm targets per compiler,
+ABBA order, n=6 per arm, wall seconds:
+
+| command | nightly-2026-10-08 median (range) | jr-ac20de5e7921 median (range) |
+|---|---|---|
+| `check` | 2.42 (2.39-2.67) | 2.57 (2.53-2.71) |
+| `test --lib -- nolocal` | 4.87 (4.53-5.36) | 5.03 (4.94-5.14) |
+
+So jr is 3-6% slower here, inside the nightly range for the test loop and
+just outside it for `check`. That matches the body-check result of
+2026-10-13 and is the opposite of its Desktop test-edit result (-14%). Not a
+`bench/suite.py` run: this network blocks the hosted ssh ports, so the
+client could not drive hosted builds and the loop ran on the slot itself
+through an SSM port forward.
+
+The store covers jr: a cold `check` of this repo in a fresh target dir hit
+164 of 170 dependency keys, 156 of them prebuilt downloads (the fleet matrix
+is `nightly-2026-10-08 jr-b7907f1fe8f7... jr-ac20de5e7921`). 32 toolchain
+tests pass under jr on the host (run 20261113-153531820-4132146).
+
+Next: a newer jr cut (PGO+BOLT, cross-crate cutoff) is what should make the
+default faster rather than equal, and jr bundles with target libraries
+would remove the cross-target exception.

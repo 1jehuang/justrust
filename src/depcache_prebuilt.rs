@@ -83,10 +83,20 @@ pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 
 /// The toolchain the public store is compiled with (justrust-cloud
 /// `prebuild/run.sh` default). Keys include rustc `-vV`, so only builds
-/// with this toolchain can hit the store. Remote build machines use it
-/// unless the project pins another (`remote_agent::store_toolchain`).
+/// with a toolchain the fleet compiles for can hit the store. Remote build
+/// machines fall back to it when [`HOSTED_TOOLCHAIN`] cannot serve a build
+/// (`remote_agent::store_toolchain`).
 #[cfg_attr(windows, allow(dead_code))] // the remote agent runs on Linux and macOS only
 pub const STORE_TOOLCHAIN: &str = "nightly-2026-10-08";
+
+/// justrust's own compiler (jr-rustc with jr-cargo), the default on remote
+/// build machines for projects that pin nothing. It must be published on
+/// the toolchain store (`v1/toolchains/<host>/<id>/manifest.json`) and be
+/// in the prebuild fleet's matrix (justrust-cloud
+/// `infra/prebuild-fleet.yaml`, `PrebuildToolchains`), or hosted builds
+/// lose every prebuilt hit.
+#[cfg_attr(windows, allow(dead_code))]
+pub const HOSTED_TOOLCHAIN: &str = "jr-ac20de5e7921";
 
 /// The store base, without a trailing slash, or `None` when off.
 pub fn base() -> Option<String> {
