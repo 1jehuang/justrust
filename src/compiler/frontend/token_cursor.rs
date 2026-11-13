@@ -54,6 +54,9 @@ impl TokenView<'_> {
     pub(super) fn is_byte(&self) -> bool {
         self.kind == ParserTokenKind::Byte
     }
+    pub(super) fn kind_is_number(&self) -> bool {
+        self.kind == ParserTokenKind::Number
+    }
     pub(super) fn is_byte_string(&self) -> bool {
         self.kind == ParserTokenKind::ByteString
     }

@@ -48,6 +48,11 @@ fn formatted_panic_messages_match_stock_text() {
             "fn main() {\n    panic!(\"{{x}}\");\n}\n",
             ":2:5:\n{x}\n",
         ),
+        (
+            "eager_concat_format",
+            "macro_rules! oob {\n    ($m:expr, $i:expr, $l:expr) => {\n        panic!(concat!(\"Vec::\", $m, \": index {} out of bounds of {}\"), $i, $l)\n    };\n}\nfn get(v: &[i32], i: usize) -> i32 { if i >= v.len() { oob!(\"get\", i, v.len()) } v[i] }\nfn main() {\n    println!(\"{}\", get(&[1, 2], 1));\n    let n = 4;\n    if n > 3 { panic!(concat!(\"n=\", 4, ' ', true, \" {}\"), n); }\n}\n",
+            ":10:16:\nn=4 true 4\n",
+        ),
     ];
     for (name, source, tail) in cases {
         let (stdout, stderr, signal) = run(name, source);
@@ -59,5 +64,37 @@ fn formatted_panic_messages_match_stock_text() {
         );
         assert!(diagnostic.ends_with(&expected_tail), "{name}: {stderr:?}");
         assert_eq!(signal, Some(6), "{name}");
+    }
+}
+
+#[test]
+fn eager_concat_format_rejections() {
+    for (name, source) in [
+        (
+            "byte_string",
+            "fn main() { panic!(concat!(\"a\", b\"b\")); }\n",
+        ),
+        (
+            "missing_argument",
+            "fn main() { panic!(concat!(\"{}\"), ); }\n",
+        ),
+    ] {
+        let dir =
+            std::env::temp_dir().join(format!("jr-panic-concat-{}-{name}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let src = dir.join("main.rs");
+        let exe = dir.join("main");
+        let _ = std::fs::remove_file(&exe);
+        std::fs::write(&src, source).unwrap();
+        let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&src)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&build.stderr);
+        assert!(!build.status.success(), "{name} accepted");
+        assert!(!stderr.contains("unsupported"), "{name}: {stderr}");
+        assert!(!exe.exists(), "{name} wrote an image");
     }
 }
