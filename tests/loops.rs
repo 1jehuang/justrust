@@ -841,6 +841,8 @@ fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
         "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{};}fn main(){}",
         "fn main(){let a:[i32;0]=[];for x in &a {*x=3;}}",
         "fn main(){let a=[1,2];for x in &a {true}}",
+        "fn main(){for x in [1,2].iter() {*x=3;}}",
+        "fn main(){for x in [3u8,300].iter() {}}",
     ] {
         stock(source, None);
         rejects("invalid referenced-array element loan", source);
@@ -866,6 +868,10 @@ fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
         (
             r#"fn main(){for x in [1,2].iter() {println!("{}",x);}}"#,
             "1\n2\n",
+        ),
+        (
+            r#"fn main(){let mut s=0u32;for x in [3u8,4,5].iter() {s+=*x as u32;}for (i,c) in ['a','b'].iter().enumerate() {println!("{} {}",i,c);}println!("{}",s);}"#,
+            "0 a\n1 b\n12\n",
         ),
         (
             r#"fn scan(a:&mut [i32]){for x in a {*x=3;}}fn main(){let mut a=[1,2];scan(&mut a);println!("{} {}",a[0],a[1]);}"#,

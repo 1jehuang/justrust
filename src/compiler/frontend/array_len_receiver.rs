@@ -81,7 +81,13 @@ impl type_check::Checker<'_> {
                     let (place, _, _) = self.checked_place(&source)?;
                     self.borrow_expression(ir::BorrowKind::Shared, place)?
                 } else {
-                    self.borrow_value(ir::BorrowKind::Shared, receiver, None)?
+                    // `[3u8, 4].iter()`: the hinted array type carries the
+                    // suffixed element type to every unsuffixed element.
+                    let expected = ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: std::sync::Arc::new(ty.clone()),
+                    };
+                    self.borrow_value(ir::BorrowKind::Shared, receiver, Some(&expected))?
                 };
                 Ok(Some(borrowed))
             }

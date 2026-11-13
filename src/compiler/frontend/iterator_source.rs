@@ -33,6 +33,9 @@ enum ArrayIterReceiver {
         timing: ir::BorrowTiming,
     },
     Local(ir::LocalId),
+    /// `[1, 2].iter()` over a closed scalar array promoted to immutable
+    /// static storage: the receiver is already a `&'static [T; N]`.
+    Promoted(ir::PromotedArray),
     Temporary {
         local: ir::LocalId,
         value: ir::ExprId,
@@ -84,6 +87,10 @@ fn array_iter_receiver_shape(
             timing: *timing,
         }),
         ir::ExprKind::Local(local) => Ok(ArrayIterReceiver::Local(*local)),
+        ir::ExprKind::PromotedArray(array) => {
+            budget.retain_bytes(std::mem::size_of::<ir::PromotedArray>())?;
+            Ok(ArrayIterReceiver::Promoted(array.clone()))
+        }
         ir::ExprKind::Block(block) => {
             let ([ir::TypedStmt::Assign { local, value }], Some(borrow)) =
                 (block.statements.as_slice(), block.tail)
