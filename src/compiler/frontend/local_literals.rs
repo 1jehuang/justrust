@@ -1560,6 +1560,10 @@ impl<'s> Solver<'_, '_, 's> {
                 && owner.trait_decl.is_none()
                 && owner.nominal == nominal
                 && plan.registry.source_member_equal(info.path.item, name)?
+                && info
+                    .visibility
+                    .accessible_from(&plan.program.modules, self.checker.module)
+                    .map_err(module_diagnostic)?
             {
                 if let Some(actuals) = actuals {
                     let (_, patterns) = nominal_parts(&owner.self_pattern)

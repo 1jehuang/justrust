@@ -66,6 +66,10 @@ impl Checker<'_> {
                     associated.nominal != nominal
                 })
                 || !plan.registry.source_member_equal(info.path.item, *name)?
+                || !info
+                    .visibility
+                    .accessible_from(&plan.program.modules, self.module)
+                    .map_err(module_diagnostic)?
             {
                 continue;
             }

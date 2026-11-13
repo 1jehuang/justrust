@@ -583,3 +583,41 @@ fn g() -> G { G { w: 2, v: vec![1, 2, 3, 4] } }";
         assert!(error.contains("E0277"), "{error}\n{source}");
     }
 }
+
+/// Method probing skips inherent methods inaccessible from the call site and
+/// continues autoderef (privacy/restricted/lookup-ignores-private.rs).
+#[test]
+fn method_lookup_skips_inaccessible_inherent_methods() {
+    use generic_index_oracle::{Case, Expect};
+    generic_index_oracle::check(
+        "method-lookup-privacy",
+        &[
+            Case {
+                name: "restricted_method_falls_through_to_deref_target",
+                source: r#"mod foo {
+    pub use self::bar::S;
+    mod bar {
+        pub struct S { pub(in crate::foo) inner: S2 }
+        impl S { pub(in crate::foo) fn f(&self) -> i32 { 7 } pub fn new() -> S { S { inner: S2 } } }
+        pub struct S2;
+        impl S2 { pub(crate) fn f(&self) -> bool { true } }
+        impl std::ops::Deref for S { type Target = S2; fn deref(&self) -> &S2 { &self.inner } }
+    }
+    pub fn inside() -> i32 { S::new().f() }
+}
+fn main() { let s = foo::S::new(); let b: bool = s.f(); println!("{} {} {}", b, s.f(), foo::inside()); }"#,
+                expect: Expect::Run("true true 7\n"),
+            },
+            Case {
+                name: "private_method_without_fallback",
+                source: "mod m { pub struct S; impl S { fn f(&self) -> i32 { 1 } } }\nfn main() { let s = m::S; println!(\"{}\", s.f()); }",
+                expect: Expect::Invalid("E0624"),
+            },
+            Case {
+                name: "restricted_method_wrong_type_through_deref",
+                source: "mod foo { pub use self::bar::S; mod bar { pub struct S { pub(in crate::foo) inner: S2 } impl S { pub(in crate::foo) fn f(&self) -> i32 { 0 } } pub struct S2; impl S2 { pub(crate) fn f(&self) -> bool { false } } impl std::ops::Deref for S { type Target = S2; fn deref(&self) -> &S2 { &self.inner } } } }\nfn unused(s: foo::S) -> i32 { s.f() }\nfn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

@@ -1003,6 +1003,17 @@ impl PlanCtx {
             {
                 continue;
             }
+            // Like stock method probing, an inaccessible inherent method is
+            // not a dot-call candidate: autoderef and trait probing continue
+            // (`s.f()` reaches `Deref::Target::f` past a restricted `S::f`).
+            if dot
+                && !info
+                    .visibility
+                    .accessible_from(&self.program.modules, *module)
+                    .map_err(module_diagnostic)?
+            {
+                continue;
+            }
             let impl_env = self.param_env(associated.impl_decl)?;
             let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
             let Some(bindings) = self.match_inherent_head(*id, owner, caller, budget)? else {
