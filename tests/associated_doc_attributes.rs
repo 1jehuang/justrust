@@ -466,6 +466,41 @@ fn main() {
 }
 
 #[test]
+fn denied_missing_docs_skips_macro_items_in_unexported_nested_module() {
+    // heck 0.5.0 shape: `pub use` names the private outer module, but its
+    // private inner module of macro-generated items is never reexported.
+    let source = r#"#![deny(missing_docs)]
+//! Crate docs.
+mod outer {
+    /// Value.
+    pub fn value() -> u8 { 7 }
+    mod inner {
+        macro_rules! t { ($n:ident) => { pub fn $n() -> u8 { super::value() } }; }
+        t!(made);
+        pub fn go() -> u8 { made() }
+    }
+    /// Runs.
+    pub fn run() -> u8 { inner::go() }
+}
+pub use outer::{run, value};
+fn main() {
+    println!("{} {}", run(), value());
+}
+"#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    // Reexporting from the inner module keeps it undecided, never accepted.
+    let reexported = "#![deny(missing_docs)]\n//! c\nmod o { pub mod i { macro_rules! t { () => { pub fn g() {} }; } t!(); } }\npub use o::i::g;\nfn main() {}";
+    let error = source::prepare_text("lint.rs", reexported, &SourceOptions::default()).unwrap_err();
+    assert_eq!(error.kind, SourceErrorKind::Unsupported, "{reexported}");
+    file_oracle::Fixture::new(
+        "#![deny(missing_docs)]\n//! c\nmod o { mod i { pub fn h() {} } pub fn g() { i::h() } }\npub use o::g;\nfn main() {}",
+        &[],
+        None,
+    )
+    .assert_negative();
+}
+
+#[test]
 fn inactive_items_lex_with_the_crate_edition() {
     let text = "#[cfg(any())] fn unused(gen: u8) -> u8 { gen } fn main(){}";
     let options = SourceOptions {

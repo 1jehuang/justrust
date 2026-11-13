@@ -812,7 +812,6 @@ pub trait StrMethods {
     fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err>;
     fn as_bytes<'a>(&'a self) -> &'a [u8];
     fn is_empty(&self) -> bool;
-    fn to_uppercase(&self) -> String;
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
     fn split_whitespace<'a>(&'a self) -> SplitWhitespace<&'a str>;
     fn split<'a, P: StrPattern>(&'a self, separator: P) -> Split<&'a str, P>;
@@ -826,9 +825,6 @@ pub trait StrMethods {
     fn trim_matches<P: StrTrimPattern>(&self, pattern: P) -> &str;
     fn trim_start(&self) -> &str;
     fn trim_end(&self) -> &str;
-    fn to_lowercase(&self) -> String;
-    fn repeat(&self, count: usize) -> String;
-    fn replace(&self, from: &str, to: &str) -> String;
 }
 
 impl StrMethods for str {
@@ -850,10 +846,6 @@ impl StrMethods for str {
 
     fn is_empty(&self) -> bool {
         self.len() == 0usize
-    }
-
-    fn to_uppercase(&self) -> String {
-        String::from(self).to_uppercase()
     }
 
     fn contains<P: StrPattern>(&self, pattern: P) -> bool {
@@ -976,6 +968,21 @@ impl StrMethods for str {
             end = at;
         }
         str_from_raw_parts(p, end)
+    }
+
+}
+
+/// Allocating `str` methods: alloc inherent methods, absent under `no_std`.
+pub trait StrAllocMethods {
+    fn to_uppercase(&self) -> String;
+    fn to_lowercase(&self) -> String;
+    fn repeat(&self, count: usize) -> String;
+    fn replace(&self, from: &str, to: &str) -> String;
+}
+
+impl StrAllocMethods for str {
+    fn to_uppercase(&self) -> String {
+        String::from(self).to_uppercase()
     }
 
     fn to_lowercase(&self) -> String {

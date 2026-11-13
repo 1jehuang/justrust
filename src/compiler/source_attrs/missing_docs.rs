@@ -116,14 +116,16 @@ impl<'a> Model<'a> {
         if !public {
             return Status::Not;
         }
+        // Any path that reexports an item out of a private module names the
+        // deepest private module on its chain (globs never import a private
+        // module), so only a mention of it or a module below it can make the
+        // item reachable.
         let mut private = None;
         for i in 1..=module.len() {
             match self.modules.get(&module[..i]) {
                 Some((true, false)) => {}
-                Some((false, true)) => {
-                    private = Some(i - 1);
-                    break;
-                }
+                Some((false, true)) => private = Some(i - 1),
+                _ if private.is_some() => {}
                 _ => return Status::Maybe,
             }
         }

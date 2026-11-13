@@ -76,6 +76,33 @@ fn mixed_crates_keep_defining_preludes_and_explicit_core_paths() {
     }
 }
 #[test]
+fn no_std_core_str_methods_match_stock() {
+    let root = project(
+        "core-str",
+        "#![no_std]\npub fn value() -> i32 { let s = \"heLLo wOrld,x\"; let mut n = 0usize; for w in s.split(|c: char| !c.is_alphanumeric()) { let mut it = w.char_indices().peekable(); while let Some((i, c)) = it.next() { if let Some(&(j, d)) = it.peek() { if c.is_lowercase() && d.is_uppercase() { n += i + j; } } else { break; } } } (n + s.trim().len() + s.bytes().count()) as i32 }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    for workers in ["1", "8"] {
+        let out = native(&root, "run", workers);
+        assert!(
+            out.status.success(),
+            "{workers}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.stdout, stock.stdout);
+    }
+}
+#[test]
 fn no_std_rejects_unavailable_names_and_io_in_unused_items() {
     for (name, body) in [
         (
@@ -89,6 +116,14 @@ fn no_std_rejects_unavailable_names_and_io_in_unused_items() {
             "pub fn unused() { let x = core::vec::Vec::<i32>::new(); }",
         ),
         ("println", "pub fn unused() { println!(\"bad\"); }"),
+        (
+            "str-alloc",
+            "pub fn unused(s: &str) { let x = s.to_uppercase(); }",
+        ),
+        (
+            "str-repeat",
+            "pub fn unused(s: &str) { let x = s.repeat(2); }",
+        ),
         (
             "nested",
             "mod nested { pub fn unused() { let x = std::mem::size_of::<i32>(); } }",
