@@ -92,7 +92,7 @@ impl Checker<'_> {
         if schema.signature.params.len() != arguments.len() + offset {
             return Err("trait method argument count mismatch".into());
         }
-        let mut solver = Inference::new(self, own)?;
+        let mut solver = Inference::new(self, own.clone())?;
         for (slot, actual) in explicit.iter().enumerate() {
             let formal = self.infer_node(InferKind::Slot(slot))?;
             let actual = self.partial_type_term(actual, 0)?;
@@ -106,9 +106,31 @@ impl Checker<'_> {
             let evidence = self.infer_type_term(expected, None, 0)?;
             constraints.push((formal, evidence));
         }
-        for (formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
-            let formal = self.method_owner_term(&solver.schema(formal, 0)?, &bindings, 0)?;
-            let evidence = self.inference_evidence(argument, 0)?;
+        for (raw_formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
+            let formal = self.method_owner_term(&solver.schema(raw_formal, 0)?, &bindings, 0)?;
+            let mut evidence = self.inference_evidence(argument, 0)?;
+            // A literal-only generic producer (`vec![2, 3]`) for a bare
+            // method parameter (`I` in `extend<I: IntoIterator<Item = A>>`)
+            // takes its numeric default only when the method's own bounds
+            // then hold under this fixed application.
+            if matches!(evidence.as_ref(), InferKind::Unknown(_))
+                && let ir::Ty::Param(parameter) = raw_formal
+                && parameter.owner == own.binder()
+                && let Some(defaulted) = self.defaulted_call_type(argument, 0)?
+                && let ir::FactsCtx::Validated(facts) = self.facts()
+            {
+                let mut bound = bindings.clone();
+                bound.insert(*parameter, defaulted.clone());
+                if own_bounds_hold(
+                    &schema.predicates,
+                    &bound,
+                    facts,
+                    &self.trait_scratch,
+                    &plan.budget,
+                )? {
+                    evidence = self.infer_type_term(&defaulted, None, 0)?;
+                }
+            }
             let (formal, evidence, _) = sr::call_input_equation(&formal, &evidence);
             constraints.push((formal.clone(), evidence.clone()));
         }
@@ -172,12 +194,29 @@ impl Checker<'_> {
         let own = plan.param_env(item)?;
         let mut fits = true;
         let mut bound_own = false;
+        let mut defaulted = false;
         for (formal, argument) in schema.signature.params[1..].iter().zip(arguments) {
             plan.budget.charge_work(1)?;
             let formal = bind_owner(formal, &bindings, &plan.budget)?;
             let evidence = self.inference_evidence(argument, 0)?;
-            let Some(actual) = solver.resolve(&evidence, false, 0)? else {
-                return Ok(None);
+            // An unsuffixed literal element (`vec![2, 3]`) is ranked under
+            // its numeric default. A defaulted mismatch only leaves the
+            // choice undecided; final selection proves the chosen one again.
+            let actual = match solver.resolve(&evidence, false, 0)? {
+                Some(actual) => actual,
+                None => match solver.resolve(&evidence, true, 0)? {
+                    Some(actual) => {
+                        defaulted = true;
+                        actual
+                    }
+                    None => match self.defaulted_call_type(argument, 0)? {
+                        Some(actual) => {
+                            defaulted = true;
+                            actual
+                        }
+                        None => return Ok(None),
+                    },
+                },
             };
             if inferred_owner::mentions_param(&actual) {
                 return Ok(None);
@@ -205,7 +244,79 @@ impl Checker<'_> {
                 &plan.budget,
             )?;
         }
+        // A defaulted literal only rules out applications no numeric type
+        // could satisfy (`Extend<&i32>` against `{integer}` items). Against
+        // a numeric trait argument (`Extend<u8>`) the default decides nothing.
+        if defaulted
+            && !fits
+            && app
+                .args
+                .iter()
+                .any(|arg| matches!(arg, ir::Ty::Int(_) | ir::Ty::Float(_)))
+        {
+            return Ok(None);
+        }
         Ok(Some(fits))
+    }
+
+    /// The numeric-defaulted type of a generic call argument whose own
+    /// arguments are literal-only (`vec![2, 3]` expands to a block binding
+    /// `__jr_vec_seed(2, 2usize)`). Used only to rank candidate trait
+    /// applications; it never becomes the argument's type.
+    fn defaulted_call_type(&self, expr: &Expr, depth: usize) -> Result<Option<ir::Ty>, String> {
+        self.infer_work(depth)?;
+        match expr {
+            Expr::Block(block) => {
+                if let (
+                    Some(Stmt::Let {
+                        name: BindingName::Named(bound),
+                        ty: Type::Infer,
+                        value,
+                        ..
+                    }),
+                    Some(Expr::Var(path)),
+                ) = (block.statements.first(), block.tail.as_deref())
+                    && matches!(path.anchor(), PathAnchor::Relative)
+                    && path.segments().len() == 1
+                    && path.checked_key(self.names()?)? == bound.checked_key(self.names()?)?
+                    && !block.statements[1..]
+                        .iter()
+                        .any(|stmt| matches!(stmt, Stmt::Let { .. }))
+                {
+                    return self.defaulted_call_type(value, depth + 1);
+                }
+                Ok(None)
+            }
+            Expr::Call { name, args } => {
+                let plan = self.signatures.plan()?;
+                let Some(declaration) = plan
+                    .registry
+                    .functions
+                    .get(&self.path_key(name, Namespace::Value)?)
+                    .copied()
+                else {
+                    return Ok(None);
+                };
+                if plan.param_env(declaration)?.arity() == 0 {
+                    return Ok(None);
+                }
+                let Some(type_args) = self.infer_call_args(declaration, args, None, true)? else {
+                    return Ok(None);
+                };
+                Ok(Some(
+                    plan.source_inference_signature(
+                        &ir::CallTarget {
+                            declaration,
+                            type_args: type_args.into(),
+                        },
+                        self.facts(),
+                        &plan.budget,
+                    )?
+                    .result,
+                ))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Complete an open trait application (`template`, whose `free` impl
@@ -297,7 +408,7 @@ impl Checker<'_> {
         if schema.signature.params.len() != arguments.len() + 1 {
             return Err("trait method argument count mismatch".into());
         }
-        let mut solver = Inference::new(self, own)?;
+        let mut solver = Inference::new(self, own.clone())?;
         for (slot, actual) in explicit.iter().enumerate() {
             let formal = self.infer_node(InferKind::Slot(slot))?;
             let actual = self.partial_type_term(actual, 0)?;

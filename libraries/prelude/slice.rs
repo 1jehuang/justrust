@@ -524,6 +524,22 @@ impl<'a, T> super::iter::IntoIterator for &'a mut [T] {
     }
 }
 
+impl<'a, T> super::iter::IntoIterator for &'a [T] {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+    fn into_iter(self) -> Iter<'a, T> {
+        Iter::new(self)
+    }
+}
+
+impl<'a, T, const N: usize> super::iter::IntoIterator for &'a [T; N] {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+    fn into_iter(self) -> Iter<'a, T> {
+        Iter::new(unsafe { from_raw_parts(self as *const [T; N] as *const T, N) })
+    }
+}
+
 impl<'a, T> SliceIter<'a, T> for &'a [T] {
     fn iter(self) -> Iter<'a, T> {
         Iter::new(self)

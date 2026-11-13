@@ -967,6 +967,14 @@ impl Solver<'_, '_, '_> {
                 return Ok(None);
             }
         }
+        // Every application was decided by closed argument types and none
+        // fits: no inference can make the call hold (`Vec<i32>::extend` with
+        // a `Vec<u32>`), as stock's unsatisfied `Extend<_>` obligation.
+        if chosen.is_none() && !applications.is_empty() {
+            return Err(self.user_error(
+                "E0277: no applicable trait application accepts the method arguments",
+            ));
+        }
         Ok(chosen)
     }
 

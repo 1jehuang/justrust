@@ -1994,6 +1994,7 @@ impl<'s> Solver<'_, '_, 's> {
                         Some(written @ ir::Ty::Ref { .. }) if method.depth == 0 => written,
                         _ => ty.clone(),
                     };
+                    let was_pending = std::mem::replace(&mut self.trait_application_pending, false);
                     if let Some(result) = self.trait_method_constraints(
                         &trait_receiver,
                         method.name,
@@ -2001,10 +2002,20 @@ impl<'s> Solver<'_, '_, 's> {
                         &method.actuals,
                         method.result,
                     )? {
+                        self.trait_application_pending |= was_pending;
                         self.bind_declared_method_result(result, method.result)?;
                         progress = true;
                         continue;
                     }
+                    if self.trait_application_pending {
+                        // Several proven applications of one trait at this
+                        // probe step (`Vec<i32>: Extend<i32> + Extend<&i32>`)
+                        // wait for argument or expected-result evidence.
+                        // Stock never autoderefs past an applicable method.
+                        pending.push(method);
+                        continue;
+                    }
+                    self.trait_application_pending = was_pending;
                     let plan = self.checker.signatures.plan()?;
                     if array_len_receiver::receiver_is_array(&ty)
                         && slice_len_method_candidate(
