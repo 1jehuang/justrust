@@ -25,3 +25,38 @@ fn main() { println!("{}",f::<i32>(7,2u8)); }"#,
         ],
     );
 }
+
+#[test]
+fn opaque_owner_reuses_its_published_template_cfg() {
+    oracle::check(
+        "impl-trait-owner-template",
+        &[
+            Case {
+                name: "opaque_iterator_owner_with_cleanup",
+                source: r#"use std::collections::BTreeMap;
+fn tokens(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').filter(|w| !w.is_empty()).map(|w| w.to_lowercase()) }
+fn main() {
+    let mut index: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (ln, line) in "A b a\nb C".lines().enumerate() { for w in tokens(line) { index.entry(w).or_default().push(ln + 1); } }
+    let all: Vec<String> = tokens("x Y  z").collect();
+    println!("{:?} {:?}", index, all);
+}"#,
+                expect: Expect::Run(
+                    "{\"a\": [1, 1], \"b\": [1, 2], \"c\": [2]} [\"x\", \"y\", \"z\"]\n",
+                ),
+            },
+            Case {
+                name: "opaque_item_is_not_its_hidden_type",
+                source: r#"fn tokens(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').map(|w| w.to_lowercase()) }
+fn main() { let v: Vec<&str> = tokens("a b").collect(); }"#,
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "opaque_owner_moved_value_reuse",
+                source: r#"fn tokens(s: &str) -> impl Iterator<Item = String> + '_ { s.split(' ').map(|w| w.to_lowercase()) }
+fn main() { let t = tokens("a b"); let a: Vec<String> = t.collect(); let b: Vec<String> = t.collect(); }"#,
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+    );
+}

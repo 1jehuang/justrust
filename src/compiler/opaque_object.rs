@@ -74,6 +74,11 @@ pub(super) async fn produce(
     let admission = cx
         .request(crate::compiler::keys::item(SOURCE_ADMISSION, source_index))
         .get(0);
+    // The universal template CFG of this exact publication is a published
+    // graph fact. Read it instead of lowering and validating it again here.
+    let lowered = cx
+        .request(crate::compiler::keys::item(UNIVERSAL_LOWER, source_index))
+        .get(0);
     let count = source
         .exprs
         .iter()
@@ -130,8 +135,17 @@ pub(super) async fn produce(
     {
         roots.push(specialization.ty(ty)?);
     }
-    let original = cfg::lower_source_template(publication, &provider.0.budget)
-        .map_err(|error| Error::new(error.to_string()))?;
+    let original: Arc<cfg::TemplateCfg> = cx.read_fact(lowered).await?;
+    if !original
+        .source_publication()
+        .is_some_and(|published| Arc::ptr_eq(published, publication))
+        || !Arc::ptr_eq(original.facts(), publication.facts())
+        || !original.budget().same_authority(&provider.0.budget)
+    {
+        return Err(Error::new(
+            "physical opaque object template changed its original publication",
+        ));
+    }
     scale_task_work_by_cfg(original.function());
     // Unchanged owning locals retain their original cleanup. Demand the same
     // owner-local frontier used by ordinary objects before any independent
