@@ -1,10 +1,16 @@
 //! Automatic local vs remote routing for `justrust check|clippy|test`.
 //!
 //! Every agent-mode build asks [`maybe_remote`] first. It returns (build
-//! locally) unless a remote run is predicted to be faster, in which case it
+//! locally) unless the build belongs on the remote machine, in which case it
 //! runs the build remotely and exits with its code.
 //!
-//! Robustness first. Local is the default and costs nothing extra:
+//! Signed in to hosted builds, the default is hosted-first (`nolocal.rs`):
+//! every build hosted can serve goes there, history and recent failures
+//! notwithstanding, and an infrastructure failure ends the command with
+//! triage steps instead of a local compile. `justrust local on` restores
+//! the router and the fallback described below.
+//!
+//! Without a hosted account local is the default and costs nothing extra:
 //! - `JUSTRUST_REMOTE=0|off`: always local, nothing is read.
 //! - `run` and debug `build` are always local (their artifacts are needed
 //!   here). An optimized `build` routes on history like the rest and brings
@@ -22,8 +28,9 @@
 //! samples expire after [`REMOTE_MAX_AGE`], so a command that lost on
 //! remote is retried now and then.
 //!
-//! Any infrastructure failure falls back to a local build, says so in one
-//! line, and pauses auto routing for [`FAIL_BACKOFF`] seconds.
+//! With local compiles on, any infrastructure failure falls back to a local
+//! build, says so in one line, and pauses auto routing for [`FAIL_BACKOFF`]
+//! seconds.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -209,10 +216,52 @@ fn routable_build(args: &[String]) -> bool {
         }
     }
     let os: Vec<OsString> = args.iter().map(OsString::from).collect();
-    // Debug binaries come back larger than they are worth on AC power, but
-    // on battery a local compile costs far more than the download.
+    // Debug binaries come back larger than they are worth on AC power when
+    // this machine may compile. On battery, or when local compiles are not
+    // the default, the download is the cheaper side.
     crate::slots::profile_dir(&os).file_name() != Some(std::ffi::OsStr::new("debug"))
         || crate::sys::battery_discharging()
+        || debug_build_comes_back(crate::nolocal::policy(), hosted_account())
+}
+
+/// Signed in with the hosted backend: the account hosted-first applies to.
+fn hosted_account() -> bool {
+    remote_backend::load() == Some(Backend::Hosted) && crate::remote_hosted::signed_in()
+}
+
+/// A debug `build` is worth bringing back when the alternative is refused
+/// (`local off`) or is not the default for this account (hosted-first).
+fn debug_build_comes_back(policy: crate::nolocal::Policy, hosted_account: bool) -> bool {
+    use crate::nolocal::Policy;
+    match policy {
+        Policy::Off => true,
+        Policy::HostedFirst => hosted_account,
+        Policy::On => false,
+    }
+}
+
+const HOSTED_FIRST: &str =
+    "hosted-first default; --local=\"<why>\" to build here, `justrust local on` for the router";
+
+/// Hosted-first: a signed-in hosted account's builds skip the router, the
+/// failure backoff and the local fallback. An explicit `--auto` still gets
+/// the router, an explicit `--local` still builds here.
+fn hosted_first(m: Mode, backend: &Backend) -> bool {
+    hosted_first_applies(
+        crate::nolocal::policy(),
+        m,
+        *backend == Backend::Hosted && crate::remote_hosted::signed_in(),
+    )
+}
+
+fn hosted_first_applies(policy: crate::nolocal::Policy, m: Mode, hosted_account: bool) -> bool {
+    policy == crate::nolocal::Policy::HostedFirst && m == Mode::Default && hosted_account
+}
+
+/// A hosted failure ends the command instead of compiling here: always when
+/// remote is required, and for a hosted account unless local compiles are on.
+fn refuses_fallback(policy: crate::nolocal::Policy, required: bool, hosted_account: bool) -> bool {
+    required || (policy != crate::nolocal::Policy::On && hosted_account)
 }
 
 const ON_BATTERY: &str = "on battery: hosted regardless of history or recent failures";
@@ -782,6 +831,8 @@ pub fn maybe_remote(full: &[OsString]) {
         "JUSTRUST_REMOTE=force".to_string()
     } else if on_battery_hosted(m, &backend) {
         ON_BATTERY.to_string()
+    } else if hosted_first(m, &backend) {
+        HOSTED_FIRST.to_string()
     } else if remote_default {
         if recently_failed(now) {
             return say_local(&backoff_reason());
@@ -865,8 +916,41 @@ pub fn maybe_remote(full: &[OsString]) {
             std::process::exit(o.code)
         }
         Ok(Err(Infra(msg))) => {
-            if remote_required() || reason == ON_BATTERY {
-                eprintln!("justrust: remote required, refusing local fallback: {msg}");
+            let strict = remote_required();
+            if strict
+                || reason == ON_BATTERY
+                || refuses_fallback(
+                    crate::nolocal::policy(),
+                    strict,
+                    backend == Backend::Hosted && crate::remote_hosted::signed_in(),
+                )
+            {
+                // A prebuild is a guess nobody waits for: the agent's own
+                // request reports the failure.
+                if !strict && crate::buildd::is_guess() {
+                    std::process::exit(crate::buildd::GUESS_DROPPED);
+                }
+                let infra = Infra(msg.clone());
+                // No local build follows, so the message must not say one does.
+                let msg = crate::nolocal::without_local_promise(&msg);
+                let fault = if infra.is_billing() {
+                    crate::nolocal::Fault::Billing
+                } else if infra.is_client_side() {
+                    crate::nolocal::Fault::ClientSide
+                } else {
+                    crate::nolocal::Fault::Service
+                };
+                if fault == crate::nolocal::Fault::Billing {
+                    eprintln!("{msg}");
+                } else if strict {
+                    eprintln!("justrust: remote required, refusing local fallback: {msg}");
+                } else {
+                    eprintln!("justrust: hosted build did not run: {msg}");
+                }
+                eprintln!(
+                    "{}",
+                    crate::nolocal::triage(fault, crate::nolocal::disabled())
+                );
                 std::process::exit(1);
             }
             // The agent's own request decides about a local fallback.
@@ -906,6 +990,39 @@ pub fn maybe_remote(full: &[OsString]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_first_is_the_default_for_hosted_accounts_only() {
+        use crate::nolocal::Policy;
+        // Default mode, signed in to hosted: skip the router.
+        assert!(hosted_first_applies(
+            Policy::HostedFirst,
+            Mode::Default,
+            true
+        ));
+        // No hosted account: local stays the free default.
+        assert!(!hosted_first_applies(
+            Policy::HostedFirst,
+            Mode::Default,
+            false
+        ));
+        // Explicit choices are honoured: --auto keeps the router.
+        assert!(!hosted_first_applies(Policy::HostedFirst, Mode::Auto, true));
+        assert!(!hosted_first_applies(Policy::On, Mode::Default, true));
+
+        // No silent fallback unless local compiles were turned on.
+        assert!(refuses_fallback(Policy::HostedFirst, false, true));
+        assert!(refuses_fallback(Policy::Off, false, true));
+        assert!(!refuses_fallback(Policy::On, false, true));
+        assert!(!refuses_fallback(Policy::HostedFirst, false, false));
+        assert!(refuses_fallback(Policy::On, true, false));
+
+        // Debug binaries come back when compiling here is not the default.
+        assert!(debug_build_comes_back(Policy::Off, false));
+        assert!(debug_build_comes_back(Policy::HostedFirst, true));
+        assert!(!debug_build_comes_back(Policy::HostedFirst, false));
+        assert!(!debug_build_comes_back(Policy::On, true));
+    }
 
     #[test]
     fn local_reason_required_when_configured() {

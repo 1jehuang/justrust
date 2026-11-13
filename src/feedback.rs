@@ -1,4 +1,9 @@
-//! Explicit feedback is synchronous, never queued, and sends only the message.
+//! Explicit feedback is synchronous, never queued, and sends only the message
+//! plus, when a `--kind` is given, that kind and this client's version.
+//!
+//! Kinds sort the maintainer inbox. `infra-urgent` is the one that pages:
+//! the service emails the maintainer as soon as it is stored. It is for a
+//! hosted failure that blocks work and cannot be fixed from the client side.
 use anyhow::{Context, bail};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -21,18 +26,70 @@ fn validate(message: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn command(message: &str) -> anyhow::Result<()> {
+/// What a message is about. `General` is the plain `justrust feedback "..."`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Kind {
+    /// Anything else (default).
+    General,
+    /// justrust did something wrong: bad verdict, hidden error, crash.
+    Bug,
+    /// A suggestion or a missing feature.
+    Idea,
+    /// Something unclear that the docs or output should have answered.
+    Question,
+    /// The hosted service misbehaved but work can continue.
+    Infra,
+    /// The hosted service is failing and blocks work. Emails the maintainer.
+    InfraUrgent,
+}
+
+impl Kind {
+    pub fn wire(self) -> &'static str {
+        match self {
+            Kind::General => "general",
+            Kind::Bug => "bug",
+            Kind::Idea => "idea",
+            Kind::Question => "question",
+            Kind::Infra => "infra",
+            Kind::InfraUrgent => "infra-urgent",
+        }
+    }
+}
+
+/// The request body. A plain message stays `{"message"}` so services that
+/// predate kinds keep accepting it.
+fn body(message: &str, kind: Kind) -> serde_json::Value {
+    match kind {
+        Kind::General => serde_json::json!({ "message": message }),
+        k => serde_json::json!({
+            "message": message,
+            "kind": k.wire(),
+            "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+        }),
+    }
+}
+
+pub fn command(message: &str, kind: Kind) -> anyhow::Result<()> {
     validate(message)?;
     if let Some(why) = crate::telemetry::disabled_reason() {
         bail!("feedback not sent: telemetry is off ({why})");
     }
     let url = format!("{}/feedback", crate::remote_hosted::build_base());
-    send(&url, message)?;
-    println!("Feedback delivered to the maintainers. Thank you.");
+    send(&url, &body(message, kind))?;
+    match kind {
+        Kind::InfraUrgent => println!(
+            "Urgent infrastructure report delivered. The maintainer has been emailed. Thank you."
+        ),
+        Kind::General => println!("Feedback delivered to the maintainers. Thank you."),
+        k => println!(
+            "Feedback ({}) delivered to the maintainers. Thank you.",
+            k.wire()
+        ),
+    }
     Ok(())
 }
 
-fn send(url: &str, message: &str) -> anyhow::Result<()> {
+fn send(url: &str, body: &serde_json::Value) -> anyhow::Result<()> {
     let loopback = url.strip_prefix("http://").is_some_and(|rest| {
         let authority = rest.split('/').next().unwrap_or("");
         ["127.0.0.1:", "localhost:", "[::1]:"].iter().any(|prefix| {
@@ -44,7 +101,7 @@ fn send(url: &str, message: &str) -> anyhow::Result<()> {
     if !url.starts_with("https://") && !loopback {
         bail!("feedback not sent: endpoint must use HTTPS (HTTP allowed only for loopback tests)");
     }
-    let body = serde_json::to_vec(&serde_json::json!({ "message": message }))?;
+    let body = serde_json::to_vec(body)?;
     let mut child = Command::new("curl")
         .args([
             "-q", // First: ignore curlrc (which could attach credentials or change delivery).
@@ -110,7 +167,32 @@ mod tests {
             "http://127.0.0.1:80@example.com/feedback",
             "http://localhost:bad/feedback",
         ] {
-            assert!(send(url, "test").unwrap_err().to_string().contains("HTTPS"));
+            assert!(
+                send(url, &body("test", Kind::General))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("HTTPS")
+            );
+        }
+    }
+    #[test]
+    fn plain_message_keeps_the_original_body_and_kinds_add_fields() {
+        assert_eq!(
+            body("hi", Kind::General),
+            serde_json::json!({"message": "hi"})
+        );
+        let urgent = body("hosted down", Kind::InfraUrgent);
+        assert_eq!(urgent["kind"], "infra-urgent");
+        assert_eq!(urgent["message"], "hosted down");
+        assert!(urgent["client"].as_str().unwrap().starts_with("justrust "));
+        assert_eq!(urgent.as_object().unwrap().len(), 3);
+        for (k, w) in [
+            (Kind::Bug, "bug"),
+            (Kind::Idea, "idea"),
+            (Kind::Question, "question"),
+            (Kind::Infra, "infra"),
+        ] {
+            assert_eq!(body("x", k)["kind"], w);
         }
     }
     #[test]

@@ -164,13 +164,16 @@ same arguments as cargo, record a timing profile, and print compact output:
 errors and failing tests in full, the first few warnings, no progress noise,
 then a one-line verdict. The full output is always saved: `justrust log`.
 
-Where check/clippy/test run: signed in to hosted builds (API key or
-subscription) means remote by default. Choose per command with `--local`,
-`--remote`, or `--auto` (the router: remote only when predicted faster),
-or set JUSTRUST_REMOTE=off|force|auto. Give a reason for going local with
-`--local=\"why\"` (or JUSTRUST_LOCAL_REASON). A
-requested local build without a reason is refused unless
-JUSTRUST_REQUIRE_LOCAL_REASON=0 (env or ~/.config/jcode env file).
+Where builds run: signed in to hosted builds (API key or subscription),
+they run on hosted machines and a hosted failure is not replaced by a local
+compile: the output says what to check, how to report it
+(`justrust feedback --kind infra-urgent`), and when to go local. Choose per
+command with `--local`, `--remote`, or `--auto` (the router: remote only
+when predicted faster), or set JUSTRUST_REMOTE=off|force|auto.
+`justrust local on` allows local compiles and automatic fallback again.
+Give a reason for going local with `--local=\"why\"` (or
+JUSTRUST_LOCAL_REASON). A requested local build without a reason is refused
+unless JUSTRUST_REQUIRE_LOCAL_REASON=0 (env or ~/.config/jcode env file).
 
 Examples:
   justrust check -p my-crate
@@ -470,10 +473,12 @@ enum Command {
     },
     /// Remove the Jcode API key (keeps other settings in the file).
     Logout,
-    /// Allow or forbid local compiles: `off` sends every build to hosted
-    /// machines with no local fallback until `on`. `status` shows it.
+    /// Where compiles may run. Default `hosted-first`: signed-in builds go to
+    /// hosted machines with no automatic local fallback, `--local="<why>"`
+    /// builds here on request. `on` allows the router and local fallback,
+    /// `off` refuses every local compile. `status` shows it.
     Local {
-        /// off, on, or status
+        /// hosted-first, on, off, or status
         #[arg(default_value = "status")]
         action: String,
         /// Why (recorded with `off`)
@@ -555,10 +560,15 @@ enum Command {
         force: bool,
     },
     /// Send an explicit message to maintainers (max 4096 UTF-8 bytes).
-    /// Do not include secrets or private paths. Respects telemetry opt-out.
+    /// `--kind infra-urgent` reports a hosted failure that blocks work and
+    /// emails the maintainer. Do not include secrets or private paths.
+    /// Respects telemetry opt-out.
     Feedback {
         /// Message to send. Quote it as one argument.
         message: String,
+        /// What it is about.
+        #[arg(long, value_enum, default_value = "general")]
+        kind: feedback::Kind,
     },
     /// Plan local release signing. Pass --execute explicitly to sign on the target OS.
     SignRelease {
@@ -776,7 +786,9 @@ fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>
 
 /// Whether a build reached through the `cargo` shim goes through local vs
 /// hosted routing. Agent sessions (`JCODE_SESSION_ID`) route by default,
-/// interactive shells keep plain recorded cargo. `JUSTRUST_CARGO_ROUTE=0`
+/// interactive shells keep plain recorded cargo: an editor's background
+/// `cargo check` on every save must not spend the account's hosted builds
+/// under the hosted-first default. `justrust local off` routes those too. `JUSTRUST_CARGO_ROUTE=0`
 /// opts out, `=1` opts a non-agent shell in. A cargo nested inside a
 /// recorded run (build scripts, tests) never routes again.
 fn cargo_shim_routes(agent: bool, nested: bool, setting: Option<&str>) -> bool {
@@ -1305,7 +1317,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             print!("{report}");
         }
         Command::Update { action, force } => update::command(&action, force)?,
-        Command::Feedback { message } => feedback::command(&message)?,
+        Command::Feedback { message, kind } => feedback::command(&message, kind)?,
         Command::Telemetry { action } => telemetry::command(&action)?,
     }
     Ok(())

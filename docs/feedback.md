@@ -1,9 +1,31 @@
-# Feedback command acceptance, October 14, 2026
+# Feedback
 
 `justrust feedback "message"` sends an explicit message to the maintainer inbox.
 It sends only that message, not build reports, source, paths, account credentials,
 or an install identifier. Anything typed in the message is sent, so do not include
 secrets or private information. Telemetry opt-outs also disable feedback.
+
+## Kinds
+
+`--kind` classifies a message. With a kind, the kind and the client version
+(`justrust 0.1.0-...`) are sent along with the message, nothing else.
+
+| Kind | Use it for |
+|---|---|
+| `general` (default) | Anything else |
+| `bug` | justrust did something wrong: bad verdict, hidden error, crash |
+| `idea` | A suggestion or a missing feature |
+| `question` | Something the docs or output should have answered |
+| `infra` | The hosted service misbehaved, but work can continue |
+| `infra-urgent` | The hosted service is failing and blocks work |
+
+`infra-urgent` emails the maintainer as soon as the report is stored. Use it
+after checking that the failure is not on the client side (network, sign-in,
+project layout), and include the command, the error line and what was tried.
+The email rate is capped, so reports beyond the cap are still stored but do
+not send another email.
+
+## Acceptance, October 14, 2026
 
 The command sends synchronously and reports success only for the endpoint's
 HTTP 201 response after the durable database insert. Failed requests are not

@@ -54,7 +54,7 @@ pub fn e2e_findings(s: &Summary) -> Vec<Finding> {
             format!(
                 "waited {queued:.1}s for another build's source sync to finish before this one could sync. \
                  Concurrent agents share one sync daemon; avoid starting builds of a different large \
-                 workspace at the same moment, or build locally with --local while it syncs"
+                 workspace at the same moment"
             ),
         ));
     }

@@ -3,6 +3,21 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## Unreleased
+
+- **Hosted-first is the default: signed-in builds no longer compile on your
+  machine.** Builds hosted can run go there whatever the history says,
+  debug `build` included, and a hosted failure ends the command instead of
+  falling back to a local compile. The output lists what to check, how to
+  report a service fault and how to build here (`--local="<why>"`).
+  `justrust local on` restores the router and automatic fallback,
+  `justrust local off` still refuses every local compile, and
+  `justrust local hosted-first` returns to the default.
+  `JUSTRUST_LOCAL=hosted-first|on|off` overrides it for one command.
+  Without a hosted account nothing changes: builds are local.
+- **`justrust feedback --kind bug|idea|question|infra|infra-urgent`**
+  classifies a message. `infra-urgent` emails the maintainer.
+
 ## 0.1.0-alpha.26
 
 - **The account dashboard (`justrust interactive dashboard`) is redrawn as

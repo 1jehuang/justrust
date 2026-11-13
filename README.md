@@ -53,6 +53,7 @@ From source: `cargo install justrust --locked` (Rust 1.91+).
 Prebuilt installs update automatically. Opt out with `justrust update off`;
 disable anonymous telemetry with `justrust telemetry off`.
 [Send feedback](docs/feedback.md) with `justrust feedback "Your suggestion"`.
+Add `--kind bug|idea|question|infra|infra-urgent` to classify it.
 
 ## Experimental native compiler
 
@@ -188,9 +189,14 @@ justrust upgrade   # activate a remote build plan
 justrust check
 ```
 
-Signed in, `check`, `clippy`, and `test` use hosted build machines by default
-on Linux. Choose `--local`, `--remote`, or `--auto` (remote only when predicted
-faster). If hosted builds are unavailable, justrust falls back to local builds.
+Signed in, builds use hosted machines by default on Linux, and your machine
+does not compile. If a hosted build cannot run, justrust does not quietly
+compile locally instead: it says what went wrong, how to report a service
+fault (`justrust feedback --kind infra-urgent "..."`), and how to build here
+when nothing else works (`--local="why"`). `justrust local on` brings back
+the router and automatic local fallback, `justrust local off` refuses every
+local compile. `--remote` and `--auto` (remote only when predicted faster)
+choose per command.
 
 Local builds are free. Hosted plans start at $20/month for 5,000 builds,
 with the first month free and a card required. See [pricing](https://jcode.sh/rust#pricing).

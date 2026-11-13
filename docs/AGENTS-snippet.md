@@ -22,12 +22,23 @@ For Rust projects, use `justrust` instead of calling cargo directly:
   a test reads files outside the repo or the network and must run again.
 - Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay cargo.
 
-Where builds run: when signed in to hosted builds or configured with an SSH
-remote machine, check, clippy, and test run on the remote build machine by
-default. Choose per command with `--local`,
-`--remote`, or `--auto` (remote only when predicted faster). If the
-machine is unreachable or out of builds, the build runs locally and prints
-one line saying why.
+Where builds run: when signed in to hosted builds, builds run on hosted
+machines and this machine does not compile. A hosted failure is not replaced
+by a local compile. When one happens:
+
+1. Find the cause. `justrust remote status`, `justrust log --tail 200` and a
+   rerun tell a problem on this side (network, sign-in, a path outside the
+   synced roots, a full disk) from a hosted one. Fix what you can and rerun.
+2. If the hosted service itself is at fault, report it:
+   `justrust feedback --kind infra-urgent "<command, error line, what you
+   tried>"` when it blocks your work (this emails the maintainer), or
+   `--kind infra` when it does not.
+3. Only when it cannot be fixed from here, rerun with `--local="<why>"`.
+
+Do not start with `--local`, and do not run `justrust local on` yourself:
+that setting is your user's. Other feedback is welcome too:
+`justrust feedback --kind bug|idea|question "<message>"`. Never put secrets
+or private source in a message.
 
 Not signed in yet? Run `justrust login --no-wait`, give your user the link
 it prints, and keep working: builds stay local until it is approved. In CI,
