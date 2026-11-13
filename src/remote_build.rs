@@ -212,7 +212,13 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
             .output()
             .context("cargo metadata")
     };
-    let mut out = metadata(true)?;
+    let mut out = match metadata(true) {
+        Ok(out) => out,
+        // A source-only machine (an agent sandbox with no Rust toolchain)
+        // still builds remotely: follow `path = "..."` in the manifests.
+        Err(e) if cargo_missing(&e) => return Ok(manifest_roots(cwd)),
+        Err(e) => return Err(e),
+    };
     if !out.status.success() {
         out = metadata(false)?;
     }
@@ -253,6 +259,33 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
         let _ = std::fs::write(&cache, v.to_string());
     }
     Ok(roots)
+}
+
+fn cargo_missing(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+/// `source_roots` without cargo: the manifest walk the build daemon uses,
+/// widened to repository or workspace roots like the cargo metadata path.
+/// Not cached, so installing cargo later takes effect at once. Like the
+/// daemon's walk it does not read member manifests, so a path dependency
+/// that only a member names, outside the repository, is not mirrored.
+fn manifest_roots(cwd: &Path) -> Vec<PathBuf> {
+    let dirs = crate::buildd::source_roots(cwd)
+        .into_iter()
+        .map(|d| {
+            let root = repo_root(&d);
+            if root.join(".git").exists() {
+                root
+            } else {
+                workspace_dir(&d)
+            }
+        })
+        .collect();
+    outermost(dirs)
 }
 
 /// Lockfile path + mtime: path dependencies only change with the lockfile.
@@ -1977,6 +2010,37 @@ mod admission_tests;
 
 #[cfg(test)]
 mod tests {
+    /// A sandbox with source but no Rust toolchain still finds what to
+    /// mirror: the repository, plus a path dependency outside it.
+    #[test]
+    fn source_roots_without_cargo_follow_manifest_paths() {
+        let t = std::env::temp_dir().join(format!("jr-roots-nocargo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (app, dep) = (t.join("app"), t.join("dep"));
+        for d in [app.join("sub/src"), app.join(".git"), dep.join("src")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(
+            app.join("sub/Cargo.toml"),
+            "[package]\nname='sub'\nversion='0.1.0'\n[dependencies]\ndep={path=\"../../dep\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dep.join("Cargo.toml"),
+            "[package]\nname='dep'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        let missing = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
+            .context("cargo metadata");
+        assert!(super::cargo_missing(&missing));
+        assert!(!super::cargo_missing(&anyhow::anyhow!(
+            "cargo metadata failed"
+        )));
+        let mut roots = super::manifest_roots(&app.join("sub"));
+        roots.sort();
+        assert_eq!(roots, vec![app.clone(), dep.clone()]);
+        let _ = std::fs::remove_dir_all(&t);
+    }
     #[test]
     fn client_side_failures_are_distinguished_from_remote_ones() {
         use super::{CLIENT_SIDE, Infra};
