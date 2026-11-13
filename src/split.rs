@@ -744,7 +744,9 @@ fn strip_test_tail(src: &str) -> &str {
     src
 }
 
-/// All `.rs` files under `dir`.
+/// All `.rs` files under `dir`. Symlinked directories are not entered: a
+/// link back to an ancestor (rustc's `build/*/lib/rustlib/src/rust`) would
+/// otherwise recurse until the machine runs out of memory.
 pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -752,7 +754,12 @@ pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name();
-        if p.is_dir() {
+        // `DirEntry::file_type` does not follow symlinks, unlike `Path::is_dir`.
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_symlink() && p.is_dir() {
+            continue;
+        }
+        if ft.is_dir() {
             let n = name.to_string_lossy();
             // Build output (`target`, `target-release`, ...) and hidden dirs.
             if !n.starts_with("target") && !n.starts_with('.') {
@@ -1820,6 +1827,27 @@ mod tests {
     fn write(p: &Path, s: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, s).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_files_does_not_follow_directory_symlink_cycles() {
+        let root = std::env::temp_dir().join(format!("jr-split-{}-cycle", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        write(&root.join("src/lib.rs"), "");
+        write(&root.join("src/deep/a.rs"), "");
+        // A link back to an ancestor, and a link to a real file.
+        std::os::unix::fs::symlink(&root, root.join("src/deep/back")).unwrap();
+        std::os::unix::fs::symlink(root.join("src/lib.rs"), root.join("src/alias.rs")).unwrap();
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        files.sort();
+        let rel: Vec<_> = files
+            .iter()
+            .map(|f| f.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(rel, ["src/alias.rs", "src/deep/a.rs", "src/lib.rs"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// base { logging, auth { store }, emails, net { http } }
