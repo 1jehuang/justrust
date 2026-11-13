@@ -189,7 +189,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                          "foreign_rustc_before": r.get("foreign_rustc_before")})
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} noisy {r['wall']:.2f}s, "
                           "waiting for quiet and remeasuring", file=sys.stderr)
-                    suite.wait_quiet(max(quiet_wait, 1800))
+                    suite.wait_quiet(max(quiet_wait, 600))
                     r = run_point(st, plan, base + k * 10 + rep, **options)
                 if "error" in r:
                     errors[st.name] = r["error"]
