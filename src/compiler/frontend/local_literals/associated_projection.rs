@@ -366,6 +366,27 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(Some(normal))
     }
 
+    /// Reduce a projection whose receiver is itself a projection
+    /// (`<<&[u8] as IntoIterator>::IntoIter as Iterator>::Item`), innermost
+    /// first, so each level normalizes once its own inputs are known.
+    pub(super) fn reduce_projection_chain(
+        &mut self,
+        term: Term,
+        depth: usize,
+    ) -> Result<bool, String> {
+        self.checker.infer_work(depth)?;
+        let root = self.root(term);
+        let Domain::AssociatedProjection(projection) = self.domain(root) else {
+            return Ok(false);
+        };
+        let mut progress = self.reduce_projection_chain(projection.receiver, depth + 1)?;
+        for argument in &projection.arguments {
+            progress |= self.reduce_projection_chain(*argument, depth + 1)?;
+        }
+        progress |= self.reduce_associated_projection(root)?;
+        Ok(progress)
+    }
+
     pub(super) fn reduce_associated_projection(&mut self, term: Term) -> Result<bool, String> {
         let root = self.root(term);
         let Domain::AssociatedProjection(projection) = self.domain(root) else {

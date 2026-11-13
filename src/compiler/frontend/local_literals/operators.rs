@@ -146,6 +146,11 @@ impl Solver<'_, '_, '_> {
             left
         };
         if matches!(kind, Kind::Deref) {
+            // A carrier typed by an associated projection (a zipped
+            // iterator's item) is reduced once its inputs are known.
+            if matches!(self.domain(left), Domain::AssociatedProjection(_)) {
+                self.reduce_projection_chain(left, 0)?;
+            }
             match self.domain(left) {
                 // A carrier still open in the final round adds no evidence:
                 // before d658dd6e1 this was an unconstrained fresh term.

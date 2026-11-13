@@ -1494,3 +1494,24 @@ fn main() {
         coherence_oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn qualified_type_paths_without_trait() {
+    coherence_oracle::stock_native(
+        r#"
+trait F: Sized { fn f(x: u8) -> Self; }
+impl F for [u8; 2] { fn f(x: u8) -> Self { [x, x + 1] } }
+fn main() {
+    let a = <[u8; 2]>::f(3);
+    let n = <u8>::max(4, 9);
+    println!("{:?} {}", a, n);
+}
+"#,
+    );
+    for source in [
+        "trait F { fn f() -> u8; } fn unused() -> u8 { <[u8; 3]>::f() } fn main() {}",
+        "fn unused() -> u8 { <u8>::nope(1) } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}

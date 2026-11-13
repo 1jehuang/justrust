@@ -19532,6 +19532,42 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn trait_call_prefix(&mut self) -> Result<Expr, ParseError> {
         let owner = self.ty()?;
+        // `<T>::name(args)`: a qualified path without a trait names an
+        // associated item of T exactly like `T::name` (arrays, slices,
+        // references and other types that have no path form).
+        if self.is(">") {
+            self.expect(">")?;
+            self.expect("::")?;
+            let name = self.ident()?;
+            let type_args = if self.is("::") && self.cursor.peek(1).is_some_and(|t| t.text == "<") {
+                self.expect("::")?;
+                self.type_arguments()?
+            } else {
+                Vec::new()
+            };
+            if !self.is("(") {
+                return Err(self
+                    .unsupported("qualified paths without a trait are supported only for calls"));
+            }
+            self.expect("(")?;
+            let mut args = Vec::new();
+            while !self.is(")") {
+                if args.len() >= 4096 {
+                    return Err(self.limit("call argument limit exceeded"));
+                }
+                args.push(self.nested_expr()?);
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.expect(")")?;
+            return Ok(Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                args,
+            });
+        }
         self.expect("as")?;
         let trait_path = self.trait_path()?;
         let trait_path = self
