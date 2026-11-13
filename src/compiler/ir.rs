@@ -10616,6 +10616,13 @@ fn ref_type_walk(
 ) -> Result<bool, String> {
     reference_type_summary(ty, root, budget, depth, visits).map(|(opaque, _)| opaque)
 }
+/// Pointer-keyed walk memo for one reference_type_summary call. Rows drop
+/// before their leases (field order), refunding the scratch on return.
+#[derive(Default)]
+struct ReferenceSummaryMemo {
+    rows: std::collections::HashMap<(usize, bool), (bool, usize)>,
+    leases: Vec<PlanReservation>,
+}
 pub(in crate::compiler) fn reference_type_summary(
     ty: &Ty,
     root: bool,
@@ -10629,7 +10636,7 @@ pub(in crate::compiler) fn reference_type_summary(
         budget: &PlanBudget,
         depth: usize,
         visits: &mut usize,
-        memo: &mut std::collections::HashMap<(usize, bool), (bool, usize)>,
+        memo: &mut ReferenceSummaryMemo,
     ) -> Result<(bool, usize), String> {
         budget.check_depth(depth)?;
         if ty.is_nominal_back_edge() {
@@ -10658,7 +10665,7 @@ pub(in crate::compiler) fn reference_type_summary(
             }
         }
         let key = (std::ptr::from_ref(ty) as usize, root);
-        if let Some(&(opaque, height)) = memo.get(&key) {
+        if let Some(&(opaque, height)) = memo.rows.get(&key) {
             budget.check_depth(
                 depth
                     .checked_add(height)
@@ -10753,10 +10760,19 @@ pub(in crate::compiler) fn reference_type_summary(
             | Ty::Dyn(_)
             | Ty::Never => {}
         }
-        budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
-        memo.try_reserve(1)
+        // Call-local scratch: refunded when this summary returns.
+        let row = budget.reserve_bytes(
+            4 * std::mem::size_of::<((usize, bool), (bool, usize))>()
+                + std::mem::size_of::<PlanReservation>(),
+        )?;
+        memo.rows
+            .try_reserve(1)
             .map_err(|_| "reference type memo allocation failed")?;
-        memo.insert(key, (opaque, height));
+        memo.leases
+            .try_reserve(1)
+            .map_err(|_| "reference type memo allocation failed")?;
+        memo.leases.push(row);
+        memo.rows.insert(key, (opaque, height));
         Ok((opaque, height))
     }
     walk(
@@ -10765,7 +10781,7 @@ pub(in crate::compiler) fn reference_type_summary(
         budget,
         depth,
         visits,
-        &mut std::collections::HashMap::new(),
+        &mut ReferenceSummaryMemo::default(),
     )
 }
 

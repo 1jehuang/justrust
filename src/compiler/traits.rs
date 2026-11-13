@@ -461,10 +461,11 @@ fn push_indexed_environment(
     push(b, environments, env)
 }
 fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
-    // Two retained slots per element pay for geometric capacity growth.
-    // Admit the old allocation separately while relocation is in progress.
-    retain::<T>(b, 2)?;
+    // Retain exactly the capacity each growth adds (at most two slots per
+    // element under doubling). Admit the old allocation separately while
+    // relocation is in progress.
     if values.len() == values.capacity() {
+        retain::<T>(b, values.len().max(1))?;
         charged(b, b.charge_work(values.len()))?;
         let bytes = values
             .len()

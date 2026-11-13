@@ -16,6 +16,11 @@ pub(super) fn clone_text(text: &str, budget: &ir::PlanBudget) -> Result<(), Stri
     )
 }
 
+/// A slice clone allocates exactly `len` elements (no growth slack).
+fn vector_bytes<T>(values: &[T]) -> Option<usize> {
+    std::mem::size_of_val(values).checked_add(128)
+}
+
 pub(super) fn clone_vector<T>(values: &[T], budget: &ir::PlanBudget) -> Result<(), String> {
     budget.charge_work(
         values
@@ -23,12 +28,7 @@ pub(super) fn clone_vector<T>(values: &[T], budget: &ir::PlanBudget) -> Result<(
             .checked_add(1)
             .ok_or("source collection work overflow")?,
     )?;
-    budget.retain_bytes(
-        std::mem::size_of_val(values)
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(128))
-            .ok_or("source collection bytes overflow")?,
-    )
+    budget.retain_bytes(vector_bytes(values).ok_or("source collection bytes overflow")?)
 }
 
 pub(super) fn clone_names(names: &[AstIdent], budget: &ir::PlanBudget) -> Result<(), String> {
@@ -124,12 +124,28 @@ pub(super) fn clone_path(path: &GenericPath, budget: &ir::PlanBudget) -> Result<
     Ok(())
 }
 
+/// Per-allocation header/rounding slack of the global allocator.
+const CLONE_ALLOCATION_OVERHEAD: usize = 32;
+
+fn node_bytes(node: &DepthNode<'_>) -> usize {
+    let node = match node {
+        DepthNode::Type(_) => std::mem::size_of::<Type>(),
+        DepthNode::Pattern(_) => std::mem::size_of::<Pattern>(),
+        DepthNode::Expr(_) => std::mem::size_of::<Expr>(),
+        DepthNode::Block(_) => std::mem::size_of::<Block>(),
+    };
+    node + CLONE_ALLOCATION_OVERHEAD
+}
+
 pub(super) fn preflight_clone_node(
     node: &DepthNode<'_>,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     budget.charge_work(1)?;
-    budget.retain_bytes(1024)?;
+    // A cloned node is at most one boxed copy of itself (children inline in a
+    // parent vector are already admitted by that vector's clone_vector), plus
+    // allocator overhead. Payload vectors/text are admitted per variant below.
+    budget.retain_bytes(node_bytes(node))?;
     match node {
         DepthNode::Type(ty) => match ty {
             Type::PhantomData(_) | Type::ManuallyDrop(_) | Type::Cell(_) => budget.retain_bytes(
@@ -483,6 +499,10 @@ pub(super) fn clone_visibility(
 
 #[cfg(test)]
 mod tests {
+    const TY: usize = std::mem::size_of::<Type>() + CLONE_ALLOCATION_OVERHEAD;
+    const PAT: usize = std::mem::size_of::<Pattern>() + CLONE_ALLOCATION_OVERHEAD;
+    const EXPR: usize = std::mem::size_of::<Expr>() + CLONE_ALLOCATION_OVERHEAD;
+    const BLOCK: usize = std::mem::size_of::<Block>() + CLONE_ALLOCATION_OVERHEAD;
     use super::*;
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::module_identity::ModuleArenaBuilder;
@@ -508,14 +528,14 @@ mod tests {
             panic!("expected actual trait application");
         };
         let box_bytes = std::mem::size_of::<SourceProjection>();
-        let segments = std::mem::size_of_val(path.segments.as_slice()) * 2 + 128;
-        let args = std::mem::size_of_val(path.segments[0].args.as_slice()) * 2 + 128;
+        let segments = vector_bytes(path.segments.as_slice()).unwrap();
+        let args = vector_bytes(path.segments[0].args.as_slice()).unwrap();
         for (bytes, used, requested) in [
-            (1024 + box_bytes - 1, 1024, box_bytes),
-            (1024 + box_bytes + segments - 1, 1024 + box_bytes, segments),
+            (TY + box_bytes - 1, TY, box_bytes),
+            (TY + box_bytes + segments - 1, TY + box_bytes, segments),
             (
-                1024 + box_bytes + segments + args - 1,
-                1024 + box_bytes + segments,
+                TY + box_bytes + segments + args - 1,
+                TY + box_bytes + segments,
                 args,
             ),
         ] {
@@ -531,10 +551,9 @@ mod tests {
         let Type::Tuple(children) = &path.segments[0].args[0] else {
             panic!("expected written nested tuple actual");
         };
-        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
-        let bindings =
-            std::mem::size_of_val(path.segments[0].associated_types.as_slice()) * 2 + 128;
-        let used = 1024 + box_bytes + segments + args + bindings + 1024;
+        let children_bytes = vector_bytes(children.as_slice()).unwrap();
+        let bindings = vector_bytes(path.segments[0].associated_types.as_slice()).unwrap();
+        let used = TY + box_bytes + segments + args + bindings + TY;
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: used + children_bytes - 1,
             ..Default::default()
@@ -545,7 +564,7 @@ mod tests {
         assert_eq!((failure.used, failure.requested), (used, children_bytes));
         preflight_program_clone(&parsed.program, &ir::PlanBudget::default()).unwrap();
         fn check_vector<T>(values: &[T]) {
-            let bytes = std::mem::size_of_val(values) * 2 + 128;
+            let bytes = vector_bytes(values).unwrap();
             let budget = ir::PlanBudget::new(ir::PlanLimits {
                 bytes: bytes - 1,
                 ..Default::default()
@@ -569,9 +588,9 @@ mod tests {
             panic!("expected source equality bound")
         };
         let segment = &path.segments[0];
-        let segments = std::mem::size_of_val(path.segments.as_slice()) * 2 + 128;
-        let args = std::mem::size_of_val(segment.args.as_slice()) * 2 + 128;
-        let rows = std::mem::size_of_val(segment.associated_types.as_slice()) * 2 + 128;
+        let segments = vector_bytes(path.segments.as_slice()).unwrap();
+        let args = vector_bytes(segment.args.as_slice()).unwrap();
+        let rows = vector_bytes(segment.associated_types.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: segments + args + rows - 1,
             ..Default::default()
@@ -583,8 +602,8 @@ mod tests {
         let Type::Tuple(children) = &segment.associated_types[0].value else {
             panic!("expected first equality tuple RHS")
         };
-        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
-        let used = segments + args + rows + 1024;
+        let children_bytes = vector_bytes(children.as_slice()).unwrap();
+        let used = segments + args + rows + TY;
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: used + children_bytes - 1,
             ..Default::default()
@@ -627,8 +646,8 @@ mod tests {
         };
         assert_eq!(actual.segments.len(), 1);
         assert_eq!(actual.segments[0].args.len(), 1);
-        let segments = std::mem::size_of_val(actual.segments.as_slice()) * 2 + 128;
-        let args = std::mem::size_of_val(actual.segments[0].args.as_slice()) * 2 + 128;
+        let segments = vector_bytes(actual.segments.as_slice()).unwrap();
+        let args = vector_bytes(actual.segments[0].args.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: segments + args - 1,
             ..Default::default()
@@ -642,16 +661,15 @@ mod tests {
         let Type::Tuple(children) = &actual.segments[0].args[0] else {
             panic!("expected actual nested tuple argument");
         };
-        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
-        let bindings =
-            std::mem::size_of_val(actual.segments[0].associated_types.as_slice()) * 2 + 128;
+        let children_bytes = vector_bytes(children.as_slice()).unwrap();
+        let bindings = vector_bytes(actual.segments[0].associated_types.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: segments + args + bindings + 1024 + children_bytes - 1,
+            bytes: segments + args + bindings + TY + children_bytes - 1,
             ..Default::default()
         });
         assert!(clone_trait_path(path, &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, segments + args + bindings + 1024);
+        assert_eq!(failure.used, segments + args + bindings + TY);
         assert_eq!(failure.requested, children_bytes);
         clone_trait_path(path, &ir::PlanBudget::default()).unwrap();
     }
@@ -665,14 +683,14 @@ mod tests {
         let declaration = &parsed.program.traits[1];
         assert_eq!(declaration.type_params.len(), 1);
         assert_eq!(declaration.bounds.len(), 1);
-        let bytes = std::mem::size_of_val(declaration.type_params.as_slice()) * 2 + 128;
+        let bytes = vector_bytes(declaration.type_params.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: bytes - 1,
             ..Default::default()
         });
         assert!(clone_names(&declaration.type_params, &budget).is_err());
         assert_eq!(budget.first_resource_failure().unwrap().requested, bytes);
-        let bytes = std::mem::size_of_val(declaration.bounds.as_slice()) * 2 + 128;
+        let bytes = vector_bytes(declaration.bounds.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: bytes - 1,
             ..Default::default()
@@ -780,15 +798,15 @@ mod tests {
         assert!(matches!(expression, Expr::TraitCall { .. }));
         let required = std::mem::size_of::<TraitPath>();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + required - 1,
+            bytes: EXPR + required - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Expr(expression), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.used, EXPR);
         assert_eq!(failure.requested, required);
-        assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert_eq!(budget.usage_snapshot().bytes, EXPR);
         assert!(!failure.arithmetic_overflow);
     }
 
@@ -802,8 +820,8 @@ mod tests {
         let boxed = std::mem::size_of::<SourceOutput>();
         let text = output.output.text.len() + 32;
         for (limit, used, requested) in [
-            (1024 + boxed - 1, 1024, boxed),
-            (1024 + boxed + text - 1, 1024 + boxed, text),
+            (EXPR + boxed - 1, EXPR, boxed),
+            (EXPR + boxed + text - 1, EXPR + boxed, text),
         ] {
             let budget = ir::PlanBudget::new(ir::PlanLimits {
                 bytes: limit,
@@ -831,17 +849,17 @@ mod tests {
         let Expr::TupleStruct { fields, .. } = &expr else {
             unreachable!()
         };
-        let required = std::mem::size_of_val(fields.as_slice()) * 2 + 128;
+        let required = vector_bytes(fields.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + required - 1,
+            bytes: EXPR + required - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Expr(&expr), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.used, EXPR);
         assert_eq!(failure.requested, required);
-        assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert_eq!(budget.usage_snapshot().bytes, EXPR);
         assert!(!failure.arithmetic_overflow);
     }
 
@@ -865,25 +883,25 @@ mod tests {
         assert!(else_branch.is_some());
         let boxes = std::mem::size_of::<Pattern>() + 2 * std::mem::size_of::<Expr>();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + boxes - 1,
+            bytes: EXPR + boxes - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Expr(expr), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.used, EXPR);
         assert_eq!(failure.requested, boxes);
         let Pattern::ArrayRest(fields) = pattern.as_ref() else {
             panic!("expected actual written prefix and suffix");
         };
-        let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
-        let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let prefix = vector_bytes(fields.prefix.as_slice()).unwrap();
+        let suffix = vector_bytes(fields.suffix.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + prefix + suffix - 1,
+            bytes: PAT + prefix + suffix - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Pattern(pattern), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, 1024 + prefix);
+        assert_eq!(failure.used, PAT + prefix);
         assert_eq!(failure.requested, suffix);
     }
 
@@ -903,28 +921,28 @@ mod tests {
         };
         assert_eq!(else_block.statements.len(), 1);
         let boxes = std::mem::size_of::<Pattern>() + std::mem::size_of::<Expr>();
-        let statements = std::mem::size_of_val(block.statements.as_slice()) * 2 + 128;
+        let statements = vector_bytes(block.statements.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + statements + boxes - 1,
+            bytes: BLOCK + statements + boxes - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Block(block), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024 + statements);
+        assert_eq!(failure.used, BLOCK + statements);
         assert_eq!(failure.requested, boxes);
         let Pattern::ArrayRest(fields) = pattern.as_ref() else {
             panic!("expected only actual written prefix and suffix");
         };
-        let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
-        let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let prefix = vector_bytes(fields.prefix.as_slice()).unwrap();
+        let suffix = vector_bytes(fields.suffix.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + prefix + suffix - 1,
+            bytes: PAT + prefix + suffix - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Pattern(pattern), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, 1024 + prefix);
+        assert_eq!(failure.used, PAT + prefix);
         assert_eq!(failure.requested, suffix);
     }
 
@@ -937,28 +955,28 @@ mod tests {
             panic!("expected genuine while-let statement");
         };
         let boxes = std::mem::size_of::<Pattern>() + std::mem::size_of::<Expr>();
-        let statements = std::mem::size_of_val(block.statements.as_slice()) * 2 + 128;
+        let statements = vector_bytes(block.statements.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + statements + boxes - 1,
+            bytes: BLOCK + statements + boxes - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Block(block), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024 + statements);
+        assert_eq!(failure.used, BLOCK + statements);
         assert_eq!(failure.requested, boxes);
         let Pattern::ArrayRest(fields) = pattern.as_ref() else {
             panic!("expected only actual written prefix and suffix");
         };
-        let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
-        let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let prefix = vector_bytes(fields.prefix.as_slice()).unwrap();
+        let suffix = vector_bytes(fields.suffix.as_slice()).unwrap();
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + prefix + suffix - 1,
+            bytes: PAT + prefix + suffix - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Pattern(pattern), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, 1024 + prefix);
+        assert_eq!(failure.used, PAT + prefix);
         assert_eq!(failure.requested, suffix);
     }
 
@@ -971,15 +989,15 @@ mod tests {
             suffix: None,
         });
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + required - 1,
+            bytes: EXPR + required - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Expr(&literal), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
         assert_eq!(failure.requested, required);
-        assert_eq!(failure.used, 1024);
-        assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert_eq!(failure.used, EXPR);
+        assert_eq!(budget.usage_snapshot().bytes, EXPR);
         assert!(!failure.arithmetic_overflow);
     }
 
@@ -989,19 +1007,19 @@ mod tests {
             prefix: vec![Pattern::Wildcard],
             suffix: vec![Pattern::Wildcard, Pattern::Wildcard],
         };
-        let prefix_bytes = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
-        let suffix_bytes = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let prefix_bytes = vector_bytes(fields.prefix.as_slice()).unwrap();
+        let suffix_bytes = vector_bytes(fields.suffix.as_slice()).unwrap();
         let pattern = Pattern::TupleRest(fields);
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + prefix_bytes + suffix_bytes - 1,
+            bytes: PAT + prefix_bytes + suffix_bytes - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Pattern(&pattern), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024 + prefix_bytes);
+        assert_eq!(failure.used, PAT + prefix_bytes);
         assert_eq!(failure.requested, suffix_bytes);
-        assert_eq!(budget.usage_snapshot().bytes, 1024 + prefix_bytes);
+        assert_eq!(budget.usage_snapshot().bytes, PAT + prefix_bytes);
         assert!(!failure.arithmetic_overflow);
     }
 
@@ -1011,19 +1029,19 @@ mod tests {
             prefix: vec![Pattern::Wildcard],
             suffix: vec![Pattern::Wildcard, Pattern::Wildcard],
         };
-        let prefix_bytes = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
-        let suffix_bytes = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let prefix_bytes = vector_bytes(fields.prefix.as_slice()).unwrap();
+        let suffix_bytes = vector_bytes(fields.suffix.as_slice()).unwrap();
         let pattern = Pattern::ArrayRest(fields);
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 1024 + prefix_bytes + suffix_bytes - 1,
+            bytes: PAT + prefix_bytes + suffix_bytes - 1,
             ..Default::default()
         });
         assert!(preflight_clone_node(&DepthNode::Pattern(&pattern), &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
-        assert_eq!(failure.used, 1024 + prefix_bytes);
+        assert_eq!(failure.used, PAT + prefix_bytes);
         assert_eq!(failure.requested, suffix_bytes);
-        assert_eq!(budget.usage_snapshot().bytes, 1024 + prefix_bytes);
+        assert_eq!(budget.usage_snapshot().bytes, PAT + prefix_bytes);
         assert!(!failure.arithmetic_overflow);
     }
 
