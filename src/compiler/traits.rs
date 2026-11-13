@@ -3138,9 +3138,15 @@ pub struct TraitScratch {
     /// Carrier contracts of concrete callable arguments, read once per
     /// facts subject by callable result transport.
     callable_contracts: Vec<(Callee, Arc<CarrierContractView>)>,
+    /// Logical item-region substitutions, keyed by (environment, actual
+    /// arguments, type). The retained environment keeps pointer identity
+    /// unambiguous for the lifetime of this facts subject.
+    item_region_substitutions: ItemRegionSubstitutions,
     /// The facts identity these answers belong to (environment + phase).
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
+type ItemRegionSubstitutions =
+    std::collections::HashMap<(usize, Vec<Ty>, Ty), (Arc<GenericEnv>, Ty)>;
 impl TraitScratch {
     pub(in crate::compiler) fn replay_nominal(
         &mut self,
@@ -3185,6 +3191,7 @@ impl TraitScratch {
             self.formed_trait_signatures.clear();
             self.formed_trait_signature_index.clear();
             self.callable_contracts.clear();
+            self.item_region_substitutions.clear();
         }
     }
 }
@@ -11471,7 +11478,18 @@ impl ValidatedTraitWorld {
         active: &mut ProofScratch,
         caller: Option<&ValidatedFacts>,
     ) -> Result<InstantiatedSchema> {
-        self.instantiate_scratch_for_use(schema, args, facts, declaration, active, caller, true)
+        // A logical proof context (source identity, not executable storage)
+        // instantiates its actuals logically as well.
+        let executable_storage = facts.executable_storage;
+        self.instantiate_scratch_for_use(
+            schema,
+            args,
+            facts,
+            declaration,
+            active,
+            caller,
+            executable_storage,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -14976,6 +14994,39 @@ impl ValidatedTraitWorld {
         transport: ParentLocalTransport<'_>,
         scratch: &mut TraitScratch,
     ) -> Result<ResolvedTraitCall> {
+        self.resolve_trait_call_for_use(call, facts, transport, scratch, true)
+    }
+
+    /// Select the implementation of a closed trait call for source identity
+    /// only. The selected callee and signature are logical: nominal actuals
+    /// are not required to have storage-normalized fields, so the result must
+    /// never be used as executable call authority. Only the callee identity
+    /// leaves this function, so no logical signature or evidence can reach
+    /// storage, lowering, or codegen.
+    pub(in crate::compiler) fn resolve_trait_call_logical(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Callee> {
+        let resolved = self.resolve_trait_call_for_use(
+            call,
+            facts,
+            ParentLocalTransport::default(),
+            scratch,
+            false,
+        )?;
+        Ok(resolved.callee)
+    }
+
+    fn resolve_trait_call_for_use(
+        &self,
+        call: &TraitCall,
+        facts: &ValidatedFacts,
+        transport: ParentLocalTransport<'_>,
+        scratch: &mut TraitScratch,
+        executable_storage: bool,
+    ) -> Result<ResolvedTraitCall> {
         let validation =
             std::cell::RefCell::new(nominal_normalization::ParentLocalValidation::default());
         let transport = transport.with_validation(&validation);
@@ -14984,7 +15035,7 @@ impl ValidatedTraitWorld {
         self.check_facts(facts, true)?;
         let caller = ProofContext {
             transport,
-            ..ProofContext::from_facts(facts)
+            ..ProofContext::from_facts(facts).for_storage(executable_storage)
         };
         if matches!(&call.trait_ref.self_ty, Ty::FnItem(_) | Ty::FnPointer(_))
             && self

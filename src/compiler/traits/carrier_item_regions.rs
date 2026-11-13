@@ -1283,8 +1283,9 @@ impl ValidatedTraitWorld {
                 scratch,
             )?]),
         };
-        let selected = self.resolve_trait_call_with(&call, facts, scratch)?;
-        let Callee::Direct(target) = selected.callee() else {
+        // Only the selected implementation identity is consulted here.
+        let selected = self.resolve_trait_call_logical(&call, facts, scratch)?;
+        let Callee::Direct(target) = selected else {
             return Ok(None);
         };
         if target.declaration != declaration || !self.eq_types(&target.type_args, arguments, 0)? {
@@ -1999,6 +2000,36 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut TraitScratch,
     ) -> Result<Ty> {
+        scratch.for_facts(facts);
+        let key = (
+            Arc::as_ptr(context.env) as usize,
+            context.arguments.to_vec(),
+            ty.clone(),
+        );
+        if let Some((env, found)) = scratch.item_region_substitutions.get(&key)
+            && Arc::ptr_eq(env, context.env)
+        {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            return Ok(found.clone());
+        }
+        let found = self.item_region_substitution_uncached(ty, context, facts, scratch)?;
+        if scratch.item_region_substitutions.len() < MAX_SCRATCH_OBLIGATIONS
+            && scratch.item_region_substitutions.try_reserve(1).is_ok()
+        {
+            scratch
+                .item_region_substitutions
+                .insert(key, (context.env.clone(), found.clone()));
+        }
+        Ok(found)
+    }
+
+    fn item_region_substitution_uncached(
+        &self,
+        ty: &Ty,
+        context: &ItemRegionContext<'_>,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Ty> {
         retain::<ir::RefContract>(&self.budget, 1)?;
         let schema = GenericSchema {
             env: context.env.clone(),
@@ -2013,11 +2044,12 @@ impl ValidatedTraitWorld {
         let instantiated =
             self.substitute_carrier_schema(&schema, context.arguments, facts, active)?;
         Ok(self
-            .normalize_closed_projected_type_with(
+            .normalize_closed_projected_type_for_use(
                 &instantiated.signature.result,
                 ProofContext::from_facts(facts),
                 false,
                 active,
+                false,
             )?
             .0)
     }
@@ -2210,10 +2242,12 @@ impl ValidatedTraitWorld {
                 args: actual_arguments.into(),
             },
         };
-        let reduction = self.normalize_projection_for_facts_with_scratch(
+        // Region transport reads only the reduced source type, never a layout.
+        let reduction = self.normalize_projection_for_facts_for_use(
             &actual,
             facts,
             scratch.for_world(self.id),
+            false,
         )?;
         // A callable result can leave its receiver storage entirely. Its exact
         // parent-sealed receipt instead selects a tuple argument component.
@@ -2282,7 +2316,7 @@ impl ValidatedTraitWorld {
         }
         let membership = self.require_in(
             &Predicate::Implements(actual.trait_ref.clone()),
-            ProofContext::from_facts(facts),
+            ProofContext::from_facts(facts).for_storage(false),
             scratch.for_world(self.id),
         )?;
         let ProofOrigin::Implementation {
@@ -2333,21 +2367,22 @@ impl ValidatedTraitWorld {
             let replay = self.replay_implementation_assignment_with(
                 &actual,
                 &membership,
-                ProofContext::from_facts(facts),
+                ProofContext::from_facts(facts).for_storage(false),
                 scratch.for_world(self.id),
             )?;
-            self.normalize_closed_projected_type_with(
+            self.normalize_closed_projected_type_for_use(
                 &replay,
-                ProofContext::from_facts(facts),
+                ProofContext::from_facts(facts).for_storage(false),
                 false,
                 scratch.for_world(self.id),
+                false,
             )?
             .0
         } else {
             self.implementation_equality_rhs_with(
                 &actual,
                 &membership,
-                ProofContext::from_facts(facts),
+                ProofContext::from_facts(facts).for_storage(false),
                 scratch.for_world(self.id),
             )?
         };

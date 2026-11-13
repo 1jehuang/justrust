@@ -757,12 +757,22 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut ProofScratch,
     ) -> Result<NormalizedAssociatedType> {
+        self.normalize_associated_type_for_use(projection, facts, scratch, true)
+    }
+
+    pub(super) fn normalize_associated_type_for_use(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut ProofScratch,
+        executable_storage: bool,
+    ) -> Result<NormalizedAssociatedType> {
         self.check_normalization_budget()?;
         self.check_facts(facts, false)?;
         let context = NormalizationContext {
-            proof: ProofContext::from_facts(facts),
+            proof: ProofContext::from_facts(facts).for_storage(executable_storage),
             staged: false,
-            executable_storage: true,
+            executable_storage,
         };
         let mut stack = NormalizationStack {
             obligations: std::mem::take(scratch),

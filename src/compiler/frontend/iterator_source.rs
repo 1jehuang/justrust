@@ -331,13 +331,14 @@ pub(super) fn validate_for_alternatives(
                         item: method,
                         method_args: Arc::from([]),
                     };
-                    let resolved = original.facts.service().resolve_trait_call_with(
+                    // Only the selected callee identity is compared here.
+                    let resolved = original.facts.world().resolve_trait_call_logical(
                         &call,
                         &original.facts,
                         &mut scratch,
                     )?;
                     validate_original_callee(
-                        resolved.callee(),
+                        &resolved,
                         &original.call_mapping[position].2,
                         budget,
                     )?;

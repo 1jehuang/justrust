@@ -222,7 +222,9 @@ impl ValidatedTraitWorld {
         };
         // Universal checking retains authenticated caller-bound projections.
         // Only a closed executable ABI must contain no symbolic projection.
+        // A logical (identity-only) selection never yields call authority.
         if context.phase == FactsPhase::Closed
+            && context.executable_storage
             && self.signature_contains_projection(&result.signature)?
         {
             return Err(FactsError::unsupported(

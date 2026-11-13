@@ -822,6 +822,16 @@ fn iterator_flat_map_matches_stock() {
                 expect: Expect::Run("Some(1)\n"),
             },
             Case {
+                name: "collect_borrowed_items_from_slice_iters",
+                source: r#"fn main(){let v=vec![1i32,2,3];let out:Vec<&i32>=(0..2).flat_map(|_|v.iter()).collect();println!("{:?}",out);let w=[4u8,5];let n:Vec<&u8>=w.iter().flat_map(|_|w.iter()).collect();println!("{:?} {}",n,n.len());}"#,
+                expect: Expect::Run("[1, 2, 3, 1, 2, 3]\n[4, 5, 4, 5] 4\n"),
+            },
+            Case {
+                name: "collected_borrowed_items_escape",
+                source: "fn main(){let out:Vec<&i32>;{let a=vec![1i32,2i32];out=(0i32..1i32).flat_map(|_|a.iter()).collect();}println!(\"{:?}\",out);}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+            Case {
                 name: "nonfused_inner_and_outer",
                 source: r#"struct Pulse{n:i32}impl Iterator for Pulse{type Item=i32;fn next(&mut self)->Option<i32>{self.n+=1;if self.n==2{None}else if self.n<4{Some(self.n)}else{None}}}impl IntoIterator for Wrap{type Item=i32;type IntoIter=Pulse;fn into_iter(self)->Pulse{Pulse{n:0}}}struct Wrap;fn main(){let out:Vec<i32>=(0i32..2i32).flat_map(|_|Wrap).collect();println!("{:?}",out);let mut it=Pulse{n:0}.flat_map(|n|0i32..n);println!("{:?} {:?} {:?}",it.next(),it.next(),it.next());}"#,
                 expect: Expect::Run("[1, 1]\nSome(0) None None\n"),

@@ -1443,20 +1443,38 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         scratch: &mut ProofScratch,
     ) -> Result<ProjectionReduction> {
+        self.normalize_projection_for_facts_for_use(projection, facts, scratch, true)
+    }
+
+    /// `executable_storage == false` reduces a projection for source identity
+    /// only: nominal actuals are not required to have storage-normalized
+    /// fields, so the result must not be used as an executable layout.
+    pub(super) fn normalize_projection_for_facts_for_use(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        facts: &ValidatedFacts,
+        scratch: &mut ProofScratch,
+        executable_storage: bool,
+    ) -> Result<ProjectionReduction> {
         if self.checked_closure_projection(projection, facts.env())?
             || self
                 .opaque_associated_binding(projection, facts.env())?
                 .is_some()
             || self.goal_is_closed_in_with(
                 &projection.trait_ref,
-                ProofContext::from_facts(facts),
+                ProofContext::from_facts(facts).for_storage(executable_storage),
                 scratch,
             )?
             || associated_types::nominal_application_self(&projection.trait_ref.self_ty)
             || self.universal_projection_has_implementation(projection, facts, scratch)?
         {
             Ok(ProjectionReduction::Implementation(
-                self.normalize_associated_type_with_scratch(projection, facts, scratch)?,
+                self.normalize_associated_type_for_use(
+                    projection,
+                    facts,
+                    scratch,
+                    executable_storage,
+                )?,
             ))
         } else {
             Ok(ProjectionReduction::Equality(
