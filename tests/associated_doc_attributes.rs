@@ -380,6 +380,51 @@ fn denied_unused_macros_match_stock() {
 }
 
 #[test]
+fn denied_missing_debug_implementations_match_stock() {
+    let source = r#"
+        #![deny(missing_debug_implementations)]
+        use std::fmt;
+        #[derive(Debug, Clone)]
+        pub struct Derived(pub u8);
+        pub struct Manual<T> { pub value: T }
+        impl<T: fmt::Display> fmt::Debug for Manual<T> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "Manual({})", self.value)
+            }
+        }
+        #[derive(Debug)]
+        pub enum Kind { A, B }
+        struct Private;
+        pub(crate) struct Crate;
+        mod hidden { pub(crate) struct Inner; }
+        fn main() {
+            let _ = (Private, Crate, hidden::Inner);
+            #[allow(missing_debug_implementations)]
+            struct Local;
+            let _ = Local;
+            println!("{:?} {:?} {:?}", Derived(1), Manual { value: 2 }, Kind::B);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#![deny(missing_debug_implementations)] pub struct A; fn main() {}",
+        "#![forbid(missing_debug_implementations)] pub enum E {} fn main() {}",
+        "#![deny(missing_debug_implementations)] pub mod m { pub union U { pub a: u8 } } fn main() {}",
+        "#![deny(missing_debug_implementations)] #[derive(Clone)] pub struct C; fn main() {}",
+    ] {
+        file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+    }
+    for unsupported in [
+        "#![deny(missing_debug_implementations)] mod p { pub struct H; } pub fn h() -> p::H { p::H } fn main() {}",
+        "#![deny(missing_debug_implementations)] pub struct S; fn main() { impl std::fmt::Debug for S { fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { Ok(()) } } }",
+    ] {
+        let error =
+            source::prepare_text("lint.rs", unsupported, &SourceOptions::default()).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported, "{unsupported}");
+    }
+}
+
+#[test]
 fn inactive_items_lex_with_the_crate_edition() {
     let text = "#[cfg(any())] fn unused(gen: u8) -> u8 { gen } fn main(){}";
     let options = SourceOptions {

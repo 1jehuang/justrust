@@ -40,7 +40,7 @@ impl Filter<'_> {
         self.tokens.get(i).map_or("", |t| t.text(self.text))
     }
 
-    fn masked(&self, i: usize) -> bool {
+    pub(super) fn token_masked(&self, i: usize) -> bool {
         let start = self.tokens[i].range.start;
         self.bytes[start] == b' ' && self.text.as_bytes()[start] != b' '
     }
@@ -82,7 +82,7 @@ impl Filter<'_> {
         // Definitions this walker did not see (function bodies, macro
         // bodies) may be linted by stock too.
         for &(keyword, _, _) in &bodies {
-            if self.masked(keyword)
+            if self.token_masked(keyword)
                 || self.macro_defs.iter().any(|d| d.keyword == keyword)
                 || ident(self.tok(keyword + 2)).starts_with('_')
             {
@@ -124,7 +124,7 @@ impl Filter<'_> {
                 let t = self.tok(i);
                 if t == "mod"
                     && self.tok(i + 2) == ";"
-                    && !self.masked(i)
+                    && !self.token_masked(i)
                     && inside_body(i).is_none()
                 {
                     return Err(self.unsupported(i, "a file module inside a macro's textual scope"));
@@ -133,7 +133,7 @@ impl Filter<'_> {
                     continue;
                 }
                 let invoked = self.tok(i + 1) == "!";
-                if self.masked(i) {
+                if self.token_masked(i) {
                     let at = self.tokens[i].range.start;
                     let configured_out = self
                         .inactive_items

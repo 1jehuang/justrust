@@ -234,9 +234,11 @@ fn prepare_with_context(
         assoc_container: None,
         macro_defs: Vec::new(),
         unused_macros_denied: inherited.0.denied("unused_macros"),
+        debug_impls: Vec::new(),
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     filter.check_unused_macros()?;
+    filter.record_unplaced_debug_impls();
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
         // E0453: a lower level cannot override `forbid`.
         return Err(error(
@@ -321,6 +323,8 @@ struct Filter<'a> {
     macro_defs: Vec<unused_macros::MacroDef>,
     /// `unused_macros` is at deny/forbid somewhere in this file.
     unused_macros_denied: bool,
+    /// Token indices of module-level `impl .. Debug ..` keywords.
+    debug_impls: Vec<usize>,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -1537,6 +1541,7 @@ impl Filter<'_> {
             }
             names.push(path.rsplit("::").next().unwrap_or(&path).to_string());
         }
+        self.doc_state.debug_derived |= names.iter().any(|name| name == "Debug");
         let generated =
             super::source_derive::expand(&self.text[item.clone()], &names).map_err(|message| {
                 let kind = if message.starts_with("unsupported") {
@@ -1933,8 +1938,12 @@ impl Filter<'_> {
             // A statement or field position holds no module-scope macro
             // definition, so lowering `unused_macros` there cannot change
             // acceptance unless the lint is forbidden (E0453).
-            let macros_only = matches!(lint, "unused_macros" | "unused")
-                && self.levels.get("unused_macros") != lint_names::Level::Forbid;
+            // Likewise statement-local types are never reachable, so they
+            // never matter to `missing_debug_implementations`.
+            let macros_only = (matches!(lint, "unused_macros" | "unused")
+                && self.levels.get("unused_macros") != lint_names::Level::Forbid)
+                || (lint == "missing_debug_implementations"
+                    && self.levels.get(lint) != lint_names::Level::Forbid);
             let touches_enforced = !macros_only
                 && (lint == "unsafe_code"
                     || lint_names::enforced(lint).is_some()
@@ -2975,7 +2984,7 @@ mod tests {
         for source in [
             "#![allow(foo::bar)] fn main(){}",
             "#![allow(dead_code reason)] fn main(){}",
-            "#![deny(missing_debug_implementations)] fn main(){}",
+            "#![deny(missing_copy_implementations)] fn main(){}",
             "#![forbid(unsafe_code)] #[allow(unsafe_code)] fn main(){}",
         ] {
             assert!(prep(source).is_err(), "accepted {source}");
@@ -3258,7 +3267,7 @@ mod tests {
             "forbid(unused)",
             "must_use(foo)",
             "stable(feature=\"x\",since=\"1.0\")",
-            "deny(missing_debug_implementations)",
+            "deny(missing_copy_implementations)",
             "forbid(dead_code)",
             "custom",
         ] {

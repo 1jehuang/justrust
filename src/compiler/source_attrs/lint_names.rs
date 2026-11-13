@@ -298,6 +298,7 @@ pub(super) const RENAMED: &[(&str, &str)] = &[
 /// Lints whose deny/forbid level the native compiler enforces exactly. Any
 /// other known lint at deny/forbid is explicitly unsupported (uncapped).
 pub(super) const ENFORCED: &[&str] = &[
+    "missing_debug_implementations",
     "missing_docs",
     "non_camel_case_types",
     "non_upper_case_globals",
