@@ -425,6 +425,47 @@ fn denied_missing_debug_implementations_match_stock() {
 }
 
 #[test]
+fn denied_missing_docs_over_trait_impl_macro_matches_stock() {
+    let source = r#"#![deny(missing_docs)]
+//! Crate docs.
+/// A trait.
+pub trait Size {
+    /// Size.
+    fn size() -> usize;
+}
+macro_rules! impl_size(
+    ($($n:expr),+) => {
+        $(
+            impl<T> Size for [T; $n] {
+                #[inline]
+                fn size() -> usize { $n }
+            }
+        )+
+    }
+);
+impl_size!(1, 2, 3);
+fn main() {
+    println!("{}", <[u8; 3] as Size>::size());
+}
+"#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for unsupported in [
+        "#![deny(missing_docs)]\n//! c\nmacro_rules! m { () => { pub struct S; } }\nm!();\nfn main() {}",
+        "#![deny(missing_docs)]\n//! c\nmacro_rules! m { () => { impl S { pub fn f() {} } } }\n/// S\npub struct S;\nm!();\nfn main() {}",
+    ] {
+        let error =
+            source::prepare_text("lint.rs", unsupported, &SourceOptions::default()).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported, "{unsupported}");
+    }
+    file_oracle::Fixture::new(
+        "#![deny(missing_docs)]\n//! c\nmacro_rules! m { () => { impl Clone for S { fn clone(&self) -> S { S } } } }\npub struct S;\nm!();\nfn main() {}",
+        &[],
+        None,
+    )
+    .assert_negative();
+}
+
+#[test]
 fn inactive_items_lex_with_the_crate_edition() {
     let text = "#[cfg(any())] fn unused(gen: u8) -> u8 { gen } fn main(){}";
     let options = SourceOptions {

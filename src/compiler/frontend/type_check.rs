@@ -11218,6 +11218,23 @@ impl<'a> Checker<'a> {
             );
         }
         ir::validate_pointer_cast(&source.ty, &target, self.facts())?;
+        // `&T`/`&mut T` to a raw pointer to the same `T` is a coercion
+        // (stock never lints raw-to-raw casts).
+        if let (
+            ir::Ty::Ref {
+                kind: from,
+                referent,
+            },
+            ir::Ty::RawPtr { kind: to, pointee },
+        ) = (&source.ty, &target)
+            && referent.as_ref() == pointee.as_ref()
+            && (*from == ir::BorrowKind::Mut || *to == ir::BorrowKind::Shared)
+        {
+            self.lint_trivial_cast(false)?;
+        }
+        if source.ty == ir::Ty::Never {
+            self.lint_trivial_cast(false)?;
+        }
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -11231,6 +11248,25 @@ impl<'a> Checker<'a> {
         });
         Ok(id)
     }
+    /// `trivial_casts` / `trivial_numeric_casts` under a crate-root deny.
+    fn lint_trivial_cast(&self, numeric: bool) -> Result<(), String> {
+        let bit = if numeric {
+            crate::compiler::frontend::CRATE_LINT_TRIVIAL_NUMERIC_CASTS
+        } else {
+            crate::compiler::frontend::CRATE_LINT_TRIVIAL_CASTS
+        };
+        let Some(plan) = &self.signatures.plan else {
+            return Ok(());
+        };
+        if plan.program.crate_lint_denied(self.module, bit)? {
+            return Err(if numeric {
+                "trivial numeric cast (`trivial_numeric_casts` is denied)".into()
+            } else {
+                "trivial cast (`trivial_casts` is denied)".into()
+            });
+        }
+        Ok(())
+    }
     pub(super) fn cast_expression(
         &mut self,
         value: &Expr,
@@ -11239,6 +11275,8 @@ impl<'a> Checker<'a> {
         let target = self.source_local_ty(target)?;
         if matches!(target, ir::Ty::FnPointer(_)) {
             let value = self.expr_with_expectation(value, Expectation::HasType(&target))?;
+            // Every admitted cast to a function pointer is a coercion.
+            self.lint_trivial_cast(false)?;
             return self.coerce_function_pointer_value(value, &target);
         }
         if matches!(self.scalar_hint(value)?, Some(ir::Ty::FnPointer(_))) {
@@ -11258,6 +11296,7 @@ impl<'a> Checker<'a> {
             if *source != target && *source != ir::Ty::Never {
                 return Err("E0605: non-primitive cast".into());
             }
+            self.lint_trivial_cast(false)?;
             return Ok(id);
         }
         // An unsuffixed literal, including a transparent block tail, is a byte
@@ -11290,6 +11329,14 @@ impl<'a> Checker<'a> {
             _ => return Err("E0605: non-primitive cast".into()),
         };
         let source = self.flow(value);
+        // Stock lints a cast whose operand already coerces to the target.
+        if source.ty == ir::Ty::Never || source.ty == target {
+            let numeric = ir::NumTy::of(&source.ty).is_some();
+            self.lint_trivial_cast(numeric)?;
+        }
+        if source.ty == ir::Ty::Char && target == ir::Ty::Char {
+            return Ok(value);
+        }
         let kind = match (&source.ty, &target) {
             (ir::Ty::Char, ir::Ty::Int(to)) => ir::ExprKind::CharToInt { value, to: *to },
             (ir::Ty::Int(ir::IntTy::U8), ir::Ty::Char) => ir::ExprKind::U8ToChar { value },
@@ -14439,6 +14486,14 @@ pub(super) fn type_callable_source(
 /// Prepare one canonical source callable before executable local obligations.
 /// The retained signature result is metadata, not a placeholder or admission;
 /// source recipes, rather than runtime locals, seed this emission-free solve.
+/// An `unsafe fn` body is an unsafe context unless its crate denies
+/// `unsafe_op_in_unsafe_fn` (stock reports E0133 there).
+fn unsafe_body_depth(program: &Program, function: &Function) -> Result<usize, String> {
+    Ok(usize::from(
+        function.unsafety && !program.unsafe_op_denied(function.module)?,
+    ))
+}
+
 #[cfg(test)]
 pub(in crate::compiler) fn prepare_callable_nominals(
     plan: &PlanCtx,
@@ -14452,7 +14507,7 @@ pub(in crate::compiler) fn prepare_callable_nominals(
     let mut checker = Checker::new(&signatures, signature.result, function.module);
     checker.install_lexical_scope(function.lexical_scope)?;
     checker.declaration = Some(declaration);
-    checker.unsafe_depth = usize::from(function.unsafety);
+    checker.unsafe_depth = unsafe_body_depth(&plan.program, function)?;
     local_literals::nominal_manifest::prepare_callable(&checker, declaration, receiver, inputs)
 }
 
@@ -14471,7 +14526,7 @@ pub(in crate::compiler) fn finalized_callable_nominal_hints(
     let mut checker = Checker::new(&signatures, signature.result, function.module);
     checker.install_lexical_scope(function.lexical_scope)?;
     checker.declaration = Some(declaration);
-    checker.unsafe_depth = usize::from(function.unsafety);
+    checker.unsafe_depth = unsafe_body_depth(&plan.program, function)?;
     local_literals::nominal_manifest::finalize_callable(&checker, declaration, receiver, inputs)
 }
 
@@ -14686,7 +14741,7 @@ fn type_callable_source_and_closures_inner(
         c.stored_constant_inputs = capability.stored_constant_inputs.clone();
     }
     c.closure_source_recipe = canonical.map(|cap| cap.inventory.owner.clone());
-    c.unsafe_depth = usize::from(f.unsafety);
+    c.unsafe_depth = unsafe_body_depth(program, f)?;
     let root_hints = if let Some((receiver, inputs)) = nominal {
         let mut hints = match local_literals::nominal_manifest::finalize_callable(
             &c,
@@ -14861,7 +14916,7 @@ pub fn type_function_with_env(
     let mut c = Checker::new(signatures, signature.result.clone(), f.module);
     c.prove_nominal_bounds(&signature.result)?;
     c.install_lexical_scope(f.lexical_scope)?;
-    c.unsafe_depth = usize::from(f.unsafety);
+    c.unsafe_depth = unsafe_body_depth(program, f)?;
     let mut params = Vec::with_capacity(f.params.len());
     for ((n, _), t) in f.params.iter().zip(&signature.params) {
         params.push(

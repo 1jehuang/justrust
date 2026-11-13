@@ -97,6 +97,104 @@ fn unsafe_operations_outside_unsafe_are_rejected() {
     }
 }
 
+#[test]
+fn denied_unsafe_op_in_unsafe_fn_matches_stock() {
+    let source = r#"#![deny(unsafe_op_in_unsafe_fn)]
+unsafe fn read(p: *const i32) -> i32 {
+    unsafe { *p }
+}
+unsafe fn twice(p: *const i32) -> i32 {
+    unsafe { read(p) * 2 }
+}
+unsafe fn nothing() -> i32 { 7 }
+fn main() {
+    let x = 21;
+    let v = unsafe { twice(&x) + nothing() };
+    println!("{v}");
+}
+"#;
+    for workers in [1, 8] {
+        assert_eq!(run(source, workers, "unsafe_op"), "49\n");
+    }
+    for source in [
+        "#![deny(unsafe_op_in_unsafe_fn)] unsafe fn f() {} unsafe fn g() { f() } fn main() { unsafe { g() } }",
+        "#![forbid(unsafe_op_in_unsafe_fn)] unsafe fn r(p: *const u8) -> u8 { *p } fn main() { let x = 1u8; unsafe { r(&x); } }",
+    ] {
+        let error = compiler::compile_observed(source.into(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted {source}"));
+        assert!(error.to_string().contains("E0133"), "{source}: {error}");
+    }
+    for source in [
+        "#![deny(unsafe_op_in_unsafe_fn)] #[allow(unsafe_op_in_unsafe_fn)] unsafe fn f() {} fn main() {}",
+        "#![deny(rust_2024_compatibility)] fn main() {}",
+        "mod m { #![deny(unsafe_op_in_unsafe_fn)] } fn main() {}",
+    ] {
+        let error = compiler::compile_observed(source.into(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted {source}"));
+        assert!(
+            error.to_string().contains("unsupported"),
+            "{source}: {error}"
+        );
+    }
+}
+
+#[test]
+fn denied_trivial_casts_match_stock() {
+    let source = r#"#![deny(trivial_casts, trivial_numeric_casts)]
+fn widen(x: u8) -> u32 {
+    x as u32
+}
+fn main() {
+    let bytes = [3u8, 200];
+    let total: u32 = bytes.iter().map(|b| widen(*b)).sum();
+    let x = 7;
+    let wide = x as u64;
+    let c = 65u8 as char;
+    let back = c as u32;
+    let f = 2.5f32 as f64;
+    println!("{total} {wide} {c} {back} {f}");
+}
+"#;
+    for workers in [1, 8] {
+        assert_eq!(run(source, workers, "trivial_casts"), "203 7 A 65 2.5\n");
+    }
+    for source in [
+        "#![deny(trivial_numeric_casts)] fn main() { let x = 1u8; let _ = x as u8; }",
+        "#![deny(trivial_numeric_casts)] fn main() { let v = [1u32]; let _ = v.len() as usize; }",
+        "#![deny(trivial_numeric_casts)] fn main() { let x = 1; let y: u8 = x; let _ = x as u8; let _ = y; }",
+        "#![forbid(trivial_casts)] fn main() { let x = 5u8; let _ = &x as *const u8; }",
+        "#![deny(trivial_casts)] fn main() { let _ = 'a' as char; }",
+    ] {
+        let error = compiler::compile_observed(source.into(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted {source}"));
+        assert!(error.to_string().contains("trivial"), "{source}: {error}");
+    }
+    for source in [
+        "#![deny(trivial_casts)] #[allow(trivial_casts)] fn f() {} fn main() {}",
+        "mod m { #![deny(trivial_numeric_casts)] } fn main() {}",
+    ] {
+        let error = compiler::compile_observed(source.into(), 1, true)
+            .err()
+            .unwrap_or_else(|| panic!("accepted {source}"));
+        assert!(
+            error.to_string().contains("unsupported"),
+            "{source}: {error}"
+        );
+    }
+    // Without the lint, `char as char` is an ordinary (trivial) cast.
+    assert_eq!(
+        run(
+            "fn main() { let c = 'z' as char; println!(\"{c}\"); }",
+            1,
+            "char_cast"
+        ),
+        "z\n"
+    );
+}
+
 #[path = "support/oracle.rs"]
 mod target_feature_oracle;
 

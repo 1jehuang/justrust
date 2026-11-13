@@ -311,6 +311,7 @@ impl Parser<'_, '_> {
             frontier: self.module_frontier,
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
+            lint_roots: self.lint_roots.clone(),
         });
         Ok(())
     }

@@ -20,6 +20,12 @@ pub(super) struct MacroDef {
     exported: bool,
 }
 
+impl MacroDef {
+    pub(super) fn keyword(&self) -> usize {
+        self.keyword
+    }
+}
+
 fn ident(text: &str) -> &str {
     text.strip_prefix("r#").unwrap_or(text)
 }

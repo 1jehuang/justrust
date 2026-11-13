@@ -138,6 +138,7 @@ impl ManuallyDropSourceOperation {
             .registry
             .source_callable(self.owner)
             .ok_or("invalid metadata: ManuallyDrop operation has no original source callable")?;
+        let unsafe_body = function.unsafety && !plan.program.unsafe_op_denied(function.module)?;
         let mut ordinal = 0usize;
         let mut unsafe_at = [None; 129];
         let mut found = None;
@@ -194,7 +195,7 @@ impl ManuallyDropSourceOperation {
                     .rev()
                     .find_map(|entry| *entry)
                     .map(UnsafeEnclosure::Block)
-                    .or(function.unsafety.then_some(UnsafeEnclosure::Function));
+                    .or(unsafe_body.then_some(UnsafeEnclosure::Function));
             }
             Ok(())
         };

@@ -557,6 +557,14 @@ impl Filter<'_> {
                 self.debug_impls.push(keyword);
                 DocKind::DebugImpl(target)
             }
+            "unknown" if body.is_none() && self.trait_impl_invocation(item_start).is_some() => {
+                // Only trait impls: nothing generated needs documentation.
+                if self.trait_impl_invocation(item_start) == Some(true) {
+                    let range = self.tokens[item_start].range.clone();
+                    self.doc_entry("", false, range, DocKind::DebugUnknown);
+                }
+                return;
+            }
             "unknown"
                 if self.tokens[item_start
                     ..body
@@ -836,5 +844,116 @@ impl Filter<'_> {
                 self.doc_entry("", false, range, DocKind::DebugUnknown);
             }
         }
+    }
+}
+
+impl Filter<'_> {
+    /// `name!(..);` at `start` invoking the file-local `macro_rules!` in
+    /// textual scope whose every transcriber expands to trait impls only.
+    /// `Some(mentions_debug)` when so, `None` when undecided.
+    fn trait_impl_invocation(&self, start: usize) -> Option<bool> {
+        let name = self.t(start).trim_start_matches("r#");
+        if !is_ident(name) || self.t(start + 1) != "!" {
+            return None;
+        }
+        self.tokens.get(start + 2)?.close?;
+        if self
+            .tokens
+            .iter()
+            .any(|t| t.doc.is_none() && t.text(self.text) == "macro_use")
+        {
+            return None;
+        }
+        // The latest earlier definition whose module body encloses the call.
+        let def = self.macro_defs.iter().rev().find(|d| {
+            let k = d.keyword();
+            k < start
+                && self.t(k + 2).trim_start_matches("r#") == name
+                && (0..k)
+                    .rev()
+                    .find(|&o| self.tokens[o].close.is_some_and(|c| c > k))
+                    .map_or(true, |o| self.tokens[o].close.is_some_and(|c| c > start))
+        })?;
+        let open = def.keyword() + 3;
+        let close = self.tokens.get(open)?.close?;
+        let mut debug = false;
+        let mut i = open + 1;
+        let mut rules = 0;
+        while i < close {
+            // (matcher) => {transcriber} ;
+            let matcher_close = self.tokens[i].close?;
+            if self.t(matcher_close + 1) != "=" || self.t(matcher_close + 2) != ">" {
+                return None;
+            }
+            let t_open = matcher_close + 3;
+            let t_close = self.tokens.get(t_open)?.close?;
+            if !self.trait_impls_only(t_open + 1, t_close, &mut debug) {
+                return None;
+            }
+            rules += 1;
+            i = t_close + 1;
+            if self.t(i) == ";" {
+                i += 1;
+            }
+        }
+        (rules > 0).then_some(debug)
+    }
+
+    fn trait_impls_only(&self, mut i: usize, end: usize, debug: &mut bool) -> bool {
+        while i < end {
+            let t = self.t(i);
+            if t == "$" && self.t(i + 1) == "(" {
+                let Some(close) = self.tokens[i + 1].close else {
+                    return false;
+                };
+                if !self.trait_impls_only(i + 2, close, debug) {
+                    return false;
+                }
+                i = close + 1;
+                // Optional separator, then the repetition operator.
+                if !matches!(self.t(i), "*" | "+" | "?") {
+                    i += 1;
+                }
+                if !matches!(self.t(i), "*" | "+" | "?") {
+                    return false;
+                }
+                i += 1;
+                continue;
+            }
+            if t == "#" && self.t(i + 1) == "[" {
+                let Some(close) = self.tokens[i + 1].close else {
+                    return false;
+                };
+                i = close + 1;
+                continue;
+            }
+            if t == ";" {
+                i += 1;
+                continue;
+            }
+            let k = if t == "unsafe" { i + 1 } else { i };
+            if self.t(k) != "impl" {
+                return false;
+            }
+            let mut j = k + 1;
+            let mut trait_impl = false;
+            while j < end && self.t(j) != "{" {
+                let tj = self.t(j);
+                if tj == "for" && self.t(j + 1) != "<" {
+                    trait_impl = true;
+                }
+                *debug |= tj == "Debug";
+                j = self.tokens[j].close.map_or(j + 1, |c| c + 1);
+            }
+            if !trait_impl || j >= end {
+                return false;
+            }
+            let Some(close) = self.tokens[j].close else {
+                return false;
+            };
+            *debug |= (j..close).any(|x| self.t(x) == "Debug");
+            i = close + 1;
+        }
+        true
     }
 }

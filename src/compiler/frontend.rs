@@ -9673,6 +9673,8 @@ pub struct Program {
     struct_sources: Arc<name_validation::StructSources>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    /// Crate roots with natively enforced crate lints (`CRATE_LINT_*` bits).
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
     alloc_library_module: Option<ModuleId>,
@@ -9770,6 +9772,7 @@ pub(super) struct ChildEntry {
     pub(super) frontier: Option<super::semantic_scope::ModuleFrontierId>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
 }
 impl ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
@@ -9800,6 +9803,7 @@ struct ProgramDeclarations {
     duplicate_modules: Vec<item_module::DuplicateModuleSyntax>,
     generated_metadata: Vec<generated_metadata::Attachment>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
     alloc_library_module: Option<ModuleId>,
@@ -9837,6 +9841,7 @@ impl ProgramDeclarations {
             struct_sources,
             embedded_issuers: Arc::from([]),
             no_std_roots: self.no_std_roots,
+            lint_roots: self.lint_roots,
             core_prelude_scope: self.core_prelude_scope,
             core_library_module: self.core_library_module,
             alloc_library_module: self.alloc_library_module,
@@ -10017,6 +10022,7 @@ impl ProgramBuilder {
             prelude_module: None,
             prelude_scope: None,
             no_std_roots: Arc::from([]),
+            lint_roots: Arc::from([]),
             core_prelude_scope: None,
             core_library_module: None,
             alloc_library_module: None,
@@ -10032,10 +10038,25 @@ impl ProgramBuilder {
     }
 }
 impl Program {
-    fn no_std_module(&self, mut module: ModuleId) -> Result<bool, String> {
+    fn no_std_module(&self, module: ModuleId) -> Result<bool, String> {
         if self.no_std_roots.is_empty() {
             return Ok(false);
         }
+        let root = self.module_crate_root(module)?;
+        for issued in self.no_std_roots.iter() {
+            self.names
+                .session()
+                .sources()
+                .text(*issued)
+                .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        }
+        Ok(self.no_std_roots.contains(&root))
+    }
+    /// Original crate root file of the crate that declares `module`.
+    fn module_crate_root(
+        &self,
+        mut module: ModuleId,
+    ) -> Result<super::token_session::SourceFileHandle, String> {
         let source = self.modules.source_root().map_err(module_diagnostic)?;
         while let Some(parent) = self.modules.parent(module).map_err(module_diagnostic)? {
             if parent == source {
@@ -10058,14 +10079,23 @@ impl Program {
             super::source_macro_binding::invocation_root(self.names.session(), span)
         }
         .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
-        for issued in self.no_std_roots.iter() {
-            self.names
-                .session()
-                .sources()
-                .text(*issued)
-                .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        Ok(root)
+    }
+    /// `module` belongs to a crate under `deny(unsafe_op_in_unsafe_fn)`, so
+    /// `unsafe fn` bodies there are not unsafe contexts.
+    pub(super) fn unsafe_op_denied(&self, module: ModuleId) -> Result<bool, String> {
+        self.crate_lint_denied(module, CRATE_LINT_UNSAFE_OP)
+    }
+    /// The crate declaring `module` denies the crate lint `bit`.
+    pub(super) fn crate_lint_denied(&self, module: ModuleId, bit: u8) -> Result<bool, String> {
+        if self.lint_roots.is_empty() {
+            return Ok(false);
         }
-        Ok(self.no_std_roots.contains(&root))
+        let root = self.module_crate_root(module)?;
+        Ok(self
+            .lint_roots
+            .iter()
+            .any(|(handle, lints)| *handle == root && lints & bit != 0))
     }
     fn implicit_prelude(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
         Ok(if self.no_std_module(module)? {
@@ -10261,6 +10291,11 @@ pub enum RegionName {
     Static,
     Infer,
 }
+/// Crate lints the native compiler enforces at a crate root (bit mask
+/// carried by `CratePolicy` and `Program::lint_roots`).
+pub(super) const CRATE_LINT_UNSAFE_OP: u8 = 1;
+pub(super) const CRATE_LINT_TRIVIAL_CASTS: u8 = 2;
+pub(super) const CRATE_LINT_TRIVIAL_NUMERIC_CASTS: u8 = 4;
 /// Tuple positions are structural indices, not decimal identifier spellings.
 #[derive(Clone, Copy, Debug)]
 pub enum FieldName {
@@ -12407,6 +12442,7 @@ struct Parser<'input, 'names> {
     /// Entry for each child site reached so far, recorded in file order.
     child_entries: Vec<ChildEntry>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     c_abi: c_abi::Declarations,
@@ -12630,6 +12666,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
+            lint_roots: self.lint_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_target_feature: None,
@@ -14187,6 +14224,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
+            lint_roots: self.lint_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
             pending_target_feature: None,
@@ -14628,6 +14666,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             child_entries: Vec::new(),
             embedded_issuers: Arc::from([]),
             forbid_unsafe_roots: Arc::from([]),
+            lint_roots: Arc::from([]),
             no_std_roots: Arc::from([]),
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
@@ -19216,6 +19255,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         result
     }
     fn cast_after_as(&mut self, value: Expr) -> Result<Expr, ParseError> {
+        self.reject_foreign_trivial_cast()?;
         self.expect("as")?;
         if self.is("(") {
             return Err(self.unsupported("parenthesized cast target types are unsupported"));
@@ -20436,6 +20476,7 @@ fn parse_syntax_tokens_configured(
         Arc::from([]),
         Arc::from([]),
         Arc::from([]),
+        Arc::from([]),
         ParserNamespace::default(),
     )
 }
@@ -20451,6 +20492,7 @@ fn parse_syntax_tokens_policy(
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     child_sites: Arc<[usize]>,
     namespace: ParserNamespace<'_>,
 ) -> Result<ParsedProgram, ParseError> {
@@ -20462,6 +20504,7 @@ fn parse_syntax_tokens_policy(
         no_std_roots,
         embedded_issuers.clone(),
         forbid_unsafe_roots,
+        lint_roots,
         child_sites,
         mount,
         exports,
@@ -20498,6 +20541,7 @@ fn parse_syntax_unit(
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
+    lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     child_sites: Arc<[usize]>,
     mount: Option<ChildMount<'_>>,
     exports: Option<Arc<super::source_item_macro::exports::ExportNamespace>>,
@@ -20560,6 +20604,7 @@ fn parse_syntax_unit(
     parser.embedded_issuers = embedded_issuers;
     parser.no_std_roots = no_std_roots;
     parser.forbid_unsafe_roots = forbid_unsafe_roots;
+    parser.lint_roots = lint_roots;
     parser.child_sites = child_sites;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
@@ -20591,6 +20636,7 @@ fn parse_syntax_unit(
     };
     parser.items(root, &root_path, &mut parsed)?;
     parsed.program.no_std_roots = parser.no_std_roots.clone();
+    parsed.program.lint_roots = parser.lint_roots.clone();
     parsed.program.c_abi = std::mem::take(&mut parser.c_abi);
     if !parser.is("") {
         return Err(parser.error("unexpected module closing brace"));
@@ -20730,6 +20776,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
             Arc::from([]),
             Arc::from([]),
             Arc::from([]),
@@ -21958,6 +22005,7 @@ pub(super) fn parse_graph_view_owned(
                         frontier: None,
                         no_std_roots: Arc::from([]),
                         forbid_unsafe_roots: Arc::from([]),
+                        lint_roots: Arc::from([]),
                     };
                     &attachment
                 }
@@ -22133,6 +22181,7 @@ pub(super) fn merge_crate_file_refs_at(
     let mut generated_owners = root.program.generated_owners.to_vec();
     let mut embedded_issuers = root.program.embedded_issuers.to_vec();
     let mut no_std_roots = root.program.no_std_roots.to_vec();
+    let mut lint_roots = root.program.lint_roots.to_vec();
     let mut extern_crate_aliases = root.program.extern_crate_aliases.to_vec();
     let mut duplicate_modules = root.program.duplicate_modules.to_vec();
     name_validation::validate_struct_sources(&root.program)?;
@@ -22194,6 +22243,11 @@ pub(super) fn merge_crate_file_refs_at(
         for root in p.no_std_roots.iter() {
             if !no_std_roots.contains(root) {
                 no_std_roots.push(*root);
+            }
+        }
+        for root in p.lint_roots.iter() {
+            if !lint_roots.contains(root) {
+                lint_roots.push(*root);
             }
         }
         extern_crate_aliases.extend(p.extern_crate_aliases.iter().cloned());
@@ -22272,6 +22326,7 @@ pub(super) fn merge_crate_file_refs_at(
     program.generated_owners = generated_owners.into();
     program.embedded_issuers = embedded_issuers.into();
     program.no_std_roots = no_std_roots.into();
+    program.lint_roots = lint_roots.into();
     program.extern_crate_aliases = extern_crate_aliases.into();
     program.duplicate_modules = duplicate_modules.into();
     Ok(ParsedProgram {
@@ -22330,11 +22385,22 @@ fn parse_projection(
     };
     let mut no_std_roots = Vec::new();
     let mut forbid_unsafe_roots = Vec::new();
+    let mut lint_roots = Vec::new();
     if let Some(mount) = &mount {
         no_std_roots.extend(mount.entry.no_std_roots.iter().copied());
         forbid_unsafe_roots.extend(mount.entry.forbid_unsafe_roots.iter().copied());
+        lint_roots.extend(mount.entry.lint_roots.iter().copied());
     }
     for policy in &source.crate_policies {
+        if let Some((root, lints)) = policy.lint_root(source)? {
+            lint_roots.push((
+                projection
+                    .snapshot()
+                    .file(root)
+                    .map_err(super::source::SourceError::from_token)?,
+                lints,
+            ));
+        }
         if let Some(root) = policy.forbid_unsafe_root(source)? {
             forbid_unsafe_roots.push(
                 projection
@@ -22366,6 +22432,7 @@ fn parse_projection(
         no_std_roots.into(),
         issuers.into(),
         forbid_unsafe_roots.into(),
+        lint_roots.into(),
         child_sites,
         ParserNamespace { mount, exports },
     )

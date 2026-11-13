@@ -37,6 +37,36 @@ impl Parser<'_, '_> {
         Ok(())
     }
 
+    /// The type checker judges `trivial_casts`/`trivial_numeric_casts` by
+    /// the crate of the enclosing function. A cast token written in another
+    /// crate's macro (stock never lints those) is explicitly unsupported
+    /// inside a crate that denies them.
+    pub(super) fn reject_foreign_trivial_cast(&self) -> Result<(), ParseError> {
+        const CASTS: u8 = CRATE_LINT_TRIVIAL_CASTS | CRATE_LINT_TRIVIAL_NUMERIC_CASTS;
+        if self.purpose == ParserPurpose::InactiveSyntax
+            || !self.lint_roots.iter().any(|(_, lints)| lints & CASTS != 0)
+        {
+            return Ok(());
+        }
+        let session = self.names.session();
+        let span = self.token().span;
+        let invoked = super::super::source_macro_binding::invocation_root(session, span)
+            .map_err(native_adapter::transport_error)?;
+        let written = super::super::source_macro_binding::definition_root(session, span)
+            .map_err(native_adapter::transport_error)?;
+        if invoked != written
+            && self
+                .lint_roots
+                .iter()
+                .any(|(root, lints)| *root == invoked && lints & CASTS != 0)
+        {
+            return Err(self.unsupported(
+                "a cast from another crate's macro under deny(trivial_casts) is unsupported",
+            ));
+        }
+        Ok(())
+    }
+
     /// A bounded lookahead distinguishes const declarations from qualified fns.
     /// Invalid qualifier orders still reach the grammar checker, not a const name.
     pub(super) fn starts_qualified_function(&self) -> bool {

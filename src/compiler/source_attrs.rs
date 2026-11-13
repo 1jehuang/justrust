@@ -82,6 +82,9 @@ pub struct AttributeOutput {
     pub forbid_unsafe_code: bool,
     /// This file lowers the `unsafe_code` lint level (`allow`/`warn`/`expect`).
     pub unsafe_code_relaxed: bool,
+    /// Crate lints denied at the crate root and enforced by later stages
+    /// (`CRATE_LINTS` bits, matching `frontend::CRATE_LINT_*`).
+    pub denied_lints: u8,
     pub text: String,
     /// `#[test]` functions found under `cfg(test)`, in source order.
     pub tests: Vec<TestItem>,
@@ -120,6 +123,13 @@ fn error(kind: AttributeErrorKind, range: Range<usize>, message: &str) -> Attrib
     }
 }
 const MAX_TOKENS: usize = 1_000_000;
+/// Crate-root lints enforced by the type checker, with their
+/// `frontend::CRATE_LINT_*` bits.
+const CRATE_LINTS: &[(&str, u8)] = &[
+    ("unsafe_op_in_unsafe_fn", 1),
+    ("trivial_casts", 2),
+    ("trivial_numeric_casts", 4),
+];
 const MAX_DEPTH: usize = 64;
 const MAX_WORK: usize = 16_384;
 
@@ -235,6 +245,7 @@ fn prepare_with_context(
         macro_defs: Vec::new(),
         unused_macros_denied: inherited.0.denied("unused_macros"),
         debug_impls: Vec::new(),
+        denied_lints: 0,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     filter.check_unused_macros()?;
@@ -265,6 +276,7 @@ fn prepare_with_context(
         has_root_use_items: filter.has_root_use_items,
         forbid_unsafe_code: filter.forbid_unsafe_code,
         unsafe_code_relaxed: filter.unsafe_code_relaxed,
+        denied_lints: filter.denied_lints,
         text: String::from_utf8(filter.bytes).expect("masking preserves UTF-8"),
         attributes: filter.records,
         inactive_items: filter.inactive_items,
@@ -325,6 +337,8 @@ struct Filter<'a> {
     unused_macros_denied: bool,
     /// Token indices of module-level `impl .. Debug ..` keywords.
     debug_impls: Vec<usize>,
+    /// Crate lints denied at the crate root (`CRATE_LINTS` bits).
+    denied_lints: u8,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -393,6 +407,12 @@ impl Filter<'_> {
             if self.cap_lints_allow {
                 continue;
             }
+            if lint == "rust_2024_compatibility"
+                || CRATE_LINTS.iter().any(|(name, _)| *name == lint)
+            {
+                self.crate_lint_level(meta, level, lint, root_inner)?;
+                continue;
+            }
             let lint = lint_names::canonical(lint);
             let new_level = match level {
                 "forbid" => lint_names::Level::Forbid,
@@ -446,6 +466,66 @@ impl Filter<'_> {
                     ),
                 ));
             }
+        }
+        Ok(())
+    }
+    /// Crate lints enforced by the type checker (`CRATE_LINTS`; the edition
+    /// group only lowers `unsafe_op_in_unsafe_fn`). Only a crate-root
+    /// deny/forbid is enforced; lowering one under that deny would need
+    /// per-item levels and is explicitly unsupported.
+    fn crate_lint_level(
+        &mut self,
+        meta: &Meta,
+        level: &str,
+        lint: &str,
+        root_inner: bool,
+    ) -> Result<(), AttributeError> {
+        let raising = matches!(level, "deny" | "forbid");
+        if lint == "rust_2024_compatibility" && raising {
+            return Err(error(
+                AttributeErrorKind::Unsupported,
+                meta.range.clone(),
+                &format!(
+                    "`{level}({lint})` is unsupported: the native compiler does not check every lint in group `{lint}`"
+                ),
+            ));
+        }
+        let (name, bit) = if lint == "rust_2024_compatibility" {
+            CRATE_LINTS[0]
+        } else {
+            *CRATE_LINTS.iter().find(|(name, _)| *name == lint).unwrap()
+        };
+        if raising && !root_inner {
+            return Err(error(
+                AttributeErrorKind::Unsupported,
+                meta.range.clone(),
+                &format!("only crate-root deny/forbid({name}) is supported"),
+            ));
+        }
+        if !raising && self.levels.denied(name) {
+            if self.levels.get(name) == lint_names::Level::Forbid {
+                return Err(error(
+                    AttributeErrorKind::Syntax,
+                    meta.range.clone(),
+                    &format!("E0453: lowering `{name}` is incompatible with previous forbid"),
+                ));
+            }
+            return Err(error(
+                AttributeErrorKind::Unsupported,
+                meta.range.clone(),
+                &format!("lowering a crate-root deny({name}) is unsupported"),
+            ));
+        }
+        if raising {
+            let new_level = if level == "forbid" {
+                lint_names::Level::Forbid
+            } else {
+                lint_names::Level::Deny
+            };
+            self.levels
+                .set(name, new_level)
+                .map_err(|m| error(AttributeErrorKind::Syntax, meta.range.clone(), &m))?;
+            self.denied_lints |= bit;
         }
         Ok(())
     }
@@ -1946,6 +2026,11 @@ impl Filter<'_> {
                     && self.levels.get(lint) != lint_names::Level::Forbid);
             let touches_enforced = !macros_only
                 && (lint == "unsafe_code"
+                    || (lint == "rust_2024_compatibility"
+                        && self.levels.denied("unsafe_op_in_unsafe_fn"))
+                    || CRATE_LINTS
+                        .iter()
+                        .any(|(name, _)| *name == lint && self.levels.denied(name))
                     || lint_names::enforced(lint).is_some()
                     || lint_names::GROUPS.iter().any(|(group, _)| *group == lint));
             if raising || touches_enforced {

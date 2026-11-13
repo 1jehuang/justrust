@@ -22,6 +22,7 @@ pub(super) struct EmbeddedUnit {
     tests: Arc<[source_attrs::TestItem]>,
     no_std: bool,
     forbid_unsafe_code: bool,
+    denied_lints: u8,
     terminal: bool,
     _admitted: super::super::expansion_budget::RetainedBytes,
 }
@@ -58,6 +59,7 @@ impl EmbeddedUnit {
             tests: Arc::from(unit.tests.as_slice()),
             no_std: unit.no_std,
             forbid_unsafe_code: unit.forbid_unsafe_code,
+            denied_lints: unit.denied_lints,
             terminal: unit.terminal.is_some(),
             _admitted: admitted,
         })
@@ -79,6 +81,7 @@ impl EmbeddedUnit {
             || self.tests.as_ref() != unit.tests
             || self.no_std != unit.no_std
             || self.forbid_unsafe_code != unit.forbid_unsafe_code
+            || self.denied_lints != unit.denied_lints
             || self.terminal != unit.terminal.is_some()
         {
             return Err(Loader::error(
@@ -147,7 +150,7 @@ pub(super) struct AssemblyTransport {
     origins: Arc<[OriginSegment]>,
     attributes: Arc<[PreparedAttribute]>,
     roots: Arc<[FileId]>,
-    policies: Arc<[(FileId, Arc<str>, bool, bool)]>,
+    policies: Arc<[(FileId, Arc<str>, bool, bool, u8)]>,
     files: Arc<[(PathBuf, Arc<str>)]>,
     issuers: Arc<[(FileId, Arc<()>)]>,
     debug_assertions: bool,
@@ -191,6 +194,7 @@ impl AssemblyTransport {
                         policy.original.clone(),
                         policy.no_std,
                         policy.forbid_unsafe_code,
+                        policy.denied_lints,
                     )
                 })
                 .collect(),
@@ -213,11 +217,12 @@ impl AssemblyTransport {
     pub(super) fn validate(&self, source: &PreparedSource) -> Result<(), SourceError> {
         let policies_match = self.policies.len() == source.crate_policies.len()
             && self.policies.iter().zip(&source.crate_policies).all(
-                |((root, original, no_std, forbid_unsafe_code), policy)| {
+                |((root, original, no_std, forbid_unsafe_code, unsafe_op), policy)| {
                     *root == policy.root
                         && Arc::ptr_eq(original, &policy.original)
                         && *no_std == policy.no_std
                         && *forbid_unsafe_code == policy.forbid_unsafe_code
+                        && *unsafe_op == policy.denied_lints
                 },
             );
         let files_match = self.files.len() == source.sources.files.len()

@@ -318,8 +318,17 @@ pub(super) struct CratePolicy {
     original: Arc<str>,
     no_std: bool,
     forbid_unsafe_code: bool,
+    denied_lints: u8,
 }
 impl CratePolicy {
+    /// The crate root and its natively enforced crate lints, if any.
+    pub(super) fn lint_root(
+        &self,
+        source: &PreparedSource,
+    ) -> Result<Option<(usize, u8)>, SourceError> {
+        self.no_std_root(source)?;
+        Ok((self.denied_lints != 0).then_some((self.root.0 as usize, self.denied_lints)))
+    }
     pub(super) fn forbid_unsafe_root(
         &self,
         source: &PreparedSource,
@@ -461,12 +470,13 @@ impl FileView {
             .sources
             .add(unit.path.clone(), unit.contents.clone());
         prepared.crate_roots.push(id);
-        if unit.forbid_unsafe_code || unit.no_std {
+        if unit.forbid_unsafe_code || unit.no_std || unit.denied_lints != 0 {
             prepared.crate_policies.push(CratePolicy {
                 root: id,
                 original: unit.contents.clone(),
                 no_std: unit.no_std,
                 forbid_unsafe_code: unit.forbid_unsafe_code,
+                denied_lints: unit.denied_lints,
             });
         }
         prepared.source_bytes = unit.contents.len();
@@ -758,6 +768,7 @@ pub struct FileUnit {
     embedded: Option<source_embedded::EmbeddedUnit>,
     no_std: bool,
     forbid_unsafe_code: bool,
+    denied_lints: u8,
     pub path: PathBuf,
     pub contents: Arc<str>,
     /// Canonical paths of the open files from the root to this one, for cycle
@@ -1124,6 +1135,7 @@ fn snapshot_unit<'a>(
         embedded: None,
         no_std: builder.no_std,
         forbid_unsafe_code: builder.forbid_unsafe_code,
+        denied_lints: builder.denied_lints,
         path,
         contents,
         chain,
@@ -1354,6 +1366,7 @@ impl SourceAssembler {
                 original: unit.contents.clone(),
                 no_std: unit.no_std,
                 forbid_unsafe_code: unit.forbid_unsafe_code,
+                denied_lints: unit.denied_lints,
             });
         }
         if ordinal.len() == 1
@@ -1407,6 +1420,7 @@ impl SourceAssembler {
                     embedded: unit.embedded.clone(),
                     no_std: unit.no_std,
                     forbid_unsafe_code: unit.forbid_unsafe_code,
+                    denied_lints: unit.denied_lints,
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
                     chain: unit.chain.clone(),
@@ -1706,6 +1720,7 @@ struct Loader<'a> {
     module_stack: Vec<String>,
     no_std: bool,
     forbid_unsafe_code: bool,
+    denied_lints: u8,
     tests: Vec<source_attrs::TestItem>,
     docs: Vec<source_attrs::missing_docs::DocEntry>,
     module_lints: Vec<(usize, source_attrs::InheritedLints)>,
@@ -1740,6 +1755,7 @@ impl<'a> Loader<'a> {
             module_stack: Vec::new(),
             no_std: false,
             forbid_unsafe_code: false,
+            denied_lints: 0,
             tests: Vec::new(),
             docs: Vec::new(),
             module_lints: Vec::new(),
@@ -1826,6 +1842,7 @@ impl<'a> Loader<'a> {
             ));
         }
         self.forbid_unsafe_code = filtered.forbid_unsafe_code;
+        self.denied_lints = if self.root { filtered.denied_lints } else { 0 };
         for inactive in filtered.inactive_items {
             let syntax = inactive_syntax(&inactive.text).map_err(|message| {
                 Self::error(
