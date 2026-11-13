@@ -158,6 +158,12 @@ than 30 rows. **v** opens the full list, including everything the build
 machine reports (toolchain, rustc, linkers, agent, OS). It is refreshed every
 minute and on **r**.
 
+**Selected run** sits directly above Runs and follows the highlighted row as
+you move with **↑/↓**. It shows the result, wall time, location, command,
+project and recorded timing breakdown with seconds and percentages. Missing
+timings are explicitly marked. Terminals shorter than 24 rows hide this card
+to preserve the run list. **Enter** still opens full details.
+
 Builds in progress lead the Runs card as `building` rows with where they run,
 the time so far, the estimate and the crates compiling. Rows alternate
 background shades. Wall time is colored by length: green under 10 seconds,

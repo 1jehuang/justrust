@@ -681,6 +681,75 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
     spans
 }
 
+fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
+    let rows = state.rows();
+    let Some(run) = rows.get(state.selected) else {
+        return vec![line(
+            "No run selected. Move through Runs with ↑/↓.",
+            LABEL,
+            width,
+        )];
+    };
+    let (result, color) = result_label(run);
+    let mut lines = vec![
+        fit(
+            vec![
+                strong(result, color),
+                span(
+                    format!("  {} wall", crate::status::dur(run.wall)),
+                    wall_color(run.wall),
+                ),
+                span(
+                    format!("  {}  {}", clean(&run.place), when(run.start)),
+                    LABEL,
+                ),
+            ],
+            width,
+        ),
+        detail(
+            "Command",
+            vec![span(
+                format!("justrust {}", clean(&run.args.join(" "))),
+                VALUE,
+            )],
+            width,
+        ),
+        detail("Project", vec![span(tilde(&clean(&run.cwd)), VALUE)], width),
+    ];
+    if let Some(times) = &run.time {
+        let total: f64 = times.iter().sum();
+        let mut parts: Vec<_> = super::data::Bucket::ALL
+            .iter()
+            .map(|b| (b.label(), times[*b as usize]))
+            .filter(|(_, secs)| *secs > 0.0)
+            .collect();
+        parts.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let text = parts
+            .iter()
+            .map(|(name, secs)| {
+                format!(
+                    "{name} {} ({:.0}%)",
+                    crate::status::dur(*secs),
+                    if total > 0.0 {
+                        secs / total * 100.0
+                    } else {
+                        0.0
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        lines.push(detail("Timing", vec![span(text, VALUE)], width));
+    } else {
+        lines.push(detail(
+            "Timing",
+            vec![span("breakdown not recorded locally", DIM)],
+            width,
+        ));
+    }
+    lines
+}
+
 fn history(f: &mut Frame, area: Rect, state: &State) {
     let rows = state.rows();
     let active = &state.snapshot.active;
@@ -1055,11 +1124,18 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         (false, h) if h < 40 => (overall_h, 0),
         (false, _) => (overall_h, compile_h),
     };
-    let [top, versions, first, second, runs, footer] = Layout::vertical([
+    let selected = selected_lines(state, width);
+    let selected_h = if area.height >= 24 {
+        selected.len() as u16 + 2
+    } else {
+        0
+    };
+    let [top, versions, first, second, selection, runs, footer] = Layout::vertical([
         Constraint::Length(account_h.min(area.height.saturating_sub(6))),
         Constraint::Length(versions_h),
         Constraint::Length(first_h),
         Constraint::Length(second_h),
+        Constraint::Length(selected_h),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
@@ -1088,6 +1164,16 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         if second.height > 0 {
             compile_card(&compile).draw(f, second, compile_lines);
         }
+    }
+    if selection.height > 0 {
+        let note = state
+            .rows()
+            .get(state.selected)
+            .map(|r| r.id.clone())
+            .unwrap_or_default();
+        Card::new("Selected run")
+            .note(note)
+            .draw(f, selection, selected);
     }
     history(f, runs, state);
     if let Some(at) = state.menu {
@@ -1348,6 +1434,57 @@ mod tests {
     }
 
     #[test]
+    fn selected_card_follows_highlight_and_sits_above_runs() {
+        let mut state = State::default();
+        let mut times = [0.0; super::super::data::BUCKETS];
+        times[Bucket::Compile as usize] = 8.0;
+        times[Bucket::Tests as usize] = 2.0;
+        state.snapshot.runs = vec![
+            RunRow {
+                id: "selected-first".into(),
+                start: 2.0,
+                args: vec!["test".into()],
+                cwd: "/srv/one".into(),
+                wall: 10.0,
+                exit: Some(0),
+                time: Some(times),
+                ..Default::default()
+            },
+            RunRow {
+                id: "selected-second".into(),
+                start: 1.0,
+                args: vec!["check".into()],
+                cwd: "/srv/two".into(),
+                exit: Some(1),
+                ..Default::default()
+            },
+        ];
+        let text = screen(&state, 140, 45);
+        assert!(text.contains("compiling 8.0s (80%)"), "{text}");
+        assert!(
+            text.find("Selected run").unwrap() < text.find("─ Runs").unwrap(),
+            "{text}"
+        );
+        state.selected = 1;
+        let lines = selected_lines(&state, 120);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            text.contains("justrust check") && text.contains("/srv/two"),
+            "{text}"
+        );
+        assert!(text.contains("breakdown not recorded"), "{text}");
+        state.snapshot.runs.clear();
+        assert!(
+            selected_lines(&state, 100)[0].spans[0]
+                .content
+                .contains("No run selected")
+        );
+    }
+
+    #[test]
     fn kind_bar_counts_runs_and_filters_show_in_the_title() {
         let run = |id: &str, args: &[&str]| super::super::data::RunRow {
             id: id.into(),
@@ -1459,7 +1596,8 @@ mod tests {
         assert!(text.contains("5m ago"), "{text}");
         assert!(text.contains("WHEN"));
         // The wide layout shows the age in place of the run ID.
-        assert!(!text.contains("exit 101") && !text.contains("20261113-050528950"));
+        let history = text.split("─ Runs").nth(1).unwrap();
+        assert!(!history.contains("exit 101") && !history.contains("20261113-050528950"));
     }
 
     #[test]
