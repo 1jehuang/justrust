@@ -722,6 +722,10 @@ impl<T> BudgetVec<T> {
     pub fn as_slice(&self) -> &[T] {
         &self.values
     }
+    /// In-place element updates. Never allocates or grows the lease.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.values
+    }
     pub fn len(&self) -> usize {
         self.values.len()
     }

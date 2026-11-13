@@ -198,6 +198,7 @@ struct ItemProduct {
     proof: ItemExpansionAdmission,
     declaration: AstIdent,
     occurrence: u32,
+    sealed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -213,8 +214,10 @@ pub(super) struct ItemScopeState {
     source_root: Option<ModuleId>,
     points: BudgetVec<ModulePoint>,
     anchors: BudgetVec<ItemAnchor>,
+    // Pushed only for freshly created function scopes, so ordered by
+    // `function.index` (binary search) and grouped by anchor in anchor order
+    // (a product is admitted only while its anchor is the open last one).
     products: BudgetVec<ItemProduct>,
-    seals: BudgetVec<ScopeId>,
 }
 impl ItemScopeState {
     pub(super) fn new(b: &ExpansionBudget) -> Result<Self, ScopeError> {
@@ -224,7 +227,6 @@ impl ItemScopeState {
             points: BudgetVec::new(b, Storage::Retained)?,
             anchors: BudgetVec::new(b, Storage::Retained)?,
             products: BudgetVec::new(b, Storage::Retained)?,
-            seals: BudgetVec::new(b, Storage::Retained)?,
         })
     }
 }
@@ -424,11 +426,21 @@ impl ScopeArenaBuilder {
         }
         let frontier = self.receiver_function_root(names, receiver)?;
         let function = self.function(frontier)?;
+        if self
+            .arena
+            .items
+            .products
+            .last()
+            .is_some_and(|last| last.function.index >= function.index)
+        {
+            return Err(ScopeError::ConflictingAssociation);
+        }
         self.arena.items.products.push(ItemProduct {
             function,
             proof: *proof,
             declaration,
             occurrence,
+            sealed: false,
         })?;
         Ok(frontier)
     }
@@ -451,10 +463,11 @@ impl ScopeArenaBuilder {
         {
             return Err(ScopeError::ConflictingAssociation);
         }
-        if self.arena.item_is_sealed(function)? {
-            return Ok(());
-        }
-        self.arena.items.seals.push(function)?;
+        let slot = self
+            .arena
+            .item_product_slot(function)?
+            .ok_or(ScopeError::InvalidHandle)?;
+        self.arena.items.products.as_mut_slice()[slot].sealed = true;
         Ok(())
     }
     /// Close only the current invocation, after the parser has consumed EOF.
@@ -472,15 +485,17 @@ impl ScopeArenaBuilder {
         proof.check_modules(names, modules)?;
         self.arena.check_item_proof(proof)?;
         self.arena.check_item_open(proof)?;
+        // This open anchor's products are the contiguous tail.
         let mut count = 0usize;
-        for product in self.arena.items.products.as_slice() {
+        for product in self.arena.items.products.as_slice().iter().rev() {
             self.arena.budget.charge(Counter::Work, 1)?;
-            if product.proof == *proof {
-                if !self.arena.item_is_sealed(product.function)? {
-                    return Err(ScopeError::ConflictingAssociation);
-                }
-                count = count.checked_add(1).ok_or(TokenError::IdExhausted)?;
+            if product.proof != *proof {
+                break;
             }
+            if !product.sealed {
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            count = count.checked_add(1).ok_or(TokenError::IdExhausted)?;
         }
         if count != expected_count {
             return Err(ScopeError::ConflictingAssociation);
@@ -699,48 +714,53 @@ impl ScopeArena {
         if let Some(arena) = self.linked_arena(f.owner)? {
             return arena.item_product(f);
         }
+        Ok(self
+            .item_product_slot(f)?
+            .map(|slot| self.items.products.as_slice()[slot]))
+    }
+    /// Own-arena product position: products are ordered by function index.
+    fn item_product_slot(&self, f: ScopeId) -> Result<Option<usize>, ScopeError> {
         self.check_function(f)?;
-        for p in self.items.products.as_slice() {
-            self.budget.charge(Counter::Work, 1)?;
-            if p.function == f {
-                return Ok(Some(*p));
-            }
-        }
-        Ok(None)
+        let products = self.items.products.as_slice();
+        self.budget.charge(
+            Counter::Work,
+            u64::from(usize::BITS - products.len().leading_zeros()) + 1,
+        )?;
+        Ok(products
+            .binary_search_by_key(&f.index, |p| p.function.index)
+            .ok()
+            .filter(|&slot| products[slot].function == f))
     }
     fn item_is_sealed(&self, f: ScopeId) -> Result<bool, ScopeError> {
-        if let Some(arena) = self.linked_arena(f.owner)? {
-            return arena.item_is_sealed(f);
-        }
-        self.budget.check()?;
-        for p in self.items.seals.as_slice() {
-            self.budget.charge(Counter::Work, 1)?;
-            if *p == f {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(self.item_product(f)?.is_some_and(|p| p.sealed))
     }
     pub(super) fn check_item_completion(&self) -> Result<(), ScopeError> {
         self.budget.check()?;
+        // Products are grouped by anchor in anchor order: one merged walk.
+        let products = self.items.products.as_slice();
+        let mut next = 0usize;
         for p in self.items.anchors.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
             let expected = p
                 .completed_count
                 .ok_or(ScopeError::ConflictingAssociation)?;
             let mut count = 0usize;
-            for product in self.items.products.as_slice() {
+            while let Some(product) = products.get(next)
+                && product.proof == p.proof
+            {
                 self.budget.charge(Counter::Work, 1)?;
-                if product.proof == p.proof {
-                    if !self.item_is_sealed(product.function)? {
-                        return Err(ScopeError::ConflictingAssociation);
-                    }
-                    count += 1;
+                if !product.sealed {
+                    return Err(ScopeError::ConflictingAssociation);
                 }
+                count += 1;
+                next += 1;
             }
             if count != expected {
                 return Err(ScopeError::ConflictingAssociation);
             }
+        }
+        if next != products.len() {
+            return Err(ScopeError::ConflictingAssociation);
         }
         Ok(())
     }
