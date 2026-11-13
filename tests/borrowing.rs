@@ -757,6 +757,19 @@ fn rejects_references_escaping_through_raw_pointer_storage() {
         "into_iter iterator escape",
         "fn main(){let mut it;{let a=vec![1i32];it=vec![&a[0]].into_iter();}println!(\"{:?}\",it.next());}\n",
     );
+    rejects(
+        "flat_map borrowed inner escape",
+        "fn main(){let item;{let a=vec![1i32,2i32];item=(0i32..1i32).flat_map(|_|a.iter()).next().unwrap();}println!(\"{}\",item);}\n",
+    );
+    // Stock E0597: references stored behind Rc's raw pointee.
+    rejects(
+        "rc reference escape",
+        "use std::rc::Rc;fn main(){let r;{let a=5i32;r=Rc::new(&a);}println!(\"{}\",r);}\n",
+    );
+    rejects(
+        "rc clone reference escape",
+        "use std::rc::Rc;fn main(){let r;{let a=String::from(\"s\");let rc=Rc::new(&a);r=Rc::clone(&rc);}println!(\"{}\",r);}\n",
+    );
 }
 
 #[test]
