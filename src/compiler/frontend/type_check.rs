@@ -13066,7 +13066,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Repeat { value, len } => {
-                if *len > ir::MAX_ARRAY_STORAGE_LEN {
+                if *len > ir::MAX_ARRAY_TYPE_LEN {
                     return Err("array repeat exceeds supported length limit".into());
                 }
                 let hint = match expected {
@@ -13080,6 +13080,12 @@ impl<'a> Checker<'a> {
                     self.require(&flow, expected)?;
                 }
                 let element = hint.cloned().unwrap_or(flow.ty);
+                if !ir::repeat_len_supported(*len, &element) {
+                    return Err(format!(
+                        "unsupported: array repeat of {len} non-scalar elements (limit {})",
+                        ir::MAX_ARRAY_STORAGE_LEN
+                    ));
+                }
                 if *len > 1 && !self.facts().must_copy(&element)? {
                     return Err("array repeat of more than one element requires Copy".into());
                 }

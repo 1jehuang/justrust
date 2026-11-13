@@ -6041,10 +6041,14 @@ impl Lowerer<'_> {
                 );
             }
             ir::ExprKind::Repeat { value, len } => {
-                let Ty::Array { len: count, .. } = &expression.ty else {
+                let Ty::Array {
+                    len: count,
+                    element,
+                } = &expression.ty
+                else {
                     return Err("checked repeat requires array type".into());
                 };
-                if len != count || *len > ir::MAX_ARRAY_STORAGE_LEN {
+                if len != count || !ir::repeat_len_supported(*len, element) {
                     return Err("checked array repeat length mismatch".into());
                 }
                 // The operand is evaluated and consumed exactly once, even

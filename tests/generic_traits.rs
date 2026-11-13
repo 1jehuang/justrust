@@ -1452,3 +1452,45 @@ fn main() {
         coherence_oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn large_scalar_arrays_in_generic_impls() {
+    coherence_oracle::stock_native(
+        r#"
+fn fill(data: &[u8], out: &mut [u8]) -> Result<(), u8> {
+    if data.len() > out.len() { return Err(1); }
+    for i in 0..data.len() { out[i] = data[i]; }
+    Ok(())
+}
+trait FromBytes: Sized { fn from_bytes<T: AsRef<[u8]>>(b: T) -> Result<Self, u8>; }
+macro_rules! imp { ($($n:expr)+) => {$(
+    impl FromBytes for [u8; $n] {
+        fn from_bytes<T: AsRef<[u8]>>(b: T) -> Result<Self, u8> {
+            let mut out = [0_u8; $n];
+            fill(b.as_ref(), &mut out as &mut [u8])?;
+            Ok(out)
+        }
+    }
+)+} }
+imp! { 2 100 4096 32768 65536 4294967296 }
+fn main() {
+    let a: Result<[u8; 2], u8> = FromBytes::from_bytes(b"hi");
+    let b: Result<[u8; 100], u8> = FromBytes::from_bytes("abc");
+    let c: Result<[u8; 4096], u8> = FromBytes::from_bytes([7u8; 9]);
+    let (a, b, c) = (a.unwrap(), b.unwrap(), c.unwrap());
+    let d: Result<[u8; 2], u8> = FromBytes::from_bytes("toolong");
+    println!("{:?} {} {} {} {} {:?}", a, b[0], b[3], c[8], c[9], d);
+    let mut big = [1u32; 1000];
+    big[999] = 5;
+    let s: u32 = big.iter().sum();
+    println!("{}", s);
+}
+"#,
+    );
+    for source in [
+        "fn unused() { let big = [0u8; 1000]; big[3] = 1; } fn main() {}",
+        "fn unused() -> u8 { let big: [u8; 1000]; big[0] } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}

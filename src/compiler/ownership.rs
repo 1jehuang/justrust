@@ -2176,6 +2176,17 @@ pub(super) fn component_preflight_for_tests(
     Ok(budget.work_limit - budget.remaining)
 }
 
+/// A long array of plain scalars is one move-path leaf. Its elements carry no
+/// references, destructors or sub-places, they are Copy (never moved out), and
+/// stock rejects element-wise initialization of arrays (E0381), so
+/// whole-array initialization tracking is exact. Element writes still check
+/// the root's mutability. Expanding one node per element would make the path
+/// graph scale with the length (`[u8; 32768]` in a generic body).
+fn summarized_scalar_array(element: &Ty, len: usize) -> bool {
+    len > SUMMARIZED_SCALAR_ARRAY_LEN
+        && matches!(element, Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char)
+}
+const SUMMARIZED_SCALAR_ARRAY_LEN: usize = 64;
 fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhausted> {
     // Recursive coercion verification can compare each enclosing subtree
     // before descending. Weight by depth to conservatively cover that repeated
@@ -2215,12 +2226,7 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         preflight_ty(referent, depth + 1, budget)?;
     }
     if let Ty::Array { element, len } = ty {
-        if *len > super::ir::MAX_ARRAY_LEN
-            && matches!(
-                element.as_ref(),
-                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char
-            )
-        {
+        if summarized_scalar_array(element, *len) {
             // Summarized as one scalar leaf (see MoveShape::of).
             return Ok(());
         }
@@ -2350,19 +2356,8 @@ impl<'a> MoveShape<'a> {
                 ty,
                 fields: definition.def().fields.len(),
             },
-            // Beyond the per-element bound, an array of plain scalars is one
-            // leaf: its elements carry no references, destructors or sub-places,
-            // and stock rejects element-wise initialization of arrays (E0381), so
-            // whole-array initialization tracking is exact.
-            Ty::Array { element, len }
-                if *len > super::ir::MAX_ARRAY_LEN
-                    && matches!(
-                        element.as_ref(),
-                        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char
-                    ) =>
-            {
-                Self::Scalar
-            }
+            // A long array of plain scalars is one leaf (summarized_scalar_array).
+            Ty::Array { element, len } if summarized_scalar_array(element, *len) => Self::Scalar,
             Ty::Array { element, len } => Self::Array { element, len: *len },
             Ty::Enum(definition) => Self::Sum(definition.def()),
             // A checked shared slice is a Copy descriptor, not an element

@@ -5690,10 +5690,14 @@ impl CarrierBuilder<'_, '_> {
                 ty: Ty::Array { len, .. },
                 value,
             } => {
+                let original = self.operand_value(state, value)?;
+                // A carrier-free element contributes no loan to any element.
+                if original.is_empty() {
+                    return Ok(Vec::new());
+                }
                 if *len > ir::MAX_ARRAY_STORAGE_LEN {
                     return Err(Exhausted);
                 }
-                let original = self.operand_value(state, value)?;
                 let mut output = Vec::new();
                 for index in 0..*len {
                     for (location, origins) in &original {

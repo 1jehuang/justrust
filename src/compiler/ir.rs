@@ -6233,6 +6233,14 @@ pub const MAX_ARRAY_TYPE_LEN: usize = 1 << 40;
 /// Bound for array values whose elements are produced or visited one by one:
 /// repeat expressions, byte repeats and per-element analyses.
 pub const MAX_ARRAY_STORAGE_LEN: usize = 1 << 24;
+/// A repeat of a plain scalar is summarized, never expanded per element
+/// (ownership treats such arrays as one leaf, borrow sees no carriers), so it
+/// is admitted up to the type bound. Others stay under the storage bound.
+pub fn repeat_len_supported(len: usize, element: &Ty) -> bool {
+    len <= MAX_ARRAY_STORAGE_LEN
+        || (len <= MAX_ARRAY_TYPE_LEN
+            && matches!(element, Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntTy {
@@ -7119,13 +7127,23 @@ fn projected_ty_inner(
                 let Ty::Array { element, len } = &ty else {
                     return Err("constant index requires array type".into());
                 };
-                if *len > MAX_ARRAY_LEN || index >= *len {
+                if *len > MAX_ARRAY_LEN {
+                    return Err(format!(
+                        "unsupported: constant index into an array of {len} elements (limit {MAX_ARRAY_LEN})"
+                    ));
+                }
+                if index >= *len {
                     return Err("array index out of bounds".into());
                 }
                 element.as_ref().clone()
             }
             Projection::DynamicIndex(index) => match &ty {
                 Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element.as_ref().clone(),
+                Ty::Array { len, .. } => {
+                    return Err(format!(
+                        "unsupported: runtime index into an array of {len} elements (limit {MAX_ARRAY_LEN})"
+                    ));
+                }
                 Ty::Slice { element } | Ty::DependentArray { element, .. } => {
                     element.as_ref().clone()
                 }
@@ -14429,7 +14447,7 @@ impl CheckedFunction {
                         return Err("array repeat requires array type".into());
                     };
                     if len != count
-                        || *len > MAX_ARRAY_STORAGE_LEN
+                        || !repeat_len_supported(*len, element)
                         || (*len > 1 && !facts.must_copy(element)?)
                     {
                         return Err("invalid array repeat type, length or Copy requirement".into());
