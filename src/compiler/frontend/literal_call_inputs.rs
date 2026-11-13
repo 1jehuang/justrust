@@ -32,6 +32,10 @@ pub(super) fn copy_literal(
             sr::retain(budget, text.len())?;
             Expr::Str(text.clone())
         }
+        Expr::ByteStr(bytes) => {
+            sr::retain(budget, bytes.len())?;
+            Expr::ByteStr(bytes.clone())
+        }
         Expr::Bool(value) => Expr::Bool(*value),
         // A written suffix fixes the scalar input without expected-type help.
         Expr::Integer(literal) if literal.suffix.is_some() => Expr::Integer(literal.clone()),
@@ -47,6 +51,26 @@ pub(super) fn copy_literal(
                 kind: ir::BorrowKind::Shared,
                 value: Box::new(value),
             }
+        }
+        Expr::Array(elements) => {
+            // One suffixed integer fixes every unsuffixed sibling's type
+            // (`[1u8, 2]`). The checked comparison still requires each value
+            // and the element type to match exactly.
+            let suffixed = elements
+                .iter()
+                .any(|e| matches!(e, Expr::Integer(l) if l.suffix.is_some()));
+            let mut copied = Vec::new();
+            for element in elements {
+                if suffixed && let Expr::Integer(literal) = element {
+                    sr::push(&mut copied, Expr::Integer(literal.clone()), budget)?;
+                    continue;
+                }
+                let Some(element) = copy_literal(element, budget, depth + 1)? else {
+                    return Ok(None);
+                };
+                sr::push(&mut copied, element, budget)?;
+            }
+            Expr::Array(copied)
         }
         Expr::Struct { name, fields } => {
             sr::work(budget, name.len())?;
@@ -84,6 +108,11 @@ pub(super) fn capture_temporaries(
     match &expr.kind {
         ir::ExprKind::Struct { fields, .. } => {
             for (_, value) in fields {
+                capture_temporaries(checked, *value, output, budget, depth + 1)?;
+            }
+        }
+        ir::ExprKind::Array(elements) => {
+            for value in elements {
                 capture_temporaries(checked, *value, output, budget, depth + 1)?;
             }
         }
@@ -145,11 +174,40 @@ fn compare(
             sr::work(budget, a.len().max(b.len()))?;
             a == b
         }
+        (Expr::ByteStr(a), ir::ExprKind::ByteStr(b)) => {
+            sr::work(budget, a.len().max(b.len()))?;
+            a == b
+        }
         (Expr::Bool(a), ir::ExprKind::Bool(b)) => a == b,
         (Expr::Integer(literal), ir::ExprKind::Int(value)) => {
-            resolve_integer(literal, false, None).map_err(|e| source_error(budget, &e))? == *value
+            resolve_integer(literal, false, Some(ty)).map_err(|e| source_error(budget, &e))?
+                == *value
         }
         (Expr::Char(a), ir::ExprKind::Char(b)) => u32::from(*a) == b.value,
+        (Expr::Array(af), ir::ExprKind::Array(bf)) => {
+            let ir::Ty::Array { element, len } = ty else {
+                return Ok(false);
+            };
+            if af.len() != bf.len() || *len != af.len() {
+                return Ok(false);
+            }
+            for (source, value) in af.iter().zip(bf) {
+                if !compare(
+                    source,
+                    element,
+                    actual,
+                    *value,
+                    checker,
+                    facts,
+                    temporaries,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         (Expr::Struct { fields: af, .. }, ir::ExprKind::Struct { ty: b, fields: bf }) => {
             if !source_type_equal(ty, &ir::Ty::Struct(b.clone()), facts, budget)?
                 || af.len() != bf.len()
@@ -230,6 +288,56 @@ fn compare(
                     depth + 1,
                 )?
         }
+        // Statically promoted `&[scalar, ..]`: every element must be exactly
+        // the replayed scalar of the written element type.
+        (
+            Expr::BorrowValue {
+                kind: ir::BorrowKind::Shared,
+                value: source,
+            },
+            ir::ExprKind::PromotedArray(array),
+        ) => {
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = ty
+            else {
+                return Ok(false);
+            };
+            let Expr::Array(elements) = source.as_ref() else {
+                return Ok(false);
+            };
+            if temporaries.contains_key(&id)
+                || !source_type_equal(referent, array.value_ty(), facts, budget)?
+                || elements.len() != array.values().len()
+            {
+                return Ok(false);
+            }
+            let ir::Ty::Array {
+                element: element_ty,
+                ..
+            } = array.value_ty()
+            else {
+                return Ok(false);
+            };
+            for (element, scalar) in elements.iter().zip(array.values()) {
+                sr::work(budget, 1)?;
+                let same = match (element, scalar) {
+                    (Expr::Bool(a), ir::PromotedScalar::Bool(b)) => *a == *b,
+                    (Expr::Char(a), ir::PromotedScalar::Char(b)) => u32::from(*a) == b.value,
+                    (Expr::Integer(literal), ir::PromotedScalar::Int(value)) => {
+                        resolve_integer(literal, false, Some(element_ty))
+                            .map_err(|e| source_error(budget, &e))?
+                            == *value
+                    }
+                    _ => false,
+                };
+                if !same {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         // Statically promoted `&literal`: the referent must be exactly the
         // replayed scalar, and no frame temporary may stand behind it.
         (
@@ -297,14 +405,21 @@ pub(super) fn validate(
         .map_err(|e| source_error(budget, &e))?
         .is_empty()
         && !sources.iter().all(|source| match source {
-            Expr::Str(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_) => true,
+            Expr::Str(_) | Expr::ByteStr(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_) => {
+                true
+            }
             Expr::BorrowValue {
                 kind: ir::BorrowKind::Shared,
                 value,
-            } => matches!(
-                value.as_ref(),
-                Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_)
-            ),
+            } => match value.as_ref() {
+                Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_) => true,
+                // Promoted closed scalar arrays are static. The comparison
+                // below rejects a frame temporary standing behind them.
+                Expr::Array(elements) => elements.iter().all(|element| {
+                    matches!(element, Expr::Bool(_) | Expr::Char(_) | Expr::Integer(_))
+                }),
+                _ => false,
+            },
             _ => false,
         })
     {

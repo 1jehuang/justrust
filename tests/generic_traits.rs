@@ -1366,8 +1366,7 @@ fn main() {
     println!("{:?}", P::from_hex(b"a").map(|p| p.0));
     let r = P::from_hex("b");
     println!("{}", r.is_ok());
-    let bytes = b"0a";
-    println!("{:?}", decode(bytes));
+    println!("{:?}", decode(b"0a"));
     let q: Result<P, HexError> = FromHex::from_hex("c");
     println!("{:?}", q.map(|p| p.0));
 }
@@ -1427,6 +1426,28 @@ fn main() {
         "fn unused() { let a = [1u8, 2]; let _ = &a as &[u16]; } fn main() {}",
         "fn unused() { let a = [1u8, 2]; let _ = &a as &mut [u8]; } fn main() {}",
         "fn unused() { let a = 5u8; let _ = &a as &[u8]; } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn inline_reference_literals_for_generic_parameters() {
+    coherence_oracle::stock_native(
+        r#"
+fn len<T: AsRef<[u8]>>(d: T) -> usize { d.as_ref().len() }
+fn id<T>(t: T) -> T { t }
+fn main() {
+    println!("{} {} {}", len(b"0a"), len(&[1u8, 2, 3]), len("hey"));
+    println!("{:?} {:?} {:?}", id(b"xy"), id(&[true, false]), id(&['a', 'b']));
+    let n = len(b"abcd");
+    println!("{}", n);
+}
+"#,
+    );
+    for source in [
+        "fn len<T: AsRef<[u8]>>(d: T) -> usize { d.as_ref().len() } fn unused() { let _ = len(&[1u16, 2]); } fn main() {}",
+        "fn len<T: AsRef<[u8]>>(d: T) -> usize { d.as_ref().len() } fn unused() { let _ = len(&[1u8, 300]); } fn main() {}",
     ] {
         coherence_oracle::stock_and_native_reject(source);
     }
