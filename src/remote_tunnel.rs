@@ -360,20 +360,37 @@ mod tests {
 
     #[test]
     fn proxy_command_quotes_paths_and_escapes_ssh_tokens() {
-        assert_eq!(
-            proxy_command_for("/usr/local/bin/justrust", false).as_deref(),
-            Some("/usr/local/bin/justrust __tunnel")
-        );
-        assert_eq!(
-            proxy_command_for("/usr/local/bin/justrust", true).as_deref(),
-            Some("/usr/local/bin/justrust __tunnel windows")
-        );
-        // A replaced binary still names the installed path.
-        assert_eq!(
-            proxy_command_for("/home/u/.cargo/bin/justrust (deleted)", false).as_deref(),
-            Some("/home/u/.cargo/bin/justrust __tunnel")
-        );
+        if cfg!(windows) {
+            // Windows paths are always double quoted.
+            assert_eq!(
+                proxy_command_for(r"C:\Program Files\jr\justrust.exe", false).as_deref(),
+                Some("\"C:\\Program Files\\jr\\justrust.exe\" __tunnel")
+            );
+            assert_eq!(
+                proxy_command_for(r"C:\jr\justrust.exe", true).as_deref(),
+                Some("\"C:\\jr\\justrust.exe\" __tunnel windows")
+            );
+            assert_eq!(
+                proxy_command_for(r"C:\100%h\justrust.exe", false).as_deref(),
+                Some("\"C:\\100%%h\\justrust.exe\" __tunnel")
+            );
+            // A quote cannot be expressed, so no command is offered.
+            assert_eq!(proxy_command_for("C:\\a\"b\\justrust.exe", false), None);
+        }
         if cfg!(unix) {
+            assert_eq!(
+                proxy_command_for("/usr/local/bin/justrust", false).as_deref(),
+                Some("/usr/local/bin/justrust __tunnel")
+            );
+            assert_eq!(
+                proxy_command_for("/usr/local/bin/justrust", true).as_deref(),
+                Some("/usr/local/bin/justrust __tunnel windows")
+            );
+            // A replaced binary still names the installed path.
+            assert_eq!(
+                proxy_command_for("/home/u/.cargo/bin/justrust (deleted)", false).as_deref(),
+                Some("/home/u/.cargo/bin/justrust __tunnel")
+            );
             // Spaces and quotes cannot split the command or start another.
             assert_eq!(
                 proxy_command_for("/home/a b/it's/justrust", false).as_deref(),

@@ -2152,11 +2152,15 @@ mod tests {
     fn client_frames(b: &Build) -> Vec<(u8, Vec<u8>)> {
         let (mut a, mut c) = UnixStream::pair().unwrap();
         stream(b, &mut a, false, false, 0.0, 0.0).unwrap();
-        drop(a);
+        // A graceful end of stream, held open until the frames are read:
+        // closing the socket outright can reset the connection on Windows
+        // and discard what the reader has not taken yet.
+        a.shutdown(std::net::Shutdown::Write).unwrap();
         let mut v = Vec::new();
         while let Some(m) = read_msg(&mut c).unwrap() {
             v.push(m);
         }
+        drop(a);
         v
     }
 
