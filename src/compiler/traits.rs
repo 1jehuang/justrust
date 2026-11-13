@@ -8966,6 +8966,24 @@ impl ValidatedTraitWorld {
                     {
                         true
                     }
+                    // `<U as IntoIterator>::Item` returned out of stored
+                    // `<U as IntoIterator>::IntoIter` state (FlatMap's front
+                    // and back iterators): an associated output of a rigid
+                    // parameter is produced from data held by any declared
+                    // projection on that same parameter. Which component maps
+                    // where is impl-internal, so every component is eligible
+                    // (conservative: more loans, never fewer).
+                    _ if matches!(
+                        (destination, &source.location.channel),
+                        (
+                            ir::CarrierChannel::ProjectionTail { projection: output, .. },
+                            ir::CarrierChannel::ProjectionTail { projection: input, .. },
+                        ) if matches!(output.trait_ref.self_ty, Ty::Param(_))
+                            && output.trait_ref.self_ty == input.trait_ref.self_ty
+                    ) =>
+                    {
+                        true
+                    }
                     (Some(a), Some(b)) => {
                         self.same_location(a, b)?
                             || (a.path.0.is_empty()
