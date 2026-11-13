@@ -313,7 +313,15 @@ impl Replay<'_> {
                 }
             }
         };
-        if !shared_identity {
+        // A blanket impl (`impl<T, U: From<T>> Into<U> for T`) has a bare
+        // owner-parameter Self: any receiver type is its owner, and the
+        // receiver equation below binds T exactly. Only a nominal Self pattern
+        // names an owner declaration to authenticate.
+        let blanket_self = matches!(
+            &associated.self_pattern,
+            ir::Ty::Param(parameter) if parameter.owner.declaration == associated.impl_decl
+        );
+        if !shared_identity && !blanket_self {
             let owner_decl = match &owner {
                 ir::Ty::Struct(value) => value.def().source_decl,
                 ir::Ty::Enum(value) => value.def().source_decl,
@@ -331,6 +339,7 @@ impl Replay<'_> {
                 ));
             }
         }
+        let owner_binder = env.as_ref().map(|scope| scope.binder());
         let mut state = sr::CallInferenceState::new(env, self.budget)?;
         if closed_header {
             if !self.equal(&view.signature().params[0], &input)? {
@@ -344,6 +353,26 @@ impl Replay<'_> {
         }
         let mut inputs = Vec::new();
         sr::push(&mut inputs, input.clone(), self.budget)?;
+        if blanket_self && !closed_header {
+            // A blanket owner parameter the receiver leaves free (`U` in
+            // `impl<T, U: From<T>> Into<U> for T`) is fixed only by the
+            // authored result context (`let d: Dog = "rex".into()`), exactly
+            // as for generic static producers. Never by the checked result.
+            let site = self.inventory.calls.get(source_index).ok_or_else(|| {
+                FactsError::invalid(self.budget, "generic method source occurrence missing")
+            })?;
+            if let Some(expected) = source_result_context(
+                self.original,
+                site,
+                id,
+                self.checked,
+                self.signatures,
+                self.budget,
+            )? {
+                let result = state.type_term(&view.signature().result, owner_binder, depth + 1)?;
+                state.constrain(&result, &expected, depth + 1)?;
+            }
+        }
         let mut materialize = |decl, args: &[ir::Ty]| {
             self.original
                 .plan
@@ -478,10 +507,19 @@ impl Replay<'_> {
                     "generic method original argument trace missing",
                 )
             })?;
+        // A by-value receiver whose instantiated Self is itself a reference
+        // (`"a".into()` with `T = &str`) is traced as that firm reference,
+        // like every other argument: derive it from the instantiated header.
+        let receiver_expectation = match (&info.receiver, &inferred.params[0]) {
+            (ReceiverKind::Value { .. }, ir::Ty::Ref { kind, .. }) => {
+                ir::CallExpectation::FirmReference { kind: *kind }
+            }
+            _ => expectation,
+        };
         if evidence.arguments.len() != args.len()
             || evidence.arguments[0].argument != 0
             || evidence.arguments[0].value != args[0]
-            || evidence.arguments[0].expectation != expectation
+            || evidence.arguments[0].expectation != receiver_expectation
         {
             return Err(FactsError::invalid(
                 self.budget,

@@ -2189,8 +2189,7 @@ impl ValidatedTraitWorld {
         } {
             ProofOutcome::Proved(evidence) => evidence,
             ProofOutcome::NotProven => {
-                return Err(FactsError::unproved(
-                    &self.budget,
+                return Err(FactsError::unproved_static(
                     "associated projection has no applicable implementation",
                 ));
             }

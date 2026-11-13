@@ -2639,9 +2639,12 @@ impl Replay<'_> {
         let associated = info.path.associated.as_ref().ok_or_else(|| {
             FactsError::invalid(self.budget, "static producer lacks associated source owner")
         })?;
+        // A direct trait-impl associated function (`Dog::from("a")` through
+        // `impl From<&str> for Dog`) is a closed producer like an inherent
+        // one: the owner, member, header and receipt checks below are the
+        // same. Only the original direct callee is replayed, never dispatch.
         if info.kind != ir::DeclKind::AssociatedFunction
             || !matches!(info.receiver, ReceiverKind::None)
-            || associated.trait_decl.is_some()
             || !self.original.facts.is_source_callable(direct.declaration)?
         {
             return Err(FactsError::unsupported(

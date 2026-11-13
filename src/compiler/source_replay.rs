@@ -1022,9 +1022,8 @@ impl CallInferenceState {
                     )?,
                 ))
             }
-            _ => Err(FactsError::invalid(
-                &self.budget,
-                &format!("conflicting generic inference constraints: {a:?} versus {b:?}"),
+            _ => Err(FactsError::invalid_static(
+                "conflicting generic inference constraints",
             )),
         }
     }
@@ -1230,8 +1229,7 @@ impl CallInferenceState {
                     }
                     Ok(())
                 }
-                _ => Err(FactsError::invalid(
-                    &self.budget,
+                _ => Err(FactsError::invalid_static(
                     "generic nominal inference identity mismatch",
                 )),
             },

@@ -10167,7 +10167,27 @@ impl<'a> Checker<'a> {
                 else {
                     return Err("comparison argument must have a shared-reference signature".into());
                 };
-                let id = if let Ok(place) = static_source_place(source)
+                let indexed = if matches!(source, Expr::Index { .. } | Expr::DynamicIndex { .. })
+                    && !(static_source_place(source).is_ok_and(|place| {
+                        place_expression(source) && self.checked_place(&place).is_ok()
+                    })) {
+                    // An overloaded index operand (`d == v[1]`, `v: Vec<D>`)
+                    // borrows through the `&T` that `Index::index` returns,
+                    // exactly as the comparison receiver does.
+                    match self.overloaded_index_reference(
+                        ir::BorrowKind::Shared,
+                        source,
+                        source as *const Expr as usize,
+                    )? {
+                        Some(reference) => Some(reference),
+                        None => self.borrow_indexed_place(ir::BorrowKind::Shared, source)?,
+                    }
+                } else {
+                    None
+                };
+                let id = if let Some(reference) = indexed {
+                    reference
+                } else if let Ok(place) = static_source_place(source)
                     && place_expression(source)
                 {
                     let (place, _, _) = self.checked_place(&place)?;

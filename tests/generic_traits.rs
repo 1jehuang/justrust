@@ -1298,3 +1298,32 @@ fn main() {
         coherence_oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn trait_impl_producers_blanket_into_and_indexed_comparison_operands() {
+    coherence_oracle::stock_native(
+        r#"
+use std::collections::HashMap;
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Dog { name: String }
+impl From<&str> for Dog { fn from(s: &str) -> Dog { Dog { name: s.to_string() } } }
+fn id<T>(_: &T) -> usize { 1 }
+fn main() {
+    let d: Dog = "rex".into();
+    let e = Dog::from("ace");
+    println!("{} {}", id(&d), id(&e));
+    let dogs = vec![e.clone(), d.clone()];
+    println!("{} {} {}", d == dogs[1], d > dogs[0], dogs[0] == e);
+    let mut hm = HashMap::new();
+    hm.insert(d.clone(), 3);
+    println!("{:?} {:?}", hm.get(&Dog::from("rex")), dogs.iter().map(|d| &d.name).collect::<Vec<_>>());
+}
+"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"#[derive(PartialEq)] struct D(i32); fn unused() { let v = vec![D(1)]; let d = D(1); let _ = d == v[0usize] == true; } fn main() {}"#,
+    );
+    coherence_oracle::stock_and_native_reject(
+        r#"struct Dog; fn unused() { let d: Dog = "rex".into(); } fn main() {}"#,
+    );
+}

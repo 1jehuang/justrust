@@ -211,11 +211,29 @@ impl FactsError {
     pub fn invalid(b: &PlanBudget, m: &str) -> Self {
         Self::make(b, FactsErrorKind::InvalidMetadata, m)
     }
+    /// A fixed, source-independent candidate rejection (a unification
+    /// conflict while trying one impl). Selection discards it and tries the
+    /// next candidate, so it must not draw on the per-node diagnostic ledger:
+    /// a type with many impls of one trait would otherwise exhaust it.
+    pub fn invalid_static(m: &'static str) -> Self {
+        Self {
+            kind: FactsErrorKind::InvalidMetadata,
+            diagnostic: Diagnostic::Static(m),
+        }
+    }
     pub fn unsupported(b: &PlanBudget, m: &str) -> Self {
         Self::make(b, FactsErrorKind::Unsupported, m)
     }
     pub fn unproved(b: &PlanBudget, m: &str) -> Self {
         Self::make(b, FactsErrorKind::Unproved, m)
+    }
+    /// Fixed-text counterpart of [`Self::unproved`] for candidate probes
+    /// whose failure selection routinely discards.
+    pub fn unproved_static(m: &'static str) -> Self {
+        Self {
+            kind: FactsErrorKind::Unproved,
+            diagnostic: Diagnostic::Static(m),
+        }
     }
     pub fn ambiguous(b: &PlanBudget, m: &str) -> Self {
         Self::make(b, FactsErrorKind::Ambiguous, m)
