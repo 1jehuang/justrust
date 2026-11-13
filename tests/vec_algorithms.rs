@@ -296,12 +296,10 @@ fn shared_slice_comparator_receiver_rejection_is_explicitly_unsupported() {
 }
 
 #[test]
-fn comparator_function_items_remain_explicitly_unsupported() {
-    comparator_boundary(
-        "fn descending(a:&i32,b:&i32)->std::cmp::Ordering{b.cmp(a)}fn main(){let mut v=vec![1i32,3,2];v.sort_unstable_by(descending);v.as_mut_slice().sort_by(descending);}",
-        "function-item",
-        None,
-        "unsupported: function items with reference-bearing signatures as callable values",
+fn comparator_function_items_match_stock() {
+    // Reference-bearing function items became callable values in f5de28435.
+    iterator_oracle::stock_native(
+        "fn descending(a:&i32,b:&i32)->std::cmp::Ordering{b.cmp(a)}fn ascending(a:&i32,b:&i32)->std::cmp::Ordering{a.cmp(b)}fn main(){let mut v=vec![1i32,3,2,9,-4,7,7,0];v.sort_unstable_by(descending);println!(\"{:?}\",v);v.as_mut_slice().sort_by(ascending);println!(\"{:?}\",v);v.sort_by(descending);println!(\"{:?}\",v);}",
     );
 }
 
