@@ -1844,7 +1844,12 @@ mod tests {
         files.sort();
         let rel: Vec<_> = files
             .iter()
-            .map(|f| f.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+            .map(|f| {
+                f.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         assert_eq!(rel, ["src/alias.rs", "src/deep/a.rs", "src/lib.rs"]);
         let _ = std::fs::remove_dir_all(&root);
