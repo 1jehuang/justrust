@@ -585,7 +585,26 @@ impl ValidatedTraitWorld {
             Some(facts),
             false,
         )?;
-        for predicate in application.predicates.iter() {
+        for (original, predicate) in schema.predicates.iter().zip(application.predicates.iter()) {
+            // A body applied to its own declaration's identity arguments
+            // assumes its elaborated where-clauses (rustc's param-env). A
+            // `<T as Source>::Out: Copy` row normalized through `Out = String`
+            // to `String: Copy` is then an assumption, not a new obligation.
+            if matches!(
+                subject,
+                parameter_equality::EqualityResultSubject::Body { .. }
+            ) {
+                let mut assumed = false;
+                for assumption in context.predicates.predicates.iter() {
+                    if self.eq_predicate(assumption, original)? {
+                        assumed = true;
+                        break;
+                    }
+                }
+                if assumed {
+                    continue;
+                }
+            }
             self.require_in(predicate, context, active)?;
         }
         if let parameter_equality::EqualityResultSubject::Direct(target) = subject {
