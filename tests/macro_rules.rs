@@ -514,6 +514,24 @@ fn stock_cases() -> Vec<StockCase> {
             stdout: Some("1\n"),
             group: 2,
         },
+        StockCase {
+            name: "generated_statement_cfg_attributes",
+            source: "macro_rules! limit {($cap:expr)=>{ if $cap > 3 { #[cfg(not(target_pointer_width = \"16\"))] panic!(\"too big\"); #[cfg(target_pointer_width = \"16\")] panic!(\"tiny\"); } }}\nmacro_rules! report {($v:expr)=>{ #[cfg(target_os = \"linux\")] println!(\"linux {}\", $v); #[cfg(windows)] println!(\"windows {}\", $v); #[allow(unused_variables)] let unused = 3; }}\nfn main(){ limit!(2); report!(7); println!(\"macro ok\"); }",
+            stdout: Some("linux 7\nmacro ok\n"),
+            group: 1,
+        },
+        StockCase {
+            name: "generated_statement_cfg_kept_body_is_checked",
+            source: "macro_rules! bad {()=>{ #[cfg(target_os = \"linux\")] let x: i32 = \"s\"; }}\nfn main(){ bad!(); }",
+            stdout: None,
+            group: 1,
+        },
+        StockCase {
+            name: "generated_expression_statement_attribute_rejected",
+            source: "macro_rules! bad {($t:ident)=>{ #[cfg(target_os = \"linux\")] $t += 1; }}\nfn main(){ let mut t = 0; bad!(t); println!(\"{t}\"); }",
+            stdout: None,
+            group: 1,
+        },
     ]
 }
 
@@ -574,7 +592,7 @@ fn stock_macro_semantics_edition2024_measured_before_native_utility() {
     let scratch = Scratch::new();
     let mut counts = [(0usize, 0usize); 3];
     let cases = stock_cases();
-    assert_eq!(cases.len(), 81);
+    assert_eq!(cases.len(), 84);
     for case in cases {
         let source = scratch.0.join(format!("{}.rs", case.name));
         let image = scratch.0.join(case.name);
@@ -639,7 +657,7 @@ fn stock_macro_semantics_edition2024_measured_before_native_utility() {
             }
         }
     }
-    assert_eq!(counts, [(31, 24), (10, 9), (6, 1)]);
+    assert_eq!(counts, [(31, 24), (11, 11), (6, 1)]);
 }
 
 // Every utility test uses lexer+grouping directly. No Rust compiler subprocess,

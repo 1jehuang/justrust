@@ -19123,12 +19123,156 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("}")?;
         Ok(block)
     }
+    /// Skip one balanced delimited group starting at the current token.
+    fn skip_token_group(&mut self) -> Result<(), ParseError> {
+        if !(self.is("(") || self.is("[") || self.is("{")) {
+            return Err(self.error("expected a delimited macro invocation group"));
+        }
+        let mut depth = 0usize;
+        loop {
+            let token = self.token();
+            if token.matches("") {
+                return Err(self.error("unterminated macro invocation group"));
+            }
+            if token.matches("(") || token.matches("[") || token.matches("{") {
+                depth += 1;
+                if depth > 128 {
+                    return Err(self.limit("macro group nesting exceeds limit 128"));
+                }
+            } else if token.matches(")") || token.matches("]") || token.matches("}") {
+                depth -= 1;
+            }
+            self.cursor.bump();
+            if depth == 0 {
+                return Ok(());
+            }
+        }
+    }
+    /// `#` in source, or the deferred `#` token carried by macro output.
+    fn at_attribute_hash(&self) -> bool {
+        let token = self.token();
+        token.text == "#" && (token.matches("#") || token.is_deferred_unsupported())
+    }
+    /// An outer attribute on a statement that reached the parser unexpanded
+    /// (macro output). Returns whether the statement stays configured in.
+    /// Only `cfg` over closed target/profile facts and inert lint levels are
+    /// admitted; any other attribute is an explicit unsupported boundary.
+    fn statement_attribute(&mut self) -> Result<bool, ParseError> {
+        fn unsupported(mut error: ParseError) -> ParseError {
+            error.kind = super::source::SourceErrorKind::Unsupported;
+            error
+        }
+        let start = self.token();
+        if !self.at_attribute_hash() {
+            return Err(self.error("expected `#`"));
+        }
+        self.cursor.bump();
+        self.expect("[")?;
+        let mut text = String::new();
+        let mut depth = 0usize;
+        loop {
+            let token = self.token();
+            if token.matches("") {
+                return Err(self.error("unterminated attribute"));
+            }
+            match if token.string { "" } else { token.text } {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "}" => depth = depth.saturating_sub(1),
+                "]" if depth == 0 => break,
+                "]" => depth -= 1,
+                _ => {}
+            }
+            if text.len() > 4096 {
+                return Err(self.limit("statement attribute exceeds 4096 bytes"));
+            }
+            if token.string {
+                if token.text.contains(['"', '\\']) {
+                    return Err(unsupported(self.error(
+                        "escaped strings in generated statement attributes are unsupported",
+                    )));
+                }
+                text.push('"');
+                text.push_str(token.text);
+                text.push('"');
+            } else {
+                text.push_str(token.text);
+            }
+            text.push(' ');
+            self.cursor.bump();
+        }
+        self.expect("]")?;
+        let meta = super::source::source_cfg::parse_meta(&text, 0)
+            .map_err(|e| self.error_at(&start, &format!("malformed attribute: {}", e.message)))?;
+        match (meta.name.as_str(), &meta.value) {
+            ("cfg", super::source::source_cfg::MetaValue::List(args)) if args.len() == 1 => {
+                let mut closed = super::source::CfgSet::native_x86_64_linux();
+                closed.set_debug_assertions(self.debug_assertions);
+                fn closed_predicate(meta: &super::source::source_cfg::Meta) -> bool {
+                    match (&*meta.name, &meta.value) {
+                        ("all" | "any" | "not", super::source::source_cfg::MetaValue::List(a)) => {
+                            a.iter().all(closed_predicate)
+                        }
+                        (name, super::source::source_cfg::MetaValue::Word) => {
+                            matches!(name, "unix" | "windows" | "debug_assertions")
+                        }
+                        (name, super::source::source_cfg::MetaValue::String(_)) => {
+                            name.starts_with("target_") || name == "panic"
+                        }
+                        _ => false,
+                    }
+                }
+                if !closed_predicate(&args[0]) {
+                    return Err(unsupported(
+                        self.error_at(&start, "unsupported: cfg on a generated statement must use only target/profile predicates"),
+                    ));
+                }
+                super::source::source_cfg::evaluate(&args[0], &closed)
+                    .map_err(|e| self.error_at(&start, &e.message))
+            }
+            ("allow" | "warn" | "expect", super::source::source_cfg::MetaValue::List(_)) => {
+                Ok(true)
+            }
+            _ => Err(unsupported(self.error_at(
+                &start,
+                &format!(
+                    "unsupported: attribute `{}` on a generated statement",
+                    meta.name
+                ),
+            ))),
+        }
+    }
     fn block_contents(&mut self, end: &str) -> Result<Block, ParseError> {
         let mut statements = Vec::new();
         let mut tail = None;
         while !self.is(end) {
             if self.is("") {
                 return Err(self.error("unterminated block"));
+            }
+            if self.at_attribute_hash() && self.cursor.peek(1).is_some_and(|t| t.matches("[")) {
+                let keep = self.statement_attribute()?;
+                let macro_call =
+                    self.is_identifier() && self.cursor.peek(1).is_some_and(|t| t.matches("!"));
+                if !(self.is("let") || self.at_attribute_hash() || macro_call) {
+                    // Stock rejects attributes on expression statements
+                    // (E0658 stmt_expr_attributes); never accept them here.
+                    return Err(self.unsupported(
+                        "attributes on generated expression statements are unsupported",
+                    ));
+                }
+                if !keep {
+                    if !macro_call {
+                        return Err(self.unsupported(
+                            "only macro-call statements may be cfg-disabled in macro output",
+                        ));
+                    }
+                    // Configured out: skip the unexpanded invocation, as rustc
+                    // strips it before expansion.
+                    self.cursor.bump();
+                    self.expect("!")?;
+                    self.skip_token_group()?;
+                    self.eat(";");
+                }
+                continue;
             }
             if self.eat(";") {
                 continue;
