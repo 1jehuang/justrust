@@ -14740,6 +14740,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             Err(self.error("expected ASCII identifier"))
         }
     }
+    /// The declared name of an item. A block-local item is declared under
+    /// its pre-scanned hidden name (local_consts.rs).
+    fn item_name(&mut self) -> Result<AstIdent, ParseError> {
+        let written = self.ident()?;
+        self.local_declared_name(written)
+    }
     fn binding(&mut self) -> Result<BindingName, ParseError> {
         if self.eat("_") {
             Ok(BindingName::Wildcard)
@@ -15563,7 +15569,8 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn trait_path(&mut self) -> Result<TraitPath, ParseError> {
-        let path = self.generic_path(true)?;
+        let mut path = self.generic_path(true)?;
+        self.rewrite_local_item_generic(&mut path)?;
         self.check_trait_path(&path)?;
         Ok(TraitPath::Source(path))
     }
@@ -16224,14 +16231,17 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect("}")?;
                 continue;
             }
-            self.nonmodule_item(
+            let enclosing = self.local_consts.module_path.replace(module_path.clone());
+            let item = self.nonmodule_item(
                 module,
                 module_path,
                 parsed,
                 visibility,
                 explicit_visibility,
                 function_source_start,
-            )?;
+            );
+            self.local_consts.module_path = enclosing;
+            item?;
             self.publish_local_consts(module, module_path, parsed)?;
         }
         self.module = previous_module;
@@ -16357,7 +16367,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             return Ok(());
         } else if self.eat("trait") {
-            let name = self.ident()?;
+            let name = self.item_name()?;
             let type_params = self.type_parameters(nominal_defaults::Owner::TraitSelf)?;
             // Associated function heads inherit their owner's lifetime scope.
             // Trait binders must reach that producer just as impl binders do,
@@ -16547,7 +16557,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.impl_regions = outer_regions;
             (name, ItemKind::Trait(declaration))
         } else if self.eat("enum") {
-            let name = self.ident()?;
+            let name = self.item_name()?;
             let type_params = self.type_parameters(nominal_defaults::Owner::Nominal)?;
             let type_defaults = std::mem::take(&mut self.pending_type_defaults);
             let region_params = self.pending_regions.params.clone();
@@ -16707,7 +16717,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
             (name, ItemKind::Enum(declaration))
         } else if self.eat("struct") {
-            let name = self.ident()?;
+            let name = self.item_name()?;
             if std::mem::take(&mut self.pending_repr_c) {
                 self.names
                     .retain_parser_text(128)
@@ -17023,7 +17033,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             parsed.program.functions.push(function);
             (name, ItemKind::Function)
         } else if self.eat("type") {
-            let name = self.ident()?;
+            let name = self.item_name()?;
             if self.is("<") && self.cursor.peek(1).is_some_and(|t| t.text == "const") {
                 return Err(self.unsupported("const type alias parameters are unsupported"));
             }
@@ -18398,7 +18408,12 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// off the recursive frame for parenthesized and tuple patterns.
     #[inline(never)]
     fn pattern_named_atom(&mut self) -> Result<Pattern, ParseError> {
-        let generic_path = self.generic_path(false)?;
+        let mut generic_path = self.generic_path(false)?;
+        // A path to a block-local item (`Local::Variant(..)`, `Local { .. }`);
+        // a bare single name stays a binding unless it is followed by `(`/`{`.
+        if generic_path.segments.len() > 1 || self.is("(") || self.is("{") {
+            self.rewrite_local_item_generic(&mut generic_path)?;
+        }
         let name = generic_path
             .checked_path(self.names)
             .map_err(native_adapter::name_error)?;
@@ -18752,11 +18767,19 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.local_macro_definition()?;
                 continue;
             }
-            if self.is("const")
+            if (self.is("const") || self.is("static"))
                 && self.cursor.peek(1).is_some_and(|t| t.is_ident())
                 && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
             {
                 self.local_const_item()?;
+                continue;
+            }
+            if self.at_local_nominal_item() {
+                if self.purpose == ParserPurpose::InactiveSyntax {
+                    self.inactive_block_item()?;
+                } else {
+                    self.local_nominal_item()?;
+                }
                 continue;
             }
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {

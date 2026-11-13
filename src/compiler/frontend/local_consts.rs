@@ -36,6 +36,12 @@ pub(super) struct LocalConsts {
     pending_imports: Vec<(AstIdent, AstPath, bool)>,
     /// Hoisted declarations not yet published by the item parser.
     pending: Vec<ConstDecl>,
+    /// Block-local nominal items and impls, published with their module item.
+    pending_items: Option<Box<ParsedDeclarations>>,
+    /// The module path of the module item being parsed.
+    pub(super) module_path: Option<AstPath>,
+    /// Hidden name for the block-local item whose header is being parsed.
+    declared: Option<AstIdent>,
 }
 
 impl Parser<'_, '_> {
@@ -65,7 +71,7 @@ impl Parser<'_, '_> {
             }
             if depth == 0
                 && statement_start
-                && token.matches("const")
+                && (token.matches("const") || token.matches("static"))
                 && self.cursor.peek(1).is_some_and(|t| t.is_ident())
                 && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
             {
@@ -95,6 +101,19 @@ impl Parser<'_, '_> {
             if depth == 0
                 && statement_start
                 && token.matches("fn")
+                && self.cursor.peek(1).is_some_and(|t| t.is_ident())
+            {
+                self.cursor.bump();
+                let written = self.ident()?;
+                self.prescan_local_item(token.bytes.start, token.span, written, &mut items)?;
+                statement_start = false;
+                continue;
+            }
+            if depth == 0
+                && statement_start
+                && ["struct", "enum", "trait", "type"]
+                    .iter()
+                    .any(|keyword| token.matches(keyword))
                 && self.cursor.peek(1).is_some_and(|t| t.is_ident())
             {
                 self.cursor.bump();
@@ -304,7 +323,12 @@ impl Parser<'_, '_> {
         if self.item_expansion.is_some() || self.expansion.is_some() {
             return Err(self.unsupported("generated block-local const items are unsupported"));
         }
-        self.expect("const")?;
+        let storage = if self.eat("static") {
+            ConstantStorage::Static
+        } else {
+            self.expect("const")?;
+            ConstantStorage::Const
+        };
         let written = self.ident()?;
         let key = self.name_key(written, LookupClass::Item(Namespace::Value))?;
         let hidden = self
@@ -331,7 +355,7 @@ impl Parser<'_, '_> {
         let name = AstPath::new(self.names, PathAnchor::Relative, &[hidden])
             .map_err(native_adapter::name_error)?;
         self.local_consts.pending.push(ConstDecl {
-            storage: ConstantStorage::Const,
+            storage,
             module: self.module,
             visibility: ir::Visibility::Restricted(self.module),
             name,
@@ -402,6 +426,9 @@ impl Parser<'_, '_> {
             parsed.program.functions.push(function);
             self.insert_item(parsed, module, &path, visibility, ItemKind::Function)?;
         }
+        if let Some(items) = self.local_consts.pending_items.take() {
+            self.merge_local_declarations(parsed, *items)?;
+        }
         let imports = std::mem::take(&mut self.local_consts.pending_imports);
         for (hidden, target, type_only) in imports {
             let path = module_path
@@ -415,6 +442,179 @@ impl Parser<'_, '_> {
                 ItemKind::Import(target, type_only),
             )?;
         }
+        Ok(())
+    }
+}
+
+impl Parser<'_, '_> {
+    /// `struct`, `enum`, `trait`, `type` or `impl` at statement position.
+    pub(super) fn at_local_nominal_item(&self) -> bool {
+        let named =
+            |keyword: &str| self.is(keyword) && self.cursor.peek(1).is_some_and(|t| t.is_ident());
+        named("struct") || named("enum") || named("trait") || named("type") || self.is("impl")
+    }
+
+    /// The name an item declaration publishes: the hidden name reserved by
+    /// the enclosing block's pre-scan while a block-local item is parsed.
+    pub(super) fn local_declared_name(
+        &mut self,
+        written: AstIdent,
+    ) -> Result<AstIdent, ParseError> {
+        let Some(hidden) = self.local_consts.declared.take() else {
+            return Ok(written);
+        };
+        let written_key = self.name_key(written, LookupClass::Item(Namespace::Type))?;
+        let found = self
+            .local_consts
+            .item_scopes
+            .last()
+            .and_then(|scope| scope.iter().find(|(_, ty, _)| *ty == written_key))
+            .map(|(_, _, hidden)| *hidden);
+        match found {
+            Some(found)
+                if self.name_key(found, LookupClass::Item(Namespace::Type))?
+                    == self.name_key(hidden, LookupClass::Item(Namespace::Type))? =>
+            {
+                Ok(hidden)
+            }
+            _ => Err(self.error("block-local item was not pre-scanned")),
+        }
+    }
+
+    /// Parse a block-local nominal item (or impl) as an ordinary item of the
+    /// enclosing module under its hidden name. Its declarations are retained
+    /// until the enclosing module item finishes, then published with it.
+    #[inline(never)]
+    pub(super) fn local_nominal_item(&mut self) -> Result<(), ParseError> {
+        if self.item_expansion.is_some() || self.expansion.is_some() {
+            return Err(self.unsupported("generated block-local items are unsupported"));
+        }
+        let module = self.module;
+        let module_path = self.local_consts.module_path.clone().ok_or_else(|| {
+            self.unsupported("block-local items outside a module item are unsupported")
+        })?;
+        if !self.is("impl") {
+            let written = self
+                .cursor
+                .peek(1)
+                .ok_or_else(|| self.error("expected block-local item name"))?;
+            let written = self.input.mint_name(&written, self.names)?;
+            let hidden = self
+                .hidden_local_item(written)?
+                .ok_or_else(|| self.error("block-local item was not pre-scanned"))?;
+            self.local_consts.declared = Some(hidden);
+        }
+        // An item context: no enclosing locals, generic parameters, bounds
+        // or impl lifetimes are visible (E0401/E0434 stay rejections).
+        let lexical = self.lexical.function.take();
+        let type_params = std::mem::take(&mut self.type_params);
+        let const_params = std::mem::take(&mut self.const_params);
+        let impl_const_params = std::mem::take(&mut self.impl_const_params);
+        let bounds = std::mem::take(&mut self.visible_bounds);
+        let impl_regions = std::mem::take(&mut self.impl_regions);
+        let pending_regions = std::mem::take(&mut self.pending_regions);
+        let mut parsed = match self.local_consts.pending_items.take() {
+            Some(parsed) => parsed,
+            None => Box::new(ParsedDeclarations {
+                program: ProgramDeclarations::default(),
+                items: HashMap::new(),
+                empty_use_prefixes: Vec::new(),
+                glob_imports: Vec::new(),
+            }),
+        };
+        let start = self.cursor.index();
+        let result = self.nonmodule_item(
+            module,
+            &module_path,
+            &mut parsed,
+            ir::Visibility::Restricted(module),
+            false,
+            start,
+        );
+        self.local_consts.declared = None;
+        self.lexical.function = lexical;
+        self.type_params = type_params;
+        self.const_params = const_params;
+        self.impl_const_params = impl_const_params;
+        self.visible_bounds = bounds;
+        self.impl_regions = impl_regions;
+        self.pending_regions = pending_regions;
+        // Items declared in blocks of this item's own bodies.
+        let nested = self.local_consts.pending_items.take();
+        let merged = match nested {
+            Some(nested) => self.merge_local_declarations(&mut parsed, *nested),
+            None => Ok(()),
+        };
+        self.local_consts.pending_items = Some(parsed);
+        result?;
+        merged
+    }
+
+    /// Append `source` declarations to `target`, rebasing declaration indices.
+    pub(super) fn merge_local_declarations(
+        &mut self,
+        target: &mut ParsedDeclarations,
+        mut source: ParsedDeclarations,
+    ) -> Result<(), ParseError> {
+        if source
+            .program
+            .impls
+            .iter()
+            .any(|block| block.primitive_source.is_some())
+            || source
+                .program
+                .functions
+                .iter()
+                .any(|function| function.embedded_source.is_some())
+        {
+            return Err(self.unsupported("embedded original block-local items are unsupported"));
+        }
+        for key in source.items.keys() {
+            if target.items.get(key).is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| !matches!(item.kind, ItemKind::Import(..)))
+            }) && source.items[key]
+                .iter()
+                .any(|item| !matches!(item.kind, ItemKind::Import(..)))
+            {
+                return Err(self.error("E0428: duplicate block-local item name"));
+            }
+        }
+        let base = DeclarationBase {
+            structs: target.program.structs.len(),
+            enums: target.program.enums.len(),
+            traits: target.program.traits.len(),
+        };
+        for (key, mut items) in source.items.drain() {
+            self.reserve_item_publication(target)?;
+            base.rebase(&mut items)
+                .map_err(|message| self.error(&message))?;
+            target.items.entry(key).or_default().extend(items);
+        }
+        let mut generated = source.program;
+        generated_metadata::rebase(
+            &mut generated.generated_metadata,
+            target.program.structs.len(),
+            target.program.impls.len(),
+        )?;
+        target.program.functions.extend(generated.functions);
+        target.program.constants.extend(generated.constants);
+        target.program.structs.extend(generated.structs);
+        target.program.enums.extend(generated.enums);
+        target.program.impls.extend(generated.impls);
+        target.program.traits.extend(generated.traits);
+        target
+            .program
+            .generated_metadata
+            .extend(generated.generated_metadata);
+        target.program.trait_imports.extend(generated.trait_imports);
+        target
+            .program
+            .closure_sources
+            .extend(generated.closure_sources);
+        target.empty_use_prefixes.extend(source.empty_use_prefixes);
+        target.glob_imports.extend(source.glob_imports);
         Ok(())
     }
 }

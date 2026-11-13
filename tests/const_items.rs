@@ -464,3 +464,61 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn block_local_nominal_items_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "block-local-nominals",
+        &[
+            Case {
+                name: "structs_enums_traits_impls_aliases",
+                source: r#"use std::fmt;
+fn make(n: i32) -> i32 { struct Acc { n: i32 } let a = Acc { n }; a.n + 1 }
+fn main() {
+    let r = make(3);
+    enum Bar { U(i32), W }
+    struct P { x: i32 }
+    impl P { fn twice(&self) -> i32 { self.x * 2 } }
+    trait Shape { fn area(&self) -> i32; }
+    impl Shape for P { fn area(&self) -> i32 { self.x * self.x } }
+    impl fmt::Display for P { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "P({})", self.x) } }
+    const C: i32 = 5;
+    type T = i32;
+    let b = Bar::U(3);
+    let v: T = match b { Bar::U(a) => a, Bar::W => 0 };
+    let p = P { x: v + C };
+    println!("{} {} {} {}", p.twice(), p.area(), p, r);
+    {
+        struct P(u8);
+        let q = P(7);
+        println!("{}", q.0);
+    }
+}"#,
+                expect: Expect::Run("16 64 P(8) 4\n7\n"),
+            },
+            Case {
+                name: "struct_uses_enclosing_generic",
+                source: "fn f<T>(x: T) { struct S { v: T } } fn main(){}",
+                expect: Expect::Invalid("E0401"),
+            },
+            Case {
+                name: "method_reads_enclosing_local",
+                source: "fn main(){ let y = 3; struct S; impl S { fn g(&self) -> i32 { y } } }",
+                expect: Expect::Invalid("E0434"),
+            },
+            Case {
+                name: "duplicate_struct_in_block",
+                source: "fn main(){ struct S; struct S; }",
+                expect: Expect::Invalid("E0428"),
+            },
+            Case {
+                name: "struct_out_of_scope",
+                source: "fn main(){ { struct Q; } let _q = Q; }",
+                expect: Expect::Invalid("E0425"),
+            },
+        ],
+    );
+}
