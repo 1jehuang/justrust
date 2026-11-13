@@ -9482,9 +9482,6 @@ fn slice_boundary_walk_inner(
                     continue;
                 }
                 let key = match node {
-                    Ty::RawPtr { pointee, .. } if pointee.contains_slice_optional(budget)? => {
-                        return Err("unsupported: raw storage of slice carriers requires heap lifetime retention".into());
-                    }
                     Ty::AssociatedType(_) if allow_universal_projections => None,
                     Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
                     Ty::Ref { .. } if !matches!(mode, SliceBoundaryMode::Carriers) => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),

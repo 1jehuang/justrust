@@ -767,16 +767,11 @@ impl SliceInventory<'_> {
                     .checked_add(1)
                     .ok_or_else(|| Error::new("slice type depth overflow"))?;
             }
-            Term::RawPtr(_, child) => {
-                // The ordinary boundary walker checks all pointee metadata for
-                // slices, then treats raw storage as a leaf. In particular,
-                // ReferenceFree does not reject references behind raw storage.
-                let pointee = self.read.resolve(child, b, 0)?;
-                if pointee.contains_slice(b).map_err(Error::new)? {
-                    return Err(Error::new(
-                        "unsupported: raw storage of slice carriers requires heap lifetime retention",
-                    ));
-                }
+            Term::RawPtr(..) => {
+                // Raw storage is a leaf, as in the ordinary boundary walker.
+                // Carriers behind it (including slice carriers stored by a
+                // generic Vec or moved through mem::replace) are tracked by
+                // their owner's family regions, like any other reference.
             }
             Term::Array(child, _) => {
                 height = self

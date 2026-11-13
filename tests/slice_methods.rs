@@ -606,54 +606,49 @@ fn slice_mut_pointer_invalid_boundaries() {
 }
 
 #[test]
-fn heap_stored_slice_carriers_are_explicitly_unsupported() {
-    let cases = [
-        (
-            "valid",
-            "fn main(){let a=[1i32,2];let v:Vec<&[i32]>=a.chunks(1).collect();println!(\"{}\",v.len());}",
-            true,
-        ),
-        (
-            "escape",
-            "fn main(){let v:Vec<&[i32]>;{let a=[1i32,2];v=a.chunks(1).collect();}println!(\"{}\",v.len());}",
-            false,
-        ),
-    ];
-    for (name, source, valid) in cases {
-        let dir = scratch(&format!("heap-{name}"));
-        let src = dir.join("main.rs");
-        std::fs::write(&src, source).unwrap();
-        let stock = Command::new(stock_rustc::stock_rustc())
-            .args(["--edition=2024", "--emit=metadata"])
-            .arg(&src)
-            .arg("-o")
-            .arg(dir.join("stock.rmeta"))
-            .output()
-            .unwrap();
-        assert_eq!(
-            stock.status.success(),
-            valid,
-            "{}",
-            String::from_utf8_lossy(&stock.stderr)
-        );
-        for workers in ["1", "8"] {
-            for check in [true, false] {
-                let image = dir.join(format!("native-{workers}-{check}"));
-                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
-                command.arg(&src).args(["--workers", workers]);
-                if check {
-                    command.arg("--check");
-                } else {
-                    command.arg("-o").arg(&image);
-                }
-                let result = command.output().unwrap();
-                assert!(!result.status.success());
-                assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported: raw storage of slice carriers requires heap lifetime retention"), "{}", String::from_utf8_lossy(&result.stderr));
-                assert!(!image.exists());
-            }
-        }
-        std::fs::remove_dir_all(dir).unwrap();
-    }
+fn heap_stored_slice_carriers_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    closure_oracle::check(
+        "heap-stored-slice-carriers",
+        &[
+            closure_oracle::Case {
+                name: "chunks_collect",
+                source: "fn main(){let a=[1i32,2];let v:Vec<&[i32]>=a.chunks(1).collect();let x=v[0][0];let y=v[1][0];println!(\"{} {} {}\",v.len(),x,y);}",
+                expect: closure_oracle::Expect::Run("2 1 2\n"),
+            },
+            closure_oracle::Case {
+                name: "flat_map_copied",
+                source: "fn main(){let v:Vec<Vec<i32>>=vec![vec![1,2],vec![3]];let f:Vec<i32>=v.iter().flat_map(|w|w.iter().copied()).collect();let n=v.iter().flat_map(|w|w.iter().copied()).count();println!(\"{:?} {}\",f,n);}",
+                expect: closure_oracle::Expect::Run("[1, 2, 3] 3\n"),
+            },
+            closure_oracle::Case {
+                name: "option_iter_take_and_vec_of_slices",
+                source: "fn main(){let a=vec![1i32,2,3];let mut v:Vec<&[i32]>=Vec::new();v.push(&a[..1]);v.push(&a[1..]);let mut o=Some(a.iter());let n=o.take().map(|i|i.count());println!(\"{} {:?} {}\",v.len(),n,o.is_none());}",
+                expect: closure_oracle::Expect::Run("2 Some(3) true\n"),
+            },
+            closure_oracle::Case {
+                name: "collected_chunks_escape",
+                source: "fn main(){let v:Vec<&[i32]>;{let a=[1i32,2];v=a.chunks(1).collect();}println!(\"{}\",v.len());}",
+                expect: closure_oracle::Expect::Invalid("E0597"),
+            },
+            closure_oracle::Case {
+                name: "flat_map_source_moved",
+                source: "fn main(){let f:Vec<i32>;{let v:Vec<Vec<i32>>=vec![vec![1,2],vec![3]];let it=v.iter().flat_map(|w|w.iter().copied());drop(v);f=it.collect();}println!(\"{:?}\",f);}",
+                expect: closure_oracle::Expect::Invalid("E0505"),
+            },
+            closure_oracle::Case {
+                name: "flat_map_source_mutated",
+                source: "fn main(){let mut v:Vec<Vec<i32>>=vec![vec![1,2],vec![3]];let it=v.iter().flat_map(|w|w.iter().copied());v.push(vec![4]);let f:Vec<i32>=it.collect();println!(\"{:?}\",f);}",
+                expect: closure_oracle::Expect::Invalid("E0502"),
+            },
+            closure_oracle::Case {
+                name: "pushed_slice_outlives_owner",
+                source: "fn main(){let mut v:Vec<&[i32]>=Vec::new();{let a=vec![1,2];v.push(&a[..]);}println!(\"{}\",v.len());}",
+                expect: closure_oracle::Expect::Invalid("E0597"),
+            },
+        ],
+    );
 }
 
 const POSITIVE: &str = r#"
