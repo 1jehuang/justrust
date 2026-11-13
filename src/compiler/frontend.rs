@@ -12428,6 +12428,10 @@ struct Parser<'input, 'names> {
     module_frontier: Option<super::semantic_scope::ModuleFrontierId>,
     module: ModuleId,
     alias_target: bool,
+    /// Region of the reference whose referent is being parsed right now
+    /// (`&'a <here>` or `&'a (<here>)`). Taken by `ty_inner`, so nested types
+    /// never observe it.
+    object_region: Option<RegionName>,
     pending_bounds: Vec<TypeBound>,
     /// Bounds of the enclosing impl and of the current parameter list, read
     /// by `Param::Item` shorthand projections.
@@ -12636,6 +12640,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module_frontier: self.module_frontier,
             module,
             alias_target: false,
+            object_region: None,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
@@ -14190,6 +14195,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module_frontier: self.module_frontier,
             module: self.module,
             alias_target: false,
+            object_region: None,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
@@ -14629,6 +14635,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module_frontier: None,
             module,
             alias_target: false,
+            object_region: None,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
@@ -14923,6 +14930,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(result)
     }
     fn ty_inner(&mut self, static_object: bool) -> Result<Type, ParseError> {
+        let enclosing_region = self.object_region.take();
         if self.is("unsafe") || self.is("extern") || self.is("for") {
             return Err(self.unsupported(
                 "unsafe, extern and higher-ranked function pointer types are unsupported",
@@ -15013,12 +15021,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 ir::BorrowKind::Shared
             };
+            self.object_region = region;
+            let referent = self.ty_at_object_position(self.opaque_return_sites.is_some(), false);
+            self.object_region = None;
             return Ok(Type::Ref {
                 kind,
                 region,
-                referent: Box::new(
-                    self.ty_at_object_position(self.opaque_return_sites.is_some(), false)?,
-                ),
+                referent: Box::new(referent?),
             });
         }
         if !self.token().string && self.is("*") {
@@ -15062,6 +15071,33 @@ impl<'input, 'names> Parser<'input, 'names> {
                     if lifetime_seen {
                         return Err(self
                             .error("E0226: only one explicit object lifetime bound is permitted"));
+                    }
+                    // `&'a (dyn Tr + 'a)` is exactly the default object
+                    // lifetime of `&'a dyn Tr`: the payload's loans already
+                    // flow through the reference carrier.
+                    if let Some(RegionName::Named(outer)) = enclosing_region
+                        && !self.alias_target
+                        && !self.cursor.peek(1).is_some_and(|t| t.matches("'static"))
+                    {
+                        self.cursor.bump();
+                        let inner = self.lifetime()?;
+                        let RegionName::Named(inner) = inner else {
+                            return Err(self.unsupported(
+                                "trait object lifetime bounds other than `'static` are unsupported",
+                            ));
+                        };
+                        if !name_scope::ident_eq(
+                            self.names,
+                            outer,
+                            inner,
+                            LookupClass::LifetimeParameter,
+                        )
+                        .map_err(|e| self.error(&e))?
+                        {
+                            return Err(self.unsupported("trait object lifetime bounds other than `'static` or the enclosing reference lifetime are unsupported"));
+                        }
+                        lifetime_seen = true;
+                        continue;
                     }
                     if !static_object || self.alias_target {
                         return Err(self.unsupported("explicit borrowed or aliased object lifetime bounds require object lifetime transport"));
@@ -15154,8 +15190,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.eat(")") {
                 return Ok(Type::Unit);
             }
+            // `&'a (dyn Tr + 'a)`: the parenthesized referent keeps the
+            // enclosing reference region; a tuple element does not.
+            self.object_region = enclosing_region;
             let first =
-                self.ty_at_object_position(self.opaque_return_sites.is_some(), static_object)?;
+                self.ty_at_object_position(self.opaque_return_sites.is_some(), static_object);
+            self.object_region = None;
+            let first = first?;
             if !self.eat(",") {
                 self.expect(")")?;
                 return Ok(first);

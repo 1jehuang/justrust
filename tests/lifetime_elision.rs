@@ -468,6 +468,43 @@ fn main() {}
 }
 
 #[test]
+fn accepts_reference_lifetime_object_bounds() {
+    runs(
+        r#"trait T { fn g(&self) -> i32; }
+trait M { fn h(&mut self) -> i32; }
+struct S<'a>(&'a i32);
+impl T for S<'_> { fn g(&self) -> i32 { *self.0 } }
+struct C(i32);
+impl M for C { fn h(&mut self) -> i32 { self.0 += 1; self.0 } }
+fn pass<'a>(r: &'a (dyn T + 'a)) -> &'a (dyn T + 'a) { r }
+fn step<'a>(r: &'a mut (dyn M + 'a)) -> i32 { r.h() + r.h() }
+fn main() { let x = 5; let s = S(&x); let r = pass(&s); let mut c = C(1); println!("{} {}", r.g(), step(&mut c)); }
+"#,
+        "5 5\n",
+    );
+}
+
+#[test]
+fn rejects_reference_lifetime_object_violations() {
+    rejects(
+        "object payload borrow ends before the returned object reference",
+        r#"trait T { fn g(&self) -> i32; }
+struct S<'a>(&'a i32);
+impl T for S<'_> { fn g(&self) -> i32 { *self.0 } }
+fn pass<'a>(r: &'a (dyn T + 'a)) -> &'a (dyn T + 'a) { r }
+fn main() { let s; let r; { let x = 5; s = S(&x); r = pass(&s); } println!("{}", r.g()); }
+"#,
+    );
+    rejects(
+        "borrowed object widened to a static object",
+        r#"trait T { fn g(&self) -> i32; }
+fn pass<'a>(r: &'a (dyn T + 'a)) -> &'static (dyn T + 'static) { r }
+fn main() {}
+"#,
+    );
+}
+
+#[test]
 fn rejects_static_type_bound_on_borrowed_actual() {
     rejects(
         "static generic actual",
