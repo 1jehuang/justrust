@@ -174,7 +174,18 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                 work(names, 1)?;
                 pending.push(referent.as_ref()).map_err(transport)?;
             }
-            Type::Dyn(trait_path) => {
+            Type::Dyn(trait_path, extra) => {
+                for bound in extra {
+                    if let TraitPath::Source(path) = bound {
+                        path.path(names)?;
+                        work(names, path.segments.len())?;
+                        for segment in &path.segments {
+                            names
+                                .key(segment.name, LookupClass::Item(Namespace::Type))
+                                .map_err(native_adapter::name_diagnostic)?;
+                        }
+                    }
+                }
                 if let TraitPath::Source(path) = trait_path.as_ref() {
                     path.path(names)?;
                     work(names, path.segments.len())?;
@@ -413,17 +424,24 @@ impl Type {
                         super::super::source::SourceError::from_token(e).to_string()
                     })?;
                 }
-                (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
-                    (TraitPath::Builtin(a), TraitPath::Builtin(b)) => equal &= a == b,
-                    (TraitPath::Source(a), TraitPath::Source(b)) => {
-                        // Written trait object principals are argument-free.
-                        let a = a.path(names)?;
-                        let b = b.path(names)?;
-                        equal &= path_key(names, &a, Namespace::Type)?
-                            == path_key(names, &b, Namespace::Type)?;
+                (Type::Dyn(a, ax), Type::Dyn(b, bx)) => {
+                    equal &= ax.len() == bx.len();
+                    for (a, b) in
+                        std::iter::once((a.as_ref(), b.as_ref())).chain(ax.iter().zip(bx.iter()))
+                    {
+                        match (a, b) {
+                            (TraitPath::Builtin(a), TraitPath::Builtin(b)) => equal &= a == b,
+                            (TraitPath::Source(a), TraitPath::Source(b)) => {
+                                // Written trait object bounds are argument-free.
+                                let a = a.path(names)?;
+                                let b = b.path(names)?;
+                                equal &= path_key(names, &a, Namespace::Type)?
+                                    == path_key(names, &b, Namespace::Type)?;
+                            }
+                            _ => equal = false,
+                        }
                     }
-                    _ => equal = false,
-                },
+                }
                 (
                     Type::FnPointer {
                         inputs: a,

@@ -420,7 +420,7 @@ impl PlanCtx {
                 super::super::nominal_realization::source_shape(&lowered, &self.budget, depth + 1)
                     .map_err(|error| error.to_string())?
             }
-            Type::Dyn(path) => {
+            Type::Dyn(path, extra) => {
                 // A closed principal is a rigid leaf: its actuals and associated
                 // assignments are lowered through the canonical dynamic metadata
                 // path and admitted only when no parameter or inference remains.
@@ -429,6 +429,7 @@ impl PlanCtx {
                     state.source_dynamic_type(
                         &self.registry,
                         path,
+                        extra,
                         bindings,
                         ir::FactsCtx::Concrete,
                         &self.budget,

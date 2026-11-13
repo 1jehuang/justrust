@@ -223,6 +223,7 @@ impl Encoder<'_> {
             traits::CatalogItem::CellSet => 17,
             traits::CatalogItem::ThreadPanicking => 18,
             traits::CatalogItem::Sync => 19,
+            traits::CatalogItem::Send => 20,
             traits::CatalogItem::ManuallyDrop => 10,
             traits::CatalogItem::ManuallyDropNew => 11,
             traits::CatalogItem::ManuallyDropIntoInner => 12,

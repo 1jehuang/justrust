@@ -577,3 +577,8 @@ impl<T: super::cmp::PartialEq<U>, U> super::cmp::PartialEq<[U]> for [T] {
         false
     }
 }
+
+// As in library/core/src/slice/iter.rs (MIT OR Apache-2.0, Rust Project
+// Contributors): IterMut behaves like `&'a mut [T]`.
+unsafe impl<'a, T: Send> Send for IterMut<'a, T> {}
+unsafe impl<'a, T: Sync> Sync for IterMut<'a, T> {}

@@ -43,7 +43,7 @@ impl Resolver<'_> {
                         stack.extend(segment.args.iter());
                     }
                 }
-                Type::Dyn(trait_path) => {
+                Type::Dyn(trait_path, _) => {
                     if let TraitPath::Source(path) = trait_path.as_ref() {
                         let name = path.path(self.names())?;
                         if self

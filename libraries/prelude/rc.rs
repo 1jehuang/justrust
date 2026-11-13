@@ -400,3 +400,9 @@ impl<'b, T: super::fmt::Display> super::fmt::Display for RefMut<'b, T> {
         unsafe { super::fmt::Display::fmt(&*self.value, f) }
     }
 }
+
+// As in library/core/src/cell.rs (MIT OR Apache-2.0, Rust Project
+// Contributors): RefCell is Send when T is Send (structural) and never Sync
+// (its Cell flag). Ref/RefMut behave like `&T` / `&mut T`.
+unsafe impl<'b, T: Sync> Sync for Ref<'b, T> {}
+unsafe impl<'b, T: Sync> Sync for RefMut<'b, T> {}

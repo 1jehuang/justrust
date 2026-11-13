@@ -840,12 +840,12 @@ impl Resolver<'_> {
                 // positions default to `'static`), so expansion is exact. A
                 // bare unsized `dyn` alias would change the default lifetime
                 // under a borrow and stays unsupported.
-                Type::Dyn(_) if top => {
+                Type::Dyn(_, _) if top => {
                     return Err(
                         "unsupported: unsized trait object type aliases are unsupported".into(),
                     );
                 }
-                Type::Dyn(_) => {}
+                Type::Dyn(_, _) => {}
                 Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                     if let Some(argument) = &source.argument {
                         check_target(argument, false)?;
@@ -964,7 +964,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-            Type::Dyn(trait_path) => {
+            Type::Dyn(trait_path, _) => {
                 if let TraitPath::Source(path) = trait_path.as_ref() {
                     for segment in &path.segments {
                         for arg in segment.args.iter().chain(
@@ -1077,7 +1077,7 @@ impl Resolver<'_> {
             }
             // The object trait keeps its genuine definition-site occurrence,
             // like a projection's trait. Only its actuals carry this use.
-            Type::Dyn(trait_path) => {
+            Type::Dyn(trait_path, _) => {
                 if let TraitPath::Source(path) = trait_path.as_mut() {
                     for segment in &mut path.segments {
                         for actual in segment.args.iter_mut().chain(
@@ -1184,7 +1184,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-            Type::Dyn(trait_path) => {
+            Type::Dyn(trait_path, _) => {
                 if let TraitPath::Source(path) = trait_path.as_mut() {
                     for segment in &mut path.segments {
                         for arg in segment.args.iter_mut().chain(
@@ -1285,6 +1285,7 @@ impl Resolver<'_> {
             (BuiltinAtom::Clone, BuiltinTrait::Clone),
             (BuiltinAtom::Drop, BuiltinTrait::Drop),
             (BuiltinAtom::Sync, BuiltinTrait::Sync),
+            (BuiltinAtom::Send, BuiltinTrait::Send),
         ] {
             if self.atom_is(ident, atom, Namespace::Type)? {
                 return Ok(Some(id));
@@ -1376,7 +1377,7 @@ impl Resolver<'_> {
             (module, trait_id),
             (
                 CatalogModule::Marker,
-                BuiltinTrait::Sized | BuiltinTrait::Copy | BuiltinTrait::Sync
+                BuiltinTrait::Sized | BuiltinTrait::Copy | BuiltinTrait::Sync | BuiltinTrait::Send
             ) | (CatalogModule::Clone, BuiltinTrait::Clone)
                 | (CatalogModule::Ops, BuiltinTrait::Drop)
         );
@@ -2936,7 +2937,18 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
-            Type::Dyn(trait_path) => self.trait_application(trait_path, module, true)?,
+            Type::Dyn(trait_path, extra) => {
+                self.trait_application(trait_path, module, true)?;
+                for bound in extra.iter_mut() {
+                    self.trait_application(bound, module, false)?;
+                    if !matches!(
+                        bound,
+                        TraitPath::Builtin(BuiltinTrait::Send | BuiltinTrait::Sync)
+                    ) {
+                        return Err("E0225: only auto traits can be used as additional traits in a trait object".into());
+                    }
+                }
+            }
             Type::DependentArray(element, _)
             | Type::Array(element, _)
             | Type::Slice(element)
@@ -5661,7 +5673,7 @@ fn resolve_impl_block_contents(
         resolver.self_nominal = match &block.self_ty {
             Type::Named(path) => Some(path.clone()),
             Type::Apply(path) => Some(path.path(resolver.names())?),
-            Type::Dyn(principal) if block.trait_path.is_none() => {
+            Type::Dyn(principal, _) if block.trait_path.is_none() => {
                 let TraitPath::Source(principal) = principal.as_ref() else {
                     return Err("E0116: inherent dyn implementations require a source-owned principal trait".into());
                 };

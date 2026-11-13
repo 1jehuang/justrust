@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 13;
+pub const CATALOG_VERSION: u32 = 14;
 
-const BASE_COUNT: u32 = 19;
+const BASE_COUNT: u32 = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -83,6 +83,7 @@ pub enum CatalogItem {
     CellSet,
     ThreadPanicking,
     Sync,
+    Send,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
@@ -92,7 +93,9 @@ impl CatalogItem {
             Self::ThreadPanicking | Self::Recipe(RecipeDescriptor::ThreadPanicking) => {
                 CatalogModule::Thread
             }
-            Self::Sized | Self::Copy | Self::Sync | Self::PhantomData => CatalogModule::Marker,
+            Self::Sized | Self::Copy | Self::Sync | Self::Send | Self::PhantomData => {
+                CatalogModule::Marker
+            }
             Self::ManuallyDrop
             | Self::ManuallyDropNew
             | Self::ManuallyDropIntoInner
@@ -108,6 +111,7 @@ impl CatalogItem {
     pub fn binding_atom(self) -> Option<BuiltinAtom> {
         match self {
             Self::Sync => Some(BuiltinAtom::Sync),
+            Self::Send => Some(BuiltinAtom::Send),
             Self::Sized => Some(BuiltinAtom::Sized),
             Self::Clone => Some(BuiltinAtom::Clone),
             Self::Copy => Some(BuiltinAtom::Copy),
@@ -146,6 +150,7 @@ impl CatalogItem {
             Self::CellSet => 16,
             Self::ThreadPanicking => 17,
             Self::Sync => 18,
+            Self::Send => 19,
             Self::Recipe(_) => return None,
         })
     }
@@ -356,6 +361,7 @@ impl CoreCatalogBuilder {
             CatalogItem::PhantomData,
             CatalogItem::ManuallyDrop,
             CatalogItem::Sync,
+            CatalogItem::Send,
         ] {
             let declaration = id(snapshot, item);
             let is_trait = matches!(
@@ -365,6 +371,7 @@ impl CoreCatalogBuilder {
                     | CatalogItem::Copy
                     | CatalogItem::Drop
                     | CatalogItem::Sync
+                    | CatalogItem::Send
             );
             let owner = match item {
                 CatalogItem::CloneItem
@@ -409,6 +416,7 @@ impl CoreCatalogBuilder {
             };
             let name = match item {
                 CatalogItem::Sync => "Sync",
+                CatalogItem::Send => "Send",
                 CatalogItem::Sized => "Sized",
                 CatalogItem::Clone => "Clone",
                 CatalogItem::CloneItem => "clone",
@@ -1420,7 +1428,7 @@ impl CoreCatalog {
                 "catalog safety identity mismatch",
             ));
         }
-        if item != CatalogItem::Sync {
+        if !matches!(item, CatalogItem::Sync | CatalogItem::Send) {
             return Ok(false);
         }
         charged(
@@ -1521,21 +1529,21 @@ mod wide_tests {
         .unwrap();
         let snapshot = SnapshotId::standalone().unwrap();
         let builder = CoreCatalogBuilder::new(snapshot, modules.clone(), &budget).unwrap();
-        assert_eq!(builder.source_start(), 19);
+        assert_eq!(builder.source_start(), 20);
         let catalog = builder
-            .finish(19, RecipeShapeInventory::new(), &budget)
+            .finish(20, RecipeShapeInventory::new(), &budget)
             .unwrap();
-        assert_eq!(catalog.version(), 13);
+        assert_eq!(catalog.version(), 14);
         assert_eq!(catalog.id(CatalogItem::CellSet).index, 16);
         let declaration = catalog.id(CatalogItem::ThreadPanicking);
         assert_eq!(declaration.index, 17);
-        assert_eq!(catalog.declarations().len(), 19);
+        assert_eq!(catalog.declarations().len(), 20);
         let row = catalog.recipe(RecipeDescriptor::ThreadPanicking).unwrap();
         assert_eq!(row.declaration, declaration);
         assert_eq!(
             row.origin,
             DeclOrigin::CoreCatalog {
-                version: 13,
+                version: 14,
                 item: CatalogItem::ThreadPanicking,
             }
         );

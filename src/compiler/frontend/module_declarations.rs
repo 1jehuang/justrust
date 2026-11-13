@@ -149,6 +149,7 @@ fn implemented_trait(
                 BuiltinTrait::Copy => 5,
                 BuiltinTrait::Drop => 6,
                 BuiltinTrait::Sync => 18,
+                BuiltinTrait::Send => 19,
             });
         }
         TraitPath::Source(path) => path,

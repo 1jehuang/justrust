@@ -135,6 +135,28 @@ impl ValidatedTraitWorld {
             &mut applications,
             0,
         )?;
+        // Written `+ Send` / `+ Sync` are object bounds, not supertraits.
+        for (written, item) in [
+            (object.auto.send, CatalogItem::Send),
+            (object.auto.sync, CatalogItem::Sync),
+        ] {
+            let declaration = self.catalog.id(item);
+            if written
+                && !applications
+                    .iter()
+                    .any(|application| application.declaration == declaration)
+            {
+                push(
+                    &self.budget,
+                    &mut applications,
+                    TraitRef {
+                        declaration,
+                        self_ty: owner.clone(),
+                        args: Arc::from([]),
+                    },
+                )?;
+            }
+        }
         Ok(applications)
     }
 }
@@ -163,6 +185,26 @@ impl ValidatedFacts {
                 self.budget(),
                 "E0277: concrete type does not implement dynamic principal",
             ));
+        }
+        // The erased payload must itself satisfy each written auto bound.
+        for (written, item) in [
+            (object.auto.send, CatalogItem::Send),
+            (object.auto.sync, CatalogItem::Sync),
+        ] {
+            if !written {
+                continue;
+            }
+            let goal = Predicate::Implements(TraitRef {
+                declaration: self.world.catalog.id(item),
+                self_ty: concrete.clone(),
+                args: Arc::from([]),
+            });
+            if !matches!(self.world.prove_goal(&goal, self)?, ProofOutcome::Proved(_)) {
+                return Err(FactsError::unproved(
+                    self.budget(),
+                    "E0277: concrete type does not implement a trait object auto bound",
+                ));
+            }
         }
         let applications = self
             .world
@@ -317,6 +359,7 @@ mod tests {
             principal: header.declaration,
             args: Arc::from([Ty::Int(ir::IntTy::I32)]),
             associated_types: Arc::from([(item, Ty::Int(ir::IntTy::I32))]),
+            auto: ir::AutoTraits::default(),
         };
         let validate = |object: &ir::DynTy| {
             world.validate_ty_metadata_in(&Ty::Dyn(Arc::new(object.clone())), &world.empty.env, 0)

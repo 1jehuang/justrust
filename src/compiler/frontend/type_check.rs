@@ -3041,7 +3041,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             kind: *kind,
             pointee: std::sync::Arc::new(checked_ty_at(pointee, env, false)?),
         }),
-        Type::Dyn(_) => Err("unsupported: trait objects require the planning frontend".into()),
+        Type::Dyn(_, _) => Err("unsupported: trait objects require the planning frontend".into()),
         Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
             Err("unsupported: shared slices require the planning frontend".into())
         }

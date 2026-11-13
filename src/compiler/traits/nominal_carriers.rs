@@ -1133,6 +1133,7 @@ mod tests {
                     principal: identity,
                     args: Arc::from([ty.clone()]),
                     associated_types: Arc::from([(declaration, ty)]),
+                    auto: ir::AutoTraits::default(),
                 })),
             }
         };

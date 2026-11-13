@@ -86,7 +86,7 @@ pub(super) fn validate_type(
                 | Type::Str
                 | Type::Projection(_)
                 | Type::Opaque(_)
-                | Type::Dyn(_)
+                | Type::Dyn(_, _)
                 | Type::Infer => {
                     return Err(
                         "unsupported: this nominal default type requires broader source transport"

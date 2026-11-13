@@ -212,6 +212,7 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
                     (items[0], ir::Ty::Bool),
                     (items[1], ir::Ty::Int(ir::IntTy::I32)),
                 ]),
+                auto: ir::AutoTraits::default(),
             })),
             _ => ir::Ty::Dyn(Arc::new(ir::DynTy {
                 principal,
@@ -220,6 +221,7 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
                     (items[0], ty),
                     (items[1], ir::Ty::Int(ir::IntTy::I32)),
                 ]),
+                auto: ir::AutoTraits::default(),
             })),
         };
         assert_eq!(
@@ -360,6 +362,7 @@ fn constructor_ingress_replays_source_application_snapshot_and_actuals() {
         principal,
         args: Arc::from([source.clone()]),
         associated_types: Arc::from([]),
+        auto: ir::AutoTraits::default(),
     }));
     assert!(crate::compiler::nominal_realization::source_shape(&deep, &shallow, 0).is_err());
     let (_, foreign_source) = foreign

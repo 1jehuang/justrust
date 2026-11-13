@@ -91,3 +91,8 @@ impl<T: super::fmt::Display + ?Sized> super::fmt::Display for Box<T> {
         <T as super::fmt::Display>::fmt(unsafe { &*self.ptr }, f)
     }
 }
+
+// Box is Send/Sync exactly when its contents are, as in library/alloc
+// (MIT OR Apache-2.0, Rust Project Contributors).
+unsafe impl<T: ?Sized + Send> Send for Box<T> {}
+unsafe impl<T: ?Sized + Sync> Sync for Box<T> {}

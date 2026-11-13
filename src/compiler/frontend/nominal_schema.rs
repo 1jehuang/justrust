@@ -970,9 +970,9 @@ impl PlanState {
                         }
                         // A trait object as a direct nominal actual (`Box<dyn P>`);
                         // `?Sized` admission is the parameter's Sized row.
-                        if let Type::Dyn(trait_path) = arg {
+                        if let Type::Dyn(trait_path, extra) = arg {
                             return self.source_dynamic_type(
-                                registry, trait_path, bindings, caller, budget,
+                                registry, trait_path, extra, bindings, caller, budget,
                             );
                         }
                         self.source_ty_with_transport(
@@ -1091,15 +1091,15 @@ impl PlanState {
                 kind,
                 referent: object,
                 ..
-            } if matches!(object.as_ref(), Type::Dyn(_)) => {
-                let Type::Dyn(trait_path) = object.as_ref() else {
+            } if matches!(object.as_ref(), Type::Dyn(_, _)) => {
+                let Type::Dyn(trait_path, extra) = object.as_ref() else {
                     return Err("invalid trait object source shape".into());
                 };
                 ir::Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(
-                        self.source_dynamic_type(registry, trait_path, bindings, caller, budget)?,
-                    ),
+                    referent: Arc::new(self.source_dynamic_type(
+                        registry, trait_path, extra, bindings, caller, budget,
+                    )?),
                 }
             }
             Type::Ref { kind, referent, .. } => {
@@ -1174,17 +1174,17 @@ impl PlanState {
                     pointee: Arc::new(ir::Ty::shared_str_ty()),
                 }
             }
-            Type::RawPtr { kind, pointee } if matches!(pointee.as_ref(), Type::Dyn(_)) => {
+            Type::RawPtr { kind, pointee } if matches!(pointee.as_ref(), Type::Dyn(_, _)) => {
                 // `*const dyn P` / `*mut dyn P`: a two-word (data, vtable)
                 // pointer with the same canonical object identity as `&dyn P`.
-                let Type::Dyn(trait_path) = pointee.as_ref() else {
+                let Type::Dyn(trait_path, extra) = pointee.as_ref() else {
                     return Err("invalid trait object source shape".into());
                 };
                 ir::Ty::RawPtr {
                     kind: *kind,
-                    pointee: Arc::new(
-                        self.source_dynamic_type(registry, trait_path, bindings, caller, budget)?,
-                    ),
+                    pointee: Arc::new(self.source_dynamic_type(
+                        registry, trait_path, extra, bindings, caller, budget,
+                    )?),
                 }
             }
             Type::RawPtr { kind, pointee } => ir::Ty::RawPtr {
@@ -1203,12 +1203,12 @@ impl PlanState {
             // An inherent impl head needs the unsized Self identity as
             // metadata. Value-position callable types retain the existing
             // explicit rejection, rather than treating dyn as a sized value.
-            Type::Dyn(path) if depth == 0 && !allow_ref => {
-                self.source_dynamic_type(registry, path, bindings, caller, budget)?
+            Type::Dyn(path, extra) if depth == 0 && !allow_ref => {
+                self.source_dynamic_type(registry, path, extra, bindings, caller, budget)?
             }
-            Type::Dyn(_) => {
+            Type::Dyn(_, _) => {
                 return Err(
-                    "E0277: a trait object value does not have a statically known size; use a reference or pointer"
+                    "unsupported: a trait object outside a reference, pointer or nominal argument"
                         .into(),
                 );
             }

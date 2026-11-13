@@ -1103,7 +1103,12 @@ impl<'a> Validator<'a> {
                 | Type::RawPtr {
                     pointee: element, ..
                 } => self.push(Visit::Type(element))?,
-                Type::Dyn(trait_path) => self.push(Visit::TraitPath(trait_path))?,
+                Type::Dyn(trait_path, extra) => {
+                    self.push(Visit::TraitPath(trait_path))?;
+                    for bound in extra {
+                        self.push(Visit::TraitPath(bound))?;
+                    }
+                }
                 Type::FnPointer { inputs, output } => {
                     self.many(inputs, Visit::Type)?;
                     self.push(Visit::Type(output))?;
@@ -1148,7 +1153,8 @@ impl<'a> Validator<'a> {
                     | BuiltinTrait::Copy
                     | BuiltinTrait::Clone
                     | BuiltinTrait::Drop
-                    | BuiltinTrait::Sync,
+                    | BuiltinTrait::Sync
+                    | BuiltinTrait::Send,
                 ) => (),
             },
             Visit::Block(block) => {

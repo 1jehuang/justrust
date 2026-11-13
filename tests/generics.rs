@@ -412,6 +412,94 @@ fn sync_native_check_build_run_workers_1_8() {
     }
 }
 
+const AUTO_VALID: &[(&str, &str)] = &[
+    (
+        "dyn_sync_reference",
+        r#"fn need<T:Sync+?Sized>(_:&T){}trait V{}struct S;impl V for S{}fn main(){let s=S;let v:&(dyn V+Sync)=&s;need(v);println!("7");}"#,
+    ),
+    (
+        "send_structural_owned_and_cell",
+        r#"fn need<T:Send>(_:T){}struct P{x:i32,v:Vec<String>,b:Box<u8>}fn main(){let n=5;need(P{x:1,v:Vec::new(),b:Box::new(2)});need(&n);need(core::cell::Cell::new(1));println!("7");}"#,
+    ),
+    (
+        "send_universal_composites",
+        r#"fn need<T:Send>(){}fn forward<T:Send>(){need::<(T,Vec<T>,Box<T>)>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "shared_ref_send_requires_sync",
+        r#"fn need<T:Send>(){}fn forward<T:Sync>(){need::<&T>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "auto_supertraits_and_dyn_send",
+        r#"trait Job:Send+Sync{fn run(&self)->i32;}struct P(i32);impl Job for P{fn run(&self)->i32{self.0}}fn need<T:Send+Sync+?Sized>(_:&T){}fn go(j:&dyn Job)->i32{need(j);j.run()}fn main(){let b:Box<dyn Job+Send>=Box::new(P(7));println!("{}",go(&*b));}"#,
+    ),
+];
+const AUTO_INVALID: &[(&str, &str)] = &[
+    (
+        "rc_not_send",
+        r#"fn need<T:Send>(_:T){}fn main(){need(std::rc::Rc::new(1));}"#,
+    ),
+    (
+        "struct_with_rc_not_send",
+        r#"struct H{s:std::rc::Rc<i32>}fn need<T:Send>(_:T){}fn main(){need(H{s:std::rc::Rc::new(1)});}"#,
+    ),
+    (
+        "ref_to_cell_not_send",
+        r#"fn need<T:Send>(_:T){}fn main(){let c=core::cell::Cell::new(1);need(&c);}"#,
+    ),
+    (
+        "missing_universal_send",
+        r#"fn need<T:Send>(){}fn bad<T>(){need::<T>();}fn main(){}"#,
+    ),
+    (
+        "ref_needs_sync_not_send",
+        r#"fn need<T:Send>(){}fn bad<T:Send>(){need::<&T>();}fn main(){}"#,
+    ),
+    (
+        "raw_pointer_not_send",
+        r#"fn need<T:Send>(){}fn main(){need::<*const i32>();}"#,
+    ),
+    (
+        "vec_of_rc_not_send",
+        r#"fn need<T:Send>(){}fn main(){need::<Vec<std::rc::Rc<i32>>>();}"#,
+    ),
+    (
+        "dyn_sync_payload_must_be_sync",
+        r#"trait V{}impl V for std::rc::Rc<i32>{}fn main(){let r=std::rc::Rc::new(1);let _v:&(dyn V+Sync)=&r;}"#,
+    ),
+    (
+        "plain_dyn_not_send",
+        r#"trait V{}fn need<T:Send+?Sized>(_:&T){}fn bad(v:&dyn V){need(v);}fn main(){}"#,
+    ),
+    (
+        "dyn_send_not_sync",
+        r#"trait V{}fn need<T:Sync+?Sized>(_:&T){}fn bad(v:&(dyn V+Send)){need(v);}fn main(){}"#,
+    ),
+    (
+        "dyn_non_auto_extra_bound",
+        r#"trait V{}struct S;impl V for S{}fn main(){let _b:Box<dyn V+Clone>=Box::new(S);}"#,
+    ),
+    (
+        "supertrait_send_impl",
+        r#"trait Job:Send{fn run(&self);}impl Job for std::rc::Rc<i32>{fn run(&self){}}fn main(){}"#,
+    ),
+    (
+        "refcell_not_sync",
+        r#"fn need<T:Sync>(_:&T){}fn main(){let r=std::cell::RefCell::new(1);need(&r);}"#,
+    ),
+];
+
+#[test]
+fn send_sync_auto_traits_native_check_build_run_workers_1_8() {
+    for (label, source) in AUTO_VALID {
+        eprintln!("auto trait valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in AUTO_INVALID {
+        rejects(label, source);
+    }
+}
+
 const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
     (
         "shared_payload_reference_return",

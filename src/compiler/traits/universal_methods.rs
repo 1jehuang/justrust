@@ -438,6 +438,7 @@ impl ValidatedTraitWorld {
                     principal: object.principal,
                     args: args.into(),
                     associated_types: associated_types.into(),
+                    auto: object.auto,
                 }))
             }
             Ty::Ref { kind, referent } => Ty::Ref {

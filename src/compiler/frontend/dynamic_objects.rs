@@ -6,6 +6,7 @@ impl PlanState {
         &mut self,
         registry: &DeclRegistry,
         path: &TraitPath,
+        extra: &[TraitPath],
         bindings: &HashMap<GenericBindingKey, ir::Ty>,
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
@@ -58,6 +59,13 @@ impl PlanState {
                 required.push(*item);
             }
             for parent in &registry.source_trait(principal)?.supertraits {
+                // Auto-trait supertraits declare no associated types.
+                if matches!(
+                    parent,
+                    TraitPath::Builtin(BuiltinTrait::Send | BuiltinTrait::Sync)
+                ) {
+                    continue;
+                }
                 collect(
                     registry,
                     registry.resolve_trait_path(parent)?,
@@ -86,10 +94,22 @@ impl PlanState {
                 ));
             }
         }
+        let mut auto = ir::AutoTraits::default();
+        for bound in extra {
+            budget.charge_work(1)?;
+            match bound {
+                TraitPath::Builtin(BuiltinTrait::Send) => auto.send = true,
+                TraitPath::Builtin(BuiltinTrait::Sync) => auto.sync = true,
+                _ => {
+                    return Err("E0225: only auto traits can be used as additional traits in a trait object".into());
+                }
+            }
+        }
         Ok(ir::Ty::Dyn(Arc::new(ir::DynTy {
             principal,
             args: application.trait_ref.args,
             associated_types: equalities.into(),
+            auto,
         })))
     }
 }

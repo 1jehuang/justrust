@@ -1833,6 +1833,7 @@ impl ValidatedTraitWorld {
                     principal: object.principal,
                     args: arguments.into(),
                     associated_types: associated_types.into(),
+                    auto: object.auto,
                 })))
             }
             Ty::Struct(_) | Ty::Enum(_) => {

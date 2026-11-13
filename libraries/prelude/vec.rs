@@ -664,3 +664,10 @@ impl<T> super::iter::Extend<T> for Vec<T> {
         self.push(item);
     }
 }
+
+// Auto-trait impls as in library/alloc/src/vec (MIT OR Apache-2.0, Rust
+// Project Contributors): the owning buffer behaves like its elements.
+unsafe impl<T: Send> Send for Vec<T> {}
+unsafe impl<T: Sync> Sync for Vec<T> {}
+unsafe impl<T: Send> Send for IntoIter<T> {}
+unsafe impl<T: Sync> Sync for IntoIter<T> {}

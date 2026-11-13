@@ -289,7 +289,7 @@ impl<'a> Lower<'a> {
             }
             Type::Projection(_) => return un("written projection type"),
             Type::Opaque(_) => return un("impl Trait type"),
-            Type::Dyn(_) => return un("dyn Trait type"),
+            Type::Dyn(_, _) => return un("dyn Trait type"),
         })
     }
 

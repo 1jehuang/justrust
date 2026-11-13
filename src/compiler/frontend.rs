@@ -3445,10 +3445,24 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
             kind: *kind,
             pointee: Box::new(copy_source_type(pointee, budget, at + 1)?),
         },
-        Type::Dyn(trait_path) => Type::Dyn(Box::new(match trait_path.as_ref() {
-            TraitPath::Source(path) => TraitPath::Source(copy_source_path(path, budget, at + 1)?),
-            TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
-        })),
+        Type::Dyn(trait_path, extra) => {
+            let copy = |path: &TraitPath| -> std::result::Result<TraitPath, FactsError> {
+                Ok(match path {
+                    TraitPath::Source(path) => {
+                        TraitPath::Source(copy_source_path(path, budget, at + 1)?)
+                    }
+                    TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
+                })
+            };
+            let mut copied = Vec::new();
+            copied
+                .try_reserve_exact(extra.len())
+                .map_err(|_| FactsError::resource(budget, "source dyn bound allocation"))?;
+            for path in extra {
+                copied.push(copy(path)?);
+            }
+            Type::Dyn(Box::new(copy(trait_path)?), copied)
+        }
         Type::Tuple(fields) => {
             let mut result = Vec::new();
             result
@@ -3645,7 +3659,7 @@ fn source_type_mentions_self(
         }
         Type::Named(path) => matches!(path.anchor(), PathAnchor::SelfType),
         Type::ConstArgument(_)
-        | Type::Dyn(_)
+        | Type::Dyn(_, _)
         | Type::Str
         | Type::Param(_)
         | Type::Int(_)
@@ -10316,6 +10330,7 @@ pub enum BuiltinTrait {
     Clone,
     Drop,
     Sync,
+    Send,
 }
 #[derive(Clone, Debug)]
 pub enum TraitPath {
@@ -10658,8 +10673,9 @@ pub enum Type {
         kind: ir::BorrowKind,
         pointee: Box<Type>,
     },
-    /// Unsized trait object `dyn Trait`. Admitted only behind a reference.
-    Dyn(Box<TraitPath>),
+    /// Unsized trait object `dyn Trait + Send + Sync`. Admitted only behind a
+    /// reference. The second field is the written auto-trait set.
+    Dyn(Box<TraitPath>, Vec<TraitPath>),
     Int(ir::IntTy),
     Float(ir::FloatTy),
     Char,
@@ -14869,7 +14885,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         None
                     }
                     Type::Apply(path) => Some(path),
-                    Type::Dyn(trait_path) => match trait_path.as_ref() {
+                    Type::Dyn(trait_path, _) => match trait_path.as_ref() {
                         TraitPath::Source(path) => Some(path),
                         _ => None,
                     },
@@ -15035,28 +15051,39 @@ impl<'input, 'names> Parser<'input, 'names> {
             // Object coercion admits only borrow-free hidden payloads until
             // erased payloads can retain their own source carrier family.
             // A shorter object lifetime is rejected instead of being dropped.
-            if self.is("+") && self.cursor.peek(1).is_some_and(|t| t.is_lifetime()) {
-                if !static_object || self.alias_target {
-                    return Err(self.unsupported("explicit borrowed or aliased object lifetime bounds require object lifetime transport"));
+            // Additional auto traits and at most one lifetime, in any order
+            // stock accepts (`dyn A + Send + 'static + Sync`).
+            let mut extra = Vec::new();
+            let mut lifetime_seen = false;
+            loop {
+                if self.is("+") && self.cursor.peek(1).is_some_and(|t| t.is_lifetime()) {
+                    if lifetime_seen {
+                        return Err(self
+                            .error("E0226: only one explicit object lifetime bound is permitted"));
+                    }
+                    if !static_object || self.alias_target {
+                        return Err(self.unsupported("explicit borrowed or aliased object lifetime bounds require object lifetime transport"));
+                    }
+                    self.cursor.bump();
+                    if !self.eat("'static") {
+                        return Err(self.unsupported(
+                            "trait object lifetime bounds other than `'static` are unsupported",
+                        ));
+                    }
+                    lifetime_seen = true;
+                    continue;
+                }
+                if !self.is("+") {
+                    break;
                 }
                 self.cursor.bump();
-                if !self.eat("'static") {
-                    return Err(self.unsupported(
-                        "trait object lifetime bounds other than `'static` are unsupported",
-                    ));
+                if extra.len() >= 8 {
+                    return Err(self.limit("trait object bound count exceeds limit 8"));
                 }
+                // Resolution admits only the canonical auto traits here (E0225).
+                extra.push(self.trait_path()?);
             }
-            if self.is("+") && self.cursor.peek(1).is_some_and(|t| t.is_lifetime()) {
-                return Err(
-                    self.error("E0226: only one explicit object lifetime bound is permitted")
-                );
-            }
-            if self.is("+") {
-                return Err(self.unsupported(
-                    "trait objects with additional trait bounds (`dyn A + B`) are unsupported",
-                ));
-            }
-            return Ok(Type::Dyn(Box::new(path)));
+            return Ok(Type::Dyn(Box::new(path), extra));
         }
         if self.eat("[") {
             let element = self.ty()?;
@@ -23085,6 +23112,31 @@ fn exact_source_generic_path(
     }
     Ok(equal)
 }
+fn exact_trait_paths(
+    names: &NameStore,
+    a: &[TraitPath],
+    b: &[TraitPath],
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (a, b) in a.iter().zip(b) {
+        budget.charge_work(1)?;
+        let same = match (a, b) {
+            (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
+            (TraitPath::Source(a), TraitPath::Source(b)) => {
+                exact_source_generic_path(names, a, b, budget, depth + 1)?
+            }
+            _ => false,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 fn exact_source_type(
     names: &NameStore,
     a: &Type,
@@ -23162,7 +23214,10 @@ fn exact_source_type(
                 && exact_source_path(names, &a.occurrence, &b.occurrence, budget)?
         }
         (Type::Opaque(a), Type::Opaque(b)) => a.exact(b, names, budget, depth + 1)?,
-        (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
+        (Type::Dyn(_, x), Type::Dyn(_, y)) if !exact_trait_paths(names, x, y, budget, depth)? => {
+            false
+        }
+        (Type::Dyn(a, _), Type::Dyn(b, _)) => match (a.as_ref(), b.as_ref()) {
             (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
             (TraitPath::Source(a), TraitPath::Source(b)) => {
                 exact_source_generic_path(names, a, b, budget, depth + 1)?
@@ -23964,6 +24019,8 @@ impl DeclRegistry {
                 TraitPath::Builtin(BuiltinTrait::Sized) => {
                     return not_compatible("it requires `Self: Sized`");
                 }
+                // Auto-trait supertraits keep a trait dyn compatible.
+                TraitPath::Builtin(BuiltinTrait::Send | BuiltinTrait::Sync) => {}
                 TraitPath::Builtin(_) => {
                     return not_compatible("a supertrait mentions `Self` (Copy/Clone/Drop)");
                 }
@@ -24931,6 +24988,10 @@ impl PlanCtx {
                         item: tr::CatalogItem::Sync,
                         ..
                     } => BuiltinTrait::Sync,
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Send,
+                        ..
+                    } => BuiltinTrait::Send,
                     _ => return Err("catalog trait origin mismatch".into()),
                 };
                 registry

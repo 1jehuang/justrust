@@ -4721,6 +4721,7 @@ fn substitute_ty_walk(
                 principal: object.principal,
                 args: arguments.into(),
                 associated_types: associated_types.into(),
+                auto: object.auto,
             }))
         }
         Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
@@ -8204,6 +8205,14 @@ pub struct DynTy {
     pub args: Arc<[Ty]>,
     /// Associated type assignments ordered by resolved declaring item identity.
     pub associated_types: Arc<[(DeclId, Ty)]>,
+    /// Written additional auto traits (`+ Send`, `+ Sync`). Part of identity.
+    pub auto: AutoTraits,
+}
+/// The canonical auto-trait set of a trait object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AutoTraits {
+    pub send: bool,
+    pub sync: bool,
 }
 impl DynTy {
     /// Budget structural transport only. This does not authenticate principal,
@@ -8235,6 +8244,7 @@ impl DynTy {
             principal,
             args: args.into(),
             associated_types: associated_types.into(),
+            auto: AutoTraits::default(),
         }))
     }
 

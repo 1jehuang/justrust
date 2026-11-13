@@ -7532,7 +7532,7 @@ impl ValidatedTraitWorld {
         self.validate_declaration_predicates(&h.predicates, &h.schema_env, None)?;
         self.require_trait_static_self(&h.trait_ref, &h.schema_env, &h.predicates)?;
         self.validate_impl_parameter_constraints(h)?;
-        if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sync) {
+        if self.is_auto_trait(h.trait_ref.declaration) {
             let arguments = match &h.trait_ref.self_ty {
                 Ty::Struct(owner) => &owner.def().type_args,
                 Ty::Enum(owner) => &owner.def().type_args,
@@ -12732,7 +12732,7 @@ impl ValidatedTraitWorld {
         for old in active.active.iter() {
             if self.same_key(old, &key)? {
                 active.cycles += 1;
-                if matches!(predicate, Predicate::Implements(goal) if goal.declaration == self.catalog.id(CatalogItem::Sync))
+                if matches!(predicate, Predicate::Implements(goal) if self.is_auto_trait(goal.declaration))
                 {
                     return Err(FactsError::unsupported(
                         &self.budget,
@@ -12914,7 +12914,7 @@ impl ValidatedTraitWorld {
             }
         }
         if let Predicate::Implements(goal) = predicate
-            && goal.declaration == self.catalog.id(CatalogItem::Sync)
+            && self.is_auto_trait(goal.declaration)
             && let Ty::AssociatedType(projection) = &goal.self_ty
             && !self.goal_is_closed_in_with(&projection.trait_ref, facts, active)?
             && self
@@ -12930,7 +12930,7 @@ impl ValidatedTraitWorld {
             return Ok(outcome);
         }
         if let Predicate::Implements(goal) = predicate
-            && goal.declaration == self.catalog.id(CatalogItem::Sync)
+            && self.is_auto_trait(goal.declaration)
         {
             self.catalog.trait_requires_unsafe_impl(goal.declaration)?;
             if let Ty::Dyn(object) = &goal.self_ty {
@@ -13225,6 +13225,11 @@ impl ValidatedTraitWorld {
     /// A conditional explicit impl suppresses automatic derivation even when
     /// its predicates are not proved. Use the same canonical head unifier as
     /// selection, never a display name or an all-program scan.
+    /// `Send` and `Sync`: compiler-derived structural auto traits.
+    fn is_auto_trait(&self, declaration: DeclId) -> bool {
+        declaration == self.catalog.id(CatalogItem::Sync)
+            || declaration == self.catalog.id(CatalogItem::Send)
+    }
     fn sync_has_explicit_head(&self, goal: &TraitRef) -> Result<bool> {
         let candidates = self
             .trait_impl_index
@@ -13271,14 +13276,20 @@ impl ValidatedTraitWorld {
             CatalogItem::Clone
         } else if goal.declaration == self.catalog.id(CatalogItem::Sync) {
             CatalogItem::Sync
+        } else if goal.declaration == self.catalog.id(CatalogItem::Send) {
+            CatalogItem::Send
         } else if goal.declaration == self.catalog.id(CatalogItem::Copy) {
             CatalogItem::Copy
         } else {
             return Ok(None);
         };
+        let auto = matches!(item, CatalogItem::Sync | CatalogItem::Send);
+        // Child goals: (trait, type). `&T: Send` requires `T: Sync`.
+        let sync = self.catalog.id(CatalogItem::Sync);
+        let mut redirected: Vec<Ty> = Vec::new();
         let mut children: Vec<Ty> = Vec::new();
         let known = match &goal.self_ty {
-            Ty::Opaque(_) if item == CatalogItem::Sync => {
+            Ty::Opaque(_) if auto => {
                 return Err(FactsError::unsupported(
                     &self.budget,
                     "unsupported: opaque Sync proof requires an authentic exported bound",
@@ -13291,9 +13302,12 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::Cell(_) => {
+            Ty::Cell(cell) => {
                 if item == CatalogItem::Sync {
                     return Ok(Some(ProofOutcome::NotProven));
+                }
+                if item == CatalogItem::Send {
+                    push(&self.budget, &mut children, cell.argument().clone())?;
                 }
                 if item == CatalogItem::Copy {
                     return Ok(Some(ProofOutcome::NotProven));
@@ -13310,19 +13324,19 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut children, wrapper.argument().clone())?;
                 true
             }
-            Ty::PhantomData(marker) if item == CatalogItem::Sync => {
+            Ty::PhantomData(marker) if auto => {
                 push(&self.budget, &mut children, marker.argument().clone())?;
                 true
             }
             Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
-            Ty::Struct(t) if matches!(item, CatalogItem::Sized | CatalogItem::Sync) => {
+            Ty::Struct(t) if item == CatalogItem::Sized || auto => {
                 for f in nominal_fields(&t.def().fields, &self.budget)?.iter() {
                     push(&self.budget, &mut children, f.ty.clone())?;
                 }
                 true
             }
-            Ty::Enum(t) if matches!(item, CatalogItem::Sized | CatalogItem::Sync) => {
+            Ty::Enum(t) if item == CatalogItem::Sized || auto => {
                 for v in t.def().variants.iter() {
                     charged(&self.budget, self.budget.charge_work(1))?;
                     for f in nominal_fields(&v.fields, &self.budget)?.iter() {
@@ -13346,21 +13360,35 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut children, referent.as_ref().clone())?;
                 true
             }
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } if item == CatalogItem::Send => {
+                push(&self.budget, &mut redirected, referent.as_ref().clone())?;
+                true
+            }
+            Ty::Ref { referent, .. } if item == CatalogItem::Send => {
+                push(&self.budget, &mut children, referent.as_ref().clone())?;
+                true
+            }
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]`, `str` and `dyn Trait` are neither Sized nor Copy/Clone.
-            Ty::Dyn(_) | Ty::AssociatedType(_) if item == CatalogItem::Sync => {
+            // A trait object implements an auto trait only through its
+            // written bounds or supertraits, matched before this builtin.
+            Ty::Dyn(_) if auto => false,
+            Ty::AssociatedType(_) if auto => {
                 return Err(FactsError::unsupported(
                     &self.budget,
-                    "unsupported: Sync for dynamic or associated types requires an authentic exported bound",
+                    "unsupported: auto traits for associated types require an authentic exported bound",
                 ));
             }
-            Ty::Str if item == CatalogItem::Sync => true,
-            Ty::Slice { element } if item == CatalogItem::Sync => {
+            Ty::Str if auto => true,
+            Ty::Slice { element } if auto => {
                 push(&self.budget, &mut children, element.as_ref().clone())?;
                 true
             }
             Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
-            Ty::RawPtr { .. } => item != CatalogItem::Sync,
+            Ty::RawPtr { .. } => !auto,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             // A const argument is not a type and implements no trait.
             Ty::Const(_) => false,
@@ -13373,9 +13401,13 @@ impl ValidatedTraitWorld {
         if !known {
             return Ok(Some(ProofOutcome::NotProven));
         }
-        for ty in children {
+        let goals = children
+            .into_iter()
+            .map(|ty| (goal.declaration, ty))
+            .chain(redirected.into_iter().map(|ty| (sync, ty)));
+        for (declaration, ty) in goals {
             let child = Predicate::Implements(TraitRef {
-                declaration: goal.declaration,
+                declaration,
                 self_ty: ty.clone(),
                 args: Arc::from([]),
             });

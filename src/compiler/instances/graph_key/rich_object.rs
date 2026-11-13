@@ -16,17 +16,28 @@ pub(super) fn encode(
         declaration(words, *item);
         ty(words, value, budget, depth + 1)?;
     }
-    // DynTy currently admits only the default/static object lifetime and no
-    // additional auto traits. Reserve explicit coordinates, never omit them.
-    words.extend([0, 0]);
+    // DynTy currently admits only the default/static object lifetime. The
+    // second coordinate is the auto-trait set (bit 0 Send, bit 1 Sync).
+    words.extend([0, auto_word(object.auto)]);
     Ok(())
 }
 
-fn markers(reader: &mut Reader<'_>) -> Result<(), String> {
-    if reader.word()? != 0 || reader.word()? != 0 {
-        return Err("unsupported: instance graph key object lifetime or auto traits".into());
+fn auto_word(auto: ir::AutoTraits) -> u64 {
+    u64::from(auto.send) | (u64::from(auto.sync) << 1)
+}
+
+fn markers(reader: &mut Reader<'_>) -> Result<ir::AutoTraits, String> {
+    if reader.word()? != 0 {
+        return Err("unsupported: instance graph key object lifetime".into());
     }
-    Ok(())
+    let auto = reader.word()?;
+    if auto > 3 {
+        return Err("invalid instance graph key object auto traits".into());
+    }
+    Ok(ir::AutoTraits {
+        send: auto & 1 != 0,
+        sync: auto & 2 != 0,
+    })
 }
 
 pub(super) fn children(
@@ -42,7 +53,7 @@ pub(super) fn children(
         reader.skip_declaration()?;
         reader.child_frame(depth + 1, children)?;
     }
-    markers(reader)
+    markers(reader).map(|_| ())
 }
 
 pub(super) fn decode(
@@ -67,12 +78,13 @@ pub(super) fn decode(
     for _ in 0..count {
         bindings.push((reader.declaration()?, reader.ty(facts, depth + 1)?));
     }
-    markers(reader)?;
+    let auto = markers(reader)?;
     // Reader::ty applies the existing facts metadata validation to this node:
     // principal arity, associated item ownership and unique canonical order.
     Ok(Arc::new(ir::DynTy {
         principal,
         args: args.into(),
         associated_types: bindings.into(),
+        auto,
     }))
 }
