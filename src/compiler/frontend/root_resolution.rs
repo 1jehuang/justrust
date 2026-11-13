@@ -8,6 +8,7 @@ mod capture_resolution;
 mod cell;
 mod const_inline;
 pub(super) use const_inline::scalar_const_assertion;
+pub(super) use const_inline::{static_elided_type, validate_lowered_constant};
 mod const_pattern;
 mod lexical_calls;
 mod manually_drop;
@@ -367,6 +368,13 @@ impl Resolver<'_> {
             .key(name, LookupClass::Member)
             .map_err(native_adapter::name_diagnostic)?;
         Ok(self.members.get(&key) == Some(&AssociatedMember::Function))
+    }
+    fn associated_member(&self, name: AstIdent) -> Result<Option<AssociatedMember>, String> {
+        let key = self
+            .names()
+            .key(name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok(self.members.get(&key).copied())
     }
     fn key(&self, path: &AstPath) -> Result<PathKey, String> {
         name_scope::path_key(self.names(), path, Namespace::Type)
@@ -4589,6 +4597,21 @@ impl Resolver<'_> {
                                 "associated constants cannot take method generic arguments".into(),
                             );
                         }
+                        match self.associated_member(name)? {
+                            Some(AssociatedMember::LoweredConstant) => {
+                                *expr = Expr::AssociatedCall {
+                                    owner,
+                                    name,
+                                    type_args: Vec::new(),
+                                    args: Vec::new(),
+                                };
+                                return self.expr(expr, module, locals);
+                            }
+                            Some(AssociatedMember::MixedConstant) => {
+                                return Err("unsupported: associated constant name shared by scalar and non-scalar inherent constants".into());
+                            }
+                            _ => {}
+                        }
                         *expr = Expr::AssociatedConst(Box::new(AssociatedConstUse {
                             owner,
                             trait_path: None,
@@ -4688,6 +4711,15 @@ impl Resolver<'_> {
             Expr::Call { name, args } => {
                 let path = self.alias_source_path(name)?;
                 if let Some((owner, item, type_args)) = self.associated_path(&path, module)? {
+                    if self.associated_member(item)? == Some(AssociatedMember::MixedConstant) {
+                        return Err("unsupported: associated function calls whose name is also a non-scalar inherent constant".into());
+                    }
+                    if self.associated_member(item)? == Some(AssociatedMember::LoweredConstant) {
+                        return Err(format!(
+                            "E0618: expected function, found associated constant `{}`",
+                            self.display(name)?
+                        ));
+                    }
                     *expr = Expr::AssociatedCall {
                         owner,
                         name: item,
@@ -4703,6 +4735,21 @@ impl Resolver<'_> {
                 if name.anchor() == PathAnchor::SelfType && self.self_allowed {
                     for arg in args.iter_mut() {
                         self.expr(arg, module, locals)?;
+                    }
+                    // Bare `Self(..)` in a tuple struct's impl is the struct's
+                    // constructor, never an enum variant.
+                    if name.is_empty()
+                        && let Some(nominal) = self.self_nominal.clone()
+                    {
+                        let expected = self.tuple_struct(&nominal)?.fields.len();
+                        if args.len() != expected {
+                            return Err("tuple struct constructor arity mismatch".into());
+                        }
+                        *expr = Expr::TupleStruct {
+                            name: self.resolved_use(&nominal, &nominal)?,
+                            fields: std::mem::take(args),
+                        };
+                        return Ok(());
                     }
                     *expr = Expr::EnumVariant {
                         name: name.clone(),
@@ -4965,6 +5012,10 @@ fn defer_equality_boundary(
 enum AssociatedMember {
     Function,
     Constant,
+    /// Non-scalar inherent constant lowered to a hidden `const fn` member.
+    LoweredConstant,
+    /// Lowered and scalar constants share the name: uses are not admitted.
+    MixedConstant,
 }
 /// Index every associated function and constant member name once.
 fn associated_members(program: &Program) -> Result<HashMap<NameKey, AssociatedMember>, String> {
@@ -4977,9 +5028,14 @@ fn associated_members(program: &Program) -> Result<HashMap<NameKey, AssociatedMe
     let mut members = HashMap::new();
     let mut add = |name: AstIdent, member: AssociatedMember| -> Result<(), String> {
         let entry = members.entry(key(name)?).or_insert(member);
-        if member == AssociatedMember::Constant {
-            *entry = member;
-        }
+        use AssociatedMember::*;
+        *entry = match (*entry, member) {
+            (Function, Function) => Function,
+            (Function, Constant) | (Constant, Function) => Constant,
+            (LoweredConstant, LoweredConstant) => LoweredConstant,
+            (Constant, Constant) => Constant,
+            _ => MixedConstant,
+        };
         Ok(())
     };
     for block in program.impls.iter() {
@@ -4988,7 +5044,12 @@ fn associated_members(program: &Program) -> Result<HashMap<NameKey, AssociatedMe
         }
         for item in &block.items {
             if let Some(last) = item.function.name.segments().last() {
-                add(*last, AssociatedMember::Function)?;
+                let member = if item.lowered_constant {
+                    AssociatedMember::LoweredConstant
+                } else {
+                    AssociatedMember::Function
+                };
+                add(*last, member)?;
             }
         }
     }

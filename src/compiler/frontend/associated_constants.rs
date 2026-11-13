@@ -387,3 +387,56 @@ impl Parser<'_, '_> {
         })
     }
 }
+
+/// An inherent associated constant whose type is not a closed scalar
+/// (`const A: Self = Self(1);`) has no scalar CTFE fact. Rust constants are
+/// pure values copied into every use, so the constant becomes a hidden
+/// zero-argument `const fn` member of its impl, and each value use `T::A`
+/// calls it. The body is type checked and const-qualified even when unused.
+/// Initializers that could fail during evaluation are not admitted, because
+/// stock rustc evaluates every constant (E0080) and this compiler does not.
+pub(super) fn lowered_inherent_constant(
+    names: &impl crate::compiler::semantic_path::NameAccess,
+    module: ModuleId,
+    constant: AssociatedConstDecl,
+) -> Result<Result<AssociatedFunction, AssociatedConstDecl>, String> {
+    let scalar = matches!(constant.ty, Type::Bool)
+        || matches!(constant.ty, Type::Int(ty) if ty != ir::IntTy::Isize);
+    let Some(initializer) = constant.initializer.as_ref().filter(|_| !scalar) else {
+        return Ok(Err(constant));
+    };
+    root_resolution::validate_lowered_constant(initializer, &constant.ty)?;
+    let initializer = initializer.clone();
+    let name = AstPath::new(names, PathAnchor::Relative, &[constant.name])
+        .map_err(native_adapter::name_diagnostic)?;
+    Ok(Ok(AssociatedFunction {
+        receiver: ReceiverKind::None,
+        visibility: constant.visibility.clone(),
+        lowered_constant: true,
+        function: Function {
+            const_params: Vec::new(),
+            target_feature: None,
+            embedded_source: None,
+            direct_return_source: None,
+            suspended_source: None,
+            lexical_scope: None,
+            module,
+            constness: Constness::Const,
+            unsafety: false,
+            static_mut: false,
+            visibility: constant.visibility,
+            bounds: Vec::new(),
+            name,
+            regions: RegionDecls::default(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            param_mut: Vec::new(),
+            result: root_resolution::static_elided_type(constant.ty),
+            impl_params: 0,
+            body: Block {
+                statements: Vec::new(),
+                tail: Some(Box::new(initializer)),
+            },
+        },
+    }))
+}

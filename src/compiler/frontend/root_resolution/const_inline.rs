@@ -280,3 +280,20 @@ impl Resolver<'_> {
         Ok(true)
     }
 }
+
+pub(in crate::compiler::frontend) fn static_elided_type(ty: Type) -> Type {
+    static_elided(ty)
+}
+
+/// Lowered (non-scalar) associated constants are never evaluated, so any
+/// initializer that could panic or overflow is rejected like free constants.
+pub(in crate::compiler::frontend) fn validate_lowered_constant(
+    initializer: &Expr,
+    ty: &Type,
+) -> Result<(), String> {
+    match fallible(initializer, matches!(ty, Type::Float(_)), 0) {
+        Fallible::No => Ok(()),
+        Fallible::Panics => Err("E0080: evaluation of constant value failed: evaluation panicked".into()),
+        Fallible::Maybe => Err("unsupported: constant initializers with operations that may panic or overflow during evaluation (arithmetic, indexing, assertions, conditional panics) are not evaluated by this compiler".into()),
+    }
+}

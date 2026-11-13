@@ -211,6 +211,7 @@ pub(super) fn construct(
         .ok_or("derived Debug nominal lacks name")?;
     implementation.trait_path = Some(TraitPath::Source(trait_path));
     implementation.items.push(AssociatedFunction {
+        lowered_constant: false,
         receiver: item.receiver,
         visibility: ir::Visibility::Restricted(declaration.module),
         function: Function {

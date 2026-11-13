@@ -60,6 +60,7 @@ impl Parser<'_, '_> {
             .map_err(native_adapter::name_error)?;
         implementation.trait_path = Some(TraitPath::Builtin(BuiltinTrait::Clone));
         implementation.items.push(AssociatedFunction {
+            lowered_constant: false,
             receiver: ReceiverKind::Borrowed {
                 kind: ir::BorrowKind::Shared,
             },

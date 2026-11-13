@@ -10446,6 +10446,10 @@ pub struct AssociatedFunction {
     pub function: Function,
     pub receiver: ReceiverKind,
     pub visibility: ir::Visibility,
+    /// Hidden member computing a non-scalar inherent associated constant.
+    /// Its name stays in the value namespace as a constant: `T::A` calls it,
+    /// while `T::A()` is E0618.
+    pub lowered_constant: bool,
 }
 #[derive(Clone, Debug)]
 pub struct CallableContext {
@@ -17167,6 +17171,24 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is("const") && !self.starts_qualified_function() {
                     let constant =
                         self.associated_constant(false, visibility.clone(), &type_params)?;
+                    let constant = if trait_path.is_none() {
+                        match associated_constants::lowered_inherent_constant(
+                            &*self.names,
+                            module,
+                            constant,
+                        )
+                        .map_err(|message| self.error(&message))?
+                        {
+                            Ok(member) => {
+                                self.reserve_parser_items(&mut items, 1)?;
+                                items.push(member);
+                                continue;
+                            }
+                            Err(constant) => constant,
+                        }
+                    } else {
+                        constant
+                    };
                     self.reserve_parser_items(&mut associated_constants, 1)?;
                     associated_constants.push(constant);
                     continue;
@@ -17178,6 +17200,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     function,
                     receiver,
                     visibility,
+                    lowered_constant: false,
                 });
             }
             let original_source = primitive_constants::original_impl_range(self, original_start);
@@ -25363,7 +25386,7 @@ impl PlanCtx {
         for implementation in &program.impls {
             for item in &implementation.items {
                 budget.charge_work(1)?;
-                if item.function.constness != Constness::Runtime {
+                if item.function.constness != Constness::Runtime && !item.lowered_constant {
                     return Err("unsupported: const associated functions are unsupported".into());
                 }
             }

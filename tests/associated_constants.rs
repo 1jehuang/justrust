@@ -242,3 +242,37 @@ fn associated_constant_declarations_and_unused_errors_match_stock() {
         ],
     );
 }
+
+#[test]
+fn aggregate_inherent_constants_match_stock() {
+    check(
+        "aggregate-inherent-constants",
+        &[
+            Case {
+                name: "self_tuple_struct_values",
+                source: "#[derive(Clone,Copy,PartialEq,Eq,Debug)] struct W(u16); mod m{use super::W; impl W{pub const B:W=W(2); pub(crate) const T:(W,bool)=(W(3),true);}} impl W{const A:Self=Self(1); const N:&'static str=\"nm\"; const F:f64=1.5; const C:u8=4; fn bump(self)->Self{Self(self.0+Self::A.0)}} fn main(){let a=W::A; println!(\"{:?} {:?} {:?} {} {} {} {:?}\",a,W::B,W::T,W::N,W::F,W::C,W::B.bump()); println!(\"{}\",W::A==W(1));}",
+                expect: Expect::Run("W(1) W(2) (W(3), true) nm 1.5 4 W(3)\ntrue\n"),
+            },
+            Case {
+                name: "unused_aggregate_type_mismatch",
+                source: "struct W(u16); impl W{const A:Self=Self(\"x\");} fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "aggregate_constant_called",
+                source: "struct W(u16); impl W{const A:Self=Self(1);} fn main(){W::A();}",
+                expect: Expect::Invalid("E0618"),
+            },
+            Case {
+                name: "private_aggregate_constant",
+                source: "mod m{pub struct W(pub u16); impl W{const A:Self=Self(1);}} fn main(){let _=m::W::A;}",
+                expect: Expect::Invalid("E0624"),
+            },
+            Case {
+                name: "unused_nonconst_call",
+                source: "struct W(u16); fn g()->u16{1} impl W{const A:Self=Self(g());} fn main(){}",
+                expect: Expect::Invalid("E0015"),
+            },
+        ],
+    );
+}
