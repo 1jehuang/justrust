@@ -127,6 +127,7 @@ mod remote_session {
     }
 }
 mod remote_sync;
+mod remote_tunnel;
 // Windows has no watcher backend yet (see the module docs).
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_watch;
@@ -915,6 +916,7 @@ pub fn main() -> anyhow::Result<()> {
         Some(telemetry::BG_ARG) => telemetry::background_main(),
         Some(remote_hosted::EVENT_SENDER_ARG) => remote_hosted::event_sender_main(),
         Some(records_queue::ARG) => records_queue::sender_main(),
+        Some(remote_tunnel::ARG) => remote_tunnel::main(),
         Some("__agent") => {
             let prefix = match std::env::args().nth(2).as_deref() {
                 Some("--prefix") => std::env::args().nth(3),

@@ -227,6 +227,22 @@ impl Creds {
         (url, self.authorization_header())
     }
 
+    /// The 443 relay to this account's own build machine (`remote_tunnel`).
+    /// The server chooses the destination from the key, never the client.
+    pub(crate) fn tunnel_request(&self, windows: bool) -> (String, tungstenite::http::HeaderValue) {
+        let url = self.url(if windows {
+            "build/tunnel?platform=windows"
+        } else {
+            "build/tunnel"
+        });
+        let url = if let Some(rest) = url.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else {
+            format!("ws://{}", url.strip_prefix("http://").unwrap_or(&url))
+        };
+        (url, self.authorization_header())
+    }
+
     pub(crate) fn url(&self, suffix: &str) -> String {
         let suffix = suffix.trim_start_matches('/');
         let base = if suffix.starts_with("build/") {
@@ -1737,6 +1753,12 @@ fn write_private(p: &Path, content: &[u8]) -> Result<()> {
 /// ssh options for the hosted machine. Strict host key checking against
 /// only the pinned known_hosts.
 pub fn target(d: &Path, user: &str, address: &str, port: u16) -> Target {
+    target_via(d, user, address, port, None)
+}
+
+/// [`target`], optionally through a `ProxyCommand` (the 443 relay). Host key
+/// pinning is unchanged: ssh still verifies `[address]:port` end to end.
+pub fn target_via(d: &Path, user: &str, address: &str, port: u16, proxy: Option<&str>) -> Target {
     let o = |s: String| ["-o".to_string(), s];
     let mut opts: Vec<String> = vec!["-i".into(), d.join("id_ed25519").display().to_string()];
     if d.join("id_ed25519-cert.pub").is_file() {
@@ -1768,6 +1790,9 @@ pub fn target(d: &Path, user: &str, address: &str, port: u16) -> Target {
             opts.extend(o(s));
         }
     }
+    if let Some(proxy) = proxy {
+        opts.extend(o(format!("ProxyCommand={proxy}")));
+    }
     opts.extend(["-p".into(), port.to_string()]);
     Target {
         dest: format!("{user}@{address}"),
@@ -1788,6 +1813,40 @@ pub struct State {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<String>,
+    /// ssh runs through the 443 relay because this network blocks the
+    /// machine's ssh port.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tunnel: bool,
+}
+
+/// `JUSTRUST_HOSTED_TUNNEL`: `on` always relays over 443, `off` never does,
+/// anything else relays only when the direct ssh port is unreachable.
+fn use_tunnel(setting: Option<&str>, direct_reachable: impl FnOnce() -> bool) -> bool {
+    match setting.map(str::trim) {
+        Some("on" | "1" | "true" | "always") => true,
+        Some("off" | "0" | "false" | "never") => false,
+        _ => !direct_reachable(),
+    }
+}
+
+/// A TCP connect to the machine's ssh port. Networks that only pass web
+/// ports drop it silently, so the wait is bounded and short: the machine was
+/// just reported ready, and a wrong "unreachable" only costs the relay hop.
+fn direct_reachable(address: &str, port: u16) -> bool {
+    use std::net::ToSocketAddrs;
+    let Ok(addresses) = (address, port).to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .take(2)
+        .any(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(3)).is_ok())
+}
+
+fn proxy_for(tunnel: bool) -> Option<String> {
+    if !tunnel {
+        return None;
+    }
+    crate::remote_tunnel::proxy_command(crate::remote_windows::selected().unwrap_or(false))
 }
 
 fn now() -> u64 {
@@ -1821,7 +1880,13 @@ pub fn load_state() -> Option<State> {
 pub fn cached_target() -> Option<Target> {
     let st = load_state()?;
     let d = state_file()?.parent()?.to_path_buf();
-    Some(target(&d, &st.user, &st.address, st.port))
+    Some(target_via(
+        &d,
+        &st.user,
+        &st.address,
+        st.port,
+        proxy_for(st.tunnel).as_deref(),
+    ))
 }
 
 /// `ssh -O check`: a local socket query, no network.
@@ -1983,10 +2048,33 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             if let Some(cert) = &r.ssh_certificate {
                 write_private(&d.join("id_ed25519-cert.pub"), cert.as_bytes())?;
             }
-            let t = target(&d, &r.user, &r.address, r.port);
             // A stale master for another address must not shadow the new one.
             let _ = std::fs::remove_file(d.join("state.json"));
             let _ = std::fs::remove_file(d.join("status.json"));
+            let direct = target(&d, &r.user, &r.address, r.port);
+            let mut tunnel = use_tunnel(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), || {
+                direct_reachable(&r.address, r.port)
+            });
+            let proxy = proxy_for(tunnel);
+            tunnel = proxy.is_some();
+            let t = if tunnel {
+                eprintln!(
+                    "hosted: this network blocks ssh port {}, connecting through the 443 relay",
+                    r.port
+                );
+                // The direct master (if any) is unreachable and shares the
+                // control path: drop it so the relay connection is used.
+                let _ = direct
+                    .command()
+                    .args(["-O", "exit"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                target_via(&d, &r.user, &r.address, r.port, proxy.as_deref())
+            } else {
+                direct
+            };
             open_master(&t, &d, Duration::from_secs(45))?;
             let st = State {
                 address: r.address.clone(),
@@ -1998,6 +2086,7 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
                     .then(|| crate::remote_windows::TARGET.into()),
                 transport: crate::remote_windows::selected()?
                     .then(|| crate::remote_windows::TRANSPORT.into()),
+                tunnel,
             };
             write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
             let _ = std::fs::remove_file(d.join("fleet-version"));
@@ -3087,6 +3176,58 @@ mod tests {
                 assert!(parse_ready_for(&missing, true).is_err(), "{key}");
             }
         }
+    }
+
+    #[test]
+    fn tunnel_is_chosen_only_when_direct_ssh_is_blocked() {
+        assert!(!use_tunnel(None, || true));
+        assert!(use_tunnel(None, || false));
+        assert!(use_tunnel(Some("auto"), || false));
+        // Forced settings never probe.
+        assert!(use_tunnel(Some("on"), || panic!("probed")));
+        assert!(!use_tunnel(Some(" off "), || panic!("probed")));
+    }
+
+    #[test]
+    fn tunnel_target_keeps_host_key_pinning_and_one_proxy_option() {
+        let h = Path::new("/h");
+        let direct = target(h, "ubuntu", "203.0.113.7", 22001);
+        assert!(!direct.opts.iter().any(|o| o.starts_with("ProxyCommand")));
+        let t = target_via(
+            h,
+            "ubuntu",
+            "203.0.113.7",
+            22001,
+            Some("'/a b/justrust' __tunnel"),
+        );
+        assert_eq!(t.dest, direct.dest);
+        // One argv element: the space cannot split into another ssh option.
+        assert!(
+            t.opts
+                .contains(&"ProxyCommand='/a b/justrust' __tunnel".to_string())
+        );
+        for pinned in ["StrictHostKeyChecking=yes", "IdentitiesOnly=yes"] {
+            assert!(t.opts.contains(&pinned.to_string()), "{pinned}");
+        }
+        assert_eq!(t.opts[t.opts.len() - 2..], ["-p", "22001"]);
+        // rsync -e gets it shell-quoted as one word.
+        assert!(
+            t.rsync_shell()
+                .contains("'ProxyCommand='\\''/a b/justrust'\\'' __tunnel'")
+        );
+        // Old state files (no field) stay direct, and the field round-trips.
+        let old: State = serde_json::from_str(
+            r#"{"address":"203.0.113.7","user":"ubuntu","port":22001,"ready_at":1}"#,
+        )
+        .unwrap();
+        assert!(!old.tunnel);
+        assert!(!serde_json::to_string(&old).unwrap().contains("tunnel"));
+        let relayed = State {
+            tunnel: true,
+            ..old
+        };
+        let back: State = serde_json::from_str(&serde_json::to_string(&relayed).unwrap()).unwrap();
+        assert!(back.tunnel);
     }
 
     #[test]

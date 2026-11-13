@@ -9996,3 +9996,50 @@ tests pass under jr on the host (run 20261113-153531820-4132146).
 Next: a newer jr cut (PGO+BOLT, cross-crate cutoff) is what should make the
 default faster rather than equal, and jr bundles with target libraries
 would remove the cross-target exception.
+
+## 2026-11-13: hosted builds survive networks that block the ssh ports
+
+Problem: pool slots are reachable only on tcp 22001-22032 (dedicated and
+Windows hosts on 22). Networks that pass only web ports drop those silently,
+so `justrust check` hung in ssh until the connect window expired. Seen on a
+wifi that dropped 22, 53, 993, 2222, 5222 and 22001 while 80, 443 and 8443
+connected.
+
+Fix, two halves:
+
+- Cloud (`justrust-cloud` `0976a22`, `ccf0c31`): `GET /v1/build/tunnel` on
+  `build.jcode.sh` is an authenticated WebSocket byte relay to the caller's
+  own build machine. The destination comes from D1 for the account the key
+  resolves to, never from the request, and private, loopback, link-local,
+  CGNAT and multicast addresses are refused.
+- Client (`src/remote_tunnel.rs`, `src/remote_hosted.rs`): after the API
+  reports the machine ready, a 3 s TCP connect probes its ssh port. If that
+  fails, ssh, rsync and the ControlMaster get
+  `ProxyCommand=<justrust> __tunnel`, and `state.json` records
+  `"tunnel": true` so later commands reuse it. ssh still runs end to end with
+  the pinned host key, the relay only carries ciphertext.
+  `JUSTRUST_HOSTED_TUNNEL=on|off` forces either path.
+
+Evidence (candidate built from this commit, run by explicit path):
+
+- Forced relay, real workload: `JUSTRUST_HOSTED_TUNNEL=on justrust check` on
+  this repo: `ok on hosted in 62.0s`, run `20261113-084931960-2654660`,
+  depcache 170 hit/0 miss, `state.json` has `"tunnel": true`, and the ssh
+  master's child is `justrust __tunnel`.
+- Auto, port reachable: `justrust remote up` connects directly and writes no
+  `tunnel` field.
+- Earlier, on the blocking wifi, a throwaway Node ProxyCommand against the
+  same relay ran commands and streamed 20 MB with a matching sha256.
+- Lib tests on the hosted host: 1036 passed, 1 failed
+  (`remote_evict::outputs::...pressure_reclaims_recent_root_outputs...`,
+  failing before this change too), clippy `--all-targets` clean.
+
+Not measured: relay throughput against direct ssh, so no speed claim. The
+relay adds a hop through Cloudflare and should be slower. Not tested: the
+auto probe on a network that is blocking at that moment (the wifi was passing
+22001 again when the Rust client was ready), and the Windows worker path
+(`__tunnel windows`), which is wired but unexercised.
+
+Limit: a tunnel choice lasts as long as the ssh master (ControlPersist), so
+moving to an open network keeps the relay until the master exits. A wrong
+"unreachable" verdict only costs the extra hop.

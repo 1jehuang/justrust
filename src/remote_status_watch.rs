@@ -108,7 +108,7 @@ fn status_hint(text: &str) -> bool {
         .is_ok_and(|v| v["type"] == "status_changed" || v["type"] == "hello" || v["hello"] == true)
 }
 
-fn select_tls_provider() {
+pub(crate) fn select_tls_provider() {
     // tungstenite deliberately disables rustls's default features. Select an
     // actual provider explicitly so WSS cannot panic while plain-WS tests pass.
     // A provider already selected by the embedding process remains in place.
