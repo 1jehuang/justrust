@@ -10100,6 +10100,9 @@ fn target_payload_bytes_with_growth(
 }
 
 impl Plan {
+    pub(super) fn target_count(&self) -> usize {
+        self.targets.iter().map(Vec::len).sum()
+    }
     pub(super) fn build_physical<'a>(
         f: &'a Arc<cfg::Function>,
         facts: &'a Arc<super::traits::ValidatedFacts>,

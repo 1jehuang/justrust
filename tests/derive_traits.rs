@@ -266,6 +266,23 @@ fn const_generic_arrays_and_recursive_generic_derives_match_stock() {
                 expect: Expect::Run("[\"x\", \"y\"]\ny x\n"),
             },
             Case {
+                name: "concrete_array_clone_nested_and_wide",
+                source: "fn main(){let a=[1u8,2,3];let b=a.clone();let m=[[1i32,2,3],[4,5,6]];let n=m.clone();let s=[String::from(\"p\"),String::from(\"q\"),String::from(\"r\")];let t=s.clone();let w=[7u16;16];let x=w.clone();println!(\"{:?} {:?} {:?} {:?} {}\",b,n,t,s,x[15]);}",
+                expect: Expect::Run(
+                    "[1, 2, 3] [[1, 2, 3], [4, 5, 6]] [\"p\", \"q\", \"r\"] [\"p\", \"q\", \"r\"] 7\n",
+                ),
+            },
+            Case {
+                name: "concrete_array_clone_requires_element_clone",
+                source: "struct N;fn main(){let a=[N,N,N];let _b:[N;3]=a.clone();}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "concrete_array_clone_result_does_not_outlive_borrow",
+                source: "fn main(){let r:[&i32;3];{let v=1i32;let a=[&v,&v,&v];r=a.clone();}println!(\"{}\",r[0]);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
                 name: "derived_partial_eq_debug_recursive_generic_enum",
                 source: "#[derive(Debug,PartialEq)]enum Tree<T:Ord>{Leaf,Node(Box<Tree<T>>,T,Box<Tree<T>>)}fn main(){let t:Tree<i32>=Tree::Node(Box::new(Tree::Leaf),3,Box::new(Tree::Leaf));println!(\"{:?} {} {}\",t,t==Tree::Leaf,t==Tree::Node(Box::new(Tree::Leaf),3,Box::new(Tree::Leaf)));}",
                 expect: Expect::Run("Node(Leaf, 3, Leaf) false true\n"),

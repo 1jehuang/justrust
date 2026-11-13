@@ -161,11 +161,21 @@ pub(super) fn counts(
         .saturating_mul(origins);
     c.parent_memberships = origins.saturating_mul(origins);
     c.lifetime_dependency_memberships = c.parent_memberships;
-    c.target_memberships = c.origin_memberships;
-    c.target_allocations = c.origin_memberships;
+    // Borrow targets are retained once per origin (deduplicated), not per
+    // program point. Recipes take only shared borrows, so a target never
+    // carries another candidate's authority: each origin holds at most its
+    // own borrowed place plus one inherited target per other origin. One
+    // extra row per origin covers the formal/receipt slack measured against
+    // the real analysis (typed_tests registered_recipe_bodies_*).
+    let targets = origins
+        .saturating_add(1)
+        .saturating_mul(origins.saturating_add(1));
+    c.target_memberships = targets;
+    c.target_allocations = targets;
     c.target_projection_steps = c.target_allocations.saturating_mul(2);
     c.target_authority_entries = c.target_allocations.saturating_mul(origins);
-    c.target_overhead_words = c.origin_memberships.saturating_mul(3);
+    // Three overhead words per retained target, as the analysis reserves.
+    c.target_overhead_words = targets.saturating_mul(3);
     c.operations = c.expressions.saturating_mul(32).saturating_add(64);
     c.ir_retained_bytes = c
         .expressions

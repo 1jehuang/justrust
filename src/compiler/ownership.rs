@@ -43,6 +43,10 @@ pub struct AnalysisStats {
     pub variant_refinements: usize,
     /// Known descendant proofs invalidated in final diagnostic replay.
     pub variant_proofs_killed: usize,
+    /// Distinct borrow targets retained by the loan plan, across all origins.
+    pub borrow_targets: usize,
+    /// Bytes the loan plan reserved, as charged against the state limit.
+    pub borrow_bytes: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4572,6 +4576,8 @@ fn analyze_with_context(
             if bytes.checked_add(loans.bytes).ok_or(Exhausted)? > state_bytes {
                 return Err(Exhausted);
             }
+            report.stats.borrow_targets = loans.target_count();
+            report.stats.borrow_bytes = loans.bytes;
             for (block, statement, problem) in &loans.problems {
                 if report.diagnostics.len() >= limits.diagnostics {
                     return Err(Exhausted);

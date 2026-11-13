@@ -1824,8 +1824,9 @@ fn canonical_clone_receiver_order_and_primitive_temporaries_use_real_borrows() {
 
 #[test]
 fn registered_recipe_bodies_share_counting_and_universal_verification() {
-    let p = Arc::new(parse("fn main(){let tuple=(1i32,true);let array:[i32;0]=[];}").unwrap());
+    let p = Arc::new(parse("fn main(){let tuple=(1i32,true);let array:[i32;0]=[];let a:[[u8;3];16]=[[1;3];16];let b=a.clone();}").unwrap());
     let budget = ir::PlanBudget::default();
+    let mut arrays_seen = 0;
     let plan = PlanCtx::from_shared_program(p.clone(), &budget).unwrap();
     let mut recipes_seen = 0;
     let mut thread_queries_seen = 0;
@@ -1877,9 +1878,32 @@ fn registered_recipe_bodies_share_counting_and_universal_verification() {
             let checked = plan.checked_body(&target, &facts, &budget).unwrap();
             let template =
                 super::super::cfg::lower_template(Arc::new(checked), facts, &budget).unwrap();
-            super::super::ownership::verify_template(template).unwrap();
+            let verified = super::super::ownership::verify_template(template).unwrap();
+            // The admitted target model must cover what the real analysis
+            // retains: one deduplicated target per origin.
+            let counts = recipes::counts(descriptor, &budget).unwrap();
+            let stats = &verified.analysis().stats;
+            assert!(
+                stats.borrow_targets <= counts.target_memberships,
+                "{descriptor:?}"
+            );
+            if let super::super::ownership::RecipeAdmission::Available(footprint) =
+                super::super::ownership::preflight_recipe_counts(&counts, &budget).unwrap()
+                && descriptor != tr::RecipeDescriptor::ThreadPanicking
+            {
+                assert!(
+                    stats.borrow_bytes <= footprint.borrow_bytes,
+                    "{descriptor:?}: real {} model {}",
+                    stats.borrow_bytes,
+                    footprint.borrow_bytes
+                );
+            }
+            if let tr::RecipeDescriptor::CloneArray { len: 3 | 16 } = descriptor {
+                arrays_seen += 1;
+            }
         }
     }
+    assert_eq!(arrays_seen, 2);
     assert!(recipes_seen >= 14);
     assert_eq!(thread_queries_seen, 1);
     let counts = recipes::counts(tr::RecipeDescriptor::CloneTuple { arity: 33 }, &budget).unwrap();
