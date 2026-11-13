@@ -38,6 +38,7 @@ mod local_literals;
 mod receiver_result_hint;
 #[path = "type_check/static_refs.rs"]
 mod static_refs;
+mod trait_call_self;
 pub(in crate::compiler) use local_literals::nominal_manifest::{
     DeclarationFields as NominalDeclarationFields, DeclarationRecipe as NominalDeclarationRecipe,
     Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
@@ -10964,12 +10965,19 @@ impl<'a> Checker<'a> {
             ),
             Expr::TraitCall {
                 owner,
+                trait_path,
                 name,
                 type_args,
                 args,
-                ..
             } => (
-                self.trait_call_owner(owner, args)?,
+                match matches!(owner, Type::Infer)
+                    .then(|| self.trait_call_self_from_expected(trait_path, name, expected))
+                    .transpose()?
+                    .flatten()
+                {
+                    Some(owner) => owner,
+                    None => self.trait_call_owner(owner, args)?,
+                },
                 name,
                 type_args,
                 args,
