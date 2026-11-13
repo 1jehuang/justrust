@@ -410,6 +410,10 @@ impl AstPath {
         })
     }
 
+    /// Whether the resolver already certified this occurrence's target.
+    pub(crate) fn has_resolved_use(&self) -> bool {
+        self.resolved_use.is_some()
+    }
     pub(crate) fn catalog_callable(&self) -> Option<CatalogCallable> {
         self.resolved_use
             .as_ref()

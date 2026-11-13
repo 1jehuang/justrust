@@ -459,6 +459,21 @@ const FIXTURES: &[Fixture] = &[
         false,
         "mod a{pub struct S{x:i32}pub fn mk()->S{S{x:7}}}fn main(){let s=a::mk();let _=s.x;}"
     ),
+    fixture!(
+        reexported_owner_from_private_module,
+        true,
+        "mod foo{mod inner{pub struct S(pub i32);impl S{pub fn new()->S{S(4)}pub const K:i32=5;}pub enum E{A}impl E{pub fn one()->i32{1}}}pub use self::inner::{S,E};}fn main(){let s=foo::S::new();if s.0+foo::S::K+foo::E::one()==10{println!(\"visibility ok\");}}"
+    ),
+    fixture!(
+        reexported_owner_private_function,
+        false,
+        "mod foo{mod inner{pub struct S;impl S{fn hidden()->i32{1}}}pub use self::inner::S;}fn main(){let _=foo::S::hidden();}"
+    ),
+    fixture!(
+        private_module_owner_path,
+        false,
+        "mod foo{mod inner{pub struct S;impl S{pub fn new()->S{S}}}}fn main(){let _=foo::inner::S::new();}"
+    ),
 ];
 // Promoted unchanged by the subsequent native type-alias milestone.
 const PROMOTED_ALIAS: Fixture = fixture!(

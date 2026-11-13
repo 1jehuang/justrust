@@ -651,6 +651,25 @@ impl Resolver<'_> {
             resolved_use: Some(path.clone()),
         })
     }
+    /// Resolve an associated-item owner. A canonical nominal owner was
+    /// already resolved and privacy-checked through its written path; its
+    /// canonical path may run through private modules behind a `pub use`
+    /// re-export, so it is re-resolved from its declaring module.
+    fn associated_owner_ty(&mut self, owner: &mut Type, module: ModuleId) -> Result<(), String> {
+        let from = match owner {
+            Type::Named(name) if name.has_resolved_use() => self
+                .path_items(name)?
+                .and_then(|items| {
+                    items.iter().find_map(|item| {
+                        matches!(item.kind, ItemKind::Struct(_) | ItemKind::Enum(_))
+                            .then_some(item.module)
+                    })
+                })
+                .unwrap_or(module),
+            _ => module,
+        };
+        self.ty(owner, from)
+    }
     fn alias_decl(&self, name: &AstPath) -> Result<(&TypeAliasDecl, ModuleId), String> {
         self.path_items(name)?
             .and_then(|items| {
@@ -2758,7 +2777,11 @@ impl Resolver<'_> {
                 Type::Named(named)
             }
         };
-        self.ty(&mut owner, module)?;
+        // A non-generic owner was already resolved and privacy-checked
+        // through the written path. Its canonical path may run through
+        // private modules behind a `pub use` re-export, so it is
+        // re-resolved from its declaring module, never from the requester.
+        self.associated_owner_ty(&mut owner, module)?;
         clone_vector(&item.args, &self.alias_budget)?;
         let mut args = item.args.clone();
         for arg in &mut args {
@@ -4424,7 +4447,7 @@ impl Resolver<'_> {
                 args,
                 ..
             } => {
-                self.ty(owner, module)?;
+                self.associated_owner_ty(owner, module)?;
                 for ty in type_args {
                     self.ty(ty, module)?;
                 }
@@ -4523,7 +4546,7 @@ impl Resolver<'_> {
                 }
             }
             Expr::AssociatedConst(value) | Expr::AssociatedFn(value) => {
-                self.ty(&mut value.owner, module)?;
+                self.associated_owner_ty(&mut value.owner, module)?;
                 if let Some(path) = &mut value.trait_path {
                     self.trait_path(path, module)?;
                 }
