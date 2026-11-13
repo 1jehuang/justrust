@@ -1,0 +1,241 @@
+{
+  "schema": 1,
+  "scope": "focused uv README evidence, not a general speedup",
+  "source": {
+    "path": "/home/jeremy/.jcode/scratch/e2e/uv",
+    "commit": "44b2e5877ef752e360acc02c7d198ba71ddf948d",
+    "archive_sha256": "930d16ee0bdde3865b5ee2b944dfc8789d9568ce0e06681c29c082088bd58626",
+    "rust_toolchain_toml": "[toolchain]\nchannel = \"1.99.0\"\n"
+  },
+  "rounds": 3,
+  "stacks": [
+    "stock"
+  ],
+  "work": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0",
+  "started_utc": "2026-11-13T20:09:34.527444+00:00",
+  "status": "complete",
+  "samples": [
+    {
+      "sample_id": "readme-uv-76f7835c8f0f465182bafe9019f1b4e2",
+      "run_id": null,
+      "stack": "stock",
+      "row": "fresh-release-build",
+      "round": 1,
+      "measured": true,
+      "command": [
+        "/usr/bin/cargo",
+        "build",
+        "--release",
+        "-p",
+        "uv",
+        "--locked"
+      ],
+      "checkout": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-1/stock/fresh-release-build",
+      "target": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-1/stock/fresh-release-build/target",
+      "log": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/logs/readme-uv-76f7835c8f0f465182bafe9019f1b4e2.log",
+      "started_utc": "2026-11-13T20:09:36.092595+00:00",
+      "load_before": {
+        "loadavg": [
+          3.01171875,
+          2.49072265625,
+          2.33544921875
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  181114 11471 203933 4176069 14991 16503 5672 0 0 0",
+        "rustc_pids": []
+      },
+      "status": "ok",
+      "edit": null,
+      "summary": null,
+      "exit": 0,
+      "monotonic_start_ns": 2866764729488,
+      "monotonic_end_ns": 3507121670447,
+      "wall_seconds": 640.356940959,
+      "compiler_identity": {
+        "path": "/usr/bin/rustc",
+        "sha256": "efbd2d6b808daf90b4eb382395c20073ccdd09ca9a1f0ed027d4c88962bbd823",
+        "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.3"
+      },
+      "cargo_identity": {
+        "path": "/usr/bin/cargo",
+        "sha256": "6de7d0dd1be17e49932a05ad0111ebe4a9061d2f359b25619e150fb438a4708c",
+        "version": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.7 (sys:0.21.0 system)\nlibcurl: 8.23.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.5)\nos: Arch Linux Rolling Release [64-bit]"
+      },
+      "load_after": {
+        "loadavg": [
+          5.7626953125,
+          7.8203125,
+          6.45849609375
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  500536 12582 249024 4834202 15670 20826 7235 0 0 0",
+        "rustc_pids": []
+      },
+      "finished_utc": "2026-11-13T20:20:16.509987+00:00",
+      "errors": []
+    },
+    {
+      "sample_id": "readme-uv-ed8a6b5a28534399bc277777a582bcd7",
+      "run_id": null,
+      "stack": "stock",
+      "row": "fresh-release-build",
+      "round": 2,
+      "measured": true,
+      "command": [
+        "/usr/bin/cargo",
+        "build",
+        "--release",
+        "-p",
+        "uv",
+        "--locked"
+      ],
+      "checkout": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-2/stock/fresh-release-build",
+      "target": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-2/stock/fresh-release-build/target",
+      "log": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/logs/readme-uv-ed8a6b5a28534399bc277777a582bcd7.log",
+      "started_utc": "2026-11-13T20:20:17.269189+00:00",
+      "load_before": {
+        "loadavg": [
+          5.7626953125,
+          7.8203125,
+          6.45849609375
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  500753 12582 249326 4834919 15671 20833 7237 0 0 0",
+        "rustc_pids": []
+      },
+      "status": "ok",
+      "edit": null,
+      "summary": null,
+      "exit": 0,
+      "monotonic_start_ns": 3507941266893,
+      "monotonic_end_ns": 4136166677293,
+      "wall_seconds": 628.2254104,
+      "compiler_identity": {
+        "path": "/usr/bin/rustc",
+        "sha256": "efbd2d6b808daf90b4eb382395c20073ccdd09ca9a1f0ed027d4c88962bbd823",
+        "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.3"
+      },
+      "cargo_identity": {
+        "path": "/usr/bin/cargo",
+        "sha256": "6de7d0dd1be17e49932a05ad0111ebe4a9061d2f359b25619e150fb438a4708c",
+        "version": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.7 (sys:0.21.0 system)\nlibcurl: 8.23.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.5)\nos: Arch Linux Rolling Release [64-bit]"
+      },
+      "load_after": {
+        "loadavg": [
+          2.23388671875,
+          4.849609375,
+          6.3818359375
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  805238 13484 277782 5503953 16649 23708 8708 0 0 0",
+        "rustc_pids": []
+      },
+      "finished_utc": "2026-11-13T20:30:45.554633+00:00",
+      "errors": []
+    },
+    {
+      "sample_id": "readme-uv-1d2ed7f892284a73a8a7c3b06bfff3bc",
+      "run_id": null,
+      "stack": "stock",
+      "row": "fresh-release-build",
+      "round": 3,
+      "measured": true,
+      "command": [
+        "/usr/bin/cargo",
+        "build",
+        "--release",
+        "-p",
+        "uv",
+        "--locked"
+      ],
+      "checkout": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-3/stock/fresh-release-build",
+      "target": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/round-3/stock/fresh-release-build/target",
+      "log": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/logs/readme-uv-1d2ed7f892284a73a8a7c3b06bfff3bc.log",
+      "started_utc": "2026-11-13T20:30:46.207247+00:00",
+      "load_before": {
+        "loadavg": [
+          2.23388671875,
+          4.849609375,
+          6.3818359375
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  805431 13484 278069 5504539 16649 23712 8710 0 0 0",
+        "rustc_pids": []
+      },
+      "status": "ok",
+      "edit": null,
+      "summary": null,
+      "exit": 0,
+      "monotonic_start_ns": 4136868663276,
+      "monotonic_end_ns": 4738565498434,
+      "wall_seconds": 601.696835158,
+      "compiler_identity": {
+        "path": "/usr/bin/rustc",
+        "sha256": "efbd2d6b808daf90b4eb382395c20073ccdd09ca9a1f0ed027d4c88962bbd823",
+        "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.3"
+      },
+      "cargo_identity": {
+        "path": "/usr/bin/cargo",
+        "sha256": "6de7d0dd1be17e49932a05ad0111ebe4a9061d2f359b25619e150fb438a4708c",
+        "version": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.7 (sys:0.21.0 system)\nlibcurl: 8.23.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.5)\nos: Arch Linux Rolling Release [64-bit]"
+      },
+      "load_after": {
+        "loadavg": [
+          2.8935546875,
+          3.607421875,
+          5.4853515625
+        ],
+        "cpu_count": 16,
+        "proc_stat_cpu": "cpu  1073007 13798 294452 6181204 16990 26310 9591 0 0 0",
+        "rustc_pids": []
+      },
+      "finished_utc": "2026-11-13T20:40:47.942894+00:00",
+      "errors": []
+    }
+  ],
+  "cache_policy": "Fresh archive workspace targets, existing shared dependency caches retained and uncontrolled. Not cold.",
+  "remote_target_policy": "Unique checkout paths per round/row, check target reused only for its prewarm and edit",
+  "prewarm_policy": "Explicit uv-resolver check immediately before body edit, excluded from measured medians",
+  "git_policy": "git archive, isolated unborn git index for correct hosted source sync, no worktrees or commits",
+  "aggregate": {
+    "fresh-release-build": {
+      "stock": {
+        "expected": 3,
+        "samples": 3,
+        "successful": 3,
+        "all_ok": true,
+        "median_seconds": 628.2254104,
+        "min_seconds": 601.696835158,
+        "max_seconds": 640.356940959,
+        "run_ids": [
+          null,
+          null,
+          null
+        ]
+      }
+    }
+  },
+  "all_ok": true,
+  "client_original": {
+    "path": "/home/jeremy/.local/bin/justrust",
+    "sha256": "1c31c9ba0af14acb25e92e3f91a64df8b0c1d30b4b12c0ba6f01b3a4993957be"
+  },
+  "binaries": {
+    "cargo": {
+      "path": "/usr/bin/cargo",
+      "sha256": "6de7d0dd1be17e49932a05ad0111ebe4a9061d2f359b25619e150fb438a4708c",
+      "version": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)\nrelease: 1.99.1\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.7 (sys:0.21.0 system)\nlibcurl: 8.23.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.5)\nos: Arch Linux Rolling Release [64-bit]"
+    },
+    "rustc": {
+      "path": "/usr/bin/rustc",
+      "sha256": "efbd2d6b808daf90b4eb382395c20073ccdd09ca9a1f0ed027d4c88962bbd823",
+      "version": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.3"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/readme-uv-87jdvhx0/binaries/justrust",
+      "sha256": "1c31c9ba0af14acb25e92e3f91a64df8b0c1d30b4b12c0ba6f01b3a4993957be",
+      "version": "justrust 0.1.0-alpha.25"
+    }
+  },
+  "finished_utc": "2026-11-13T20:40:47.943336+00:00"
+}
