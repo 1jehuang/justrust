@@ -144,7 +144,18 @@ its total is compiler time and exceeds the compiling share of the wait.
 Both profiles follow the filters, so choosing a project or a command kind
 shows that slice. They sit side by side at 110 columns or more and stack
 otherwise. Terminals shorter than 24 rows hide both, and narrow terminals
-shorter than 34 rows show only the overall profile.
+shorter than 40 rows show only the overall profile.
+
+**Versions** shows what is running on each side: this client (and whether it
+is a published release or a source build), the hosted service deployment, the
+compiler the service names for hosted builds with its protocol, and what the
+build machine itself reports (toolchain, rustc, agent). The border says `up to
+date`, `update available`, `ahead of release`, or `update required` when the
+client cannot drive the hosted toolchain. A build machine on a different
+toolchain from the service is flagged. It sits beside the account card at 110
+columns or more, below it otherwise, and is hidden on narrow terminals shorter
+than 30 rows. **v** opens the full list. It is refreshed every minute and on
+**r**.
 
 Builds in progress lead the Runs card as `building` rows with where they run,
 the time so far, the estimate and the crates compiling. Rows alternate

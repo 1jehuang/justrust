@@ -489,10 +489,321 @@ pub(crate) fn fetch_detail(row: &RunRow, logs: bool) -> Result<String> {
     Ok(crate::runs::render(&summary, &dir))
 }
 
+/// What the hosted service says is live (`GET <build base>/version`).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct Live {
+    /// The release clients are told to run.
+    pub release: Option<String>,
+    /// The operator holds the rollout at `release` instead of the newest.
+    pub held: bool,
+    pub auto_update: bool,
+    /// The control plane deployment that answered.
+    pub deployment: Option<String>,
+    pub deployed_at: Option<String>,
+    /// The compiler hosted builds use when a project pins none.
+    pub toolchain: Option<String>,
+    pub protocol: Option<u32>,
+    pub published: bool,
+}
+
+/// Parse the service's answer. `None` when it is not the version document.
+pub(crate) fn live(text: &str) -> Option<Live> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    v.get("release")?.as_object()?;
+    let text = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    Some(Live {
+        release: text(&v["release"]["version"]),
+        held: v["release"]["held"].as_bool().unwrap_or(false),
+        auto_update: v["release"]["auto_update"].as_bool().unwrap_or(true),
+        deployment: text(&v["service"]["id"]),
+        deployed_at: text(&v["service"]["deployed_at"]),
+        toolchain: text(&v["toolchain"]["toolchain"]),
+        protocol: v["toolchain"]["protocol"]
+            .as_u64()
+            .and_then(|p| p.try_into().ok()),
+        published: v["toolchain"]["published"].as_bool().unwrap_or(false),
+    })
+}
+
+/// How this client compares with the release the service names.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Currency {
+    Current,
+    /// A newer release exists.
+    Behind(String),
+    /// Newer than anything published.
+    Ahead,
+    Unknown,
+}
+
+/// Every version that decides how a build behaves: this client, the release
+/// and compiler the service names, and what the build machine really runs.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct Versions {
+    pub client: String,
+    /// A published release artifact, not a source build of the same number.
+    pub release_build: bool,
+    pub service: String,
+    pub live: Option<Live>,
+    pub error: Option<String>,
+    /// Named versions read from the build machine, in its display order.
+    pub machine: Vec<(String, String)>,
+    /// Why `machine` is empty.
+    pub machine_note: Option<String>,
+    /// When the service was last asked, `None` before the first answer.
+    pub at: Option<f64>,
+}
+
+impl Versions {
+    /// What is known without the network.
+    pub(crate) fn local() -> Self {
+        let base = crate::remote_hosted::build_base();
+        let host = base.split("://").nth(1).unwrap_or(&base);
+        Self {
+            client: crate::update::VERSION.into(),
+            release_build: crate::update::release_build(),
+            service: host.split('/').next().unwrap_or(host).into(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn currency(&self) -> Currency {
+        match self.live.as_ref().and_then(|l| l.release.as_deref()) {
+            None => Currency::Unknown,
+            Some(r) if crate::update::newer(r, &self.client) => Currency::Behind(r.into()),
+            Some(r) if crate::update::newer(&self.client, r) => Currency::Ahead,
+            Some(_) => Currency::Current,
+        }
+    }
+
+    /// Whether this client speaks the hosted toolchain's protocol.
+    pub(crate) fn drives_toolchain(&self) -> Option<bool> {
+        let protocol = self.live.as_ref()?.protocol?;
+        Some(crate::toolchain_policy::SUPPORTED.contains(&protocol))
+    }
+
+    pub(crate) fn machine(&self, name: &str) -> Option<&str> {
+        self.machine
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The whole picture as text, for the detail view.
+    pub(crate) fn report(&self) -> String {
+        use std::fmt::Write;
+        let mut o = String::from("Versions\n\n");
+        let _ = writeln!(
+            o,
+            "Client\n  justrust {} ({})\n  {}",
+            self.client,
+            if self.release_build {
+                "published release"
+            } else {
+                "source build, not a published artifact"
+            },
+            match self.currency() {
+                Currency::Current => "up to date with the release the service names".to_owned(),
+                Currency::Behind(v) => format!("{v} is available: run `justrust update`"),
+                Currency::Ahead => "newer than the release the service names".to_owned(),
+                Currency::Unknown => "latest release not known yet".to_owned(),
+            }
+        );
+        let _ = writeln!(o, "\nService ({})", self.service);
+        match &self.live {
+            Some(l) => {
+                let or = |v: &Option<String>| v.clone().unwrap_or_else(|| "not reported".into());
+                let _ = writeln!(o, "  deployment  {}", or(&l.deployment));
+                let _ = writeln!(o, "  deployed    {}", or(&l.deployed_at));
+                let _ = writeln!(
+                    o,
+                    "  release     {}{}",
+                    or(&l.release),
+                    if l.held { " (rollout held here)" } else { "" }
+                );
+                let _ = writeln!(
+                    o,
+                    "  auto-update {}",
+                    if l.auto_update {
+                        "on"
+                    } else {
+                        "off for every client"
+                    }
+                );
+                let _ = writeln!(
+                    o,
+                    "  toolchain   {}{}",
+                    or(&l.toolchain),
+                    if l.toolchain.is_some() && !l.published {
+                        " (not on the toolchain store)"
+                    } else {
+                        ""
+                    }
+                );
+                if let Some(p) = l.protocol {
+                    let _ = writeln!(
+                        o,
+                        "  protocol    {p} ({})",
+                        match self.drives_toolchain() {
+                            Some(false) => "this client cannot drive it: run `justrust update`",
+                            _ => "supported by this client",
+                        }
+                    );
+                }
+            }
+            None => {
+                let _ = writeln!(o, "  not reached yet");
+            }
+        }
+        if let Some(e) = &self.error {
+            let _ = writeln!(o, "  error: {e}");
+        }
+        let _ = writeln!(o, "\nBuild machine");
+        for (name, value) in &self.machine {
+            let _ = writeln!(o, "  {name:<11} {value}");
+        }
+        if let Some(note) = &self.machine_note {
+            let _ = writeln!(o, "  {note}");
+        }
+        o
+    }
+}
+
+fn fetch_live() -> Result<Live> {
+    let url = format!("{}/version", crate::remote_hosted::build_base());
+    let out = std::process::Command::new("curl")
+        .args(["-fsS", "--proto", "=https,http"])
+        .args(["--connect-timeout", "5", "--max-time", "10"])
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context("running curl")?;
+    if !out.status.success() {
+        let error = String::from_utf8_lossy(&out.stderr);
+        bail!(
+            "{}",
+            error.lines().last().unwrap_or("request failed").trim()
+        );
+    }
+    live(&String::from_utf8_lossy(&out.stdout)).context("the service returned no version document")
+}
+
+/// What the build machine runs, read from the machine over the open session.
+fn machine_versions() -> (Vec<(String, String)>, Option<String>) {
+    let status = crate::remote::collect(true);
+    if !status.configured {
+        return (
+            Vec::new(),
+            Some("no remote build machine configured".into()),
+        );
+    }
+    let Some(probe) = status.probe else {
+        return (
+            Vec::new(),
+            Some(
+                status
+                    .error
+                    .unwrap_or_else(|| "no session open to the build machine".into()),
+            ),
+        );
+    };
+    let mut versions: Vec<_> = probe
+        .versions
+        .into_iter()
+        .map(|v| (v.name, v.value))
+        .collect();
+    if versions.is_empty()
+        && let Some(rustc) = probe.rustc
+    {
+        versions.push(("rustc".into(), rustc));
+    }
+    let note = (!probe.ok).then(|| {
+        probe
+            .error
+            .unwrap_or_else(|| "the build machine did not answer".into())
+    });
+    (versions, note)
+}
+
+/// Network: the service's version document and the build machine's probe.
+/// `last` keeps the previous answers visible when one of them fails.
+pub(crate) fn fetch_versions(last: &Versions) -> Versions {
+    let mut versions = Versions::local();
+    match fetch_live() {
+        Ok(live) => versions.live = Some(live),
+        Err(error) => {
+            versions.live = last.live.clone();
+            versions.error = Some(error.to_string());
+        }
+    }
+    (versions.machine, versions.machine_note) = machine_versions();
+    if versions.machine.is_empty() && !last.machine.is_empty() {
+        versions.machine = last.machine.clone();
+    }
+    versions.at = Some(crate::paths::now());
+    versions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn versions_compare_the_client_with_what_the_service_names() {
+        let doc = r#"{"service":{"id":"f0daab20-248d","deployed_at":"2026-11-13T21:31:40Z"},
+            "release":{"version":"0.1.0-alpha.26","held":true,"auto_update":false},
+            "toolchain":{"toolchain":"jr-ac20de5e7921","protocol":1,"published":true}}"#;
+        let l = live(doc).unwrap();
+        assert_eq!(l.release.as_deref(), Some("0.1.0-alpha.26"));
+        assert!(l.held && !l.auto_update && l.published);
+        assert_eq!(l.toolchain.as_deref(), Some("jr-ac20de5e7921"));
+        assert_eq!(l.protocol, Some(1));
+        // Missing parts are unknown, not an error. Another document is.
+        let bare =
+            live(r#"{"service":{"id":null},"release":{"version":null},"toolchain":null}"#).unwrap();
+        assert_eq!(
+            (bare.release, bare.toolchain, bare.protocol),
+            (None, None, None)
+        );
+        assert!(bare.auto_update);
+        assert!(live(r#"{"error":{"code":"not_found"}}"#).is_none());
+        assert!(live("<html>").is_none());
+
+        let mut v = Versions {
+            client: "0.1.0-alpha.26".into(),
+            release_build: true,
+            service: "build.jcode.sh".into(),
+            ..Default::default()
+        };
+        assert_eq!(v.currency(), Currency::Unknown);
+        assert_eq!(v.drives_toolchain(), None);
+        v.live = Some(l);
+        assert_eq!(v.currency(), Currency::Current);
+        assert_eq!(v.drives_toolchain(), Some(true));
+        v.client = "0.1.0-alpha.9".into();
+        assert_eq!(v.currency(), Currency::Behind("0.1.0-alpha.26".into()));
+        v.client = "0.1.0".into();
+        assert_eq!(v.currency(), Currency::Ahead);
+        v.machine = vec![("rustc".into(), "rustc 1.99.1".into())];
+        v.machine_note = Some("no session open".into());
+        let report = v.report();
+        for want in [
+            "justrust 0.1.0 (published release)",
+            "newer than the release",
+            "Service (build.jcode.sh)",
+            "0.1.0-alpha.26 (rollout held here)",
+            "off for every client",
+            "protocol    1 (supported by this client)",
+            "rustc       rustc 1.99.1",
+            "no session open",
+        ] {
+            assert!(report.contains(want), "missing {want:?} in\n{report}");
+        }
+        let local = Versions::local();
+        assert_eq!(local.client, crate::update::VERSION);
+        assert!(!local.service.contains('/'), "{}", local.service);
+    }
 
     #[test]
     fn defaults_are_simple_empty_snapshots() {

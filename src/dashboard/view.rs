@@ -1,7 +1,7 @@
 //! Jcode-style cards: `╭─ Title · note ── ● status ─╮` borders, two cells of
 //! padding, label/value rows, `▰▱` gauges, and one accent color. Text is
 //! clipped by display cell, never wrapped. All server/log text is untrusted.
-use super::data::RunRow;
+use super::data::{Currency, RunRow, Versions};
 use super::{CompileProfile, Kind, MenuRow, Profile, State};
 use ratatui::{
     Frame,
@@ -380,6 +380,158 @@ fn account(f: &mut Frame, area: Rect, state: &State, lines: Vec<Line<'static>>) 
         .status(status)
         .footer(footer)
         .draw(f, area, lines);
+}
+
+/// How long ago an RFC 3339 instant was, `None` when unparseable.
+fn since(iso: &str, now: f64) -> Option<String> {
+    let at = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
+    let secs = (now - at.timestamp() as f64).max(0.0);
+    Some(if secs >= 2.0 * 86400.0 {
+        format!("{}d ago", (secs / 86400.0) as u64)
+    } else if secs >= 3600.0 {
+        format!("{}h ago", (secs / 3600.0) as u64)
+    } else if secs >= 60.0 {
+        format!("{}m ago", (secs / 60.0) as u64)
+    } else {
+        "just now".into()
+    })
+}
+
+/// The version inside `justrust 0.1.0 (...)` or `rustc 1.99.1 (...)`.
+fn bare_version(text: &str) -> &str {
+    text.split_whitespace().nth(1).unwrap_or(text)
+}
+
+/// Client, service, compiler and build machine, one row each, with whatever
+/// disagrees picked out in the warning color.
+fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
+    let mut client = vec![
+        span(clean(&v.client), VALUE),
+        span(
+            if v.release_build {
+                "  published release"
+            } else {
+                "  source build"
+            },
+            if v.release_build { LABEL } else { WARN },
+        ),
+    ];
+    match v.currency() {
+        Currency::Current => client.push(span("  ● latest", GOOD)),
+        Currency::Behind(latest) => client.push(span(
+            format!("  ▲ {} available: justrust update", clean(&latest)),
+            WARN,
+        )),
+        Currency::Ahead => client.push(span("  newer than the published release", ACCENT)),
+        Currency::Unknown => {}
+    }
+    let mut lines = vec![detail("Client", client, width)];
+
+    let mut service = vec![span(clean(&v.service), VALUE)];
+    match &v.live {
+        Some(live) => {
+            let deployed = live
+                .deployed_at
+                .as_deref()
+                .and_then(|at| since(at, crate::paths::now()));
+            if let Some(deployed) = deployed {
+                service.push(span(format!("  deployed {deployed}"), LABEL));
+            }
+            if let Some(id) = &live.deployment {
+                service.push(span(
+                    format!("  {}", clean(id.split('-').next().unwrap_or(id))),
+                    DIM,
+                ));
+            }
+            if live.held {
+                service.push(span("  rollout held", WARN));
+            }
+            if !live.auto_update {
+                service.push(span("  auto-update off", WARN));
+            }
+        }
+        None if v.error.is_none() => service.push(span("  checking", DIM)),
+        None => {}
+    }
+    if let Some(error) = &v.error {
+        service.push(span(format!("  ▲ {}", clean(error)), WARN));
+    }
+    lines.push(detail("Service", service, width));
+
+    let live = v.live.as_ref();
+    let mut compiler = match live.and_then(|l| l.toolchain.as_deref()) {
+        Some(toolchain) => vec![span(clean(toolchain), VALUE)],
+        None => vec![span("not reported", LABEL)],
+    };
+    if let Some(protocol) = live.and_then(|l| l.protocol) {
+        compiler.push(match v.drives_toolchain() {
+            Some(false) => span(format!("  ▲ protocol {protocol} needs a newer client"), BAD),
+            _ => span(format!("  protocol {protocol}"), LABEL),
+        });
+    }
+    if live.is_some_and(|l| l.toolchain.is_some() && !l.published) {
+        compiler.push(span("  ▲ not on the toolchain store", WARN));
+    }
+    lines.push(detail("Compiler", compiler, width));
+
+    let mut machine = Vec::new();
+    let wanted = live.and_then(|l| l.toolchain.as_deref());
+    if let Some(toolchain) = v.machine("toolchain") {
+        // The machine follows the service on its next build, so a
+        // difference here is a rollout in progress or a stuck machine.
+        let same = wanted.is_none_or(|w| w == toolchain);
+        machine.push(span(clean(toolchain), if same { VALUE } else { WARN }));
+        if !same {
+            machine.push(span("  ▲ differs from the service", WARN));
+        }
+    }
+    if let Some(rustc) = v.machine("rustc") {
+        let lead = if machine.is_empty() { "" } else { "  " };
+        machine.push(span(
+            format!("{lead}rustc {}", clean(bare_version(rustc))),
+            if machine.is_empty() { VALUE } else { LABEL },
+        ));
+    }
+    if let Some(agent) = v.machine("agent") {
+        let agent = bare_version(agent);
+        let same = agent == v.client;
+        machine.push(span(
+            format!("  agent {}", clean(agent)),
+            if same { LABEL } else { WARN },
+        ));
+    }
+    if machine.is_empty() {
+        machine.push(span(
+            clean(v.machine_note.as_deref().unwrap_or("checking")),
+            if v.machine_note.is_some() { LABEL } else { DIM },
+        ));
+    } else if let Some(note) = &v.machine_note {
+        machine.push(span(format!("  {}", clean(note)), DIM));
+    }
+    lines.push(detail("Machine", machine, width));
+    lines
+}
+
+fn versions_card(v: &Versions) -> Card {
+    let status = match (v.currency(), v.drives_toolchain()) {
+        (_, Some(false)) => vec![span("▲ ", BAD), strong("update required", BAD)],
+        (Currency::Behind(_), _) => vec![span("▲ ", WARN), strong("update available", WARN)],
+        (Currency::Current, _) => vec![span("● ", GOOD), strong("up to date", GOOD)],
+        (Currency::Ahead, _) => vec![span("● ", ACCENT), strong("ahead of release", ACCENT)],
+        (Currency::Unknown, _) if v.error.is_some() => {
+            vec![span("● ", BAD), strong("unreachable", BAD)]
+        }
+        (Currency::Unknown, _) => vec![span("◌ ", ACCENT), strong("checking", ACCENT)],
+    };
+    let footer =
+        v.at.map(|at| {
+            format!(
+                "checked {} ago",
+                crate::status::dur((crate::paths::now() - at).max(0.0))
+            )
+        })
+        .unwrap_or_default();
+    Card::new("Versions").status(status).footer(footer)
 }
 
 /// The kind filter as a row of chips with the run count behind each choice.
@@ -898,36 +1050,59 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         return;
     }
     let width = inner_width(area.width);
-    let account_lines = account_lines(state, width);
-    let account_h = account_lines.len() as u16 + 2;
-    let profile = state.profile();
-    let compile = state.compile_profile();
-    // The two profiles sit side by side when there is room, else stacked,
-    // and short terminals keep the run list instead.
+    // Cards pair up side by side when there is room, else stack, and short
+    // terminals keep the run list instead.
     let beside = area.width >= 110;
     let card_width = if beside {
         inner_width(area.width / 2)
     } else {
         width
     };
+    let account_lines = account_lines(state, card_width);
+    let version_lines = version_lines(&state.versions, card_width);
+    let versions_h = version_lines.len() as u16 + 2;
+    let account_h = if beside {
+        (account_lines.len() as u16 + 2).max(versions_h)
+    } else {
+        account_lines.len() as u16 + 2
+    };
+    // Stacked, the versions take their own rows unless the terminal is short.
+    let versions_h = if beside || area.height < 30 {
+        0
+    } else {
+        versions_h
+    };
+    let profile = state.profile();
+    let compile = state.compile_profile();
     let time_lines = profile_lines(&profile, card_width);
     let compile_lines = compile_lines(&compile, card_width);
     let (overall_h, compile_h) = (time_lines.len() as u16 + 2, compile_lines.len() as u16 + 2);
     let (first_h, second_h) = match (beside, area.height) {
         (_, h) if h < 24 => (0, 0),
         (true, _) => (overall_h.max(compile_h), 0),
-        (false, h) if h < 34 => (overall_h, 0),
+        (false, h) if h < 40 => (overall_h, 0),
         (false, _) => (overall_h, compile_h),
     };
-    let [top, first, second, runs, footer] = Layout::vertical([
+    let [top, versions, first, second, runs, footer] = Layout::vertical([
         Constraint::Length(account_h.min(area.height.saturating_sub(6))),
+        Constraint::Length(versions_h),
         Constraint::Length(first_h),
         Constraint::Length(second_h),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
     .areas(area);
-    account(f, top, state, account_lines);
+    if beside {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
+        account(f, left, state, account_lines);
+        versions_card(&state.versions).draw(f, right, version_lines);
+    } else {
+        account(f, top, state, account_lines);
+        if versions.height > 0 {
+            versions_card(&state.versions).draw(f, versions, version_lines);
+        }
+    }
     if beside && first.height > 0 {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -981,6 +1156,7 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
                 ("/", "search"),
                 ("x", "clear"),
                 ("a", "account"),
+                ("v", "versions"),
                 ("r", "refresh"),
                 ("q", "quit"),
             ],
@@ -1032,6 +1208,152 @@ mod tests {
         assert_eq!(until(at, epoch - 750.0), "in 12m");
         assert_eq!(until(at, epoch + 5.0), "now");
         assert_eq!(until("not a date", 0.0), "not a date");
+    }
+
+    fn versions(client: &str, latest: &str) -> Versions {
+        Versions {
+            client: client.into(),
+            release_build: true,
+            service: "build.jcode.sh".into(),
+            live: Some(crate::dashboard::data::Live {
+                release: Some(latest.into()),
+                auto_update: true,
+                deployment: Some("f0daab20-248d-4f14".into()),
+                deployed_at: chrono::DateTime::from_timestamp(
+                    crate::paths::now() as i64 - 3 * 3600 - 60,
+                    0,
+                )
+                .map(|at| at.to_rfc3339()),
+                toolchain: Some("jr-ac20de5e7921".into()),
+                protocol: Some(1),
+                published: true,
+                ..Default::default()
+            }),
+            machine: vec![
+                ("toolchain".into(), "jr-ac20de5e7921".into()),
+                ("rustc".into(), "rustc 1.99.1 (58cf8f9c3 2026-10-13)".into()),
+                ("agent".into(), format!("justrust {client}")),
+            ],
+            at: Some(crate::paths::now()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn versions_card_says_whether_the_client_is_current() {
+        let text = |lines: Vec<Line>| -> String {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect()
+        };
+        let status = |v: &Versions| -> String {
+            versions_card(v)
+                .status
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+        let current = versions("0.1.0-alpha.26", "0.1.0-alpha.26");
+        let shown = text(version_lines(&current, 120));
+        assert!(
+            shown.contains("Client   0.1.0-alpha.26  published release  ● latest"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Service  build.jcode.sh  deployed 3h ago  f0daab20"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Compiler jr-ac20de5e7921  protocol 1"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("Machine  jr-ac20de5e7921  rustc 1.99.1  agent 0.1.0-alpha.26"),
+            "{shown}"
+        );
+        assert!(!shown.contains('▲'), "{shown}");
+        assert_eq!(status(&current), "● up to date");
+
+        let mut behind = versions("0.1.0-alpha.25", "0.1.0-alpha.26");
+        behind.release_build = false;
+        behind.machine[0].1 = "jr-000000000000".into();
+        let shown = text(version_lines(&behind, 120));
+        assert!(
+            shown.contains("source build  ▲ 0.1.0-alpha.26 available: justrust update"),
+            "{shown}"
+        );
+        assert!(shown.contains("▲ differs from the service"), "{shown}");
+        assert_eq!(status(&behind), "▲ update available");
+
+        // A toolchain this client cannot drive outranks everything else.
+        let mut refused = versions("0.1.0-alpha.26", "0.1.0-alpha.26");
+        refused.live.as_mut().unwrap().protocol =
+            Some(crate::toolchain_policy::SUPPORTED.end() + 1);
+        assert!(text(version_lines(&refused, 120)).contains("needs a newer client"));
+        assert_eq!(status(&refused), "▲ update required");
+
+        assert_eq!(
+            status(&versions("0.1.0-alpha.27", "0.1.0-alpha.26")),
+            "● ahead of release"
+        );
+
+        // Before the first answer, and when the service cannot be reached.
+        let mut unknown = Versions {
+            client: "0.1.0-alpha.26".into(),
+            service: "build.jcode.sh".into(),
+            ..Default::default()
+        };
+        assert_eq!(status(&unknown), "◌ checking");
+        unknown.error = Some("Could not resolve host".into());
+        unknown.machine_note = Some("no session open to the build machine".into());
+        let shown = text(version_lines(&unknown, 120));
+        assert!(shown.contains("▲ Could not resolve host"), "{shown}");
+        assert!(shown.contains("Compiler not reported"), "{shown}");
+        assert!(shown.contains("Machine  no session open"), "{shown}");
+        assert_eq!(status(&unknown), "● unreachable");
+        // Rows are clipped, never wrapped.
+        for l in version_lines(&behind, 30) {
+            assert!(l.width() <= 30);
+        }
+    }
+
+    #[test]
+    fn versions_card_sits_beside_the_account_or_below_it() {
+        let state = State {
+            versions: versions("0.1.0-alpha.26", "0.1.0-alpha.26"),
+            ..Default::default()
+        };
+        let wide = screen(&state, 140, 30);
+        let row = wide
+            .lines()
+            .find(|l| l.contains("Versions"))
+            .unwrap_or_else(|| panic!("{wide}"));
+        assert!(
+            row.contains("justrust") && row.contains("up to date"),
+            "{wide}"
+        );
+        assert!(wide.contains("jr-ac20de5e7921"), "{wide}");
+        assert!(wide.contains("v versions"), "{wide}");
+        let narrow = screen(&state, 90, 32);
+        let rows: Vec<&str> = narrow.lines().collect();
+        let account = rows
+            .iter()
+            .position(|l| l.contains("Your account"))
+            .unwrap();
+        let card = rows
+            .iter()
+            .position(|l| l.contains("Versions"))
+            .unwrap_or_else(|| panic!("{narrow}"));
+        assert!(card > account, "{narrow}");
+        // A short terminal keeps the run list.
+        assert!(!screen(&state, 90, 26).contains("Versions"));
     }
 
     fn screen(state: &State, w: u16, h: u16) -> String {
@@ -1378,7 +1700,8 @@ mod tests {
             }),
             plan: None,
         });
-        let text = screen(&state, 150, 45);
+        // Stacked: beside the taller Versions card the account card pads.
+        let text = screen(&state, 100, 45);
         assert!(text.contains("75% left  resets in 5h"), "{text}");
         let rows: Vec<&str> = text.lines().collect();
         let end = rows.iter().position(|r| r.starts_with('╰')).unwrap();

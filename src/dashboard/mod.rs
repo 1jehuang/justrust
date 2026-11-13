@@ -232,6 +232,7 @@ struct State {
     detail_request: u64,
     refreshing: bool,
     cwd: String,
+    versions: data::Versions,
 }
 
 impl State {
@@ -450,6 +451,7 @@ impl State {
 enum Update {
     Local(Snapshot),
     Hosted(Result<data::HostedSnapshot>),
+    Versions(data::Versions),
     Detail(u64, Result<String>),
 }
 
@@ -471,6 +473,25 @@ fn hosted_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
                 break;
             }
             match requests.recv_timeout(Duration::from_secs(30)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+    refresh
+}
+
+/// Versions change rarely: ask once a minute, and on a manual refresh.
+fn versions_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
+    let (refresh, requests) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut last = data::Versions::local();
+        loop {
+            last = data::fetch_versions(&last);
+            if tx.send(Update::Versions(last.clone())).is_err() {
+                break;
+            }
+            match requests.recv_timeout(Duration::from_secs(60)) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -506,6 +527,7 @@ fn apply_updates(state: &mut State, updates: &Receiver<Update>) {
                 state.loading_detail = false;
             }
             Update::Detail(_, _) => {}
+            Update::Versions(versions) => state.versions = versions,
         }
     }
     state.reconcile_selection();
@@ -520,6 +542,7 @@ pub(crate) fn run() -> Result<()> {
     }
     let (tx, updates) = mpsc::channel();
     let refresh = hosted_worker(tx.clone());
+    let refresh_versions = versions_worker(tx.clone());
     let local_tx = tx.clone();
     std::thread::spawn(move || {
         let mut times = data::TimeCache::new();
@@ -536,6 +559,7 @@ pub(crate) fn run() -> Result<()> {
     let mut state = State {
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
         refreshing: true,
+        versions: data::Versions::local(),
         ..Default::default()
     };
     let mut terminal = ratatui::try_init()?;
@@ -660,7 +684,13 @@ pub(crate) fn run() -> Result<()> {
                 if refresh.try_send(()).is_ok() {
                     state.refreshing = true;
                 }
+                let _ = refresh_versions.try_send(());
                 last_refresh = Instant::now();
+            }
+            KeyCode::Char('v') => {
+                state.detail_request += 1;
+                state.detail_scroll = 0;
+                state.detail = Some(state.versions.report());
             }
             KeyCode::Char('a') => {
                 state.detail_request += 1;
