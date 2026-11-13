@@ -4828,7 +4828,10 @@ impl Lowerer<'_> {
         for (arm_index, arm) in arms.iter().enumerate() {
             if scoped && arm_index == last_arm {
                 // Entering the else arm: the scrutinee temporaries end first.
+                // Every earlier path ended them too, so forget them: a
+                // `break`/`return` inside the else arm must not end them again.
                 self.cleanup(scrutinee_depth - 1, Some(id));
+                self.scopes[scrutinee_depth - 1].clear();
             }
             if let ir::MatchPattern::Or { rows, .. } = &arm.pattern {
                 self.grouped_or_arm(

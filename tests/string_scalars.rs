@@ -63,6 +63,29 @@ fn main(){
                 ),
             },
             Case {
+                name: "closure_split_loop_item_methods",
+                source: r#"fn main(){
+    let s="hello, big world;x";
+    let mut n=0;
+    for w in s.split(|c:char|c==','||c==';'){
+        n+=w.trim().len();
+        println!("{}",w.to_uppercase());
+    }
+    println!("{n}");
+}"#,
+                expect: Expect::Run("HELLO\n BIG WORLD\nX\n15\n"),
+            },
+            Case {
+                name: "unused_closure_split_loop_item_wrong_method",
+                source: "fn bad(s:&str){for w in s.split(|c:char|c==','){let _=w.push('x');}}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "unused_closure_split_loop_item_not_string",
+                source: "fn bad(s:&str){for w in s.split(|c:char|c==','){let _:String=w;}}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "reverse_and_first_match_patterns",
                 source: r#"fn main(){
     println!("{:?} {:?}","é::日::🦀".split_once("::"),"é日".split_once(""));

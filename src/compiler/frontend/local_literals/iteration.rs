@@ -86,6 +86,24 @@ impl<'s> Solver<'_, '_, 's> {
     /// A unique structural `IntoIterator` impl links the item to the open
     /// actual instead (an equation, never a proof).
     fn open_iterator_item(&mut self, source: Term) -> Result<Option<Term>, String> {
+        // A closure-bearing source (`Split<&str, {closure}>`) whose own
+        // `Iterator` impl assigns `Item` without the closure (`Item = S`)
+        // links the item structurally. Only a unique compatible impl applies;
+        // checked lowering still proves the loop from the finalized closure.
+        if !self.projection_defaults
+            && matches!(self.domain(source), Domain::Nominal(..))
+            && self.contains_callable(source, 0)?
+        {
+            let plan = self.checker.signatures.plan()?;
+            if let Some(trait_id) = plan.iterator_trait_id()?
+                && let Some(item) = plan.native_associated_item(trait_id, "Item")?
+                && let Some(term) = self.structural_projection(source, trait_id, item, &[], 0)?
+                && !self.contains_callable(term, 0)?
+                && matches!(self.domain(term), Domain::Ref(..) | Domain::Fixed(_))
+            {
+                return Ok(Some(term));
+            }
+        }
         if self.projection_defaults
             || !matches!(self.domain(source), Domain::Nominal(..))
             // Closure-bearing sources (`Map<I, {closure}>`) are typed by
