@@ -72,7 +72,10 @@ impl Parser<'_, '_> {
             if depth == 0
                 && statement_start
                 && (token.matches("const") || token.matches("static"))
-                && self.cursor.peek(1).is_some_and(|t| t.is_ident())
+                && self
+                    .cursor
+                    .peek(1)
+                    .is_some_and(|t| t.is_ident() && !t.matches("_"))
                 && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
             {
                 self.cursor.bump();
@@ -329,14 +332,19 @@ impl Parser<'_, '_> {
             self.expect("const")?;
             ConstantStorage::Const
         };
-        let written = self.ident()?;
-        let key = self.name_key(written, LookupClass::Item(Namespace::Value))?;
-        let hidden = self
-            .local_consts
-            .scopes
-            .last()
-            .and_then(|scope| scope.iter().find(|(k, _)| *k == key).map(|(_, h)| *h))
-            .ok_or_else(|| self.error("block-local const was not pre-scanned"))?;
+        let unnamed = storage == ConstantStorage::Const && self.is("_");
+        let hidden = if unnamed {
+            // `const _` names nothing; it is only evaluated and checked.
+            self.unnamed_const_name()?
+        } else {
+            let written = self.ident()?;
+            let key = self.name_key(written, LookupClass::Item(Namespace::Value))?;
+            self.local_consts
+                .scopes
+                .last()
+                .and_then(|scope| scope.iter().find(|(k, _)| *k == key).map(|(_, h)| *h))
+                .ok_or_else(|| self.error("block-local const was not pre-scanned"))?
+        };
         self.expect(":")?;
         let ty = self.ty()?;
         self.expect("=")?;
@@ -350,6 +358,11 @@ impl Parser<'_, '_> {
         }
         let initializer = initializer?;
         self.expect(";")?;
+        let (ty, initializer) = if unnamed {
+            self.unnamed_const_initializer(ty, initializer)?
+        } else {
+            (ty, initializer)
+        };
         // Defined in the enclosing function's module with that module's
         // private visibility; publish_local_consts gives it the full path.
         let name = AstPath::new(self.names, PathAnchor::Relative, &[hidden])
@@ -363,6 +376,97 @@ impl Parser<'_, '_> {
             initializer,
         });
         Ok(())
+    }
+
+    /// `const _: T = e;` (module or block level): a fresh unique hidden
+    /// name, unique by the `_` token's prepared offset, so no path can ever
+    /// name it and several unnamed constants never collide.
+    pub(super) fn unnamed_const_name(&mut self) -> Result<AstIdent, ParseError> {
+        let token = self.token();
+        if !token.matches("_") {
+            return Err(self.error("expected `_`"));
+        }
+        let spelling = format!("{HIDDEN_PREFIX}{}__", token.bytes.start);
+        let name = self
+            .names
+            .intern_root(&spelling, token.span)
+            .map_err(native_adapter::name_error)?;
+        self.cursor.bump();
+        Ok(name)
+    }
+
+    /// `const _: () = assert!(cond);` is evaluated by stock rustc even though
+    /// nothing names it. Lower it to the scalar boolean constant
+    /// `cond || (1u8 / 0u8 == 0u8)`, which the scalar evaluator rejects
+    /// (E0080) exactly when the assertion fails. Any other unit initializer
+    /// that could panic has no evaluator here, so it fails closed.
+    pub(super) fn unnamed_const_initializer(
+        &mut self,
+        ty: Type,
+        initializer: Expr,
+    ) -> Result<(Type, Expr), ParseError> {
+        if !matches!(ty, Type::Unit) {
+            return Ok((ty, initializer));
+        }
+        let condition = match initializer {
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+            } if then_block.statements.is_empty()
+                && then_block.tail.is_none()
+                && else_block.statements.is_empty()
+                && matches!(else_block.tail.as_deref(), Some(Expr::Panic(_))) =>
+            {
+                *condition
+            }
+            Expr::Block(Block {
+                statements,
+                tail: None,
+            }) if statements.is_empty() => {
+                return Ok((
+                    Type::Unit,
+                    Expr::Block(Block {
+                        statements,
+                        tail: None,
+                    }),
+                ));
+            }
+            _ => {
+                return Err(self.unsupported(
+                    "unnamed constants other than `()` or a single `assert!` are unsupported",
+                ));
+            }
+        };
+        if !super::root_resolution::scalar_const_initializer(&condition) {
+            return Err(self.unsupported("constant assertions require a scalar constant condition"));
+        }
+        let byte = |magnitude| {
+            Box::new(Expr::Integer(IntegerLiteral {
+                magnitude,
+                suffix: Some(ir::IntTy::U8),
+            }))
+        };
+        let failure = Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Div,
+                left: byte(1),
+                right: byte(0),
+                site: None,
+            }),
+            right: byte(0),
+            site: None,
+        };
+        Ok((
+            Type::Bool,
+            Expr::Binary {
+                op: BinaryOp::Or,
+                left: Box::new(condition),
+                right: Box::new(failure),
+                site: None,
+            },
+        ))
     }
 
     /// The hidden path for a single-segment value use of a block-local const.

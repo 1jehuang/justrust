@@ -14,6 +14,11 @@ pub(super) fn needs_inline(declaration: &ConstDecl) -> bool {
     !(scalar && simple(&declaration.initializer))
 }
 
+/// An initializer the scalar constant evaluator computes (never inlined).
+pub(in crate::compiler::frontend) fn scalar_const_initializer(expr: &Expr) -> bool {
+    simple(expr)
+}
+
 fn simple(expr: &Expr) -> bool {
     match expr {
         Expr::Integer(_) | Expr::Bool(_) | Expr::Var(_) | Expr::ConstItem(_) => true,

@@ -522,3 +522,48 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn unnamed_const_items_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "unnamed-consts",
+        &[
+            Case {
+                name: "module_and_block_unnamed_consts",
+                source: r#"const _: () = ();
+const _: u32 = 3 + 4;
+const N: usize = 4;
+const _: () = assert!(N > 2);
+fn f() -> u32 { const _: () = assert!(1 < 2); const _: u8 = 1; 5 }
+fn main() {
+    let x = unsafe { const _: () = assert!(4 <= 8); 7u32 };
+    println!("{} {}", f(), x);
+}"#,
+                expect: Expect::Run("5 7\n"),
+            },
+            Case {
+                name: "unnamed_const_assert_fails",
+                source: "const _: () = assert!(1 > 2); fn main(){}",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "unnamed_const_type_mismatch",
+                source: "fn main(){ const _: u8 = true; }",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "block_unnamed_const_assert_fails",
+                source: "fn main(){ const _: () = assert!(1 > 2); }",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "unnamed_const_is_not_a_name",
+                source: "const _: u32 = 1; fn main(){ let _x: u32 = _; }",
+                expect: Expect::Invalid("error"),
+            },
+        ],
+    );
+}

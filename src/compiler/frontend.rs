@@ -17019,12 +17019,22 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect("const")?;
                 ConstantStorage::Const
             };
-            let name = self.ident()?;
+            let unnamed = storage == ConstantStorage::Const && self.is("_");
+            let name = if unnamed {
+                self.unnamed_const_name()?
+            } else {
+                self.ident()?
+            };
             self.expect(":")?;
             let ty = self.ty()?;
             self.expect("=")?;
             let initializer = self.nested_expr()?;
             self.expect(";")?;
+            let (ty, initializer) = if unnamed {
+                self.unnamed_const_initializer(ty, initializer)?
+            } else {
+                (ty, initializer)
+            };
             self.reserve_parser_items(&mut parsed.program.constants, 1)?;
             parsed.program.constants.push(ConstDecl {
                 storage,
@@ -18824,6 +18834,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             if (self.is("const") || self.is("static"))
                 && self.cursor.peek(1).is_some_and(|t| t.is_ident())
+                && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
+            {
+                self.local_const_item()?;
+                continue;
+            }
+            if self.is("const")
+                && self.cursor.peek(1).is_some_and(|t| t.matches("_"))
                 && self.cursor.peek(2).is_some_and(|t| t.matches(":"))
             {
                 self.local_const_item()?;
