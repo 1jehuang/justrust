@@ -132,13 +132,16 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
         partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
-        identity=None, stop_on_invalid: bool = False) -> dict:
+        identity=None, stop_on_invalid: bool = False, retry_noisy: int = 0) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
     generator and stacks (a spot interruption killed the run), run the rest.
     `stop_on_invalid`: finish and persist the first erroneous or noisy point,
-    then stop before the next point. Cannot be combined with resume."""
+    then stop before the next point. Cannot be combined with resume.
+    `retry_noisy`: remeasure a noisy sample up to this many times, after waiting
+    for a quiet machine. Discarded attempts are kept under `noisy_retries`; the
+    kept sample still has to pass the same noise check."""
     if stop_on_invalid and resume:
         raise ValueError("bench: stop_on_invalid cannot be combined with resume")
     if identity is not None and resume:
@@ -168,6 +171,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
             continue
         samples: dict[str, list[dict]] = {st.name: [] for st in stacks}
         errors: dict[str, str] = {}
+        retried: dict[str, list[dict]] = {}
         for rep in range(reps):
             order = stacks[(k + rep) % len(stacks):] + stacks[:(k + rep) % len(stacks)]
             for st in order:
@@ -177,6 +181,16 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                     suite.wait_quiet(quiet_wait)
                 options = {"identity": identity} if identity is not None else {}
                 r = run_point(st, plan, base + k * 10 + rep, **options)
+                for _ in range(retry_noisy):
+                    if "error" in r or r.get("noisy") is False:
+                        break
+                    retried.setdefault(st.name, []).append(
+                        {"wall": r["wall"], "avg_other_cores": r.get("avg_other_cores"),
+                         "foreign_rustc_before": r.get("foreign_rustc_before")})
+                    print(f"  synth {k + 1}/{len(plans)} {st.name:12s} noisy {r['wall']:.2f}s, "
+                          "waiting for quiet and remeasuring", file=sys.stderr)
+                    suite.wait_quiet(max(quiet_wait, 1800))
+                    r = run_point(st, plan, base + k * 10 + rep, **options)
                 if "error" in r:
                     errors[st.name] = r["error"]
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} ERROR {r['error']}", file=sys.stderr)
@@ -190,6 +204,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         print(f"JCODE_PROGRESS {json.dumps({'current': k + 1, 'total': len(plans), 'unit': 'points', 'eta_seconds': round(eta)})}",
               file=sys.stderr)
         res_points.append({**plan.to_json(), "samples": samples, "errors": errors,
+                           **({"noisy_retries": retried} if retried else {}),
                            "stats": {s: versus.stats(v) for s, v in samples.items() if v}})
         if stop_on_invalid:
             reasons = []

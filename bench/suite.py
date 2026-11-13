@@ -1633,6 +1633,8 @@ def cmd_run_synth(args, identity=None) -> None:
     options = {"identity": identity} if identity is not None else {}
     if getattr(args, "stop_on_invalid", False):
         options["stop_on_invalid"] = True
+    if getattr(args, "retry_noisy", 0):
+        options["retry_noisy"] = args.retry_noisy
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
               "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=synthetic_partial_path(args, identity), resume=args.resume, **options)}
     if identity is not None:
@@ -1855,6 +1857,9 @@ def main() -> None:
                    help="synthetic: keep the points of an interrupted run of the same seed")
     r.add_argument("--stop-on-invalid", action="store_true",
                    help="synthetic: save evidence and exit nonzero after the first failed or noisy point; no resume")
+    r.add_argument("--retry-noisy", type=int, default=0, metavar="N",
+                   help="synthetic: remeasure a noisy sample up to N times after waiting for quiet "
+                        "(discarded attempts kept as noisy_retries)")
     r.add_argument("--toolchain-identity", type=Path, metavar="PRIVATE_JSON",
                    help="require declared prefix hashes and actual local synthetic invocation identity")
     r.add_argument("--toolchain", default="system", metavar="SPEC",
