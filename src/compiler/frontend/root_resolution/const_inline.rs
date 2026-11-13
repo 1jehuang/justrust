@@ -14,6 +14,133 @@ pub(super) fn needs_inline(declaration: &ConstDecl) -> bool {
     !(scalar && simple(&declaration.initializer))
 }
 
+/// Constants the scalar evaluator does not compute are inlined at each use and
+/// type checked, but never evaluated. Stock rustc evaluates every constant
+/// (E0080 on panic or overflow) even when unused. An initializer that reaches
+/// `panic!` unconditionally is that error. One with any other operation that
+/// can fail during evaluation gets an explicit unsupported diagnostic, never
+/// an unevaluated acceptance. Calls keep their E0015/const-fn qualification.
+pub(super) fn validate_unevaluated(declaration: &ConstDecl) -> Result<(), String> {
+    if !needs_inline(declaration) {
+        return Ok(());
+    }
+    let float = matches!(declaration.ty, Type::Float(_));
+    match fallible(&declaration.initializer, float, 0) {
+        Fallible::No => Ok(()),
+        Fallible::Panics => Err("E0080: evaluation of constant value failed: evaluation panicked".into()),
+        Fallible::Maybe => Err("unsupported: constant initializers with operations that may panic or overflow during evaluation (arithmetic, indexing, assertions, conditional panics) are not evaluated by this compiler".into()),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fallible {
+    No,
+    Maybe,
+    Panics,
+}
+
+fn fallible(expr: &Expr, float: bool, depth: usize) -> Fallible {
+    if depth > 256 {
+        return Fallible::Maybe;
+    }
+    let combine = |items: &mut dyn Iterator<Item = &Expr>| {
+        let mut result = Fallible::No;
+        for item in items {
+            match fallible(item, float, depth + 1) {
+                Fallible::No => {}
+                other => {
+                    if result == Fallible::No {
+                        result = other;
+                    }
+                    if other == Fallible::Panics {
+                        // Evaluation order reaches this only if no earlier
+                        // operand might fail first; keep the first verdict.
+                    }
+                }
+            }
+            if result != Fallible::No {
+                break;
+            }
+        }
+        result
+    };
+    match expr {
+        Expr::Panic(_) => Fallible::Panics,
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let arithmetic = matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Rem
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            );
+            if arithmetic && !float {
+                return Fallible::Maybe;
+            }
+            combine(&mut [left.as_ref(), right.as_ref()].into_iter())
+        }
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            value,
+            ..
+        } if !float => {
+            if matches!(value.as_ref(), Expr::Integer(_)) {
+                Fallible::No
+            } else {
+                Fallible::Maybe
+            }
+        }
+        Expr::Unary { value, .. } => fallible(value, float, depth + 1),
+        Expr::If { .. }
+        | Expr::IfLet { .. }
+        | Expr::Match { .. }
+        | Expr::Loop { .. }
+        | Expr::LabeledBlock { .. }
+        | Expr::Index { .. }
+        | Expr::DynamicIndex { .. }
+        | Expr::RangeIndex { .. }
+        | Expr::Try(_)
+        | Expr::Deref { .. } => Fallible::Maybe,
+        Expr::Block(block) | Expr::Unsafe(block) => {
+            let mut parts = Vec::new();
+            for statement in &block.statements {
+                match statement {
+                    Stmt::Expr(value) | Stmt::ImplicitExpr(value) => parts.push(value),
+                    Stmt::Let { value, .. } => parts.push(value),
+                    _ => return Fallible::Maybe,
+                }
+            }
+            if let Some(tail) = block.tail.as_deref() {
+                parts.push(tail);
+            }
+            combine(&mut parts.into_iter())
+        }
+        Expr::Array(items) | Expr::Tuple(items) => combine(&mut items.iter()),
+        Expr::TupleStruct { fields, .. } => combine(&mut fields.iter()),
+        Expr::Call { args, .. } => combine(&mut args.iter()),
+        Expr::MethodCall { receiver, args, .. } => {
+            combine(&mut std::iter::once(receiver.as_ref()).chain(args.iter()))
+        }
+        Expr::AssociatedCall { args, .. } | Expr::TraitCall { args, .. } => {
+            combine(&mut args.iter())
+        }
+        Expr::Struct { fields, .. } => combine(&mut fields.iter().map(|(_, value)| value)),
+        Expr::EnumVariant { fields, .. } => combine(&mut fields.iter().map(|(_, value)| value)),
+        Expr::Repeat { value, .. }
+        | Expr::ParamRepeat { value, .. }
+        | Expr::Apply { value, .. }
+        | Expr::BorrowValue { value, .. }
+        | Expr::Cast { value, .. } => fallible(value, float, depth + 1),
+        Expr::Field { base, .. } => fallible(base, float, depth + 1),
+        _ => Fallible::No,
+    }
+}
+
 /// An initializer the scalar constant evaluator computes (never inlined).
 pub(in crate::compiler::frontend) fn scalar_const_initializer(expr: &Expr) -> bool {
     simple(expr)

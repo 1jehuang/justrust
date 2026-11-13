@@ -5907,6 +5907,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
     // The value-namespace slot freed above holds a checked zero-argument
     // `const fn` computing the initializer, so unused constants still type check.
     for declaration in &parsed.program.constants {
+        const_inline::validate_unevaluated(declaration)?;
         if const_inline::needs_inline(declaration) {
             program
                 .functions

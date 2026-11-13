@@ -567,3 +567,30 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn unevaluated_constant_initializers_fail_closed() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "unevaluated-consts",
+        &[
+            Case {
+                name: "aggregate_and_reference_constants_still_work",
+                source: r#"struct P { x: i32, y: [u8; 2] }
+const ORIGIN: P = P { x: -3, y: [1, 2] };
+const NAME: &str = "jr";
+const PAIR: (u8, char) = (7, 'z');
+const F: f64 = 1.5;
+fn main() { println!("{} {} {} {} {} {}", ORIGIN.x, ORIGIN.y[1], NAME, PAIR.0, PAIR.1, F); }"#,
+                expect: Expect::Run("-3 2 jr 7 z 1.5\n"),
+            },
+            Case {
+                name: "unused_block_panic_constant",
+                source: "const X: u32 = { panic!(\"no\") }; fn main(){}",
+                expect: Expect::Invalid("E0080"),
+            },
+        ],
+    );
+}
