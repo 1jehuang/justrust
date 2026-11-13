@@ -673,3 +673,29 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn zip_iter_mut_with_shared_iter_writes_through_pairs() {
+    oracle::stock_native(
+        r#"
+fn main() {
+    let data = [1u8, 2, 3, 4];
+    let mut out = [0u8; 4];
+    for (o, d) in out.iter_mut().zip(data.iter()) { *o = *d * 2; }
+    println!("{:?}", out);
+    let mut v = vec![0u8; 3];
+    for (o, d) in v.iter_mut().zip(&[7u8, 8, 9]) { *o = *d; }
+    println!("{:?}", v);
+    let mut a = [1u8, 2];
+    for (y, x) in data.iter().zip(a.iter_mut()) { *x += *y; }
+    println!("{:?}", a);
+}
+"#,
+    );
+    for source in [
+        "fn main() { let mut v = vec![1u8, 2]; for (o, d) in v.iter_mut().zip(v.iter()) { *o = *d; } }",
+        "fn main() { let mut a = [1u8, 2]; let r; { let b = [3u8, 4]; let mut it = a.iter_mut().zip(b.iter()); r = it.next().unwrap().1; } println!(\"{}\", r); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

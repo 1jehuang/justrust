@@ -7689,6 +7689,17 @@ impl CarrierBuilder<'_, '_> {
             if value_projection(location).contains(&Projection::Deref) {
                 continue;
             }
+            // Copy channels beside the one mutable reborrow (`Zip<IterMut,
+            // Iter>` yields `(&mut T, &U)`) carry no affine authority; their
+            // loans remain under the ordinary result-origin checks.
+            let Some(semantic) =
+                self.metadata_value(ir::carrier_at(result, location, &self.ledger))?
+            else {
+                return Ok(false);
+            };
+            if self.copy_permission_in(&semantic, authority)? {
+                continue;
+            }
             if owned.is_some()
                 || !location.path.0.iter().all(|step| {
                     matches!(
@@ -8391,6 +8402,13 @@ impl CarrierBuilder<'_, '_> {
             && write_channels == 1
             && result_channels <= 2
             && self.copy_family_reborrow_admitted(params, result, view, authority)?
+        {
+            return Ok(true);
+        }
+        if affine_results == 1
+            && result_channels > 1
+            && affine_writes == 0
+            && self.identity_copy_reborrow_admitted(params, result, view, authority)?
         {
             return Ok(true);
         }
