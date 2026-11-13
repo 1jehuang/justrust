@@ -521,7 +521,7 @@ pub(super) fn inventory_validated(
                     }
                     block(body, ds, b, d + 1)?;
                 }
-                Stmt::Return(None) => {}
+                Stmt::Return(None) | Stmt::UseGlob(_) => {}
             }
         }
         if let Some(e) = &value.tail {

@@ -16,6 +16,8 @@ pub(super) mod missing_docs;
 mod naming_lints;
 #[path = "source_attrs/unused_extern_crates.rs"]
 pub(super) mod unused_extern_crates;
+#[path = "source_attrs/unused_import_braces.rs"]
+mod unused_import_braces;
 #[path = "source_attrs/unused_macros.rs"]
 mod unused_macros;
 
@@ -263,11 +265,14 @@ fn prepare_with_context(
         unused_macros_denied: inherited.0.denied("unused_macros"),
         extern_crates: Vec::new(),
         unused_extern_denied: inherited.0.denied("unused_extern_crates"),
+        import_braces_denied: inherited.0.denied("unused_import_braces"),
+        checked_uses: Vec::new(),
         debug_impls: Vec::new(),
         denied_lints: 0,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     filter.check_unused_macros()?;
+    filter.check_unvisited_import_braces()?;
     let extern_facts = filter.extern_facts()?;
     filter.record_unplaced_debug_impls();
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
@@ -372,6 +377,10 @@ struct Filter<'a> {
     extern_crates: Vec<unused_extern_crates::ExternEntry>,
     /// `unused_extern_crates` is at deny/forbid somewhere in this file.
     unused_extern_denied: bool,
+    /// `unused_import_braces` is at deny/forbid somewhere in this file.
+    import_braces_denied: bool,
+    /// Token indices of `use` keywords checked at their item's lint level.
+    checked_uses: Vec<usize>,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -480,6 +489,8 @@ impl Filter<'_> {
                 for member in members {
                     self.unused_macros_denied |=
                         member == "unused_macros" && new_level >= lint_names::Level::Deny;
+                    self.import_braces_denied |=
+                        member == "unused_import_braces" && new_level >= lint_names::Level::Deny;
                     self.levels
                         .set(member, new_level)
                         .map_err(|m| error(AttributeErrorKind::Syntax, meta.range.clone(), &m))?;
@@ -1460,6 +1471,9 @@ impl Filter<'_> {
                     if self.frontier {
                         self.macro_use_frontier.push((at..at, true));
                     }
+                }
+                if kind == "use" {
+                    self.check_import_braces(keyword, stop)?;
                 }
                 if kind == "extern" {
                     let attributed = attrs

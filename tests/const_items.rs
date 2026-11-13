@@ -508,6 +508,64 @@ fn main() {
 }
 
 #[test]
+fn block_local_glob_imports_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "block-local-globs",
+        &[
+            Case {
+                name: "block_glob_imports",
+                source: r#"use std::ops::Bound;
+mod shapes { pub enum Shape { Dot, Line(u32), Square(u32) } pub fn area() -> u32 { 1 } }
+fn area() -> u32 { 100 }
+fn start(bound: Bound<&usize>) -> usize {
+    use core::ops::Bound::*;
+    match bound {
+        Included(&n) => n,
+        Excluded(&n) => n + 1,
+        Unbounded => 0,
+    }
+}
+fn size(s: &shapes::Shape) -> u32 {
+    use shapes::Shape::*;
+    match s { Dot => 0, Line(n) => *n, Square(n) => n * n }
+}
+fn main() {
+    println!("{} {} {}", start(Bound::Included(&2)), start(Bound::Excluded(&3)), start(Bound::Unbounded));
+    println!("{} {} {}", size(&shapes::Shape::Dot), size(&shapes::Shape::Line(4)), size(&shapes::Shape::Square(3)));
+    println!("{}", area());
+    {
+        use shapes::*;
+        println!("{}", area());
+        let v = Shape::Line(7);
+        println!("{}", size(&v));
+    }
+    println!("{}", area());
+}"#,
+                expect: Expect::Run("2 4 0\n0 4 9\n100\n1\n7\n100\n"),
+            },
+            Case {
+                name: "block_glob_out_of_scope",
+                source: "mod m { pub fn f() -> u32 { 1 } } fn main(){ { use m::*; let _ = f(); } let _ = f(); }",
+                expect: Expect::Invalid("E0425"),
+            },
+            Case {
+                name: "unused_unresolved_block_glob",
+                source: "fn main(){ use std::nope::*; }",
+                expect: Expect::Invalid("E0432"),
+            },
+            Case {
+                name: "ambiguous_block_globs",
+                source: "mod a { pub fn f() -> u32 { 1 } } mod b { pub fn f() -> u32 { 2 } } fn main(){ use a::*; use b::*; let _ = f(); }",
+                expect: Expect::Invalid("E0659"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn block_local_nominal_items_match_stock() {
     #[path = "support/closure_oracle.rs"]
     mod closure_oracle;

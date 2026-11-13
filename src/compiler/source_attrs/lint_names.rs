@@ -303,6 +303,7 @@ pub(super) const ENFORCED: &[&str] = &[
     "non_camel_case_types",
     "non_upper_case_globals",
     "unused_extern_crates",
+    "unused_import_braces",
     "unused_macros",
 ];
 

@@ -1243,6 +1243,8 @@ impl<'a> Validator<'a> {
                 Stmt::Expr(expression) | Stmt::ImplicitExpr(expression) => {
                     self.push(Visit::Expr(expression))?
                 }
+                // Scoped and validated by root resolution.
+                Stmt::UseGlob(_) => {}
                 Stmt::Return(value) => {
                     if let Some(value) = value {
                         self.push(Visit::Expr(value))?;

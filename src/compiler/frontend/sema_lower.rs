@@ -534,6 +534,9 @@ impl<'a> Lower<'a> {
                 let x = self.expr(e)?;
                 out.push(h::HirStmt::Expr(x));
             }
+            Stmt::UseGlob(_) => {
+                return Err(Unsupported("block glob reached semantic lowering".into()));
+            }
             Stmt::Return(v) => {
                 let v = match v {
                     Some(v) => Some(self.expr(v)?),

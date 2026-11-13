@@ -112,6 +112,8 @@ struct Resolver<'a> {
     /// `use prefix::*;` declarations, consulted after explicit bindings.
     globs: &'a [GlobImport],
     active_globs: std::collections::HashSet<(usize, PathKey, bool)>,
+    /// Block-local `use target::*;` scopes, innermost last: (module, target).
+    block_globs: Vec<Vec<(ModuleId, AstPath)>>,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -1897,6 +1899,84 @@ impl Resolver<'_> {
         }
         Ok(found)
     }
+    /// A name brought in by an enclosing block's `use target::*;`. Inner
+    /// blocks shadow outer ones; distinct results in one block are E0659.
+    /// Only body paths of the block's own module consult them, never import
+    /// or glob resolution in progress.
+    fn block_glob_item(
+        &mut self,
+        ident: AstIdent,
+        from: ModuleId,
+        namespace: bool,
+    ) -> Result<Option<ResolvedItem>, String> {
+        if self.block_globs.iter().all(Vec::is_empty)
+            || !self.active.is_empty()
+            || !self.active_globs.is_empty()
+        {
+            return Ok(None);
+        }
+        let scopes = std::mem::take(&mut self.block_globs);
+        let result = (|| -> Result<Option<ResolvedItem>, String> {
+            for depth in (0..scopes.len()).rev() {
+                let mut found: Option<ResolvedItem> = None;
+                for (module, target) in &scopes[depth] {
+                    if *module != from {
+                        continue;
+                    }
+                    self.alias_budget.charge_work(1)?;
+                    // The target itself sees only the enclosing scopes.
+                    self.block_globs = scopes[..depth].to_vec();
+                    let base = self.path(target, *module, true, true);
+                    self.block_globs = Vec::new();
+                    let Some(base) = base? else {
+                        continue;
+                    };
+                    let item = match &base.path {
+                        ResolvedPath::Source(source) => {
+                            let full = self.semantic_append(source, ident)?;
+                            self.item(&full, *module, namespace, true)?
+                        }
+                        ResolvedPath::CatalogModule(catalog) => {
+                            self.catalog_child(*catalog, ident, namespace)?
+                        }
+                        ResolvedPath::StdRoot(Some(source)) => {
+                            let full = self.semantic_append(source, ident)?;
+                            self.item(&full, *module, namespace, true)?
+                        }
+                        ResolvedPath::StdRoot(None) => {
+                            self.catalog_child(CatalogModule::Root, ident, namespace)?
+                        }
+                        _ => None,
+                    };
+                    let Some(item) = item else {
+                        continue;
+                    };
+                    if !item
+                        .visibility
+                        .accessible_from(&self.program.modules, from)
+                        .map_err(module_diagnostic)?
+                    {
+                        continue;
+                    }
+                    match &found {
+                        Some(previous) if !self.same_resolved(previous, &item)? => {
+                            return Err(format!(
+                                "E0659: {} is ambiguous (glob imports)",
+                                self.ident_display(ident)?
+                            ));
+                        }
+                        _ => found = Some(item),
+                    }
+                }
+                if found.is_some() {
+                    return Ok(found);
+                }
+            }
+            Ok(None)
+        })();
+        self.block_globs = scopes;
+        result
+    }
     fn import(
         &mut self,
         path: &AstPath,
@@ -2113,8 +2193,15 @@ impl Resolver<'_> {
                 }
             }
             let full = self.semantic_append(&self.module_path(from)?, *ident)?;
+            let block = if extern_only {
+                None
+            } else {
+                self.block_glob_item(*ident, from, type_namespace)?
+            };
             let local = if extern_only {
                 None
+            } else if block.is_some() {
+                block
             } else {
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
             };
@@ -3840,6 +3927,45 @@ impl Resolver<'_> {
             .try_reserve(1)
             .map_err(|_| "scope stack allocation failed")?;
         locals.push(std::collections::HashSet::new());
+        // Block globs are visible throughout their block, like block items.
+        let mut globs = Vec::new();
+        block.statements.retain(|stmt| match stmt {
+            Stmt::UseGlob(target) => {
+                globs.push((module, target.clone()));
+                false
+            }
+            _ => true,
+        });
+        self.charge_entries::<(ModuleId, AstPath)>(globs.len())?;
+        for (module, target) in &globs {
+            // Validate eagerly like module globs: the target must exist.
+            let saved = std::mem::take(&mut self.block_globs);
+            let base = self.path(target, *module, true, true);
+            self.block_globs = saved;
+            match base? {
+                Some(base) if matches!(base.kind, ResolvedKind::Module | ResolvedKind::Enum) => {}
+                Some(_) => {
+                    return Err(format!(
+                        "glob import target {} is not a module or enum",
+                        self.display(target)?
+                    ));
+                }
+                None => {
+                    return Err(format!("unresolved glob import {}", self.display(target)?));
+                }
+            }
+        }
+        self.block_globs.push(globs);
+        let result = self.block_statements(block, module, locals);
+        self.block_globs.pop();
+        result
+    }
+    fn block_statements(
+        &mut self,
+        block: &mut Block,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
         for stmt in &mut block.statements {
             if let Stmt::Let {
                 name,
@@ -3967,6 +4093,7 @@ impl Resolver<'_> {
                     self.block(body, module, locals)?;
                 }
                 Stmt::Return(None) => {}
+                Stmt::UseGlob(_) => return Err("block glob escaped its block scope".into()),
             }
         }
         if let Some(tail) = &mut block.tail {
@@ -5105,6 +5232,7 @@ impl ResolutionState {
             static_muts: self.static_muts.clone(),
             globs: &parsed.glob_imports,
             active_globs: std::collections::HashSet::new(),
+            block_globs: Vec::new(),
             program: &parsed.program,
             type_depth: 0,
             alias_cache: self.alias_cache.clone(),
@@ -6006,6 +6134,7 @@ pub fn prepare_resolution_owned(parsed: Arc<ParsedProgram>) -> Result<Resolution
         static_muts,
         globs: &parsed.glob_imports,
         active_globs: std::collections::HashSet::new(),
+        block_globs: Vec::new(),
         program: &parsed.program,
         type_depth: 0,
         alias_cache: HashMap::new(),
@@ -7126,6 +7255,7 @@ mod associated_projection_tests {
             static_muts: Default::default(),
             globs: &[],
             active_globs: Default::default(),
+            block_globs: Vec::new(),
         };
         let module = program.traits[0].module;
         assert!(resolver.trait_method_bounds(&mut [], module, 0, 0).is_ok());

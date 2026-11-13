@@ -8588,6 +8588,7 @@ impl<'a> Checker<'a> {
                     }
                     (ir::TypedStmt::Expr(value), f.completes)
                 }
+                Stmt::UseGlob(_) => return Err("block glob reached type checking".into()),
                 Stmt::Return(e) => {
                     let result_ty = self.result.clone();
                     let value = e

@@ -164,9 +164,13 @@ impl Parser<'_, '_> {
         let prefix = AstPath::new(self.names, PathAnchor::Relative, &[])
             .map_err(native_adapter::name_error)?;
         self.use_tree(&prefix, 0, &mut work, &mut bytes, &mut tree)?;
-        for (name, _, _) in tree {
+        for (name, _, type_only) in tree {
             let Some(name) = name else {
-                return Err(self.unsupported("block-local glob imports are unsupported"));
+                if !type_only {
+                    return Err(self.unsupported("block-local empty use prefixes are unsupported"));
+                }
+                // `use path::*;` binds no names here; the resolver scopes it.
+                continue;
             };
             self.prescan_local_item(offset, span, name, items)?;
         }
@@ -294,7 +298,7 @@ impl Parser<'_, '_> {
 
     /// Parse a block-local `use` item and hoist each binding.
     #[inline(never)]
-    pub(super) fn local_use_item(&mut self) -> Result<(), ParseError> {
+    pub(super) fn local_use_item(&mut self, statements: &mut Vec<Stmt>) -> Result<(), ParseError> {
         if self.item_expansion.is_some() || self.expansion.is_some() {
             return Err(self.unsupported("generated block-local use items are unsupported"));
         }
@@ -306,8 +310,16 @@ impl Parser<'_, '_> {
         self.use_tree(&prefix, 0, &mut work, &mut bytes, &mut tree)?;
         self.expect(";")?;
         for (name, target, type_only) in tree {
-            let name =
-                name.ok_or_else(|| self.unsupported("block-local glob imports are unsupported"))?;
+            let Some(name) = name else {
+                if !type_only {
+                    return Err(self.unsupported("block-local empty use prefixes are unsupported"));
+                }
+                // A block glob is scoped to this block: the resolver consults
+                // it before the enclosing module's items (stock order).
+                let target = self.local_item_path(&target)?.unwrap_or(target);
+                statements.push(Stmt::UseGlob(target));
+                continue;
+            };
             let hidden = self
                 .hidden_local_item(name)?
                 .ok_or_else(|| self.error("block-local use was not pre-scanned"))?;

@@ -4406,7 +4406,7 @@ impl SourceInventory {
                     )?;
                     self.block(body, &here.child(5, 0, budget)?, false, budget, depth + 1)?;
                 }
-                Stmt::Return(None) => {}
+                Stmt::Return(None) | Stmt::UseGlob(_) => {}
             }
         }
         if let Some(tail) = &block.tail {
@@ -11026,6 +11026,9 @@ pub enum Stmt {
         value: Box<Expr>,
         else_block: Block,
     },
+    /// A block-local `use target::*;`. Root resolution consumes it into its
+    /// block scope and removes it; no later stage ever sees one.
+    UseGlob(AstPath),
 }
 /// The written iterable of a for loop.
 #[derive(Clone, Debug)]
@@ -19464,7 +19467,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     continue;
                 }
                 if self.is("use") {
-                    self.local_use_item()?;
+                    self.local_use_item(&mut statements)?;
                     continue;
                 }
                 return Err(self.unsupported("block-local items are unsupported"));
@@ -23715,7 +23718,7 @@ fn walk_depth_inspecting<'source>(
                             push(DepthNode::Expr(condition))?;
                             push(DepthNode::Block(body))?;
                         }
-                        Stmt::Return(None) => {}
+                        Stmt::Return(None) | Stmt::UseGlob(_) => {}
                     }
                 }
                 if let Some(tail) = &block.tail {

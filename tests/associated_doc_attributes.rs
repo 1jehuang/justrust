@@ -896,3 +896,44 @@ fn denied_unused_extern_crates_matches_stock() {
         file_oracle::stock_and_native_reject(invalid);
     }
 }
+
+#[test]
+fn denied_unused_import_braces_matches_stock() {
+    let source = r#"
+        #![deny(unused_import_braces)]
+        use std::collections::{HashMap, BTreeMap};
+        use std::fmt::{self};
+        use std::cmp::{self as compare};
+        use std::{ops::{Add, Sub}};
+        use std::cmp::{Ordering::{Less, Greater}};
+        #[allow(unused_import_braces)]
+        use std::mem::{swap};
+        #[cfg(any())]
+        use std::mem::{replace};
+        struct P;
+        impl fmt::Display for P {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "p") }
+        }
+        fn main() {
+            let mut m = HashMap::new();
+            m.insert(1, 2);
+            let mut b = BTreeMap::new();
+            b.insert(3, 4);
+            let (mut x, mut y) = (1, 2);
+            swap(&mut x, &mut y);
+            let o = if x < y { Less } else { Greater };
+            println!("{} {} {} {} {} {} {:?}", m.get(&1).unwrap(), b.get(&3).unwrap(), P, compare::max(x, y), 1.add(2), 5.sub(1), o);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#![deny(unused_import_braces)] use std::mem::{swap}; fn main() { let (mut a, mut b) = (1, 2); swap(&mut a, &mut b); }",
+        "#![deny(unused_import_braces)] use std::collections::{HashMap as M}; fn main() { let _m: M<u8, u8> = M::new(); }",
+        "#![deny(unused_import_braces)] use std::{collections::{*}}; fn main() { let _m: HashMap<u8, u8> = HashMap::new(); }",
+        "#![forbid(unused_import_braces)] use std::{mem::{swap}, cmp::max}; fn main() { let (mut a, mut b) = (1, 2); swap(&mut a, &mut b); let _ = max(a, b); }",
+        "mod m { #![deny(unused_import_braces)] pub use std::mem::{drop}; } fn main() { m::drop(1); }",
+        "#![deny(unused_import_braces)] use std::{{ops::Add}}; fn main() { let _ = 1.add(2); }",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}
