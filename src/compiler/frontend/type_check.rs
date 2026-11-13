@@ -2102,6 +2102,20 @@ impl<'s> Checker<'s> {
             // argument: `&[T; N]` may unsize to a `&[T]` field. Only that
             // outer equation is relaxed (the element stays invariant), and the
             // ordinary field check still proves and records the coercion.
+            // A field already fixed by the expected type to a trait-object
+            // pointer (`Err::<_, Box<dyn Error>>(Box::new(e))`) is an unsizing
+            // coercion site: its value's pointee need not equal the slot, and
+            // the ordinary field check proves and records the coercion.
+            if expected.is_some()
+                && matches!(
+                    evidence.as_ref(),
+                    InferKind::Nominal(..) | InferKind::Ref(..)
+                )
+                && let Some(target) = solver.resolve(&formal, false, depth + 1).ok().flatten()
+                && unsizes_to_object(&target)
+            {
+                continue;
+            }
             let (formal, evidence, extra) = sr::call_input_equation(&formal, &evidence);
             if ir::contains_associated_types(&field.ty, &plan.budget)? && extra == 0 {
                 self.infer_storage(1)?;
@@ -16903,5 +16917,16 @@ mod checked_identity_tests {
         supplied.functions[1].body.tail = Some(Box::new(Expr::Var(name)));
         assert!(type_function_with_plan(&supplied, 0, &plan, &budget).is_ok());
         assert!(type_function_with_plan(&supplied, 1, &plan, &budget).is_err());
+    }
+}
+
+/// A pointer to a trait object: the target of an unsizing coercion whose
+/// source pointee is any type implementing the object's traits.
+fn unsizes_to_object(ty: &ir::Ty) -> bool {
+    match ty.owned_pointer_pointee() {
+        Some((_, pointee)) => matches!(pointee, ir::Ty::Dyn(_)),
+        None => {
+            matches!(ty, ir::Ty::Ref { referent, .. } if matches!(referent.as_ref(), ir::Ty::Dyn(_)))
+        }
     }
 }

@@ -587,3 +587,40 @@ fn fallible_main_reports_through_termination() {
         ],
     );
 }
+
+/// `Ok`/`Err`/`Some(Box::new(v))` under an expected `Box<dyn Trait>` payload
+/// is an unsizing coercion site, not an equation on the pointee.
+#[test]
+fn boxed_trait_object_constructor_payloads_match_stock() {
+    oracle::check(
+        "boxed-object-constructor-payloads",
+        &[
+            Case {
+                name: "err_box_new_to_box_dyn_error",
+                source: r#"#[derive(Debug)] struct E;
+impl std::fmt::Display for E { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "e") } }
+impl std::error::Error for E {}
+fn a(fail: bool) -> Result<i32, Box<dyn std::error::Error>> { if fail { return Err(Box::new(E)); } let n: i32 = "4".parse()?; Ok(n) }
+fn main() { println!("{} {}", a(true).unwrap_err(), a(false).unwrap()); }"#,
+                expect: Expect::Run("e 4\n"),
+            },
+            Case {
+                name: "some_and_ok_box_new_to_box_dyn",
+                source: r#"trait T { fn n(&self) -> i32; } struct A; impl T for A { fn n(&self) -> i32 { 3 } }
+fn b() -> Option<Box<dyn T>> { Some(Box::new(A)) }
+fn main() { let x: Result<Box<dyn T>, ()> = Ok(Box::new(A)); let b2 = Box::new(A); let o: Option<Box<dyn T>> = Some(b2); println!("{} {} {}", b().unwrap().n(), x.unwrap().n(), o.unwrap().n()); }"#,
+                expect: Expect::Run("3 3 3\n"),
+            },
+            Case {
+                name: "payload_missing_trait",
+                source: "trait T {} trait U {} struct A; impl U for A {}\nfn f() -> Option<Box<dyn T>> { Some(Box::new(A)) }\nfn main() { f(); }",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "payload_wrong_concrete_box",
+                source: "struct A; struct B;\nfn f() -> Option<Box<A>> { Some(Box::new(B)) }\nfn main() { f(); }",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
