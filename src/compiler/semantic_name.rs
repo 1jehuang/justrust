@@ -999,6 +999,10 @@ pub(super) fn occurrence_index(
     names.check(ident)?;
     Ok(ident.index)
 }
+/// Occurrence index of an ident the caller has already admitted with `check`.
+pub(super) fn checked_occurrence_index(ident: AstIdent) -> u32 {
+    ident.index
+}
 pub(super) fn name_context(
     names: &impl super::semantic_path::NameAccess,
     ident: AstIdent,

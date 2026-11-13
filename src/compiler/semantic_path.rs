@@ -493,6 +493,35 @@ impl AstPath {
         Ok(())
     }
 
+    /// `check_target` against raw source segments, without building the
+    /// target path (no key lookups or path storage for an already certified use).
+    pub(crate) fn check_target_segments(
+        &self,
+        names: &impl NameAccess,
+        anchor: &PathAnchor,
+        segments: impl ExactSizeIterator<Item = AstIdent>,
+    ) -> Result<(), NameError> {
+        self.check(names)?;
+        if matches!(anchor, PathAnchor::DefiningCrate(_))
+            || &self.anchor != anchor
+            || self.len() != segments.len()
+        {
+            return Err(TokenError::InvalidInput("resolved generic target mismatch").into());
+        }
+        // `self.check` already admitted every expected segment.
+        for (expected, actual) in self.segments().iter().zip(segments) {
+            if super::semantic_name::checked_occurrence_index(*expected)
+                != super::semantic_name::occurrence_index(names, actual)?
+            {
+                return Err(TokenError::InvalidInput(
+                    "resolved generic target occurrence mismatch",
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     fn check_structural_edit(&self) -> Result<(), NameError> {
         if self.resolved_use.is_some() || self.data.receiver.is_some() {
             return Err(
@@ -555,6 +584,26 @@ impl AstPath {
     pub fn push(&self, names: &impl NameAccess, ident: AstIdent) -> Result<Self, NameError> {
         self.check(names)?;
         self.check_structural_edit()?;
+        let count = self.len().checked_add(1).ok_or(TokenError::IdExhausted)?;
+        Self::build(
+            names,
+            self.anchor.clone(),
+            count,
+            self.segments()
+                .iter()
+                .copied()
+                .chain(std::iter::once(ident)),
+        )
+    }
+    /// Canonical namespace-lookup intermediate `self.segments() ++ [ident]`
+    /// under this anchor, built once. Never carries this path's resolved-use
+    /// or receiver certificate, so it is valid for certified paths too.
+    pub(crate) fn semantic_append(
+        &self,
+        names: &impl NameAccess,
+        ident: AstIdent,
+    ) -> Result<Self, NameError> {
+        self.check(names)?;
         let count = self.len().checked_add(1).ok_or(TokenError::IdExhausted)?;
         Self::build(
             names,

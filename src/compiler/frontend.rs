@@ -10633,6 +10633,16 @@ impl GenericPath {
         &self,
         names: &impl NameAccess,
     ) -> Result<AstPath, super::semantic_name::NameError> {
+        if let Some(certificate) = &self.resolved_use
+            && !matches!(self.anchor, PathAnchor::DefiningCrate(_))
+        {
+            certificate.check_target_segments(
+                names,
+                &self.anchor,
+                self.segments.iter().map(|segment| segment.name),
+            )?;
+            return Ok(certificate.clone());
+        }
         let mut segments = super::token_session::BudgetVec::new(
             names.budget(),
             super::expansion_budget::Storage::Temporary,

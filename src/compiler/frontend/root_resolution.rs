@@ -575,12 +575,7 @@ impl Resolver<'_> {
     fn semantic_append(&self, path: &AstPath, ident: AstIdent) -> Result<AstPath, String> {
         // This is a canonical namespace-lookup intermediate, not a new source
         // occurrence. Never mutate or extend an original-use certificate.
-        path.check(self.names())
-            .map_err(native_adapter::name_diagnostic)?;
-        let canonical = AstPath::new(self.names(), path.anchor(), path.segments())
-            .map_err(native_adapter::name_diagnostic)?;
-        canonical
-            .push(self.names(), ident)
+        path.semantic_append(self.names(), ident)
             .map_err(native_adapter::name_diagnostic)
     }
     fn single_path(&self, ident: AstIdent) -> Result<AstPath, String> {
