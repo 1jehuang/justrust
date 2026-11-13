@@ -104,8 +104,40 @@ refresh failures keep the last successful data visible with its age and error.
 
 Use **↑/↓** to select a run, **Enter** for details, **l** for the last 2,000 local
 log lines (up to 1 MiB), **a** for full account status and refresh errors,
-**f** for failures, **h** for this project, **r** to refresh,
-and **q** to quit. **Esc** returns from details, with **Page Up/Down** for scrolling.
+**r** to refresh, and **q** to quit. **Esc** returns from details, with
+**Page Up/Down** for scrolling.
+
+Press **s** for the filter menu: **↑/↓** picks a filter, **←/→** changes it, and
+**s** or **Esc** closes it. Filters combine, and the Runs title always states
+which are on.
+
+| Filter | Choices |
+|---|---|
+| Project | all projects, or any project with recorded runs (most runs first) |
+| Command | check, test, build, release (a release-profile build), clippy, run, other. The kind bar shows how many runs each choice would list. |
+| Where | anywhere, remote only, local only |
+| Result | all, failed, passed, failed on your code, failed on the toolchain or infrastructure |
+| Search | command, project path and run ID (Enter keeps it, Esc cancels) |
+
+Shortcuts outside the menu: **c** / **Tab** steps the command kind (back with
+**C** / **Shift+Tab**), **w** steps where, **f** toggles failures, **h** toggles
+the project you launched from, **/** searches, and **x** or **Esc** clears all.
+
+The Runs card says what happened instead of a bare exit code: `compile error`,
+`tests failed`, `your code failed`, `toolchain fault`, `infra fault`,
+`interrupted` or `unknown cause`. The cause is the class the recorder stored. A
+failure with no recorded class shows its exit code. The last column is how long
+ago the run started. Enter still shows the run ID and full details.
+
+**Where the time went** adds up the wait of the listed runs and splits it into
+compiling, running tests, source sync, artifacts back, hosted overhead, cargo
+startup, build directory lock, the justrust client, and other. It follows the
+filters, so choosing a project or a command kind shows that slice. Timings come
+from run summaries on this machine: account-only records are counted in the
+title as runs without timings. The card is hidden on terminals shorter than 24
+rows.
+
+Account records that carry no command are counted as `other`, never guessed.
 Local history is a bounded recent window (up to 200 index entries); the account
 list contains up to 50 uploaded runs. Older account records may show unknown
 results until opened. Hosted uploads contain summaries, not full output logs.

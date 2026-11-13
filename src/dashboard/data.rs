@@ -11,6 +11,118 @@ const INDEX_ROWS: usize = 200;
 const LOG_LINES: usize = 2000;
 const SUMMARY_BYTES: u64 = 8 * 1024 * 1024;
 
+/// Where a run's wait went, grouped from the end-to-end segments
+/// (`crate::e2e`) into the few buckets a person can act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bucket {
+    Compile,
+    Tests,
+    Sync,
+    Artifacts,
+    Hosted,
+    Startup,
+    Lock,
+    Client,
+    Other,
+}
+
+pub(crate) const BUCKETS: usize = 9;
+
+/// Seconds per [`Bucket`], indexed by `Bucket as usize`. Sums to the wait.
+pub(crate) type Times = [f64; BUCKETS];
+
+/// Parsed timings by run ID. A finished run's summary never changes, so each
+/// is read once. `None` records a summary that could not be read.
+pub(crate) type TimeCache = std::collections::HashMap<String, Option<Times>>;
+
+impl Bucket {
+    pub(crate) const ALL: [Bucket; BUCKETS] = [
+        Bucket::Compile,
+        Bucket::Tests,
+        Bucket::Sync,
+        Bucket::Artifacts,
+        Bucket::Hosted,
+        Bucket::Startup,
+        Bucket::Lock,
+        Bucket::Client,
+        Bucket::Other,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Bucket::Compile => "compiling",
+            Bucket::Tests => "running tests",
+            Bucket::Sync => "source sync",
+            Bucket::Artifacts => "artifacts back",
+            Bucket::Hosted => "hosted overhead",
+            Bucket::Startup => "cargo startup",
+            Bucket::Lock => "build dir lock",
+            Bucket::Client => "justrust client",
+            Bucket::Other => "other",
+        }
+    }
+
+    /// Bucket for an `area.what` segment key. Unrecognized keys are `Other`.
+    fn of(key: &str) -> Bucket {
+        match key.split_once('.').unwrap_or(("", key)) {
+            ("sync", _) => Bucket::Sync,
+            ("client", _) => Bucket::Client,
+            (_, "compile") => Bucket::Compile,
+            (_, "tests") => Bucket::Tests,
+            (_, "cargo_startup") => Bucket::Startup,
+            (_, "lock_wait") => Bucket::Lock,
+            ("remote", "artifacts") => Bucket::Artifacts,
+            ("remote", "other") => Bucket::Other,
+            ("remote", _) => Bucket::Hosted,
+            ("host", "prepare" | "recorder" | "finalize" | "records") => Bucket::Hosted,
+            _ => Bucket::Other,
+        }
+    }
+}
+
+/// Only the timing fields of a run summary, so older or newer summaries with
+/// other shapes elsewhere still parse.
+#[derive(serde::Deserialize)]
+struct Timing {
+    #[serde(default)]
+    wall: f64,
+    #[serde(default)]
+    phases: Option<crate::summary::Phases>,
+    #[serde(default)]
+    e2e: Option<crate::e2e::E2e>,
+}
+
+/// End-to-end segments when recorded, otherwise the coarser cargo phases with
+/// the unattributed remainder of the wall time as `Other`.
+fn times(summary: &[u8]) -> Option<Times> {
+    let timing: Timing = serde_json::from_slice(summary).ok()?;
+    let mut out = [0.0; BUCKETS];
+    let mut add = |bucket: Bucket, secs: f64| {
+        if secs.is_finite() && secs > 0.0 {
+            out[bucket as usize] += secs;
+        }
+    };
+    match timing.e2e.filter(|e2e| !e2e.segments.is_empty()) {
+        Some(e2e) => {
+            for segment in &e2e.segments {
+                add(Bucket::of(&segment.key), segment.secs);
+            }
+        }
+        None => {
+            let p = timing.phases?;
+            add(Bucket::Startup, p.startup);
+            add(Bucket::Lock, p.lock_wait);
+            add(Bucket::Compile, p.compile);
+            add(Bucket::Tests, p.test_run);
+            add(Bucket::Other, p.build_gaps + p.tail);
+            let attributed =
+                p.startup + p.lock_wait + p.compile + p.test_run + p.build_gaps + p.tail;
+            add(Bucket::Other, timing.wall - attributed);
+        }
+    }
+    Some(out)
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Snapshot {
     pub active: Vec<crate::status::Active>,
@@ -33,6 +145,11 @@ pub(crate) struct RunRow {
     pub machine: Option<String>,
     /// `local` means the record is on this client, not where compilation ran.
     pub origin: String,
+    /// Who a failed run is on, when the recorder classified it.
+    pub failure: Option<crate::failure::Class>,
+    pub compile_failed: bool,
+    /// Where the wait went. Only for runs whose summary is on this client.
+    pub time: Option<Times>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -43,7 +160,7 @@ pub(crate) struct HostedSnapshot {
 }
 
 /// An independent local update. The caller retains last-good hosted data.
-pub(crate) fn local_snapshot() -> Snapshot {
+pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
     let mut snapshot = Snapshot::default();
     match crate::status::collect() {
         Ok(status) => snapshot.active = status.active,
@@ -60,7 +177,19 @@ pub(crate) fn local_snapshot() -> Snapshot {
         Ok(index_rows(&read_tail(&mut file, size, TAIL_BYTES)?))
     })();
     match rows {
-        Ok(rows) => snapshot.runs = rows,
+        Ok(mut rows) => {
+            if let Ok(dir) = crate::paths::runs_dir() {
+                for row in &mut rows {
+                    row.time = *cache.entry(row.id.clone()).or_insert_with(|| {
+                        read_summary(&dir.join(&row.id).join("summary.json"))
+                            .ok()
+                            .and_then(|bytes| times(&bytes))
+                    });
+                }
+                cache.retain(|id, _| rows.iter().any(|row| &row.id == id));
+            }
+            snapshot.runs = rows;
+        }
         Err(error) => {
             let message = format!("Local history: {error:#}");
             snapshot.local_error = Some(match snapshot.local_error.take() {
@@ -138,6 +267,9 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             .into(),
             machine: entry.remote,
             origin: "local".into(),
+            failure: entry.failure,
+            compile_failed: entry.compile_failed,
+            time: None,
         })
         .collect()
 }
@@ -173,6 +305,9 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
             .unwrap_or("unknown")
             .into(),
         origin: "hosted".into(),
+        failure: serde_json::from_value(summary["failure"].clone()).ok(),
+        compile_failed: summary["compile_failed"].as_bool().unwrap_or(false),
+        time: None,
     })
 }
 
@@ -266,6 +401,76 @@ mod tests {
         assert!(snapshot.local_error.is_none() && snapshot.hosted_at.is_none());
         assert!(HostedSnapshot::default().runs.is_empty());
         assert_eq!(RunRow::default().exit, None);
+    }
+
+    #[test]
+    fn segments_group_into_buckets_that_sum_to_the_wait() {
+        for (key, bucket) in [
+            ("host.compile", Bucket::Compile),
+            ("build.compile", Bucket::Compile),
+            ("host.tests", Bucket::Tests),
+            ("sync.push", Bucket::Sync),
+            ("sync.lock_wait", Bucket::Sync),
+            ("host.lock_wait", Bucket::Lock),
+            ("remote.artifacts", Bucket::Artifacts),
+            ("remote.admission", Bucket::Hosted),
+            ("host.records", Bucket::Hosted),
+            ("build.cargo_startup", Bucket::Startup),
+            ("client.route", Bucket::Client),
+            ("remote.other", Bucket::Other),
+            ("host.build_gaps", Bucket::Other),
+            ("new.unknown", Bucket::Other),
+            ("nodot", Bucket::Other),
+        ] {
+            assert_eq!(Bucket::of(key), bucket, "{key}");
+        }
+        assert_eq!(Bucket::ALL.map(|b| b as usize), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let e2e = serde_json::json!({"wall": 99.0, "e2e": {"wall": 10.0, "segments": [
+            {"key": "client.route", "secs": 1.0},
+            {"key": "sync.push", "secs": 2.0},
+            {"key": "sync.link", "secs": 0.5},
+            {"key": "host.compile", "secs": 6.0},
+            {"key": "host.tests", "secs": 0.5},
+            {"key": "host.tail", "secs": -3.0}
+        ]}});
+        let t = times(e2e.to_string().as_bytes()).unwrap();
+        assert_eq!(t[Bucket::Sync as usize], 2.5);
+        assert_eq!(t[Bucket::Compile as usize], 6.0);
+        assert_eq!(t.iter().sum::<f64>(), 10.0);
+
+        // Without end-to-end segments, cargo phases plus the unattributed rest.
+        let phases = serde_json::json!({"wall": 10.0, "phases": {"startup": 1.0,
+            "lock_wait": 0.0, "compile": 6.0, "build_gaps": 0.5, "test_run": 1.0, "tail": 0.5}});
+        let t = times(phases.to_string().as_bytes()).unwrap();
+        assert_eq!(t[Bucket::Startup as usize], 1.0);
+        assert_eq!(t[Bucket::Other as usize], 2.0);
+        assert_eq!(t.iter().sum::<f64>(), 10.0);
+        assert!(times(b"{\"wall\": 3}").is_none());
+        assert!(times(b"not json").is_none());
+    }
+
+    #[test]
+    fn failure_class_comes_only_from_the_record() {
+        let entry = crate::summary::IndexEntry {
+            id: "run-1".into(),
+            exit: 101,
+            compile_failed: true,
+            failure: Some(crate::failure::Class::UserCode),
+            ..Default::default()
+        };
+        let rows = index_rows(&(serde_json::to_string(&entry).unwrap() + "\n"));
+        assert_eq!(rows[0].failure, Some(crate::failure::Class::UserCode));
+        assert!(rows[0].compile_failed && rows[0].time.is_none());
+        let hosted =
+            hosted_row(&serde_json::json!({"id":"c", "summary":{"exit":1, "failure":"infra"}}))
+                .unwrap();
+        assert_eq!(hosted.failure, Some(crate::failure::Class::Infra));
+        let unknown =
+            hosted_row(&serde_json::json!({"id":"c", "summary":{"exit":1, "failure":"new_class"}}))
+                .unwrap();
+        assert_eq!(unknown.failure, None);
+        assert!(!unknown.compile_failed);
     }
 
     #[test]

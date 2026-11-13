@@ -53,7 +53,7 @@ fn last_entry_in(path: &std::path::Path) -> Option<IndexEntry> {
     }
 }
 
-fn ago(t: f64) -> String {
+pub(crate) fn ago(t: f64) -> String {
     let d = (paths::now() - t).max(0.0);
     match d {
         d if d < 90.0 => format!("{d:.0}s ago"),
