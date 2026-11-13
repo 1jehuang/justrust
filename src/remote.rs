@@ -76,6 +76,18 @@ pub struct Probe {
     /// `uname -sm` of the machine (`Darwin arm64`, `Linux x86_64`).
     #[serde(default)]
     pub platform: Option<String>,
+    /// What the machine would build with, in display order: the default
+    /// hosted toolchain and its parts, the linkers, the C toolchain, the OS.
+    /// Read from the machine itself, never assumed from this client.
+    #[serde(default)]
+    pub versions: Vec<Version>,
+}
+
+/// One named version reported by a build machine (`rustc`, `wild`, `os`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Version {
+    pub name: String,
+    pub value: String,
 }
 
 /// The local sync daemon, from its socket (no network).
@@ -109,6 +121,10 @@ pub struct Status {
     pub session_usd: Option<f64>,
     pub probe: Option<Probe>,
     pub error: Option<String>,
+    /// This client: `justrust <version>`, and whether it is a published
+    /// release or a source build (which a version number cannot tell apart).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub client: String,
     /// None when the daemon is not running.
     pub daemon: Option<DaemonState>,
     /// JUSTRUST_REMOTE when set (auto, 0, 1).
@@ -314,6 +330,7 @@ pub fn collect(probe: bool) -> Status {
         Some(Backend::Hosted) => collect_hosted(probe),
         Some(Backend::Ssh { host, opts }) => collect_ssh(&host, &opts, probe),
     };
+    out.client = client_identity();
     // Native Windows sessions never use the Unix sync daemon.
     out.daemon = if out.backend == "hosted" && !hosted_unix_metrics() {
         None
@@ -348,6 +365,19 @@ fn daemon_state() -> Option<DaemonState> {
 // Invalid selections must not expose Linux session data either.
 fn hosted_unix_metrics() -> bool {
     matches!(crate::remote_windows::selected(), Ok(false))
+}
+
+/// `justrust <version> (published release)` or `(source build)`.
+fn client_identity() -> String {
+    format!(
+        "justrust {} ({})",
+        crate::update::VERSION,
+        if crate::update::release_build() {
+            "published release"
+        } else {
+            "source build"
+        }
+    )
 }
 
 fn collect_hosted(probe: bool) -> Status {
@@ -728,7 +758,40 @@ else
   m instance-life-cycle
 fi
 uname -sm
+v() { [ -n "$2" ] && printf 'v\t%s\t%s\n' "$1" "$2"; }
+if [ -n "$JR_TC" ]; then
+  tc="$HOME/.justrust/toolchains/$JR_TC"
+  if [ -x "$tc/bin/rustc" ]; then
+    v toolchain "$JR_TC"
+    v rustc "$("$tc/bin/rustc" -V 2>/dev/null)"
+    v llvm "$("$tc/bin/rustc" -vV 2>/dev/null | sed -n 's/^LLVM version: //p')"
+    v cargo "$("$tc/bin/cargo" -V 2>/dev/null)"
+    [ -x "$tc/bin/jr-cargo" ] && v jr-cargo "$("$tc/bin/jr-cargo" -V 2>/dev/null | sed -n 's/.*(jr-cargo \([0-9a-f]*\)).*/\1/p')"
+  else
+    v toolchain "$JR_TC (not installed)"
+  fi
+fi
+w=$(ls -d "$HOME"/.justrust/toolchains/linkers/wild-*/wild 2>/dev/null | tail -1)
+[ -n "$w" ] && v wild "$("$w" --version 2>/dev/null | head -1)"
+a=$(ls -t "$HOME"/.justrust/remote/session-executables/*/justrust 2>/dev/null | head -1)
+[ -n "$a" ] && v agent "$("$a" --version 2>/dev/null | head -1)"
+for t in cc clang mold ld.lld ld; do
+  command -v $t >/dev/null 2>&1 && v $t "$($t --version 2>/dev/null | head -1)"
+done
+if [ -r /etc/os-release ]; then v os "$(. /etc/os-release; echo "$PRETTY_NAME")"
+else v os "$(sw_vers -productName 2>/dev/null) $(sw_vers -productVersion 2>/dev/null)"; fi
+v kernel "$(uname -r)"
+true
 "#;
+
+/// The probe, told which toolchain builds default to on a remote machine
+/// (`store_toolchain` in the agent) so it reports that one, not `rustc` on PATH.
+fn probe_script() -> String {
+    format!(
+        "JR_TC='{}'{PROBE_SCRIPT}",
+        crate::depcache_prebuilt::HOSTED_TOOLCHAIN
+    )
+}
 
 fn run_probe(ip: &str) -> Probe {
     let mut p = Probe {
@@ -737,7 +800,7 @@ fn run_probe(ip: &str) -> Probe {
         ..Default::default()
     };
     let res = ssh_base(ip).and_then(|mut c| {
-        Ok(c.arg(PROBE_SCRIPT)
+        Ok(c.arg(probe_script())
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
             .output()?)
@@ -758,7 +821,7 @@ fn run_probe_ssh(t: &crate::remote_backend::Target) -> Probe {
     };
     let res = t
         .command()
-        .arg(PROBE_SCRIPT)
+        .arg(probe_script())
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -811,10 +874,27 @@ fn fill_probe(p: &mut Probe, res: Result<std::process::Output>) {
             p.region = some(get(10));
             p.spot = get(11) == "spot";
             p.platform = some(get(12));
+            p.versions = l.iter().skip(13).filter_map(|l| version_line(l)).collect();
         }
         Ok(o) => p.error = Some(first_line(&String::from_utf8_lossy(&o.stderr))),
         Err(e) => p.error = Some(first_line(&e.to_string())),
     }
+}
+
+/// `v<TAB>name<TAB>value` from the probe. Linkers add a compatibility note
+/// (`Wild 0.10.0 (compatible with GNU linkers)`) that says nothing here.
+fn version_line(line: &str) -> Option<Version> {
+    let mut parts = line.splitn(3, '\t');
+    if parts.next() != Some("v") {
+        return None;
+    }
+    let name = parts.next()?.trim();
+    let value = parts.next()?.trim();
+    let value = value.split(" (compatible with").next().unwrap_or(value);
+    (!name.is_empty() && !value.is_empty()).then(|| Version {
+        name: name.into(),
+        value: value.into(),
+    })
 }
 
 // ---------------------------------------------------------------- rendering
@@ -857,6 +937,9 @@ pub fn render_text(s: &Status) -> String {
     }
     if let Some(e) = &s.error {
         let _ = writeln!(o, "  error: {e}");
+    }
+    if !s.client.is_empty() {
+        let _ = writeln!(o, "client: {}", s.client);
     }
     render_daemon(&mut o, s);
     o
@@ -1025,11 +1108,23 @@ fn render_probe(o: &mut String, s: &Status, p: &Probe) {
             {
                 let _ = writeln!(o, "  up {}", dur(u));
             }
-            let _ = writeln!(
-                o,
-                "  toolchain {}",
-                p.rustc.as_deref().unwrap_or("not installed yet")
-            );
+            if p.versions.is_empty() {
+                let _ = writeln!(
+                    o,
+                    "  toolchain {}",
+                    p.rustc.as_deref().unwrap_or("not installed yet")
+                );
+            } else {
+                // `rustc` on PATH is only the fallback: builds use the
+                // toolchain listed first below.
+                let _ = writeln!(o, "  versions on the machine");
+                for v in &p.versions {
+                    let _ = writeln!(o, "    {:<10} {}", v.name, v.value);
+                }
+                if let Some(r) = &p.rustc {
+                    let _ = writeln!(o, "    {:<10} {r}", "system");
+                }
+            }
             // idle-left can be stale right after a wake (written before the
             // last shutdown, before the first timer tick of this boot).
             if let Some(m) = p.idle_left_min.filter(|m| *m >= 0.0) {
@@ -2151,6 +2246,71 @@ mod tests {
         );
         assert!(t.contains("Apple M4 (arm64) (macOS 27.2)"), "{t}");
         assert!(t.contains("up 131h14m"), "{t}");
+    }
+
+    #[test]
+    fn probe_reports_the_default_toolchain_not_path_rustc() {
+        let out = "16\n1.0\n28.9 20.4\n28\nrustc 1.99.1 (58cf8f9c3 2026-10-13)\nready\n-\n9.0\n-\n\n\n\nLinux x86_64\n\
+                   v\ttoolchain\tjr-ac20de5e7921\n\
+                   v\trustc\trustc 1.101.0-nightly (ac20de5e7 2026-10-11)\n\
+                   v\twild\tWild 0.10.0 (compatible with GNU linkers)\n\
+                   v\tkernel\t\nnot a version line\n";
+        let mut p = Probe::default();
+        fill_probe(
+            &mut p,
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: out.into(),
+                stderr: vec![],
+            }),
+        );
+        let got: Vec<(&str, &str)> = p
+            .versions
+            .iter()
+            .map(|v| (v.name.as_str(), v.value.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("toolchain", "jr-ac20de5e7921"),
+                ("rustc", "rustc 1.101.0-nightly (ac20de5e7 2026-10-11)"),
+                ("wild", "Wild 0.10.0"),
+            ]
+        );
+        assert_eq!(p.platform.as_deref(), Some("Linux x86_64"));
+        let s = Status {
+            configured: true,
+            backend: "hosted".into(),
+            state: "running".into(),
+            client: "justrust 9.9.9 (source build)".into(),
+            probe: Some(p),
+            ..Default::default()
+        };
+        let t = render_text(&s);
+        assert!(t.contains("    toolchain  jr-ac20de5e7921\n"), "{t}");
+        assert!(t.contains("    system     rustc 1.99.1"), "{t}");
+        assert!(!t.contains("  toolchain rustc 1.99.1"), "{t}");
+        assert!(t.contains("client: justrust 9.9.9 (source build)\n"), "{t}");
+    }
+
+    // The version lines come after everything the positional parser reads.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn probe_script_reports_versions_on_this_host() {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(probe_script())
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let mut p = Probe::default();
+        fill_probe(&mut p, Ok(out));
+        assert!(p.ok, "{p:?}");
+        assert_eq!(p.platform, Some(local_platform()), "{p:?}");
+        let names: Vec<&str> = p.versions.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names.first(), Some(&"toolchain"), "{p:?}");
+        assert!(names.contains(&"kernel"), "{p:?}");
     }
 
     #[test]
