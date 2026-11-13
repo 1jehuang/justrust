@@ -3266,7 +3266,16 @@ impl Replay<'_> {
                 self.reference(*kind, ty)?
             }
             (Expr::Integer(literal), ir::ExprKind::Int(value)) => {
-                let resolved = resolve_integer(literal, false, expected)
+                // An unsuffixed literal with no replay context (a generic
+                // argument such as `vec![1]`'s seed element) took its final
+                // type from later inference: replay against that type, which
+                // re-validates the literal's range.
+                let inferred = ir::Ty::Int(value.ty);
+                let context = match (expected, literal.suffix) {
+                    (None, None) => Some(&inferred),
+                    _ => expected,
+                };
+                let resolved = resolve_integer(literal, false, context)
                     .map_err(|e| source_error(self.budget, &e))?;
                 if resolved != *value {
                     return Err(FactsError::invalid(self.budget, "input integer changed"));

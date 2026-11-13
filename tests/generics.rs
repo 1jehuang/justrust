@@ -414,6 +414,10 @@ fn sync_native_check_build_run_workers_1_8() {
 
 const AUTO_VALID: &[(&str, &str)] = &[
     (
+        "vec_literal_field_integer_inferred_late",
+        r#"fn need<T:Sync>(_:&T){}struct P{x:i32,t:Vec<u8>,w:Vec<u64>}fn main(){let p=P{x:3,t:vec![1],w:vec![2,3]};need(&p);println!("{}",p.x+p.t[0] as i32+p.w[1] as i32);}"#,
+    ),
+    (
         "dyn_sync_reference",
         r#"fn need<T:Sync+?Sized>(_:&T){}trait V{}struct S;impl V for S{}fn main(){let s=S;let v:&(dyn V+Sync)=&s;need(v);println!("7");}"#,
     ),
@@ -435,6 +439,10 @@ const AUTO_VALID: &[(&str, &str)] = &[
     ),
 ];
 const AUTO_INVALID: &[(&str, &str)] = &[
+    (
+        "vec_literal_field_integer_out_of_range",
+        r#"fn need<T:Sync>(_:&T){}struct P{t:Vec<u8>}fn main(){let p=P{t:vec![300]};need(&p);}"#,
+    ),
     (
         "rc_not_send",
         r#"fn need<T:Send>(_:T){}fn main(){need(std::rc::Rc::new(1));}"#,
