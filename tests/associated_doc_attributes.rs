@@ -812,3 +812,23 @@ fn denied_unconditional_recursion_matches_stock() {
         file_oracle::stock_and_native_reject(invalid);
     }
 }
+
+#[test]
+fn static_associated_type_bounds_match_stock() {
+    let source = r#"
+        trait Sealed: Copy { type Buffer: 'static; type Other: Clone + 'static; fn write(self) -> u32; }
+        #[derive(Clone, Copy)] struct W<T>(T);
+        impl Sealed for u8 { type Buffer = [u8; 3]; type Other = String; fn write(self) -> u32 { self as u32 + 1 } }
+        impl<T: Copy + 'static> Sealed for W<T> { type Buffer = Option<T>; type Other = Vec<T>; fn write(self) -> u32 { 9 } }
+        fn keep<S: Sealed>(s: S) -> u32 { s.write() }
+        fn main() { println!("{} {}", keep(4u8), keep(W(1u16))); }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "trait S { type B: 'static; } impl<'a> S for &'a u8 { type B = &'a u8; } fn main(){}",
+        "trait S { type B: 'static; } struct W<T>(T); impl<T> S for W<T> { type B = T; } fn main(){}",
+        "trait S { type B: 'static + 'static + Missing; } fn main(){}",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}

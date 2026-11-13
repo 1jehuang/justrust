@@ -34,7 +34,7 @@ impl ValidatedTraitWorld {
         Ok(false)
     }
 
-    fn type_outlives_static(
+    pub(super) fn type_outlives_static(
         &self,
         ty: &Ty,
         env: &GenericEnv,
@@ -70,6 +70,13 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "static lifetime obligation for a reference payload is not proved by the caller",
             )),
+            // A projection whose family declares `'static` outlives it in
+            // every implementation; each assignment is checked at its impl.
+            Ty::AssociatedType(projection)
+                if self.associated_header(projection.item)?.outlives_static =>
+            {
+                Ok(true)
+            }
             Ty::Opaque(_) | Ty::AssociatedType(_) => Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: static trait selection requires a declared opaque or projection outlives proof",

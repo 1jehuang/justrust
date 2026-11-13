@@ -10414,6 +10414,8 @@ pub struct AssociatedTypeDecl {
     pub bounds: Vec<TraitPath>,
     /// Written `?Sized`: the associated type has no implicit `Sized` bound.
     pub relaxed_sized: bool,
+    /// Written `'static`: every assignment must outlive `'static`.
+    pub outlives_static: bool,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemDecl {
@@ -16646,8 +16648,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                     let mut associated_bounds = Vec::new();
                     let mut relaxed_sized = false;
+                    let mut outlives_static = false;
                     if self.eat(":") {
                         loop {
+                            if self.static_type_bound()? {
+                                outlives_static = true;
+                                if !self.eat("+") {
+                                    break;
+                                }
+                                continue;
+                            }
                             if self.is("?") {
                                 // Only `?Sized`; any other relaxation is rejected
                                 // like stock. Repeating it is also an error.
@@ -16686,6 +16696,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         name,
                         bounds: associated_bounds,
                         relaxed_sized,
+                        outlives_static,
                     });
                     continue;
                 }
@@ -23967,6 +23978,7 @@ enum TraitLookupKey {
 struct FrozenAssociatedBounds {
     ids: Arc<[ir::DeclId]>,
     relaxed_sized: bool,
+    outlives_static: bool,
     predicates: Arc<[ir::Predicate]>,
     source_index: Option<usize>,
 }
@@ -26349,6 +26361,7 @@ impl PlanCtx {
                     FrozenAssociatedBounds {
                         ids: ids.into(),
                         relaxed_sized: member.relaxed_sized,
+                        outlives_static: member.outlives_static,
                         predicates: Arc::from([]),
                         source_index: (!program.associated_bound_sources.is_empty())
                             .then_some(source_index),
@@ -27177,6 +27190,11 @@ impl PlanCtx {
                         .associated_type_bounds
                         .get(declaration)
                         .is_some_and(|bounds| bounds.relaxed_sized),
+                    outlives_static: self
+                        .registry
+                        .associated_type_bounds
+                        .get(declaration)
+                        .is_some_and(|bounds| bounds.outlives_static),
                 });
             }
             for (ii, item) in t.items.iter().enumerate() {

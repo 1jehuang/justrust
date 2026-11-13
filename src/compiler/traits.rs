@@ -654,6 +654,8 @@ pub struct AssociatedTypeHeader {
     pub bounds: Arc<[DeclId]>,
     /// Declared `?Sized`: no implicit `Sized` on the family or its values.
     pub relaxed_sized: bool,
+    /// Declared `'static`: each implementation's assignment must outlive it.
+    pub outlives_static: bool,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedTypeValue {
@@ -7570,6 +7572,19 @@ impl ValidatedTraitWorld {
         self.validate_declaration_ref(&h.trait_ref, &h.schema_env, None)?;
         self.validate_declaration_predicates(&h.predicates, &h.schema_env, None)?;
         self.require_trait_static_self(&h.trait_ref, &h.schema_env, &h.predicates)?;
+        // `type Out: 'static` holds for each assignment under the impl's own
+        // written predicates only, never under the membership being checked.
+        for value in h.associated_types.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if self.associated_header(value.associated)?.outlives_static
+                && !self.type_outlives_static(&value.rhs, &h.schema_env, &h.predicates, 0)?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "E0310: the associated type assignment may not live long enough for its 'static bound",
+                ));
+            }
+        }
         self.validate_impl_parameter_constraints(h)?;
         if self.is_auto_trait(h.trait_ref.declaration) {
             let arguments = match &h.trait_ref.self_ty {
