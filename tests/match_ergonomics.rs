@@ -188,6 +188,21 @@ fn cases() -> Vec<Case> {
             source: "fn unused(p: &(i32, i32)) -> i32 { let (ref a, b) = p; *a + *b } fn main() { println!(\"live\"); }",
             expect: Expect::Invalid("cannot explicitly borrow"),
         },
+        Case {
+            name: "inferred_option_of_reference_peels_nested_patterns",
+            source: "fn main() { let t = (1u8, 2u8); if let Some((x, y)) = Some(&t) { println!(\"{} {}\", x, y); } let a = [1u8, 2, 3]; if let Some([x, y, z]) = Some(&a) { println!(\"{}\", *x + *y + *z); } }",
+            expect: Expect::Run("1 2\n6\n"),
+        },
+        Case {
+            name: "inferred_option_of_reference_binds_by_reference",
+            source: "fn main() { if let Some((x, _)) = Some(&(1u8, 2u8)) { let z: u8 = x; let _ = z; } }",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "inferred_option_of_array_reference_binds_by_reference",
+            source: "fn main() { if let Some([x, _]) = Some(&[1u8, 2u8]) { let z: u8 = x; let _ = z; } }",
+            expect: Expect::Invalid("E0308"),
+        },
     ]
 }
 

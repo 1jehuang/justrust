@@ -2327,7 +2327,15 @@ impl<'s> Solver<'_, '_, 's> {
             let patterns = std::mem::take(&mut self.patterns);
             let force = !progress;
             for (pattern, term, bindings) in patterns {
-                if !force && matches!(self.domain(self.peel_refs(term)), Domain::Unknown) {
+                // A pending lazy coercion may still reveal that this unknown
+                // scrutinee is a reference (`Some(&(1, 2))`), which changes
+                // the default binding mode. Let that fallback run first.
+                let peeled = self.root(self.peel_refs(term));
+                let awaiting_coercion = self
+                    .lazy_coercions
+                    .iter()
+                    .any(|(_, expected)| self.root(*expected) == peeled);
+                if (!force || awaiting_coercion) && matches!(self.domain(peeled), Domain::Unknown) {
                     self.patterns.push((pattern, term, bindings));
                     continue;
                 }
@@ -2692,7 +2700,11 @@ impl<'s> Solver<'_, '_, 's> {
             && matches!(self.domain(self.peel_refs(term)), Domain::Unknown)
             && matches!(
                 pattern,
-                Pattern::Variant { .. } | Pattern::Struct { .. } | Pattern::Tuple(_)
+                Pattern::Variant { .. }
+                    | Pattern::Struct { .. }
+                    | Pattern::Tuple(_)
+                    | Pattern::Array(_)
+                    | Pattern::ArrayRest(_)
             )
         {
             let mut bindings = HashMap::new();
