@@ -204,6 +204,33 @@ fn main(){ println!("{} {}", a(), b()); if false { c(); } }"#;
 }
 
 #[test]
+fn return_in_expression_position_diverges() {
+    let source = r#"fn a(b:bool)->i32 { let x = b || (return 3); if x { 1 } else { 2 } }
+fn c(b:bool)->i32 { let v:i32 = if b { 5 } else { return 4 }; v + 10 }
+fn d()->bool { false || return true }
+fn e() { let _x = (return); }
+fn f(v:Option<i32>)->i32 { let n = match v { Some(n) => n, None => return -1 }; n * 2 }
+fn g()->i32 { let h = |x:i32| return x + 1; h(6) }
+fn main(){ e(); println!("{} {} {} {} {} {} {}", a(true), a(false), c(true), c(false), d(), f(Some(4)), f(None)); println!("{}", g()); }"#;
+    stock(source, Some("1 3 15 4 true 8 -1\n7\n"));
+    runs(source, "1 3 15 4 true 8 -1\n7\n");
+    for (label, source) in [
+        ("negated return", "fn f()->i32 { -return 3 } fn main(){}"),
+        (
+            "return value type",
+            "fn f()->i32 { let x = false || (return true); 0 } fn main(){}",
+        ),
+        (
+            "return outside fn body value",
+            "fn f() { let x = (return 3); } fn main(){}",
+        ),
+    ] {
+        stock(source, None);
+        rejects(label, source);
+    }
+}
+
+#[test]
 fn nested_loop_and_while_control_targets_are_innermost() {
     runs(
         r#"
@@ -822,11 +849,7 @@ fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
 
 #[test]
 fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
-    for source in [
-        "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
-        "fn scan(a:&mut [i32]){for x in a {*x=3;}}fn main(){let mut a=[1,2];scan(&mut a);}",
-        "fn main(){for x in [1,2].into_iter() {}}",
-    ] {
+    for source in ["struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}"] {
         stock(source, Some(""));
         rejects("explicit unsupported iterator boundary", source);
     }
@@ -842,6 +865,14 @@ fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
         ),
         (
             r#"fn main(){for x in [1,2].iter() {println!("{}",x);}}"#,
+            "1\n2\n",
+        ),
+        (
+            r#"fn scan(a:&mut [i32]){for x in a {*x=3;}}fn main(){let mut a=[1,2];scan(&mut a);println!("{} {}",a[0],a[1]);}"#,
+            "3 3\n",
+        ),
+        (
+            r#"fn main(){for x in [1,2].into_iter() {println!("{}",x);}}"#,
             "1\n2\n",
         ),
         (

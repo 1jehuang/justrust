@@ -19,6 +19,21 @@ impl<'input> Parser<'input, '_> {
         };
         Ok(Expr::Break { label, value })
     }
+
+    /// `return [value]` in expression position (`false || return`,
+    /// `(return x)`). It diverges with type `!`, exactly like the block
+    /// `{ return value; }`, which is how it is represented.
+    pub(super) fn return_prefix(&mut self) -> Result<Expr, ParseError> {
+        let value = if matches!(self.token().text, ";" | "}" | ")" | "]" | "," | "") {
+            None
+        } else {
+            Some(self.expr(0)?)
+        };
+        Ok(Expr::Block(Block {
+            statements: vec![Stmt::Return(value)],
+            tail: None,
+        }))
+    }
 }
 
 #[cfg(test)]

@@ -19598,6 +19598,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.eat("break") {
             return self.break_prefix();
         }
+        if self.eat("return") {
+            return self.return_prefix();
+        }
         // These recursive forms must not retain the unrelated aggregate,
         // borrow, break-value and trait-call temporaries from the ordinary
         // prefix frame for every admitted syntax nesting level.

@@ -11,6 +11,7 @@ pub(super) use const_inline::scalar_const_initializer;
 mod const_pattern;
 mod lexical_calls;
 mod manually_drop;
+mod nominal_self;
 mod primitive_owners;
 mod private_in_public;
 mod static_places;
@@ -5105,6 +5106,28 @@ fn resolve_nominal(
             )?;
             let mut enumeration = program.enums[index].clone();
             resolver.type_params = enumeration.type_params.clone();
+            let self_ty = nominal_self::nominal_self_type(
+                resolver,
+                &enumeration.name,
+                &enumeration.region_params,
+                &enumeration.type_params,
+                !enumeration.const_params.is_empty(),
+            )?;
+            nominal_self::substitute_nominal_self_bounds(
+                &mut enumeration.bounds,
+                self_ty.as_ref(),
+                &resolver.alias_budget,
+            )?;
+            for variant in &mut enumeration.variants {
+                for field in &mut variant.fields {
+                    nominal_self::substitute_nominal_self(
+                        &mut field.ty,
+                        self_ty.as_ref(),
+                        &resolver.alias_budget,
+                    )?;
+                }
+            }
+            resolver.type_params = enumeration.type_params.clone();
             for default in enumeration.type_defaults.iter_mut().flatten() {
                 resolver.ty(&mut default.ty, enumeration.module)?;
             }
@@ -5123,6 +5146,26 @@ fn resolve_nominal(
                 &resolver.alias_budget,
             )?;
             let mut structure = program.structs[index].clone();
+            resolver.type_params = structure.type_params.clone();
+            let self_ty = nominal_self::nominal_self_type(
+                resolver,
+                &structure.name,
+                &structure.region_params,
+                &structure.type_params,
+                !structure.const_params.is_empty(),
+            )?;
+            nominal_self::substitute_nominal_self_bounds(
+                &mut structure.bounds,
+                self_ty.as_ref(),
+                &resolver.alias_budget,
+            )?;
+            for field in &mut structure.fields {
+                nominal_self::substitute_nominal_self(
+                    &mut field.ty,
+                    self_ty.as_ref(),
+                    &resolver.alias_budget,
+                )?;
+            }
             resolver.type_params = structure.type_params.clone();
             for default in structure.type_defaults.iter_mut().flatten() {
                 resolver.ty(&mut default.ty, structure.module)?;

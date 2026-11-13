@@ -4329,24 +4329,34 @@ impl<'a> Checker<'a> {
         }
         Ok(out)
     }
-    /// Whether a named/positional field exists on a struct declaration.
+    /// Whether a named/positional field exists on a struct declaration and
+    /// is visible here. Like stock field lookup, an inaccessible field does
+    /// not stop autoderef: `s.x` continues to `Deref::Target` (and reports
+    /// the private field only when no later step has an accessible one).
     pub(super) fn has_member(
         &self,
         declaration: ir::DeclId,
         field: &FieldSelector,
     ) -> Result<bool, String> {
-        Ok(match field {
-            FieldSelector::Tuple(index) => matches!(
-                self.source_fields(declaration, None)?.get(*index),
-                Some(FieldName::Tuple(actual)) if actual == index
-            ),
+        let index = match field {
+            FieldSelector::Tuple(index) => match self.source_fields(declaration, None)?.get(*index)
+            {
+                Some(FieldName::Tuple(actual)) if actual == index => *index,
+                _ => return Ok(false),
+            },
             FieldSelector::Named(name) => match self.member_index(declaration, None, *name) {
-                Ok(_) => true,
-                Err(error) if error == "unknown nominal field" => false,
+                Ok(index) => index,
+                Err(error) if error == "unknown nominal field" => return Ok(false),
                 Err(error) => return Err(error),
             },
-            _ => true,
-        })
+            _ => return Ok(true),
+        };
+        let schema = self.nominal_source(declaration)?;
+        let NominalSchema::Struct(source) = schema.as_ref() else {
+            return Err("contract: struct member on a non-struct source schema".into());
+        };
+        let field = source.fields.get(index).ok_or("contract: member index")?;
+        self.visible(&field.visibility)
     }
     pub(super) fn member_index(
         &self,

@@ -65,6 +65,32 @@ fn boxed_recursive_tree_drops_in_stock_order() {
 /// `Holder`, `Weak<Watched>` inside `Watched`). Metadata validation used to
 /// recurse without bound here and overflow the compiler stack.
 #[test]
+fn self_inside_nominal_definitions_names_the_nominal() {
+    runs("self_in_definition");
+    for (source, expected) in [
+        ("struct A{x:Self} fn main(){}", "infinite size"),
+        ("enum E{A(Option<Self>),B} fn main(){}", "infinite size"),
+        (
+            "struct S{x:Option<Box<Self>>} fn main(){let _s=S{x:Some(Box::new(5))};}",
+            "",
+        ),
+        (
+            "struct W<T>{v:T,n:Vec<Self>} fn main(){let _w:W<u8>=W{v:1u8,n:vec![W{v:2u16,n:Vec::new()}]};}",
+            "",
+        ),
+    ] {
+        let dir = scratch();
+        let input = dir.join("input.rs");
+        std::fs::write(&input, source).unwrap();
+        let out = jr(&input, 1).arg("--check").output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{source}: accepted");
+        assert!(stderr.contains(expected), "{source}: {stderr}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn self_applied_pointer_wrappers_validate_and_run() {
     runs("self_pointer_holder");
 }

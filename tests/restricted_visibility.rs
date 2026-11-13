@@ -444,6 +444,21 @@ const FIXTURES: &[Fixture] = &[
         false,
         "mod a{}mod b{pub(in crate::a) struct S{pub x:i32}}fn main(){}"
     ),
+    fixture!(
+        private_field_autoderef_skips_to_target,
+        true,
+        "mod a{pub struct T{pub x:bool}pub struct S{x:i32,t:T}impl std::ops::Deref for S{type Target=T;fn deref(&self)->&T{&self.t}}pub fn mk()->S{S{x:7,t:T{x:true}}}pub fn own(s:&S)->i32{s.x}}fn main(){let s=a::mk();let r=&s;if s.x&&r.x&&a::own(&s)==7{println!(\"visibility ok\");}}"
+    ),
+    fixture!(
+        private_field_autoderef_target_private,
+        false,
+        "mod a{pub struct T{y:bool}pub struct S{x:i32,t:T}impl std::ops::Deref for S{type Target=T;fn deref(&self)->&T{&self.t}}pub fn mk()->S{S{x:7,t:T{y:true}}}}fn main(){let s=a::mk();let _=s.x;}"
+    ),
+    fixture!(
+        private_field_without_deref,
+        false,
+        "mod a{pub struct S{x:i32}pub fn mk()->S{S{x:7}}}fn main(){let s=a::mk();let _=s.x;}"
+    ),
 ];
 // Promoted unchanged by the subsequent native type-alias milestone.
 const PROMOTED_ALIAS: Fixture = fixture!(
