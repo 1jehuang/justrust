@@ -149,19 +149,44 @@ fn main(){
 
 #[test]
 fn uppercase_mappings_match_stock() {
+    // The Unicode tables must be the pinned stock release's, not the host
+    // test binary's std, so the scalar set and expectation come from stock.
+    let stock = closure_oracle::pinned_stock::stock_rustc();
+    let dir = std::env::temp_dir().join(format!("jr-uppercase-gen-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let generator = dir.join("generator.rs");
+    let image = dir.join("generator");
+    fs::write(
+        &generator,
+        r#"fn main() {
     let text: String = (0..=0x10ffff)
         .filter_map(char::from_u32)
         .filter(|c| c.to_uppercase().ne(std::iter::once(*c)))
         .chain("Az09 日🦀".chars())
         .collect();
-    let source = format!("fn main(){{let text={text:?};println!(\"{{}}\",text.to_uppercase());}}");
-    let expected = format!("{}\n", text.to_uppercase());
+    print!("{text:?}\0{}\n", text.to_uppercase());
+}"#,
+    )
+    .unwrap();
+    let built = Command::new(&stock)
+        .args(["--edition=2024", "-Awarnings", "-o"])
+        .arg(&image)
+        .arg(&generator)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{built:?}");
+    let ran = Command::new(&image).output().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(ran.status.success(), "{ran:?}");
+    let output = String::from_utf8(ran.stdout).unwrap();
+    let (literal, expected) = output.split_once('\0').unwrap();
+    let source = format!("fn main(){{let text={literal};println!(\"{{}}\",text.to_uppercase());}}");
     closure_oracle::check(
         "uppercase-mappings",
         &[closure_oracle::Case {
             name: "all_changed_unicode_scalars",
             source: Box::leak(source.into_boxed_str()),
-            expect: closure_oracle::Expect::Run(Box::leak(expected.into_boxed_str())),
+            expect: closure_oracle::Expect::Run(Box::leak(expected.to_string().into_boxed_str())),
         }],
     );
 }
