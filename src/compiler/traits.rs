@@ -16892,6 +16892,7 @@ mod tests {
             module,
             visibility: crate::compiler::ir::Visibility::Restricted(module),
             fields: Arc::<[FieldDef]>::from([]).into(),
+            field_order: crate::compiler::ir::FieldOrder::Optimized,
         }))
     }
     fn case() -> Case {

@@ -1609,6 +1609,17 @@ impl PlanState {
                             }
                             let fields = make_fields(self, &d.fields, d.module)?;
                             let name = self.schema_path_text(registry, &d.name, budget)?;
+                            // A `?Sized` parameter may make the tail unsizable,
+                            // which keeps the last field out of the sort.
+                            let field_order = if d.repr_align.is_some()
+                                || d.bounds.iter().any(|bound| bound.maybe_unsized)
+                            {
+                                ir::FieldOrder::Unknown
+                            } else if d.repr_c {
+                                ir::FieldOrder::Declaration
+                            } else {
+                                ir::FieldOrder::Optimized
+                            };
                             let definition = ir::StructDef {
                                 id,
                                 source_decl: decl,
@@ -1617,6 +1628,7 @@ impl PlanState {
                                 module: d.module,
                                 visibility: d.visibility.clone(),
                                 fields: fields.into(),
+                                field_order,
                             };
                             ir::Ty::Struct(ir::StructTy::new(definition))
                         }

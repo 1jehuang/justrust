@@ -6724,6 +6724,7 @@ impl StructDef {
             module,
             visibility: Visibility::Public,
             fields: Vec::<FieldDef>::new().into(),
+            field_order: FieldOrder::Unknown,
         }
     }
 }
@@ -7300,6 +7301,21 @@ pub struct StructDef {
     pub visibility: Visibility,
     /// Declaration order. No layout offsets or implicit Copy permission.
     pub fields: NominalFields,
+    /// How the target orders this struct's fields in memory.
+    pub field_order: FieldOrder,
+}
+
+/// Source representation facts that decide in-memory field order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldOrder {
+    /// Default Rust representation with a statically sized tail: the target
+    /// sorts every field by alignment group.
+    Optimized,
+    /// `#[repr(C)]`: declaration order.
+    Declaration,
+    /// The order also depends on facts not modelled here, such as a possibly
+    /// unsized tail or explicit alignment. Addresses must fail closed.
+    Unknown,
 }
 
 /// Nominal field storage is either already concrete or a sealed symbolic
@@ -20772,6 +20788,7 @@ mod tests {
             name: name.into(),
             module: modules.core_root(),
             visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
+            field_order: FieldOrder::Optimized,
             fields: fields
                 .into_iter()
                 .enumerate()

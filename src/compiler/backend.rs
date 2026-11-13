@@ -492,8 +492,14 @@ pub(super) fn field_offset(
     {
         let field_layout = super::memory_layout::compact::layout(&field, budget, 0)?
             .ok_or("compact aggregate lost its field layout")?;
-        let offset = i32::try_from(layout.field_offset(index, field_layout.align)?)
-            .map_err(|_| "compact aggregate field offset exceeds native memory limit")?;
+        let offset = i32::try_from(super::memory_layout::compact::field_offset(
+            ty,
+            layout,
+            index,
+            field_layout.align,
+            budget,
+        )?)
+        .map_err(|_| "compact aggregate field offset exceeds native memory limit")?;
         return Ok((offset, field));
     }
     let offset = (0..index).try_fold(0_i32, |offset, index| {

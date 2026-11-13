@@ -353,6 +353,7 @@ impl ReadComponent {
                         module: source.module,
                         visibility: source.visibility.clone(),
                         fields: fields(None, source.fields.len()),
+                        field_order: source.field_order,
                     })
                     .with_native_sequence_binding(n.native_sequence_binding().cloned()),
                 )

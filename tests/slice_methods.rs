@@ -459,21 +459,62 @@ fn main() {
 }
 
 #[test]
+fn zst_field_addresses_follow_stock_field_order() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "zst-field-order",
+        &[Case {
+            name: "sorted_and_declared_zst_offsets",
+            source: r#"
+struct Probe;
+struct Take<I> { iterator: I, remaining: usize }
+struct V { n: u8, z: [u128; 0] }
+struct W { z: (), n: u32 }
+struct B { z: [u64; 0], n: bool, t: () }
+struct A { a: [u8; 0], x: [u8; 12], z: [u32; 0] }
+#[repr(C)] struct C { n: u8, z: [u128; 0] }
+struct Outer { value: V }
+fn off<T, F>(base: &T, field: &F) -> usize {
+    field as *const F as usize - base as *const T as usize
+}
+fn pointer(s: &mut [Outer]) -> *mut [u128; 0] { &mut s[0].value.z as *mut [u128; 0] }
+fn main() {
+    let t = Take { iterator: Probe, remaining: 0 };
+    println!("take {} {}", off(&t, &t.iterator), off(&t, &t.remaining));
+    let v = V { n: 1, z: [] };
+    println!("v {} {}", off(&v, &v.n), off(&v, &v.z));
+    let w = W { z: (), n: 1 };
+    println!("w {} {}", off(&w, &w.z), off(&w, &w.n));
+    let b = B { z: [], n: true, t: () };
+    println!("b {} {} {}", off(&b, &b.z), off(&b, &b.n), off(&b, &b.t));
+    let a = A { a: [], x: [0; 12], z: [] };
+    println!("a {} {} {}", off(&a, &a.a), off(&a, &a.x), off(&a, &a.z));
+    let c = C { n: 1, z: [] };
+    println!("c {} {}", off(&c, &c.n), off(&c, &c.z));
+    let u = (1u8, [0u128; 0], ());
+    println!("u {} {} {}", off(&u, &u.0), off(&u, &u.1), off(&u, &u.2));
+    let q = ((), 5u64, ());
+    println!("q {} {} {}", off(&q, &q.0), off(&q, &q.1), off(&q, &q.2));
+    let mut outer = [Outer { value: V { n: 1, z: [] } }];
+    let base = &outer[0] as *const Outer as usize;
+    println!("outer {}", pointer(&mut outer) as usize - base);
+}
+"#,
+            expect: Expect::Run(
+                "take 8 0\nv 0 0\nw 4 0\nb 0 0 1\na 12 0 12\nc 0 16\nu 0 0 1\nq 8 0 8\nouter 0\n",
+            ),
+        }],
+    );
+}
+
+#[test]
 fn slice_mut_pointer_unproved_physical_layout_is_rejected() {
     for (name, source, diagnostic) in [
         (
-            "ambiguous_trailing_high_alignment_zst_address",
-            "struct V{n:u8,z:[u128;0]}fn main(){let v=V{n:1,z:[]};let p=&v.z as *const [u128;0];println!(\"{}\",p as usize);}",
-            "ZST field address",
-        ),
-        (
-            "mutable_nested_trailing_high_alignment_zst_address",
-            "struct V{n:u8,z:[u128;0]}struct Outer{value:V}fn pointer(s:&mut[Outer])->*mut[u128;0]{&mut s[0].value.z as *mut[u128;0]}fn main(){let mut a=[Outer{value:V{n:1,z:[]}}];let p=pointer(&mut a);println!(\"{}\",p as usize);}",
-            "ZST field address",
-        ),
-        (
-            "ambiguous_leading_low_alignment_zst_address",
-            "struct V{z:(),n:u32}fn main(){let v=V{z:(),n:1};let p=&v.z as *const ();println!(\"{}\",p as usize);}",
+            "maybe_unsized_tail_zst_address",
+            "struct V<T:?Sized>{z:(),n:u32,t:T}fn main(){let v=V{z:(),n:1,t:()};let p=&v.z as *const ();println!(\"{}\",p as usize);}",
             "ZST field address",
         ),
         (
@@ -494,7 +535,7 @@ fn slice_mut_pointer_unproved_physical_layout_is_rejected() {
         (
             "packed_layout",
             "#[repr(packed)]struct V{n:u32}fn main(){let mut a=[V{n:1},V{n:2}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
-            "repr(C)/repr(align(N)) structs",
+            "repr(C)/repr(align(N))",
         ),
     ] {
         let root = scratch(&format!("pointer-layout-{name}"));

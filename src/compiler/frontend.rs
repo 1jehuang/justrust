@@ -10428,6 +10428,8 @@ pub struct RegionDecls {
 pub struct StructDecl {
     pub const_params: Vec<SourceConstParameter>,
     repr_align: Option<c_abi::SourceAlignment>,
+    /// Written `#[repr(C)]`: fields keep declaration order in memory.
+    pub(crate) repr_c: bool,
     pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
@@ -16769,7 +16771,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             (name, ItemKind::Enum(declaration))
         } else if self.eat("struct") {
             let name = self.item_name()?;
-            if std::mem::take(&mut self.pending_repr_c) {
+            let repr_c = std::mem::take(&mut self.pending_repr_c);
+            if repr_c {
                 self.names
                     .retain_parser_text(128)
                     .map_err(native_adapter::name_error)?;
@@ -16864,6 +16867,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             parsed.program.structs.push(StructDecl {
                 const_params: std::mem::take(&mut self.const_params),
                 repr_align,
+                repr_c,
                 shape,
                 module,
                 type_params,

@@ -2278,6 +2278,7 @@ mod tests {
         input.structs.push(StructDecl {
             const_params: Vec::new(),
             repr_align: None,
+            repr_c: false,
             module,
             shape: StructShape::Record,
             type_params: Vec::new(),
@@ -2355,6 +2356,7 @@ mod tests {
         input.structs.push(StructDecl {
             const_params: Vec::new(),
             repr_align: None,
+            repr_c: false,
             module,
             shape: StructShape::Unit,
             type_params: Vec::new(),
@@ -2875,6 +2877,7 @@ mod tests {
         input.structs.push(StructDecl {
             const_params: Vec::new(),
             repr_align: None,
+            repr_c: false,
             module,
             shape: StructShape::Tuple,
             type_params: Vec::new(),
