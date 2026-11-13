@@ -190,7 +190,14 @@ fn cases() -> Vec<Case> {
             source: r#"macro_rules! make{()=>{#[inline]fn answer()->i32{42}};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "generated_inline_on_struct",
+            source: r#"macro_rules! make{()=>{#[inline]struct S;};}make!();fn main(){}"#,
+            stdout: None,
+            stock_diagnostic: Some("attribute cannot be used on structs"),
+            outcome: Outcome::Semantic,
         },
         Case {
             name: "generated_module_boundary",
@@ -588,8 +595,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (29, 20));
-    assert_eq!(partition, (23, 8, 11, 7));
+    assert_eq!(counts, (29, 21));
+    assert_eq!(partition, (24, 8, 12, 6));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -644,7 +651,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (8, 7, 2));
+    assert_eq!(counts, (8, 6, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")
@@ -783,8 +790,8 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 176);
-    assert_eq!(modes, (42, 42, 32, 32, 14, 14));
+    assert_eq!(gates, 200);
+    assert_eq!(modes, (48, 48, 40, 40, 12, 12));
     eprintln!(
         "NATIVE ITEM SOURCE:176 cells, modes{modes:?};42 executed native images;28 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );
