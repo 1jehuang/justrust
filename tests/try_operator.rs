@@ -479,3 +479,111 @@ fn main() {
         }
     }
 }
+
+/// Stock-compile `source` and run it; return (stdout, stderr, exit code).
+fn stock_run(source: &str, tag: &str) -> Option<(Vec<u8>, Vec<u8>, Option<i32>)> {
+    let dir = std::env::temp_dir().join(format!("jr-try-stock-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("main.rs");
+    let image = dir.join("stock");
+    std::fs::write(&input, source).unwrap();
+    let built = std::process::Command::new(oracle::pinned_stock::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "-Cpanic=abort", "-Awarnings"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&image)
+        .output()
+        .unwrap();
+    let result = built.status.success().then(|| {
+        let ran = std::process::Command::new(&image).output().unwrap();
+        (ran.stdout, ran.stderr, ran.status.code())
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+fn native_run(source: &str, workers: usize, tag: &str) -> (Vec<u8>, Vec<u8>, Option<i32>) {
+    let dir = std::env::temp_dir().join(format!(
+        "jr-try-native-{}-{tag}-{workers}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("main.rs");
+    let image = dir.join("out");
+    std::fs::write(&input, source).unwrap();
+    let checked = std::process::Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .arg(&input)
+        .args(["--workers", &workers.to_string(), "--check"])
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "CHECK {tag}: {checked:?}");
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .arg(&input)
+        .args(["--workers", &workers.to_string()])
+        .arg("-o")
+        .arg(&image)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "BUILD {tag}: {built:?}");
+    let ran = std::process::Command::new(&image).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    (ran.stdout, ran.stderr, ran.status.code())
+}
+
+/// `fn main() -> T: Termination`: `Err(e)` prints `Error: {e:?}` to stderr and
+/// exits 1; `ExitCode` sets the status; `Ok`/`()` exit 0.
+#[test]
+fn fallible_main_reports_through_termination() {
+    let cases = [
+        (
+            "err_debug",
+            "#[derive(Debug)] struct E { code: i32 }\nfn run(x: i32) -> Result<i32, E> { if x > 2 { Err(E { code: x }) } else { Ok(x) } }\nfn main() -> Result<(), E> { println!(\"{}\", run(1)?); run(5)?; println!(\"unreachable\"); Ok(()) }",
+        ),
+        (
+            "ok_string",
+            "fn main() -> Result<(), String> { println!(\"hi\"); Ok(()) }",
+        ),
+        (
+            "err_string",
+            "fn main() -> Result<(), String> { let v = vec![1]; let x = v.get(3).ok_or(\"missing\".to_string())?; println!(\"{}\", x); Ok(()) }",
+        ),
+        (
+            "boxed_parse_error",
+            "fn main() -> Result<(), Box<dyn std::error::Error>> { let a: i64 = \"12\".parse()?; println!(\"{}\", a); let b: i64 = \"zz\".parse()?; println!(\"{}\", b); Ok(()) }",
+        ),
+        (
+            "exit_code",
+            "use std::process::ExitCode;\nfn main() -> ExitCode { println!(\"x\"); ExitCode::from(3) }",
+        ),
+        (
+            "drops_before_report",
+            "struct D; impl Drop for D { fn drop(&mut self) { println!(\"drop\"); } }\nfn main() -> Result<(), &'static str> { let _d = D; Err(\"bad\") }",
+        ),
+    ];
+    for (tag, source) in cases {
+        let expected = stock_run(source, tag).unwrap_or_else(|| panic!("stock rejected {tag}"));
+        for workers in [1, 8] {
+            assert_eq!(
+                native_run(source, workers, tag),
+                expected,
+                "{tag} workers={workers}"
+            );
+        }
+    }
+    oracle::check(
+        "fallible-main-invalid",
+        &[
+            Case {
+                name: "error_without_debug",
+                source: "struct NoDebug;\nfn main() -> Result<(), NoDebug> { Ok(()) }",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "integer_main",
+                source: "fn main() -> i32 { 0 }",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}

@@ -449,6 +449,10 @@ impl FileView {
             (ordinal == [0] && options.library && !options.cfg.names.contains("test"))
                 .then(|| "\nfn main() {}\n".to_string())
         });
+        let entry = entry.or_else(|| {
+            (ordinal == [0] && unit.fallible_main && !options.cfg.names.contains("test"))
+                .then(fallible_main_entry)
+        });
         Self::mounted(unit, base, options, external, entry.as_deref())
     }
 
@@ -769,6 +773,8 @@ pub struct FileUnit {
     no_std: bool,
     forbid_unsafe_code: bool,
     denied_lints: u8,
+    /// Crate root whose `main` returns a non-unit `Termination` value.
+    fallible_main: bool,
     pub path: PathBuf,
     pub contents: Arc<str>,
     /// Canonical paths of the open files from the root to this one, for cycle
@@ -1138,6 +1144,7 @@ fn snapshot_unit<'a>(
         no_std: builder.no_std,
         forbid_unsafe_code: builder.forbid_unsafe_code,
         denied_lints: builder.denied_lints,
+        fallible_main: builder.fallible_main,
         path,
         contents,
         chain,
@@ -1197,6 +1204,8 @@ pub struct SourceAssembler {
     test_filter: TestFilter,
     /// Library target without a harness: append an inert entry.
     library: bool,
+    /// The user crate root renamed a non-unit `main`; synthesize its entry.
+    fallible_main: bool,
     externs: Vec<String>,
     next_extern: usize,
     in_extern: bool,
@@ -1306,6 +1315,7 @@ impl SourceAssembler {
             extern_facts: Vec::new(),
             crate_no_std: false,
             library: options.library && !options.cfg.names.contains("test"),
+            fallible_main: false,
             test_filter: options.test_filter.clone(),
             externs: options.externs.iter().map(|e| e.name.clone()).collect(),
             next_extern: 0,
@@ -1375,6 +1385,9 @@ impl SourceAssembler {
         if !self.in_prelude && !self.in_extern {
             self.prepared.source_bytes += unit.contents.len();
             self.prepared.files += 1;
+            if ordinal == [0] && unit.fallible_main && self.harness.is_none() {
+                self.fallible_main = true;
+            }
             if let Some(tests) = &mut self.harness {
                 for test in &unit.tests {
                     let mut test = test.clone();
@@ -1471,6 +1484,7 @@ impl SourceAssembler {
                     no_std: unit.no_std,
                     forbid_unsafe_code: unit.forbid_unsafe_code,
                     denied_lints: unit.denied_lints,
+                    fallible_main: unit.fallible_main,
                     path: unit.path.clone(),
                     contents: unit.contents.clone(),
                     chain: unit.chain.clone(),
@@ -1511,6 +1525,9 @@ impl SourceAssembler {
                         Some(tests) => Some(test_harness(tests, &self.test_filter)),
                         None if std::mem::take(&mut self.library) => {
                             Some("\nfn main() {}\n".to_string())
+                        }
+                        None if std::mem::take(&mut self.fallible_main) => {
+                            Some(fallible_main_entry())
                         }
                         None => None,
                     };
@@ -1617,6 +1634,14 @@ impl SourceAssembler {
             }
         }
     }
+}
+/// Entry of a crate whose `main` returns a non-unit value: report it through
+/// `Termination` (stock `lang_start`). The renamed user `main` stays private.
+fn fallible_main_entry() -> String {
+    format!(
+        "\nfn main() {{ crate::{}::process::__justrust_report(__justrust_user_main()); }}\n",
+        source_prelude::PRELUDE_MODULE
+    )
 }
 /// The `cfg(test)` entry point: run every `#[test]` in name order through
 /// the native harness (`libraries/prelude/test.rs`), like libtest.
@@ -1776,6 +1801,7 @@ struct Loader<'a> {
     no_std: bool,
     forbid_unsafe_code: bool,
     denied_lints: u8,
+    fallible_main: bool,
     tests: Vec<source_attrs::TestItem>,
     docs: Vec<source_attrs::missing_docs::DocEntry>,
     extern_facts: Option<Arc<source_attrs::unused_extern_crates::ExternFacts>>,
@@ -1812,6 +1838,7 @@ impl<'a> Loader<'a> {
             no_std: false,
             forbid_unsafe_code: false,
             denied_lints: 0,
+            fallible_main: false,
             tests: Vec::new(),
             docs: Vec::new(),
             extern_facts: None,
@@ -1948,6 +1975,18 @@ impl<'a> Loader<'a> {
         self.extern_facts = filtered.extern_facts.map(Arc::new);
         self.module_lints = filtered.module_lints;
         let mut text = filtered.text;
+        if self.root
+            && filtered.test_main.is_none()
+            && let Some(name) = filtered.fallible_main
+        {
+            // Like stock `lang_start`, a non-unit `main` result is reported
+            // through `Termination` by a synthesized entry.
+            text.replace_range(name.clone(), &" ".repeat(name.len()));
+            self.derives
+                .push((name.start + 1, "__justrust_user_main".into()));
+            self.derives.sort_by_key(|(at, _)| *at);
+            self.fallible_main = true;
+        }
         if self.root
             && let Some(name) = filtered.test_main
         {

@@ -93,6 +93,10 @@ pub struct AttributeOutput {
     /// Byte range of the name of a file-level `fn main` under `cfg(test)`.
     /// A crate root renames it so the synthesized harness owns the entry.
     pub test_main: Option<Range<usize>>,
+    /// Name range of a file-level `fn main() -> T` with a non-unit result.
+    /// A crate root renames it; the synthesized entry reports through
+    /// `Termination` like stock's `lang_start`.
+    pub fallible_main: Option<Range<usize>>,
     /// Built-in derive expansions: (filtered-text offset just after the item, generated impls).
     pub derives: Vec<(usize, String)>,
     /// `#[path = "..."]` on `mod name;`: (offset of the `mod` keyword, path).
@@ -234,6 +238,7 @@ fn prepare_with_context(
         pending: PendingTest::default(),
         tests: Vec::new(),
         test_main: None,
+        fallible_main: None,
         forbid_unsafe_code: false,
         deny_unsafe_code: false,
         unsafe_code_relaxed: false,
@@ -291,6 +296,7 @@ fn prepare_with_context(
         derives: filter.derives,
         tests: filter.tests,
         test_main: filter.test_main,
+        fallible_main: filter.fallible_main,
         module_paths: filter.module_paths,
         module_lints: filter.module_lints,
         docs: filter.docs,
@@ -329,6 +335,7 @@ struct Filter<'a> {
     pending: PendingTest,
     tests: Vec<TestItem>,
     test_main: Option<Range<usize>>,
+    fallible_main: Option<Range<usize>>,
     /// `#[path]` admitted on the module item being walked.
     pending_path: Option<String>,
     module_paths: Vec<(usize, String)>,
@@ -1439,6 +1446,7 @@ impl Filter<'_> {
                         InheritedLints(self.levels.clone()),
                     ));
                 }
+                self.record_fallible_main(kind, keyword, body.map_or(stop, |(open, _)| open));
                 self.admit_test_item(kind, item_start, keyword);
                 // Only modules introduce supported nested item attachment positions.
                 let header_end = body.map_or(stop, |(open, _)| open);
@@ -1597,6 +1605,41 @@ impl Filter<'_> {
             ignore: pending.ignore,
             should_panic: pending.should_panic,
         });
+    }
+    /// Root `fn main() -> T` where `T` is not `()`: record its name so the
+    /// crate root can route the entry through `Termination`.
+    fn record_fallible_main(&mut self, kind: &str, keyword: usize, header_end: usize) {
+        if kind != "fn" || !self.module_path.is_empty() {
+            return;
+        }
+        let Some(name) = self.tokens.get(keyword + 1) else {
+            return;
+        };
+        if name.text(self.text) != "main" {
+            return;
+        }
+        let Some(open) = self.tokens.get(keyword + 2) else {
+            return;
+        };
+        let Some(close) = open.close.filter(|_| open.text(self.text) == "(") else {
+            return;
+        };
+        let arrow = close + 1;
+        if arrow + 2 >= header_end
+            || self.tokens[arrow].text(self.text) != "-"
+            || self.tokens[arrow + 1].text(self.text) != ">"
+            || self.tokens[arrow + 1].range.start != self.tokens[arrow].range.end
+        {
+            return;
+        }
+        let result: Vec<&str> = self.tokens[arrow + 2..header_end]
+            .iter()
+            .map(|token| token.text(self.text))
+            .collect();
+        if result == ["(", ")"] {
+            return;
+        }
+        self.fallible_main = Some(name.range.clone());
     }
     fn item_kind(&self, mut i: usize, end: usize) -> (&'static str, usize) {
         if self.tokens[i].text(self.text) == "pub" {
