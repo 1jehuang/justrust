@@ -10272,6 +10272,9 @@ pub enum ConstantStorage {
 }
 #[derive(Clone, Debug)]
 pub struct ConstDecl {
+    /// `const _: () = assert!(..)` lowered to a bool: always evaluated by the
+    /// scalar CTFE path (which admits layout queries), never inlined.
+    pub assertion: bool,
     pub storage: ConstantStorage,
     pub module: ModuleId,
     pub visibility: ir::Visibility,
@@ -17192,8 +17195,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 (ty, initializer)
             };
+            let assertion = unnamed && matches!(ty, Type::Bool);
             self.reserve_parser_items(&mut parsed.program.constants, 1)?;
             parsed.program.constants.push(ConstDecl {
+                assertion,
                 storage,
                 module,
                 visibility: visibility.clone(),

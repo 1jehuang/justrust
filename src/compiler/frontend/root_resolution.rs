@@ -7,7 +7,7 @@ use super::*;
 mod capture_resolution;
 mod cell;
 mod const_inline;
-pub(super) use const_inline::scalar_const_initializer;
+pub(super) use const_inline::scalar_const_assertion;
 mod const_pattern;
 mod lexical_calls;
 mod manually_drop;

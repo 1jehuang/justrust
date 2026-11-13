@@ -252,6 +252,7 @@ impl Checker<'_> {
                 source::SyntaxKind::Call { declaration, .. } => Some(source::scalar_type(
                     &self.plan.constant_callable_source(*declaration)?.result,
                 )?),
+                source::SyntaxKind::Layout(_) => Some(scalar::ScalarTy::Int(ir::IntTy::Usize)),
             },
         )
     }
@@ -281,6 +282,13 @@ impl Checker<'_> {
                     })),
                 )
             }
+            source::SyntaxKind::Layout(value) => (
+                scalar::ScalarTy::Int(ir::IntTy::Usize),
+                scalar::ScalarExprKind::Literal(scalar::ScalarValue::Int(ir::IntValue {
+                    ty: ir::IntTy::Usize,
+                    bits: *value,
+                })),
+            ),
             source::SyntaxKind::Bool(value) => (
                 scalar::ScalarTy::Bool,
                 scalar::ScalarExprKind::Literal(scalar::ScalarValue::Bool(*value)),

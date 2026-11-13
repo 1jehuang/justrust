@@ -89,6 +89,53 @@ impl PlanCtx {
             .ok_or_else(|| "constant initializer call does not resolve to a function".into())
     }
 
+    /// `Some` when `declaration` is the embedded prelude's public
+    /// `mem::size_of` or `mem::align_of`, identified by declaration identity.
+    pub(in crate::compiler) fn constant_layout_query(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<ir::TypeQueryKind>, String> {
+        let info = self.declaration(declaration)?;
+        if info.kind != ir::DeclKind::Function || info.owner.is_some() {
+            return Ok(None);
+        }
+        let Some(root) = self.program.prelude_module else {
+            return Ok(None);
+        };
+        if self
+            .program
+            .modules
+            .parent(info.path.module)
+            .map_err(module_diagnostic)?
+            != Some(root)
+        {
+            return Ok(None);
+        }
+        let Some(module) = self
+            .program
+            .modules
+            .name(info.path.module)
+            .map_err(module_diagnostic)?
+        else {
+            return Ok(None);
+        };
+        let DeclItemName::Source(item) = info.path.item else {
+            return Ok(None);
+        };
+        let names = self.program.names.as_ref();
+        let module = names
+            .spelling(module)
+            .map_err(native_adapter::name_diagnostic)?;
+        let item = names
+            .spelling(item)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok(match (module, item) {
+            ("mem", "align_of") => Some(ir::TypeQueryKind::Alignment),
+            ("mem", "size_of") => Some(ir::TypeQueryKind::SemanticSize),
+            _ => None,
+        })
+    }
+
     pub(in crate::compiler) fn constant_count(&self) -> usize {
         self.registry.const_ids.len()
     }

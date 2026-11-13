@@ -368,6 +368,7 @@ impl Parser<'_, '_> {
         let name = AstPath::new(self.names, PathAnchor::Relative, &[hidden])
             .map_err(native_adapter::name_error)?;
         self.local_consts.pending.push(ConstDecl {
+            assertion: unnamed && matches!(ty, Type::Bool),
             storage,
             module: self.module,
             visibility: ir::Visibility::Restricted(self.module),
@@ -438,7 +439,7 @@ impl Parser<'_, '_> {
                 ));
             }
         };
-        if !super::root_resolution::scalar_const_initializer(&condition) {
+        if !super::root_resolution::scalar_const_assertion(&condition) {
             return Err(self.unsupported("constant assertions require a scalar constant condition"));
         }
         let byte = |magnitude| {

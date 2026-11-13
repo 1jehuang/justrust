@@ -28,6 +28,9 @@ pub(super) enum SyntaxKind {
         declaration: ir::DeclId,
         arguments: std::ops::Range<usize>,
     },
+    /// `core::mem::{size_of, align_of}::<T>()` for a primitive `T`, computed
+    /// from the Linux x86-64 layout of `T`. Other queried types fail closed.
+    Layout(u128),
 }
 #[derive(Clone, Debug)]
 pub(super) struct SyntaxExpr {
@@ -125,6 +128,8 @@ fn shape(
                 .checked_add(args.len())
                 .ok_or("constant call edge count overflow")?;
         }
+        frontend::Expr::Apply { value, .. } if matches!(value.as_ref(), frontend::Expr::Call { args, .. } if args.is_empty()) =>
+            {}
         _ => return Err("unsupported: expression in scalar constant initializer".into()),
     }
     Ok((nodes, edges))
@@ -396,6 +401,31 @@ impl ConstProjectionScratch<'_> {
                     arguments: start..self.arguments.len(),
                 }
             }
+            frontend::Expr::Apply { path, value } => {
+                let frontend::Expr::Call { name, args } = value.as_ref() else {
+                    return Err("unsupported: expression in scalar constant initializer".into());
+                };
+                if !args.is_empty() {
+                    return Err("unsupported: expression in scalar constant initializer".into());
+                }
+                let declaration = self.plan.constant_callee(name)?;
+                let Some(kind) = self.plan.constant_layout_query(declaration)? else {
+                    return Err(
+                        "unsupported: generic const fn call in constant initializer; only core::mem::size_of and align_of are evaluated"
+                            .into(),
+                    );
+                };
+                let [.., last] = path.segments.as_slice() else {
+                    return Err("contract: generic constant call path has no segment".into());
+                };
+                let [queried] = last.args.as_slice() else {
+                    return Err("E0107: size_of/align_of take exactly one type argument".into());
+                };
+                if !last.region_args.is_empty() || !last.associated_types.is_empty() {
+                    return Err("E0107: size_of/align_of take exactly one type argument".into());
+                }
+                SyntaxKind::Layout(primitive_layout(queried, kind)?)
+            }
             _ => return Err("unsupported: expression in scalar constant initializer".into()),
         };
         let index = self.expressions.len();
@@ -429,3 +459,31 @@ fn binary(op: frontend::BinaryOp) -> scalar::Binary {
 }
 
 impl crate::engine::Fact for DeclarationFact {}
+
+/// Public Linux x86-64 size or alignment of a primitive type. Aggregates,
+/// references and generic parameters would need the layout graph fact and
+/// are rejected explicitly here rather than approximated.
+fn primitive_layout(queried: &frontend::Type, kind: ir::TypeQueryKind) -> Result<u128, String> {
+    let ty = match queried {
+        frontend::Type::Int(ty) => ir::Ty::Int(*ty),
+        frontend::Type::Float(ty) => ir::Ty::Float(*ty),
+        frontend::Type::Bool => ir::Ty::Bool,
+        frontend::Type::Unit => ir::Ty::Unit,
+        frontend::Type::Char => {
+            return Ok(4);
+        }
+        _ => {
+            return Err(
+                "unsupported: size_of/align_of in a constant initializer require a primitive type"
+                    .into(),
+            );
+        }
+    };
+    let (size, alignment) = super::c_abi::layout::scalar_size_align(&ty)
+        .ok_or("contract: primitive type lacks a target layout")?;
+    Ok(match kind {
+        ir::TypeQueryKind::Alignment => alignment as u128,
+        ir::TypeQueryKind::SemanticSize => size as u128,
+        _ => return Err("contract: unexpected constant layout query".into()),
+    })
+}

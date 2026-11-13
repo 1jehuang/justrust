@@ -636,3 +636,55 @@ fn main() { println!("{} {} {} {} {} {}", ORIGIN.x, ORIGIN.y[1], NAME, PAIR.0, P
         ],
     );
 }
+
+#[test]
+fn layout_assertions_in_unnamed_consts_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "layout-assertions",
+        &[
+            Case {
+                name: "size_and_align_assertions",
+                source: r#"use std::mem::{align_of, size_of};
+const _: () = assert!(align_of::<u32>() <= align_of::<f32>());
+const _: () = assert!(size_of::<u64>() == 8 && align_of::<u16>() == 2);
+mod inner {
+    use core::mem::align_of;
+    pub fn check() -> u8 {
+        const _: () = assert!(align_of::<u64>() <= align_of::<f64>());
+        const _: () = assert!(core::mem::size_of::<char>() == 4);
+        7
+    }
+}
+fn main() {
+    const _: () = assert!(size_of::<i128>() == 16);
+    println!("{} {}", inner::check(), size_of::<u32>());
+}
+"#,
+                expect: Expect::Run("7 4\n"),
+            },
+            Case {
+                name: "failing_align_assertion",
+                source: "use std::mem::align_of; const _: () = assert!(align_of::<u64>() < align_of::<u8>()); fn main(){}",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "unused_failing_size_assertion",
+                source: "fn bad(){ const _: () = assert!(std::mem::size_of::<u8>() == 2); } fn main(){}",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "wrong_layout_type_argument_count",
+                source: "use std::mem::size_of; const _: () = assert!(size_of::<u8, u8>() == 1); fn main(){}",
+                expect: Expect::Invalid("E0107"),
+            },
+            Case {
+                name: "layout_compared_with_bool",
+                source: "use std::mem::size_of; const _: () = assert!(size_of::<u8>() == true); fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

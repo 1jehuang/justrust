@@ -11,7 +11,9 @@ use super::*;
 pub(super) fn needs_inline(declaration: &ConstDecl) -> bool {
     let scalar = matches!(declaration.ty, Type::Bool)
         || matches!(declaration.ty, Type::Int(ty) if ty != ir::IntTy::Isize);
-    !(scalar && simple(&declaration.initializer))
+    !(scalar
+        && (simple(&declaration.initializer)
+            || (declaration.assertion && assertion_operand(&declaration.initializer))))
 }
 
 /// Constants the scalar evaluator does not compute are inlined at each use and
@@ -141,9 +143,22 @@ fn fallible(expr: &Expr, float: bool, depth: usize) -> Fallible {
     }
 }
 
-/// An initializer the scalar constant evaluator computes (never inlined).
-pub(in crate::compiler::frontend) fn scalar_const_initializer(expr: &Expr) -> bool {
-    simple(expr)
+/// A `const _` assertion condition the scalar constant evaluator computes:
+/// scalar operations over constants and argument-free layout calls such as
+/// `align_of::<u32>()`. The callee and queried type are checked later.
+pub(in crate::compiler::frontend) fn scalar_const_assertion(expr: &Expr) -> bool {
+    assertion_operand(expr)
+}
+
+fn assertion_operand(expr: &Expr) -> bool {
+    match expr {
+        Expr::Apply { value, .. } => {
+            matches!(value.as_ref(), Expr::Call { args, .. } if args.is_empty())
+        }
+        Expr::Unary { value, .. } => assertion_operand(value),
+        Expr::Binary { left, right, .. } => assertion_operand(left) && assertion_operand(right),
+        other => simple(other),
+    }
 }
 
 fn simple(expr: &Expr) -> bool {
