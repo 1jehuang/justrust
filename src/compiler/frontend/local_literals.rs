@@ -1675,6 +1675,15 @@ impl<'s> Solver<'_, '_, 's> {
             if self.deferred_coercion(*expected)? && !constructor_parameter {
                 continue;
             }
+            // `&?R` whose referent is a pending producer (`&mut v[0]`) waits
+            // for that producer, which may in turn wait on an independent
+            // ready edge (`vec!["x"]` fixing `Vec<?T>`). Retain it for replay
+            // instead of blocking every other ready local input.
+            if let Domain::Ref(_, inner) = self.domain(*actual)
+                && self.deferred_coercion(inner)?
+            {
+                continue;
+            }
             if !matches!(self.domain(*expected), Domain::Unknown)
                 // A closure's source-directed constructor input must already
                 // have its exact canonical type, not a numeric-default guess.
