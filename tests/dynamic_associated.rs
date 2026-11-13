@@ -251,3 +251,27 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn box_pointee_reference_provenance() {
+    oracle::check(
+        "box-pointee-provenance",
+        &[
+            Case {
+                name: "boxed_reference_outlives_local",
+                source: "fn main() { let b; { let x = 5; b = Box::new(&x); } let r: &i32 = *b; println!(\"{}\", r); }",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "generic_box_reference_outlives_local",
+                source: "fn mk<T>(x: T) -> Box<T> { Box::new(x) } fn unused() { let b; { let x = 5; b = mk(&x); } let r: &i32 = *b; } fn main() {}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "assign_while_boxed_borrow",
+                source: "fn main() { let mut x = 5; let b = Box::new(&x); x = 6; let r: &i32 = *b; println!(\"{} {}\", r, x); }",
+                expect: Expect::Invalid("E0506"),
+            },
+        ],
+    );
+}

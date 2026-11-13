@@ -914,6 +914,9 @@ pub enum CarrierStep {
         field: usize,
     },
     Referent,
+    /// The owned pointee of a `Box<T>`: part of the owner's storage tree,
+    /// so loans stored in it live and die with the Box like Vec elements.
+    BoxPointee,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CarrierPath(pub Arc<[CarrierStep]>);
@@ -925,6 +928,102 @@ pub struct CarrierLocation {
 
 /// One canonical typed component walk for world contracts and the SAME Plan.
 /// Presence memoization avoids expanding reference-free shared type DAGs.
+/// Whether an owned Box pointee gets carrier cells: it must not mention any
+/// nominal on the current expansion stack (a recursive type through the
+/// Box), at any depth. Bounded by the plan budget.
+/// Whether an owned Box pointee gets carrier cells. Context free, so every
+/// walker (inventory, source regions, call expansion, borrow cells) agrees:
+/// a pointee that can reach any nominal twice by value, also through nested
+/// Boxes and owned sequences, is a recursive type through indirection
+/// (`Box<L>` with `L` holding `Box<L>`) and keeps the summarized,
+/// fail-closed treatment. Bounded by the budget.
+pub(crate) fn box_pointee_carried(ty: &Ty, budget: &PlanBudget) -> Result<bool, String> {
+    let mut visiting: Vec<DeclId> = Vec::new();
+    box_pointee_acyclic(ty, &mut visiting, budget, 0)
+}
+
+fn box_pointee_acyclic(
+    ty: &Ty,
+    visiting: &mut Vec<DeclId>,
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    // An unfinished (recursive, still being defined) nominal cannot be read;
+    // it is exactly the recursion this check excludes.
+    if ty.has_unfinished_nominal_definition() {
+        return Ok(false);
+    }
+    if let Some(pointee) = ty.owned_box_pointee() {
+        return box_pointee_acyclic(pointee, visiting, budget, depth + 1);
+    }
+    let decl = match ty {
+        Ty::Struct(value) => Some(value.def().source_decl),
+        Ty::Enum(value) => Some(value.def().source_decl),
+        _ => None,
+    };
+    if let Some(decl) = decl {
+        budget.charge_work(visiting.len())?;
+        if visiting.contains(&decl) {
+            return Ok(false);
+        }
+        budget.retain_bytes(std::mem::size_of::<DeclId>())?;
+        visiting
+            .try_reserve(1)
+            .map_err(|_| "box pointee allocation resource limit")?;
+        visiting.push(decl);
+    }
+    let mut ok = true;
+    match ty {
+        Ty::Struct(value) => {
+            if let Some(element) = ty.owned_sequence_element() {
+                ok &= box_pointee_acyclic(element, visiting, budget, depth + 1)?;
+            }
+            for field in value.def().fields.read(budget)?.iter() {
+                if !ok {
+                    break;
+                }
+                ok &= box_pointee_acyclic(&field.ty, visiting, budget, depth + 1)?;
+            }
+        }
+        Ty::Enum(value) => {
+            'variants: for variant in value.def().variants.iter() {
+                for field in variant.fields.read(budget)?.iter() {
+                    if !box_pointee_acyclic(&field.ty, visiting, budget, depth + 1)? {
+                        ok = false;
+                        break 'variants;
+                    }
+                }
+            }
+        }
+        Ty::Ref {
+            referent: inner, ..
+        }
+        | Ty::Array { element: inner, .. }
+        | Ty::DependentArray { element: inner, .. }
+        | Ty::Slice { element: inner } => {
+            ok = box_pointee_acyclic(inner, visiting, budget, depth + 1)?;
+        }
+        Ty::ManuallyDrop(wrapper) => {
+            ok = box_pointee_acyclic(wrapper.argument(), visiting, budget, depth + 1)?;
+        }
+        Ty::Tuple(fields) => {
+            for field in fields.iter() {
+                if !box_pointee_acyclic(field, visiting, budget, depth + 1)? {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+    if decl.is_some() {
+        visiting.pop();
+    }
+    Ok(ok)
+}
+
 pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLocation]>, String> {
     match source_carrier_inventory(ty, budget)? {
         SourceCarrierInventory::Complete(locations) => Ok(locations),
@@ -1062,6 +1161,11 @@ pub(super) fn source_carrier_inventory(
             Ty::Ref { .. } | Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_)
         );
         let mut height = 0;
+        // Decided before `child` borrows the cycle stack.
+        let box_carried = match ty.owned_box_pointee() {
+            Some(pointee) => box_pointee_carried(pointee, budget)?,
+            None => false,
+        };
         let mut child = |ty: &Ty| -> Result<(), String> {
             let (found, h) = present(ty, budget, depth + 1, memo, deferred, cycle)?;
             has |= found;
@@ -1095,6 +1199,13 @@ pub(super) fn source_carrier_inventory(
                     child(ty)?;
                 }
             }
+            // A Box pointee is carried only when it cannot reach the Box's
+            // own enclosing nominal (`Box<Tree<T>>` inside `Tree<T>`): such
+            // recursive unfolding keeps the summarized, fail-closed pointee.
+            Ty::Struct(_) if ty.owned_box_pointee().is_some() && box_carried => {
+                child(ty.owned_box_pointee().unwrap())?;
+            }
+            Ty::Struct(_) if ty.owned_box_pointee().is_some() => {}
             Ty::Struct(value) => {
                 if let Some(element) = ty.owned_sequence_element() {
                     child(element)?;
@@ -1297,6 +1408,12 @@ pub(super) fn source_carrier_inventory(
                     Ty::Slice { element } => {
                         child(CarrierStep::SliceElement, element)?;
                     }
+                    Ty::Struct(_) if ty.owned_box_pointee().is_some() => {
+                        let pointee = ty.owned_box_pointee().unwrap();
+                        if box_pointee_carried(pointee, budget)? {
+                            child(CarrierStep::BoxPointee, pointee)?;
+                        }
+                    }
                     Ty::Struct(value) => {
                         if let Some(element) = ty.owned_sequence_element() {
                             child(CarrierStep::SliceElement, element)?;
@@ -1387,6 +1504,9 @@ pub fn carrier_at(
                 return Err("ManuallyDrop payload requires canonical carrier step".into());
             }
             (CarrierStep::Referent, Ty::Ref { referent, .. }) => referent.as_ref().clone(),
+            (CarrierStep::BoxPointee, _) if ty.owned_box_pointee().is_some() => {
+                ty.owned_box_pointee().unwrap().clone()
+            }
             (CarrierStep::Field(index), _) => ty
                 .field_ty(*index, budget)?
                 .ok_or("carrier field outside type")?,
@@ -6756,7 +6876,7 @@ impl StructDef {
 }
 
 impl Ty {
-    fn has_unfinished_nominal_definition(&self) -> bool {
+    pub(crate) fn has_unfinished_nominal_definition(&self) -> bool {
         match self {
             Ty::Struct(value) => {
                 matches!(&value.0, NominalRef::Back(weak, _) if weak.strong_count() == 0)

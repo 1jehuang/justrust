@@ -42,7 +42,7 @@ impl CarrierBuilder<'_, '_> {
         let mut admitted = false;
         for row in view.contract().results.iter() {
             self.budget.spend(view.contract().inputs.len() + 1)?;
-            if value_projection(&row.location).contains(&Projection::Deref) {
+            if !location_is_owned(&row.location) {
                 continue;
             }
             let Some(ty) =

@@ -620,6 +620,25 @@ impl Collector<'_> {
             path.pop();
             return Ok(());
         }
+        // An owned Box pointee is walked through its SOURCE argument, like an
+        // owned sequence element, never through the private raw pointer.
+        // A recursive pointee (`Box<Tree<T>>` inside `Tree<T>`) gets no
+        // cells, exactly as in the semantic carrier inventory.
+        if let ir::Ty::Struct(value) = semantic
+            && value.def().source_decl == id
+            && let Some(pointee) = semantic.owned_box_pointee()
+        {
+            if !ir::box_pointee_carried(pointee, self.budget)? {
+                return Ok(());
+            }
+            let [source_pointee] = args else {
+                return Err("native Box carrier type argument arity mismatch".into());
+            };
+            path.push(ir::CarrierStep::BoxPointee);
+            self.walk(source_pointee, pointee, parameter, path, 0, depth + 1)?;
+            path.pop();
+            return Ok(());
+        }
         let (type_params, region_params, fields): (
             _,
             _,
@@ -699,6 +718,7 @@ impl Collector<'_> {
             .try_reserve(1)
             .map_err(|_| "source carrier stack allocation failed")?;
         self.nominal_stack.push(app);
+
         let result = self.nominal_fields(
             semantic,
             parameter,
@@ -714,6 +734,7 @@ impl Collector<'_> {
             },
         );
         self.nominal_stack.pop();
+
         result
     }
     fn nominal_fields(

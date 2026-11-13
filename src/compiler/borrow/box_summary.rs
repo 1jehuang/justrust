@@ -127,7 +127,7 @@ pub(super) fn holds_reference_carrying_box(
     ledger: Option<&ir::PlanBudget>,
     budget: &mut Budget,
 ) -> Result<bool, Exhausted> {
-    let mut active: Vec<ir::NominalAppId> = Vec::new();
+    let mut active: Vec<ir::DeclId> = Vec::new();
     holds_box(ty, ledger, budget, &mut active, 0)
 }
 
@@ -135,7 +135,7 @@ fn holds_box(
     ty: &Ty,
     ledger: Option<&ir::PlanBudget>,
     budget: &mut Budget,
-    active: &mut Vec<ir::NominalAppId>,
+    active: &mut Vec<ir::DeclId>,
     depth: usize,
 ) -> Result<bool, Exhausted> {
     if depth > ir::MAX_PATTERN_PROJECTION_DEPTH {
@@ -144,12 +144,19 @@ fn holds_box(
     budget.nodes(1)?;
     budget.spend(add(active.len(), 1)?)?;
     if let Some(pointee) = ty.owned_box_pointee() {
+        // A carried pointee has its own cells (`CarrierStep::BoxPointee`,
+        // same rule as the carrier inventory): look inside it instead.
+        if let Some(ledger_budget) = ledger
+            && ir::box_pointee_carried(pointee, ledger_budget).map_err(|_| Exhausted)?
+        {
+            return holds_box(pointee, ledger, budget, active, depth + 1);
+        }
         // Erased objects keep their separate object-lifetime check.
         return box_pointee_carries_references(pointee, ledger, budget);
     }
     let nominal = match ty {
-        Ty::Struct(value) => Some(value.id()),
-        Ty::Enum(value) => Some(value.id()),
+        Ty::Struct(value) => Some(value.def().source_decl),
+        Ty::Enum(value) => Some(value.def().source_decl),
         _ => None,
     };
     if let Some(id) = nominal {
@@ -170,7 +177,7 @@ fn holds_box_children(
     ty: &Ty,
     ledger: Option<&ir::PlanBudget>,
     budget: &mut Budget,
-    active: &mut Vec<ir::NominalAppId>,
+    active: &mut Vec<ir::DeclId>,
     depth: usize,
 ) -> Result<bool, Exhausted> {
     let mut child =
@@ -265,7 +272,10 @@ impl CarrierBuilder<'_, '_> {
         let mut ty = self.f.locals[destination.local.0].ty.clone();
         for (index, step) in destination.projection.iter().enumerate() {
             self.budget.spend(index + 1)?;
-            if *step == Projection::Deref && ty.owned_box_pointee().is_some() {
+            if *step == Projection::Deref
+                && let Some(pointee) = ty.owned_box_pointee()
+                && !ir::box_pointee_carried(pointee, &self.ledger).map_err(|_| Exhausted)?
+            {
                 return Ok(true);
             }
             ty = ir::projected_ty(&ty, &destination.projection[index..=index], &self.ledger)

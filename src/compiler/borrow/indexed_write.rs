@@ -450,7 +450,7 @@ impl CarrierBuilder<'_, '_> {
         let components = ir::carrier_locations(actual, &self.ledger).map_err(|_| Exhausted)?;
         let mut destinations = Vec::new();
         for component in components.iter() {
-            if value_projection(component).contains(&Projection::Deref) {
+            if !location_is_owned(component) {
                 continue;
             }
             let mut matching = view.component_mappings().iter().filter(|mapping| {

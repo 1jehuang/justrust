@@ -9287,6 +9287,13 @@ impl ValidatedTraitWorld {
                     facts,
                     scratch,
                 )?;
+                // A family substituted under an owned Box pointee keeps the
+                // concrete inventory's rule: a recursive pointee has no cells.
+                if path.last() == Some(&ir::CarrierStep::BoxPointee)
+                    && !charged(&self.budget, ir::box_pointee_carried(&actual, &self.budget))?
+                {
+                    return Ok(output);
+                }
                 for relative in
                     charged(&self.budget, ir::carrier_locations(&actual, &self.budget))?.iter()
                 {
@@ -9899,6 +9906,11 @@ impl ValidatedTraitWorld {
                     if index < len =>
                 {
                     element.as_ref().clone()
+                }
+                // An owned Box pointee preserves enclosing access, as an
+                // owned sequence element does.
+                (ir::CarrierStep::BoxPointee, _) if ty.owned_box_pointee().is_some() => {
+                    ty.owned_box_pointee().unwrap().clone()
                 }
                 (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
                     // The authenticated owned sequence preserves enclosing access,

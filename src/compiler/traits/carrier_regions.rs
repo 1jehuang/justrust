@@ -976,6 +976,9 @@ impl ValidatedTraitWorld {
                 (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
                     (step.clone(), Some(element.as_ref().clone()))
                 }
+                (ir::CarrierStep::BoxPointee, _) => {
+                    (step.clone(), current.owned_box_pointee().cloned())
+                }
                 (ir::CarrierStep::SliceElement, _) => {
                     (step.clone(), current.owned_sequence_element().cloned())
                 }
@@ -1022,6 +1025,9 @@ impl ValidatedTraitWorld {
                     }
                     (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {
                         Some(element.as_ref().clone())
+                    }
+                    (ir::CarrierStep::BoxPointee, _) if ty.owned_box_pointee().is_some() => {
+                        ty.owned_box_pointee().cloned()
                     }
                     (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
                         ty.owned_sequence_element().cloned()

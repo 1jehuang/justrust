@@ -418,11 +418,17 @@ fn family_channel(family: &ir::CarrierFamily, prefix: u8) -> CarrierChannel {
         },
     }
 }
+/// True when a carrier location is an owned component of its root value:
+/// no reference is crossed. An owned Box pointee (`BoxPointee`) lowers to a
+/// `Deref` projection but is still part of the owner's storage tree.
+fn location_is_owned(location: &CarrierLocation) -> bool {
+    location.channel.prefix() == 0 && !location.path.0.contains(&CarrierStep::Referent)
+}
 fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
     let mut path = Vec::new();
     for step in location.path.0.iter() {
         match step {
-            CarrierStep::Referent => path.push(Projection::Deref),
+            CarrierStep::Referent | CarrierStep::BoxPointee => path.push(Projection::Deref),
             CarrierStep::Field(index) => path.push(Projection::Field(*index)),
             CarrierStep::ManuallyDropPayload => path.push(Projection::ManuallyDropPayload),
             CarrierStep::ConstantIndex(index) => path.push(Projection::ConstantIndex(*index)),
@@ -624,13 +630,6 @@ fn read_cell_cover_with_ledger(
         }
         budget.nodes(1)?;
         budget.spend(add(storage.projection.len(), 1)?)?;
-        // References behind an owned Box have no materialized cell. The
-        // cover is incomplete, never an empty (uninitialized) one.
-        if let Some(pointee) = ty.owned_box_pointee()
-            && box_summary::box_pointee_carries_references(pointee, ledger, budget)?
-        {
-            return Ok(false);
-        }
         match ty {
             Ty::Ref { .. } => {
                 budget.reserve_bytes(mul(storage.projection.len(), size_of::<Projection>())?)?;
@@ -667,6 +666,24 @@ fn read_cell_cover_with_ledger(
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
                 }
+                // An owned Box pointee holding references is walked only when
+                // the carrier inventory gave it cells. A recursive pointee
+                // has none: the cover is incomplete, never empty.
+                let mut box_descend = false;
+                if let Some(pointee) = ty.owned_box_pointee()
+                    && box_summary::box_pointee_carries_references(pointee, ledger, budget)?
+                {
+                    budget.spend(cell_index.len() + 1)?;
+                    let mut inside = storage.projection.clone();
+                    inside.push(Projection::Deref);
+                    if !cell_index.keys().any(|key| {
+                        key.storage.root == storage.root
+                            && key.storage.projection.starts_with(&inside)
+                    }) {
+                        return Ok(false);
+                    }
+                    box_descend = true;
+                }
                 // Materialization uses the original proof ledger, independently
                 // of whether the ownership scratch counter carries a ledger.
                 let field_budget = ledger;
@@ -688,6 +705,16 @@ fn read_cell_cover_with_ledger(
                     result
                 };
                 match ty {
+                    // An owned Box pointee is part of the owner's storage tree.
+                    // A recursive pointee was not given cells by the carrier
+                    // inventory: the cover is incomplete, never empty.
+                    Ty::Struct(_) if ty.owned_box_pointee().is_some() => {
+                        if box_descend
+                            && !child(&[Projection::Deref], ty.owned_box_pointee().unwrap())?
+                        {
+                            return Ok(false);
+                        }
+                    }
                     Ty::ManuallyDrop(wrapper) => {
                         if !child(&[Projection::ManuallyDropPayload], wrapper.argument())? {
                             return Ok(false);
@@ -3410,9 +3437,7 @@ impl CarrierBuilder<'_, '_> {
                     // A whole-value replacement transports owned channels only.
                     // Deeper referent channels describe existing pointed-to cells,
                     // not additional values overwritten by this assignment.
-                    if owned_destination
-                        && value_projection(&mapping.substituted).contains(&Projection::Deref)
-                    {
+                    if owned_destination && !location_is_owned(&mapping.substituted) {
                         continue;
                     }
                     let location = self.compose_component(
@@ -4215,10 +4240,10 @@ impl CarrierBuilder<'_, '_> {
         for location in locations.iter() {
             // Reading a value transports only its OWNED components. Pointee
             // values remain in their current canonical cells, not a snapshot.
-            let path = value_projection(location);
-            if path.contains(&Projection::Deref) {
+            if !location_is_owned(location) {
                 continue;
             }
+            let path = value_projection(location);
             let mut component = place.clone();
             component.projection.extend_from_slice(&path);
             let (targets, _, mut failure) = self.lens(state, &component)?;
@@ -4524,7 +4549,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         .charge_work(location.path.0.len() + 1)
                         .map_err(|_| Exhausted)?;
                     if !matches!(location.channel, CarrierChannel::Fixed(_))
-                        || value_projection(location).contains(&Projection::Deref)
+                        || !location_is_owned(location)
                     {
                         continue;
                     }
@@ -4647,7 +4672,9 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         for (local, locations) in layouts.iter().enumerate() {
             for location in locations.iter() {
                 let path = value_projection(location);
-                if path.contains(&Projection::Deref) {
+                // Only Box pointee steps may dereference: that storage is
+                // owned by the local. A reference's referent is not.
+                if !location_is_owned(location) {
                     continue;
                 }
                 let ty = ir::carrier_at(&f.locals[local].ty, location, &builder.ledger)
@@ -5225,13 +5252,21 @@ impl CarrierBuilder<'_, '_> {
                 block,
                 statement,
                 Problem::Unsupported(
-                    "unsupported: borrowed data stored behind an owned Box has no tracked provenance"
+                    "unsupported: borrowed data stored behind a recursive owned Box has no tracked provenance"
                         .into(),
                 ),
             )?;
         }
         let ty = self.place_ty(self.f, destination)?.clone();
         for (location, origins) in value {
+            // An unsizing coercion `Box<T>` to `Box<dyn P>` erases the
+            // pointee's components into the object: they have no cell in the
+            // destination. The object's lifetime bound is checked separately.
+            if location.path.0.first() == Some(&CarrierStep::BoxPointee)
+                && ty.owned_box_object().is_some()
+            {
+                continue;
+            }
             let semantic = ir::carrier_at(&ty, location, &self.ledger)
                 .map_err(|_| Exhausted)?
                 .clone();
@@ -5978,7 +6013,7 @@ impl CarrierBuilder<'_, '_> {
                 block,
                 None,
                 Problem::Unsupported(
-                    "unsupported: borrowed data moved into an owned Box has no tracked provenance"
+                    "unsupported: borrowed data moved into a recursive owned Box has no tracked provenance"
                         .into(),
                 ),
             )?;
@@ -6096,7 +6131,7 @@ impl CarrierBuilder<'_, '_> {
             for result in view.contract().results.iter() {
                 // Return rows are entry relations. Pointee rows are not new
                 // owned values and remain current-cell views of their anchors.
-                if value_projection(&result.location).contains(&Projection::Deref) {
+                if !location_is_owned(&result.location) {
                     continue;
                 }
                 let mut value = self.empty_origins()?;
@@ -7686,7 +7721,7 @@ impl CarrierBuilder<'_, '_> {
         let mut owned = None;
         for location in locations.iter() {
             self.budget.spend(location.path.0.len() + 1)?;
-            if value_projection(location).contains(&Projection::Deref) {
+            if !location_is_owned(location) {
                 continue;
             }
             // Copy channels beside the one mutable reborrow (`Zip<IterMut,
@@ -8261,7 +8296,7 @@ impl CarrierBuilder<'_, '_> {
             return Ok(false);
         };
         for location in locations.iter() {
-            if value_projection(location).contains(&Projection::Deref) {
+            if !location_is_owned(location) {
                 continue;
             }
             result_channels = add(result_channels, 1)?;
@@ -10638,7 +10673,7 @@ impl Plan {
                 // not the current contents of its pointee. In particular an
                 // opaque T behind &T is not read as a reference-valued cell.
                 // Positioned reference origins are checked independently below.
-                if projection.contains(&Projection::Deref) {
+                if !location_is_owned(&row.location) {
                     if let Some(problem) = self.check_invariant_nested_result(
                         f,
                         block,
