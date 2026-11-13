@@ -14,6 +14,8 @@ mod lint_names;
 pub(super) mod missing_docs;
 #[path = "source_attrs/naming_lints.rs"]
 mod naming_lints;
+#[path = "source_attrs/unused_macros.rs"]
+mod unused_macros;
 
 /// Lint levels in effect at a `mod name;` declaration, inherited by the
 /// child file's top level.
@@ -230,8 +232,11 @@ fn prepare_with_context(
         doc_state: Default::default(),
         pending_export: false,
         assoc_container: None,
+        macro_defs: Vec::new(),
+        unused_macros_denied: inherited.0.denied("unused_macros"),
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
+    filter.check_unused_macros()?;
     if filter.unsafe_code_relaxed && filter.forbid_unsafe_code {
         // E0453: a lower level cannot override `forbid`.
         return Err(error(
@@ -312,6 +317,10 @@ struct Filter<'a> {
     pending_export: bool,
     /// Documentation container of the impl/trait body being walked.
     assoc_container: Option<missing_docs::Container>,
+    /// Configured module-scope `macro_rules!` definitions.
+    macro_defs: Vec<unused_macros::MacroDef>,
+    /// `unused_macros` is at deny/forbid somewhere in this file.
+    unused_macros_denied: bool,
 }
 impl Filter<'_> {
     /// Lint-level attributes. The native compiler emits no warnings, so
@@ -412,6 +421,8 @@ impl Filter<'_> {
             };
             if !members.is_empty() {
                 for member in members {
+                    self.unused_macros_denied |=
+                        member == "unused_macros" && new_level >= lint_names::Level::Deny;
                     self.levels
                         .set(member, new_level)
                         .map_err(|m| error(AttributeErrorKind::Syntax, meta.range.clone(), &m))?;
@@ -1268,6 +1279,9 @@ impl Filter<'_> {
                 // they cannot establish export absence or uniqueness.
                 self.has_root_use_items |= kind == "use" && self.module_path.is_empty();
                 let exported_macro = self.pending_export;
+                if kind == "macro_rules" {
+                    self.record_macro_definition(keyword, exported_macro);
+                }
                 self.record_item_docs(kind, item_start, keyword, body, exported_macro);
                 if kind == "mod" && body.is_none() {
                     self.module_lints.push((
@@ -1706,9 +1720,15 @@ impl Filter<'_> {
                 continue;
             }
             let lint = lint_names::canonical(lint);
-            let touches_enforced = lint == "unsafe_code"
-                || lint_names::enforced(lint).is_some()
-                || lint_names::GROUPS.iter().any(|(group, _)| *group == lint);
+            // A statement or field position holds no module-scope macro
+            // definition, so lowering `unused_macros` there cannot change
+            // acceptance unless the lint is forbidden (E0453).
+            let macros_only = matches!(lint, "unused_macros" | "unused")
+                && self.levels.get("unused_macros") != lint_names::Level::Forbid;
+            let touches_enforced = !macros_only
+                && (lint == "unsafe_code"
+                    || lint_names::enforced(lint).is_some()
+                    || lint_names::GROUPS.iter().any(|(group, _)| *group == lint));
             if raising || touches_enforced {
                 return Ok(false);
             }
@@ -2660,6 +2680,45 @@ mod tests {
         }
         let capped = |s| prepare_capped(s, &CfgSet::default(), true, &InheritedLints::default());
         assert!(capped("#![forbid(non_camel_case_types)] struct a; fn main(){}").is_ok());
+    }
+
+    #[test]
+    fn unused_macros_matches_stock() {
+        for source in [
+            "#![deny(unused_macros)] macro_rules! a { () => {1} } mod m { macro_rules! b { () => {2} } pub fn f()->i32{ b!() } } #[allow(unused_macros)] macro_rules! c {()=>{}} macro_rules! _d {()=>{}} #[macro_export] macro_rules! e {()=>{}} fn main(){ a!(); m::f(); }",
+            "#![forbid(unused_macros)] macro_rules! r#a { () => {} } fn main(){ a!(); }",
+            "#![deny(unused_macros)] #[allow(unused)] macro_rules! a { () => {} } fn main(){}",
+            "macro_rules! a { () => {} } fn main(){}",
+        ] {
+            assert!(prep(source).is_ok(), "rejected {source}");
+        }
+        for source in [
+            "#![deny(unused_macros)] fn main(){} macro_rules! a { () => {} }",
+            "mod m { #![deny(unused_macros)] macro_rules! b { () => {} } } fn main(){}",
+            "#![deny(unused_macros)] fn main(){ a!() } macro_rules! a { () => {} }",
+            "#![deny(unused_macros)] macro_rules! a { () => {} } #[cfg(any())] fn g(){ a!() } fn main(){}",
+            "#![deny(unused_macros)] mod m { macro_rules! a { () => {} } } fn main(){ a!() }",
+            "#![forbid(unused_macros)] #[allow(unused)] macro_rules! a { () => {} } fn main(){}",
+        ] {
+            let e = prep(source).err();
+            assert!(
+                e.as_ref()
+                    .is_some_and(|e| e.kind == AttributeErrorKind::Syntax),
+                "{source}: {e:?}"
+            );
+        }
+        for source in [
+            "#![deny(unused_macros)] macro_rules! a { () => {} } macro_rules! b { () => { a!() } } fn main(){ b!() }",
+            "#![deny(unused_macros)] fn main(){ macro_rules! a { () => {} } }",
+            "#![deny(unused_macros)] macro_rules! a { () => {} } mod n; fn main(){}",
+        ] {
+            let e = prep(source).err();
+            assert!(
+                e.as_ref()
+                    .is_some_and(|e| e.kind == AttributeErrorKind::Unsupported),
+                "{source}: {e:?}"
+            );
+        }
     }
 
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {

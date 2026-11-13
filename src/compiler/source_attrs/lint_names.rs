@@ -301,19 +301,52 @@ pub(super) const ENFORCED: &[&str] = &[
     "missing_docs",
     "non_camel_case_types",
     "non_upper_case_globals",
+    "unused_macros",
 ];
 
 /// Builtin lint groups whose members include an enforced lint, with the full
 /// member list. A group can be raised to deny/forbid only when every member
 /// is enforced; lowering it applies to every enforced member.
-pub(super) const GROUPS: &[(&str, &[&str])] = &[(
-    "nonstandard_style",
-    &[
-        "non_camel_case_types",
-        "non_snake_case",
-        "non_upper_case_globals",
-    ],
-)];
+pub(super) const GROUPS: &[(&str, &[&str])] = &[
+    (
+        "nonstandard_style",
+        &[
+            "non_camel_case_types",
+            "non_snake_case",
+            "non_upper_case_globals",
+        ],
+    ),
+    (
+        "unused",
+        &[
+            "unused_imports",
+            "unused_variables",
+            "unused_visibilities",
+            "unused_assignments",
+            "dead_code",
+            "unused_mut",
+            "unreachable_cfg_select_predicates",
+            "unreachable_code",
+            "unreachable_patterns",
+            "unused_must_use",
+            "unused_unsafe",
+            "path_statements",
+            "unused_attributes",
+            "unused_macros",
+            "unused_macro_rules",
+            "unused_allocation",
+            "unused_doc_comments",
+            "unused_extern_crates",
+            "unused_features",
+            "unused_labels",
+            "unused_parens",
+            "unused_braces",
+            "redundant_semicolons",
+            "map_unit_fn",
+            "repeated_reprs",
+        ],
+    ),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Level {

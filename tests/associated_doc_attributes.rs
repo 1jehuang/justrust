@@ -356,6 +356,31 @@ fn statement_and_field_lint_levels_match_stock() {
 }
 
 #[test]
+fn denied_unused_macros_match_stock() {
+    let source = r#"
+        #![deny(unused_macros)]
+        macro_rules! twice { ($e:expr) => { $e * 2 } }
+        mod m {
+            macro_rules! three { () => { 3 } }
+            pub fn f() -> i32 { three!() }
+        }
+        #[allow(unused_macros)]
+        macro_rules! idle { () => {} }
+        macro_rules! _quiet { () => {} }
+        fn main() {
+            println!("{} {}", twice!(4), m::f());
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#![deny(unused_macros)] macro_rules! a { () => {} } fn main() {}",
+        "#![forbid(unused_macros)] fn main() { a!() } macro_rules! a { () => {} }",
+    ] {
+        file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+    }
+}
+
+#[test]
 fn inactive_items_lex_with_the_crate_edition() {
     let text = "#[cfg(any())] fn unused(gen: u8) -> u8 { gen } fn main(){}";
     let options = SourceOptions {
