@@ -1445,9 +1445,10 @@ impl ValidatedTraitWorld {
 
     /// The borrowed-item inverse is an original declaration protocol, not a
     /// monomorphic type match. Its two parameters are linked only by one exact
-    /// associated equality `I::Item = &T`, with canonical Clone(T). The wrapper
-    /// physically owns I and no T, so the outer item-reference region cannot
-    /// become a source for a stored carrier inside the cloned T.
+    /// associated equality `I::Item = &T`, with canonical Clone(T) (`Cloned`)
+    /// or canonical Copy(T) (`Copied`). The wrapper physically owns I and no
+    /// T, so the outer item-reference region cannot become a source for a
+    /// stored carrier inside the cloned or copied T.
     fn closed_borrowed_item_context(
         &self,
         parameter: ParamId,
@@ -1489,9 +1490,31 @@ impl ValidatedTraitWorld {
             return Ok(false);
         }
         retain::<Ty>(&self.budget, 1)?;
+        // Exactly one duplication bound: Clone(T) or Copy(T), never both and
+        // never a lookalike trait. Both produce an owned T from `&T`.
+        let mut duplication = None;
+        for candidate in [CatalogItem::Clone, CatalogItem::Copy] {
+            let declaration = self.catalog.id(candidate);
+            let row = Predicate::Implements(TraitRef {
+                declaration,
+                self_ty: Ty::Param(parameter),
+                args: Arc::from([]),
+            });
+            let mut count = 0;
+            for actual in &rows {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                count += usize::from(self.eq_predicate(actual, &row)?);
+            }
+            if count == 1 && duplication.replace(declaration).is_some() {
+                return Ok(false);
+            }
+        }
+        let Some(duplication) = duplication else {
+            return Ok(false);
+        };
         let expected = [
             Predicate::Implements(TraitRef {
-                declaration: self.catalog.id(CatalogItem::Clone),
+                declaration: duplication,
                 self_ty: Ty::Param(parameter),
                 args: Arc::from([]),
             }),
@@ -1518,7 +1541,7 @@ impl ValidatedTraitWorld {
             self.item_region_substitution(&Ty::Param(parameter), context, facts, scratch)?;
         self.require_in(
             &Predicate::Implements(TraitRef {
-                declaration: self.catalog.id(CatalogItem::Clone),
+                declaration: duplication,
                 self_ty: actual,
                 args: Arc::from([]),
             }),

@@ -642,3 +642,25 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn copied_iterator_preserves_element_lifetime() {
+    oracle::stock_native(
+        r#"
+fn first<'a>(x: &[&'a str]) -> Option<&'a str> { x.iter().copied().next() }
+fn nums<'a>(x: &[&'a i32]) -> i32 { let mut t = 0; for n in x.iter().copied() { t += *n; } t }
+fn gather<'a>(x: &[&'a str]) -> Vec<&'a str> { let mut v = Vec::new(); for s in x.iter().copied() { v.push(s); } v }
+fn main() {
+    let words = ["alpha", "beta"];
+    let held = first(&words);
+    println!("{:?} {} {:?}", held, nums(&[&3, &4]), gather(&words));
+}
+"#,
+    );
+    for source in [
+        "fn first<'a, 'b>(x: &[&'a str], _y: &'b str) -> Option<&'b str> { x.iter().copied().next() } fn main() { println!(\"{:?}\", first(&[\"a\"], \"b\")); }",
+        "fn first<'a>(x: &[&'a str]) -> Option<&'static str> { x.iter().copied().next() } fn main() { println!(\"{:?}\", first(&[\"a\"])); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
