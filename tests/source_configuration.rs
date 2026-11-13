@@ -225,6 +225,8 @@ fn fixtures() -> Vec<Fixture> {
         case("disabled_bad_lexical_token", "#[cfg(any())] fn unused() { ` }", Invalid, "unknown start of token"),
         case("disabled_unterminated_string", "#[cfg(any())] fn unused() { \"", Invalid, "unterminated double quote string"),
         case("disabled_syntactically_invalid_body", "#[cfg(any())] fn unused() { let = ; }", Invalid, "expected pattern"),
+        case("disabled_qualified_item_macro", "#[cfg(any())] quickcheck::quickcheck! { fn qc(x: Vec<u8>) -> bool { true } }\n#[cfg(any())] ::a::b!(1);\nstruct S;\n#[cfg(any())] impl S { a::m! { fn f() {} } }", Supported, ""),
+        case("disabled_qualified_item_macro_unclosed", "#[cfg(any())] a::b! { fn f() {} ]", Invalid, "mismatched closing delimiter"),
         case("disabled_impl_item_macro", "struct S; trait T { fn f(&self); }\n#[cfg(any())] impl T for S { m! { if #[cfg(x)] { fn f(&self) {} } } n!(1); }\n#[cfg(any())] trait U { m! { fn g(); } }", Supported, ""),
         case("disabled_impl_item_macro_unclosed", "struct S;\n#[cfg(any())] impl S { m! { fn f() {} ) }", Invalid, "mismatched closing delimiter"),
         case("disabled_impl_item_paren_macro_missing_semicolon", "struct S;\n#[cfg(any())] impl S { m!(1) fn f() {} }", Invalid, "followed by a semicolon"),

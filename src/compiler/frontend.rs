@@ -16351,6 +16351,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.module_macro_definition()?;
                 continue;
             }
+            if !explicit_visibility && self.inactive_qualified_macro_item()? {
+                continue;
+            }
             if self.token().is_ident()
                 && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
             {
