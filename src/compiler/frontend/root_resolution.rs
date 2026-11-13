@@ -7,7 +7,7 @@ use super::*;
 mod capture_resolution;
 mod cell;
 mod const_inline;
-pub(super) use const_inline::scalar_const_assertion;
+pub(super) use const_inline::{scalar_const_assertion, scalar_simple};
 pub(super) use const_inline::{static_elided_type, validate_lowered_constant};
 mod aggregate_const_pattern;
 mod const_pattern;

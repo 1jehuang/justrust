@@ -351,12 +351,18 @@ impl Parser<'_, '_> {
         // An item context: the initializer sees items, never local bindings.
         let frontier = self.lexical.function.as_ref().map(|f| f.frontier);
         let scopes_taken = self.lexical.function.take();
+        let initializer_start = self.cursor.index();
         let initializer = self.nested_expr();
         self.lexical.function = scopes_taken;
         if let (Some(function), Some(frontier)) = (self.lexical.function.as_mut(), frontier) {
             function.frontier = frontier;
         }
         let initializer = initializer?;
+        let initializer = if unnamed {
+            initializer
+        } else {
+            self.fold_scalar_const_initializer(&ty, initializer_start, initializer)?
+        };
         self.expect(";")?;
         let (ty, initializer) = if unnamed {
             self.unnamed_const_initializer(ty, initializer)?

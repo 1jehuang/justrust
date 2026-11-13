@@ -688,3 +688,69 @@ fn main() {
         ],
     );
 }
+
+#[test]
+fn typed_array_length_expressions_match_stock() {
+    #[path = "support/closure_oracle.rs"]
+    mod closure_oracle;
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "typed-array-lengths",
+        &[
+            Case {
+                name: "primitive_constants_layout_and_bool_casts",
+                source: r#"use core::mem;
+const PTR_BYTES: usize = mem::size_of::<*const u8>();
+const TAIL_BYTES: usize = 8 * (PTR_BYTES < 8) as usize - PTR_BYTES * (PTR_BYTES < 8) as usize;
+const DIGITS: usize = u64::MAX.ilog10() as usize + 1;
+const SIGNED: usize = i128::MAX.ilog10() as usize + 2;
+const WIDE: u32 = 3;
+struct Buf {
+    tail: [u8; TAIL_BYTES],
+    digits: [u8; DIGITS],
+    bits: [u8; i32::BITS as usize / 8],
+    layout: [u8; std::mem::size_of::<[u16; 3]>() + mem::align_of::<u64>()],
+}
+fn main() {
+    let b = Buf { tail: [], digits: [1; 20], bits: [2; 4], layout: [3; 14] };
+    let pow = [0u8; 2usize.pow(WIDE)];
+    let mixed = [0u8; (-3i8) as u8 as usize - 250 + (true && 1 < 2) as usize];
+    let shifted = [0u8; (1u64 << 4) as usize >> 1];
+    println!("{} {} {} {} {} {} {} {}", b.tail.len(), b.digits.len(), b.bits.len(), b.layout.len(), SIGNED, pow.len(), mixed.len(), shifted.len());
+}
+"#,
+                expect: Expect::Run("0 20 4 14 40 8 4 8\n"),
+            },
+            Case {
+                name: "length_subtraction_overflows",
+                source: "fn main() { let a = [0u8; 2 - 3 + 4]; println!(\"{}\", a.len()); }",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "unused_length_division_by_zero",
+                source: "struct S { a: [u8; 5 / (2 - 2)] } fn main() {}",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "signed_arithmetic_overflows",
+                source: "fn main() { let a = [0u8; (2000000000 * 3) as usize]; println!(\"{}\", a.len()); }",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "ilog_of_zero_panics",
+                source: "const Z: u8 = 0; fn main() { let a = [0u8; Z.ilog10() as usize]; println!(\"{}\", a.len()); }",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "non_usize_length",
+                source: "const N: u32 = 3; fn main() { let a = [0u8; N + 1]; println!(\"{}\", a.len()); }",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_cast_initializer_overflows",
+                source: "const W: u8 = u16::MAX as u8 + 1; fn main() {}",
+                expect: Expect::Invalid("E0080"),
+            },
+        ],
+    );
+}

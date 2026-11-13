@@ -161,6 +161,11 @@ fn assertion_operand(expr: &Expr) -> bool {
     }
 }
 
+/// An initializer the scalar graph CTFE path computes directly.
+pub(in crate::compiler::frontend) fn scalar_simple(expr: &Expr) -> bool {
+    simple(expr)
+}
+
 fn simple(expr: &Expr) -> bool {
     match expr {
         Expr::Integer(_) | Expr::Bool(_) | Expr::Var(_) | Expr::ConstItem(_) => true,

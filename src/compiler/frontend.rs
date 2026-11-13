@@ -16186,17 +16186,47 @@ impl<'input, 'names> Parser<'input, 'names> {
         if let Some(start) = self.cursor.index() {
             let tokens: &[Token] = self.input;
             if let Some(end) = array_len::length_end(tokens, start) {
+                // A length naming an in-scope const generic parameter is
+                // dependent, never an item constant of the same spelling.
+                let mut names_parameter = false;
+                for index in start..end {
+                    let token = &tokens[index];
+                    if token.kind != ParserTokenKind::Ident {
+                        continue;
+                    }
+                    for declared in self.const_params.iter().chain(&self.impl_const_params) {
+                        let spelled = self
+                            .names
+                            .spelling(declared.name)
+                            .map_err(native_adapter::name_error)?;
+                        if spelled == token.text {
+                            names_parameter = true;
+                        }
+                    }
+                }
                 let table = array_len::scan(tokens);
-                if let Some(value) = array_len::evaluate(tokens, &table, start..end) {
-                    if value > ir::MAX_ARRAY_TYPE_LEN as u128
-                        && self.purpose != ParserPurpose::InactiveSyntax
+                match (!names_parameter)
+                    .then(|| array_len::evaluate(tokens, &table, start..end))
+                    .unwrap_or(Err(array_len::Failure::Unsupported))
+                {
+                    Ok(value) => {
+                        if value > ir::MAX_ARRAY_TYPE_LEN as u128
+                            && self.purpose != ParserPurpose::InactiveSyntax
+                        {
+                            return Err(self.limit("array length/index exceeds supported limit"));
+                        }
+                        while self.cursor.index().is_some_and(|at| at < end) {
+                            self.cursor.bump();
+                        }
+                        return Ok(value.min(ir::MAX_ARRAY_TYPE_LEN as u128) as usize);
+                    }
+                    // Inactive items are validated for syntax only.
+                    Err(array_len::Failure::Invalid(message))
+                        if self.purpose != ParserPurpose::InactiveSyntax =>
                     {
-                        return Err(self.limit("array length/index exceeds supported limit"));
+                        return Err(self.error(&message));
                     }
-                    while self.cursor.index().is_some_and(|at| at < end) {
-                        self.cursor.bump();
-                    }
-                    return Ok(value.min(ir::MAX_ARRAY_TYPE_LEN as u128) as usize);
+                    Err(_) => {}
                 }
             }
         }
@@ -17290,7 +17320,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect(":")?;
             let ty = self.ty()?;
             self.expect("=")?;
+            let initializer_start = self.cursor.index();
             let initializer = self.nested_expr()?;
+            let initializer = if unnamed {
+                initializer
+            } else {
+                self.fold_scalar_const_initializer(&ty, initializer_start, initializer)?
+            };
             self.expect(";")?;
             let (ty, initializer) = if unnamed {
                 self.unnamed_const_initializer(ty, initializer)?
