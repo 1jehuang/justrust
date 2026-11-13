@@ -694,6 +694,58 @@ fn accepts_generic_returned_slot_of_reference_holding_vec() {
 }
 
 #[test]
+fn accepts_entry_or_insert_with_reference_holding_vec() {
+    runs(
+        r#"use std::collections::BTreeMap;
+struct E<'a, V> { m: &'a mut Vec<V> }
+impl<'a, V> E<'a, V> {
+    fn ins<F: FnOnce() -> V>(self, g: F) -> &'a mut V {
+        let m = self.m; let x = g(); m.push(x); let n = m.len() - 1;
+        match m.get_mut(n) { Some(r) => r, None => panic!() }
+    }
+}
+fn main() {
+    let s = String::from("hi");
+    let mut v: Vec<Vec<&str>> = Vec::new();
+    E { m: &mut v }.ins(Vec::new).push(&s);
+    println!("{:?}", v);
+    let words = vec!["apple", "avocado", "bean"];
+    let mut m: BTreeMap<char, Vec<&str>> = BTreeMap::new();
+    for w in &words { m.entry(w.chars().next().unwrap()).or_insert_with(Vec::new).push(w); }
+    let mut n: BTreeMap<char, Vec<&str>> = BTreeMap::new();
+    for w in &words { n.entry('x').or_insert(Vec::new()).push(w); }
+    println!("{:?} {:?}", m, n);
+}
+"#,
+        "[[\"hi\"]]\n{'a': [\"apple\", \"avocado\"], 'b': [\"bean\"]} {'x': [\"apple\", \"avocado\", \"bean\"]}\n",
+    );
+}
+
+#[test]
+fn rejects_entry_or_insert_with_reference_holding_vec_misuse() {
+    rejects(
+        "short-lived entry element",
+        r#"use std::collections::BTreeMap;
+fn main() {
+    let mut b: BTreeMap<char, Vec<&str>> = BTreeMap::new();
+    { let s = String::from("apple"); b.entry('a').or_insert_with(Vec::new).push(&s); }
+    println!("{:?}", b);
+}
+"#,
+    );
+    rejects(
+        "short-lived closure-made entry",
+        r#"use std::collections::BTreeMap;
+fn main() {
+    let mut b: BTreeMap<char, Vec<&str>> = BTreeMap::new();
+    { let s = String::from("apple"); b.entry('a').or_insert_with(|| vec![s.as_str()]).push("x"); }
+    println!("{:?}", b);
+}
+"#,
+    );
+}
+
+#[test]
 fn rejects_generic_returned_slot_of_reference_holding_vec_misuse() {
     rejects(
         "short-lived element",

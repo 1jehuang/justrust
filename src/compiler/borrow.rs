@@ -5030,6 +5030,13 @@ impl CarrierBuilder<'_, '_> {
                 continue;
             }
             if self.targets[origin].is_empty() {
+                // Same rule as `origin_regions`: an origin with no storage
+                // targets and no dependencies holds no loan (a carrier in a
+                // value freshly returned by an input-free call such as
+                // `Vec::new()`), so it cannot leave the declaration envelope.
+                if self.dependencies[origin].members().next().is_none() {
+                    continue;
+                }
                 return Ok(false);
             }
             for target in &self.targets[origin] {
@@ -7885,6 +7892,54 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(true)
     }
+    /// The original contract without write sources from other families whose
+    /// closed actual has no carrier locations. `None` if nothing was removed.
+    fn without_carrier_free_family_sources(
+        &mut self,
+        view: &super::traits::CarrierContractView,
+    ) -> Result<Option<ir::CarrierContract>, Exhausted> {
+        let contract = view.original_contract();
+        let mut changed = false;
+        let mut writes = Vec::new();
+        for row in contract.writes.iter() {
+            let mut sources = Vec::new();
+            for source in row.sources.iter() {
+                self.budget.spend(1)?;
+                let drop = match source.location.channel {
+                    CarrierChannel::ParamTail { parameter, .. }
+                        if source.location.channel != row.destination.location.channel =>
+                    {
+                        match view.parameter_actual(parameter).map_err(|_| Exhausted)? {
+                            Some((_, actual)) if actual.is_closed_shallow() => self
+                                .metadata_value(ir::carrier_locations(actual, &self.ledger))?
+                                .is_some_and(|locations| locations.is_empty()),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                };
+                if drop {
+                    changed = true;
+                } else {
+                    checked_vec_growth(&mut sources, self.budget)?;
+                    sources.push(source.clone());
+                }
+            }
+            checked_vec_growth(&mut writes, self.budget)?;
+            writes.push(ir::CarrierWriteEnvelope {
+                destination: row.destination.clone(),
+                sources: sources.into(),
+            });
+        }
+        if !changed {
+            return Ok(None);
+        }
+        Ok(Some(ir::CarrierContract {
+            inputs: contract.inputs.clone(),
+            results: contract.results.clone(),
+            writes: writes.into(),
+        }))
+    }
     /// Copy-only family writes do not transport affine authority. This proof
     /// replays every original write/source and the one returned mutable loan;
     /// it does not alter target, lifetime, alias or callee-envelope checks.
@@ -7911,7 +7966,20 @@ impl CarrierBuilder<'_, '_> {
         if !closed && facts.phase() != super::traits::FactsPhase::Universal {
             return Ok(false);
         }
-        let Some(families) = copy_family_effect_rows(view.original_contract(), self.budget)? else {
+        // A source from another family whose closed actual carries no
+        // references (for example `F = fn() -> Vec<_>` supplying a fresh
+        // value) contributes no origins. Remove only those sources before
+        // the shape check; every other source and row is kept unchanged.
+        let original = if closed {
+            self.without_carrier_free_family_sources(view)?
+        } else {
+            None
+        };
+        let Some(families) = copy_family_effect_rows(
+            original.as_ref().unwrap_or(view.original_contract()),
+            self.budget,
+        )?
+        else {
             return Ok(false);
         };
         for parameter in families {
