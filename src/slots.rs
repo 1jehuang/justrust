@@ -538,12 +538,75 @@ fn children(dir: &Path, max_age: Option<Duration>) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Unit dirs of Cargo's per-package build layout (stable since 1.100):
+/// `build/<package>/<hash>/` holds `fingerprint/` beside `out/` and `run/`,
+/// and there is no `.fingerprint/` or `deps/`. Empty for the older layout,
+/// whose `build/<package>-<hash>/` dirs have no `fingerprint` child.
+fn package_units(package: &Path) -> Vec<PathBuf> {
+    children(package, None)
+        .into_iter()
+        .filter(|unit| unit.join("fingerprint").is_dir())
+        .collect()
+}
+
+/// Whether a profile dir holds built units in either layout, so there is
+/// something to seed a slot from (or the slot was seeded).
+fn has_units(profile: &Path) -> bool {
+    profile.join(".fingerprint").is_dir()
+        || children(&profile.join("build"), None)
+            .iter()
+            .any(|package| !package_units(package).is_empty())
+}
+
+/// Copy jobs for `build/`, split so fingerprints can go first:
+/// (fingerprint dirs, everything else). Old-layout dirs are copied whole.
+/// Creates the destination unit dirs. None if one cannot be created.
+type CopyJobs = Vec<(PathBuf, PathBuf)>;
+fn build_jobs(shared: &Path, slot: &Path) -> Option<(CopyJobs, CopyJobs)> {
+    let (mut fingerprints, mut rest) = (Vec::new(), Vec::new());
+    let dst_build = slot.join("build");
+    std::fs::create_dir_all(&dst_build).ok()?;
+    for package in children(&shared.join("build"), None) {
+        let units = package_units(&package);
+        let Some(name) = package.file_name() else {
+            continue;
+        };
+        if units.is_empty() {
+            rest.push((package, dst_build.clone()));
+            continue;
+        }
+        let dst_package = dst_build.join(name);
+        std::fs::create_dir_all(&dst_package).ok()?;
+        for entry in children(&package, None) {
+            let Some(name) = entry.file_name() else {
+                continue;
+            };
+            if !units.contains(&entry) {
+                rest.push((entry, dst_package.clone()));
+                continue;
+            }
+            let dst_unit = dst_package.join(name);
+            std::fs::create_dir_all(&dst_unit).ok()?;
+            for part in children(&entry, None) {
+                if part.file_name().is_some_and(|n| n == "fingerprint") {
+                    fingerprints.push((part, dst_unit.clone()));
+                } else {
+                    rest.push((part, dst_unit.clone()));
+                }
+            }
+        }
+    }
+    Some((fingerprints, rest))
+}
+
 /// Reflink-copy the shared profile dir into the slot's profile dir.
 ///
 /// Order matters because the shared dir may be in use by another cargo:
 /// fingerprints are copied before the artifacts they describe, so a copied
 /// fingerprint never claims an artifact newer than the copied one. An artifact
-/// newer than its fingerprint only makes cargo rebuild that unit.
+/// newer than its fingerprint only makes cargo rebuild that unit. That holds
+/// in both layouts: `.fingerprint/` first in the old one, each unit's
+/// `fingerprint/` first in the per-package one.
 fn seed(shared: &Path, slot: &Path) -> bool {
     let stage = |subs: &[(&str, Option<Duration>)]| -> bool {
         let mut jobs = Vec::new();
@@ -558,9 +621,13 @@ fn seed(shared: &Path, slot: &Path) -> bool {
         }
         cp_parallel(&jobs, &[])
     };
+    let Some((fingerprints, build)) = build_jobs(shared, slot) else {
+        return false;
+    };
     stage(&[(".fingerprint", None)])
+        && cp_parallel(&fingerprints, &[])
+        && cp_parallel(&build, &[])
         && stage(&[
-            ("build", None),
             ("deps", None),
             ("examples", None),
             ("incremental", Some(INCREMENTAL_MAX_AGE)),
@@ -683,6 +750,11 @@ struct Refresh {
 /// with mtimes preserved. Cargo's fingerprints then decide freshness as
 /// usual: a copied unit whose inputs or dependencies differ in the slot is
 /// simply rebuilt.
+///
+/// Only the `.fingerprint/` layout is refreshed. Units in the per-package
+/// layout (Cargo 1.100+) are not listed here, so a slot seeded from one is
+/// left alone and Cargo rebuilds what changed inside the slot: correct, but
+/// without the copy shortcut.
 ///
 /// The caller holds the slot's flock and a shared flock on the shared dir's
 /// build lock, so neither side is being written. Crash safety: a replaced
@@ -1084,7 +1156,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     let shared_profile = target.join(&profile);
     // Nothing to seed from: building deps into a slot from zero would cost
     // as much as the shared build and then double the disk use.
-    if !shared_profile.join(".fingerprint").is_dir() {
+    if !has_units(&shared_profile) {
         return None;
     }
     let root = target.join("justrust-slots");
@@ -1168,7 +1240,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     // Never wait for it: a busy shared dir means skip, the slot is still valid.
     let shared_guard = try_lock_shared(&shared_profile.join(".cargo-build-lock"));
     let stamp = shared_stamp(&shared_profile);
-    if !meta.seeded || !slot_profile.join(".fingerprint").is_dir() {
+    if !meta.seeded || !has_units(&slot_profile) {
         eprintln!(
             "justrust: seeding build slot {n} from {} (reflink copy, once per slot)",
             shared_profile.display()
@@ -1884,6 +1956,111 @@ mod tests {
             mt(&shared.join("deps/liba-1.rlib")),
             mt(&slot.join("deps/liba-1.rlib"))
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Cargo 1.100 moved fingerprints and artifacts under
+    /// `build/<package>/<hash>/` and dropped `.fingerprint/` and `deps/`.
+    fn per_package_profile(base: &Path) -> PathBuf {
+        let shared = base.join("shared/debug");
+        for d in [
+            "build/a/0123456789abcdef/fingerprint",
+            "build/a/0123456789abcdef/out",
+            "build/a/fedcba9876543210/fingerprint",
+            "build/a/fedcba9876543210/run",
+            "incremental/a-1/s-1",
+        ] {
+            std::fs::create_dir_all(shared.join(d)).unwrap();
+        }
+        let unit = shared.join("build/a/0123456789abcdef");
+        std::fs::write(unit.join("fingerprint/lib-a"), b"fp").unwrap();
+        std::fs::write(unit.join("out/liba-0123456789abcdef.rlib"), b"rlib").unwrap();
+        std::fs::write(shared.join("build/a/fedcba9876543210/run/stdout"), b"out").unwrap();
+        shared
+    }
+
+    #[test]
+    fn per_package_layout_counts_as_built_units() {
+        let base =
+            std::env::temp_dir().join(format!("justrust-slot-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let shared = per_package_profile(&base);
+        assert!(has_units(&shared));
+        assert_eq!(package_units(&shared.join("build/a")).len(), 2);
+        // Old layout: `.fingerprint/` decides, its build dirs are not units.
+        let old = base.join("old/debug");
+        std::fs::create_dir_all(old.join("build/a-0123456789abcdef/out")).unwrap();
+        assert!(!has_units(&old));
+        assert!(package_units(&old.join("build/a-0123456789abcdef")).is_empty());
+        std::fs::create_dir_all(old.join(".fingerprint")).unwrap();
+        assert!(has_units(&old));
+        assert!(!has_units(&base.join("missing/debug")));
+
+        // Fingerprints are separate jobs so they are copied first, each into
+        // its own unit dir. Old-layout build dirs are copied whole.
+        let slot = base.join("slots/0/debug");
+        let (fingerprints, rest) = build_jobs(&shared, &slot).unwrap();
+        let mut fp: Vec<_> = fingerprints
+            .iter()
+            .map(|(src, dst)| {
+                (
+                    src.strip_prefix(&shared).unwrap(),
+                    dst.strip_prefix(&slot).unwrap(),
+                )
+            })
+            .collect();
+        fp.sort();
+        assert_eq!(
+            fp,
+            [
+                (
+                    Path::new("build/a/0123456789abcdef/fingerprint"),
+                    Path::new("build/a/0123456789abcdef")
+                ),
+                (
+                    Path::new("build/a/fedcba9876543210/fingerprint"),
+                    Path::new("build/a/fedcba9876543210")
+                ),
+            ]
+        );
+        assert!(rest.iter().all(|(src, _)| !src.ends_with("fingerprint")));
+        assert_eq!(rest.len(), 2);
+        assert!(slot.join("build/a/fedcba9876543210").is_dir());
+        let (fingerprints, rest) = build_jobs(&old, &base.join("slots/1/debug")).unwrap();
+        assert!(fingerprints.is_empty());
+        assert_eq!(
+            rest,
+            [(
+                old.join("build/a-0123456789abcdef"),
+                base.join("slots/1/debug/build")
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn seed_copies_per_package_units_with_mtimes() {
+        let base =
+            std::env::temp_dir().join(format!("justrust-slot-seed-pkg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let shared = per_package_profile(&base);
+        if !reflink_supported(&base) {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let slot = base.join("slots/0/debug");
+        assert!(seed(&shared, &slot));
+        assert!(has_units(&slot));
+        let rlib = "build/a/0123456789abcdef/out/liba-0123456789abcdef.rlib";
+        assert_eq!(std::fs::read(slot.join(rlib)).unwrap(), b"rlib");
+        assert!(
+            slot.join("build/a/0123456789abcdef/fingerprint/lib-a")
+                .is_file()
+        );
+        assert!(slot.join("build/a/fedcba9876543210/run/stdout").is_file());
+        assert!(slot.join("incremental/a-1/s-1").is_dir());
+        let mt = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+        assert_eq!(mt(&shared.join(rlib)), mt(&slot.join(rlib)));
         let _ = std::fs::remove_dir_all(&base);
     }
 
