@@ -40,7 +40,9 @@
 //! Opt-in: `JUSTRUST_REMOTE_CHECKPOINT=1` in the daemon's environment.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
 /// `Hello` capability of an agent that serves `Checkpoint` and `Verify`.
 pub const CAP: &str = "checkpoint";

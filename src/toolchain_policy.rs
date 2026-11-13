@@ -165,6 +165,8 @@ fn plan(cached: Option<Cached>, now: f64) -> Plan {
 
 /// The control plane's toolchain, for a build machine: asks when nothing is
 /// known yet, otherwise never waits. `None` when it has never answered.
+// Only the build agent asks, and it is Unix-only.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn current() -> Option<Policy> {
     if off() {
         return None;
