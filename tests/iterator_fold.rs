@@ -846,6 +846,16 @@ fn iterator_flat_map_matches_stock() {
                 source: "fn main(){let item;{let a=vec![1i32,2i32];item=(0i32..1i32).flat_map(|_|a.iter()).next().unwrap();}println!(\"{}\",item);}",
                 expect: Expect::InvalidAfterParse("E0597"),
             },
+            Case {
+                name: "borrowed_inner_escape_through_held_iterator",
+                source: "fn main(){let item;{let a=vec![1i32,2i32];let mut it=(0i32..1i32).flat_map(|_|a.iter());item=it.next().unwrap();}println!(\"{}\",item);}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+            Case {
+                name: "borrowed_inner_escape_through_owned_vec_of_refs",
+                source: "fn main(){let item;{let a=vec![1i32,2i32];item=(0i32..1i32).flat_map(|_|vec![&a[0]]).next().unwrap();}println!(\"{}\",item);}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
         ],
     );
 }

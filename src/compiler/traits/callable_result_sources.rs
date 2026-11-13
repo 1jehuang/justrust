@@ -26,12 +26,23 @@ impl ValidatedTraitWorld {
         actuals: &nominal_carriers::CarrierFamilyActuals,
     ) -> Result<Vec<ir::InputCarrier>> {
         let mut sources = Vec::new();
-        let ir::CarrierChannel::ParamTail {
-            parameter: family,
-            prefix: 0,
-        } = result.location.channel
-        else {
-            return Ok(sources);
+        // A projection rooted at the callable's output family (FlatMap's
+        // `<U as IntoIterator>::IntoIter` slots) is computed from that output,
+        // so it can carry every origin the callable result carries. Its exact
+        // component inside the output is not known here: take all of them.
+        let (family, whole) = match &result.location.channel {
+            ir::CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } => (*parameter, false),
+            ir::CarrierChannel::ProjectionTail {
+                projection,
+                prefix: 0,
+            } => match projection.trait_ref.self_ty {
+                Ty::Param(parameter) => (parameter, true),
+                _ => return Ok(sources),
+            },
+            _ => return Ok(sources),
         };
         if facts.phase() != FactsPhase::Closed
             || !matches!(output.location.channel, ir::CarrierChannel::Fixed(_))
@@ -86,12 +97,13 @@ impl ValidatedTraitWorld {
                     };
                     let target = Callee::Direct(self.closure_target(closure, mode)?);
                     let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
-                    let Some(row) = self.callable_result_row(&view, component)? else {
+                    let rows = self.callable_result_rows(&view, component, whole)?;
+                    if rows.is_empty() && !whole {
                         return unsupported(
                             "unsupported: closure result lacks the instantiated result carrier",
                         );
-                    };
-                    for source in row.sources.iter() {
+                    }
+                    for source in rows.iter().flat_map(|row| row.sources.iter()) {
                         charged(&self.budget, self.budget.charge_work(1))?;
                         match (source.param, source.location.path.0.split_first()) {
                             (0, _) => captures = true,
@@ -120,12 +132,13 @@ impl ValidatedTraitWorld {
                 Ty::FnItem(item) => {
                     let target = Callee::Direct(item.as_ref().clone());
                     let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
-                    let Some(row) = self.callable_result_row(&view, component)? else {
+                    let rows = self.callable_result_rows(&view, component, whole)?;
+                    if rows.is_empty() && !whole {
                         return unsupported(
                             "unsupported: function item result lacks the instantiated result carrier",
                         );
-                    };
-                    for source in row.sources.iter() {
+                    }
+                    for source in rows.iter().flat_map(|row| row.sources.iter()) {
                         charged(&self.budget, self.budget.charge_work(1))?;
                         push(
                             &self.budget,
@@ -176,17 +189,24 @@ impl ValidatedTraitWorld {
         Ok(sources)
     }
 
-    fn callable_result_row<'a>(
+    /// The callable result row at `component`, or every row when `whole`.
+    fn callable_result_rows<'a>(
         &self,
         view: &'a CarrierContractView,
         component: &ir::CarrierLocation,
-    ) -> Result<Option<&'a ir::CarrierReturn>> {
+        whole: bool,
+    ) -> Result<Vec<&'a ir::CarrierReturn>> {
+        let mut rows = Vec::new();
         for row in view.contract().results.iter() {
-            if self.same_location(&row.location, component)? {
-                return Ok(Some(row));
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if whole || self.same_location(&row.location, component)? {
+                push(&self.budget, &mut rows, row)?;
+                if !whole {
+                    break;
+                }
             }
         }
-        Ok(None)
+        Ok(rows)
     }
 
     // The bound selects the capability the callee uses, not the closure's
