@@ -108,8 +108,8 @@ log lines (up to 1 MiB), **a** for full account status and refresh errors,
 **Page Up/Down** for scrolling.
 
 Press **s** for the filter menu: **↑/↓** picks a filter, **←/→** changes it, and
-**s** or **Esc** closes it. Filters combine, and the Runs title always states
-which are on.
+**s** or **Esc** closes it. Filters combine, and the Runs card's top border
+always states which are on, with the changed ones highlighted.
 
 | Filter | Choices |
 |---|---|
@@ -129,13 +129,17 @@ The Runs card says what happened instead of a bare exit code: `compile error`,
 failure with no recorded class shows its exit code. The last column is how long
 ago the run started. Enter still shows the run ID and full details.
 
-**Where the time went** adds up the wait of the listed runs and splits it into
-compiling, running tests, source sync, artifacts back, hosted overhead, cargo
-startup, build directory lock, the justrust client, and other. It follows the
+**Where the time went** adds up the wait of the listed runs and shows each part
+as a gauge with its share and total: compiling, running tests, source sync,
+artifacts back, hosted overhead, cargo startup, build directory lock, the
+justrust client, and other. It follows the
 filters, so choosing a project or a command kind shows that slice. Timings come
-from run summaries on this machine: account-only records are counted in the
-title as runs without timings. The card is hidden on terminals shorter than 24
-rows.
+from run summaries on this machine: account-only records are counted on the
+card's border as runs without timings. The card is hidden on terminals shorter
+than 24 rows.
+
+The cards follow Jcode's card style: a title and status on the top border,
+label and value rows, and `▰▱` gauges.
 
 Account records that carry no command are counted as `other`, never guessed.
 Local history is a bounded recent window (up to 200 index entries); the account
