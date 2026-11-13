@@ -3,6 +3,20 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.26
+
+- **The account dashboard (`justrust interactive dashboard`) is redrawn as
+  Jcode-style cards.** An overall profile card shows where the wait went and
+  a compile profile card splits the compile time. Both follow the filters.
+- Active builds are listed in the Runs card. Rows are banded and each run's
+  wall time is color coded.
+- The build allowance shows how long until it resets (`resets in 17d`), and
+  the account card no longer has an empty row.
+- A filter menu, readable results and run ages in the run list.
+- `JUSTRUST_HOSTED_TUNNEL` set explicitly replaces a connection on the other
+  path.
+- `justrust split` does not follow directory symlinks when listing sources.
+
 ## 0.1.0-alpha.25
 
 - **Hosted builds use justrust's own compiler by default** (`jr-ac20de5e7921`)
