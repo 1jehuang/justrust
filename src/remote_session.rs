@@ -920,6 +920,14 @@ impl RecoveryBudget {
         self.retries += 1;
         true
     }
+
+    /// The session answered an attach, so that outage is over. The attempt
+    /// and wall budgets bound one outage, not every outage of a session that
+    /// may live for many builds. Without this a second blip more than GRACE
+    /// after the first was never retried.
+    fn reattached(&mut self) {
+        *self = Self::default();
+    }
 }
 
 fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -> Result<()> {
@@ -1151,6 +1159,9 @@ fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -
         let _ = child.wait();
         if pending.0.lock().unwrap().closed {
             return result.map(|_| ());
+        }
+        if connected.load(Ordering::SeqCst) {
+            recovery.reattached();
         }
         match result {
             Ok(_) => return Ok(()),

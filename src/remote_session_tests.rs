@@ -457,6 +457,16 @@ fn recovery_is_transport_only_and_exhausts_attempt_and_wall_budgets() {
     let mut budget = RecoveryBudget::default();
     assert!(budget.retry(&error, now));
     assert!(!budget.retry(&error, now + GRACE));
+    // A later outage of the same session gets its own budget once an attach
+    // succeeded in between, however long after the first outage it starts.
+    let mut budget = RecoveryBudget::default();
+    assert!(budget.retry(&error, now));
+    budget.reattached();
+    assert!(budget.deadline().is_none());
+    for _ in 0..RECONNECTS {
+        assert!(budget.retry(&error, now + GRACE * 10));
+    }
+    assert!(!budget.retry(&error, now + GRACE * 10));
     for reason in [
         "compiler failed",
         "test failed: exit 101",
