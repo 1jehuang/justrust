@@ -51,6 +51,7 @@ pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
 mod trait_method_source_tests;
 
+mod associated_macro_items;
 mod function_qualifiers;
 mod function_source;
 pub use function_source::packed_query::PackedReserveAuthority;
@@ -16590,6 +16591,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.limit("trait item limit exceeded"));
                 }
                 self.retain_generated_item_metadata()?;
+                if self.associated_macro_item()? {
+                    continue;
+                }
                 if self.is("pub") {
                     return Err(self.error("trait items cannot declare visibility"));
                 }
@@ -17072,6 +17076,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.limit("associated item limit exceeded"));
                 }
                 self.retain_generated_item_metadata()?;
+                if self.associated_macro_item()? {
+                    continue;
+                }
                 let (visibility, explicit_visibility) = self.visibility(module)?;
                 if explicit_visibility && trait_path.is_some() {
                     return Err(self.error("trait impl items cannot declare pub"));
