@@ -123,6 +123,59 @@ impl PhysicalCfgDraft {
     pub(super) fn function(&self) -> &cfg::Function {
         &self.function
     }
+    /// Normalize once and seal before the draft leaves this function. The
+    /// expected correspondence is an immutable copy of the same replay from
+    /// the immutable original inputs, taken before any caller can touch the
+    /// candidate, so a second identical normalization adds no authority.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn normalize_sealed<'a>(
+        publication: &'a Arc<source_replay::CanonicalSourcePublication>,
+        target: &ir::CallTarget,
+        original: &'a cfg::Function,
+        representations: &'a opaque_instances::Representations,
+        calls: &[Arc<opaque_dispatch::OpaqueCallAuthorization>],
+        context: &'a frontend::PlanCtx,
+        closed: &traits::ValidatedFacts,
+        budget: &'a ir::PlanBudget,
+        before_seal: impl FnOnce(&cfg::Function),
+    ) -> Result<(Self, PhysicalValidation<'a>), Error> {
+        let mut draft = normalize(
+            publication,
+            target,
+            original,
+            representations,
+            calls,
+            context,
+            budget,
+        )?;
+        before_seal(&draft.function);
+        let expected = PhysicalCfgDraft {
+            function: draft.function.clone(),
+            proof: draft.proof.clone(),
+        };
+        let mut validation = PhysicalValidation {
+            proof: draft.proof.clone(),
+            publication,
+            expected,
+            sealed_shape: None,
+            original,
+            representations,
+            budget,
+        };
+        validation
+            .validate_mapping(&draft.function, closed)
+            .map_err(Error::new)?;
+        draft
+            .function
+            .seal_physical_shape(closed, draft.proof.clone(), budget)
+            .map_err(Error::new)?;
+        validation
+            .validate_cfg(&draft.function, closed)
+            .map_err(Error::new)?;
+        validation.sealed_shape = draft.function.lowering_proof.clone();
+        Ok((draft, validation))
+    }
+    #[cfg(test)]
     pub(super) fn seal<'a>(
         &mut self,
         publication: &'a Arc<source_replay::CanonicalSourcePublication>,
@@ -183,6 +236,7 @@ pub(super) struct PhysicalValidation<'a> {
     budget: &'a ir::PlanBudget,
 }
 impl<'a> PhysicalValidation<'a> {
+    #[cfg(test)]
     fn new(
         proof: Arc<PhysicalNormalizationProof>,
         publication: &'a Arc<source_replay::CanonicalSourcePublication>,

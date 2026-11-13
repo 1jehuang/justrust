@@ -392,6 +392,22 @@ impl PlanCtx {
                 let mut state = self.scratch();
                 state.source_context = Some(self.registry.source_type_context(declaration)?);
                 let info = self.registry.declaration(declaration)?;
+                // `Self::Out` in an impl or trait callable names the sealed
+                // owner `Self` when no outer binding supplies one.
+                let with_self;
+                let bindings = match self
+                    .contexts
+                    .get(&declaration)
+                    .and_then(|context| context.self_ty.clone())
+                {
+                    Some(self_ty) if !bindings.contains_key(&GenericBindingKey::SelfType) => {
+                        let mut extended = bindings.clone();
+                        extended.insert(GenericBindingKey::SelfType, self_ty);
+                        with_self = extended;
+                        &with_self
+                    }
+                    _ => bindings,
+                };
                 let lowered = state.source_ty(
                     &self.registry,
                     ty,

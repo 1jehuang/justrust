@@ -7800,8 +7800,32 @@ impl CarrierBuilder<'_, '_> {
         let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
             return Ok(false);
         };
-        if params.get(owned.param) != Some(actual) {
+        // The by-value parameter and the substituted family actual may carry
+        // the same closed nominal under different realization indices. Use
+        // the world's canonical comparator, never structural identity.
+        let Some(parameter_ty) = params.get(owned.param) else {
             return Ok(false);
+        };
+        if parameter_ty != actual {
+            let Some(facts) = authority
+                .or(self.authority.as_deref())
+                .or(match self.facts {
+                    FactsCtx::Validated(facts) => Some(facts),
+                    _ => None,
+                })
+            else {
+                return Ok(false);
+            };
+            if !facts
+                .world()
+                .types_equal(
+                    std::slice::from_ref(parameter_ty),
+                    std::slice::from_ref(actual),
+                )
+                .unwrap_or(false)
+            {
+                return Ok(false);
+            }
         }
         let Some(locations) = self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
         else {
