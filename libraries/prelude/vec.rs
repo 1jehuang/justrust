@@ -342,17 +342,18 @@ impl<T, U, const N: usize> ArrayMap<T, U> for [T; N] {
 /// Owning iteration: moves elements out front to back. Unyielded elements
 /// drop with the iterator, then the buffer is released, as in std.
 pub struct IntoIter<T> {
-    ptr: *mut T,
-    cap: usize,
+    // The owned buffer stays a Vec so element carriers (for example `&T`)
+    // remain visible to borrow checking through Vec's element channel.
+    // `buf.len` is the back boundary; elements before `index` were moved out.
+    buf: Vec<T>,
     index: usize,
-    len: usize,
 }
 
 impl<T> super::iter::Iterator for IntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
-        if self.index < self.len {
-            let src = slot(self.ptr, self.index);
+        if self.index < self.buf.len {
+            let src = slot(self.buf.ptr, self.index);
             self.index += 1usize;
             Option::Some(unsafe { *src })
         } else {
@@ -363,9 +364,9 @@ impl<T> super::iter::Iterator for IntoIter<T> {
 
 impl<T> super::iter::DoubleEndedIterator for IntoIter<T> {
     fn next_back(&mut self) -> Option<T> {
-        if self.index < self.len {
-            self.len -= 1usize;
-            Option::Some(unsafe { *slot(self.ptr, self.len) })
+        if self.index < self.buf.len {
+            self.buf.len -= 1usize;
+            Option::Some(unsafe { *slot(self.buf.ptr, self.buf.len) })
         } else {
             Option::None
         }
@@ -374,27 +375,21 @@ impl<T> super::iter::DoubleEndedIterator for IntoIter<T> {
 
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
-        while self.index < self.len {
-            let _dropped = unsafe { *slot(self.ptr, self.index) };
+        while self.index < self.buf.len {
+            let _dropped = unsafe { *slot(self.buf.ptr, self.index) };
             self.index += 1usize;
         }
-        if self.cap != 0usize {
-            let size = element_stride::<T>();
-            let bytes = if size == 0usize { 8usize } else { self.cap * size };
-            super::mem::raw_free(self.ptr as usize, bytes);
-        }
+        // Every element was moved out or dropped; `buf` then frees only
+        // the allocation.
+        self.buf.len = 0usize;
     }
 }
 
 impl<T> super::iter::IntoIterator for Vec<T> {
     type Item = T;
     type IntoIter = IntoIter<T>;
-    fn into_iter(mut self) -> IntoIter<T> {
-        let iter = IntoIter { ptr: self.ptr, cap: self.cap, index: 0usize, len: self.len };
-        // Ownership of the buffer and elements moves to the iterator.
-        self.len = 0usize;
-        self.cap = 0usize;
-        iter
+    fn into_iter(self) -> IntoIter<T> {
+        IntoIter { buf: self, index: 0usize }
     }
 }
 

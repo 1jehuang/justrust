@@ -722,6 +722,44 @@ fn main() {
 }
 
 #[test]
+fn vec_into_iter_reference_elements_and_drops_match_stock() {
+    runs(
+        "struct D(i32);
+impl Drop for D { fn drop(&mut self) { println!(\"drop {}\", self.0); } }
+fn main() {
+    let a = vec![1i32, 2, 3];
+    let r: Vec<&i32> = vec![&a[0], &a[2]];
+    let mut s = 0i32;
+    for x in r { s += *x; }
+    let mut it = vec![D(1), D(2), D(3)].into_iter();
+    let first = it.next().unwrap();
+    let last = it.next_back().unwrap();
+    drop(it);
+    println!(\"{} {} {}\", s, first.0, last.0);
+    let strs = vec![String::from(\"p\"), String::from(\"q\")];
+    let mut back = strs.into_iter();
+    while let Some(w) = back.next_back() { println!(\"{}\", w); }
+}
+",
+        "drop 2\n4 1 3\nq\np\ndrop 3\ndrop 1\n",
+    );
+}
+
+#[test]
+fn rejects_references_escaping_through_raw_pointer_storage() {
+    // Stock rejects each with E0597. vec::IntoIter keeps its elements behind a
+    // raw pointer, so these must never be accepted.
+    rejects(
+        "into_iter item escape",
+        "fn main(){let item;{let a=vec![1i32];item=vec![&a[0]].into_iter().next().unwrap();}println!(\"{}\",item);}\n",
+    );
+    rejects(
+        "into_iter iterator escape",
+        "fn main(){let mut it;{let a=vec![1i32];it=vec![&a[0]].into_iter();}println!(\"{:?}\",it.next());}\n",
+    );
+}
+
+#[test]
 fn rejects_entry_or_insert_with_reference_holding_vec_misuse() {
     rejects(
         "short-lived entry element",
