@@ -397,13 +397,8 @@ fn since(iso: &str, now: f64) -> Option<String> {
     })
 }
 
-/// The version inside `justrust 0.1.0 (...)` or `rustc 1.99.1 (...)`.
-fn bare_version(text: &str) -> &str {
-    text.split_whitespace().nth(1).unwrap_or(text)
-}
-
-/// Client, service, compiler and build machine, one row each, with whatever
-/// disagrees picked out in the warning color.
+/// Client, service and compiler, one row each, with whatever disagrees
+/// picked out in the warning color.
 fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
     let mut client = vec![
         span(clean(&v.client), VALUE),
@@ -472,43 +467,20 @@ fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
     if live.is_some_and(|l| l.toolchain.is_some() && !l.published) {
         compiler.push(span("  ▲ not on the toolchain store", WARN));
     }
+    // The build machine installs whatever the service names on its next
+    // build, so it is only worth a mention while it has something else: a
+    // rollout in progress or a stuck machine. `v` lists everything on it.
+    if let (Some(wanted), Some(has)) = (
+        live.and_then(|l| l.toolchain.as_deref()),
+        v.machine("toolchain"),
+    ) && wanted != has
+    {
+        compiler.push(span(
+            format!("  ▲ build machine still has {}", clean(has)),
+            WARN,
+        ));
+    }
     lines.push(detail("Compiler", compiler, width));
-
-    let mut machine = Vec::new();
-    let wanted = live.and_then(|l| l.toolchain.as_deref());
-    if let Some(toolchain) = v.machine("toolchain") {
-        // The machine follows the service on its next build, so a
-        // difference here is a rollout in progress or a stuck machine.
-        let same = wanted.is_none_or(|w| w == toolchain);
-        machine.push(span(clean(toolchain), if same { VALUE } else { WARN }));
-        if !same {
-            machine.push(span("  ▲ differs from the service", WARN));
-        }
-    }
-    if let Some(rustc) = v.machine("rustc") {
-        let lead = if machine.is_empty() { "" } else { "  " };
-        machine.push(span(
-            format!("{lead}rustc {}", clean(bare_version(rustc))),
-            if machine.is_empty() { VALUE } else { LABEL },
-        ));
-    }
-    if let Some(agent) = v.machine("agent") {
-        let agent = bare_version(agent);
-        let same = agent == v.client;
-        machine.push(span(
-            format!("  agent {}", clean(agent)),
-            if same { LABEL } else { WARN },
-        ));
-    }
-    if machine.is_empty() {
-        machine.push(span(
-            clean(v.machine_note.as_deref().unwrap_or("checking")),
-            if v.machine_note.is_some() { LABEL } else { DIM },
-        ));
-    } else if let Some(note) = &v.machine_note {
-        machine.push(span(format!("  {}", clean(note)), DIM));
-    }
-    lines.push(detail("Machine", machine, width));
     lines
 }
 
@@ -1274,10 +1246,12 @@ mod tests {
             shown.contains("Compiler jr-ac20de5e7921  protocol 1"),
             "{shown}"
         );
+        // A build machine on the named compiler is not worth a row.
         assert!(
-            shown.contains("Machine  jr-ac20de5e7921  rustc 1.99.1  agent 0.1.0-alpha.26"),
+            !shown.contains("Machine") && !shown.contains("agent"),
             "{shown}"
         );
+        assert_eq!(shown.lines().count(), 3, "{shown}");
         assert!(!shown.contains('▲'), "{shown}");
         assert_eq!(status(&current), "● up to date");
 
@@ -1289,7 +1263,10 @@ mod tests {
             shown.contains("source build  ▲ 0.1.0-alpha.26 available: justrust update"),
             "{shown}"
         );
-        assert!(shown.contains("▲ differs from the service"), "{shown}");
+        assert!(
+            shown.contains("▲ build machine still has jr-000000000000"),
+            "{shown}"
+        );
         assert_eq!(status(&behind), "▲ update available");
 
         // A toolchain this client cannot drive outranks everything else.
@@ -1316,7 +1293,7 @@ mod tests {
         let shown = text(version_lines(&unknown, 120));
         assert!(shown.contains("▲ Could not resolve host"), "{shown}");
         assert!(shown.contains("Compiler not reported"), "{shown}");
-        assert!(shown.contains("Machine  no session open"), "{shown}");
+        assert!(!shown.contains("no session open"), "{shown}");
         assert_eq!(status(&unknown), "● unreachable");
         // Rows are clipped, never wrapped.
         for l in version_lines(&behind, 30) {
