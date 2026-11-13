@@ -24,7 +24,9 @@ mod tests {
         }
     }
     fn fixture(tag: &str) -> (PathBuf, PathBuf, PathBuf, Registry, P) {
-        let root = crate::remote_evict::tests::scratch(tag);
+        // Orphan collection scans the registered root's parent. Keep it private
+        // so this test cannot inspect or delete other tests' scratch targets.
+        let root = crate::remote_evict::tests::scratch(tag).join("project");
         let build = root.join("target/debug/build");
         let old = build.join("some-package-0000000000000001");
         let newest = build.join("some-package-0000000000000002");
