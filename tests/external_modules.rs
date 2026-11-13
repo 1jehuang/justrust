@@ -1134,3 +1134,72 @@ fn external_missing_module_cannot_be_created_by_trace_publication() {
         }
     }
 }
+
+#[test]
+fn external_macro_use_module_files_extend_textual_scope() {
+    // Rules defined in a `#[macro_use]` file (and its own `#[macro_use]`
+    // children) stay in scope after the `mod` item; earlier items do not
+    // see them, and a non-macro_use sibling file does not leak its rules.
+    runs(
+        &[
+            (
+                "src/input.rs",
+                "#[macro_use] mod macros; mod user; fn main() { println!(\"{} {} {}\", double!(3), triple!(2), user::f()); }",
+            ),
+            (
+                "src/macros.rs",
+                "macro_rules! double { ($x:expr) => { $x * 2 }; } #[macro_use] mod inner; mod hidden; pub fn g() -> i32 { triple!(1) }",
+            ),
+            (
+                "src/macros/inner.rs",
+                "macro_rules! triple { ($x:expr) => { $x * 3 } }",
+            ),
+            (
+                "src/macros/hidden.rs",
+                "macro_rules! secret { () => { 0 } } pub fn h() -> i32 { secret!() }",
+            ),
+            (
+                "src/user.rs",
+                "pub fn f() -> i32 { double!(10) + triple!(1) }",
+            ),
+        ],
+        "6 6 23\n",
+    );
+    rejects(
+        "macro_use file used before its declaration",
+        &[
+            (
+                "src/input.rs",
+                "fn early() -> i32 { double!(1) } #[macro_use] mod macros; fn main() { early(); }",
+            ),
+            (
+                "src/macros.rs",
+                "macro_rules! double { ($x:expr) => { $x * 2 } }",
+            ),
+        ],
+    );
+    rejects(
+        "non-macro_use file does not export textual rules",
+        &[
+            (
+                "src/input.rs",
+                "#[macro_use] mod macros; fn main() { secret!(); }",
+            ),
+            ("src/macros.rs", "mod hidden;"),
+            (
+                "src/macros/hidden.rs",
+                "macro_rules! secret { () => { 0 } }",
+            ),
+        ],
+    );
+    rejects(
+        "unused invalid macro_use expansion",
+        &[
+            (
+                "src/input.rs",
+                "#[macro_use] mod macros; fn unused() -> i32 { bad!() } fn main() {}",
+            ),
+            ("src/macros.rs", "macro_rules! bad { () => { true } }"),
+        ],
+    );
+}

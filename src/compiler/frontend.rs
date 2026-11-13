@@ -94,6 +94,7 @@ mod format_macros;
 mod int_consts;
 mod item_module;
 mod let_statement;
+mod macro_use_files;
 pub(super) mod module_declarations;
 pub use format_macros::SourceFormatInto;
 mod associated_constants;
@@ -16414,19 +16415,19 @@ impl<'input, 'names> Parser<'input, 'names> {
                 let (child, full, duplicate) =
                     self.inline_module_header(module, module_path, parsed, visibility)?;
                 if macro_use && self.purpose == ParserPurpose::Active {
+                    let point = self.module_frontier.ok_or_else(|| {
+                        self.unsupported("macro_use requires a module macro scope")
+                    })?;
                     if self
                         .child_entries
                         .last()
                         .is_some_and(|entry| entry.module == child)
                     {
-                        return Err(
-                            self.unsupported("macro_use on an external module file is unsupported")
-                        );
+                        // External file: its frontier comes from SOURCE.
+                        self.adopt_external_macro_use(self.child_entries.len() - 1, point)?;
+                    } else {
+                        self.lexical.pending_macro_use = Some(point);
                     }
-                    let point = self.module_frontier.ok_or_else(|| {
-                        self.unsupported("macro_use requires a module macro scope")
-                    })?;
-                    self.lexical.pending_macro_use = Some(point);
                 }
                 if duplicate {
                     // The header already proves an invalid declaration. Still

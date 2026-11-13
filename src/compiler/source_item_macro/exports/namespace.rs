@@ -107,6 +107,41 @@ impl Namespace {
             Ok(snapshot)
         }
     }
+    /// The complete declaration subtree of this file's external child
+    /// `index`, found through the crate root's completeness tree. No body
+    /// parse or extra dependency: the root tree is already this parser's input.
+    pub(in crate::compiler) fn child_subtree(
+        &self,
+        index: usize,
+    ) -> Result<Option<&Arc<ExportSubtree>>, SourceError> {
+        let mut ancestors = vec![self.local.file.clone()];
+        while let Some(parent) = ancestors.last().and_then(|file| file.parent()) {
+            ancestors.push(parent);
+        }
+        let Some(root) = ancestors.pop() else {
+            return Ok(None);
+        };
+        let Some(mut tree) = self
+            .trees
+            .as_slice()
+            .iter()
+            .find(|tree| tree.local.file == root)
+        else {
+            return Ok(None);
+        };
+        while let Some(file) = ancestors.pop() {
+            let Some(next) = tree
+                .children
+                .as_slice()
+                .iter()
+                .find(|child| child.local.file == file)
+            else {
+                return Err(contract("macro_use subtree lost canonical file ownership"));
+            };
+            tree = next;
+        }
+        Ok(tree.child(index))
+    }
     pub(in crate::compiler) fn select<'a>(
         &'a self,
         path: &AstPath,

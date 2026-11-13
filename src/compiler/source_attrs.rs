@@ -103,6 +103,10 @@ pub struct AttributeOutput {
     pub module_paths: Vec<(usize, String)>,
     /// Lint levels at each `mod name;`: (offset of the `mod` keyword, levels).
     pub module_lints: Vec<(usize, InheritedLints)>,
+    /// Textual macro scope at this file's end, in source order: active
+    /// `macro_rules!` item ranges (`false`) and `#[macro_use] mod name;`
+    /// keyword offsets (`true`) reachable through `#[macro_use]` modules only.
+    pub macro_use_frontier: Vec<(Range<usize>, bool)>,
     /// `missing_docs` facts of this file's configured items.
     pub docs: Vec<missing_docs::DocEntry>,
     /// `unused_extern_crates` facts, when the lint is denied in this file.
@@ -248,6 +252,9 @@ fn prepare_with_context(
         pending_path: None,
         module_paths: Vec::new(),
         module_lints: Vec::new(),
+        macro_use_frontier: Vec::new(),
+        frontier: true,
+        pending_macro_use: false,
         docs: Vec::new(),
         doc_state: Default::default(),
         pending_export: false,
@@ -299,6 +306,7 @@ fn prepare_with_context(
         fallible_main: filter.fallible_main,
         module_paths: filter.module_paths,
         module_lints: filter.module_lints,
+        macro_use_frontier: filter.macro_use_frontier,
         docs: filter.docs,
         extern_facts,
     })
@@ -340,6 +348,11 @@ struct Filter<'a> {
     pending_path: Option<String>,
     module_paths: Vec<(usize, String)>,
     module_lints: Vec<(usize, InheritedLints)>,
+    macro_use_frontier: Vec<(Range<usize>, bool)>,
+    /// The walk position is in this file's own textual macro frontier.
+    frontier: bool,
+    /// The attributes most recently admitted include `macro_use`.
+    pending_macro_use: bool,
     docs: Vec<missing_docs::DocEntry>,
     /// Documentation on the attributes most recently admitted.
     doc_state: missing_docs::DocState,
@@ -819,6 +832,7 @@ impl Filter<'_> {
         self.pending = PendingTest::default();
         self.doc_state = Default::default();
         self.pending_export = false;
+        self.pending_macro_use = false;
         self.work = self.work.saturating_add(attrs.len());
         if self.work > MAX_WORK {
             return Err(error(
@@ -1143,6 +1157,7 @@ impl Filter<'_> {
                     if !retained_abi.contains(&original.range) {
                         retained_abi.push(original.range.clone());
                     }
+                    self.pending_macro_use = true;
                 }
                 "path" if owner == Owner::Module => {
                     let MetaValue::String(path) = &meta.value else {
@@ -1430,8 +1445,21 @@ impl Filter<'_> {
                 // they cannot establish export absence or uniqueness.
                 self.has_root_use_items |= kind == "use" && self.module_path.is_empty();
                 let exported_macro = self.pending_export;
+                let macro_use = self.pending_macro_use && kind == "mod";
                 if kind == "macro_rules" {
                     self.record_macro_definition(keyword, exported_macro);
+                    if self.frontier {
+                        self.macro_use_frontier.push((
+                            self.tokens[item_start].range.start..self.tokens[stop - 1].range.end,
+                            false,
+                        ));
+                    }
+                }
+                if macro_use && body.is_none() {
+                    let at = self.tokens[keyword].range.start;
+                    if self.frontier {
+                        self.macro_use_frontier.push((at..at, true));
+                    }
                 }
                 if kind == "extern" {
                     let attributed = attrs
@@ -1469,6 +1497,8 @@ impl Filter<'_> {
                             .trim_start_matches("r#")
                             .to_string();
                         self.module_path.push(name);
+                        let frontier = self.frontier;
+                        self.frontier = frontier && macro_use;
                         let result = self.scope(
                             open + 1,
                             close,
@@ -1476,6 +1506,7 @@ impl Filter<'_> {
                             Owner::Module,
                             depth + 1,
                         );
+                        self.frontier = frontier;
                         self.module_path.pop();
                         result?;
                     } else if matches!(kind, "impl" | "trait") {

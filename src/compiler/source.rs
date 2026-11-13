@@ -304,6 +304,21 @@ impl MacroExport {
         }
         Ok((self.attribute, self.item))
     }
+    /// The checked original item range of a `macro_use` frontier record.
+    pub(super) fn item_span(&self, source: &PreparedSource) -> Result<SourceSpan, SourceError> {
+        let file = source.sources.files.get(self.item.file.0 as usize);
+        if !file.is_some_and(|file| file.contents == self.original)
+            || self.item.lo >= self.item.hi
+            || self.item.hi as usize > self.original.len()
+        {
+            return Err(Loader::error(
+                SourceErrorKind::Contract,
+                Some(self.item),
+                "macro_use source identity mismatch",
+            ));
+        }
+        Ok(self.item)
+    }
     fn remap(&self, file: FileId) -> Self {
         Self {
             attribute: remap_span(self.attribute, file),
@@ -311,6 +326,20 @@ impl MacroExport {
             original: self.original.clone(),
         }
     }
+}
+/// Per-file `#[macro_use]` fact from the configured item walker: the textual
+/// macro scope this file leaves at its end when it is itself `#[macro_use]`d,
+/// in source order.
+#[derive(Clone, Debug, Default)]
+pub(super) struct MacroUseFrontier {
+    pub(super) entries: Arc<[MacroUseEntry]>,
+}
+#[derive(Clone, Debug)]
+pub(super) enum MacroUseEntry {
+    /// An active `macro_rules!` item (`attribute` is empty at `item.lo`).
+    Rules(MacroExport),
+    /// A `#[macro_use] mod name;` child, by child index.
+    Child(usize),
 }
 #[derive(Clone, Debug)]
 pub(super) struct CratePolicy {
@@ -385,6 +414,8 @@ pub struct PreparedSource {
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
     pub(super) macro_exports: Vec<MacroExport>,
+    /// File views only: this file's `#[macro_use]` textual frontier.
+    pub(super) macro_use: MacroUseFrontier,
     pub(super) has_item_macro_invocations: bool,
     pub(super) has_root_use_items: bool,
     /// Reviewed source pin audit records, never semantic or publication authority.
@@ -408,6 +439,7 @@ impl Default for PreparedSource {
             origins: Vec::new(),
             attributes: Vec::new(),
             macro_exports: Vec::new(),
+            macro_use: MacroUseFrontier::default(),
             has_item_macro_invocations: false,
             has_root_use_items: false,
             probes: Vec::new(),
@@ -522,6 +554,7 @@ impl FileView {
         prepared
             .macro_exports
             .extend(unit.macro_exports.iter().cloned());
+        prepared.macro_use = unit.macro_use.clone();
         prepared.has_item_macro_invocations |= unit.has_item_macro_invocations;
         prepared.has_root_use_items |= unit.has_root_use_items;
         if let Some(error) = &unit.terminal {
@@ -793,6 +826,7 @@ pub struct FileUnit {
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
     pub(super) macro_exports: Vec<MacroExport>,
+    pub(super) macro_use: MacroUseFrontier,
     pub(super) has_item_macro_invocations: bool,
     pub(super) has_root_use_items: bool,
     pub children: Vec<ChildModule>,
@@ -1161,6 +1195,7 @@ fn snapshot_unit<'a>(
         origins: builder.origins,
         attributes: builder.attributes,
         macro_exports: builder.macro_exports,
+        macro_use: builder.macro_use,
         has_item_macro_invocations: builder.has_item_macro_invocations,
         has_root_use_items: builder.has_root_use_items,
         children: builder.children,
@@ -1511,6 +1546,7 @@ impl SourceAssembler {
                     origins: unit.origins.clone(),
                     attributes: unit.attributes.clone(),
                     macro_exports: unit.macro_exports.clone(),
+                    macro_use: unit.macro_use.clone(),
                     has_item_macro_invocations: unit.has_item_macro_invocations,
                     has_root_use_items: unit.has_root_use_items,
                     children: unit.children.clone(),
@@ -1807,6 +1843,7 @@ struct Loader<'a> {
     origins: Vec<OriginSegment>,
     attributes: Vec<PreparedAttribute>,
     macro_exports: Vec<MacroExport>,
+    macro_use: MacroUseFrontier,
     has_item_macro_invocations: bool,
     has_root_use_items: bool,
     children: Vec<ChildModule>,
@@ -1847,6 +1884,7 @@ impl<'a> Loader<'a> {
             origins: Vec::new(),
             attributes: Vec::new(),
             macro_exports: Vec::new(),
+            macro_use: MacroUseFrontier::default(),
             has_item_macro_invocations: false,
             has_root_use_items: false,
             children: Vec::new(),
@@ -1993,6 +2031,7 @@ impl<'a> Loader<'a> {
         self.docs = filtered.docs;
         self.extern_facts = filtered.extern_facts.map(Arc::new);
         self.module_lints = filtered.module_lints;
+        let macro_use_frontier = filtered.macro_use_frontier;
         let mut text = filtered.text;
         if self.root
             && filtered.test_main.is_none()
@@ -2016,7 +2055,36 @@ impl<'a> Loader<'a> {
                 .push((name.start + 1, "__justrust_user_main".into()));
             self.derives.sort_by_key(|(at, _)| *at);
         }
-        self.expand(&text, 0, directory, depth)
+        self.expand(&text, 0, directory, depth)?;
+        // `#[macro_use] mod name;` names a child by its `mod` keyword offset.
+        let child = |at: usize| {
+            self.children
+                .iter()
+                .position(|child| child.decl.lo as usize == at)
+                .ok_or_else(|| {
+                    Self::error(
+                        SourceErrorKind::Contract,
+                        Some(Self::span(id, at..at)),
+                        "macro_use module has no external child declaration",
+                    )
+                })
+        };
+        let mut entries = Vec::new();
+        for (range, module) in macro_use_frontier {
+            entries.push(if module {
+                MacroUseEntry::Child(child(range.start)?)
+            } else {
+                MacroUseEntry::Rules(MacroExport {
+                    attribute: Self::span(id, range.start..range.start),
+                    item: Self::span(id, range),
+                    original: self.contents.clone(),
+                })
+            });
+        }
+        self.macro_use = MacroUseFrontier {
+            entries: entries.into(),
+        };
+        Ok(())
     }
     /// Lexical validation only, before configuration processing or module IO.
     /// No token input counts are charged until the configured lexer actually
@@ -2141,7 +2209,17 @@ impl<'a> Loader<'a> {
         let mut i = 0;
         while i < tokens.len() {
             let mut head = i;
-            if tokens[head].text(text) == "pub" {
+            // A retained `#[macro_use]` stays in the text before its module.
+            if tokens.get(head).is_some_and(|t| t.text(text) == "#")
+                && tokens.get(head + 1).is_some_and(|t| t.text(text) == "[")
+                && tokens
+                    .get(head + 2)
+                    .is_some_and(|t| t.text(text) == "macro_use")
+                && tokens.get(head + 3).is_some_and(|t| t.text(text) == "]")
+            {
+                head += 4;
+            }
+            if tokens.get(head).is_some_and(|t| t.text(text) == "pub") {
                 head += 1;
                 if tokens.get(head).is_some_and(|t| t.text(text) == "(") {
                     head = close_group(&tokens, text, head) + 1;

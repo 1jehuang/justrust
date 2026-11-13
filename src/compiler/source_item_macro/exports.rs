@@ -28,6 +28,20 @@ pub(in crate::compiler) struct LocalExports {
     root: SourceFileHandle,
     crate_id: CrateId,
     declarations: BudgetVec<Declaration>,
+    macro_use: BudgetVec<MacroUseEntry>,
+}
+/// One record of a file's `#[macro_use]` textual frontier: the rules this
+/// file leaves in scope at its end when its declaration is `#[macro_use]`.
+/// Declaration-only: rule bodies are original token slices, never compiled
+/// or parsed here. Unsupported records fail only when actually consumed.
+pub(in crate::compiler) enum MacroUseEntry {
+    Rules {
+        name: AstIdent,
+        body: TokenSlice,
+        site: DefinitionSite,
+    },
+    Child(usize),
+    Unsupported(crate::compiler::source::SourceSpan),
 }
 impl std::fmt::Debug for LocalExports {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,6 +71,15 @@ impl std::fmt::Debug for ExportSubtree {
 }
 impl crate::engine::Fact for ExportSubtree {}
 impl ExportSubtree {
+    pub(in crate::compiler) fn macro_use(&self) -> &[MacroUseEntry] {
+        self.local.macro_use.as_slice()
+    }
+    pub(in crate::compiler) fn child(&self, index: usize) -> Option<&Arc<Self>> {
+        self.children.as_slice().get(index)
+    }
+    pub(in crate::compiler) fn file(&self) -> &crate::compiler::keys::SourceFile {
+        &self.local.file
+    }
     pub(in crate::compiler) fn complete(
         local: Arc<LocalExports>,
         children: BudgetVec<Arc<Self>>,
@@ -356,81 +379,46 @@ impl LocalExports {
                 .sources()
                 .file(item.file.0 as usize)
                 .map_err(token_error)?;
-            let mut events =
-                BudgetVec::new(session.budget(), Storage::Temporary).map_err(token_error)?;
-            let mut first = None;
-            let mut last = None;
-            while next < lexed.events().len() {
-                session
-                    .budget()
-                    .charge(Counter::Work, 1)
-                    .map_err(|error| token_error(error.into()))?;
-                let event = &lexed.events()[next];
-                let data = session.span(event.token.span()).map_err(token_error)?;
-                let SpanOrigin::Original(original) = data.origin else {
-                    next += 1;
-                    continue;
-                };
-                let rendered = session
-                    .sources()
-                    .render_span(original)
-                    .map_err(token_error)?;
-                if original.file() == file && rendered.lo >= item.hi {
-                    break;
-                }
-                next += 1;
-                if original.file() != file || rendered.hi <= item.lo {
-                    continue;
-                }
-                if rendered.lo < item.lo
-                    || rendered.hi > item.hi
-                    || data.expansion.is_some()
-                    || data.context != session.root_context()
-                {
-                    return Err(contract("export declaration token escaped original item"));
-                }
-                let original_text = session.sources().text(file).map_err(token_error)?;
-                if original_text.get(rendered.lo as usize..rendered.hi as usize)
-                    != projection.text().get(event.prepared.clone())
-                {
-                    return Err(contract(
-                        "export declaration token changed original spelling",
-                    ));
-                }
-                first.get_or_insert(rendered.lo);
-                last = Some(rendered.hi);
-                events.push(event.token).map_err(token_error)?;
-            }
-            if first != Some(item.lo) || last != Some(item.hi) {
-                return Err(contract("missing original macro export declaration tokens"));
-            }
-            for doc in lexed.docs() {
-                let original = session.original(doc.span, 512).map_err(token_error)?;
-                let rendered = session
-                    .sources()
-                    .render_span(original)
-                    .map_err(token_error)?;
-                if original.file() == file && item.lo <= rendered.lo && rendered.hi <= item.hi {
-                    return Err(failure(
-                        SourceErrorKind::Unsupported,
-                        Some(rendered),
-                        "documentation tokens inside exported macro rules are unsupported",
-                    ));
-                }
-            }
-            let stream = super::super::token_tree::group(
-                &mut session,
-                events.as_slice(),
-                super::super::token_tree::GroupPolicy::OriginalSource,
-            )
-            .map_err(token_error)?;
-            let slice = TokenSlice::roots(&session, stream).map_err(token_error)?;
+            let Some(slice) = original_item(&mut session, &lexed, projection, item, &mut next)?
+            else {
+                return Err(failure(
+                    SourceErrorKind::Unsupported,
+                    Some(item),
+                    "documentation tokens inside exported macro rules are unsupported",
+                ));
+            };
             let attribute = session
                 .sources()
                 .span(file, attribute.lo, attribute.hi)
                 .map_err(token_error)?;
             let attribute = session.original_span(attribute).map_err(token_error)?;
             originals.push((slice, attribute)).map_err(token_error)?;
+        }
+        // The `#[macro_use]` frontier, in source order, on its own cursor.
+        let mut frontier =
+            BudgetVec::new(session.budget(), Storage::Temporary).map_err(token_error)?;
+        let mut next = 0usize;
+        for entry in source.macro_use.entries.iter() {
+            session
+                .budget()
+                .charge(Counter::Work, 1)
+                .map_err(|error| token_error(error.into()))?;
+            let entry = match entry {
+                crate::compiler::source::MacroUseEntry::Child(index) => {
+                    if *index >= child_count {
+                        return Err(contract("macro_use child outside source children"));
+                    }
+                    Err(Ok(*index))
+                }
+                crate::compiler::source::MacroUseEntry::Rules(rules) => {
+                    let item = rules.item_span(source)?;
+                    match original_item(&mut session, &lexed, projection, item, &mut next)? {
+                        Some(slice) => Ok((slice, item)),
+                        None => Err(Err(item)),
+                    }
+                }
+            };
+            frontier.push(entry).map_err(token_error)?;
         }
         let mut names =
             NameStoreBuilder::new(session, cap, source.edition()).map_err(name_error)?;
@@ -532,6 +520,16 @@ impl LocalExports {
                 })
                 .map_err(token_error)?;
         }
+        let mut macro_use =
+            BudgetVec::new(names.budget(), Storage::Retained).map_err(token_error)?;
+        for entry in frontier.as_slice() {
+            let entry = match entry {
+                Err(Ok(index)) => MacroUseEntry::Child(*index),
+                Err(Err(item)) => MacroUseEntry::Unsupported(*item),
+                Ok((slice, item)) => macro_use_rules(&mut names, slice, *item, crate_id, source)?,
+            };
+            macro_use.push(entry).map_err(token_error)?;
+        }
         let names = names.freeze().map_err(name_error)?;
         let has_unresolved_imports = file_key.parent().is_none() && source.has_root_use_items;
         Ok(Self {
@@ -543,8 +541,142 @@ impl LocalExports {
             root,
             crate_id,
             declarations,
+            macro_use,
         })
     }
+}
+
+/// `macro_rules! name { .. }` (or `( .. );` / `[ .. ];`) as an original
+/// declaration record. Anything else is an explicit unsupported record.
+fn macro_use_rules(
+    names: &mut NameStoreBuilder,
+    slice: &TokenSlice,
+    item: crate::compiler::source::SourceSpan,
+    crate_id: CrateId,
+    source: &PreparedSource,
+) -> Result<MacroUseEntry, SourceError> {
+    let length = slice.len(names.session()).map_err(token_error)?;
+    if length < 4 {
+        return Ok(MacroUseEntry::Unsupported(item));
+    }
+    let keyword = leaf(slice, names.session(), 0)?;
+    let bang = leaf(slice, names.session(), 1)?;
+    let token = leaf(slice, names.session(), 2)?;
+    if !word(names.session(), keyword, "macro_rules")?
+        || !matches!(bang.kind, TokenKind::Punct { ch: '!', .. })
+        || !matches!(token.kind, TokenKind::Ident(_))
+    {
+        return Ok(MacroUseEntry::Unsupported(item));
+    }
+    let Node::Delimited { kind, .. } = slice.node(names.session(), 3).map_err(token_error)? else {
+        return Ok(MacroUseEntry::Unsupported(item));
+    };
+    let braced = *kind == Delimiter::Brace;
+    let terminated = length == 5
+        && matches!(
+            leaf(slice, names.session(), 4)?.kind,
+            TokenKind::Punct { ch: ';', .. }
+        );
+    if !(length == 4 && braced || terminated) {
+        return Ok(MacroUseEntry::Unsupported(item));
+    }
+    let name = names
+        .from_token(token, source.edition())
+        .map_err(name_error)?;
+    let body = slice
+        .children(names.session(), 3)
+        .map_err(token_error)?
+        .ok_or_else(|| contract("missing macro_use rule body"))?;
+    let site = DefinitionSite {
+        span: token.span,
+        edition: source.edition(),
+        defining_crate: crate_id,
+    };
+    super::super::source_macro_binding::validate_definition(names.session(), site)
+        .map_err(token_error)?;
+    Ok(MacroUseEntry::Rules { name, body, site })
+}
+
+/// Group one walker-issued original item range into a token slice, checked
+/// against the retained original text. `None` when documentation tokens lie
+/// inside the item. `next` is a monotonic event cursor for ordered records.
+fn original_item(
+    session: &mut TokenSession,
+    lexed: &crate::compiler::lexer::LexedTokens,
+    projection: &PreparedLexInput<'_>,
+    item: crate::compiler::source::SourceSpan,
+    next: &mut usize,
+) -> Result<Option<TokenSlice>, SourceError> {
+    let file = session
+        .sources()
+        .file(item.file.0 as usize)
+        .map_err(token_error)?;
+    let mut events = BudgetVec::new(session.budget(), Storage::Temporary).map_err(token_error)?;
+    let mut first = None;
+    let mut last = None;
+    while *next < lexed.events().len() {
+        session
+            .budget()
+            .charge(Counter::Work, 1)
+            .map_err(|error| token_error(error.into()))?;
+        let event = &lexed.events()[*next];
+        let data = session.span(event.token.span()).map_err(token_error)?;
+        let SpanOrigin::Original(original) = data.origin else {
+            *next += 1;
+            continue;
+        };
+        let rendered = session
+            .sources()
+            .render_span(original)
+            .map_err(token_error)?;
+        if original.file() == file && rendered.lo >= item.hi {
+            break;
+        }
+        *next += 1;
+        if original.file() != file || rendered.hi <= item.lo {
+            continue;
+        }
+        if rendered.lo < item.lo
+            || rendered.hi > item.hi
+            || data.expansion.is_some()
+            || data.context != session.root_context()
+        {
+            return Err(contract("export declaration token escaped original item"));
+        }
+        let original_text = session.sources().text(file).map_err(token_error)?;
+        if original_text.get(rendered.lo as usize..rendered.hi as usize)
+            != projection.text().get(event.prepared.clone())
+        {
+            return Err(contract(
+                "export declaration token changed original spelling",
+            ));
+        }
+        first.get_or_insert(rendered.lo);
+        last = Some(rendered.hi);
+        events.push(event.token).map_err(token_error)?;
+    }
+    if first != Some(item.lo) || last != Some(item.hi) {
+        return Err(contract("missing original macro export declaration tokens"));
+    }
+    for doc in lexed.docs() {
+        let original = session.original(doc.span, 512).map_err(token_error)?;
+        let rendered = session
+            .sources()
+            .render_span(original)
+            .map_err(token_error)?;
+        if original.file() == file && item.lo <= rendered.lo && rendered.hi <= item.hi {
+            return Ok(None);
+        }
+    }
+    let stream = super::super::token_tree::group(
+        session,
+        events.as_slice(),
+        super::super::token_tree::GroupPolicy::OriginalSource,
+    )
+    .map_err(token_error)?;
+    Ok(Some(
+        TokenSlice::roots(session, stream).map_err(token_error)?,
+    ))
 }
 
 fn leaf(slice: &TokenSlice, session: &TokenSession, index: usize) -> Result<Token, SourceError> {
