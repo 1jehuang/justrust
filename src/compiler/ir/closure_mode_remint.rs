@@ -151,6 +151,7 @@ pub(in crate::compiler) fn remint_closure_mode_body(
             | ExprKind::ByteRepeat { .. }
             | ExprKind::PromotedArray(_)
             | ExprKind::PromotedScalar(_)
+            | ExprKind::StaticRef(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }

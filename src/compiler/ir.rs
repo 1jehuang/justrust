@@ -21,6 +21,9 @@ mod associated_const;
 mod promotion;
 pub use associated_const::AssociatedConstOperand;
 pub use promotion::PromotedArray;
+#[path = "ir/static_data.rs"]
+mod static_data;
+pub use static_data::StaticData;
 #[path = "ir/schema_metadata.rs"]
 mod schema_metadata;
 pub(super) use schema_metadata::{
@@ -4985,6 +4988,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::ByteRepeat { .. }
             | ExprKind::PromotedArray(_)
             | ExprKind::PromotedScalar(_)
+            | ExprKind::StaticRef(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -11973,6 +11977,8 @@ pub enum ExprKind {
     /// scalar (stock rvalue static promotion of `&3u32`, `&true`, `&'c'`).
     PromotedScalar(PromotedScalar),
     PromotedArray(PromotedArray),
+    /// Shared `&'static T` to the one interned storage of a static item.
+    StaticRef(StaticData),
     /// Shared `&[u8; len]` over immutable static bytes all equal to `byte`
     /// (stock static promotion of `&[byte; len]`), without a per-element payload.
     ByteRepeat {
@@ -12918,6 +12924,7 @@ impl CheckedFunction {
                 ExprKind::ByteRepeat { .. } => storage(budget, 1, 16)?,
                 ExprKind::PromotedArray(array) => storage(budget, array.values().len(), 32)?,
                 ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
+                ExprKind::StaticRef(data) => storage(budget, data.values().len(), 32)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::ConstParameter(operand) => operand.validate(facts, budget)?,
                 ExprKind::ParamRepeat { length, .. } => length.validate(facts, budget)?,
@@ -14913,6 +14920,12 @@ impl CheckedFunction {
                     if value.ty != scalar.reference_ty() || value.completion != Completion::Returns
                     {
                         return Err("promoted scalar expression type mismatch".into());
+                    }
+                }
+                ExprKind::StaticRef(data) => {
+                    data.validate(conditional_budget)?;
+                    if value.ty != data.reference_ty() || value.completion != Completion::Returns {
+                        return Err("static reference expression type mismatch".into());
                     }
                 }
                 ExprKind::ByteRepeat { len, .. } => {

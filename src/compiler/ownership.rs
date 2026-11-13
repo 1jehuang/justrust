@@ -2079,6 +2079,7 @@ fn preflight_with_plan(
                     | Rvalue::ByteStr(_)
                     | Rvalue::PromotedArray(_)
                     | Rvalue::PromotedScalar(_)
+                    | Rvalue::StaticRef(_)
                     | Rvalue::ByteRepeat { .. } => {}
                 }
             }
@@ -3904,6 +3905,7 @@ impl Transfer<'_> {
             | Rvalue::ByteStr(_)
             | Rvalue::PromotedArray(_)
             | Rvalue::PromotedScalar(_)
+            | Rvalue::StaticRef(_)
             | Rvalue::ByteRepeat { .. } => {}
         }
         Ok(())

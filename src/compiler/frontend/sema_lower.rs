@@ -1278,6 +1278,7 @@ impl<'a> Lower<'a> {
             Expr::ManuallyDrop(_) => return un("canonical ManuallyDrop operation semantic HIR"),
             Expr::Invoke { .. } => return un("callee expression invocation"),
             Expr::ByteStr(_) => return un("byte string"),
+            Expr::StaticRef(_) => return un("static item reference"),
             Expr::ParamRepeat { .. } => return un("const-parameter array repeat"),
             Expr::TypeAlignment(_)
             | Expr::NativeSyscall(_)

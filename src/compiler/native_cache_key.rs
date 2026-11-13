@@ -375,6 +375,20 @@ impl Encoder<'_, '_> {
                 }
                 Ok(())
             }
+            StaticRef(data) => {
+                self.n(92)?;
+                self.bytes(&data.link_key())?;
+                self.ty(data.value_ty(), 0)?;
+                self.n(data.values().len())?;
+                for scalar in data.values() {
+                    match scalar {
+                        ir::PromotedScalar::Int(v) => self.constant(&cfg::Constant::Int(*v))?,
+                        ir::PromotedScalar::Bool(v) => self.constant(&cfg::Constant::Bool(*v))?,
+                        ir::PromotedScalar::Char(v) => self.constant(&cfg::Constant::Char(*v))?,
+                    }
+                }
+                Ok(())
+            }
             PromotedScalar(s) => {
                 self.n(20)?;
                 match s {

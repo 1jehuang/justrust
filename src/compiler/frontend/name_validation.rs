@@ -1450,7 +1450,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Selector(field))?;
                 }
-                Expr::ConstItem(path) => self.push(Visit::Path(path))?,
+                Expr::ConstItem(path) | Expr::StaticRef(path) => self.push(Visit::Path(path))?,
                 Expr::Var(path) => {
                     self.push(Visit::Path(path))?;
                     if path.anchor() == PathAnchor::SelfModule && path.is_empty() {

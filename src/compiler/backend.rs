@@ -38,6 +38,8 @@ use std::collections::HashMap;
 mod panic_bounds;
 mod panic_header;
 mod runtime_traps;
+mod static_items;
+pub use static_items::StaticBlob;
 mod wide_float;
 mod wide_int;
 
@@ -623,6 +625,9 @@ pub struct Object {
     /// Absolute relocations to tokens interned by full canonical type bytes.
     /// Kept separate from literals, whose addresses are not type identities.
     pub type_ids: Vec<(usize, Vec<u8>)>,
+    /// Absolute relocations to immutable static item storage, interned by the
+    /// canonical declaration key: every `&S` of one item has one address.
+    pub statics: Vec<(usize, StaticBlob)>,
     /// Immutable evidence that this object's storage was paid, set by the
     /// SSA backend (OPTIMIZATION.md 13). The stack emitter accounts through
     /// its own retained-byte path and leaves this `None`. Holds no ledger.
@@ -2739,11 +2744,22 @@ impl<'a> Emitter<'a> {
     /// `&'static T` to one constant scalar in the private frame layout: a
     /// normalized eight-byte word, or (low, high) limbs for 128-bit integers.
     fn promoted_array(&mut self, array: &ir::PromotedArray) -> Result<(), String> {
+        let bytes = self.promoted_array_bytes(array.value_ty(), array.values())?;
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]);
+        Ok(())
+    }
+
+    fn promoted_array_bytes(
+        &self,
+        ty: &ir::Ty,
+        values: &[ir::PromotedScalar],
+    ) -> Result<Vec<u8>, String> {
         let budget = self.concrete.facts().budget().clone();
-        let extent = usize::try_from(array_element_stride(array.value_ty(), &budget)?)
+        let extent = usize::try_from(array_element_stride(ty, &budget)?)
             .map_err(|_| "promoted array extent is negative")?;
         let alignment = super::memory_layout::alignment(
-            array.value_ty(),
+            ty,
             ir::FactsCtx::from_validated(self.concrete.facts()),
             &budget,
         )?
@@ -2758,7 +2774,7 @@ impl<'a> Emitter<'a> {
         bytes
             .try_reserve_exact(size)
             .map_err(|_| "promoted array allocation failed")?;
-        for scalar in array.values() {
+        for scalar in values {
             scalar.validate()?;
             match scalar {
                 ir::PromotedScalar::Int(value) if value.ty.bits() == 128 => {
@@ -2781,12 +2797,17 @@ impl<'a> Emitter<'a> {
         if bytes.is_empty() {
             bytes.resize(16, 0);
         }
-        self.data_relocation(bytes)?;
-        self.bytes(&[0x48, 0x89, 0xf0]);
-        Ok(())
+        Ok(bytes)
     }
 
     fn promoted_scalar(&mut self, scalar: ir::PromotedScalar) -> Result<(), String> {
+        let bytes = self.promoted_scalar_bytes(scalar)?;
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]); // mov rax, rsi: thin scalar pointer
+        Ok(())
+    }
+
+    fn promoted_scalar_bytes(&self, scalar: ir::PromotedScalar) -> Result<Vec<u8>, String> {
         scalar.validate()?;
         let budget = self.concrete.facts().budget().clone();
         let mut bytes = Vec::new();
@@ -2817,9 +2838,7 @@ impl<'a> Emitter<'a> {
                 bytes.extend_from_slice(&u64::from(value.value).to_le_bytes())
             }
         }
-        self.data_relocation(bytes)?;
-        self.bytes(&[0x48, 0x89, 0xf0]); // mov rax, rsi: thin scalar pointer
-        Ok(())
+        Ok(bytes)
     }
 
     /// `&'static [u8; len]` of one repeated byte, in the same private element
@@ -3232,6 +3251,7 @@ impl<'a> Emitter<'a> {
                     calls: Vec::new(),
                     strings: Vec::new(),
                     type_ids: Vec::new(),
+                    statics: Vec::new(),
                     vtables: Vec::new(),
                     exports: Vec::new(),
                     receipt: None,
@@ -3911,6 +3931,7 @@ impl Emitter<'_> {
             cfg::Rvalue::ByteRepeat { byte, len } => self.byte_repeat_literal(*byte, *len)?,
             cfg::Rvalue::PromotedArray(array) => self.promoted_array(array)?,
             cfg::Rvalue::PromotedScalar(scalar) => self.promoted_scalar(*scalar)?,
+            cfg::Rvalue::StaticRef(data) => self.static_ref(data)?,
             cfg::Rvalue::RefToDyn {
                 reference,
                 object,
@@ -4875,6 +4896,7 @@ fn emit_native_cfg(
             calls: Vec::new(),
             strings: Vec::new(),
             type_ids: Vec::new(),
+            statics: Vec::new(),
             vtables: Vec::new(),
             exports: Vec::new(),
             receipt: None,
@@ -5145,6 +5167,42 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
                 // are not exposed by TypeId, only its canonical identity.
                 data.push(0);
                 type_addresses.insert(identity.as_slice(), address);
+                address
+            };
+            code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
+        }
+    }
+    // Immutable static items: one sixteen-byte aligned allocation per
+    // canonical declaration key, so every `&S` has one address.
+    let mut static_addresses: HashMap<&[u8], (u64, &[u8])> = HashMap::new();
+    for (name, object) in functions {
+        let start = symbols[name.as_str()];
+        for (at, blob) in &object.statics {
+            if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
+                return Err("invalid static item relocation".into());
+            }
+            let address = if let Some((address, bytes)) = static_addresses.get(blob.key.as_slice())
+            {
+                if *bytes != blob.bytes.as_slice() {
+                    return Err("static item storage differs between objects".into());
+                }
+                *address
+            } else {
+                let aligned = data
+                    .len()
+                    .checked_add(15)
+                    .map(|n| n & !15)
+                    .ok_or("ELF immutable data alignment overflow")?;
+                aligned
+                    .checked_add(blob.bytes.len())
+                    .ok_or("ELF immutable data size overflow")?;
+                data.resize(aligned, 0);
+                let address = BASE
+                    .checked_add(data_offset as u64)
+                    .and_then(|a| a.checked_add(data.len() as u64))
+                    .ok_or("ELF address overflow")?;
+                data.extend_from_slice(&blob.bytes);
+                static_addresses.insert(blob.key.as_slice(), (address, blob.bytes.as_slice()));
                 address
             };
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
@@ -5950,6 +6008,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6026,6 +6085,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6086,6 +6146,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6346,6 +6407,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -6790,6 +6852,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -7216,6 +7279,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: Vec::new(),
                 exports: Vec::new(),
                 receipt: None,
@@ -9578,6 +9642,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: vec![],
                 exports: Vec::new(),
                 receipt: None,
@@ -9858,6 +9923,7 @@ mod tests {
                     calls: vec![],
                     strings: vec![],
                     type_ids: Vec::new(),
+                    statics: Vec::new(),
                     vtables: vec![],
                     exports: Vec::new(),
                     receipt: None,
@@ -9963,6 +10029,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: vec![],
                 exports: Vec::new(),
                 receipt: None,
@@ -10567,6 +10634,7 @@ mod tests {
                 .map(|(i, b)| (i * 8, b.clone()))
                 .collect(),
             type_ids: Vec::new(),
+            statics: Vec::new(),
             vtables: vec![],
             receipt: None,
         };

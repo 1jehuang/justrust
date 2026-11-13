@@ -3204,6 +3204,10 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => self.fixed(ir::Ty::byte_string_ty(bytes.len())),
+            Expr::StaticRef(path) => {
+                let ty = self.checker.static_data(path)?.reference_ty();
+                self.fixed(ty)
+            }
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
                 let missing = "contract: constant constraints require sealed graph inputs";
                 let ty = match &self.stored_constants {

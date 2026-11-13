@@ -5069,6 +5069,7 @@ impl SourceInventory {
             | Expr::Char(_)
             | Expr::Str(_)
             | Expr::ByteStr(_)
+            | Expr::StaticRef(_)
             | Expr::Bool(_)
             | Expr::Var(_)
             | Expr::Continue { .. }
@@ -9643,6 +9644,7 @@ mod const_items;
 #[cfg(test)]
 mod const_source_tests;
 mod explicit_field_borrow;
+mod higher_ranked;
 mod index_bounds;
 mod indexed_borrow;
 #[cfg(test)]
@@ -11450,6 +11452,8 @@ pub enum Expr {
     Var(AstPath),
     /// Resolved module constant, never a local binding or mutable place.
     ConstItem(AstPath),
+    /// `&S` of a resolved immutable `static` item: its one interned address.
+    StaticRef(AstPath),
     AssociatedConst(Box<AssociatedConstUse>),
     /// `Owner::name` naming an associated function as a value. Checking
     /// selects the exact declaration and types it as `Ty::FnItem`.
@@ -12443,6 +12447,9 @@ struct Parser<'input, 'names> {
     pending_type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
     /// Lifetime parameters written by the last nominal/impl parameter list.
     pending_regions: RegionDecls,
+    /// Lifetimes declared by the function head being parsed, for `for<..>`
+    /// shadowing checks (E0496). Cleared with the head.
+    callable_regions: Vec<AstIdent>,
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
     impl_regions: RegionDecls,
     impl_const_params: Vec<SourceConstParameter>,
@@ -12645,6 +12652,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
+            callable_regions: Vec::new(),
             impl_regions: RegionDecls::default(),
             impl_const_params: Vec::new(),
             impl_header_anonymous: None,
@@ -14200,6 +14208,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
+            callable_regions: Vec::new(),
             impl_regions: RegionDecls::default(),
             impl_const_params: std::mem::take(&mut self.impl_const_params),
             impl_header_anonymous: None,
@@ -14640,6 +14649,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
+            callable_regions: Vec::new(),
             impl_regions: RegionDecls::default(),
             impl_const_params: Vec::new(),
             impl_header_anonymous: None,
@@ -15058,7 +15068,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.token().is_lifetime() || self.is("?") || self.is("(") {
                 return Err(self.unsupported("unsupported trait object bound syntax"));
             }
-            let path = self.trait_path()?;
+            let path = self.bound_trait_path()?;
             // Object coercion admits only borrow-free hidden payloads until
             // erased payloads can retain their own source carrier family.
             // A shorter object lifetime is rejected instead of being dropped.
@@ -15268,7 +15278,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         }
                     }
                 } else {
-                    let path = self.trait_path()?;
+                    let path = self.bound_trait_path()?;
                     self.reserve_parser_items(&mut traits, 1)?;
                     traits.push(path);
                 }
@@ -15580,7 +15590,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             }
                         }
                     } else {
-                        let path = self.trait_path()?;
+                        let path = self.bound_trait_path()?;
                         self.reserve_parser_items(&mut traits, 1)?;
                         traits.push(path);
                     }
@@ -16488,7 +16498,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             outlives: Vec::new(),
                         });
                     } else {
-                        let path = self.trait_path()?;
+                        let path = self.bound_trait_path()?;
                         self.reserve_parser_items(&mut supertraits, 1)?;
                         supertraits.push(path);
                     }
@@ -16548,7 +16558,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             if associated_bounds.len() >= 256 {
                                 return Err(self.limit("associated type bound limit exceeded"));
                             }
-                            let path = self.trait_path()?;
+                            let path = self.bound_trait_path()?;
                             self.reserve_parser_items(&mut associated_bounds, 1)?;
                             associated_bounds.push(path);
                             if !self.eat("+") {
@@ -17471,7 +17481,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if traits.len() >= 256 {
                 return Err(self.limit("predicate limit exceeded"));
             }
-            let path = self.trait_path()?;
+            let path = self.bound_trait_path()?;
             self.reserve_parser_items(&mut traits, 1)?;
             traits.push(path);
             if !self.eat("+") {
@@ -17681,6 +17691,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.error("expected declared lifetime"));
                 };
                 regions.params.push(ident);
+                self.callable_regions = regions.params.clone();
                 self.region_bounds(name, regions)?;
             } else {
                 seen_type = true;
@@ -17716,7 +17727,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                                 }
                             }
                         } else {
-                            let path = self.trait_path()?;
+                            let path = self.bound_trait_path()?;
                             self.reserve_parser_items(&mut traits, 1)?;
                             traits.push(path);
                         }
@@ -17846,7 +17857,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.reserve_parser_items(&mut visible, inherited.len())?;
         visible.extend_from_slice(inherited);
         self.type_params = visible;
-        let type_params = self.callable_generics(&mut regions)?;
+        self.callable_regions.clear();
+        let type_params = self.callable_generics(&mut regions);
+        self.callable_regions = regions.params.clone();
+        let type_params = type_params?;
         if associated && !self.const_params.is_empty() {
             return Err(self.unsupported("associated const parameter declarations are unsupported"));
         }
@@ -18005,6 +18019,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         }
         self.visible_bounds = enclosing_bounds;
+        self.callable_regions.clear();
         Ok((
             FunctionHead {
                 const_params: self.const_params.clone(),

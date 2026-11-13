@@ -578,7 +578,7 @@ impl Parser<'_, '_> {
                 if self.is("use") {
                     return Err(self.unsupported("precise opaque capture bounds are unsupported"));
                 }
-                let bound = self.trait_path()?;
+                let bound = self.bound_trait_path()?;
                 self.reserve_parser_items(&mut bounds, 1)?;
                 bounds.push(bound);
             }

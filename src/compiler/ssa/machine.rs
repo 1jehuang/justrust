@@ -1170,6 +1170,7 @@ pub fn emit(
         calls,
         strings,
         type_ids: Vec::new(),
+        statics: Vec::new(),
         vtables: Vec::new(),
         exports: Vec::new(),
         receipt: None,

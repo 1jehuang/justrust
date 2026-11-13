@@ -74,6 +74,7 @@ pub fn object_with_panic(
             .len()
             .checked_add(o.strings.len())
             .and_then(|n| n.checked_add(o.type_ids.len()))
+            .and_then(|n| n.checked_add(o.statics.len()))
             .and_then(|n| {
                 n.checked_add(
                     o.vtables
@@ -85,6 +86,14 @@ pub fn object_with_panic(
             .ok_or("ELF relocation count overflow")?;
         n.checked_add(o.code.len())
             .and_then(|n| n.checked_add(o.strings.iter().map(|(_, s)| s.len()).sum::<usize>()))
+            .and_then(|n| {
+                n.checked_add(
+                    o.statics
+                        .iter()
+                        .map(|(_, s)| s.bytes.len() + 16)
+                        .sum::<usize>(),
+                )
+            })
             .and_then(|n| {
                 n.checked_add(
                     reloc * 512
@@ -191,6 +200,7 @@ pub fn object_with_panic(
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
     let mut type_offsets: BTreeMap<&[u8], usize> = BTreeMap::new();
+    let mut static_offsets: BTreeMap<&[u8], (usize, &[u8])> = BTreeMap::new();
     if entry {
         let at = if unwind { 24 } else { 21 };
         relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
@@ -218,6 +228,29 @@ pub fn object_with_panic(
                 data.push(0);
                 offset
             });
+            relocation(&mut rel_text, start + at, 1, 1, offset as i64);
+        }
+        for (at, blob) in &o.statics {
+            if at.checked_add(8).is_none_or(|end| end > o.code.len()) {
+                return Err("invalid static item relocation".into());
+            }
+            let offset = match static_offsets.get(blob.key.as_slice()) {
+                Some((offset, bytes)) => {
+                    if *bytes != blob.bytes.as_slice() {
+                        return Err("static item storage differs between objects".into());
+                    }
+                    *offset
+                }
+                None => {
+                    while data.len() % 16 != 0 {
+                        data.push(0);
+                    }
+                    let offset = data.len();
+                    data.extend_from_slice(&blob.bytes);
+                    static_offsets.insert(blob.key.as_slice(), (offset, blob.bytes.as_slice()));
+                    offset
+                }
+            };
             relocation(&mut rel_text, start + at, 1, 1, offset as i64);
         }
         for (at, vtable) in &o.vtables {
@@ -441,6 +474,7 @@ finish:
                 calls: vec![],
                 strings: vec![],
                 type_ids: Vec::new(),
+                statics: Vec::new(),
                 vtables: vec![],
                 exports: vec![],
                 receipt: None,

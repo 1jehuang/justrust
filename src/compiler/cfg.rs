@@ -1227,6 +1227,8 @@ pub enum Rvalue {
     /// `&'static T` over a program-data copy of one constant scalar.
     PromotedScalar(ir::PromotedScalar),
     PromotedArray(ir::PromotedArray),
+    /// `&'static T` to the one interned storage of a static item.
+    StaticRef(ir::StaticData),
     Println(String),
     Format {
         pieces: Vec<String>,
@@ -1378,6 +1380,7 @@ impl Rvalue {
             | Self::ByteStr(_)
             | Self::PromotedArray(_)
             | Self::PromotedScalar(_)
+            | Self::StaticRef(_)
             | Self::ByteRepeat { .. } => {}
         }
         Ok(())
@@ -2735,6 +2738,7 @@ impl Function {
                             | Rvalue::ByteStr(_)
                             | Rvalue::PromotedArray(_)
                             | Rvalue::PromotedScalar(_)
+                            | Rvalue::StaticRef(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }
                     }
@@ -3633,6 +3637,7 @@ impl Function {
             Rvalue::ByteRepeat { len, .. } => Ok(Ty::byte_string_ty(*len)),
             Rvalue::PromotedArray(array) => Ok(array.reference_ty()),
             Rvalue::PromotedScalar(scalar) => Ok(scalar.reference_ty()),
+            Rvalue::StaticRef(data) => Ok(data.reference_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts, scratch)?;
                 match (op, &ty) {
@@ -6145,6 +6150,9 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::PromotedScalar(scalar) => {
                 self.assign(destination.clone(), Rvalue::PromotedScalar(*scalar), origin)
+            }
+            ir::ExprKind::StaticRef(data) => {
+                self.assign(destination.clone(), Rvalue::StaticRef(data.clone()), origin)
             }
             ir::ExprKind::ByteRepeat { byte, len } => self.assign(
                 destination.clone(),
@@ -14811,6 +14819,7 @@ mod tests {
                             | Rvalue::ByteStr(_)
                             | Rvalue::PromotedArray(_)
                             | Rvalue::PromotedScalar(_)
+                            | Rvalue::StaticRef(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }
                     }

@@ -36,6 +36,8 @@ mod iterator_loop;
 mod local_literals;
 #[path = "type_check/receiver_result_hint.rs"]
 mod receiver_result_hint;
+#[path = "type_check/static_refs.rs"]
+mod static_refs;
 pub(in crate::compiler) use local_literals::nominal_manifest::{
     DeclarationFields as NominalDeclarationFields, DeclarationRecipe as NominalDeclarationRecipe,
     Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
@@ -1323,6 +1325,10 @@ impl<'s> Checker<'s> {
             Expr::Str(_) => self.infer_type_term(&ir::Ty::shared_str_ty(), None, depth + 1)?,
             Expr::ByteStr(bytes) => {
                 self.infer_type_term(&ir::Ty::byte_string_ty(bytes.len()), None, depth + 1)?
+            }
+            Expr::StaticRef(path) => {
+                let ty = self.static_data(path)?.reference_ty();
+                self.infer_type_term(&ty, None, depth + 1)?
             }
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
                 let ty = self.source_constant_type(
@@ -5485,6 +5491,7 @@ impl<'a> Checker<'a> {
             Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => Some(ir::Ty::byte_string_ty(bytes.len())),
+            Expr::StaticRef(path) => Some(self.static_data(path)?.reference_ty()),
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
                 Some(self.source_constant_type(
                     e,
@@ -13645,6 +13652,7 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::shared_str_ty()),
                 )
             }
+            Expr::StaticRef(path) => return self.static_ref(path),
             Expr::ConstItem(_) | Expr::AssociatedConst(_) => (
                 self.source_constant_kind(
                     e,

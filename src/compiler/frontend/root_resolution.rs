@@ -13,6 +13,7 @@ mod lexical_calls;
 mod manually_drop;
 mod primitive_owners;
 mod private_in_public;
+mod static_places;
 mod stored_closures;
 mod trait_globs;
 
@@ -3814,6 +3815,7 @@ impl Resolver<'_> {
                 };
             }
             self.static_mut_assignment(stmt, module, locals)?;
+            self.static_assignment(stmt, module, locals)?;
             match stmt {
                 Stmt::Assign { name, .. } if self.anonymous_closure_body => {
                     let mut place = Place {
@@ -4314,6 +4316,9 @@ impl Resolver<'_> {
             } else if let Expr::Apply { value, .. } = expr {
                 *expr = *std::mem::replace(value, Box::new(Expr::Tuple(Vec::new())));
             }
+            return Ok(());
+        }
+        if self.static_borrow(expr, module, locals)? {
             return Ok(());
         }
         match expr {

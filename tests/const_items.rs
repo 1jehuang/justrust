@@ -41,6 +41,23 @@ fn general_constants_match_stock_output() {
             "16 9\n",
         ),
         (
+            "static_refs",
+            "mod m { pub static T: [i64; 2] = [-4, 9]; pub static B: bool = true; }
+             static S: i32 = 5; static C: char = 'x';
+             static N: [[u16; 2]; 2] = [[1, 2], [3, 4]]; static Z: [u8; 4] = [7; 4];
+             fn get() -> &'static i32 { &S }
+             fn first() -> &'static [i64; 2] { &m::T }
+             fn main(){
+                 let r = &S;
+                 println!(\"{} {} {}\", r, std::ptr::eq(&S, &S), std::ptr::eq(get(), r));
+                 let t = &m::T; let b = &m::B; let c = &C;
+                 println!(\"{:?} {} {} {}\", t, b, c, first()[1] == t[1]);
+                 let s: &[u8] = &Z; let n = &N;
+                 println!(\"{:?} {} {}\", s, s.len(), n[1][0] + N[0][1]);
+             }",
+            "5 true true\n[-4, 9] true x true\n[7, 7, 7, 7] 4 5\n",
+        ),
+        (
             "aggregate",
             "const A: [i32; 3] = [1, 2, 3]; struct P { x: i32 } const O: P = P { x: 3 }; fn main(){ let v = A[1]; let o = O.x; println!(\"{} {}\", v, o); }",
             "2 3\n",
@@ -71,6 +88,31 @@ fn general_constants_match_stock_output() {
 #[test]
 fn invalid_constants_reject_even_when_unused() {
     for (source, category) in [
+        // Immutable statics are places with one address, never writable.
+        (
+            "static S: i32 = 1; fn main(){ let r = &mut S; *r = 2; }",
+            "E0596",
+        ),
+        (
+            "static S: i32 = 1; fn f() -> &'static mut i32 { &mut S } fn main(){}",
+            "E0596",
+        ),
+        (
+            "static A: [i32; 2] = [1, 2]; fn main(){ let r = &mut A[0]; *r = 3; }",
+            "E0596",
+        ),
+        ("static S: i32 = 1; fn main(){ S = 2; }", "E0594"),
+        ("static S: i32 = 1; fn main(){ S += 2; }", "E0594"),
+        (
+            "static A: [i32; 2] = [1, 2]; fn main(){ A[0] = 3; }",
+            "E0594",
+        ),
+        ("static S: i32 = 1; fn main(){ let _r: &u8 = &S; }", "E0308"),
+        // Borrowed statics outside the closed scalar/array subset fail closed.
+        (
+            "static S: &str = \"x\"; fn main(){ let r = &S; println!(\"{}\", r); }",
+            "unsupported",
+        ),
         (
             "fn f()->[i32;1]{[1]} const A:[i32;1]=f(); fn main(){}",
             "E0015",

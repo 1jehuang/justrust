@@ -3613,6 +3613,19 @@ impl Provider for CompilerProvider {
                                 .saturating_add(value.len().div_ceil(8))
                                 .saturating_add(std::mem::size_of::<(usize, Vec<u8>)>());
                         }
+                        for (_, blob) in &object.statics {
+                            let entry = blob.key.len()
+                                + std::mem::size_of::<(usize, backend::StaticBlob)>();
+                            bytes = bytes
+                                .checked_add(blob.bytes.len())
+                                .and_then(|n| n.checked_add(entry))
+                                .ok_or_else(|| {
+                                    Error::new("generic link input byte limit exceeded")
+                                })?;
+                            copy_work = copy_work
+                                .saturating_add(blob.bytes.len().div_ceil(8))
+                                .saturating_add(entry);
+                        }
                         this.0.budget.retain_bytes(bytes).map_err(Error::new)?;
                         this.0.budget.charge_work(copy_work).map_err(Error::new)?;
                         objects.push((symbol, object.as_ref().clone()));

@@ -34,6 +34,12 @@ pub(crate) fn attach_export(
             .into_iter()
             .map(|(at, bytes)| (at + offset, bytes)),
     );
+    object.statics.extend(
+        wrapper
+            .statics
+            .into_iter()
+            .map(|(at, blob)| (at + offset, blob)),
+    );
     object.vtables.extend(
         wrapper
             .vtables

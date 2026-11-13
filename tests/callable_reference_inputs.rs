@@ -414,3 +414,48 @@ fn main() {
         oracle::stock_and_native_reject(source);
     }
 }
+
+#[test]
+fn higher_ranked_callable_sugar_matches_stock() {
+    oracle::stock_native(
+        r#"fn apply<F>(f: F) -> usize
+where
+    F: for<'a> Fn(&'a str) -> usize,
+{
+    let owned = String::from("xy");
+    f("abc") + f(&owned)
+}
+fn each(f: &dyn for<'x> Fn(&'x i32) -> i32) -> i32 {
+    f(&4)
+}
+fn sum<F: for<'a> FnMut(&'a i32) -> i32>(mut f: F) -> i32 {
+    let v = [1, 2, 3];
+    let mut t = 0;
+    for x in v.iter() {
+        t += f(x);
+    }
+    t
+}
+fn mk() -> impl for<'a> Fn(&'a u8) -> u8 {
+    |x| *x + 1
+}
+fn main() {
+    println!("{}", apply(|s| s.len()));
+    let double = |x: &i32| *x * 2;
+    println!("{}", each(&double));
+    println!("{}", sum(|x| x * 10));
+    println!("{}", mk()(&7));
+}"#,
+    );
+}
+
+#[test]
+fn higher_ranked_callable_sugar_rejects_like_stock() {
+    for source in [
+        "fn f<'a, F: for<'a> Fn(&'a i32)>(g: F) { g(&1) } fn main(){}",
+        "fn f<'a, F>(g: F) where F: for<'a> Fn(&'a i32) { g(&1) } fn main(){}",
+        "fn f<F: for<'a> Fn(&'a i32) -> i32>(g: F) -> i32 { g(&1) } fn main(){ let _ = f(|x: &u8| *x as i32); }",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
