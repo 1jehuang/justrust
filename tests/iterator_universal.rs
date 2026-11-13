@@ -19,7 +19,13 @@ fn main() {
     c.extend("ab".chars());
     let mut s = vec![String::from("x")];
     s.extend(vec![String::from("y")]);
-    println!("{:?} {:?} {:?}", e, c, s);
+    let mut b: Vec<u8> = vec![1];
+    b.extend(vec![200]);
+    let mut w: Vec<u64> = vec![1];
+    w.extend(vec![2, 3]);
+    let wide = [4u64];
+    w.extend(&wide);
+    println!("{:?} {:?} {:?} {:?} {:?}", e, c, s, b, w);
 }
 "#,
     );
@@ -28,6 +34,9 @@ fn main() {
     );
     oracle::stock_and_native_reject(
         "fn unused() { let mut e: Vec<String> = Vec::new(); let s = vec![String::new()]; e.extend(s.iter()); } fn main() {}",
+    );
+    oracle::stock_and_native_reject(
+        "fn unused() { let mut e: Vec<u8> = vec![1]; e.extend(vec![300]); } fn main() {}",
     );
 }
 

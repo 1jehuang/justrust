@@ -177,6 +177,10 @@ struct Solver<'a: 's, 'b: 's, 's> {
     missing_source_schemas: std::cell::Cell<bool>,
     missing_declarations: std::cell::RefCell<Vec<ir::DeclId>>,
     preparation_needs_actuals: std::cell::Cell<bool>,
+    /// Candidate-local numeric default for unsuffixed integer literals while
+    /// ranking one trait application (`Extend<u8>` reads `{integer}` as u8).
+    /// Never persists past that comparison.
+    integer_default: std::cell::Cell<ir::IntTy>,
 }
 
 pub(in crate::compiler) struct Hints {
@@ -308,6 +312,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         missing_source_schemas: std::cell::Cell::new(false),
         missing_declarations: std::cell::RefCell::new(Vec::new()),
         preparation_needs_actuals: std::cell::Cell::new(false),
+        integer_default: std::cell::Cell::new(ir::IntTy::I32),
     };
     let return_term = match source_seed {
         Some(seed) => solver.manifest_term(&seed.result, 0)?,
@@ -999,7 +1004,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(Some(match self.domain(term) {
             Domain::Unknown | Domain::Callable(_) => return Ok(None),
-            Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
+            Domain::Integer => ir::Ty::Int(self.integer_default.get()),
             Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
             Domain::Fixed(ty) => ty,
             Domain::PhantomData(declaration, argument) => {

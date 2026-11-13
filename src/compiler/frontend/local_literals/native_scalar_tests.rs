@@ -249,6 +249,7 @@ fn inspect_with_opaque_hint(
         missing_source_schemas: std::cell::Cell::new(false),
         missing_declarations: std::cell::RefCell::new(Vec::new()),
         preparation_needs_actuals: std::cell::Cell::new(false),
+        integer_default: std::cell::Cell::new(ir::IntTy::I32),
     };
     let unit = solver.fixed(ir::Ty::Unit)?;
     solver.return_terms.push(unit);

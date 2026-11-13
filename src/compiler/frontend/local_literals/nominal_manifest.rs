@@ -1109,7 +1109,7 @@ impl<'s> Solver<'_, '_, 's> {
                     "unsupported: opaque nominal actual needs an explicit manifest recipe".into(),
                 );
             }
-            Domain::Integer => Shape::Leaf(ir::Ty::Int(ir::IntTy::I32)),
+            Domain::Integer => Shape::Leaf(ir::Ty::Int(self.integer_default.get())),
             Domain::Float => Shape::Leaf(ir::Ty::Float(ir::FloatTy::F64)),
             Domain::Fixed(ty) => match ty {
                 ir::Ty::Unit

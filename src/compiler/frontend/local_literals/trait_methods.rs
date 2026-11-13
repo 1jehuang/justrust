@@ -923,14 +923,22 @@ impl Solver<'_, '_, '_> {
             for (argument, formal) in arguments.iter().zip(schema.signature.params.iter().skip(1)) {
                 let formal =
                     super::super::trait_method_hint::bind_owner(formal, &bindings, &plan.budget)?;
-                let actual = match self.domain(*argument) {
-                    Domain::Fixed(actual) => actual,
-                    _ => match self.resolve(*argument, 0)? {
-                        Some(actual) => actual,
-                        None => {
-                            return Ok(None);
-                        }
-                    },
+                // Unsuffixed integer literals inside the argument read as
+                // this application's own integer argument (`Extend<u8>`), as
+                // stock unifies `{integer}` with the candidate's item type.
+                // Other applications see the i32 default.
+                let literal = application.args.iter().find_map(|arg| match arg {
+                    ir::Ty::Int(int) => Some(*int),
+                    _ => None,
+                });
+                self.integer_default.set(literal.unwrap_or(ir::IntTy::I32));
+                let resolved = match self.domain(*argument) {
+                    Domain::Fixed(actual) => Ok(Some(actual)),
+                    _ => self.resolve(*argument, 0),
+                };
+                self.integer_default.set(ir::IntTy::I32);
+                let Some(actual) = resolved? else {
+                    return Ok(None);
                 };
                 if super::super::inferred_owner::mentions_param(&actual) {
                     return Ok(None);

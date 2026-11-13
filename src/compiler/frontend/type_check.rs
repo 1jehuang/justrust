@@ -916,8 +916,9 @@ impl<'c, 's> Inference<'c, 's> {
             .as_ref()
             .ok_or("inference requires planning context")?
             .budget;
-        let core = CallInferenceState::new(Some(env), budget)
+        let mut core = CallInferenceState::new(Some(env), budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        core.set_integer_default(checker.literal_integer_default.get());
         Ok(Self { checker, core })
     }
     pub(super) fn empty(checker: &'c Checker<'s>) -> Result<Self, String> {
@@ -927,8 +928,9 @@ impl<'c, 's> Inference<'c, 's> {
             .as_ref()
             .ok_or("inference requires planning context")?
             .budget;
-        let core =
+        let mut core =
             CallInferenceState::new(None, budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        core.set_integer_default(checker.literal_integer_default.get());
         Ok(Self { checker, core })
     }
     pub(super) fn schema(&self, ty: &ir::Ty, depth: usize) -> Result<InferTerm, String> {
@@ -2338,6 +2340,9 @@ pub(super) struct Checker<'a> {
     /// Nesting depth of enclosing `unsafe` blocks; raw pointer dereference
     /// requires at least one (E0133).
     pub(super) unsafe_depth: usize,
+    /// Local to one hint computation: the integer literal fallback used
+    /// while ranking a candidate trait application (`Extend<u8>`).
+    pub(super) literal_integer_default: std::cell::Cell<ir::IntTy>,
     /// Default binding mode of the pattern position being checked. `None` is
     /// move mode; implicit dereferences of matched references switch it to a
     /// borrow. Always restored after each implicit dereference.
@@ -4445,6 +4450,7 @@ impl<'a> Checker<'a> {
             applications: std::cell::RefCell::new(Vec::new()),
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
             unsafe_depth: 0,
+            literal_integer_default: std::cell::Cell::new(ir::IntTy::I32),
             binding_mode: std::cell::Cell::new(None),
             borrow_temporaries: Vec::new(),
             extending_borrows: Vec::new(),

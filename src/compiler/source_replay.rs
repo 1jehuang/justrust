@@ -228,8 +228,14 @@ pub(super) struct CallInferenceState {
     budget: ir::PlanBudget,
     env: Option<Arc<ir::ParamEnv>>,
     slots: Vec<Option<InferTerm>>,
+    /// Numeric fallback for unsuffixed integer literals (i32 unless a
+    /// candidate trait application is being ranked under its own item type).
+    integer_default: ir::IntTy,
 }
 impl CallInferenceState {
+    pub(super) fn set_integer_default(&mut self, int: ir::IntTy) {
+        self.integer_default = int;
+    }
     pub(super) fn new(
         env: Option<Arc<ir::ParamEnv>>,
         budget: &ir::PlanBudget,
@@ -239,6 +245,7 @@ impl CallInferenceState {
             budget: budget.clone(),
             env,
             slots: Vec::new(),
+            integer_default: ir::IntTy::I32,
         };
         if count != 0 {
             state.storage(count)?;
@@ -393,7 +400,7 @@ impl CallInferenceState {
                 }
                 Some(ir::Ty::Opaque(Arc::new(mapped)))
             }
-            InferKind::Integer if fallback => Some(ir::Ty::Int(ir::IntTy::I32)),
+            InferKind::Integer if fallback => Some(ir::Ty::Int(self.integer_default)),
             InferKind::Float if fallback => Some(ir::Ty::Float(ir::FloatTy::F64)),
             InferKind::Integer
             | InferKind::Float

@@ -106,6 +106,10 @@ impl Checker<'_> {
             let evidence = self.infer_type_term(expected, None, 0)?;
             constraints.push((formal, evidence));
         }
+        // Literal-only producers (`vec![200]`) for a bare method parameter
+        // are re-inferred under the fixed application's integer argument
+        // (`Extend<u8>`), as stock unifies `{integer}` with the item type.
+        let literal = LiteralDefault::set(self, application);
         for (raw_formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
             let formal = self.method_owner_term(&solver.schema(raw_formal, 0)?, &bindings, 0)?;
             let mut evidence = self.inference_evidence(argument, 0)?;
@@ -134,6 +138,7 @@ impl Checker<'_> {
             let (formal, evidence, _) = sr::call_input_equation(&formal, &evidence);
             constraints.push((formal.clone(), evidence.clone()));
         }
+        drop(literal);
         if !solver.constrain_projected_terms(constraints, true)? {
             return Ok(None);
         }
@@ -190,6 +195,13 @@ impl Checker<'_> {
                 actual.clone(),
             );
         }
+        // `{integer}` evidence reads as this application's own integer
+        // argument (`Extend<u8>`), as stock unifies the literal variable
+        // with the candidate's item type. Other applications use i32.
+        // `{integer}` evidence (`[1, 2]`, `vec![200]`) is ranked under this
+        // application's own integer argument (`Extend<u8>`), as stock
+        // unifies the literal variable with the candidate's item type.
+        let _literal = LiteralDefault::set(self, app);
         let solver = Inference::empty(self)?;
         let own = plan.param_env(item)?;
         let mut fits = true;
@@ -679,4 +691,30 @@ pub(in crate::compiler::frontend) fn own_bounds_hold(
         }
     }
     Ok(true)
+}
+
+/// Restores the checker's i32 literal fallback when one candidate
+/// application's ranking ends, including on early return.
+struct LiteralDefault<'c, 's> {
+    checker: &'c Checker<'s>,
+    previous: ir::IntTy,
+}
+
+impl<'c, 's> LiteralDefault<'c, 's> {
+    fn set(checker: &'c Checker<'s>, application: &ir::TraitRef) -> Self {
+        let previous = checker.literal_integer_default.get();
+        if let Some(int) = application.args.iter().find_map(|arg| match arg {
+            ir::Ty::Int(int) => Some(*int),
+            _ => None,
+        }) {
+            checker.literal_integer_default.set(int);
+        }
+        Self { checker, previous }
+    }
+}
+
+impl Drop for LiteralDefault<'_, '_> {
+    fn drop(&mut self) {
+        self.checker.literal_integer_default.set(self.previous);
+    }
 }
