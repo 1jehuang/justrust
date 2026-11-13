@@ -10,7 +10,7 @@ pub mod core_v1 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
-    pub use super::super::convert::{From, Into};
+    pub use super::super::convert::{AsMut, AsRef, From, Into};
     pub use super::super::primitive::{ByteMethods, CharFrom, CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
@@ -32,7 +32,7 @@ pub mod v1 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
-    pub use super::super::convert::{From, Into};
+    pub use super::super::convert::{AsMut, AsRef, From, Into};
     pub use super::super::primitive::{ByteMethods, CharFrom, CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
 }
@@ -48,7 +48,7 @@ pub mod core_v1_2018 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
-    pub use super::super::convert::{From, Into};
+    pub use super::super::convert::{AsMut, AsRef, From, Into};
     pub use super::super::primitive::{ByteMethods, CharFrom, CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
     // Allocation-free slice methods are core `[T]` inherent methods.
@@ -71,7 +71,7 @@ pub mod v1_2018 {
     pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
     pub use super::super::default::Default;
     pub use super::super::mem::drop;
-    pub use super::super::convert::{From, Into};
+    pub use super::super::convert::{AsMut, AsRef, From, Into};
     pub use super::super::primitive::{ByteMethods, CharFrom, CharMethods, CheckedShiftMethods, FloatBits, IntMethods, RadixParse};
     pub use super::super::float_math::{FloatMath, FloatTrig};
 }

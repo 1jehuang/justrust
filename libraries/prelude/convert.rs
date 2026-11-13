@@ -78,3 +78,127 @@ impl<'a> From<&'a str> for super::string::String {
         super::string::String::from(value)
     }
 }
+
+// Adapted from library/core/src/convert/mod.rs and the `AsRef`/`AsMut` impls in
+// library/core/src/str, library/alloc/src/{string,vec,boxed,rc}.rs.
+// MIT OR Apache-2.0, Rust Project Contributors.
+
+/// Used to do a cheap reference-to-reference conversion.
+pub trait AsRef<T: ?Sized> {
+    fn as_ref(&self) -> &T;
+}
+
+/// Used to do a cheap mutable-to-mutable reference conversion.
+pub trait AsMut<T: ?Sized> {
+    fn as_mut(&mut self) -> &mut T;
+}
+
+// As lifts over &
+impl<T: ?Sized, U: ?Sized> AsRef<U> for &T
+where
+    T: AsRef<U>,
+{
+    fn as_ref(&self) -> &U {
+        <T as AsRef<U>>::as_ref(*self)
+    }
+}
+
+// As lifts over &mut
+impl<T: ?Sized, U: ?Sized> AsRef<U> for &mut T
+where
+    T: AsRef<U>,
+{
+    fn as_ref(&self) -> &U {
+        <T as AsRef<U>>::as_ref(&**self)
+    }
+}
+
+impl<T> AsRef<[T]> for [T] {
+    fn as_ref(&self) -> &[T] {
+        self
+    }
+}
+
+impl<T> AsMut<[T]> for [T] {
+    fn as_mut(&mut self) -> &mut [T] {
+        self
+    }
+}
+
+impl<T, const N: usize> AsRef<[T]> for [T; N] {
+    fn as_ref(&self) -> &[T] {
+        unsafe { super::slice::from_raw_parts(self as *const [T; N] as *const T, N) }
+    }
+}
+
+impl<T, const N: usize> AsMut<[T]> for [T; N] {
+    fn as_mut(&mut self) -> &mut [T] {
+        unsafe { super::slice::from_raw_parts_mut(self as *mut [T; N] as *mut T, N) }
+    }
+}
+
+impl AsRef<str> for str {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl AsRef<[u8]> for str {
+    fn as_ref(&self) -> &[u8] {
+        super::string::StrMethods::as_bytes(self)
+    }
+}
+
+impl AsRef<str> for super::string::String {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<[u8]> for super::string::String {
+    fn as_ref(&self) -> &[u8] {
+        super::string::StrMethods::as_bytes(self.as_str())
+    }
+}
+
+impl<T> AsRef<super::vec::Vec<T>> for super::vec::Vec<T> {
+    fn as_ref(&self) -> &super::vec::Vec<T> {
+        self
+    }
+}
+
+impl<T> AsMut<super::vec::Vec<T>> for super::vec::Vec<T> {
+    fn as_mut(&mut self) -> &mut super::vec::Vec<T> {
+        self
+    }
+}
+
+impl<T> AsRef<[T]> for super::vec::Vec<T> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> AsMut<[T]> for super::vec::Vec<T> {
+    fn as_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
+}
+
+impl<T: ?Sized> AsRef<T> for super::boxed::Box<T> {
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T: ?Sized> AsMut<T> for super::boxed::Box<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut **self
+    }
+}
+
+impl<T: ?Sized> AsRef<T> for super::rc::Rc<T> {
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}

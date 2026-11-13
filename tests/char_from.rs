@@ -316,3 +316,39 @@ fn lossy_or_missing_integer_from_is_rejected() {
         differential(name, source, false);
     }
 }
+
+#[test]
+fn as_ref_conversions_match_stock() {
+    differential(
+        "as-ref-conversions",
+        r#"fn count<S: AsRef<str>>(s: S) -> usize { s.as_ref().len() }
+fn sum<B: AsRef<[u8]>>(b: B) -> u32 { let mut t = 0u32; for x in b.as_ref() { t += *x as u32; } t }
+fn main() {
+    let s = String::from("hello");
+    println!("{} {} {}", count("abc"), count(&s), count(s.clone()));
+    let v: Vec<u8> = vec![1, 2, 3];
+    println!("{} {} {} {} {}", sum("AB"), sum(&v), sum([4u8, 5]), sum(s), sum(v));
+}"#,
+        true,
+    );
+}
+
+#[test]
+fn missing_as_ref_impls_are_rejected() {
+    for (name, source) in [
+        (
+            "string-as-ref-i32-slice",
+            "fn f<B: AsRef<[i32]>>(_: B) {} fn main(){ f(String::new()); }",
+        ),
+        (
+            "unused-u8-as-ref-str",
+            "fn f<S: AsRef<str>>(_: S) {} fn bad(){ f(5u8); } fn main(){}",
+        ),
+        (
+            "as-mut-on-shared",
+            "fn f<M: AsMut<[u8]>>(_: M) {} fn main(){ let v = vec![1u8]; f(&v); }",
+        ),
+    ] {
+        differential(name, source, false);
+    }
+}
