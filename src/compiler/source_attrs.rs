@@ -911,6 +911,7 @@ impl Filter<'_> {
                     | "unsafe"
                     | "no_std"
                     | "path"
+                    | "macro_use"
                     | "macro_export"
                     | "forbid"
                     | "deny"
@@ -1100,6 +1101,30 @@ impl Filter<'_> {
                     }
                 }
                 "no_std" if owner == Owner::Crate && matches!(meta.value, MetaValue::Word) => {}
+                // Extends the module's textual macro scope past its end. The
+                // parser consumes the retained original attribute.
+                "macro_use" if owner == Owner::Module => {
+                    if !matches!(meta.value, MetaValue::Word) {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "malformed `macro_use` attribute input",
+                        ));
+                    }
+                    let Some(original) = attrs
+                        .iter()
+                        .find(|attr| attr.content == meta.range && !attr.inner)
+                    else {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "configured or inner macro_use attributes are unsupported",
+                        ));
+                    };
+                    if !retained_abi.contains(&original.range) {
+                        retained_abi.push(original.range.clone());
+                    }
+                }
                 "path" if owner == Owner::Module => {
                     let MetaValue::String(path) = &meta.value else {
                         return Err(error(

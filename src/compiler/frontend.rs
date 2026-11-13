@@ -12411,6 +12411,9 @@ struct ParserLexicalState {
     async_serial: usize,
     closure_parent: Option<closures::ClosureParent>,
     closure_sources: Vec<closures::ClosureSource>,
+    /// Set by `#[macro_use] mod`: the parent's frontier at the item, consumed
+    /// by the child's `items` call when it leaves its macro scope.
+    pending_macro_use: Option<super::semantic_scope::ModuleFrontierId>,
 }
 struct FunctionMacroState {
     frontier: super::semantic_scope::FrontierId,
@@ -16305,10 +16308,21 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn leave_module_macros(
         &mut self,
         parent: Option<Box<super::source_item_macro::SourceItemMacroDriver>>,
-    ) {
+        macro_use: Option<(super::semantic_scope::ModuleFrontierId, usize)>,
+    ) -> Result<(), ParseError> {
         if let Some(parent) = parent {
-            self.lexical.item_macros = Some(*parent);
+            let child = self.lexical.item_macros.replace(*parent);
+            if let (Some((point, start)), Some(child)) = (macro_use, child) {
+                let driver = self.lexical.item_macros.as_mut().ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?;
+                let result = driver.adopt_macro_use(&child, start, point, self.names);
+                result.map_err(|error| self.driver_error(error))?;
+            }
+        } else if macro_use.is_some() {
+            return Err(self.unsupported("macro_use requires a module macro scope"));
         }
+        Ok(())
     }
     fn items(
         &mut self,
@@ -16323,7 +16337,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         let previous_module = self.module;
         let previous_frontier = self.module_frontier;
         self.module = module;
+        let macro_use = self.lexical.pending_macro_use.take();
         let parent_macros = self.enter_module_macros(module, previous_frontier)?;
+        let macro_use_start = self
+            .lexical
+            .item_macros
+            .as_ref()
+            .map_or(0, |driver| driver.next_index());
         while !self.is("") && !self.is("}") {
             if let Some(before) = self.module_frontier {
                 let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
@@ -16336,8 +16356,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 );
             }
             let function_source_start = self.cursor.index();
+            let macro_use = self.macro_use_attribute()?;
             self.c_attributes()?;
             let (visibility, explicit_visibility) = self.visibility(module)?;
+            if macro_use && !self.is("mod") {
+                return Err(self.unsupported("macro_use is supported only on modules"));
+            }
             if self.is("macro_rules") && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
             {
                 if explicit_visibility {
@@ -16363,6 +16387,21 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.eat("mod") {
                 let (child, full, duplicate) =
                     self.inline_module_header(module, module_path, parsed, visibility)?;
+                if macro_use && self.purpose == ParserPurpose::Active {
+                    if self
+                        .child_entries
+                        .last()
+                        .is_some_and(|entry| entry.module == child)
+                    {
+                        return Err(
+                            self.unsupported("macro_use on an external module file is unsupported")
+                        );
+                    }
+                    let point = self.module_frontier.ok_or_else(|| {
+                        self.unsupported("macro_use requires a module macro scope")
+                    })?;
+                    self.lexical.pending_macro_use = Some(point);
+                }
                 if duplicate {
                     // The header already proves an invalid declaration. Still
                     // parse the body, but do not merge its colliding names into
@@ -16396,7 +16435,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.module = previous_module;
         self.module_frontier = previous_frontier;
-        self.leave_module_macros(parent_macros);
+        self.leave_module_macros(
+            parent_macros,
+            macro_use.map(|point| (point, macro_use_start)),
+        )?;
         self.nesting -= 1;
         Ok(())
     }

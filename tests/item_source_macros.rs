@@ -39,6 +39,41 @@ struct Case {
 fn cases() -> Vec<Case> {
     vec![
         Case {
+            name: "macro_use_inline_module_extends_textual_scope",
+            source: r#"#[macro_use] mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } pub fn inner() -> i32 { double!(4) } } mod later { pub fn use_it() -> i32 { double!(10) } } fn main() { println!("{} {} {}", macros::inner(), later::use_it(), double!(1)); }"#,
+            stdout: Some("8 20 2\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "macro_use_nested_inline_modules",
+            source: r#"#[macro_use] mod outer { #[macro_use] mod inner { macro_rules! one { () => { 1 } } } pub fn two() -> i32 { one!() + one!() } } fn main() { println!("{} {}", outer::two(), one!()); }"#,
+            stdout: Some("2 1\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "module_macro_without_macro_use_is_scoped",
+            source: r#"mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } } fn main() { println!("{}", double!(1)); }"#,
+            stdout: None,
+            stock_diagnostic: Some("cannot find macro `double` in this scope"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
+            name: "macro_use_module_after_use_site",
+            source: r#"fn main() { println!("{}", double!(1)); } #[macro_use] mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } }"#,
+            stdout: None,
+            stock_diagnostic: Some("cannot find macro `double` in this scope"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
+            name: "macro_use_with_arguments_on_module",
+            source: r#"#[macro_use(double)] mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } } fn main() {}"#,
+            stdout: None,
+            stock_diagnostic: Some("arguments to `macro_use` are not allowed here"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
             name: "captured_function_name_literal_return",
             source: r#"macro_rules! make{($name:ident,$value:literal)=>{fn $name()->i32{$value}};}make!(answer,42);fn main(){if answer()==42{println!("ok");}else{println!("bad");}}"#,
             stdout: Some("ok\n"),
@@ -553,8 +588,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (27, 17));
-    assert_eq!(partition, (21, 5, 11, 7));
+    assert_eq!(counts, (29, 20));
+    assert_eq!(partition, (23, 8, 11, 7));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -567,9 +602,20 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
         if case.outcome == Outcome::Runtime || case.outcome == Outcome::Semantic {
             continue;
         }
-        let prepared =
-            source::prepare_text("items.rs", case.source, &source::SourceOptions::default())
-                .unwrap_or_else(|e| panic!("{} preparation:{e}", case.name));
+        let prepared = match source::prepare_text(
+            "items.rs",
+            case.source,
+            &source::SourceOptions::default(),
+        ) {
+            Ok(prepared) => prepared,
+            // Attribute preparation may reject first; its category still binds.
+            Err(e) if case.name.starts_with("macro_use_") => {
+                assert_eq!(e.kind, source::SourceErrorKind::Syntax, "{}:{e}", case.name);
+                counts.0 += 1;
+                continue;
+            }
+            Err(e) => panic!("{} preparation:{e}", case.name),
+        };
         assert_eq!(prepared.files, 1);
         assert_eq!(prepared.sources.files.len(), 1);
         assert_eq!(prepared.source_bytes, case.source.len());
@@ -598,7 +644,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (5, 7, 2));
+    assert_eq!(counts, (8, 7, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")

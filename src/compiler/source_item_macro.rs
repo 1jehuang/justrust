@@ -282,6 +282,57 @@ impl SourceItemMacroDriver {
     pub(super) fn is_empty(&self) -> bool {
         self.first == 0 && self.definitions.len() == 0
     }
+    /// Global index of the next definition, the start of a child module's
+    /// own definitions when called right after `from_checkpoint`.
+    pub(super) fn next_index(&self) -> usize {
+        self.first + self.definitions.len()
+    }
+    /// `#[macro_use] mod m { .. }`: re-register `child`'s own definitions
+    /// (global index `start..`) at `point`, the parent's frontier at the
+    /// module item, so their textual scope continues past the module end.
+    pub(super) fn adopt_macro_use(
+        &mut self,
+        child: &Self,
+        start: usize,
+        point: ModuleFrontierId,
+        names: &mut NameStoreBuilder,
+    ) -> Result<(), DriverError> {
+        self.check(names)?;
+        child.check(names)?;
+        let mut chunks: Vec<&[Definition]> = Vec::new();
+        let mut first = child.first;
+        chunks.push(child.definitions.as_slice());
+        let mut prefix = child.prefix.as_deref();
+        while first > start {
+            let Some(parent) = prefix else { break };
+            names.budget().charge(Counter::Work, 1)?;
+            let skip = start.saturating_sub(parent.first);
+            let slice = parent.definitions.as_slice();
+            chunks.push(slice.get(skip..).unwrap_or(&[]));
+            first = parent.first;
+            prefix = parent.parent.as_deref();
+        }
+        if first < start && chunks.len() == 1 {
+            return Err(TokenError::InvalidHandle.into());
+        }
+        for chunk in chunks.into_iter().rev() {
+            for definition in chunk {
+                names.budget().charge(Counter::Work, 1)?;
+                let rules = names.compile_local_rules(definition.body.clone(), definition.site)?;
+                u32::try_from(self.first + self.definitions.len())
+                    .map_err(|_| TokenError::IdExhausted)?;
+                self.definitions.push(Definition {
+                    name: definition.name,
+                    point,
+                    rules,
+                    body: definition.body.clone(),
+                    site: definition.site,
+                    source_crate: definition.source_crate,
+                })?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn known(
         &self,
         name: AstIdent,

@@ -5,6 +5,25 @@
 use super::*;
 
 impl Parser<'_, '_> {
+    /// Leading retained `#[macro_use]` (admitted by source attributes only on
+    /// modules). Repeating it is accepted like stock, which only warns.
+    pub(super) fn macro_use_attribute(&mut self) -> Result<bool, ParseError> {
+        let mut seen = false;
+        while self.is("#")
+            && self.cursor.peek(1).is_some_and(|t| t.matches("["))
+            && self.cursor.peek(2).is_some_and(|t| t.matches("macro_use"))
+            && self.cursor.peek(3).is_some_and(|t| t.matches("]"))
+        {
+            if self.item_expansion.is_some() {
+                return Err(self.unsupported("generated macro_use attributes are unsupported"));
+            }
+            for _ in 0..4 {
+                self.cursor.bump();
+            }
+            seen = true;
+        }
+        Ok(seen)
+    }
     /// Length of `name` / `a::b` / `::a::b` followed by `!`, if present.
     fn macro_path_ahead(&self) -> Option<usize> {
         let mut at = 0;
