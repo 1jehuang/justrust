@@ -772,3 +772,43 @@ fn non_exhaustive_positions_match_stock() {
         file_oracle::stock_and_native_reject(invalid);
     }
 }
+
+#[test]
+fn denied_unconditional_recursion_matches_stock() {
+    let source = r#"
+        #![deny(unconditional_recursion)]
+        pub enum E { A, B }
+        fn count(n: u32) -> u32 { if n == 0 { 0 } else { 1 + count(n - 1) } }
+        fn stops(e: E) -> u8 { match e { E::A => stops(E::B), E::B => 2 } }
+        fn diverges(b: bool) -> u8 { if b { panic!("stop") } diverges(b) }
+        fn looped(n: u8) -> u8 { loop { if n > 3 { return n; } return looped(n + 1); } }
+        fn exits_early(x: Option<u8>) -> u8 { let Some(v) = x else { return 0 }; exits_early(Some(v).filter(|v| *v > 9)) }
+        fn short(b: bool) -> bool { b && short(!b) }
+        fn labeled(x: u8) -> u8 { 'a: { if x == 0 { break 'a } return labeled(x - 1); } 7 }
+        struct S;
+        impl S { fn depth(&self, n: u8) -> u8 { if n == 0 { 0 } else { self.depth(n - 1) + 1 } } }
+        trait Tr { fn m(&self) -> u8; }
+        struct W<T>(T);
+        impl Tr for u8 { fn m(&self) -> u8 { *self } }
+        impl<T: Tr> Tr for W<T> { fn m(&self) -> u8 { self.0.m() + 1 } }
+        fn main() {
+            println!("{} {} {} {} {} {}", count(3), stops(E::A), 0, looped(1), exits_early(Some(4)), short(true));
+            println!("{} {} {}", labeled(2), S.depth(3), W(W(4u8)).m());
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#![deny(unconditional_recursion)] fn f() { f() } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f(b: bool) { if b { f(b) } else { f(!b) } } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f(n: u32) -> u32 { n + f(n) } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f() { loop { f() } } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f(x: u8) { match x { 0 => f(1), _ => f(0) } } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f(x: Option<u8>) { if let Some(_) = x {} f(x) } fn main() {}",
+        "#![deny(unconditional_recursion)] struct S; impl S { fn g(&self) { self.g() } } fn main() {}",
+        "#![deny(unconditional_recursion)] trait T { fn g(&self) { self.g() } } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f<T>(x: T) { f(x) } fn main() {}",
+        "#![deny(unconditional_recursion)] fn f(x: u8) { println!(\"{x}\"); f(x) } fn main() {}",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}

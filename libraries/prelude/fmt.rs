@@ -1792,6 +1792,12 @@ impl StrDebugInto for str {
     }
 }
 
+/// write!/writeln! private buffer. Reachable from no_std crates through
+/// core::fmt; it never exposes an allocation API by a public name.
+pub fn __jr_write_buffer() -> String {
+    String::new()
+}
+
 /// format! result: a call (not a block) so method chains type normally.
 pub fn __jr_format(buf: String) -> String {
     buf

@@ -135,7 +135,21 @@ impl Parser<'_, '_> {
         {
             last.push('\n');
         }
-        self.format_into_built(site, pieces, arguments, specs, counts, destination)
+        // `write!` needs only `core::fmt::Write`; in a no_std crate its
+        // private buffer comes from the core formatting surface.
+        let root =
+            super::super::source_macro_binding::invocation_root(self.names.session(), token_site)
+                .map_err(native_adapter::transport_error)?;
+        let core_buffer = self.no_std_roots.contains(&root);
+        self.format_into_built_in(
+            site,
+            pieces,
+            arguments,
+            specs,
+            counts,
+            destination,
+            core_buffer,
+        )
     }
 
     /// The buffered formatting expression for already resolved placeholders:
@@ -145,12 +159,30 @@ impl Parser<'_, '_> {
     pub(super) fn format_into_built(
         &mut self,
         site: super::super::expansion_span::SpanId,
-        mut pieces: Vec<String>,
+        pieces: Vec<String>,
         arguments: Vec<Expr>,
         specs: Vec<FormatSpec>,
         counts: Vec<super::format_args::FormatCounts>,
         destination: Option<Expr>,
     ) -> Result<Expr, ParseError> {
+        self.format_into_built_in(site, pieces, arguments, specs, counts, destination, false)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn format_into_built_in(
+        &mut self,
+        site: super::super::expansion_span::SpanId,
+        mut pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        specs: Vec<FormatSpec>,
+        counts: Vec<super::format_args::FormatCounts>,
+        destination: Option<Expr>,
+        core_buffer: bool,
+    ) -> Result<Expr, ParseError> {
+        if core_buffer && destination.is_none() {
+            return Err(self.unsupported(
+                "std/alloc macro is unavailable in this no_std crate; explicit library opt-in is unsupported",
+            ));
+        }
         if counts.len() != specs.len() {
             return Err(self.error("format argument count mismatch"));
         }
@@ -172,7 +204,11 @@ impl Parser<'_, '_> {
         let out = self.fmt_ident("__jr_fmt_out", site)?;
         let frontier = self.enter_lexical()?;
         let built = (|| {
-            let new = self.fmt_path(site, &["std", "string", "String", "new"])?;
+            let new = if core_buffer {
+                self.fmt_path(site, &["core", "fmt", "__jr_write_buffer"])?
+            } else {
+                self.fmt_path(site, &["std", "string", "String", "new"])?
+            };
             let mut statements = vec![Stmt::Let {
                 name: BindingName::Named(buf),
                 mutable: true,

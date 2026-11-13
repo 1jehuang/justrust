@@ -704,3 +704,55 @@ fn trait_globs_do_not_leak_private_or_ambiguous_method_scope() {
         }
     }
 }
+
+#[test]
+fn write_macros_use_core_fmt_write_in_no_std_crates() {
+    let root = project(
+        "write",
+        "#![no_std]\nuse core::fmt::{self, Write};\npub struct Count(pub usize);\nimpl Write for Count { fn write_str(&mut self, s: &str) -> fmt::Result { self.0 += s.len(); Ok(()) } }\npub struct P(pub i32);\nimpl fmt::Display for P { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, \"<{}:{:?}>\", self.0, \"q\") } }\npub fn value() -> i32 { let mut c = Count(0); write!(c, \"{}-{}\", P(12), 7u8).unwrap(); writeln!(c).unwrap(); writeln!(c, \"x{:>4}\", 1).unwrap(); c.0 as i32 }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let out = native(&root, command, workers);
+            assert!(
+                out.status.success(),
+                "{command}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if command == "run" {
+                assert_eq!(out.stdout, stock.stdout);
+            }
+        }
+    }
+    // format! still needs alloc, and a write! destination still needs Write.
+    for (name, body) in [
+        ("format", "pub fn unused() { let _ = format!(\"{}\", 1); }"),
+        (
+            "no-write",
+            "pub struct N; pub fn unused() { let _ = write!(N, \"{}\", 1); }",
+        ),
+    ] {
+        let root = project(
+            name,
+            &format!("#![no_std]\n{body}\npub fn value() -> i32 {{ 3i32 }}\n"),
+        );
+        let out = native(&root, "check", "1");
+        assert_eq!(
+            out.status.code(),
+            Some(101),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

@@ -129,6 +129,7 @@ const CRATE_LINTS: &[(&str, u8)] = &[
     ("unsafe_op_in_unsafe_fn", 1),
     ("trivial_casts", 2),
     ("trivial_numeric_casts", 4),
+    ("unconditional_recursion", 8),
 ];
 const MAX_DEPTH: usize = 64;
 const MAX_WORK: usize = 16_384;

@@ -39,7 +39,7 @@ pub mod core_surface {
     // a heap String internally; that is an implementation detail of the
     // library, not a no_std-visible allocation API.
     pub mod fmt {
-        pub use super::super::fmt::{Debug, Display, Error, Formatter, LowerExp, Result, UpperExp, Write};
+        pub use super::super::fmt::{Debug, Display, Error, Formatter, LowerExp, Result, UpperExp, Write, __jr_write_buffer};
     }
     pub mod prelude {
         pub use super::super::prelude::core_v1 as v1;

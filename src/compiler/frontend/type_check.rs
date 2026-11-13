@@ -39,6 +39,7 @@ mod receiver_result_hint;
 #[path = "type_check/static_refs.rs"]
 mod static_refs;
 mod trait_call_self;
+mod unconditional_recursion;
 pub(in crate::compiler) use local_literals::nominal_manifest::{
     DeclarationFields as NominalDeclarationFields, DeclarationRecipe as NominalDeclarationRecipe,
     Demand as NominalDemand, Inputs as NominalPreparationInputs, Preparation as NominalPreparation,
@@ -14874,6 +14875,30 @@ fn type_callable_source_and_closures_inner(
         body,
     };
     validate_const_typed_calls(&plan.registry, f, &checked, budget)?;
+    if program.crate_lint_denied(f.module, CRATE_LINT_UNCONDITIONAL_RECURSION)? {
+        let context = plan.callable_context(declaration)?;
+        let trait_item = match plan.registry.callable_sources[plan.callable_index(declaration)?] {
+            CallableSource::TraitDefault { trait_index, item } => plan
+                .registry
+                .trait_items
+                .get(trait_index)
+                .and_then(|items| items.get(item))
+                .copied(),
+            _ => plan
+                .declaration(declaration)?
+                .path
+                .associated
+                .as_ref()
+                .and_then(|owner| owner.trait_item),
+        };
+        let classifier = unconditional_recursion::Classifier {
+            declaration,
+            trait_item,
+            self_ty: context.self_ty,
+            generic: plan.callable_env(declaration)?.is_generic(),
+        };
+        unconditional_recursion::check(&checked, &classifier, budget)?;
+    }
     let closures = c.checked_closures;
     let hidden = c.opaque_hidden;
     if canonical.is_some() {

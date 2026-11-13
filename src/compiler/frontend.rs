@@ -10297,6 +10297,7 @@ pub enum RegionName {
 pub(super) const CRATE_LINT_UNSAFE_OP: u8 = 1;
 pub(super) const CRATE_LINT_TRIVIAL_CASTS: u8 = 2;
 pub(super) const CRATE_LINT_TRIVIAL_NUMERIC_CASTS: u8 = 4;
+pub(super) const CRATE_LINT_UNCONDITIONAL_RECURSION: u8 = 8;
 /// Tuple positions are structural indices, not decimal identifier spellings.
 #[derive(Clone, Copy, Debug)]
 pub enum FieldName {
@@ -13234,14 +13235,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if builtin
             && matches!(
                 spelling,
-                "print"
-                    | "println"
-                    | "eprint"
-                    | "eprintln"
-                    | "vec"
-                    | "format"
-                    | "write"
-                    | "writeln"
+                "print" | "println" | "eprint" | "eprintln" | "vec" | "format"
             )
         {
             let root =
