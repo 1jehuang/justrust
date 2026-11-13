@@ -1128,6 +1128,28 @@ impl Filter<'_> {
                             }),
                             MetaValue::OtherLiteral => false,
                         } => {}
+                // `non_exhaustive` only restricts other crates; inside the
+                // defining crate it has no effect. Stock admits it on
+                // structs and enums (variants are checked as nested members).
+                "non_exhaustive" => {
+                    if self.text[meta.range.clone()].trim() != meta.name {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "malformed `non_exhaustive` attribute input",
+                        ));
+                    }
+                    let kind = item
+                        .as_ref()
+                        .map_or("", |item| item_keyword(&self.text[item.clone()]));
+                    if owner != Owner::FreeItem || !matches!(kind, "struct" | "enum") {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "the `non_exhaustive` attribute can only be applied to structs, enums and enum variants",
+                        ));
+                    }
+                }
                 // Codegen hints: `cold` only affects layout, and
                 // `track_caller` only the reported panic location on stderr.
                 "cold" | "track_caller"
@@ -1701,6 +1723,10 @@ impl Filter<'_> {
                 if !fields && !a.inner && self.nested_cfg(&a, i, end)? {
                     continue;
                 }
+                if fields && !a.inner && self.nested_non_exhaustive(&a, i, start)? {
+                    self.mask(a.range.clone());
+                    continue;
+                }
                 if !a.inner && self.nested_lint_level(&a, i, start, fields)? {
                     self.mask(a.range.clone());
                     continue;
@@ -1720,6 +1746,51 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `#[non_exhaustive]` inside a struct/enum/union body at token `i`
+    /// (`start` is the first token after the body brace). On an enum variant
+    /// it is the semver marker, inert inside the defining crate. On a field
+    /// stock only emits a future-incompatibility warning, so it is inert too.
+    /// A malformed form is rejected like stock (E0565).
+    fn nested_non_exhaustive(
+        &mut self,
+        a: &Attr,
+        i: usize,
+        start: usize,
+    ) -> Result<bool, AttributeError> {
+        let content = self.text[a.content.clone()].trim();
+        if content
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            != Some("non_exhaustive")
+        {
+            return Ok(false);
+        }
+        if content != "non_exhaustive" {
+            return Err(error(
+                AttributeErrorKind::Syntax,
+                a.range.clone(),
+                "malformed `non_exhaustive` attribute input",
+            ));
+        }
+        if start == 0 || start > i {
+            return Ok(false);
+        }
+        // The attribute is on a member of the item body or on a field of one
+        // variant's field list; deeper positions (expressions) stay unsupported.
+        let mut enclosing = 0;
+        for j in start..i {
+            if let Some(close) = self.tokens[j].close
+                && close > i
+            {
+                if !matches!(self.tokens[j].text(self.text), "{" | "(") {
+                    return Ok(false);
+                }
+                enclosing += 1;
+            }
+        }
+        Ok(enclosing <= 1)
     }
 
     /// `#[cfg_attr(pred, attrs..)]` at a nested position. Expanded exactly
@@ -2464,6 +2535,25 @@ fn lint_level_attribute(content: &str) -> bool {
         .next()
         .unwrap_or("");
     matches!(name, "allow" | "warn" | "expect" | "deny" | "forbid")
+}
+
+/// The item keyword of an item's text after its visibility.
+fn item_keyword(item: &str) -> &str {
+    let mut rest = item.trim_start();
+    if let Some(after) = rest.strip_prefix("pub")
+        && !after.starts_with(|c: char| c == '_' || c.is_alphanumeric())
+    {
+        rest = after.trim_start();
+        if let Some(group) = rest.strip_prefix('(') {
+            rest = group
+                .split_once(')')
+                .map_or("", |(_, tail)| tail)
+                .trim_start();
+        }
+    }
+    rest.split(|c: char| !(c == '_' || c.is_alphanumeric()))
+        .next()
+        .unwrap_or("")
 }
 
 /// Nested attributes that never change compilation: documentation and

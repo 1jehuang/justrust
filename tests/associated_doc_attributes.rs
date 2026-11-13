@@ -739,3 +739,36 @@ fn shorthand_projections_see_the_functions_later_where_clause() {
     )
     .assert_negative();
 }
+
+#[test]
+fn non_exhaustive_positions_match_stock() {
+    let source = r#"
+        #[non_exhaustive]
+        pub struct Config { pub level: u8, #[non_exhaustive] pub name: &'static str }
+        #[non_exhaustive]
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum Kind { #[non_exhaustive] Unit, #[non_exhaustive] Tuple(i32), Named { #[doc = "x"] x: i64 } }
+        #[non_exhaustive] pub(crate) struct Marker;
+        fn main() {
+            let c = Config { level: 3, name: "n" };
+            let Config { level, name } = c;
+            let k = Kind::Tuple(4);
+            match k { Kind::Unit => println!("u"), Kind::Tuple(v) => println!("{v}"), Kind::Named { x } => println!("{x}") }
+            let _ = Marker;
+            println!("{level} {name} {:?} {}", Kind::Named { x: 9 }, k == Kind::Unit);
+        }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    for invalid in [
+        "#[non_exhaustive] fn f(){} fn main(){f()}",
+        "#[non_exhaustive] type A = u8; fn main(){let _: A = 1;}",
+        "#[non_exhaustive(x)] struct T; fn main(){let _ = T;}",
+        "#[non_exhaustive = \"x\"] enum Q { A } fn main(){let _ = Q::A;}",
+        "enum Q { #[non_exhaustive(y)] A } fn main(){let _ = Q::A;}",
+        "trait Tr {} #[non_exhaustive] impl Tr for u8 {} fn main(){}",
+        "mod m { #![non_exhaustive] } fn main(){}",
+        "#[non_exhaustive] struct T { a: u8 } fn main(){ let T { a } = T { a: 1u16 }; let _ = a; }",
+    ] {
+        file_oracle::stock_and_native_reject(invalid);
+    }
+}
