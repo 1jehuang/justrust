@@ -1822,11 +1822,22 @@ pub struct State {
 /// `JUSTRUST_HOSTED_TUNNEL`: `on` always relays over 443, `off` never does,
 /// anything else relays only when the direct ssh port is unreachable.
 fn use_tunnel(setting: Option<&str>, direct_reachable: impl FnOnce() -> bool) -> bool {
+    forced_tunnel(setting).unwrap_or_else(|| !direct_reachable())
+}
+
+/// The explicit `on` or `off`, `None` when the choice is automatic.
+fn forced_tunnel(setting: Option<&str>) -> Option<bool> {
     match setting.map(str::trim) {
-        Some("on" | "1" | "true" | "always") => true,
-        Some("off" | "0" | "false" | "never") => false,
-        _ => !direct_reachable(),
+        Some("on" | "1" | "true" | "always") => Some(true),
+        Some("off" | "0" | "false" | "never") => Some(false),
+        _ => None,
     }
+}
+
+/// A live master is reused unless an explicit setting asks for the other
+/// path: the automatic choice lasts as long as the connection it made.
+fn master_matches_setting(setting: Option<&str>, master_tunnel: bool) -> bool {
+    forced_tunnel(setting).is_none_or(|forced| forced == master_tunnel)
 }
 
 /// A TCP connect to the machine's ssh port. Networks that only pass web
@@ -2024,7 +2035,26 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
     let _lock = Lock::take(&d)?;
     cached_or_refresh(
         refresh || crate::remote_windows::selected()?,
-        || master_alive().then(cached_target).flatten(),
+        || {
+            if !master_alive() {
+                return None;
+            }
+            let t = cached_target()?;
+            let tunnel = load_state().is_some_and(|st| st.tunnel);
+            if master_matches_setting(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), tunnel) {
+                return Some(t);
+            }
+            // Both paths share one control path: the master on the other
+            // path has to go before the requested one can be opened.
+            let _ = t
+                .command()
+                .args(["-O", "exit"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            None
+        },
         || {
             let c = creds()?;
             if crate::remote_windows::selected()?
@@ -3186,6 +3216,18 @@ mod tests {
         // Forced settings never probe.
         assert!(use_tunnel(Some("on"), || panic!("probed")));
         assert!(!use_tunnel(Some(" off "), || panic!("probed")));
+    }
+
+    #[test]
+    fn explicit_tunnel_setting_replaces_a_master_on_the_other_path() {
+        // Automatic: whatever master is alive is kept.
+        assert!(master_matches_setting(None, false));
+        assert!(master_matches_setting(None, true));
+        assert!(master_matches_setting(Some("auto"), true));
+        assert!(master_matches_setting(Some("on"), true));
+        assert!(master_matches_setting(Some("off"), false));
+        assert!(!master_matches_setting(Some("on"), false));
+        assert!(!master_matches_setting(Some("off"), true));
     }
 
     #[test]
