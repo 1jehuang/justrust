@@ -2,7 +2,7 @@
 //! padding, label/value rows, `▰▱` gauges, and one accent color. Text is
 //! clipped by display cell, never wrapped. All server/log text is untrusted.
 use super::data::RunRow;
-use super::{Kind, MenuRow, Profile, State};
+use super::{CompileProfile, Kind, MenuRow, Profile, State};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -25,6 +25,8 @@ const ACCENT: Color = Color::Rgb(140, 180, 255);
 const BORDER: Color = Color::Rgb(120, 140, 190);
 const TRACK: Color = Color::Rgb(50, 50, 60);
 const SELECTED: Color = Color::Rgb(45, 50, 70);
+/// Every other run row, so neighbors read as separate entries.
+const BAND: Color = Color::Rgb(28, 30, 40);
 /// Widest a gauge grows, as in Jcode's cards.
 const GAUGE: usize = 16;
 
@@ -380,60 +382,6 @@ fn account(f: &mut Frame, area: Rect, state: &State, lines: Vec<Line<'static>>) 
         .draw(f, area, lines);
 }
 
-fn active(f: &mut Frame, area: Rect, state: &State) {
-    let width = inner_width(area.width);
-    let runs = &state.snapshot.active;
-    let name = runs
-        .iter()
-        .map(|r| UnicodeWidthStr::width(r.label.as_str()))
-        .max()
-        .unwrap_or(0)
-        .min(32);
-    let mut lines = Vec::new();
-    for run in runs {
-        let mut spans = vec![
-            span("● ", GOOD),
-            strong(pad(&run.label, name), VALUE),
-            span(format!("  {}", pad(&run.place, 7)), LABEL),
-            span(pad_left(&crate::status::dur(run.elapsed), 7), VALUE),
-        ];
-        if let Some(e) = &run.estimate {
-            spans.push(span(
-                format!("  ~{} left", crate::status::dur(e.remaining)),
-                DIM,
-            ));
-        }
-        let current = run
-            .running
-            .iter()
-            .take(3)
-            .map(|(name, _)| clean(name))
-            // A hosted build reports only where it runs, which is already shown.
-            .filter(|name| *name != run.place)
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !current.is_empty() {
-            spans.push(span(format!("  {current}"), DIM));
-        }
-        lines.push(fit(spans, width));
-    }
-    if lines.is_empty() {
-        lines.push(line(
-            "Nothing building. Run justrust check, test or build in another terminal.",
-            LABEL,
-            width,
-        ));
-    }
-    let status = match runs.len() {
-        0 => vec![span("idle", DIM)],
-        n => vec![span("● ", GOOD), strong(format!("{n} building"), GOOD)],
-    };
-    Card::new("Active")
-        .note("on this client")
-        .status(status)
-        .draw(f, area, lines);
-}
-
 /// The kind filter as a row of chips with the run count behind each choice.
 fn kind_bar(state: &State, width: usize) -> Line<'static> {
     let counts = state.kind_counts();
@@ -540,11 +488,84 @@ fn filter_status(state: &State) -> Vec<Span<'static>> {
 
 const RESULT_WIDTH: usize = 18;
 const WHERE_WIDTH: usize = 7;
+/// Builds in progress pinned above the recorded runs, at most.
+const ACTIVE_ROWS: usize = 4;
+
+/// How long a wait was, at a glance: quick, ordinary, slow, very slow.
+fn wall_color(secs: f64) -> Color {
+    match secs {
+        s if s < 10.0 => GOOD,
+        s if s < 60.0 => VALUE,
+        s if s < 300.0 => WARN,
+        _ => BAD,
+    }
+}
+
+/// A run row filled to the card's width on its background.
+fn banded(mut l: Line<'static>, width: usize, bg: Option<Color>) -> Line<'static> {
+    let Some(bg) = bg else { return l };
+    let used = l.width();
+    l.spans
+        .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    l.style(Style::default().bg(bg))
+}
+
+/// A build in progress, in the columns of the recorded runs.
+fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> Vec<Span<'static>> {
+    let mut detail = Vec::new();
+    if let Some(e) = &run.estimate {
+        detail.push(format!("~{} left", crate::status::dur(e.remaining)));
+    }
+    let current = run
+        .running
+        .iter()
+        // A hosted build reports the place itself while it has no unit names.
+        .filter(|(name, _)| *name != run.place)
+        .take(3)
+        .map(|(name, _)| clean(name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !current.is_empty() {
+        detail.push(current);
+    }
+    let detail = detail.join(" · ");
+    let label = clean(&run.label);
+    let elapsed = crate::status::dur(run.elapsed);
+    let mut spans = vec![span("◌ ", ACCENT)];
+    if wide {
+        let label = clip(&label, command_width.saturating_sub(2));
+        let used = UnicodeWidthStr::width(label.as_str());
+        let detail = pad(&detail, command_width.saturating_sub(used + 2));
+        spans.extend([
+            strong(pad("building", RESULT_WIDTH - 2), ACCENT),
+            span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
+            span(format!(" {elapsed:>7}  "), wall_color(run.elapsed)),
+            span(label, VALUE),
+            span(format!("  {detail}"), DIM),
+            span(pad_left("now", 9), LABEL),
+        ]);
+    } else {
+        spans.extend([
+            strong("building", ACCENT),
+            span(" · ", LABEL),
+            span(elapsed, wall_color(run.elapsed)),
+            span(" · ", LABEL),
+            span(label, VALUE),
+            span(format!("  {detail}"), DIM),
+        ]);
+    }
+    spans
+}
 
 fn history(f: &mut Frame, area: Rect, state: &State) {
     let rows = state.rows();
+    let active = &state.snapshot.active;
+    let note = match active.len() {
+        0 => count(rows.len() as i64),
+        n => format!("{} · {n} building", count(rows.len() as i64)),
+    };
     let inner = Card::new("Runs")
-        .note(count(rows.len() as i64))
+        .note(note)
         .status(filter_status(state))
         .frame(f, area);
     if inner.height == 0 {
@@ -571,7 +592,14 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         Line::default(),
         line(header, DIM, width),
     ];
-    let visible = inner.height.saturating_sub(3) as usize;
+    let body = inner.height.saturating_sub(3) as usize;
+    // Builds in progress lead the list and never crowd out the history.
+    let pinned = active.len().min(ACTIVE_ROWS).min(body / 2);
+    for (i, run) in active.iter().take(pinned).enumerate() {
+        let l = fit(active_row(run, wide, command_width), width);
+        lines.push(banded(l, width, (i % 2 == 1).then_some(BAND)));
+    }
+    let visible = body - pinned;
     let start = state.selected.saturating_sub(visible.saturating_sub(1));
     for (i, run) in rows.iter().enumerate().skip(start).take(visible) {
         let (result, color) = result_label(run);
@@ -596,7 +624,14 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
             spans.extend([
                 span(pad(&result, RESULT_WIDTH - 2), color),
                 span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
-                span(format!(" {wall:>7}  "), VALUE),
+                span(
+                    format!(" {wall:>7}  "),
+                    if run.exit.is_some() {
+                        wall_color(run.wall)
+                    } else {
+                        DIM
+                    },
+                ),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
                 span(pad_left(&when(run.start), 9), LABEL),
@@ -611,14 +646,14 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         }
         let mut l = fit(spans, width);
         if i == state.selected {
-            let used = l.width();
-            l.spans
-                .push(Span::raw(" ".repeat(width.saturating_sub(used))));
-            l = l.style(Style::default().bg(SELECTED).add_modifier(Modifier::BOLD));
+            l = banded(l, width, Some(SELECTED));
+            l.style = l.style.add_modifier(Modifier::BOLD);
+        } else {
+            l = banded(l, width, ((pinned + i) % 2 == 1).then_some(BAND));
         }
         lines.push(l);
     }
-    if rows.is_empty() {
+    if rows.is_empty() && pinned == 0 {
         lines.push(line(
             if state.filters_active() {
                 "No runs match these filters. Press x to clear them."
@@ -647,10 +682,48 @@ fn profile_lines(profile: &Profile, width: usize) -> Vec<Line<'static>> {
             width,
         )];
     }
-    let name = profile
+    let parts: Vec<_> = profile
         .buckets
         .iter()
-        .map(|(b, _)| b.label().len())
+        .map(|(bucket, secs)| (bucket.label(), *secs))
+        .collect();
+    share_lines(&parts, profile.total, width)
+}
+
+/// The compile profile: what the compiler's time went to, same gauges.
+fn compile_lines(profile: &CompileProfile, width: usize) -> Vec<Line<'static>> {
+    if profile.timed == 0 || profile.total <= 0.0 {
+        return vec![line(
+            "No compiled units for these runs. Units come from runs recorded on this machine.",
+            LABEL,
+            width,
+        )];
+    }
+    let parts: Vec<_> = profile
+        .parts
+        .iter()
+        .map(|(part, secs)| (part.label(), *secs))
+        .collect();
+    share_lines(&parts, profile.total, width)
+}
+
+fn compile_card(profile: &CompileProfile) -> Card {
+    let card = Card::new("Compile profile");
+    if profile.timed == 0 {
+        return card;
+    }
+    card.note(format!(
+        "{} of compiler time over {} {}",
+        crate::status::dur(profile.total),
+        profile.timed,
+        if profile.timed == 1 { "run" } else { "runs" }
+    ))
+}
+
+fn share_lines(parts: &[(&'static str, f64)], total: f64, width: usize) -> Vec<Line<'static>> {
+    let name = parts
+        .iter()
+        .map(|(label, _)| label.len())
         .max()
         .unwrap_or(0);
     let gap = 5;
@@ -668,17 +741,17 @@ fn profile_lines(profile: &Profile, width: usize) -> Vec<Line<'static>> {
         SHARE_BAR
     };
     let columns = columns_with(bar);
-    let shown = profile.buckets.len().min(columns * PROFILE_ROWS);
+    let shown = parts.len().min(columns * PROFILE_ROWS);
     let rows = shown.div_ceil(columns);
     let mut lines = Vec::with_capacity(rows);
     for row in 0..rows {
         let mut spans = Vec::new();
         for column in 0..columns {
             // Column-major, so each column reads as a ranked list.
-            let Some((bucket, secs)) = profile.buckets[..shown].get(column * rows + row) else {
+            let Some((label, secs)) = parts[..shown].get(column * rows + row) else {
                 continue;
             };
-            let share = secs / profile.total;
+            let share = secs / total;
             let percent = match share * 100.0 {
                 p if p < 1.0 => "<1%".to_owned(),
                 p => format!("{p:.0}%"),
@@ -686,7 +759,7 @@ fn profile_lines(profile: &Profile, width: usize) -> Vec<Line<'static>> {
             if column > 0 {
                 spans.push(Span::raw(" ".repeat(gap)));
             }
-            spans.push(span(pad(bucket.label(), name + 2), LABEL));
+            spans.push(span(pad(label, name + 2), LABEL));
             if bar > 0 {
                 let filled = ((share * bar as f64).round() as usize).min(bar);
                 spans.push(span("▰".repeat(filled), ACCENT));
@@ -705,7 +778,7 @@ fn profile_lines(profile: &Profile, width: usize) -> Vec<Line<'static>> {
 }
 
 fn profile_card(profile: &Profile) -> Card {
-    let card = Card::new("Where the time went");
+    let card = Card::new("Overall profile");
     if profile.timed == 0 {
         return card;
     }
@@ -827,28 +900,47 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     let width = inner_width(area.width);
     let account_lines = account_lines(state, width);
     let account_h = account_lines.len() as u16 + 2;
-    let active_h = (state.snapshot.active.len() as u16 + 2).clamp(3, 6);
     let profile = state.profile();
-    let time_lines = profile_lines(&profile, width);
-    let profile_h = if area.height >= 24 {
-        time_lines.len() as u16 + 2
+    let compile = state.compile_profile();
+    // The two profiles sit side by side when there is room, else stacked,
+    // and short terminals keep the run list instead.
+    let beside = area.width >= 110;
+    let card_width = if beside {
+        inner_width(area.width / 2)
     } else {
-        0
+        width
     };
-    let [top, running, time, runs, footer] = Layout::vertical([
+    let time_lines = profile_lines(&profile, card_width);
+    let compile_lines = compile_lines(&compile, card_width);
+    let (overall_h, compile_h) = (time_lines.len() as u16 + 2, compile_lines.len() as u16 + 2);
+    let (first_h, second_h) = match (beside, area.height) {
+        (_, h) if h < 24 => (0, 0),
+        (true, _) => (overall_h.max(compile_h), 0),
+        (false, h) if h < 34 => (overall_h, 0),
+        (false, _) => (overall_h, compile_h),
+    };
+    let [top, first, second, runs, footer] = Layout::vertical([
         Constraint::Length(account_h.min(area.height.saturating_sub(6))),
-        Constraint::Length(if area.height >= 18 { active_h } else { 0 }),
-        Constraint::Length(profile_h),
+        Constraint::Length(first_h),
+        Constraint::Length(second_h),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
     .areas(area);
     account(f, top, state, account_lines);
-    if running.height > 0 {
-        active(f, running, state);
-    }
-    if time.height > 0 {
-        profile_card(&profile).draw(f, time, time_lines);
+    if beside && first.height > 0 {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(first);
+        profile_card(&profile).draw(f, left, time_lines);
+        compile_card(&compile).draw(f, right, compile_lines);
+    } else {
+        if first.height > 0 {
+            profile_card(&profile).draw(f, first, time_lines);
+        }
+        if second.height > 0 {
+            compile_card(&compile).draw(f, second, compile_lines);
+        }
     }
     history(f, runs, state);
     if let Some(at) = state.menu {
@@ -1092,7 +1184,7 @@ mod tests {
         ];
         let text = screen(&state, 140, 40);
         assert!(
-            text.contains("Where the time went · 1m40s waited over 2 runs"),
+            text.contains("Overall profile · 1m40s waited over 2 runs"),
             "{text}"
         );
         // Each part of the wait is a gauge filled to its share, largest first.
@@ -1120,7 +1212,110 @@ mod tests {
         let text = screen(&state, 140, 40);
         assert!(text.contains("No timings for these runs"), "{text}");
         // Short terminals keep the run list and drop the card.
-        assert!(!screen(&state, 140, 20).contains("Where the time went"));
+        assert!(!screen(&state, 140, 20).contains("Overall profile"));
+    }
+
+    #[test]
+    fn compile_profile_has_its_own_card_beside_or_below_the_overall_one() {
+        let mut state = State::default();
+        state.snapshot.runs = vec![RunRow {
+            id: "a".into(),
+            args: vec!["test".into()],
+            exit: Some(0),
+            compile: Some([30.0, 60.0, 0.0, 0.0, 0.0, 10.0]),
+            ..Default::default()
+        }];
+        let text = screen(&state, 160, 40);
+        assert!(
+            text.contains("Compile profile · 1m40s of compiler time over 1 run "),
+            "{text}"
+        );
+        assert!(text.contains("test targets"), "{text}");
+        assert!(text.contains(" 60%"), "{text}");
+        assert!(text.contains("workspace crates") && text.contains("cache restores"));
+        // Side by side: both titles share a row.
+        let titles = text
+            .lines()
+            .find(|l| l.contains("Overall profile"))
+            .unwrap();
+        assert!(titles.contains("Compile profile"), "{text}");
+        // Narrow and tall: stacked. Narrow and short: the overall one only.
+        let text = screen(&state, 100, 40);
+        assert!(text.contains("Overall profile") && text.contains("Compile profile"));
+        let text = screen(&state, 100, 28);
+        assert!(text.contains("Overall profile") && !text.contains("Compile profile"));
+        state.snapshot.runs[0].compile = None;
+        assert!(screen(&state, 160, 40).contains("No compiled units for these runs"));
+    }
+
+    #[test]
+    fn builds_in_progress_lead_the_runs_card_and_rows_are_banded() {
+        let building = |label: &str, elapsed: f64| crate::status::Active {
+            id: label.into(),
+            label: label.into(),
+            cwd: String::new(),
+            args: Vec::new(),
+            agent_session: None,
+            ncpu: 0,
+            cpu_cores: None,
+            sampled_at: None,
+            place: "hosted".into(),
+            reason: None,
+            elapsed,
+            live: Default::default(),
+            units_finished: 0,
+            running: vec![("serde".into(), 1.0)],
+            estimate: None,
+        };
+        let done = |id: &str, wall: f64| RunRow {
+            id: id.into(),
+            args: vec!["check".into()],
+            exit: Some(0),
+            wall,
+            ..Default::default()
+        };
+        let mut state = State::default();
+        state.snapshot.active = vec![building("jcode test", 75.0)];
+        state.snapshot.runs = vec![done("a", 2.0), done("b", 30.0), done("c", 400.0)];
+        let text = screen(&state, 140, 30);
+        assert!(!text.contains("on this client"), "{text}");
+        assert!(text.contains("╭─ Runs · 3 · 1 building "), "{text}");
+        let row = text.lines().find(|l| l.contains("◌ building")).unwrap();
+        assert!(row.contains("hosted") && row.contains("1m15s"), "{row}");
+        assert!(row.contains("jcode test  serde") && row.contains("now"));
+        state.snapshot.active[0].running = vec![("hosted".into(), 1.0)];
+        assert!(!screen(&state, 140, 30).contains("jcode test  hosted"));
+        state.snapshot.active[0].running = vec![("serde".into(), 1.0)];
+        // The narrow layout keeps it too.
+        assert!(screen(&state, 70, 30).contains("building · 1m15s · jcode test"));
+
+        assert_eq!(wall_color(2.0), GOOD);
+        assert_eq!(wall_color(30.0), VALUE);
+        assert_eq!(wall_color(75.0), WARN);
+        assert_eq!(wall_color(400.0), BAD);
+
+        // Row backgrounds alternate, and the selected row has its own.
+        let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|f| draw(f, &state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row_of = |needle: &str| {
+            (0..30u16)
+                .find(|y| {
+                    (0..140u16)
+                        .map(|x| buffer[(x, *y)].symbol())
+                        .collect::<String>()
+                        .contains(needle)
+                })
+                .unwrap()
+        };
+        let first = row_of("◌ building");
+        let bgs: Vec<_> = (0..4).map(|i| buffer[(60, first + i)].bg).collect();
+        assert_eq!(bgs, [Color::Reset, SELECTED, Color::Reset, BAND]);
+        // The wall time carries its own color on a recorded row.
+        let wall = (0..140u16)
+            .find(|x| buffer[(*x, first + 3)].symbol() == "6")
+            .unwrap();
+        assert_eq!(buffer[(wall, first + 3)].fg, BAD);
     }
 
     #[test]
@@ -1220,7 +1415,6 @@ mod tests {
         let text = screen(&state, 150, 45);
         assert!(text.contains("● connected ─╮"), "{text}");
         assert!(text.contains("╰─ updated "), "{text}");
-        assert!(text.contains("idle ─╮"), "{text}");
         assert!(text.contains("all projects · all results · anywhere ─╮"));
         // The command reads first and its project follows, dimmer.
         assert!(text.contains("● ok"), "{text}");

@@ -33,7 +33,98 @@ pub(crate) type Times = [f64; BUCKETS];
 
 /// Parsed timings by run ID. A finished run's summary never changes, so each
 /// is read once. `None` records a summary that could not be read.
-pub(crate) type TimeCache = std::collections::HashMap<String, Option<Times>>;
+pub(crate) type TimeCache =
+    std::collections::HashMap<String, (Option<Times>, Option<CompileTimes>)>;
+
+/// What the compiler's time went to, from the units a run recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Part {
+    Workspace,
+    Tests,
+    Dependencies,
+    ProcMacros,
+    BuildScripts,
+    Restores,
+}
+
+pub(crate) const PARTS: usize = 6;
+
+/// Unit seconds per [`Part`], indexed by `Part as usize`. Units overlap, so
+/// the sum is compiler time, not time waited.
+pub(crate) type CompileTimes = [f64; PARTS];
+
+impl Part {
+    pub(crate) const ALL: [Part; PARTS] = [
+        Part::Workspace,
+        Part::Tests,
+        Part::Dependencies,
+        Part::ProcMacros,
+        Part::BuildScripts,
+        Part::Restores,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Part::Workspace => "workspace crates",
+            Part::Tests => "test targets",
+            Part::Dependencies => "dependencies",
+            Part::ProcMacros => "proc macros",
+            Part::BuildScripts => "build scripts",
+            Part::Restores => "cache restores",
+        }
+    }
+}
+
+/// Only what the compile profile needs from a recorded unit.
+#[derive(serde::Deserialize)]
+struct UnitTime {
+    #[serde(default)]
+    crate_types: Vec<String>,
+    #[serde(default)]
+    test: bool,
+    #[serde(default)]
+    build_script: bool,
+    #[serde(default)]
+    local: bool,
+    #[serde(default)]
+    wall: f64,
+    #[serde(default)]
+    depcache: String,
+}
+
+/// Unit seconds by what was compiled. A unit restored from a cache counts as
+/// a restore whatever it is. `None` when no unit has a usable time.
+fn compile_times(units: &[u8]) -> Option<CompileTimes> {
+    let mut out = [0.0; PARTS];
+    let mut any = false;
+    for row in units.split(|byte| *byte == b'\n') {
+        let Ok(unit) = serde_json::from_slice::<UnitTime>(row) else {
+            continue;
+        };
+        if !unit.wall.is_finite() || unit.wall <= 0.0 {
+            continue;
+        }
+        let part = if matches!(
+            unit.depcache.as_str(),
+            "hit" | "remote" | "peer" | "prebuilt" | "local"
+        ) {
+            Part::Restores
+        } else if unit.build_script {
+            Part::BuildScripts
+        } else if unit.crate_types.iter().any(|t| t == "proc-macro") {
+            Part::ProcMacros
+        } else if unit.test {
+            Part::Tests
+        } else if unit.local {
+            Part::Workspace
+        } else {
+            Part::Dependencies
+        };
+        out[part as usize] += unit.wall;
+        any = true;
+    }
+    any.then_some(out)
+}
 
 impl Bucket {
     pub(crate) const ALL: [Bucket; BUCKETS] = [
@@ -150,6 +241,8 @@ pub(crate) struct RunRow {
     pub compile_failed: bool,
     /// Where the wait went. Only for runs whose summary is on this client.
     pub time: Option<Times>,
+    /// What the compiler's time went to. Only for runs with units recorded here.
+    pub compile: Option<CompileTimes>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -180,10 +273,16 @@ pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
         Ok(mut rows) => {
             if let Ok(dir) = crate::paths::runs_dir() {
                 for row in &mut rows {
-                    row.time = *cache.entry(row.id.clone()).or_insert_with(|| {
-                        read_summary(&dir.join(&row.id).join("summary.json"))
-                            .ok()
-                            .and_then(|bytes| times(&bytes))
+                    (row.time, row.compile) = *cache.entry(row.id.clone()).or_insert_with(|| {
+                        let run = dir.join(&row.id);
+                        (
+                            read_summary(&run.join("summary.json"))
+                                .ok()
+                                .and_then(|bytes| times(&bytes)),
+                            read_summary(&run.join("units.jsonl"))
+                                .ok()
+                                .and_then(|bytes| compile_times(&bytes)),
+                        )
                     });
                 }
                 cache.retain(|id, _| rows.iter().any(|row| &row.id == id));
@@ -270,6 +369,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             failure: entry.failure,
             compile_failed: entry.compile_failed,
             time: None,
+            compile: None,
         })
         .collect()
 }
@@ -308,6 +408,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         failure: serde_json::from_value(summary["failure"].clone()).ok(),
         compile_failed: summary["compile_failed"].as_bool().unwrap_or(false),
         time: None,
+        compile: None,
     })
 }
 
@@ -448,6 +549,32 @@ mod tests {
         assert_eq!(t.iter().sum::<f64>(), 10.0);
         assert!(times(b"{\"wall\": 3}").is_none());
         assert!(times(b"not json").is_none());
+    }
+
+    #[test]
+    fn compile_times_group_units_by_what_was_compiled() {
+        let units = [
+            r#"{"crate_types":["lib"],"local":true,"wall":4.0,"depcache":"local-miss"}"#,
+            r#"{"crate_types":["bin"],"local":true,"test":true,"wall":3.0}"#,
+            r#"{"crate_types":["lib"],"wall":2.0,"depcache":"miss"}"#,
+            r#"{"crate_types":["proc-macro"],"wall":1.5}"#,
+            r#"{"crate_types":["bin"],"build_script":true,"wall":0.5}"#,
+            r#"{"crate_types":["lib"],"wall":0.25,"depcache":"prebuilt"}"#,
+            r#"{"crate_types":["lib"],"local":true,"wall":0.25,"depcache":"local"}"#,
+            r#"{"crate_types":["lib"],"wall":-1.0}"#,
+            "torn row",
+        ]
+        .join("\n");
+        let t = compile_times(units.as_bytes()).unwrap();
+        assert_eq!(t[Part::Workspace as usize], 4.0);
+        assert_eq!(t[Part::Tests as usize], 3.0);
+        assert_eq!(t[Part::Dependencies as usize], 2.0);
+        assert_eq!(t[Part::ProcMacros as usize], 1.5);
+        assert_eq!(t[Part::BuildScripts as usize], 0.5);
+        assert_eq!(t[Part::Restores as usize], 0.5);
+        assert_eq!(Part::ALL.map(|p| p as usize), [0, 1, 2, 3, 4, 5]);
+        assert!(compile_times(b"").is_none());
+        assert!(compile_times(b"{}\nnot json").is_none());
     }
 
     #[test]

@@ -129,14 +129,26 @@ The Runs card says what happened instead of a bare exit code: `compile error`,
 failure with no recorded class shows its exit code. The last column is how long
 ago the run started. Enter still shows the run ID and full details.
 
-**Where the time went** adds up the wait of the listed runs and shows each part
+**Overall profile** adds up the wait of the listed runs and shows each part
 as a gauge with its share and total: compiling, running tests, source sync,
 artifacts back, hosted overhead, cargo startup, build directory lock, the
-justrust client, and other. It follows the
-filters, so choosing a project or a command kind shows that slice. Timings come
-from run summaries on this machine: account-only records are counted on the
-card's border as runs without timings. The card is hidden on terminals shorter
-than 24 rows.
+justrust client, and other. Timings come from run summaries on this machine:
+account-only records are counted on the card's border as runs without timings.
+
+**Compile profile** splits the compiler's own time for the same runs by what
+was compiled: workspace crates, test targets, dependencies, proc macros, build
+scripts, and cache restores. It sums unit times, and units run in parallel, so
+its total is compiler time and exceeds the compiling share of the wait.
+
+Both profiles follow the filters, so choosing a project or a command kind
+shows that slice. They sit side by side at 110 columns or more and stack
+otherwise. Terminals shorter than 24 rows hide both, and narrow terminals
+shorter than 34 rows show only the overall profile.
+
+Builds in progress lead the Runs card as `building` rows with where they run,
+the time so far, the estimate and the crates compiling. Rows alternate
+background shades. Wall time is colored by length: green under 10 seconds,
+plain under a minute, amber under five minutes, red beyond.
 
 The cards follow Jcode's card style: a title and status on the top border,
 label and value rows, and `▰▱` gauges.

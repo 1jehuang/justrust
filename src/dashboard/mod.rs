@@ -191,6 +191,17 @@ pub(crate) struct Profile {
     pub buckets: Vec<(data::Bucket, f64)>,
 }
 
+/// What the compiler's time went to across the listed runs.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct CompileProfile {
+    /// Listed runs with units recorded on this client.
+    pub timed: usize,
+    /// Unit seconds of those runs. Units overlap, so this exceeds the wait.
+    pub total: f64,
+    /// Largest first, empty parts left out.
+    pub parts: Vec<(data::Part, f64)>,
+}
+
 /// Last path component, the way a person names a project.
 pub(crate) fn project_name(path: &str) -> &str {
     std::path::Path::new(path)
@@ -342,6 +353,29 @@ impl State {
             timed,
             total: sums.iter().sum(),
             buckets,
+        }
+    }
+
+    /// What the compiler's time went to for the listed runs.
+    fn compile_profile(&self) -> CompileProfile {
+        let mut sums = [0.0; data::PARTS];
+        let mut timed = 0;
+        for time in self.rows().iter().filter_map(|row| row.compile) {
+            timed += 1;
+            for (sum, secs) in sums.iter_mut().zip(time) {
+                *sum += secs;
+            }
+        }
+        let mut parts: Vec<_> = data::Part::ALL
+            .into_iter()
+            .zip(sums)
+            .filter(|(_, secs)| *secs > 0.0)
+            .collect();
+        parts.sort_by(|a, b| b.1.total_cmp(&a.1));
+        CompileProfile {
+            timed,
+            total: sums.iter().sum(),
+            parts,
         }
     }
 
@@ -803,6 +837,27 @@ mod tests {
         assert_eq!(p.buckets[0], (Bucket::Sync, 6.0));
         s.query = "nothing matches".into();
         assert_eq!(s.profile(), Profile::default());
+        assert_eq!(s.compile_profile(), CompileProfile::default());
+
+        use data::Part;
+        let mut s = State::default();
+        let mut a = run_with("a", &["check"], "remote", 0);
+        let mut b = run_with("b", &["test"], "remote", 0);
+        a.compile = Some([4.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        b.compile = Some([2.0, 9.0, 0.0, 0.0, 0.0, 0.0]);
+        s.snapshot.runs = vec![a, b, run_with("c", &["test"], "remote", 0)];
+        let p = s.compile_profile();
+        assert_eq!((p.timed, p.total), (2, 16.0));
+        assert_eq!(
+            p.parts,
+            [
+                (Part::Tests, 9.0),
+                (Part::Workspace, 6.0),
+                (Part::Dependencies, 1.0)
+            ]
+        );
+        s.kind = Some(Kind::Check);
+        assert_eq!(s.compile_profile().parts[0], (Part::Workspace, 4.0));
     }
 
     fn run_with(id: &str, args: &[&str], place: &str, exit: i32) -> RunRow {
