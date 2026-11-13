@@ -96,7 +96,7 @@ impl ValidatedTraitWorld {
                         );
                     };
                     let target = Callee::Direct(self.closure_target(closure, mode)?);
-                    let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
+                    let view = self.callable_contract(&target, facts, scratch)?;
                     let rows = self.callable_result_rows(&view, component, whole)?;
                     if rows.is_empty() && !whole {
                         return unsupported(
@@ -131,7 +131,7 @@ impl ValidatedTraitWorld {
                 }
                 Ty::FnItem(item) => {
                     let target = Callee::Direct(item.as_ref().clone());
-                    let view = self.carrier_contract(SignatureSubject::Call(&target), facts)?;
+                    let view = self.callable_contract(&target, facts, scratch)?;
                     let rows = self.callable_result_rows(&view, component, whole)?;
                     if rows.is_empty() && !whole {
                         return unsupported(
@@ -187,6 +187,33 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(sources)
+    }
+
+    /// The carrier contract of a concrete callable argument. One callable is
+    /// consulted for every result row of the instance; its contract depends
+    /// only on the callee and the facts subject, so form it once per subject.
+    fn callable_contract(
+        &self,
+        target: &Callee,
+        facts: &ValidatedFacts,
+        scratch: &mut TraitScratch,
+    ) -> Result<Arc<CarrierContractView>> {
+        scratch.for_facts(facts);
+        for (callee, view) in scratch.callable_contracts.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if same_callee(callee, target) {
+                return Ok(view.clone());
+            }
+        }
+        let view = self.carrier_contract(SignatureSubject::Call(target), facts)?;
+        if scratch.callable_contracts.len() < MAX_SCRATCH_OBLIGATIONS
+            && scratch.callable_contracts.try_reserve(1).is_ok()
+        {
+            scratch
+                .callable_contracts
+                .push((target.clone(), view.clone()));
+        }
+        Ok(view)
     }
 
     /// The callable result row at `component`, or every row when `whole`.

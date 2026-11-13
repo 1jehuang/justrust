@@ -3130,6 +3130,9 @@ pub struct TraitScratch {
     /// Canonical signatures produced for exact retained trait-call inputs.
     formed_trait_signatures: Vec<(TraitCall, Signature)>,
     formed_trait_signature_index: std::collections::HashMap<DeclId, Vec<usize>>,
+    /// Carrier contracts of concrete callable arguments, read once per
+    /// facts subject by callable result transport.
+    callable_contracts: Vec<(Callee, Arc<CarrierContractView>)>,
     /// The facts identity these answers belong to (environment + phase).
     facts_key: Option<(usize, FactsPhase, DeclId)>,
 }
@@ -3176,6 +3179,7 @@ impl TraitScratch {
             self.direct_index.clear();
             self.formed_trait_signatures.clear();
             self.formed_trait_signature_index.clear();
+            self.callable_contracts.clear();
         }
     }
 }
