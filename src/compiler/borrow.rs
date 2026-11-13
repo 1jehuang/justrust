@@ -21,6 +21,7 @@ mod indexed_write;
 mod linear_family;
 mod native_exchange;
 mod native_storage;
+mod rc_summary;
 mod singleton_heap;
 use singleton_heap::SingletonHeapSlot;
 mod renewal;
@@ -5959,6 +5960,15 @@ impl CarrierBuilder<'_, '_> {
             args.len() + 1,
         )?;
         let entry = state.clone();
+        if diagnose && self.rc_ingress_unsupported(&entry, &args, &destination)? {
+            self.problem(
+                block,
+                None,
+                Problem::Unsupported(
+                    "unsupported: borrowed data moved into an Rc has no tracked provenance".into(),
+                ),
+            )?;
+        }
         if diagnose && self.box_ingress_unsupported(&entry, &args, &destination)? {
             self.problem(
                 block,
