@@ -3,6 +3,23 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.25
+
+- **Hosted builds use justrust's own compiler by default** (`jr-ac20de5e7921`)
+  for the build machine's host target. Projects that pin a toolchain, other
+  targets, and machines where it cannot be obtained keep nightly-2026-10-08.
+- **Hosted builds survive networks that block the ssh ports.** When the build
+  machine's ssh port is unreachable, the client connects through an
+  authenticated relay on port 443 instead. Host key pinning is unchanged.
+  `JUSTRUST_HOSTED_TUNNEL=on|off` forces the choice.
+- Build slots seed from Cargo 1.100's per-package `build/` layout, so
+  concurrent builds get their own target slot again on current stable Cargo.
+- Hosted runs are capped at 30 minutes of wall clock.
+- Service refusals are labelled apart from transport failures.
+- Prebuild on edit runs on hosted when local compiles are off.
+- `justrust profile --by` splits end-to-end wait by command, cargo profile and
+  rebuild scope.
+
 ## 0.1.0-alpha.24
 
 - **Failed runs report their cause to run history.** Hosted and signed-in
