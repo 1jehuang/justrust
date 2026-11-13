@@ -545,6 +545,7 @@ impl Parser<'_, '_> {
     pub(super) fn opaque_return_type(&mut self) -> Result<Type, ParseError> {
         if self.names.edition() != super::super::token::Edition::E2024
             && !self.pre_2024_capture_agrees
+            && self.pre_2024_capture_need.is_none()
         {
             return Err(self.unsupported(
                 "pre-2024 `impl Trait` return lifetime capture rules are unsupported; the native compiler implements only edition 2024 capture",
@@ -560,11 +561,15 @@ impl Parser<'_, '_> {
         self.expect("impl")?;
         let mut bounds = Vec::new();
         let mut regions = Vec::new();
+        let mut region_texts: Vec<String> = Vec::new();
         loop {
             if bounds.len().saturating_add(regions.len()) >= 256 {
                 return Err(self.limit("predicate limit exceeded"));
             }
             if self.token().is_lifetime() {
+                if self.pre_2024_capture_need.is_some() && region_texts.len() < 256 {
+                    region_texts.push(self.token().text.to_owned());
+                }
                 let region = if self.eat("'static") {
                     RegionName::Static
                 } else if self.eat("'_") {
@@ -588,6 +593,24 @@ impl Parser<'_, '_> {
         }
         if bounds.is_empty() {
             return Err(self.error("E0224: at least one trait is required for an opaque type"));
+        }
+        if let Some(need) = &self.pre_2024_capture_need {
+            // Pre-2024 captures only the lifetimes the opaque names. It equals
+            // the edition 2024 capture set when every input lifetime is named:
+            // `'_` stands for the single elided input lifetime.
+            let names_elided = need.elided == 0
+                || (need.elided == 1
+                    && need.named.is_empty()
+                    && regions.iter().any(|r| matches!(r, RegionName::Infer)));
+            let names_all = need
+                .named
+                .iter()
+                .all(|name| region_texts.iter().any(|text| text == name));
+            if !names_elided || !names_all {
+                return Err(self.unsupported(
+                    "pre-2024 `impl Trait` return lifetime capture rules are unsupported unless the opaque names every input lifetime; the native compiler implements only edition 2024 capture",
+                ));
+            }
         }
         Ok(Type::Opaque(Box::new(SourceOpaqueType {
             site,

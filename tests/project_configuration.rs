@@ -95,6 +95,16 @@ fn edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries() {
             "fn f(x: &u32) -> impl Fn() -> u32 { let y = *x; move || y } fn main() { let v = 3; println!(\"{}\", f(&v)()); }\n",
             Some("pre-2024 `impl Trait`"),
         ),
+        (
+            "opaque-names-elided-input",
+            "fn bigrams(s: &str) -> impl Iterator<Item = (char, char)> + '_ { s.chars().zip(s.chars().skip(1)) } fn main() { println!(\"{}\", bigrams(\"abcd\").count()); }\n",
+            None,
+        ),
+        (
+            "opaque-names-every-parameter",
+            "fn firsts<'a>(v: &'a [u32]) -> impl Iterator<Item = &'a u32> + 'a { v.iter().step_by(2) } fn main() { let v = [1u32, 2, 3]; println!(\"{:?}\", firsts(&v).collect::<Vec<_>>()); }\n",
+            None,
+        ),
     ];
     for (name, source, boundary) in cases {
         let p = Project::new(&format!("e2021-{name}"), "edition = \"2021\"", "", source);
@@ -115,6 +125,20 @@ fn edition_2021_is_admitted_with_stock_semantics_or_explicit_boundaries() {
                 }
             }
         }
+    }
+    // Accepted in 2024 (every lifetime captured), E0700 in 2021: the opaque
+    // names no lifetime, yet its hidden type holds `x`. Native never accepts.
+    let unnamed = Project::new(
+        "e2021-opaque-unnamed-capture",
+        "edition = \"2021\"",
+        "",
+        "fn f<'a>(x: &'a u32) -> impl Fn() -> u32 { move || *x } fn main() { let v = 3; println!(\"{}\", f(&v)()); }\n",
+    );
+    let stock = unnamed.stock(&["check", "--offline"]);
+    assert!(!stock.status.success());
+    assert!(stderr(&stock).contains("E0700"), "{}", stderr(&stock));
+    for workers in ["1", "8"] {
+        rejected(unnamed.native(&["check"], workers), "pre-2024 `impl Trait`");
     }
     let chain = Project::new(
         "e2021-let-chain",

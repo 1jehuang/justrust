@@ -10296,6 +10296,13 @@ pub enum BindingName {
     Named(AstIdent),
     Wildcard,
 }
+#[derive(Clone, Debug, Default)]
+pub(super) struct Pre2024CaptureNeed {
+    /// `&` inputs without a written lifetime.
+    pub(super) elided: usize,
+    /// Declared lifetime parameters, each of which the opaque must name.
+    pub(super) named: Vec<String>,
+}
 /// Builtin lifetime syntax is distinct from a user-declared lifetime binder.
 #[derive(Clone, Copy, Debug)]
 pub enum RegionName {
@@ -12534,6 +12541,10 @@ struct Parser<'input, 'names> {
     /// Pre-2024 function whose signature has no lifetime inputs, so its
     /// `impl Trait` capture set equals the edition 2024 one.
     pre_2024_capture_agrees: bool,
+    /// Pre-2024 function whose only lifetime inputs are references: its
+    /// `impl Trait` capture set equals the edition 2024 one exactly when the
+    /// opaque names every such lifetime (`+ '_` for one elided input).
+    pre_2024_capture_need: Option<Pre2024CaptureNeed>,
     cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
@@ -12736,6 +12747,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
+            pre_2024_capture_need: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
             allow_struct: true,
@@ -14291,6 +14303,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
+            pre_2024_capture_need: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
@@ -14735,6 +14748,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
+            pre_2024_capture_need: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
             allow_struct: true,
@@ -18054,23 +18068,27 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// binding names, integer literals and plain punctuation may appear before
     /// `->`. Any path (`Chars`, `String`, `std::..`), bound, reference,
     /// lifetime or `Self` may carry a hidden region, so it is refused.
-    fn head_has_no_lifetime_inputs(&self) -> bool {
+    /// The exception is a plain reference (`&T`, `&'a T`, `&mut T`) whose
+    /// lifetime is elided or an unbounded parameter of this function: those
+    /// are counted, and the opaque agrees when it names all of them.
+    fn head_lifetime_inputs(&self) -> Option<Pre2024CaptureNeed> {
         const PRIMITIVES: &[&str] = &[
             "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-            "f32", "f64", "bool", "char",
+            "f32", "f64", "bool", "char", "str",
         ];
         // The enclosing item scope must declare no lifetimes: free functions
         // outside any impl or trait only.
         if !self.impl_regions.params.is_empty() || self.impl_regions.receiver.is_some() {
-            return false;
+            return None;
         }
         let mut generics: Vec<&str> = Vec::new();
+        let mut need = Pre2024CaptureNeed::default();
         let mut at = 1usize; // token 0 is the function name
         if self.cursor.peek(at).is_some_and(|t| t.matches("<")) {
             at += 1;
             loop {
                 let Some(token) = self.cursor.peek(at) else {
-                    return false;
+                    return None;
                 };
                 if token.matches(">") {
                     at += 1;
@@ -18080,13 +18098,25 @@ impl<'input, 'names> Parser<'input, 'names> {
                     at += 1;
                     continue;
                 }
-                if !token.is_ident() || token.is_lifetime() {
-                    return false;
+                if token.is_lifetime() {
+                    if token.text == "'static" || token.text == "'_" {
+                        return None;
+                    }
+                    // Only unbounded lifetime parameters.
+                    if self.cursor.peek(at + 1).is_some_and(|n| n.matches(":")) {
+                        return None;
+                    }
+                    need.named.push(token.text.to_owned());
+                    at += 1;
+                    continue;
+                }
+                if !token.is_ident() {
+                    return None;
                 }
                 generics.push(token.text);
                 at += 1;
                 if generics.len() > 32 {
-                    return false;
+                    return None;
                 }
             }
         }
@@ -18094,17 +18124,31 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut steps = 0usize;
         while let Some(token) = self.cursor.peek(at) {
             steps += 1;
-            if steps > 4096 || token.is_lifetime() || token.string {
-                return false;
+            if steps > 4096 || token.string {
+                return None;
+            }
+            if token.is_lifetime() {
+                // Only a declared lifetime directly after `&`.
+                let after_ref = self.cursor.peek(at - 1).is_some_and(|p| p.matches("&"));
+                if !after_ref || !need.named.iter().any(|n| n == token.text) {
+                    return None;
+                }
+                at += 1;
+                continue;
             }
             let text = token.text;
             if depth == 0 && (text == "->" || text == "{" || text == ";" || text == "where") {
-                return text == "->";
+                return (text == "->").then_some(need);
             }
             match text {
                 "(" | "[" => depth += 1,
                 ")" | "]" => depth = depth.saturating_sub(1),
                 "," | ";" | "_" | "mut" => {}
+                "&" => {
+                    if !self.cursor.peek(at + 1).is_some_and(|n| n.is_lifetime()) {
+                        need.elided += 1;
+                    }
+                }
                 ":" => {}
                 _ if text.starts_with(|c: char| c.is_ascii_digit()) => {}
                 _ if PRIMITIVES.contains(&text) || generics.contains(&text) => {}
@@ -18112,12 +18156,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 _ if token.is_ident()
                     && self.cursor.peek(at + 1).is_some_and(|n| n.matches(":"))
                     && !matches!(text, "self" | "Self") => {}
-                _ => return false,
+                _ => return None,
             }
             at += 1;
         }
-        false
+        None
     }
+
     fn function_head(
         &mut self,
         inherited: &[AstIdent],
@@ -18132,9 +18177,17 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.lexical.pending_param_patterns.clear();
         let (constness, unsafety) = self.function_qualifiers(associated)?;
         self.expect("fn")?;
-        self.pre_2024_capture_agrees = self.names.edition() != super::token::Edition::E2024
-            && !associated
-            && self.head_has_no_lifetime_inputs();
+        self.pre_2024_capture_agrees = false;
+        self.pre_2024_capture_need = None;
+        if self.names.edition() != super::token::Edition::E2024 && !associated {
+            match self.head_lifetime_inputs() {
+                Some(need) if need.elided == 0 && need.named.is_empty() => {
+                    self.pre_2024_capture_agrees = true;
+                }
+                Some(need) => self.pre_2024_capture_need = Some(need),
+                None => {}
+            }
+        }
         let name = self.ident()?;
         let mut regions = if associated {
             self.impl_regions.clone()
@@ -18316,6 +18369,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(")")?;
         let result = self.opaque_function_result();
         self.pre_2024_capture_agrees = false;
+        self.pre_2024_capture_need = None;
         let result = result?;
         if self.eat("where") {
             loop {
