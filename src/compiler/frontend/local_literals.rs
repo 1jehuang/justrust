@@ -561,6 +561,14 @@ impl<'s> Solver<'_, '_, 's> {
             _ => false,
         })
     }
+    /// A written generic argument. Const arguments carry no type evidence
+    /// here; checking resolves them against the selected declaration's slot.
+    fn generic_argument_term(&mut self, ty: &Type) -> Result<Term, String> {
+        if matches!(ty, Type::ConstArgument(_)) {
+            return self.fresh();
+        }
+        self.source_ty(ty)
+    }
     fn source_ty(&mut self, ty: &Type) -> Result<Term, String> {
         if matches!(ty, Type::Infer) {
             return self.fresh();
@@ -3233,7 +3241,7 @@ impl<'s> Solver<'_, '_, 's> {
                     path.segments
                         .iter()
                         .flat_map(|s| &s.args)
-                        .map(|a| self.source_ty(a))
+                        .map(|a| self.generic_argument_term(a))
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 if let Expr::Call { name, args } = value.as_ref() {
@@ -3492,7 +3500,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .collect::<Result<Vec<_>, _>>()?;
                 let actuals = type_args
                     .iter()
-                    .map(|a| self.source_ty(a))
+                    .map(|a| self.generic_argument_term(a))
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
@@ -3620,7 +3628,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .collect::<Result<Vec<_>, _>>()?;
                 let actuals = type_args
                     .iter()
-                    .map(|a| self.source_ty(a))
+                    .map(|a| self.generic_argument_term(a))
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Some(result) = self.callable_method_application(receiver, *name, &args)? {
                     return Ok(result);

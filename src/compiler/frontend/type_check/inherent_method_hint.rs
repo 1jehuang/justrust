@@ -56,7 +56,23 @@ impl Checker<'_> {
             }
             for (slot, ty) in explicit.iter().enumerate() {
                 let formal = self.infer_node(InferKind::Slot(slot))?;
-                let actual = self.partial_type_term(ty, 0)?;
+                let kind = info.param_env.parameter_kind(ir::ParamId {
+                    owner: info.param_env.binder(),
+                    index: u16::try_from(slot).map_err(|_| "generic slot overflow")?,
+                });
+                let actual = match kind {
+                    Some(kind @ ir::GenericParamKind::Const(_)) => {
+                        let value = plan.source_generic_argument(
+                            ty,
+                            kind,
+                            &self.signatures.params,
+                            self.facts(),
+                            &plan.budget,
+                        )?;
+                        self.infer_type_term(&value, None, 0)?
+                    }
+                    _ => self.partial_type_term(ty, 0)?,
+                };
                 solver.constrain(&formal, &actual, 0)?;
             }
         }

@@ -18206,9 +18206,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         let type_params = self.callable_generics(&mut regions);
         self.callable_regions = regions.params.clone();
         let type_params = type_params?;
-        if associated && !self.const_params.is_empty() {
-            return Err(self.unsupported("associated const parameter declarations are unsupported"));
-        }
         let bounds = std::mem::take(&mut self.pending_bounds);
         let enclosing_bounds = std::mem::take(&mut self.visible_bounds);
         {
@@ -26362,6 +26359,54 @@ impl PlanCtx {
                 )?;
                 decl_mut(&registry.slots, &mut registry.declarations, id)?.embedded_function =
                     Some(bound);
+            }
+        }
+        // Const generic parameters declared on associated functions: their
+        // own binder carries the const slot kinds; the impl binder is joined
+        // when member environments are sealed below.
+        for (implementation, block) in program.impls.iter().enumerate() {
+            for (item, member) in block.items.iter().enumerate() {
+                if member.function.const_params.is_empty() {
+                    continue;
+                }
+                let id = *registry
+                    .associated_ids
+                    .get(implementation)
+                    .and_then(|ids| ids.get(item))
+                    .ok_or("associated const-generic member lost its declaration")?;
+                let function = &member.function;
+                budget.charge_work(function.type_params.len() + 1)?;
+                let mut kinds = Vec::new();
+                kinds
+                    .try_reserve_exact(function.type_params.len())
+                    .map_err(|_| "const slot kind allocation failed")?;
+                kinds.resize(function.type_params.len(), ir::GenericParamKind::Type);
+                for parameter in &function.const_params {
+                    let written = function
+                        .type_params
+                        .get(usize::from(parameter.slot))
+                        .ok_or("const parameter slot is outside its source declaration")?;
+                    if program
+                        .names
+                        .key(*written, LookupClass::TypeParameter)
+                        .map_err(native_adapter::name_diagnostic)?
+                        != program
+                            .names
+                            .key(parameter.name, LookupClass::TypeParameter)
+                            .map_err(native_adapter::name_diagnostic)?
+                    {
+                        return Err("const parameter slot changed source declaration order".into());
+                    }
+                    let kind = kinds
+                        .get_mut(usize::from(parameter.slot))
+                        .ok_or("const parameter slot is outside its source declaration")?;
+                    if *kind != ir::GenericParamKind::Type {
+                        return Err("duplicate const parameter slot".into());
+                    }
+                    *kind = ir::GenericParamKind::Const(parameter.ty);
+                }
+                let info = decl_mut(&registry.slots, &mut registry.declarations, id)?;
+                info.param_env = Arc::new(info.param_env.with_slot_kinds(&kinds, budget)?);
             }
         }
         for declaration in &program.structs {

@@ -121,18 +121,24 @@ impl Checker<'_> {
                 .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?,
             _ => Vec::new(),
         };
-        let written =
-            if !explicit.is_empty() && !explicit.iter().any(partial_annotation::has_nested_infer) {
-                self.infer_storage(explicit.len())?;
-                Some(
-                    explicit
-                        .iter()
-                        .map(|actual| self.checked_type_actual(actual))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )
-            } else {
-                None
-            };
+        let has_const = explicit
+            .iter()
+            .any(|actual| matches!(actual, Type::ConstArgument(_)));
+        let partial_const = has_const && explicit.iter().any(partial_annotation::has_nested_infer);
+        let written = if !has_const
+            && !explicit.is_empty()
+            && !explicit.iter().any(partial_annotation::has_nested_infer)
+        {
+            self.infer_storage(explicit.len())?;
+            Some(
+                explicit
+                    .iter()
+                    .map(|actual| self.checked_type_actual(actual))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
+        };
         let mut deferred = false;
         let mut partial_result = None;
         let mut unproved_expected = false;
@@ -147,6 +153,19 @@ impl Checker<'_> {
             (&self.module, &plan.budget),
             &self.trait_scratch,
             |owner, mode, traits_only| {
+                // Const arguments need the selected candidate's slot kinds.
+                if has_const
+                    && !partial_const
+                    && !traits_only
+                    && let Some(id) = self.explicit_method_declaration(owner, name, Some(mode))?
+                {
+                    let actuals = self.explicit_method_actuals(Some(id), explicit)?;
+                    return Ok(if prepared {
+                        MethodArguments::ReadyPrepared(Cow::Owned(actuals), &prepare)
+                    } else {
+                        MethodArguments::Ready(Cow::Owned(actuals))
+                    });
+                }
                 if let Some(written) = &written {
                     // Anonymous `impl Trait` parameters cannot be written in a
                     // turbofish. Their actuals come from inference, with the

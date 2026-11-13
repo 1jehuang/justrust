@@ -310,3 +310,32 @@ fn aggregate_constant_patterns_match_stock() {
         ],
     );
 }
+
+#[test]
+fn associated_function_const_parameters_match_stock() {
+    check(
+        "associated-const-parameters",
+        &[
+            Case {
+                name: "method_and_path_const_arguments",
+                source: "struct S{v:Vec<u32>} impl S{fn get<const N:usize>(&self)->usize{N+self.v.len()} fn pick<T:Copy,const B:bool>(&self,a:T,b:T)->T{if B{a}else{b}} fn fill<const N:usize>(x:u8)->[u8;N]{[x;N]}} fn main(){let s=S{v:vec![1,2]}; println!(\"{} {} {:?} {}\",s.get::<3>(),s.pick::<i8,false>(1,2),S::fill::<4>(7),S::get::<1>(&s));}",
+                expect: Expect::Run("5 2 [7, 7, 7, 7] 3\n"),
+            },
+            Case {
+                name: "inferred_type_with_const_flag",
+                source: "struct V{d:Vec<u32>} impl V{fn extend_from_iter<I,const CHECK:bool>(&mut self,iterable:I) where I:IntoIterator<Item=u32>{for x in iterable{if CHECK&&x>5{continue;} self.d.push(x);}} fn extend(&mut self,s:&[u32]){self.extend_from_iter::<_,true>(s.iter().cloned());} fn extend_all(&mut self,s:&[u32]){self.extend_from_iter::<_,false>(s.iter().cloned());}} fn main(){let mut v=V{d:Vec::new()}; v.extend(&[1,9,3]); v.extend_all(&[7]); println!(\"{:?}\",v.d);}",
+                expect: Expect::Run("[1, 3, 7]\n"),
+            },
+            Case {
+                name: "wrong_const_argument_type",
+                source: "struct S; impl S{fn get<const N:usize>(&self)->usize{N}} fn main(){println!(\"{}\",S.get::<true>());}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "type_for_const_parameter",
+                source: "struct S; impl S{fn get<const N:usize>(&self)->usize{N}} fn main(){println!(\"{}\",S.get::<u8>());}",
+                expect: Expect::Invalid("E0747"),
+            },
+        ],
+    );
+}

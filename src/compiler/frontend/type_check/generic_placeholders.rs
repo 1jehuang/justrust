@@ -66,10 +66,8 @@ impl Checker<'_> {
         // parameters with the method's own inference slots.
         if !type_args.is_empty() && !partial {
             self.infer_storage(type_args.len())?;
-            return type_args
-                .iter()
-                .map(|ty| self.checked_type_actual(ty))
-                .collect();
+            let declaration = self.explicit_method_declaration(owner, name, None)?;
+            return self.explicit_method_actuals(declaration, type_args);
         }
         {
             let inferred = if type_args.is_empty() && expected.is_none() {
@@ -168,5 +166,58 @@ impl Checker<'_> {
             .infer_call_args_with_partial(declaration, values, expected, fallback, Some(args))?
             .ok_or("E0282: type annotations needed for partial generic arguments")?;
         Ok(Some((key, actuals)))
+    }
+}
+
+impl Checker<'_> {
+    /// Lower written method generic arguments against the selected
+    /// declaration's own slot kinds, so const parameters receive their
+    /// scalar const argument instead of a type shape.
+    pub(super) fn explicit_method_actuals(
+        &self,
+        declaration: Option<ir::DeclId>,
+        type_args: &[Type],
+    ) -> Result<Vec<ir::Ty>, String> {
+        let plan = self.signatures.plan()?;
+        let scope = declaration.map(|id| plan.param_env(id)).transpose()?;
+        let mut actuals = Vec::new();
+        for (index, source) in type_args.iter().enumerate() {
+            let kind = scope.as_ref().and_then(|scope| {
+                scope.parameter_kind(ir::ParamId {
+                    owner: scope.binder(),
+                    index: u16::try_from(index).ok()?,
+                })
+            });
+            actuals.push(match kind {
+                Some(kind @ ir::GenericParamKind::Const(_)) => plan.source_generic_argument(
+                    source,
+                    kind,
+                    &self.signatures.params,
+                    self.facts(),
+                    &plan.budget,
+                )?,
+                _ => self.checked_type_actual(source)?,
+            });
+        }
+        Ok(actuals)
+    }
+
+    /// The unique inherent method a written turbofish applies to, if any.
+    pub(super) fn explicit_method_declaration(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        filter: Option<ReceiverKind>,
+    ) -> Result<Option<ir::DeclId>, String> {
+        let mut root = owner;
+        if filter.is_none() {
+            while let ir::Ty::Ref { referent, .. } = root {
+                root = referent;
+            }
+        }
+        Ok(match self.inherent_method_candidate(root, name, filter)? {
+            super::receiver_result_hint::InherentMethodCandidate::Unique(id, _) => Some(id),
+            _ => None,
+        })
     }
 }
