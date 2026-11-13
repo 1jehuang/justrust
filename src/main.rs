@@ -1,8 +1,24 @@
 //! Entry point. The implementation lives in `lib.rs` (Linux, macOS, Windows).
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> anyhow::Result<()> {
     justrust::main()
+}
+
+/// Windows gives the main thread 1 MB of stack, against 8 MB on Linux and
+/// macOS. Debug builds overflow that while parsing and dispatching the CLI
+/// (`justrust feedback` died with a stack overflow), so run on a thread with
+/// the same stack the other platforms have.
+#[cfg(windows)]
+fn main() -> anyhow::Result<()> {
+    let cli = std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(8 << 20)
+        .spawn(justrust::main)?;
+    match cli.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 /// Elsewhere: fail open. `justrust check|test|build|clippy|run|cargo ...`

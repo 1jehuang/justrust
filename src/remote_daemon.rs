@@ -139,7 +139,10 @@ fn ping_with(s: &UnixStream, timeout: Duration) -> Result<Pong> {
         }),
         _ => bail!("bad pong"),
     };
-    s.set_read_timeout(None)?;
+    // macOS fails setsockopt with EINVAL once the peer has closed. That must
+    // not turn a pong already read into "daemon not running". On a live
+    // socket this cannot fail, and a closed one fails its next read anyway.
+    let _ = s.set_read_timeout(None);
     res
 }
 
