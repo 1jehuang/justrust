@@ -107,7 +107,23 @@ impl ValidatedTraitWorld {
         // for `&Self::Target`. Authenticate the exact raw schema here, not an
         // executable stored contract before its projection is normalized.
         self.validate_declaration_schema(declaration, schema)?;
-        let source = self.validate_source_regions(declaration, &schema.signature)?;
+        // Source carrier rows describe the declaration's own types, where an
+        // owning-impl assignment such as `type Err = &'static str` is already
+        // reduced. Rebase them onto the owner-normalized signature, not onto
+        // the unreduced `Self::Err` projection, which has no reference layer.
+        let source = if let Some(owner) = owner {
+            let mut normalized = schema.signature.clone();
+            for ty in normalized
+                .params
+                .iter_mut()
+                .chain(std::iter::once(&mut normalized.result))
+            {
+                *ty = self.normalize_owner_type_for_use(ty, owner, &mut Vec::new(), 0, false)?;
+            }
+            self.validate_source_regions(declaration, &normalized)?
+        } else {
+            self.validate_source_regions(declaration, &schema.signature)?
+        };
         // Explicit reference layers, including layers inside an enum or tuple,
         // need a declaration-owned lifetime row. Projection tails retain their
         // separate origin authority and are never guessed from a normalized type.
