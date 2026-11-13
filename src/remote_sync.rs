@@ -572,7 +572,14 @@ impl Mirror {
             .status()?
             .success()
         {
-            bail!("cannot create {remote} on the remote machine");
+            // Hosted machines create mirrors through `jcode-mkdir`, which
+            // refuses everything else (a container's /work, /workspace).
+            let hint = if remote.starts_with("/home/") || remote.starts_with("/Users/") {
+                ""
+            } else {
+                ". Hosted machines only mirror projects under /home or /Users: move the checkout there"
+            };
+            bail!("cannot create {remote} on the remote machine{hint}");
         }
         Ok(())
     }
