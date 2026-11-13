@@ -2,6 +2,15 @@
 use super::*;
 
 impl ValidatedTraitWorld {
+    /// A trait method bounded by `where Self: Sized` is not callable on a
+    /// trait object, so it has no vtable slot (stock rustc rule). Only the
+    /// declared item predicates are read; nothing is proved here.
+    pub(super) fn has_vtable_slot(&self, item: DeclId) -> Result<bool> {
+        let header = self.item_header(item)?;
+        let self_param = self.trait_header(header.trait_decl)?.self_param;
+        Ok(!self.predicates_prove_sized(self_param, &header.schema.predicates)?)
+    }
+
     pub(super) fn dynamic_associated_binding(
         &self,
         projection: &ir::AssociatedTypeProjection,
@@ -298,6 +307,9 @@ impl ValidatedFacts {
         for application in applications.into_iter().rev() {
             let header = self.world.trait_header(application.declaration)?;
             for item in header.items.iter() {
+                if !self.world.has_vtable_slot(*item)? {
+                    continue;
+                }
                 let call = TraitCall {
                     trait_ref: application.clone(),
                     item: *item,
@@ -331,6 +343,9 @@ impl ValidatedFacts {
         {
             let header = self.world.trait_header(application.declaration)?;
             for item in header.items.iter() {
+                if !self.world.has_vtable_slot(*item)? {
+                    continue;
+                }
                 push(self.budget(), &mut out, (application.clone(), *item))?;
             }
         }

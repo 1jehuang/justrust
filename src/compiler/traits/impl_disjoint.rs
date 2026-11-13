@@ -62,6 +62,31 @@ impl ValidatedTraitWorld {
                 (local, _) => local,
             };
         }
+        // An implicitly `Sized` impl parameter can never be bound to an
+        // intrinsically unsized type (`str`, `[T]`, `dyn P`): `impl<T: Clone>
+        // ToOwned for T` and `impl ToOwned for str` are disjoint (stock rule).
+        for (side, implementation) in [(0u8, a), (1u8, b)] {
+            for parameter in implementation.schema_env.ordered_params() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if implementation.schema_env.relaxed_sized(parameter) {
+                    continue;
+                }
+                let mut bound = None;
+                for binding in bindings.iter() {
+                    if binding.side == side && binding.parameter == parameter {
+                        bound = Some(binding.value);
+                        break;
+                    }
+                }
+                let Some(bound) = bound else {
+                    continue;
+                };
+                let bound = self.dereference(bound, bindings, 0)?;
+                if matches!(bound.ty, Ty::Str | Ty::Slice { .. } | Ty::Dyn(_)) {
+                    return Ok(true);
+                }
+            }
+        }
         for (side, implementation) in [(0, a), (1, b)] {
             for predicate in implementation.predicates.iter() {
                 charged(&self.budget, self.budget.charge_work(1))?;
@@ -96,9 +121,18 @@ impl ValidatedTraitWorld {
             ty: &goal.self_ty,
         };
         if self.closure_trait_kind(goal.declaration)?.is_some() {
-            return Ok(!self.intrinsically_non_callable(subject, bindings, 0)?);
-        }
-        if self.catalog.declaration(goal.declaration).is_some() {
+            if self.intrinsically_non_callable(subject, bindings, 0)? {
+                return Ok(false);
+            }
+            // A struct, enum or reference gets a call capability only from a
+            // written impl (builtin call impls cover closures, fn items and
+            // fn pointers; `&F` forwards through the library impls). Decide
+            // it by the ordinary impl enumeration below.
+            let resolved = self.dereference(subject, bindings, 0)?;
+            if !matches!(resolved.ty, Ty::Struct(_) | Ty::Enum(_) | Ty::Ref { .. }) {
+                return Ok(true);
+            }
+        } else if self.catalog.declaration(goal.declaration).is_some() {
             return Ok(true);
         }
         if !self.decidable_subject(subject, bindings, 0)? {
@@ -144,6 +178,11 @@ impl ValidatedTraitWorld {
                 side: candidate_side,
                 ty: &candidate.trait_ref.self_ty,
             };
+            // Distinct concrete outer constructors never unify, whatever
+            // (possibly non-structural) arguments they carry.
+            if self.outer_constructors_differ(head, subject, bindings)? {
+                continue;
+            }
             // A head that hides a projection may equal the subject only after
             // normalization: it cannot be excluded structurally.
             if !self.structural(head, bindings, 0)? {
@@ -252,6 +291,54 @@ impl ValidatedTraitWorld {
         }))
     }
 
+    /// True only when both terms resolve to concrete type constructors that
+    /// can never be equal (`Box<dyn E>` vs `u8`). Parameters, projections,
+    /// opaque, object and callable types are never called different.
+    fn outer_constructors_differ<'a>(
+        &self,
+        left: Term<'a>,
+        right: Term<'a>,
+        bindings: &[Binding<'a>],
+    ) -> Result<bool> {
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let left = self.dereference(left, bindings, 0)?;
+        let right = self.dereference(right, bindings, 0)?;
+        fn class(ty: &Ty) -> Option<u8> {
+            Some(match ty {
+                Ty::Int(_) => 0,
+                Ty::Char => 1,
+                Ty::Str => 2,
+                Ty::Float(_) => 3,
+                Ty::Bool => 4,
+                Ty::Unit => 5,
+                Ty::Struct(_) => 6,
+                Ty::Enum(_) => 7,
+                Ty::Tuple(_) => 8,
+                Ty::Array { .. } | Ty::DependentArray { .. } => 9,
+                Ty::Slice { .. } => 10,
+                Ty::Ref { .. } => 11,
+                Ty::RawPtr { .. } => 12,
+                Ty::Never => 13,
+                _ => return None,
+            })
+        }
+        let (Some(a), Some(b)) = (class(left.ty), class(right.ty)) else {
+            return Ok(false);
+        };
+        if a != b {
+            return Ok(true);
+        }
+        Ok(match (left.ty, right.ty) {
+            (Ty::Int(x), Ty::Int(y)) => x != y,
+            (Ty::Float(x), Ty::Float(y)) => x != y,
+            (Ty::Struct(x), Ty::Struct(y)) => x.def().source_decl != y.def().source_decl,
+            (Ty::Enum(x), Ty::Enum(y)) => x.def().source_decl != y.def().source_decl,
+            (Ty::Tuple(x), Ty::Tuple(y)) => x.len() != y.len(),
+            (Ty::Ref { kind: x, .. }, Ty::Ref { kind: y, .. }) => x != y,
+            _ => false,
+        })
+    }
+
     /// A subject whose trait memberships are all given by implementation
     /// headers: structural, and not a type some downstream crate could own.
     fn decidable_subject<'a>(
@@ -269,6 +356,28 @@ impl ValidatedTraitWorld {
         }
         if matches!(term.ty, Ty::Param(_)) {
             return Ok(false);
+        }
+        // `Box<dyn P>` / `&dyn P` is not the object type: only a written impl
+        // for the wrapper applies (builtin object impls cover `dyn P` alone),
+        // and candidate enumeration keeps any impl whose bound stays
+        // undecided. The object's own arguments must still be structural.
+        if hops > depth
+            && let Ty::Dyn(object) = term.ty
+        {
+            for argument in object
+                .args
+                .iter()
+                .chain(object.associated_types.iter().map(|(_, ty)| ty))
+            {
+                let argument = Term {
+                    side: term.side,
+                    ty: argument,
+                };
+                if !self.structural(argument, bindings, hops + 1)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
         }
         self.structural(term, bindings, hops)
     }
@@ -299,6 +408,7 @@ impl ValidatedTraitWorld {
             }
             | Ty::RawPtr { pointee: inner, .. }
             | Ty::Array { element: inner, .. }
+            | Ty::DependentArray { element: inner, .. }
             | Ty::Slice { element: inner } => self.structural(child(inner), bindings, depth + 1),
             Ty::Tuple(_) | Ty::Struct(_) | Ty::Enum(_) => {
                 for argument in type_arguments(term.ty) {

@@ -1396,6 +1396,9 @@ impl ValidatedFacts {
                 visit(world, parent.declaration, seen, out, depth + 1)?;
             }
             for item in header.items.iter() {
+                if !world.has_vtable_slot(*item)? {
+                    continue;
+                }
                 push(&world.budget, out, (declaration, *item))?;
             }
             Ok(())
@@ -11053,6 +11056,27 @@ impl ValidatedTraitWorld {
                         bindings,
                         depth + 1,
                     )?);
+            }
+            // A const-generic length may equal any length: unify elements
+            // and treat the extents as possibly equal (more overlap, never
+            // less).
+            (
+                Ty::DependentArray { element: at, .. },
+                Ty::DependentArray { element: bt, .. } | Ty::Array { element: bt, .. },
+            )
+            | (Ty::Array { element: at, .. }, Ty::DependentArray { element: bt, .. }) => {
+                return self.unify(
+                    Term {
+                        side: left.side,
+                        ty: at,
+                    },
+                    Term {
+                        side: right.side,
+                        ty: bt,
+                    },
+                    bindings,
+                    depth + 1,
+                );
             }
             (Ty::Slice { element: at }, Ty::Slice { element: bt }) => {
                 return self.unify(

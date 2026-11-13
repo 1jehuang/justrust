@@ -160,3 +160,94 @@ fn main() {
         }],
     );
 }
+
+#[test]
+fn dyn_iterator_objects() {
+    oracle::check(
+        "dyn-iterator-objects",
+        &[
+            Case {
+                name: "mut_dyn_iterator",
+                source: r#"
+fn total(it: &mut dyn Iterator<Item = i32>) -> i32 {
+    let mut s = 0;
+    while let Some(x) = it.next() { s += x; }
+    s
+}
+fn main() {
+    let mut r = 1..5;
+    println!("{}", total(&mut r));
+    let mut v = vec![4, 5, 6].into_iter();
+    let d: &mut dyn Iterator<Item = i32> = &mut v;
+    println!("{:?} {:?}", d.next(), d.nth(0));
+}
+"#,
+                expect: Expect::Run("10\nSome(4) Some(5)\n"),
+            },
+            Case {
+                name: "boxed_dyn_iterator",
+                source: r#"
+struct C(i32);
+impl Iterator for C {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> { self.0 += 1; if self.0 < 4 { Some(self.0) } else { None } }
+}
+fn mk() -> Box<dyn Iterator<Item = i32>> { Box::new(C(0)) }
+fn main() {
+    let mut b = mk();
+    println!("{:?}", b.next());
+    let r: &mut dyn Iterator<Item = i32> = &mut *b;
+    println!("{:?} {:?}", r.next(), r.size_hint());
+}
+"#,
+                expect: Expect::Run("Some(1)\nSome(2) (0, None)\n"),
+            },
+            Case {
+                name: "sized_method_skipped_by_vtable",
+                source: r#"
+trait T { fn a(&self) -> i32; fn g<B>(&self, b: B) -> B where Self: Sized { b } fn by(self) -> i32 where Self: Sized { 7 } }
+impl T for i32 { fn a(&self) -> i32 { *self } }
+fn main() { let x: &dyn T = &5; println!("{} {} {}", x.a(), 3.g(9), 4.by()); }
+"#,
+                expect: Expect::Run("5 9 7\n"),
+            },
+            Case {
+                name: "sized_method_on_object",
+                source: "trait T { fn a(&self) -> i32; fn b(self) -> i32 where Self: Sized { 7 } } impl T for i32 { fn a(&self) -> i32 { *self } } fn main() { let y: Box<dyn T> = Box::new(3); y.b(); }",
+                expect: Expect::Invalid("cannot be invoked on a trait object"),
+            },
+            Case {
+                name: "generic_method_object",
+                source: "trait T { fn g<A>(&self, a: A); } fn f(_: &dyn T) {} fn main() {}",
+                expect: Expect::Invalid("E0038"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn implicit_sized_parameter_disjoint_from_unsized_impls() {
+    oracle::check(
+        "implicit-sized-impl-disjoint",
+        &[
+            Case {
+                name: "blanket_and_str_impls",
+                source: r#"
+trait Name { fn name(&self) -> String; }
+impl<T: Clone + std::fmt::Debug> Name for T { fn name(&self) -> String { format!("{:?}", self) } }
+impl Name for str { fn name(&self) -> String { format!("str:{}", self) } }
+impl Name for [u8] { fn name(&self) -> String { format!("bytes:{}", self.len()) } }
+fn main() {
+    println!("{} {} {}", 5.name(), "hi".name(), b"abc"[..].name());
+}
+"#,
+                expect: Expect::Run("5 str:hi bytes:3\n"),
+            },
+            Case {
+                name: "relaxed_blanket_overlaps_str",
+                source: "trait Name { fn n(&self) {} } impl<T: ?Sized> Name for T {} impl Name for str {} fn main() {}",
+                expect: Expect::Invalid("E0119"),
+            },
+        ],
+    );
+}

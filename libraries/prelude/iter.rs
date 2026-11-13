@@ -18,7 +18,9 @@ fn select_by<T, F: FnMut(&T, &T) -> super::cmp::Ordering>(
     }
 }
 
-pub trait Iterator: Sized {
+// As std: no `Sized` supertrait, so `dyn Iterator` is dyn compatible. Methods
+// that take `self` by value or are generic require `Self: Sized`.
+pub trait Iterator {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
 
@@ -42,7 +44,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn last(mut self) -> Option<Self::Item> {
+    fn last(mut self) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut last = match self.next() {
             Option::Some(item) => item,
             Option::None => return Option::None,
@@ -55,7 +60,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn find<P: FnMut(&Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<Self::Item> {
+    fn find<P: FnMut(&Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         loop {
             match self.next() {
                 Option::Some(item) => {
@@ -68,7 +76,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn enumerate(self) -> Enumerate<Self> {
+    fn enumerate(self) -> Enumerate<Self>
+    where
+        Self: Sized,
+    {
         Enumerate {
             iterator: self,
             count: 0usize,
@@ -77,33 +88,46 @@ pub trait Iterator: Sized {
 
     fn rev(self) -> Rev<Self>
     where
+        Self: Sized,
         Self: DoubleEndedIterator,
     {
         Rev { iterator: self }
     }
 
-    fn zip<U: IntoIterator>(self, other: U) -> Zip<Self, U::IntoIter> {
+    fn zip<U: IntoIterator>(self, other: U) -> Zip<Self, U::IntoIter>
+    where
+        Self: Sized,
+    {
         Zip {
             left: self,
             right: other.into_iter(),
         }
     }
 
-    fn skip(self, n: usize) -> Skip<Self> {
+    fn skip(self, n: usize) -> Skip<Self>
+    where
+        Self: Sized,
+    {
         Skip {
             iterator: self,
             remaining: n,
         }
     }
 
-    fn take(self, n: usize) -> Take<Self> {
+    fn take(self, n: usize) -> Take<Self>
+    where
+        Self: Sized,
+    {
         Take {
             iterator: self,
             remaining: n,
         }
     }
 
-    fn step_by(self, step: usize) -> StepBy<Self> {
+    fn step_by(self, step: usize) -> StepBy<Self>
+    where
+        Self: Sized,
+    {
         assert!(step != 0usize);
         StepBy {
             iterator: self,
@@ -112,30 +136,48 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn copied(self) -> Copied<Self> {
+    fn copied(self) -> Copied<Self>
+    where
+        Self: Sized,
+    {
         Copied { iterator: self }
     }
 
-    fn cloned(self) -> Cloned<Self> {
+    fn cloned(self) -> Cloned<Self>
+    where
+        Self: Sized,
+    {
         Cloned { iterator: self }
     }
 
-    fn map<B, F: FnMut(Self::Item) -> B>(self, f: F) -> Map<Self, F> {
+    fn map<B, F: FnMut(Self::Item) -> B>(self, f: F) -> Map<Self, F>
+    where
+        Self: Sized,
+    {
         Map { iterator: self, f }
     }
 
-    fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P> {
+    fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> Filter<Self, P>
+    where
+        Self: Sized,
+    {
         Filter {
             iterator: self,
             predicate,
         }
     }
 
-    fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F> {
+    fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> FilterMap<Self, F>
+    where
+        Self: Sized,
+    {
         FilterMap { iterator: self, f }
     }
 
-    fn peekable(self) -> Peekable<Self, Self::Item> {
+    fn peekable(self) -> Peekable<Self, Self::Item>
+    where
+        Self: Sized,
+    {
         Peekable {
             iterator: self,
             peeked: Option::None,
@@ -143,14 +185,20 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn chain<U: IntoIterator>(self, other: U) -> Chain<Self, U::IntoIter> {
+    fn chain<U: IntoIterator>(self, other: U) -> Chain<Self, U::IntoIter>
+    where
+        Self: Sized,
+    {
         Chain {
             first: Option::Some(self),
             second: other.into_iter(),
         }
     }
 
-    fn take_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> TakeWhile<Self, P> {
+    fn take_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> TakeWhile<Self, P>
+    where
+        Self: Sized,
+    {
         TakeWhile {
             iterator: self,
             predicate,
@@ -158,7 +206,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn skip_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> SkipWhile<Self, P> {
+    fn skip_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> SkipWhile<Self, P>
+    where
+        Self: Sized,
+    {
         SkipWhile {
             iterator: self,
             predicate,
@@ -166,11 +217,17 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn inspect<F: FnMut(&Self::Item)>(self, f: F) -> Inspect<Self, F> {
+    fn inspect<F: FnMut(&Self::Item)>(self, f: F) -> Inspect<Self, F>
+    where
+        Self: Sized,
+    {
         Inspect { iterator: self, f }
     }
 
-    fn find_map<B, F: FnMut(Self::Item) -> Option<B>>(&mut self, mut f: F) -> Option<B> {
+    fn find_map<B, F: FnMut(Self::Item) -> Option<B>>(&mut self, mut f: F) -> Option<B>
+    where
+        Self: Sized,
+    {
         loop {
             match self.next() {
                 Option::Some(item) => match f(item) {
@@ -182,7 +239,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn for_each<F: FnMut(Self::Item)>(mut self, mut f: F) {
+    fn for_each<F: FnMut(Self::Item)>(mut self, mut f: F)
+    where
+        Self: Sized,
+    {
         loop {
             match self.next() {
                 Option::Some(item) => f(item),
@@ -194,7 +254,10 @@ pub trait Iterator: Sized {
     fn reduce<F: FnMut(Self::Item, Self::Item) -> Self::Item>(
         mut self,
         mut f: F,
-    ) -> Option<Self::Item> {
+    ) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut acc = match self.next() {
             Option::Some(first) => first,
             Option::None => return Option::None,
@@ -207,7 +270,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U, F> {
+    fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> FlatMap<Self, U, F>
+    where
+        Self: Sized,
+    {
         FlatMap {
             iterator: self,
             f,
@@ -219,6 +285,7 @@ pub trait Iterator: Sized {
 
     fn flatten(self) -> Flatten<Self, <Self::Item as IntoIterator>::IntoIter>
     where
+        Self: Sized,
         Self::Item: IntoIterator,
     {
         Flatten {
@@ -227,7 +294,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
+    fn any<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool
+    where
+        Self: Sized,
+    {
         loop {
             match self.next() {
                 Option::Some(item) => {
@@ -240,7 +310,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn all<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool {
+    fn all<F: FnMut(Self::Item) -> bool>(&mut self, mut f: F) -> bool
+    where
+        Self: Sized,
+    {
         loop {
             match self.next() {
                 Option::Some(item) => {
@@ -253,7 +326,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn position<P: FnMut(Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<usize> {
+    fn position<P: FnMut(Self::Item) -> bool>(&mut self, mut predicate: P) -> Option<usize>
+    where
+        Self: Sized,
+    {
         let mut index = 0usize;
         loop {
             match self.next() {
@@ -268,7 +344,10 @@ pub trait Iterator: Sized {
         }
     }
 
-    fn count(self) -> usize {
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
         let mut iterator = self;
         let mut count = 0usize;
         loop {
@@ -281,20 +360,30 @@ pub trait Iterator: Sized {
 
     fn collect<B: FromIterator<Self::Item>>(self) -> B
     where
+        Self: Sized,
         CollectInput<Self>: IntoIterator<Item = <Self as Iterator>::Item>,
     {
         B::from_iter(CollectInput { iterator: self })
     }
 
-    fn product<P: Product<Self::Item>>(self) -> P {
+    fn product<P: Product<Self::Item>>(self) -> P
+    where
+        Self: Sized,
+    {
         <P as Product<Self::Item>>::product(self)
     }
 
-    fn sum<S: Sum<Self::Item>>(self) -> S {
+    fn sum<S: Sum<Self::Item>>(self) -> S
+    where
+        Self: Sized,
+    {
         <S as Sum<Self::Item>>::sum(self)
     }
 
-    fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B {
+    fn fold<B, F: FnMut(B, Self::Item) -> B>(mut self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+    {
         let mut acc = init;
         loop {
             match self.next() {
@@ -307,7 +396,10 @@ pub trait Iterator: Sized {
     fn max_by<F: FnMut(&Self::Item, &Self::Item) -> super::cmp::Ordering>(
         mut self,
         mut compare: F,
-    ) -> Option<Self::Item> {
+    ) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut best = match self.next() {
             Option::Some(item) => item,
             Option::None => return Option::None,
@@ -323,7 +415,10 @@ pub trait Iterator: Sized {
     fn min_by<F: FnMut(&Self::Item, &Self::Item) -> super::cmp::Ordering>(
         mut self,
         mut compare: F,
-    ) -> Option<Self::Item> {
+    ) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut best = match self.next() {
             Option::Some(item) => item,
             Option::None => return Option::None,
@@ -338,6 +433,7 @@ pub trait Iterator: Sized {
     /// The last maximum, as std's `max`.
     fn max(mut self) -> Option<Self::Item>
     where
+        Self: Sized,
         Self::Item: super::cmp::Ord,
     {
         let mut best = match self.next() {
@@ -358,6 +454,7 @@ pub trait Iterator: Sized {
     /// The first minimum, as std's `min`.
     fn min(mut self) -> Option<Self::Item>
     where
+        Self: Sized,
         Self::Item: super::cmp::Ord,
     {
         let mut best = match self.next() {
@@ -379,7 +476,10 @@ pub trait Iterator: Sized {
     fn max_by_key<B: super::cmp::Ord, F: FnMut(&Self::Item) -> B>(
         mut self,
         mut key: F,
-    ) -> Option<Self::Item> {
+    ) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut best = match self.next() {
             Option::Some(item) => item,
             Option::None => return Option::None,
@@ -401,7 +501,10 @@ pub trait Iterator: Sized {
     fn partition<B: super::default::Default + Extend<Self::Item>, F: FnMut(&Self::Item) -> bool>(
         mut self,
         mut f: F,
-    ) -> (B, B) {
+    ) -> (B, B)
+    where
+        Self: Sized,
+    {
         let mut left: B = <B as super::default::Default>::default();
         let mut right: B = <B as super::default::Default>::default();
         loop {
@@ -421,7 +524,10 @@ pub trait Iterator: Sized {
     fn min_by_key<B: super::cmp::Ord, F: FnMut(&Self::Item) -> B>(
         mut self,
         mut key: F,
-    ) -> Option<Self::Item> {
+    ) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
         let mut best = match self.next() {
             Option::Some(item) => item,
             Option::None => return Option::None,
