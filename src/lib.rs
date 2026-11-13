@@ -151,6 +151,7 @@ mod test_bundle;
 mod test_pool;
 mod test_runner;
 mod toolchain;
+mod toolchain_policy;
 mod update;
 
 use clap::{Parser, Subcommand};

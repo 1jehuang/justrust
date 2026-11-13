@@ -793,11 +793,12 @@ true
 
 /// The probe, told which toolchain builds default to on a remote machine
 /// (`store_toolchain` in the agent) so it reports that one, not `rustc` on PATH.
+/// That is the control plane's choice once known, as on the machine.
 fn probe_script() -> String {
-    format!(
-        "JR_TC='{}'{PROBE_SCRIPT}",
-        crate::depcache_prebuilt::HOSTED_TOOLCHAIN
-    )
+    let active = crate::toolchain_policy::known()
+        .map(|p| p.toolchain)
+        .unwrap_or_else(|| crate::depcache_prebuilt::HOSTED_TOOLCHAIN.into());
+    format!("JR_TC='{active}'{PROBE_SCRIPT}")
 }
 
 fn run_probe(ip: &str) -> Probe {

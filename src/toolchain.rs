@@ -233,6 +233,17 @@ fn is_off(v: &str) -> bool {
     matches!(v, "" | "system" | "off" | "0" | "none")
 }
 
+/// The project chose its own compiler: `justrust.toml`, or a `rust-toolchain`
+/// file rustup honors, at or above `cwd`. Nothing justrust or the hosted
+/// service prefers may replace it.
+pub fn project_pinned(cwd: &Path) -> bool {
+    cwd.ancestors().any(|d| {
+        d.join(CONFIG_FILE).is_file()
+            || d.join("rust-toolchain.toml").is_file()
+            || d.join("rust-toolchain").is_file()
+    })
+}
+
 /// The toolchain a build in `cwd` should use, or `None` for the system one.
 pub fn resolve(cwd: &Path) -> Result<Option<Pin>> {
     if let Ok(v) = std::env::var("JUSTRUST_TOOLCHAIN") {
@@ -402,7 +413,13 @@ pub fn for_build() -> Option<Toolchain> {
         // resolves to Ok(None) too, so check the variable.
         Ok(None) => {
             let off = std::env::var("JUSTRUST_TOOLCHAIN").is_ok_and(|v| is_off(v.trim()));
-            return if off { None } else { default_jr() };
+            // A `rust-toolchain` file is the project's pin: leave it to the
+            // system cargo (rustup), as stock cargo would.
+            return if off || project_pinned(&cwd) {
+                None
+            } else {
+                unpinned_default()
+            };
         }
         Err(e) => {
             eprintln!("justrust: ignoring the toolchain pin: {e:#}");
@@ -899,6 +916,19 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain, activate: bool) -> Res
         dir: dest,
         nightly: true,
     })
+}
+
+/// What an unpinned local build uses: the toolchain the hosted service
+/// currently runs when it is installed here and this justrust can drive it
+/// (so local and hosted builds share cache keys), else the newest installed
+/// jr toolchain. Never waits on the network: local builds are the fallback
+/// for when hosted is unreachable.
+fn unpinned_default() -> Option<Toolchain> {
+    crate::toolchain_policy::known()
+        .filter(|p| p.check().is_ok())
+        .and_then(|p| Spec::parse(&p.toolchain).ok())
+        .and_then(|spec| installed(&spec).ok().flatten())
+        .or_else(default_jr)
 }
 
 /// The newest installed jr toolchain, used by default when nothing else is

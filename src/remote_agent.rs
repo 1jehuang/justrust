@@ -714,8 +714,10 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
 }
 
 /// The toolchain a build on this machine uses when the project pins none:
-/// justrust's own compiler ([`crate::depcache_prebuilt::HOSTED_TOOLCHAIN`]),
-/// or the stock nightly the prebuilt store started with
+/// the one the control plane names ([`crate::toolchain_policy`], so it can
+/// be switched or rolled back there without a client release), else the
+/// compiled-in [`crate::depcache_prebuilt::HOSTED_TOOLCHAIN`] when it has
+/// never answered, or the stock nightly the prebuilt store started with
 /// ([`crate::depcache_prebuilt::STORE_TOOLCHAIN`]) when the jr compiler
 /// cannot serve this build ([`hosted_default`]). The prebuild fleet compiles
 /// the store for both, and keys include rustc `-vV`, so a machine building
@@ -725,39 +727,61 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
 /// (`justrust.toml`, or a `rust-toolchain` file rustup would honor), or
 /// `JUSTRUST_REMOTE_TOOLCHAIN` says otherwise (`system` keeps the machine's
 /// rustc, any other value is used as the default spec).
-fn store_toolchain(cwd: &Path, args: &[String], env: &[(String, String)]) -> Option<String> {
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64"))
-        && std::env::var_os("JUSTRUST_REMOTE_TOOLCHAIN").is_none()
-    {
-        return None;
+///
+/// `Err` refuses the build: the control plane's toolchain speaks a protocol
+/// this justrust does not, and would be the one used.
+fn store_toolchain(
+    cwd: &Path,
+    args: &[String],
+    env: &[(String, String)],
+    policy: Option<&crate::toolchain_policy::Policy>,
+) -> Result<Option<String>, String> {
+    let machine = std::env::var("JUSTRUST_REMOTE_TOOLCHAIN").ok();
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) && machine.is_none() {
+        return Ok(None);
     }
     if env
         .iter()
         .any(|(k, _)| matches!(k.as_str(), "JUSTRUST_TOOLCHAIN" | "RUSTUP_TOOLCHAIN"))
     {
-        return None;
+        return Ok(None);
     }
-    let want = std::env::var("JUSTRUST_REMOTE_TOOLCHAIN")
-        .unwrap_or_else(|_| hosted_default(args, env, jr_obtainable(env)).to_owned());
+    // The project's own pin wins over anything the service prefers.
+    if crate::toolchain::project_pinned(cwd) {
+        return Ok(None);
+    }
+    let want = match machine {
+        Some(m) => m,
+        None => {
+            let active = policy
+                .map(|p| p.toolchain.as_str())
+                .unwrap_or(crate::depcache_prebuilt::HOSTED_TOOLCHAIN);
+            let want = hosted_default(args, env, active, jr_obtainable(active, env));
+            if let Some(p) = policy.filter(|p| p.toolchain == want) {
+                p.check()?;
+            }
+            want.to_owned()
+        }
+    };
     if matches!(want.trim(), "" | "system" | "off" | "0" | "none") {
-        return None;
+        return Ok(None);
     }
-    let pinned = cwd.ancestors().any(|d| {
-        d.join(crate::toolchain::CONFIG_FILE).is_file()
-            || d.join("rust-toolchain.toml").is_file()
-            || d.join("rust-toolchain").is_file()
-    });
-    (!pinned).then_some(want)
+    Ok(Some(want))
 }
 
-/// The jr compiler, unless this build needs something it does not have.
+/// The active compiler, unless this build needs something it does not have.
 /// Its bundle ships the host standard library only and upstream target
 /// libraries must never be mixed into it (`toolchain::add_target`), so a
 /// build for another target keeps the stock nightly, which installs official
 /// target libraries on demand. The same holds when the jr prefix is neither
 /// installed nor downloadable here: a failed install would drop the build
 /// to the system rustc and lose every prebuilt hit.
-fn hosted_default(args: &[String], env: &[(String, String)], jr_obtainable: bool) -> &'static str {
+fn hosted_default<'a>(
+    args: &[String],
+    env: &[(String, String)],
+    active: &'a str,
+    jr_obtainable: bool,
+) -> &'a str {
     let os: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
     let env_target = env
         .iter()
@@ -766,18 +790,21 @@ fn hosted_default(args: &[String], env: &[(String, String)], jr_obtainable: bool
     let cross = crate::record::requested_targets(&os, env_target)
         .iter()
         .any(|t| t != crate::toolchain::TARGET);
-    if cross || !jr_obtainable {
-        crate::depcache_prebuilt::STORE_TOOLCHAIN
+    // An official toolchain installs target libraries on demand and needs
+    // no toolchain store.
+    let official = !active.starts_with("jr-");
+    if official || !(cross || !jr_obtainable) {
+        active
     } else {
-        crate::depcache_prebuilt::HOSTED_TOOLCHAIN
+        crate::depcache_prebuilt::STORE_TOOLCHAIN
     }
 }
 
 /// Installed already, or a toolchain store is configured to download it
 /// from (by this machine or forwarded by the client) and automatic installs
 /// are not turned off.
-fn jr_obtainable(env: &[(String, String)]) -> bool {
-    let installed = crate::toolchain::Spec::parse(crate::depcache_prebuilt::HOSTED_TOOLCHAIN)
+fn jr_obtainable(id: &str, env: &[(String, String)]) -> bool {
+    let installed = crate::toolchain::Spec::parse(id)
         .ok()
         .and_then(|spec| crate::toolchain::installed(&spec).ok().flatten())
         .is_some();
@@ -924,8 +951,13 @@ fn start_run(
     }
     // Never route a build the agent runs back to another machine.
     c.env(crate::route::ON_AGENT, "1");
-    if let Some(tc) = store_toolchain(cwd, args, env) {
-        c.env("JUSTRUST_TOOLCHAIN", tc);
+    let policy = crate::toolchain_policy::current();
+    match store_toolchain(cwd, args, env, policy.as_ref()) {
+        Ok(Some(tc)) => {
+            c.env("JUSTRUST_TOOLCHAIN", tc);
+        }
+        Ok(None) => {}
+        Err(refused) => bail!("build not started: {refused}"),
     }
     if let Some(j) = machine_jobs(args, env) {
         c.env("CARGO_BUILD_JOBS", j.to_string());
@@ -1309,83 +1341,125 @@ mod tests {
             "JUSTRUST_TOOLCHAIN_DIST".to_string(),
             "https://store.example".to_string(),
         );
-        let want = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            Some(crate::depcache_prebuilt::HOSTED_TOOLCHAIN.to_owned())
-        } else {
-            None
-        };
+        let linux = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+        let want = |id: &str| Ok(linux.then(|| id.to_owned()));
+        // The control plane has never answered: the compiled-in default.
         assert_eq!(
-            store_toolchain(&sub, &[], std::slice::from_ref(&dist)),
-            want
+            store_toolchain(&sub, &[], std::slice::from_ref(&dist), None),
+            want(crate::depcache_prebuilt::HOSTED_TOOLCHAIN)
+        );
+        // It names one: that is what builds use, with no client release.
+        let policy = |id: &str, protocol| crate::toolchain_policy::Policy {
+            toolchain: id.into(),
+            protocol,
+        };
+        let ok = *crate::toolchain_policy::SUPPORTED.end();
+        let next = policy("jr-0123456789ab", ok);
+        assert_eq!(
+            store_toolchain(&sub, &[], std::slice::from_ref(&dist), Some(&next)),
+            want("jr-0123456789ab")
+        );
+        let official = policy("nightly-2026-11-01", ok);
+        assert_eq!(
+            store_toolchain(&sub, &[], &[], Some(&official)),
+            want("nightly-2026-11-01")
+        );
+        // One this justrust cannot drive: refuse, never guess.
+        let too_new = policy("jr-0123456789ab", ok + 1);
+        let refused = store_toolchain(&sub, &[], std::slice::from_ref(&dist), Some(&too_new));
+        if linux {
+            let msg = refused.unwrap_err();
+            assert!(msg.contains("`justrust update`"), "{msg}");
+        }
+        // ...unless the build would not use it anyway.
+        let cross = [
+            "build".to_string(),
+            "--target=wasm32-unknown-unknown".to_string(),
+        ];
+        assert_eq!(
+            store_toolchain(&sub, &cross, std::slice::from_ref(&dist), Some(&too_new)),
+            want(crate::depcache_prebuilt::STORE_TOOLCHAIN)
         );
         // The client chose one: keep it.
         let env = [("JUSTRUST_TOOLCHAIN".to_string(), "system".to_string())];
-        assert_eq!(store_toolchain(&sub, &[], &env), None);
+        assert_eq!(store_toolchain(&sub, &[], &env, Some(&too_new)), Ok(None));
         let env = [("RUSTUP_TOOLCHAIN".to_string(), "1.90.0".to_string())];
-        assert_eq!(store_toolchain(&sub, &[], &env), None);
-        // The project pins one (rustup file or justrust.toml): keep it.
+        assert_eq!(store_toolchain(&sub, &[], &env, Some(&next)), Ok(None));
+        // The project pins one (rustup file or justrust.toml): keep it,
+        // whatever the control plane says.
         std::fs::write(d.join("a/rust-toolchain.toml"), "").unwrap();
-        assert_eq!(store_toolchain(&sub, &[], &[dist]), None);
+        assert_eq!(
+            store_toolchain(&sub, &[], std::slice::from_ref(&dist), Some(&next)),
+            Ok(None)
+        );
+        assert_eq!(
+            store_toolchain(&sub, &[], &[dist], Some(&too_new)),
+            Ok(None)
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
-    fn hosted_default_is_jr_unless_it_cannot_serve_the_build() {
+    fn hosted_default_is_the_active_toolchain_unless_it_cannot_serve_the_build() {
         use crate::depcache_prebuilt::{HOSTED_TOOLCHAIN, STORE_TOOLCHAIN};
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(HOSTED_TOOLCHAIN.starts_with("jr-"));
-        assert_eq!(
-            hosted_default(&args(&["check"]), &[], true),
-            HOSTED_TOOLCHAIN
-        );
+        let jr = "jr-0123456789ab";
+        assert_eq!(hosted_default(&args(&["check"]), &[], jr, true), jr);
         // The host triple spelled out is still a host build.
         let host = args(&["build", "--target", crate::toolchain::TARGET]);
-        assert_eq!(hosted_default(&host, &[], true), HOSTED_TOOLCHAIN);
+        assert_eq!(hosted_default(&host, &[], jr, true), jr);
         // The jr bundle has no other target's standard library.
         for cross in [
             args(&["build", "--target", "wasm32-unknown-unknown"]),
             args(&["zigbuild", "--target=aarch64-apple-ios"]),
         ] {
-            assert_eq!(hosted_default(&cross, &[], true), STORE_TOOLCHAIN);
+            assert_eq!(hosted_default(&cross, &[], jr, true), STORE_TOOLCHAIN);
+            // An official toolchain installs target libraries itself.
+            assert_eq!(
+                hosted_default(&cross, &[], "nightly-2026-11-01", false),
+                "nightly-2026-11-01"
+            );
         }
         let env = [(
             "CARGO_BUILD_TARGET".to_string(),
             "thumbv7em-none-eabi".to_string(),
         )];
         assert_eq!(
-            hosted_default(&args(&["check"]), &env, true),
+            hosted_default(&args(&["check"]), &env, jr, true),
             STORE_TOOLCHAIN
         );
         // A target after `--` belongs to the test binary, not cargo.
         let passthrough = args(&["test", "--", "--target", "x"]);
-        assert_eq!(hosted_default(&passthrough, &[], true), HOSTED_TOOLCHAIN);
+        assert_eq!(hosted_default(&passthrough, &[], jr, true), jr);
         // Not installed and nowhere to download it from.
         assert_eq!(
-            hosted_default(&args(&["check"]), &[], false),
+            hosted_default(&args(&["check"]), &[], jr, false),
             STORE_TOOLCHAIN
         );
     }
 
     #[test]
     fn jr_needs_a_store_and_automatic_installs_when_absent() {
-        let installed = crate::toolchain::Spec::parse(crate::depcache_prebuilt::HOSTED_TOOLCHAIN)
-            .ok()
-            .and_then(|s| crate::toolchain::installed(&s).ok().flatten())
-            .is_some();
-        if installed || std::env::var_os("JUSTRUST_TOOLCHAIN_DIST").is_some() {
+        // Never installed anywhere.
+        let id = "jr-00000000000000aa";
+        if std::env::var_os("JUSTRUST_TOOLCHAIN_DIST").is_some() {
             return; // this machine can always get it
         }
         let kv = |k: &str, v: &str| (k.to_string(), v.to_string());
-        assert!(!jr_obtainable(&[]));
-        assert!(jr_obtainable(&[kv(
-            "JUSTRUST_TOOLCHAIN_DIST",
-            "https://s.example"
-        )]));
-        assert!(!jr_obtainable(&[kv("JUSTRUST_TOOLCHAIN_DIST", "off")]));
-        assert!(!jr_obtainable(&[
-            kv("JUSTRUST_TOOLCHAIN_DIST", "https://s.example"),
-            kv("JUSTRUST_TOOLCHAIN_AUTO_INSTALL", "0"),
-        ]));
+        assert!(!jr_obtainable(id, &[]));
+        assert!(jr_obtainable(
+            id,
+            &[kv("JUSTRUST_TOOLCHAIN_DIST", "https://s.example")]
+        ));
+        assert!(!jr_obtainable(id, &[kv("JUSTRUST_TOOLCHAIN_DIST", "off")]));
+        assert!(!jr_obtainable(
+            id,
+            &[
+                kv("JUSTRUST_TOOLCHAIN_DIST", "https://s.example"),
+                kv("JUSTRUST_TOOLCHAIN_AUTO_INSTALL", "0"),
+            ]
+        ));
     }
 
     #[test]
