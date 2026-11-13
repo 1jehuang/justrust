@@ -247,3 +247,49 @@ fn missing_field_impls_reject_like_stock() {
         }
     }
 }
+
+#[test]
+fn const_generic_arrays_and_recursive_generic_derives_match_stock() {
+    oracle::check(
+        "derive-const-generic-recursive",
+        &[
+            Case {
+                name: "derived_debug_clone_const_generic_nested_array",
+                source: "#[derive(Debug,Clone)]struct M<const R:usize,const C:usize>{d:[[i32;C];R]}impl<const R:usize,const C:usize>M<R,C>{fn t(&self)->M<C,R>{let mut d=[[0;R];C];for i in 0..R{for j in 0..C{d[j][i]=self.d[i][j];}}M{d}}}#[derive(Debug,Clone)]struct V<const N:usize>{d:[u8;N]}fn main(){let m=M{d:[[1,2,3],[4,5,6]]};let v=V{d:[7,8]};let c=v.clone();println!(\"{:?} {:?} {:?}\",m.t(),v,c);}",
+                expect: Expect::Run(
+                    "M { d: [[1, 4], [2, 5], [3, 6]] } V { d: [7, 8] } V { d: [7, 8] }\n",
+                ),
+            },
+            Case {
+                name: "generic_length_array_debug_and_clone",
+                source: "fn show<const N:usize>(d:&[String;N])->[String;N]{println!(\"{:?}\",d);d.clone()}fn main(){let a=[String::from(\"x\"),String::from(\"y\")];let b=show(&a);println!(\"{} {}\",b[1],a[0]);}",
+                expect: Expect::Run("[\"x\", \"y\"]\ny x\n"),
+            },
+            Case {
+                name: "derived_partial_eq_debug_recursive_generic_enum",
+                source: "#[derive(Debug,PartialEq)]enum Tree<T:Ord>{Leaf,Node(Box<Tree<T>>,T,Box<Tree<T>>)}fn main(){let t:Tree<i32>=Tree::Node(Box::new(Tree::Leaf),3,Box::new(Tree::Leaf));println!(\"{:?} {} {}\",t,t==Tree::Leaf,t==Tree::Node(Box::new(Tree::Leaf),3,Box::new(Tree::Leaf)));}",
+                expect: Expect::Run("Node(Leaf, 3, Leaf) false true\n"),
+            },
+            Case {
+                name: "manual_partial_eq_recursive_generic_list",
+                source: "struct L<T>{n:Option<Box<L<T>>>,v:T}impl<T:PartialEq>PartialEq for L<T>{fn eq(&self,o:&Self)->bool{self.v==o.v&&match(&self.n,&o.n){(Some(a),Some(b))=>a==b,(None,None)=>true,_=>false}}}fn main(){let a=L{n:Some(Box::new(L{n:None,v:2})),v:1};let b=L{n:Some(Box::new(L{n:None,v:3})),v:1};println!(\"{} {}\",a==a,a==b);}",
+                expect: Expect::Run("true false\n"),
+            },
+            Case {
+                name: "recursive_generic_eq_requires_element_bound",
+                source: "struct N;#[derive(PartialEq)]enum Tree<T>{Leaf,Node(Box<Tree<T>>,T)}fn main(){let t:Tree<N>=Tree::Leaf;let _=t==Tree::Leaf;}",
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "generic_length_array_clone_requires_element_clone",
+                source: "struct N;fn c<const K:usize>(d:&[N;K])->[N;K]{d.clone()}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "generic_length_array_debug_requires_element_debug",
+                source: "struct N;fn s<const K:usize>(d:[N;K]){println!(\"{:?}\",d);}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}

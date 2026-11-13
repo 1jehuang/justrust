@@ -1564,6 +1564,18 @@ impl<T: Debug> Debug for [T] {
     }
 }
 
+impl<T: Debug, const N: usize> Debug for [T; N] {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let mut list = f.debug_list();
+        let mut i = 0usize;
+        while i < N {
+            list = list.entry::<T>(&self[i]);
+            i += 1usize;
+        }
+        list.finish()
+    }
+}
+
 impl<T: Debug> Debug for Option<T> {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {

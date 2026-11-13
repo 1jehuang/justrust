@@ -6495,6 +6495,15 @@ impl<D> NominalRef<D> {
     pub fn is_back_edge(&self) -> bool {
         matches!(self, Self::Back(..))
     }
+    /// The definition behind a back edge once its construction completed,
+    /// or `None` while the cycle is still being built.
+    fn completed(&self) -> Option<&D> {
+        match self {
+            Self::Strong(a) => Some(a),
+            Self::Back(w, _) if w.strong_count() > 0 => Some(self.get()),
+            Self::Back(..) => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -6538,6 +6547,11 @@ impl EnumTy {
     }
     pub fn is_back_edge(&self) -> bool {
         self.0.is_back_edge()
+    }
+    /// Ordered type arguments of a completed application, also through a
+    /// back edge. `None` only while a recursive definition is under construction.
+    pub fn completed_type_args(&self) -> Option<&[Ty]> {
+        self.0.completed().map(|d| &d.type_args[..])
     }
     /// Canonical application identity, readable even on a back edge whose
     /// definition is still under construction.
@@ -7238,6 +7252,11 @@ impl StructTy {
     }
     pub fn is_back_edge(&self) -> bool {
         self.0.is_back_edge()
+    }
+    /// Ordered type arguments of a completed application, also through a
+    /// back edge. `None` only while a recursive definition is under construction.
+    pub fn completed_type_args(&self) -> Option<&[Ty]> {
+        self.0.completed().map(|d| &d.type_args[..])
     }
     /// Canonical application identity, readable even on a back edge whose
     /// definition is still under construction.

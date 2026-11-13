@@ -5626,6 +5626,17 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
         if ty.is_nominal_back_edge() {
+            // The definition is checked through its strong outer application,
+            // but closedness is a property of this occurrence: `Box<L<T>>`
+            // reached through a recursive field is as open as `L<T>`.
+            let args = match ty {
+                Ty::Struct(n) => n.completed_type_args(),
+                Ty::Enum(n) => n.completed_type_args(),
+                _ => None,
+            };
+            if args.is_none_or(|args| !args.iter().all(Ty::is_closed_shallow)) {
+                walk.has_parameters = true;
+            }
             return Ok(0);
         }
         walk.visits = walk
@@ -5854,6 +5865,9 @@ impl ValidatedTraitWorld {
                         "dependent array const parameter lacks declaration-owned usize schema",
                     ));
                 }
+                // The extent is a const parameter: the type is open until the
+                // instance substitutes it, exactly like a type parameter.
+                forwarded_const = true;
                 child(
                     element,
                     if usage == TypeUse::Actual {
