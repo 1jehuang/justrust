@@ -201,7 +201,7 @@ impl Checker<'_> {
             capture_use::by_value(&mut uses);
         }
         if self.names()?.edition().pre_2021() {
-            capture_use::whole_variable(&mut uses);
+            capture_use::whole_variable(&mut uses, &child.locals);
         }
         let mut sources = Vec::new();
         let mut capture_types = Vec::new();

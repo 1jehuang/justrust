@@ -172,6 +172,21 @@ fn editions_2015_and_2018_match_stock_or_reject_explicitly() {
             "struct D(&'static str); impl Drop for D { fn drop(&mut self) { println!(\"drop {}\", self.0); } } struct P { a: D, b: D } fn main() { let p = P { a: D(\"a\"), b: D(\"b\") }; { let c = move || { let _x = &p.a; }; c(); println!(\"closure done\"); } println!(\"end\"); }\n",
             Run,
         ),
+        // A `&mut` binding used only through its referent is captured by
+        // unique borrow and needs no `mut` (hex's BytesToHexChars::next).
+        (
+            "capture-unique-borrow",
+            both,
+            "struct S { x: Option<u8>, t: u8 } fn f(s: &mut S) -> Option<u8> { Some(1u8).map(|b| { s.x = Some(b + s.t); b }) } fn main() { let mut s = S { x: None, t: 4 }; let r = f(&mut s); println!(\"{:?} {:?}\", r, s.x); }\n",
+            Run,
+        ),
+        // Rebinding the reference itself still needs `mut`.
+        (
+            "capture-unique-rebind",
+            both,
+            "fn main() { let mut a = 1u8; let mut b = 2u8; let r = &mut a; let mut c = || { r = &mut b; }; c(); println!(\"{}\", b); }\n",
+            Rejects("initialization/move analysis"),
+        ),
         // `:pat` excludes top-level or-patterns before 2021.
         (
             "pat-fragment",

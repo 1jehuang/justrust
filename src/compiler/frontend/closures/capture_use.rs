@@ -186,7 +186,11 @@ fn binding_use(
 
 /// Editions 2015/2018 capture whole variables (no RFC 2229 disjoint field
 /// capture): collapse every candidate's captures to its root place.
-pub(super) fn whole_variable(uses: &mut [Vec<Capture>]) {
+///
+/// A `&mut` binding used only through its referent is captured by unique
+/// borrow of the referent, which needs no `mut` on the binding (rustc's
+/// "unique immutable borrow"). Model it as a capture of `*binding`.
+pub(super) fn whole_variable(uses: &mut [Vec<Capture>], locals: &[ir::LocalDecl]) {
     for captures in uses.iter_mut() {
         let Some(first) = captures.first() else {
             continue;
@@ -196,11 +200,26 @@ pub(super) fn whole_variable(uses: &mut [Vec<Capture>]) {
         for capture in captures.iter() {
             usage.merge(capture.usage);
         }
+        let unique = !usage.moved
+            && matches!(
+                locals.get(local.0).map(|decl| &decl.ty),
+                Some(ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    ..
+                })
+            )
+            && captures
+                .iter()
+                .all(|capture| capture.place.projection.first() == Some(&ir::Projection::Deref));
         captures.clear();
         captures.push(Capture {
             place: ir::Place {
                 local,
-                projection: Vec::new(),
+                projection: if unique {
+                    vec![ir::Projection::Deref]
+                } else {
+                    Vec::new()
+                },
             },
             usage,
         });
