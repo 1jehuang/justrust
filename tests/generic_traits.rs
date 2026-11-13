@@ -1366,7 +1366,8 @@ fn main() {
     println!("{:?}", P::from_hex(b"a").map(|p| p.0));
     let r = P::from_hex("b");
     println!("{}", r.is_ok());
-    println!("{:?}", decode(b"0a"));
+    let bytes = b"0a";
+    println!("{:?}", decode(bytes));
     let q: Result<P, HexError> = FromHex::from_hex("c");
     println!("{:?}", q.map(|p| p.0));
 }
@@ -1395,4 +1396,38 @@ fn unused() { let _ = P::from_hex(5u32); } fn main() {}"#,
 struct P; impl FromHex for P { type Error = (); fn from_hex<T: AsRef<[u8]>>(_: T) -> Result<Self, ()> { Ok(P) } }
 fn unused() { let _: Result<u8, ()> = FromHex::from_hex("a"); } fn main() {}"#,
     );
+}
+
+#[test]
+fn reference_casts_to_unsized_slices() {
+    coherence_oracle::stock_native(
+        r#"
+fn fill(out: &mut [u8]) -> Result<(), u8> {
+    for (i, b) in out.iter_mut().enumerate() { *b = i as u8 + 1; }
+    Ok(())
+}
+fn arr() -> Result<[u8; 3], u8> {
+    let mut out = [0_u8; 3];
+    fill(&mut out as &mut [u8])?;
+    Ok(out)
+}
+fn main() {
+    println!("{:?}", arr());
+    let a = [4u8, 5];
+    let s = &a as &[u8];
+    let v = vec![7u16, 8, 9];
+    let t = &v as &[u16];
+    let w = String::from("hi");
+    let st = &w as &str;
+    println!("{:?} {:?} {}", s, t, st);
+}
+"#,
+    );
+    for source in [
+        "fn unused() { let a = [1u8, 2]; let _ = &a as &[u16]; } fn main() {}",
+        "fn unused() { let a = [1u8, 2]; let _ = &a as &mut [u8]; } fn main() {}",
+        "fn unused() { let a = 5u8; let _ = &a as &[u8]; } fn main() {}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
 }

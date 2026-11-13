@@ -11290,7 +11290,14 @@ impl<'a> Checker<'a> {
         // `value as Box<dyn Trait>` / `value as &dyn Trait`: an explicit
         // unsizing coercion. The ordinary coercion site proves it. A value
         // that does not coerce to exactly the target is not castable.
-        if target.owned_pointer_object().is_some() || trait_object_target(&target).is_some() {
+        // `&mut arr as &mut [u8]`: a cast whose target is a reference to an
+        // unsized slice is the same explicit coercion (array unsizing, Deref).
+        let unsized_reference = matches!(&target, ir::Ty::Ref { referent, .. }
+            if matches!(referent.as_ref(), ir::Ty::Slice { .. } | ir::Ty::Str));
+        if target.owned_pointer_object().is_some()
+            || trait_object_target(&target).is_some()
+            || unsized_reference
+        {
             let id = self.expr_with_expectation(value, Expectation::HasType(&target))?;
             let source = &self.exprs[id.0].ty;
             if *source != target && *source != ir::Ty::Never {
