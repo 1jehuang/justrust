@@ -206,6 +206,7 @@ pub(super) fn unit_copy(declaration: &StructDecl) -> Result<ImplDecl, &'static s
         regions: RegionDecls::default(),
         original_source: None,
         primitive_source: None,
+        derived: true,
         trait_path: Some(TraitPath::Builtin(BuiltinTrait::Copy)),
         bounds: Vec::new(),
         module: declaration.module,

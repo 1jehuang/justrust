@@ -10358,6 +10358,9 @@ pub struct ImplDecl {
     pub regions: RegionDecls,
     pub(super) original_source: Option<super::token_session::OriginalSpan>,
     primitive_source: Option<Arc<primitive_constants::SourceImpl>>,
+    /// Emitted by a built-in `#[derive]` (synthetic prepared text), which
+    /// is what makes a `PartialEq`/`Eq` impl structural for const patterns.
+    pub(super) derived: bool,
     pub trait_path: Option<TraitPath>,
     pub bounds: Vec<TypeBound>,
     pub module: ModuleId,
@@ -17083,6 +17086,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 primitive_constants::original_token(self)
             };
+            let derived_impl = primitive_constants::synthetic_prepared_token(self);
             self.expect("impl")?;
             if explicit_visibility {
                 return Err(self.error("pub impl is invalid"));
@@ -17228,6 +17232,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 regions: self.impl_regions.clone(),
                 original_source,
                 primitive_source: None,
+                derived: derived_impl,
                 trait_path,
                 bounds,
                 module,

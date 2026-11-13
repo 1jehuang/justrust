@@ -9,6 +9,7 @@ mod cell;
 mod const_inline;
 pub(super) use const_inline::scalar_const_assertion;
 pub(super) use const_inline::{static_elided_type, validate_lowered_constant};
+mod aggregate_const_pattern;
 mod const_pattern;
 mod lexical_calls;
 mod manually_drop;
@@ -3641,8 +3642,20 @@ impl Resolver<'_> {
             | Pattern::Char(_)
             | Pattern::Str(_)
             | Pattern::Range { .. } => {}
+            Pattern::Path(name)
+                if name.anchor() == PathAnchor::SelfType
+                    && self.self_allowed
+                    && name.len() == 1
+                    && let Some(value) = self.associated_const_pattern(name, module)? =>
+            {
+                *pattern = value;
+            }
             Pattern::Path(name) if name.anchor() == PathAnchor::SelfType && self.self_allowed => {}
             Pattern::Path(name) => {
+                if let Some(value) = self.associated_const_pattern(name, module)? {
+                    *pattern = value;
+                    return Ok(());
+                }
                 if let Some(literal) = self.const_pattern(name, module)? {
                     *pattern = literal;
                     return Ok(());

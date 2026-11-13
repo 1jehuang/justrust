@@ -33,6 +33,20 @@ fn fit(v: i128, ty: ir::IntTy) -> Result<i128, String> {
     Ok(v)
 }
 
+fn value_pattern(value: Value) -> Pattern {
+    match value {
+        Value::Bool(b) => Pattern::Bool(b),
+        Value::Char(c) => Pattern::Char(c),
+        Value::Int(v, ty) => Pattern::Int {
+            literal: IntegerLiteral {
+                magnitude: v.unsigned_abs(),
+                suffix: ty,
+            },
+            negative: v < 0,
+        },
+    }
+}
+
 impl Resolver<'_> {
     /// `Some(pattern)` when `path` names a scalar constant.
     pub(super) fn const_pattern(
@@ -47,18 +61,26 @@ impl Resolver<'_> {
             return Ok(None);
         }
         let source = item.source()?.clone();
+        if let Some(pattern) = self.aggregate_const_item_pattern(&source, 0)? {
+            return Ok(Some(pattern));
+        }
         let value = self.const_value(&source, 0)?;
-        Ok(Some(match value {
-            Value::Bool(b) => Pattern::Bool(b),
-            Value::Char(c) => Pattern::Char(c),
-            Value::Int(v, ty) => Pattern::Int {
-                literal: IntegerLiteral {
-                    magnitude: v.unsigned_abs(),
-                    suffix: ty,
-                },
-                negative: v < 0,
-            },
-        }))
+        Ok(Some(value_pattern(value)))
+    }
+
+    /// A scalar leaf of an aggregate constant value, as a literal pattern.
+    pub(super) fn scalar_value_pattern(
+        &mut self,
+        value: &Expr,
+        module: ModuleId,
+        hint: Option<ir::IntTy>,
+        depth: usize,
+    ) -> Result<Pattern, String> {
+        let value = match (self.const_expr(value, module, hint, depth)?, hint) {
+            (Value::Int(n, _), Some(t)) => Value::Int(fit(n, t)?, Some(t)),
+            (value, _) => value,
+        };
+        Ok(value_pattern(value))
     }
 
     fn const_value(&mut self, path: &AstPath, depth: usize) -> Result<Value, String> {

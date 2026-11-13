@@ -276,3 +276,37 @@ fn aggregate_inherent_constants_match_stock() {
         ],
     );
 }
+
+#[test]
+fn aggregate_constant_patterns_match_stock() {
+    check(
+        "aggregate-constant-patterns",
+        &[
+            Case {
+                name: "struct_valued_associated_constants_in_patterns",
+                source: "#[derive(Clone,Copy,Debug,PartialEq,Eq)] struct WidthInfo(u16); impl WidthInfo{const DEFAULT:Self=Self(0); const LF:Self=Self(1); const ZWJ:Self=Self(0b10); fn is_lf(self)->bool{matches!(self,Self::LF)}} fn f(w:WidthInfo,c:char)->u32{match (w,c){(WidthInfo::DEFAULT,_)=>0,(WidthInfo::LF|WidthInfo::ZWJ,'a')=>1,_=>2}} fn main(){println!(\"{} {} {} {} {}\",f(WidthInfo(0),'x'),f(WidthInfo(1),'a'),f(WidthInfo(2),'a'),f(WidthInfo(2),'b'),WidthInfo(1).is_lf());}",
+                expect: Expect::Run("0 1 1 2 true\n"),
+            },
+            Case {
+                name: "nested_enum_and_record_constant_patterns",
+                source: "#[derive(PartialEq,Eq)] struct P{x:i32,y:(u8,bool)} #[derive(PartialEq,Eq)] enum E{A,B(P)} impl P{const O:P=P{x:-1,y:(2,true)};} const Q:E=E::B(P{x:-1,y:(2,true)}); fn g(v:&E)->u8{match *v{Q=>1,E::A=>2,_=>3}} fn h(p:P)->u8{match p{P::O=>1,P{..}=>0}} fn main(){let a=E::B(P{x:-1,y:(2,true)}); let b=E::B(P{x:0,y:(2,true)}); println!(\"{} {} {} {}\",g(&a),g(&E::A),g(&b),h(P{x:-1,y:(2,true)}));}",
+                expect: Expect::Run("1 2 3 1\n"),
+            },
+            Case {
+                name: "manual_partial_eq_is_not_structural",
+                source: "#[derive(Clone,Copy)] struct W(u16); impl PartialEq for W{fn eq(&self,o:&W)->bool{self.0==o.0}} impl W{const A:Self=Self(0);} fn main(){match W(0){W::A=>{},_=>{}}}",
+                expect: Expect::Invalid("non-structural"),
+            },
+            Case {
+                name: "nested_manual_partial_eq_is_not_structural",
+                source: "struct J(u8); impl PartialEq for J{fn eq(&self,_:&J)->bool{true}} #[derive(PartialEq)] struct W(u8,J); const A:W=W(0,J(1)); fn main(){match W(0,J(1)){A=>{},_=>{}}}",
+                expect: Expect::Invalid("non-structural"),
+            },
+            Case {
+                name: "private_constant_pattern",
+                source: "mod m{#[derive(PartialEq)] pub struct W(pub u8); impl W{const A:W=W(1);}} fn main(){match m::W(0){m::W::A=>{},_=>{}}}",
+                expect: Expect::Invalid("E0624"),
+            },
+        ],
+    );
+}

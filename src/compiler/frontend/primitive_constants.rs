@@ -15,6 +15,20 @@ pub(super) fn original_token(parser: &Parser<'_, '_>) -> Option<OriginalSpan> {
         _ => None,
     }
 }
+/// Whether the current token is compiler-inserted prepared text (built-in
+/// derive output), not original source or a macro expansion.
+pub(super) fn synthetic_prepared_token(parser: &Parser<'_, '_>) -> bool {
+    let token = parser.token();
+    token.provenance == TokenProvenance::Prepared
+        && matches!(
+            parser
+                .names
+                .session()
+                .span(token.span)
+                .map(|data| data.origin),
+            Ok(crate::compiler::expansion_span::SpanOrigin::Synthetic { .. })
+        )
+}
 pub(super) fn original_impl_range(
     parser: &Parser<'_, '_>,
     start: Option<OriginalSpan>,
