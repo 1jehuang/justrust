@@ -319,8 +319,18 @@ pub(super) struct CratePolicy {
     no_std: bool,
     forbid_unsafe_code: bool,
     denied_lints: u8,
+    /// The crate's own cfg set (features, user cfg, target), for `cfg!`.
+    cfg: Arc<CfgSet>,
 }
 impl CratePolicy {
+    /// The crate root and its exact cfg set.
+    pub(super) fn cfg_root(
+        &self,
+        source: &PreparedSource,
+    ) -> Result<(usize, Arc<CfgSet>), SourceError> {
+        self.no_std_root(source)?;
+        Ok((self.root.0 as usize, self.cfg.clone()))
+    }
     /// The crate root and its natively enforced crate lints, if any.
     pub(super) fn lint_root(
         &self,
@@ -474,15 +484,14 @@ impl FileView {
             .sources
             .add(unit.path.clone(), unit.contents.clone());
         prepared.crate_roots.push(id);
-        if unit.forbid_unsafe_code || unit.no_std || unit.denied_lints != 0 {
-            prepared.crate_policies.push(CratePolicy {
-                root: id,
-                original: unit.contents.clone(),
-                no_std: unit.no_std,
-                forbid_unsafe_code: unit.forbid_unsafe_code,
-                denied_lints: unit.denied_lints,
-            });
-        }
+        prepared.crate_policies.push(CratePolicy {
+            root: id,
+            original: unit.contents.clone(),
+            no_std: unit.no_std,
+            forbid_unsafe_code: unit.forbid_unsafe_code,
+            denied_lints: unit.denied_lints,
+            cfg: Arc::new(options.cfg.clone()),
+        });
         prepared.source_bytes = unit.contents.len();
         prepared.files = 1;
         let anchor = SourceSpan {
@@ -1209,6 +1218,8 @@ pub struct SourceAssembler {
     externs: Vec<String>,
     next_extern: usize,
     in_extern: bool,
+    /// Cfg set per top-level ordinal: user crate, prelude, then externs.
+    crate_cfgs: Vec<Arc<CfgSet>>,
 }
 struct Frame {
     unit: SharedFileUnit,
@@ -1320,6 +1331,9 @@ impl SourceAssembler {
             externs: options.externs.iter().map(|e| e.name.clone()).collect(),
             next_extern: 0,
             in_extern: false,
+            crate_cfgs: (0..2 + options.externs.len() as u64)
+                .map(|first| Arc::new(options.for_ordinal(&[first]).cfg.clone()))
+                .collect(),
         }
     }
     /// Assemble only the user crate, without the prelude library.
@@ -1430,6 +1444,11 @@ impl SourceAssembler {
                 no_std: unit.no_std,
                 forbid_unsafe_code: unit.forbid_unsafe_code,
                 denied_lints: unit.denied_lints,
+                cfg: ordinal
+                    .first()
+                    .and_then(|first| self.crate_cfgs.get(*first as usize))
+                    .cloned()
+                    .unwrap_or_else(|| self.crate_cfgs[0].clone()),
             });
         }
         if ordinal.len() == 1

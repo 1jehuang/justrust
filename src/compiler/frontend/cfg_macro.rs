@@ -8,6 +8,7 @@ use crate::compiler::source::source_cfg::{Meta, MetaValue, evaluate, parse_meta}
 
 impl Parser<'_, '_> {
     pub(super) fn cfg_macro_expression(&mut self) -> Result<Expr, ParseError> {
+        let site = self.token().span;
         self.cursor.bump();
         self.expect("!")?;
         let close = match self.token().text {
@@ -58,13 +59,29 @@ impl Parser<'_, '_> {
         let trimmed = text.trim_end_matches(|c| c == ',' || c == ' ');
         let meta = parse_meta(trimmed, 0)
             .map_err(|error| self.error(&format!("invalid cfg! predicate: {}", error.message)))?;
-        if let Some(name) = unknown_name(&meta) {
-            return Err(self.unsupported(&format!(
-                "cfg! on `{name}` (crate features or user cfg) is unsupported in expressions"
-            )));
-        }
-        let mut cfg = CfgSet::native_x86_64_linux();
-        cfg.set_debug_assertions(self.debug_assertions);
+        let root =
+            crate::compiler::source_macro_binding::invocation_root(self.names.session(), site)
+                .map_err(super::native_adapter::transport_error)?;
+        let configured = self
+            .cfg_roots
+            .iter()
+            .find(|(handle, _)| *handle == root)
+            .map(|(_, cfg)| cfg.clone());
+        let cfg = match configured {
+            Some(cfg) => cfg,
+            None => {
+                // No crate configuration reached this parse: decide only
+                // target facts and debug_assertions.
+                if let Some(name) = unknown_name(&meta) {
+                    return Err(self.unsupported(&format!(
+                        "cfg! on `{name}` needs the crate configuration, which is unavailable here"
+                    )));
+                }
+                let mut cfg = CfgSet::native_x86_64_linux();
+                cfg.set_debug_assertions(self.debug_assertions);
+                std::sync::Arc::new(cfg)
+            }
+        };
         let value = evaluate(&meta, &cfg)
             .map_err(|error| self.error(&format!("invalid cfg! predicate: {}", error.message)))?;
         self.expect(close)?;

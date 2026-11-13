@@ -312,6 +312,7 @@ impl Parser<'_, '_> {
             no_std_roots: self.no_std_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             lint_roots: self.lint_roots.clone(),
+            cfg_roots: self.cfg_roots.clone(),
         });
         Ok(())
     }

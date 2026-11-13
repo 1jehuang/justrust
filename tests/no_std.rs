@@ -796,8 +796,10 @@ fn alloc_borrow_names_resolve_in_no_std_crates() {
 fn cfg_macro_expressions_match_stock() {
     let root = project(
         "cfg-macro",
-        "#![no_std]\nmacro_rules! pick { () => { pick!(1) }; ($v:expr) => { if cfg!(debug_assertions) { $v + 10 } else { $v } }; }\npub fn value() -> i32 { let u = cfg!(unix) as i32; let w = cfg![any(windows, target_os = \"macos\")] as i32; let a = cfg!{all(target_pointer_width = \"64\", not(target_endian = \"big\"))} as i32; pick!() * 0 + u * 100 + w * 10 + a }\n",
+        "#![no_std]\nmacro_rules! pick { () => { pick!(1) }; ($v:expr) => { if cfg!(debug_assertions) { $v + 10 } else { $v } }; }\npub fn value() -> i32 { let u = cfg!(unix) as i32; let w = cfg![any(windows, target_os = \"macos\")] as i32; let a = cfg!{all(target_pointer_width = \"64\", not(target_endian = \"big\"))} as i32; let f = cfg!(feature = \"on\") as i32 * 1000 + cfg!(feature = \"off\") as i32 * 5000; pick!() * 0 + u * 100 + w * 10 + a + f }\n",
     );
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"client\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\ndep = { path = \"dep\", features = [\"on\"] }\n").unwrap();
+    std::fs::write(root.join("dep/Cargo.toml"), "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\non = []\noff = []\n").unwrap();
     let stock = Command::new("cargo")
         .args(["run", "--offline", "--quiet"])
         .current_dir(&root)
@@ -809,7 +811,7 @@ fn cfg_macro_expressions_match_stock() {
         "{}",
         String::from_utf8_lossy(&stock.stderr)
     );
-    assert_eq!(stock.stdout, b"101\n");
+    assert_eq!(stock.stdout, b"1101\n");
     for workers in ["1", "8"] {
         let out = native(&root, "run", workers);
         assert!(
@@ -819,11 +821,11 @@ fn cfg_macro_expressions_match_stock() {
         );
         assert_eq!(out.stdout, stock.stdout);
     }
-    // Malformed predicates are rejected; feature predicates are unsupported.
+    // Malformed predicates are rejected.
     for (name, body) in [
         ("cfg-macro-bad", "cfg!(not(unix, windows)) as i32"),
         ("cfg-macro-empty", "cfg!() as i32"),
-        ("cfg-macro-feature", "cfg!(feature = \"x\") as i32"),
+        ("cfg-macro-literal", "cfg!(feature = 1) as i32"),
     ] {
         let root = project(
             name,

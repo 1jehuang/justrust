@@ -9775,6 +9775,12 @@ pub(super) struct ChildEntry {
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
+    cfg_roots: Arc<
+        [(
+            super::token_session::SourceFileHandle,
+            Arc<super::source::CfgSet>,
+        )],
+    >,
 }
 impl ParsedProgram {
     /// Child file entries of a single-file view parse, in child-site order.
@@ -12460,6 +12466,13 @@ struct Parser<'input, 'names> {
     lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
+    /// Crate roots and their exact cfg sets, for `cfg!`.
+    cfg_roots: Arc<
+        [(
+            super::token_session::SourceFileHandle,
+            Arc<super::source::CfgSet>,
+        )],
+    >,
     c_abi: c_abi::Declarations,
     pending_c_abi: bool,
     pending_target_feature: Option<target_features::Pending>,
@@ -12680,6 +12693,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             child_entries: Vec::new(),
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
+            cfg_roots: self.cfg_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             lint_roots: self.lint_roots.clone(),
             c_abi: c_abi::Declarations::default(),
@@ -14234,6 +14248,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             child_entries: Vec::new(),
             embedded_issuers: self.embedded_issuers.clone(),
             no_std_roots: self.no_std_roots.clone(),
+            cfg_roots: self.cfg_roots.clone(),
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             lint_roots: self.lint_roots.clone(),
             c_abi: c_abi::Declarations::default(),
@@ -14679,6 +14694,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             forbid_unsafe_roots: Arc::from([]),
             lint_roots: Arc::from([]),
             no_std_roots: Arc::from([]),
+            cfg_roots: Arc::from([]),
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
@@ -20772,6 +20788,7 @@ fn parse_syntax_tokens_configured(
         Arc::from([]),
         Arc::from([]),
         Arc::from([]),
+        Arc::from([]),
         ParserNamespace::default(),
     )
 }
@@ -20788,6 +20805,12 @@ fn parse_syntax_tokens_policy(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
+    cfg_roots: Arc<
+        [(
+            super::token_session::SourceFileHandle,
+            Arc<super::source::CfgSet>,
+        )],
+    >,
     child_sites: Arc<[usize]>,
     namespace: ParserNamespace<'_>,
 ) -> Result<ParsedProgram, ParseError> {
@@ -20800,6 +20823,7 @@ fn parse_syntax_tokens_policy(
         embedded_issuers.clone(),
         forbid_unsafe_roots,
         lint_roots,
+        cfg_roots,
         child_sites,
         mount,
         exports,
@@ -20837,6 +20861,12 @@ fn parse_syntax_unit(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     lint_roots: Arc<[(super::token_session::SourceFileHandle, u8)]>,
+    cfg_roots: Arc<
+        [(
+            super::token_session::SourceFileHandle,
+            Arc<super::source::CfgSet>,
+        )],
+    >,
     child_sites: Arc<[usize]>,
     mount: Option<ChildMount<'_>>,
     exports: Option<Arc<super::source_item_macro::exports::ExportNamespace>>,
@@ -20900,6 +20930,7 @@ fn parse_syntax_unit(
     parser.no_std_roots = no_std_roots;
     parser.forbid_unsafe_roots = forbid_unsafe_roots;
     parser.lint_roots = lint_roots;
+    parser.cfg_roots = cfg_roots;
     parser.child_sites = child_sites;
     parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
@@ -21071,6 +21102,7 @@ pub(super) fn validate_inactive_syntax(
             input,
             ParserPurpose::InactiveSyntax,
             super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            Arc::from([]),
             Arc::from([]),
             Arc::from([]),
             Arc::from([]),
@@ -22301,6 +22333,7 @@ pub(super) fn parse_graph_view_owned(
                         no_std_roots: Arc::from([]),
                         forbid_unsafe_roots: Arc::from([]),
                         lint_roots: Arc::from([]),
+                        cfg_roots: Arc::from([]),
                     };
                     &attachment
                 }
@@ -22681,12 +22714,22 @@ fn parse_projection(
     let mut no_std_roots = Vec::new();
     let mut forbid_unsafe_roots = Vec::new();
     let mut lint_roots = Vec::new();
+    let mut cfg_roots = Vec::new();
     if let Some(mount) = &mount {
+        cfg_roots.extend(mount.entry.cfg_roots.iter().cloned());
         no_std_roots.extend(mount.entry.no_std_roots.iter().copied());
         forbid_unsafe_roots.extend(mount.entry.forbid_unsafe_roots.iter().copied());
         lint_roots.extend(mount.entry.lint_roots.iter().copied());
     }
     for policy in &source.crate_policies {
+        let (root, cfg) = policy.cfg_root(source)?;
+        cfg_roots.push((
+            projection
+                .snapshot()
+                .file(root)
+                .map_err(super::source::SourceError::from_token)?,
+            cfg,
+        ));
         if let Some((root, lints)) = policy.lint_root(source)? {
             lint_roots.push((
                 projection
@@ -22728,6 +22771,7 @@ fn parse_projection(
         issuers.into(),
         forbid_unsafe_roots.into(),
         lint_roots.into(),
+        cfg_roots.into(),
         child_sites,
         ParserNamespace { mount, exports },
     )
