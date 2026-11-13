@@ -12442,6 +12442,10 @@ struct Parser<'input, 'names> {
     visible_bounds: Vec<TypeBound>,
     /// Nonzero while scanning forward where predicates for shorthand bounds.
     forward_bounds_depth: usize,
+    /// Bounds of the current function's own `where` clause, scanned ahead so
+    /// parameter and result types may use `B::Item` before `where B: Trait`.
+    /// Consulted only when no earlier bound of the parameter is visible.
+    forward_where_bounds: Vec<TypeBound>,
     /// Indices of type parameters written `= Self` by the last parameter list.
     pending_self_defaults: Vec<usize>,
     pending_type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
@@ -12658,6 +12662,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             forward_bounds_depth: 0,
+            forward_where_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
@@ -14214,6 +14219,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             forward_bounds_depth: 0,
+            forward_where_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
@@ -14655,6 +14661,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_header_anonymous: None,
             visible_bounds: Vec::new(),
             forward_bounds_depth: 0,
+            forward_where_bounds: Vec::new(),
             impl_trait_params: None,
             opaque_return_sites: None,
             pre_2024_capture_agrees: false,
@@ -16353,6 +16360,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting -= 1;
         Ok(())
     }
+    /// `union Name ...` inside disabled cfg: syntax-checked as a braced
+    /// record and discarded. Active unions remain explicitly unsupported.
+    fn inactive_union_item(&self) -> bool {
+        self.purpose == ParserPurpose::InactiveSyntax
+            && self.is("union")
+            && self.cursor.peek(1).is_some_and(|t| {
+                !t.string
+                    && t.text
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            })
+    }
     // Keep the large nonrecursive declaration parser frame off the recursive
     // inline-module path, including on ordinary 2 MiB test-thread stacks.
     #[inline(never)]
@@ -16412,6 +16432,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.token().text,
                 "async" | "extern" | "union" | "macro_rules"
             )
+            && !self.inactive_union_item()
             || (self.is("unsafe") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn")))
             && !self.starts_qualified_function()
         {
@@ -16820,7 +16841,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 variants,
             });
             (name, ItemKind::Enum(declaration))
-        } else if self.eat("struct") {
+        } else if self.is("struct") || self.inactive_union_item() {
+            let union = self.is("union");
+            self.cursor.bump();
             let name = self.item_name()?;
             let repr_c = std::mem::take(&mut self.pending_repr_c);
             if repr_c {
@@ -16844,7 +16867,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             let mut bounds = self.nominal_bounds()?;
             self.set_visible_bounds(&bounds)?;
             let mut fields = Vec::new();
-            let shape = if self.eat(";") {
+            let shape = if union && !self.is("{") {
+                return Err(self.error("expected `{` after union name"));
+            } else if self.eat(";") {
                 StructShape::Unit
             } else if self.eat("(") {
                 if self.is(")") {
@@ -16946,6 +16971,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
             self.impl_header_anonymous = Some(());
+            // Inline parameter bounds are in scope for shorthand projections
+            // in the header types (`impl<A: Array> T<&[A::Item]> for X<A>`).
+            // Only disabled items admit this so far: active header projections
+            // lack retained declaration context and stay rejected.
+            if self.purpose == ParserPurpose::InactiveSyntax {
+                self.set_visible_bounds(&bounds)?;
+            }
             let first_ty = self.ty();
             let (trait_path, self_ty) = match first_ty {
                 Err(error) => {
@@ -17445,6 +17477,77 @@ impl<'input, 'names> Parser<'input, 'names> {
             other => other,
         }
     }
+    /// With `(` current, look past the balanced parameter list and optional
+    /// result type for this function's `where` clause and parse its type
+    /// predicates without retaining any parser state except the returned
+    /// bounds. Predicates that cannot be parsed ahead (lifetimes, or ones that
+    /// themselves need later context) are skipped; the real parse after the
+    /// result type remains authoritative. Returns the previous forward set.
+    fn scan_function_where_bounds(&mut self) -> Result<Vec<TypeBound>, ParseError> {
+        let outer = std::mem::take(&mut self.forward_where_bounds);
+        if self.forward_bounds_depth != 0 || !self.is("(") {
+            return Ok(outer);
+        }
+        let mark = self.cursor.checkpoint();
+        let mut depth = 0usize;
+        let mut steps = 0usize;
+        // Find `where` at nesting depth zero before the body or `;`.
+        let found = loop {
+            steps += 1;
+            if steps > 65536 {
+                break false;
+            }
+            let token = self.token();
+            if token.text.is_empty() {
+                break false;
+            }
+            if !token.string {
+                match token.text {
+                    "(" | "[" => depth += 1,
+                    ")" | "]" => depth = depth.saturating_sub(1),
+                    "{" | ";" if depth == 0 => break false,
+                    "where" if depth == 0 => break true,
+                    _ => {}
+                }
+            }
+            self.cursor.bump();
+        };
+        let mut forward = Vec::new();
+        if found {
+            self.cursor.bump();
+            self.forward_bounds_depth += 1;
+            let saved_pending = self.pending_bounds.len();
+            while !(self.is("{") || self.is(";") || self.token().text.is_empty()) {
+                if self.token().is_lifetime() {
+                    while !(self.is(",")
+                        || self.is("{")
+                        || self.is(";")
+                        || self.token().text.is_empty())
+                    {
+                        self.cursor.bump();
+                    }
+                } else if self.where_type_predicate_once(&mut forward).is_err() {
+                    while !(self.is(",")
+                        || self.is("{")
+                        || self.is(";")
+                        || self.token().text.is_empty())
+                    {
+                        self.cursor.bump();
+                    }
+                }
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.pending_bounds.truncate(saved_pending);
+            self.forward_bounds_depth -= 1;
+        }
+        if !self.cursor.restore(mark) {
+            return Err(self.error("contract: forward where scan lost its position"));
+        }
+        self.forward_where_bounds = forward;
+        Ok(outer)
+    }
     fn where_type_predicate_once(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
         if self.is("for") {
             return Err(self.unsupported("higher-ranked where predicates are unsupported"));
@@ -17864,7 +17967,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if associated && !self.const_params.is_empty() {
             return Err(self.unsupported("associated const parameter declarations are unsupported"));
         }
-        let mut bounds = std::mem::take(&mut self.pending_bounds);
+        let bounds = std::mem::take(&mut self.pending_bounds);
         let enclosing_bounds = std::mem::take(&mut self.visible_bounds);
         {
             let mut visible = enclosing_bounds.clone();
@@ -17886,6 +17989,32 @@ impl<'input, 'names> Parser<'input, 'names> {
             visible.push(*name);
             self.type_params = visible;
         }
+        let outer_forward = self.scan_function_where_bounds()?;
+        let head = self.function_head_tail(
+            associated,
+            constness,
+            unsafety,
+            name,
+            regions,
+            type_params,
+            bounds,
+            enclosing_bounds,
+        );
+        self.forward_where_bounds = outer_forward;
+        head
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn function_head_tail(
+        &mut self,
+        associated: bool,
+        constness: Constness,
+        unsafety: bool,
+        name: AstIdent,
+        mut regions: RegionDecls,
+        type_params: Vec<AstIdent>,
+        mut bounds: Vec<TypeBound>,
+        enclosing_bounds: Vec<TypeBound>,
+    ) -> Result<(FunctionHead, ReceiverKind), ParseError> {
         self.expect("(")?;
         let mut params = Vec::new();
         let mut param_mut = Vec::new();

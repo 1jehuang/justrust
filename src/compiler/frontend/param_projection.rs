@@ -24,7 +24,26 @@ impl Parser<'_, '_> {
             .map_err(native_adapter::name_error)?;
         let mut found: Option<TraitPath> = None;
         let mut ambiguous = false;
-        for bound in self.visible_bounds.iter().chain(self.pending_bounds.iter()) {
+        let declared = self
+            .visible_bounds
+            .iter()
+            .chain(self.pending_bounds.iter())
+            .any(|bound| {
+                matches!(&bound.subject, Type::Param(p) if self.names.key(*p, LookupClass::TypeParameter).ok() == Some(key))
+            });
+        // A bound written later in the same function's `where` clause is in
+        // scope for the whole signature; use it only if nothing earlier is.
+        let forward: &[TypeBound] = if declared {
+            &[]
+        } else {
+            &self.forward_where_bounds
+        };
+        for bound in self
+            .visible_bounds
+            .iter()
+            .chain(self.pending_bounds.iter())
+            .chain(forward.iter())
+        {
             let Type::Param(parameter) = &bound.subject else {
                 continue;
             };

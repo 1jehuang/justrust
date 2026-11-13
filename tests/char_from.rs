@@ -352,3 +352,54 @@ fn missing_as_ref_impls_are_rejected() {
         differential(name, source, false);
     }
 }
+
+#[test]
+fn exact_size_iterators_match_stock() {
+    differential(
+        "exact-size",
+        r#"use std::iter;
+struct H<'a> { inner: ::core::slice::Iter<'a, u8>, next: Option<char> }
+impl<'a> Iterator for H<'a> {
+    type Item = char;
+    fn next(&mut self) -> Option<char> {
+        match self.next.take() {
+            Some(c) => Some(c),
+            None => self.inner.next().map(|b| { self.next = Some((b'a' + (b & 15)) as char); (b'a' + (b >> 4)) as char }),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) { let l = self.len(); (l, Some(l)) }
+}
+impl<'a> iter::ExactSizeIterator for H<'a> {
+    fn len(&self) -> usize { let mut l = self.inner.len() * 2; if self.next.is_some() { l += 1; } l }
+}
+fn main() {
+    let data = [0x12u8, 0xab];
+    let mut h = H { inner: data.iter(), next: None };
+    println!("{} {:?}", h.len(), h.size_hint());
+    h.next();
+    println!("{} {}", h.len(), h.len() == 0);
+    let s: String = h.collect();
+    println!("{}", s);
+    let v = vec![1, 2, 3];
+    println!("{} {} {}", v.iter().len(), v.iter().map(|x| x + 1).len(), v.into_iter().rev().len());
+}
+"#,
+        true,
+    );
+    for (name, source) in [
+        (
+            "exact-size-on-filter",
+            "fn main(){ let v = vec![1]; let _ = v.iter().filter(|x| **x > 0).len(); }",
+        ),
+        (
+            "exact-size-is-empty-unstable",
+            "fn main(){ let v = vec![1]; let _ = v.iter().is_empty(); }",
+        ),
+        (
+            "unused-exact-size-on-chars",
+            "fn bad(s: &str) -> usize { s.chars().len() } fn main(){}",
+        ),
+    ] {
+        differential(name, source, false);
+    }
+}

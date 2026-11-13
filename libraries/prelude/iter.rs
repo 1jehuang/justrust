@@ -22,6 +22,12 @@ pub trait Iterator: Sized {
     type Item;
     fn next(&mut self) -> Option<Self::Item>;
 
+    // Adapted from library/core/src/iter/traits/iterator.rs.
+    // MIT OR Apache-2.0, Rust Project Contributors.
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0usize, Option::None)
+    }
+
     fn nth(&mut self, mut n: usize) -> Option<Self::Item> {
         loop {
             match self.next() {
@@ -438,6 +444,18 @@ pub trait Iterator: Sized {
 
 pub trait DoubleEndedIterator: Iterator {
     fn next_back(&mut self) -> Option<Self::Item>;
+}
+
+// Adapted from library/core/src/iter/traits/exact_size.rs.
+// MIT OR Apache-2.0, Rust Project Contributors.
+pub trait ExactSizeIterator: Iterator {
+    fn len(&self) -> usize {
+        let (lower, upper) = self.size_hint();
+        match upper {
+            Option::Some(upper) if upper == lower => lower,
+            _ => panic!("assertion `left == right` failed"),
+        }
+    }
 }
 
 pub struct Rev<I> {
@@ -1804,5 +1822,37 @@ impl<T, I: Iterator<Item = T>, F: FnMut(&T)> Iterator for Inspect<I, F> {
             }
             Option::None => Option::None,
         }
+    }
+}
+
+// Exact-size adapters, as in library/core/src/iter/adapters.
+// MIT OR Apache-2.0, Rust Project Contributors.
+impl<I: ExactSizeIterator + DoubleEndedIterator> ExactSizeIterator for Rev<I> {
+    fn len(&self) -> usize {
+        self.iterator.len()
+    }
+}
+
+impl<I: ExactSizeIterator> ExactSizeIterator for Enumerate<I> {
+    fn len(&self) -> usize {
+        self.iterator.len()
+    }
+}
+
+impl<'a, T: Copy, I: ExactSizeIterator<Item = &'a T>> ExactSizeIterator for Copied<I> {
+    fn len(&self) -> usize {
+        self.iterator.len()
+    }
+}
+
+impl<'a, T: Clone, I: ExactSizeIterator<Item = &'a T>> ExactSizeIterator for Cloned<I> {
+    fn len(&self) -> usize {
+        self.iterator.len()
+    }
+}
+
+impl<A, B, I: ExactSizeIterator<Item = A>, F: FnMut(A) -> B> ExactSizeIterator for Map<I, F> {
+    fn len(&self) -> usize {
+        self.iterator.len()
     }
 }

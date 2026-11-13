@@ -362,6 +362,12 @@ impl<T> super::iter::Iterator for IntoIter<T> {
     }
 }
 
+impl<T> super::iter::ExactSizeIterator for IntoIter<T> {
+    fn len(&self) -> usize {
+        self.len - self.index
+    }
+}
+
 impl<T> super::iter::DoubleEndedIterator for IntoIter<T> {
     fn next_back(&mut self) -> Option<T> {
         if self.index < self.buf.len {

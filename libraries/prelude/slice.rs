@@ -31,6 +31,12 @@ impl<'a, T> super::iter::Iterator for Iter<'a, T> {
     }
 }
 
+impl<'a, T> super::iter::ExactSizeIterator for Iter<'a, T> {
+    fn len(&self) -> usize {
+        self.len - self.index
+    }
+}
+
 impl<'a, T> super::iter::DoubleEndedIterator for Iter<'a, T> {
     fn next_back(&mut self) -> super::option::Option<&'a T> {
         if self.index < self.len {
@@ -487,6 +493,12 @@ impl<'a, T> super::iter::Iterator for IterMut<'a, T> {
         } else {
             super::option::Option::None
         }
+    }
+}
+
+impl<'a, T> super::iter::ExactSizeIterator for IterMut<'a, T> {
+    fn len(&self) -> usize {
+        self.len - self.index
     }
 }
 

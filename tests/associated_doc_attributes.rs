@@ -532,3 +532,58 @@ fn where_shorthand_sees_other_predicates_and_edition_2018_impl_trait_without_lif
         );
     }
 }
+
+#[test]
+fn inactive_unions_are_syntax_only_and_active_unions_stay_explicit() {
+    let source = r#"
+        #[cfg(any())]
+        union Data<A: Copy> { inline: core::mem::ManuallyDrop<A>, heap: (*mut u8, usize) }
+        #[cfg(any())]
+        impl<A: Copy> Data<A> { fn missing(&self) -> u8 { nothing() } }
+        fn main() { let union = 3; println!("{}", union); }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    // Disabled items must still be syntactically valid.
+    file_oracle::Fixture::new(
+        "#[cfg(any())] union U { a: u8 b: u8 } fn main(){}",
+        &[],
+        None,
+    )
+    .assert_negative();
+    file_oracle::Fixture::new("#[cfg(any())] union U; fn main(){}", &[], None).assert_negative();
+    // An active union is legal Rust that is not implemented: explicit diagnostic.
+    let checked =
+        compiler::compile_observed("union U { a: u32, b: f32 } fn main(){}".into(), 1, true);
+    match checked {
+        Ok(_) => panic!("active union accepted"),
+        Err(error) => assert!(error.to_string().contains("unsupported"), "{error}"),
+    }
+}
+
+#[test]
+fn shorthand_projections_see_the_functions_later_where_clause() {
+    let source = r#"
+        trait Seq { type Error; fn fail(&self) -> Self::Error; }
+        struct S;
+        impl Seq for S { type Error = u16; fn fail(&self) -> u16 { 7 } }
+        fn visit<B>(seq: B) -> Result<u8, B::Error> where B: Seq { Err(seq.fail()) }
+        fn first<B>(seq: &B, _hint: Option<B::Error>) -> B::Error where B: Seq, { seq.fail() }
+        #[cfg(any())]
+        impl<'a, T: Arr> Spec<&'a [T::Item]> for W<T> where T::Item: Copy { fn spec(&self, x: &'a [T::Item]) -> usize { x.len() } }
+        fn main() { println!("{:?} {}", visit(S), first(&S, None)); }
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    // The later bound must still name a trait declaring the member.
+    file_oracle::Fixture::new(
+        "trait T {} fn f<B>(_: B) -> Option<B::Missing> where B: T { None } fn main(){}",
+        &[],
+        None,
+    )
+    .assert_negative();
+    file_oracle::Fixture::new(
+        "fn f<B>(_: B) -> Option<B::Item> where u8: Copy { None } fn main(){}",
+        &[],
+        None,
+    )
+    .assert_negative();
+}
