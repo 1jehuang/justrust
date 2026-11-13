@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 
 use crate::peercache;
 use crate::remote_backend::{self, Backend};
+use crate::remote_checkpoint;
 use crate::remote_proto::{Msg, VERSION, read_frame, write_frame};
 use crate::remote_resume;
 use crate::remote_sync::{self, MAX_FILE, Manifest, Mirror, UNKNOWN};
@@ -213,6 +214,8 @@ struct Routes {
     /// would ever be answered.
     dead: bool,
     barriers: HashMap<u64, Sender<SyncAck>>,
+    /// `Verify` answers: whether the checkpoint held, else why not.
+    verifies: HashMap<u64, Sender<Result<(), String>>>,
     runs: HashMap<u64, Sender<(Msg, Vec<u8>)>>,
 }
 
@@ -224,6 +227,8 @@ struct Link {
     mirror: Mirror,
     /// Peer dependency cache over this session (`src/peercache.rs`).
     peer: Arc<peercache::Relay>,
+    /// The agent serves `Checkpoint` and `Verify`, and this daemon uses them.
+    checkpoint: bool,
 }
 
 impl Link {
@@ -255,6 +260,8 @@ struct Root {
     /// A new agent connection cannot trust the previous connection's manifest.
     /// Resync on demand, not all remembered workspaces before the first build.
     needs_full_sync: bool,
+    /// Evidence that survives a reconnect (`remote_checkpoint`).
+    mark: remote_checkpoint::Mark,
 }
 
 impl Root {
@@ -869,9 +876,18 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     }
     let mut stdin = BufWriter::new(child.stdin.take().unwrap());
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    write_frame(&mut stdin, &Msg::Hello { version: VERSION }, &[])?;
-    match read_frame(&mut stdout) {
-        Ok(Some((Msg::Hello { version }, _))) if version == VERSION => {}
+    write_frame(
+        &mut stdin,
+        &Msg::Hello {
+            version: VERSION,
+            caps: Vec::new(),
+        },
+        &[],
+    )?;
+    let checkpoint = match read_frame(&mut stdout) {
+        Ok(Some((Msg::Hello { version, caps }, _))) if version == VERSION => {
+            remote_checkpoint::enabled() && caps.iter().any(|c| c == remote_checkpoint::CAP)
+        }
         other => {
             let _ = child.kill();
             let _ = child.wait();
@@ -882,7 +898,7 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
             }
             bail!("remote agent handshake failed: {other:?}");
         }
-    }
+    };
     let stdin = Arc::new(Mutex::new(stdin));
     let peer = {
         let w = stdin.clone();
@@ -895,6 +911,7 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         child: Mutex::new(child),
         stdin,
         peer: peer.clone(),
+        checkpoint,
         routes: Mutex::default(),
         mirror: Mirror {
             target: Some(target.clone()),
@@ -913,7 +930,8 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     }
     st.link = Some(link.clone());
     d.set_info(|i| i.connected = true);
-    // Everything the machine had may be stale: start from a full mirror.
+    // Everything the machine had may be stale: start from a full mirror,
+    // unless the agent confirms a root's checkpoint (`reverify`).
     // Roots deleted since (a removed worktree) are forgotten, not mirrored:
     // rsync of a missing dir failed the whole connect and sent the next
     // build local (FINDINGS 65).
@@ -937,9 +955,19 @@ fn read_agent(
                 id,
                 failed,
                 disk_full,
+                lost,
             } => {
                 if let Some(tx) = r.barriers.remove(&id) {
-                    let _ = tx.send(SyncAck { failed, disk_full });
+                    let _ = tx.send(SyncAck {
+                        failed,
+                        disk_full,
+                        lost,
+                    });
+                }
+            }
+            Msg::Verified { id, ok, why } => {
+                if let Some(tx) = r.verifies.remove(&id) {
+                    let _ = tx.send(if ok { Ok(()) } else { Err(why) });
                 }
             }
             Msg::Out { id, .. }
@@ -971,6 +999,7 @@ fn read_agent(
         let _ = tx.try_send(());
     }
     r.barriers.clear();
+    r.verifies.clear();
     for (id, tx) in r.runs.drain() {
         let _ = tx.send((
             Msg::Error {
@@ -1096,6 +1125,7 @@ fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<us
                         watch_dirs: None,
                         oversized,
                         needs_full_sync: false,
+                        mark: Default::default(),
                     },
                 );
                 remember_root(st.backend.kind(), root);
@@ -1114,9 +1144,113 @@ fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<us
                 t.elapsed().as_secs_f64()
             )),
         }
+    } else if let Some(sent) = reverify(d, st, link, root) {
+        return sent;
     }
     remote_resume::invalidate(&link.mirror, root);
     add_root(d, st, link, root).map(|()| 0)
+}
+
+/// A root this daemon mirrored over an earlier connection: keep its mirror
+/// when the agent confirms the checkpoint (`remote_checkpoint`), then send
+/// what the old connection may not have applied and what changed since.
+/// `None` means no confirmation: mirror it in full.
+fn reverify(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Option<Result<usize>> {
+    if !link.checkpoint {
+        return None;
+    }
+    let t = Instant::now();
+    let (token, list, files) = {
+        let r = st.roots.get(root)?;
+        let token = r.mark.token.clone()?;
+        let settled = || {
+            r.manifest
+                .iter()
+                .filter(|(p, s)| **s != UNKNOWN && !r.mark.dirty.contains(*p))
+        };
+        let list = remote_checkpoint::encode(settled().map(|(p, s)| (p.as_path(), s.size)))?;
+        (token, list, settled().count())
+    };
+    let next = remote_checkpoint::new_token();
+    let id = d.id();
+    let (tx, rx) = channel();
+    {
+        let mut routes = link.routes.lock().unwrap();
+        if routes.dead {
+            return None;
+        }
+        routes.verifies.insert(id, tx);
+    }
+    let answer = link
+        .send(
+            &Msg::Verify {
+                id,
+                path: root.display().to_string(),
+                token,
+                next: next.clone(),
+            },
+            &list,
+        )
+        .map_err(|e| e.to_string())
+        .and_then(|()| {
+            rx.recv_timeout(BARRIER_TIMEOUT)
+                .map_err(|_| "no answer from the machine".to_string())?
+        });
+    link.routes.lock().unwrap().verifies.remove(&id);
+    let r = st.roots.get_mut(root)?;
+    if let Err(why) = answer {
+        log(&format!(
+            "source mirror {}: checkpoint not confirmed ({why}, {:.3}s), full mirror",
+            root.display(),
+            t.elapsed().as_secs_f64()
+        ));
+        r.mark = Default::default();
+        return None;
+    }
+    let verified = t.elapsed();
+    r.mark.token = Some(next);
+    // Sent after the checkpoint: the old connection may or may not have
+    // applied them. Absent locally means delete, as for a failed delete.
+    let resend = r.mark.dirty.len();
+    for path in &r.mark.dirty {
+        r.manifest.insert(path.clone(), UNKNOWN);
+    }
+    r.needs_full_sync = false;
+    Some(push_root(d, st, root).inspect(|n| {
+        log(&format!(
+            "source mirror {}: checkpoint confirmed for {files} files in {:.3}s, {resend} resent, {n} files sent, total {:.3}s",
+            root.display(),
+            verified.as_secs_f64(),
+            t.elapsed().as_secs_f64()
+        ));
+    }))
+}
+
+/// The root is in sync once the agent has applied every frame so far: have
+/// it remember that. Sent without waiting. An agent that failed one of those
+/// frames refuses, and the next connection then mirrors in full.
+fn checkpoint(st: &mut Sync, link: &Link, root: &Path, force: bool) -> Result<()> {
+    if !link.checkpoint {
+        return Ok(());
+    }
+    let Some(r) = st.roots.get_mut(root) else {
+        return Ok(());
+    };
+    if !force && !r.mark.wanted() {
+        return Ok(());
+    }
+    let token = remote_checkpoint::new_token();
+    // Forget the old one first: if this frame is lost, nothing is claimed.
+    r.mark = Default::default();
+    link.send(
+        &Msg::Checkpoint {
+            path: root.display().to_string(),
+            token: token.clone(),
+        },
+        &[],
+    )?;
+    r.mark.token = Some(token);
+    Ok(())
 }
 
 /// Start tracking a root: rsync it once, then remember its manifest.
@@ -1211,8 +1345,10 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             watch_dirs: Some(watch_dirs),
             oversized: scan.oversized,
             needs_full_sync: false,
+            mark: Default::default(),
         },
     );
+    checkpoint(st, link, root, true)?;
     update_root_info(d, st);
     Ok(())
 }
@@ -1244,13 +1380,23 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     };
     let compared = total.elapsed();
     let link = st.link.clone().context("not connected")?;
+    let mut bulk = false;
     if !diff.is_empty() {
+        // Before anything is sent: after a lost connection these are the
+        // paths whose state on the machine is unknown.
+        if link.checkpoint
+            && let Some(r) = st.roots.get_mut(root)
+        {
+            r.mark.dirty.extend(diff.changed.iter().cloned());
+            r.mark.dirty.extend(diff.deleted.iter().cloned());
+        }
         if diff.changed.len() + diff.deleted.len() > remote_sync::RSYNC_ABOVE {
             // A branch switch or a big generated change: one rsync is cheaper.
             // It bypasses the agent, so drop saved mirror state here.
             remote_resume::invalidate(&link.mirror, root);
             let t = Instant::now();
             let n = link.mirror.rsync(root)?;
+            bulk = true;
             link.send(
                 &Msg::Synced {
                     path: root.display().to_string(),
@@ -1330,6 +1476,8 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
         r.manifest = new;
         r.oversized = scan.oversized;
     }
+    // `Synced` after a bulk rsync dropped the agent's checkpoint.
+    checkpoint(st, &link, root, bulk)?;
     update_root_info(d, st);
     d.set_info(|i| i.pushed += n as u64);
     Ok(n)
@@ -1404,12 +1552,31 @@ fn barrier(d: &Daemon, st: &mut Sync, link: &Link) -> Result<()> {
 struct SyncAck {
     failed: Vec<String>,
     disk_full: bool,
+    /// Roots another connection wrote to since this one's checkpoint.
+    lost: Vec<String>,
 }
 
 /// Both standalone and run-integrated barriers repair the same manifest.
 fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
     let failed = &ack.failed;
+    for root in &ack.lost {
+        // Not what this daemon sent any more, and not known how: mirror it
+        // again before anything builds on it.
+        if let Some(r) = st.roots.get_mut(Path::new(root)) {
+            r.needs_full_sync = true;
+            r.mark = Default::default();
+        }
+        log(&format!(
+            "source mirror {root}: changed by another connection, full mirror next"
+        ));
+    }
     if failed.is_empty() {
+        if !ack.lost.is_empty() {
+            bail!(
+                "another connection changed the source mirror of {} on the remote machine; it is mirrored again on the next build",
+                ack.lost.join(", ")
+            );
+        }
         return Ok(());
     }
     for f in failed {
@@ -1908,6 +2075,7 @@ mod tests {
             watch_dirs: Some(expected.clone()),
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let diff = remote_sync::Diff::default();
         for iteration in 0..5 {
@@ -1935,6 +2103,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         for paths in [
             vec!["src/lib.rs"],
@@ -1974,6 +2143,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let (tx, _rx) = channel();
         let watcher = Watcher::new(tx).unwrap();
@@ -2013,6 +2183,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let mut child = Command::new("cat")
             .stdin(Stdio::piped())
@@ -2025,6 +2196,7 @@ mod tests {
             child: Mutex::new(child),
             routes: Mutex::default(),
             peer: peercache::Relay::new(false, |_, _| true),
+            checkpoint: false,
             mirror: Mirror {
                 target: None,
                 prefix: String::new(),
@@ -2052,6 +2224,7 @@ mod tests {
         let full = SyncAck {
             failed: vec![failed_write.clone(), failed_delete.clone()],
             disk_full: true,
+            lost: Vec::new(),
         };
         assert!(check_sync_failures(&mut st, &full).is_err());
         assert_eq!(st.repair_roots(), vec![a.clone()]);
@@ -2091,6 +2264,7 @@ mod tests {
         let receipt = SyncAck {
             failed: vec![failed_write],
             disk_full: false,
+            lost: Vec::new(),
         };
         assert!(check_sync_failures(&mut st, &receipt).is_err());
         std::fs::remove_file(a.join("lib.rs")).unwrap();
@@ -2100,6 +2274,152 @@ mod tests {
         std::fs::rename(&a, base.join("unavailable-a")).unwrap();
         assert!(repair_sources(&d, &mut st, &link).is_err());
         assert_eq!(st.repair_roots(), vec![a]);
+        link.kill();
+        drop(st);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn reconnect_keeps_a_confirmed_mirror_and_resends_only_unsettled_paths() {
+        let base = std::env::temp_dir().join(format!("jr-reverify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("w");
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            std::fs::write(root.join(name), name).unwrap();
+        }
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut frames = BufReader::new(child.stdout.take().unwrap());
+        let link = Arc::new(Link {
+            stdin: Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap()))),
+            child: Mutex::new(child),
+            routes: Mutex::default(),
+            peer: peercache::Relay::new(false, |_, _| true),
+            checkpoint: true,
+            mirror: Mirror {
+                target: None,
+                prefix: String::new(),
+            },
+        });
+        let tracked = Root {
+            manifest: remote_sync::scan(&root).unwrap().files,
+            watch_dirs: None,
+            oversized: Vec::new(),
+            needs_full_sync: false,
+            mark: Default::default(),
+        };
+        let d = Daemon {
+            status_hint: None,
+            sync: Mutex::new(Sync {
+                backend: Backend::Hosted,
+                link: Some(link.clone()),
+                roots: BTreeMap::from([(root.clone(), tracked)]),
+            }),
+            info: Mutex::default(),
+            next_id: AtomicU64::new(1),
+            watcher: Watcher::new(channel().0).unwrap(),
+            sock: (base.join("unused.sock"), (0, 0)),
+            lock: Mutex::new(None),
+            draining: AtomicBool::new(false),
+            peer: Arc::default(),
+            peer_sock: Mutex::default(),
+        };
+        let mut st = d.sync.lock().unwrap();
+        let name = root.display().to_string();
+        let path = |rel: &str| root.join(rel).display().to_string();
+
+        // In sync and nothing to send: the agent is asked to remember that.
+        assert_eq!(push_root(&d, &mut st, &root).unwrap(), 0);
+        let first = match read_frame(&mut frames).unwrap().unwrap().0 {
+            Msg::Checkpoint { path, token } if path == name => token,
+            other => panic!("expected Checkpoint, got {other:?}"),
+        };
+        assert_eq!(st.roots[&root].mark.token.as_deref(), Some(first.as_str()));
+
+        // Later frames are recorded, not checkpointed one by one.
+        std::fs::write(root.join("a.rs"), "edited").unwrap();
+        std::fs::remove_file(root.join("b.rs")).unwrap();
+        assert_eq!(push_root(&d, &mut st, &root).unwrap(), 2);
+        assert!(matches!(
+            read_frame(&mut frames).unwrap().unwrap().0,
+            Msg::Write { path: p, .. } if p == path("a.rs")
+        ));
+        assert!(matches!(
+            read_frame(&mut frames).unwrap().unwrap().0,
+            Msg::Delete { path: p } if p == path("b.rs")
+        ));
+        assert_eq!(st.roots[&root].mark.dirty.len(), 2);
+        assert_eq!(st.roots[&root].mark.token.as_deref(), Some(first.as_str()));
+
+        // The connection is replaced. An agent that confirms the checkpoint
+        // is asked only about files that were settled when it was taken.
+        let answer = |ok: bool, mut frames: BufReader<std::process::ChildStdout>| {
+            let link = link.clone();
+            std::thread::spawn(move || {
+                let (msg, payload) = read_frame(&mut frames).unwrap().unwrap();
+                let Msg::Verify {
+                    id, token, next, ..
+                } = msg
+                else {
+                    panic!("expected Verify, got {msg:?}");
+                };
+                let mut raw = Vec::new();
+                flate2::read::GzDecoder::new(&payload[..])
+                    .read_to_end(&mut raw)
+                    .unwrap();
+                let tx = link.routes.lock().unwrap().verifies.remove(&id).unwrap();
+                tx.send(if ok { Ok(()) } else { Err("size".into()) })
+                    .unwrap();
+                (frames, token, next, raw)
+            })
+        };
+        st.invalidate_sources();
+        assert!(st.needs_mirror(&root));
+        let agent = answer(true, frames);
+        assert_eq!(mirror_root(&d, &mut st, &link, &root).unwrap(), 2);
+        let (mut frames, token, next, list) = agent.join().unwrap();
+        assert_eq!(token, first);
+        assert_eq!(list, b"4\0c.rs\0");
+        assert!(!st.needs_mirror(&root));
+        assert_eq!(st.roots[&root].mark.token.as_deref(), Some(next.as_str()));
+        // What the old connection may not have applied goes again.
+        assert_eq!(
+            read_frame(&mut frames).unwrap().unwrap(),
+            (
+                Msg::Write {
+                    path: path("a.rs"),
+                    mode: st.roots[&root].manifest[Path::new("a.rs")].mode
+                },
+                b"edited".to_vec()
+            )
+        );
+        assert!(matches!(
+            read_frame(&mut frames).unwrap().unwrap().0,
+            Msg::Delete { path: p } if p == path("b.rs")
+        ));
+        assert!(!st.roots[&root].manifest.contains_key(Path::new("b.rs")));
+
+        // Another connection wrote under the root: nothing is known now.
+        let displaced = SyncAck {
+            lost: vec![name.clone()],
+            ..Default::default()
+        };
+        assert!(check_sync_failures(&mut st, &displaced).is_err());
+        assert!(st.needs_mirror(&root));
+        assert!(st.roots[&root].mark.token.is_none());
+        assert!(reverify(&d, &mut st, &link, &root).is_none());
+
+        // An agent that does not confirm leaves no claim behind.
+        st.roots.get_mut(&root).unwrap().mark.token = Some("stale".into());
+        let agent = answer(false, frames);
+        assert!(reverify(&d, &mut st, &link, &root).is_none());
+        agent.join().unwrap();
+        assert!(st.needs_mirror(&root));
+        assert!(st.roots[&root].mark.token.is_none());
         link.kill();
         drop(st);
         std::fs::remove_dir_all(base).unwrap();
@@ -2122,6 +2442,7 @@ mod tests {
             stdin,
             routes: Mutex::default(),
             peer,
+            checkpoint: false,
             // A guaranteed rsync receiver error without SSH or global env changes.
             mirror: Mirror {
                 target: None,
@@ -2141,6 +2462,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let other = base.join("unrelated");
         let d = Daemon {
@@ -2209,6 +2531,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let mut sync = Sync {
             backend: Backend::Hosted,
@@ -2226,6 +2549,7 @@ mod tests {
                         "/workspace/deleted.rs".into()
                     ],
                     disk_full: false,
+                    lost: Vec::new(),
                 }
             )
             .is_err()
@@ -2238,6 +2562,7 @@ mod tests {
             &SyncAck {
                 failed: vec!["/workspace/src/lib.rs".into()],
                 disk_full: false,
+                lost: Vec::new(),
             },
         )
         .unwrap_err()
@@ -2248,6 +2573,7 @@ mod tests {
             &SyncAck {
                 failed: vec!["/workspace/src/lib.rs".into()],
                 disk_full: true,
+                lost: Vec::new(),
             },
         )
         .unwrap_err()
@@ -2271,6 +2597,7 @@ mod tests {
             watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
+            mark: Default::default(),
         };
         let mut sync = Sync {
             backend: Backend::Hosted,

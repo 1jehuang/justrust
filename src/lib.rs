@@ -109,6 +109,8 @@ mod remote_status_watch;
 // Parts are used only by the remote agent, which is not built on Windows.
 mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
+mod remote_checkpoint;
+#[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
 mod remote_resume;
 #[cfg(unix)]

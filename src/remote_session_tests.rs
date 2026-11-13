@@ -37,7 +37,14 @@ fn hosted_transport_defaults_on_with_strict_explicit_rollback_policy() {
 
 #[test]
 fn binary_hello_is_flushed_before_waiting_for_more_transport_input() {
-    let hello = encode(&Msg::Hello { version: 1 }, &[]).unwrap();
+    let hello = encode(
+        &Msg::Hello {
+            version: 1,
+            caps: vec![],
+        },
+        &[],
+    )
+    .unwrap();
     assert!(!hello.contains(&b'\n'));
     let mut buffered = std::io::BufWriter::new(Vec::new());
     publish(&mut buffered, &hello).unwrap();

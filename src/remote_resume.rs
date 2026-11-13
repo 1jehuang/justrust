@@ -21,7 +21,9 @@
 //! the machine's token in one command, so at most one daemon can resume it.
 //! The token is also deleted by every change to the machine's tree that
 //! the next daemon would not know about: the agent drops it before applying
-//! any source write or delete under the root (from any client), and full or
+//! any source write or delete under the root (`remote_checkpoint`, which
+//! shares the token file and keeps it only for the connection that holds a
+//! checkpoint there), and full or
 //! bulk rsyncs drop it before they start. A save is written only after a
 //! clean barrier on exit.
 //! `JUSTRUST_REMOTE_RESUME=0` (in the daemon's environment) turns this off.
@@ -32,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 const VERSION: u32 = 1;
-const TOKEN_FILE: &str = ".justrust/mirror-token";
+use crate::remote_checkpoint::TOKEN_FILE;
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -286,19 +288,6 @@ pub fn invalidate(mirror: &Mirror, root: &Path) {
     );
 }
 
-/// Machine side, before applying a source write or delete at `path`: any
-/// saved mirror state of a root above it no longer describes the tree.
-/// One `stat` per ancestor.
-#[cfg_attr(not(unix), allow(dead_code))]
-pub fn invalidate_above(path: &Path) {
-    for dir in path.ancestors().skip(1) {
-        let token = dir.join(TOKEN_FILE);
-        if token.is_file() {
-            let _ = std::fs::remove_file(token);
-        }
-    }
-}
-
 fn take_in(
     d: &Path,
     backend: &str,
@@ -449,7 +438,10 @@ mod tests {
             save_in(&home, "hosted", &mirror, &[(&root, &manifest, &[])]),
             1
         );
-        invalidate_above(&remote.join("src/new.rs"));
+        crate::remote_checkpoint::invalidate_above(
+            &remote.join("src/new.rs"),
+            &std::collections::HashMap::new(),
+        );
         assert!(take_in(&home, "hosted", &mirror, &root).is_err());
         // Another saver's token replaced ours: only the last save matches.
         assert_eq!(

@@ -164,6 +164,10 @@ pub enum Msg {
     /// First frame in both directions.
     Hello {
         version: u32,
+        /// Agent -> daemon: optional frames this agent serves
+        /// (`remote_checkpoint::CAP`). Older peers omit and ignore it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        caps: Vec<String>,
     },
     /// Payload is the file content. Written atomically (temp file + rename).
     Write {
@@ -182,6 +186,29 @@ pub enum Msg {
     Synced {
         path: String,
     },
+    /// Only to agents with the `checkpoint` capability: every earlier frame
+    /// under `path` is applied, remember that as `token`
+    /// (`remote_checkpoint`). Not answered. Refused silently while a write
+    /// or delete under `path` is still failed.
+    Checkpoint {
+        path: String,
+        token: String,
+    },
+    /// Whether `path` still holds checkpoint `token` and every file in the
+    /// payload (`remote_checkpoint::encode`) has its listed size. On success
+    /// the agent replaces the token with `next`. Answered with `Verified`.
+    Verify {
+        id: u64,
+        path: String,
+        token: String,
+        next: String,
+    },
+    Verified {
+        id: u64,
+        ok: bool,
+        #[serde(default)]
+        why: String,
+    },
     /// Answered with `BarrierAck` once every earlier frame is applied.
     Barrier {
         id: u64,
@@ -197,6 +224,11 @@ pub enum Msg {
         /// agent. Older agents never set it; older daemons ignore it.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         disk_full: bool,
+        /// Roots whose checkpoint another connection displaced since this
+        /// one took it: something else wrote there, so the tree may not be
+        /// what the daemon sent. Cleared by `Synced`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lost: Vec<String>,
     },
     /// Run `justrust <args>` in `cwd`. Client -> daemon also carries the
     /// source roots that must be synced first.
@@ -479,6 +511,24 @@ mod tests {
         assert_eq!(back, new);
     }
     #[test]
+    fn hello_capabilities_are_invisible_to_older_peers() {
+        let plain = serde_json::to_value(Msg::Hello {
+            version: VERSION,
+            caps: vec![],
+        })
+        .unwrap();
+        assert_eq!(plain, serde_json::json!({"t":"Hello","version":VERSION}));
+        let old: Msg = serde_json::from_value(plain).unwrap();
+        assert_eq!(
+            old,
+            Msg::Hello {
+                version: VERSION,
+                caps: vec![]
+            }
+        );
+    }
+
+    #[test]
     fn barrier_ack_disk_full_is_compatible_both_ways() {
         // An old agent's ack (no field) reads as not disk-full.
         let old: Msg = serde_json::from_value(serde_json::json!({
@@ -490,7 +540,8 @@ mod tests {
             Msg::BarrierAck {
                 id: 3,
                 failed: vec!["/w/a.rs".into()],
-                disk_full: false
+                disk_full: false,
+                lost: vec![],
             }
         );
         // A healthy ack omits the field, so it is byte-identical for old daemons.
@@ -498,14 +549,17 @@ mod tests {
             id: 4,
             failed: vec![],
             disk_full: false,
+            lost: vec![],
         })
         .unwrap();
         assert!(healthy.get("disk_full").is_none(), "{healthy}");
+        assert!(healthy.get("lost").is_none(), "{healthy}");
         // A disk-full ack carries it and round-trips.
         let full = Msg::BarrierAck {
             id: 5,
             failed: vec!["/w/b.rs".into()],
             disk_full: true,
+            lost: vec!["/w".into()],
         };
         let v = serde_json::to_value(&full).unwrap();
         assert_eq!(v["disk_full"], serde_json::json!(true));

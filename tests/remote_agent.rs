@@ -91,7 +91,15 @@ impl Agent {
     }
 
     fn start_copy(name: &str, copy: bool) -> Agent {
-        let dir = scratch(name);
+        Self::start_in(scratch(name), copy)
+    }
+
+    /// A second connection to the mirror `other` serves.
+    fn beside(other: &Agent) -> Agent {
+        Self::start_in(other.dir.clone(), false)
+    }
+
+    fn start_in(dir: PathBuf, copy: bool) -> Agent {
         let executable = if copy {
             let path = dir.join("justrust");
             std::fs::copy(env!("CARGO_BIN_EXE_justrust"), &path).unwrap();
@@ -126,7 +134,15 @@ impl Agent {
         .unwrap();
         let mut w = BufWriter::new(child.stdin.take().unwrap());
         let mut r = BufReader::new(child.stdout.take().unwrap());
-        write_frame(&mut w, &Msg::Hello { version: VERSION }, &[]).unwrap();
+        write_frame(
+            &mut w,
+            &Msg::Hello {
+                version: VERSION,
+                caps: vec![],
+            },
+            &[],
+        )
+        .unwrap();
         let (tx, rx) = channel();
         std::thread::spawn(move || read_all(&mut r, tx));
         let a = Agent {
@@ -135,7 +151,13 @@ impl Agent {
             rx,
             dir,
         };
-        assert_eq!(a.recv().0, Msg::Hello { version: VERSION });
+        assert_eq!(
+            a.recv().0,
+            Msg::Hello {
+                version: VERSION,
+                caps: vec!["checkpoint".into()],
+            }
+        );
         a
     }
 
@@ -717,7 +739,8 @@ fn disk_full_other_root_requires_exact_repair_before_unchanged_run() {
         Msg::BarrierAck {
             id: 2,
             failed: vec!["/idle/lib.rs".into()],
-            disk_full: true
+            disk_full: true,
+            lost: vec![],
         }
     );
     assert_eq!(read(&a.at("/idle/lib.rs")), "old idle source");
@@ -748,7 +771,8 @@ fn disk_full_other_root_requires_exact_repair_before_unchanged_run() {
             Msg::BarrierAck {
                 id,
                 failed: vec!["/idle/lib.rs".into()],
-                disk_full: true
+                disk_full: true,
+                lost: vec![],
             }
         );
         assert!(matches!(a.recv().0, Msg::Error { id: got, .. } if got == id));
@@ -770,7 +794,8 @@ fn disk_full_other_root_requires_exact_repair_before_unchanged_run() {
         Msg::BarrierAck {
             id: 5,
             failed: vec![],
-            disk_full: false
+            disk_full: false,
+            lost: vec![],
         }
     );
     loop {
@@ -836,6 +861,7 @@ edition="2024"
                 id,
                 failed: vec!["/block/nested.rs".into()],
                 disk_full: false,
+                lost: vec![],
             }
         );
         assert!(matches!(a.recv().0, Msg::Error { id: got, .. } if got == id));
@@ -880,7 +906,8 @@ edition="2024"
             Msg::BarrierAck {
                 id,
                 failed: vec![],
-                disk_full: false
+                disk_full: false,
+                lost: vec![],
             }
         );
         let mut output = String::new();
@@ -1253,7 +1280,8 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
             Msg::BarrierAck {
                 id,
                 failed: vec![],
-                disk_full: false
+                disk_full: false,
+                lost: vec![],
             }
         );
         loop {
@@ -1348,7 +1376,15 @@ fn refuses_unknown_protocol_versions() {
         .spawn()
         .unwrap();
     let mut w = child.stdin.take().unwrap();
-    write_frame(&mut w, &Msg::Hello { version: 99 }, &[]).unwrap();
+    write_frame(
+        &mut w,
+        &Msg::Hello {
+            version: 99,
+            caps: vec![],
+        },
+        &[],
+    )
+    .unwrap();
     let mut r = BufReader::new(child.stdout.take().unwrap());
     match read_frame(&mut r).unwrap() {
         Some((Msg::Error { msg, .. }, _)) => assert!(msg.contains("protocol"), "{msg}"),
@@ -1374,13 +1410,24 @@ fn serves_v1_daemons() {
         .spawn()
         .unwrap();
     let mut w = child.stdin.take().unwrap();
-    write_frame(&mut w, &Msg::Hello { version: 1 }, &[]).unwrap();
+    write_frame(
+        &mut w,
+        &Msg::Hello {
+            version: 1,
+            caps: vec![],
+        },
+        &[],
+    )
+    .unwrap();
     write_frame(&mut w, &Msg::Barrier { id: 1 }, &[]).unwrap();
     drop(w);
     let mut r = BufReader::new(child.stdout.take().unwrap());
     assert_eq!(
         read_frame(&mut r).unwrap().unwrap().0,
-        Msg::Hello { version: 1 }
+        Msg::Hello {
+            version: 1,
+            caps: vec!["checkpoint".into()],
+        }
     );
     assert!(matches!(
         read_frame(&mut r).unwrap().unwrap().0,
@@ -1745,4 +1792,153 @@ fn peer_cache_relays_shim_requests_to_the_daemon() {
         (Msg::CacheLines { id: 11, lines, .. }, _) => assert!(lines.is_empty()),
         other => panic!("unexpected {other:?}"),
     }
+}
+
+/// `remote_checkpoint::encode`: `size NUL path NUL` per file, gzipped.
+fn sizes(files: &[(&str, u64)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    for (path, size) in files {
+        write!(gz, "{size}\0{path}\0").unwrap();
+    }
+    gz.finish().unwrap()
+}
+
+fn verify(a: &mut Agent, id: u64, token: &str, next: &str, files: &[(&str, u64)]) -> bool {
+    a.send(
+        Msg::Verify {
+            id,
+            path: "/w".into(),
+            token: token.into(),
+            next: next.into(),
+        },
+        &sizes(files),
+    );
+    match a.recv().0 {
+        Msg::Verified { id: got, ok, .. } if got == id => ok,
+        other => panic!("expected Verified, got {other:?}"),
+    }
+}
+
+fn write(a: &mut Agent, path: &str, data: &[u8]) {
+    a.send(
+        Msg::Write {
+            path: path.into(),
+            mode: 0o644,
+        },
+        data,
+    );
+}
+
+fn lost(a: &mut Agent, id: u64) -> Vec<String> {
+    a.send(Msg::Barrier { id }, &[]);
+    match a.recv().0 {
+        Msg::BarrierAck { id: got, lost, .. } if got == id => lost,
+        other => panic!("expected BarrierAck, got {other:?}"),
+    }
+}
+
+/// A reconnecting daemon keeps its mirror only on the agent's confirmation,
+/// and the previous connection can no longer change it unnoticed.
+#[test]
+fn checkpoint_survives_a_reconnect_only_while_nothing_else_wrote() {
+    let mut old = Agent::start("checkpoint");
+    write(&mut old, "/w/src/lib.rs", b"one");
+    write(&mut old, "/w/Cargo.toml", b"[package]");
+    old.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "t1".into(),
+        },
+        &[],
+    );
+    // The holder's own later writes keep the checkpoint.
+    write(&mut old, "/w/src/lib.rs", b"three");
+    assert!(lost(&mut old, 1).is_empty());
+    let files = [("src/lib.rs", 5), ("Cargo.toml", 9)];
+
+    // The connection is lost. The next one proves the tree with the token
+    // and sizes, and takes the checkpoint over under a new token.
+    let mut new = Agent::beside(&old);
+    assert!(!verify(&mut new, 2, "wrong", "t2", &files));
+    // A failed verify is not left behind as evidence for a later one.
+    assert!(!verify(&mut new, 3, "t1", "t2", &files));
+
+    old.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "t1".into(),
+        },
+        &[],
+    );
+    assert!(lost(&mut old, 4).is_empty());
+    assert!(!verify(&mut new, 5, "t1", "t2", &[("src/lib.rs", 3)]));
+    old.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "t1".into(),
+        },
+        &[],
+    );
+    assert!(lost(&mut old, 6).is_empty());
+    assert!(verify(&mut new, 7, "t1", "t2", &files));
+    // The old token is spent: only the replacement verifies.
+    assert!(verify(&mut new, 9, "t2", "t3", &files));
+    write(&mut new, "/w/src/lib.rs", b"four");
+    assert!(lost(&mut new, 10).is_empty());
+
+    // A frame the old connection applies late changes the tree behind the
+    // new connection: it must learn that before anything builds.
+    write(&mut old, "/w/src/lib.rs", b"stale");
+    assert_eq!(lost(&mut old, 11), ["/w"]);
+    assert_eq!(read(&new.at("/w/src/lib.rs")), "stale");
+    assert_eq!(lost(&mut new, 12), ["/w"]);
+    assert!(lost(&mut new, 13).is_empty(), "reported once");
+    let mut third = Agent::beside(&new);
+    assert!(!verify(&mut third, 14, "t3", "t4", &[]));
+
+    // A guarded run refuses to start on a displaced mirror.
+    new.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "t5".into(),
+        },
+        &[],
+    );
+    assert!(lost(&mut new, 15).is_empty());
+    write(&mut old, "/w/src/lib.rs", b"again");
+    assert!(lost(&mut old, 16).is_empty());
+    new.send(
+        Msg::RunSync {
+            id: 17,
+            cwd: "/w".into(),
+            args: vec!["check".into()],
+            env: vec![],
+            roots: vec![],
+            start: false,
+            run_id: format!("checkpoint-{}", std::process::id()),
+        },
+        &[],
+    );
+    assert!(matches!(
+        new.recv().0,
+        Msg::BarrierAck { id: 17, ref lost, .. } if lost == &["/w".to_string()]
+    ));
+    assert!(matches!(new.recv().0, Msg::Error { id: 17, .. }));
+
+    // A checkpoint is refused while a write under the root is failed.
+    std::fs::create_dir_all(new.at("/w/src/blocked.rs")).unwrap();
+    write(&mut new, "/w/src/blocked.rs", b"x");
+    new.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "t6".into(),
+        },
+        &[],
+    );
+    assert_eq!(new.barrier(18), ["/w/src/blocked.rs"]);
+    assert!(!verify(&mut third, 19, "t6", "t7", &[]));
+    // `old` removes the shared scratch directory last.
+    drop(third);
+    drop(new);
 }

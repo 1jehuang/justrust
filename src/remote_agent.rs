@@ -257,8 +257,10 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
     // `Synced` and ignore the new fields): serve them in their version so a
     // machine shared by two justrust builds keeps working for both.
     let version = match read_frame(&mut input)? {
-        Some((Msg::Hello { version }, _)) if (MIN_VERSION..=VERSION).contains(&version) => version,
-        Some((Msg::Hello { version }, _)) => {
+        Some((Msg::Hello { version, .. }, _)) if (MIN_VERSION..=VERSION).contains(&version) => {
+            version
+        }
+        Some((Msg::Hello { version, .. }, _)) => {
             send(
                 &out,
                 &Msg::Error {
@@ -272,7 +274,14 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         _ => bail!("expected Hello"),
     };
     let executable = executable_snapshot()?;
-    send(&out, &Msg::Hello { version }, &[]);
+    send(
+        &out,
+        &Msg::Hello {
+            version,
+            caps: vec![crate::remote_checkpoint::CAP.into()],
+        },
+        &[],
+    );
     // Peer dependency cache: this machine's cache serves the daemon's
     // requests, and this machine's rustc shims reach the daemon's machine
     // through `peer.sock`.
@@ -320,6 +329,9 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
     // The subset of `failed` whose cause was a full disk (ENOSPC), so the
     // client can say "hosted disk full" instead of a generic sync failure.
     let mut disk_full: BTreeSet<String> = BTreeSet::new();
+    // Source checkpoints this connection wrote or verified
+    // (`remote_checkpoint`): only its own frames may change those roots.
+    let mut held: HashMap<PathBuf, crate::remote_checkpoint::Held> = HashMap::new();
     let res = loop {
         let (msg, payload) = match read_frame(&mut input) {
             Ok(Some(f)) => f,
@@ -332,7 +344,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         let sync_run = matches!(&msg, Msg::RunSync { .. });
         // Saved mirror state of the root no longer describes the tree.
         if let Msg::Write { path, .. } | Msg::Delete { path } = &msg {
-            crate::remote_resume::invalidate_above(&at(path));
+            crate::remote_checkpoint::invalidate_above(&at(path), &held);
         }
         match msg {
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
@@ -378,6 +390,57 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 let under = format!("{}/", path.trim_end_matches('/'));
                 failed.retain(|p| !p.starts_with(&under));
                 disk_full.retain(|p| !p.starts_with(&under));
+                // Mirrored out of band: no checkpoint describes it now.
+                held.remove(&at(&path));
+                crate::remote_checkpoint::forget(&at(&path));
+            }
+            Msg::Checkpoint { path, token } => {
+                let dir = at(&path);
+                let under = format!("{}/", path.trim_end_matches('/'));
+                held.remove(&dir);
+                if failed.iter().any(|p| p.starts_with(&under)) {
+                    crate::remote_checkpoint::forget(&dir);
+                } else if let Err(e) = crate::remote_checkpoint::write(&dir, &token) {
+                    eprintln!("justrust agent: checkpoint {path}: {e}");
+                    crate::remote_checkpoint::forget(&dir);
+                } else {
+                    held.insert(dir, crate::remote_checkpoint::Held { token, name: path });
+                }
+            }
+            Msg::Verify {
+                id,
+                path,
+                token,
+                next,
+            } => {
+                let dir = at(&path);
+                let result =
+                    crate::remote_checkpoint::check(&dir, &token, &payload).and_then(|()| {
+                        crate::remote_checkpoint::write(&dir, &next).map_err(|e| e.to_string())
+                    });
+                held.remove(&dir);
+                match &result {
+                    Ok(()) => {
+                        held.insert(
+                            dir,
+                            crate::remote_checkpoint::Held {
+                                token: next,
+                                name: path,
+                            },
+                        );
+                    }
+                    // Whatever it was, it is not evidence for anyone now.
+                    Err(_) => crate::remote_checkpoint::forget(&dir),
+                }
+                send(
+                    &out,
+                    &Msg::Verified {
+                        id,
+                        ok: result.is_ok(),
+                        why: result.err().unwrap_or_default(),
+                    },
+                    &[],
+                );
             }
             Msg::Barrier { id } => send(
                 &out,
@@ -385,6 +448,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                     id,
                     failed: failed.iter().cloned().collect(),
                     disk_full: !disk_full.is_empty(),
+                    lost: crate::remote_checkpoint::take_lost(&mut held),
                 },
                 &[],
             ),
@@ -406,15 +470,30 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             } => {
                 let received = std::time::Instant::now();
                 if sync_run {
+                    let lost = crate::remote_checkpoint::take_lost(&mut held);
+                    let displaced = !lost.is_empty();
                     send(
                         &out,
                         &Msg::BarrierAck {
                             id,
                             failed: failed.iter().cloned().collect(),
                             disk_full: !disk_full.is_empty(),
+                            lost,
                         },
                         &[],
                     );
+                    if displaced && failed.is_empty() {
+                        send(
+                            &out,
+                            &Msg::Error {
+                                id,
+                                msg: "another connection changed the source mirror, build not started"
+                                    .into(),
+                            },
+                            &[],
+                        );
+                        continue;
+                    }
                     if !failed.is_empty() {
                         send(
                             &out,
