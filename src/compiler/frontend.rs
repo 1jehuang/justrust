@@ -10221,12 +10221,13 @@ enum ItemKind {
     Variant(ir::VariantShape),
     Import(AstPath, bool), // target path, type-namespace-only (`prefix::{self}`)
     AllocCrate(AstPath),   // original explicit extern crate alloc target
+    StdCrate(AstPath),     // explicit extern crate std in a no_std crate
 }
 impl ItemKind {
     fn import_target(&self) -> Option<(&AstPath, bool)> {
         match self {
             Self::Import(target, type_only) => Some((target, *type_only)),
-            Self::AllocCrate(target) => Some((target, true)),
+            Self::AllocCrate(target) | Self::StdCrate(target) => Some((target, true)),
             _ => None,
         }
     }

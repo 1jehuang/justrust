@@ -2002,10 +2002,27 @@ impl Resolver<'_> {
             return Err("checked import binding has wrong kind".into());
         };
         let alloc = matches!(item.kind, ItemKind::AllocCrate(_));
+        let std_crate = matches!(item.kind, ItemKind::StdCrate(_));
         let target = target.clone();
         let requester = item.module;
         let resolved = if type_only && !namespace {
             None
+        } else if std_crate {
+            let prelude = self
+                .program
+                .prelude_module
+                .ok_or("unsupported: native std library surface is unavailable")?;
+            let canonical = self.module_path(prelude)?;
+            let resolved = self
+                .item(&canonical, requester, true, false)?
+                .ok_or("native std library source module is missing")?;
+            if resolved.kind != ResolvedKind::Module {
+                return Err("native std library identity is not a module".into());
+            }
+            Some(ResolvedItem {
+                path: ResolvedPath::StdRoot(Some(canonical)),
+                ..resolved
+            })
         } else if alloc {
             target
                 .check(self.names())

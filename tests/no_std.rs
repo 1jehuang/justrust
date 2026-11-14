@@ -297,7 +297,11 @@ fn no_std_attribute_boundaries_are_explicit() {
         ("malformed", "#![no_std(x)]"),
         ("misplaced", "mod nested { #![no_std] }"),
         ("outer", "#[no_std] pub fn unused() {}"),
-        ("opt-in", "#![no_std]\nextern crate std;"),
+        // A renamed opt-in must not also introduce the name `std`.
+        (
+            "renamed-opt-in",
+            "#![no_std]\nextern crate std as s;\npub fn unused() { let v: std::vec::Vec<i32> = s::vec::Vec::new(); }",
+        ),
     ] {
         let root = project(
             name,
@@ -311,6 +315,74 @@ fn no_std_attribute_boundaries_are_explicit() {
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(!out.stderr.is_empty());
+    }
+}
+#[test]
+fn explicit_std_opt_in_preserves_no_std_prelude_and_module_scope() {
+    for (name, body) in [
+        (
+            "std-opt-in-no-prelude",
+            "extern crate std; pub fn unused() { let v = Vec::<i32>::new(); }",
+        ),
+        (
+            "std-opt-in-local-module",
+            "mod inner { extern crate std; } pub fn unused() { let v = std::vec::Vec::<i32>::new(); }",
+        ),
+    ] {
+        let root = project(
+            name,
+            &format!("#![no_std]\n{body}\npub fn value() -> i32 {{ 3 }}\n"),
+        );
+        let stock = Command::new("cargo")
+            .args(["check", "--offline", "--quiet"])
+            .current_dir(&root)
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .output()
+            .unwrap();
+        assert!(
+            !stock.status.success(),
+            "{name}: stock accepted invalid program"
+        );
+        for workers in ["1", "8"] {
+            let out = native(&root, "check", workers);
+            assert_eq!(
+                out.status.code(),
+                Some(101),
+                "{name}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+#[test]
+fn extern_crate_std_opt_in_names_std_in_no_std_crate() {
+    // lazy_static's pattern: a no_std crate opting back into std.
+    let library = "#![no_std]\nextern crate std;\nmod inner { use std::string::String; pub fn len() -> usize { String::from(\"abcd\").len() } }\nuse self::std::vec::Vec;\npub fn value() -> i32 { let mut v: Vec<i32> = Vec::new(); v.push(3); v[0] + inner::len() as i32 + std::cmp::max(1, 2) }\n";
+    let root = project("std-opt-in", library);
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    assert_eq!(stock.stdout, b"9\n");
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let out = native(&root, command, workers);
+            assert!(
+                out.status.success(),
+                "{command}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if command == "run" {
+                assert_eq!(out.stdout, stock.stdout);
+            }
+        }
     }
 }
 #[test]

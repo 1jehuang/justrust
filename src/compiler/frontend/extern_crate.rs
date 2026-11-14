@@ -32,17 +32,16 @@ impl Parser<'_, '_> {
             crate_name
         };
         self.expect(";")?;
+        // `extern crate std;` in a `#![no_std]` crate opts that crate's
+        // extern prelude back into the std library root.
+        let mut std_opt_in = false;
         if crate_token.text == "std" && !self.no_std_roots.is_empty() {
             let root = super::super::source_macro_binding::invocation_root(
                 self.names.session(),
                 crate_token.span,
             )
             .map_err(native_adapter::transport_error)?;
-            if self.no_std_roots.contains(&root) {
-                return Err(self.unsupported(
-                    "explicit extern crate std opt-in in a no_std crate is unsupported",
-                ));
-            }
+            std_opt_in = self.no_std_roots.contains(&root);
         }
         let target = AstPath::new(self.names, PathAnchor::Relative, &[crate_name])
             .map_err(native_adapter::name_error)?;
@@ -55,6 +54,7 @@ impl Parser<'_, '_> {
         // already provides that name, so recording a self-import would only
         // create a resolver cycle.
         if !alloc
+            && !std_opt_in
             && self.name_key(local, LookupClass::Item(Namespace::Type))?
                 == self.name_key(crate_name, LookupClass::Item(Namespace::Type))?
         {
@@ -78,6 +78,8 @@ impl Parser<'_, '_> {
             visibility,
             if alloc {
                 ItemKind::AllocCrate(target)
+            } else if std_opt_in {
+                ItemKind::StdCrate(target)
             } else {
                 ItemKind::Import(target, true)
             },
