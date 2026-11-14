@@ -1,0 +1,353 @@
+# Snapshot-only TUI fixture contracts for pinned abff94eeb.
+# Home isolation follows production fixture-only commit e639ccff1 and truecolor
+# follows aeb8170fe. ContinuePrompt is post-login, and direct API auth assertions
+# require actual fixture credentials even under credential-free isolated-v2.
+# All assertions, test names, and runtime production sources remain unchanged.
+diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
+index fd72498..ebf82c2 100644
+--- a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
++++ b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
+@@ -646,6 +646,11 @@ fn import_review_decline_all_falls_back_to_manual_login() {
+ #[test]
+ fn answering_no_on_continue_prompt_lands_on_regular_session() {
+     with_temp_jcode_home(|| {
++        // ContinuePrompt follows login. A credential-free home instead shows
++        // the deliberate unauthenticated /login hint on the regular screen.
++        let _auth_env = EnvRestoreGuard::capture(["OPENAI_API_KEY"]);
++        crate::env::set_var("OPENAI_API_KEY", "sk-onboarding-fixture");
++        crate::auth::AuthStatus::invalidate_cache();
+         let mut app = onboarding_test_app();
+         if let Some(flow) = app.onboarding_flow.as_mut() {
+             flow.phase = OnboardingPhase::ContinuePrompt {
+diff --git a/crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs b/crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs
+index aff8675..971100f 100644
+--- a/crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs
++++ b/crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs
+@@ -1530,6 +1530,8 @@ fn test_info_widget_local_direct_api_runtime_shows_cost_based_usage() {
+         }
+     }
+     let tracked_env = [
++        "OPENAI_API_KEY",
++        "ANTHROPIC_API_KEY",
+         "JCODE_RUNTIME_PROVIDER",
+         "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+         "JCODE_OPENROUTER_API_BASE",
+@@ -1549,6 +1551,11 @@ fn test_info_widget_local_direct_api_runtime_shows_cost_based_usage() {
+     for key in tracked_env {
+         crate::env::remove_var(key);
+     }
++    // Runtime selection chooses between credentials, it does not create them.
++    // These direct-API cases must carry the credentials their auth assertions
++    // describe even in the benchmark's intentionally empty account home.
++    crate::env::set_var("OPENAI_API_KEY", "sk-openai-widget-fixture");
++    crate::env::set_var("ANTHROPIC_API_KEY", "sk-anthropic-widget-fixture");
+ 
+     let cases = [
+         (
+diff --git a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
+index 2dff4c4..3170b60 100644
+--- a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
++++ b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
+@@ -482,80 +482,84 @@ fn test_multiple_pastes() {
+ 
+ #[test]
+ fn test_restore_session_adds_reload_message() {
+-    use crate::session::Session;
++    with_temp_jcode_home(|| {
++        use crate::session::Session;
+ 
+-    let mut app = create_test_app();
++        let mut app = create_test_app();
+ 
+-    // Create and save a session with a fake provider_session_id
+-    let mut session = Session::create(None, None);
+-    session.add_message(
+-        Role::User,
+-        vec![ContentBlock::Text {
+-            text: "test message".to_string(),
+-            cache_control: None,
+-        }],
+-    );
+-    session.provider_session_id = Some("fake-uuid".to_string());
+-    let session_id = session.id.clone();
+-    session.save().unwrap();
+-
+-    // Restore the session
+-    app.restore_session(&session_id);
+-
+-    // Should have the original message + reload success message in display
+-    assert_eq!(app.display_messages().len(), 2);
+-    assert_eq!(app.display_messages()[0].role, "user");
+-    assert_eq!(app.display_messages()[0].content, "test message");
+-    assert_eq!(app.display_messages()[1].role, "system");
+-    assert!(
+-        app.display_messages()[1]
+-            .content
+-            .contains("Reload complete - continuing.")
+-    );
++        // Create and save a session with a fake provider_session_id
++        let mut session = Session::create(None, None);
++        session.add_message(
++            Role::User,
++            vec![ContentBlock::Text {
++                text: "test message".to_string(),
++                cache_control: None,
++            }],
++        );
++        session.provider_session_id = Some("fake-uuid".to_string());
++        let session_id = session.id.clone();
++        session.save().unwrap();
++
++        // Restore the session
++        app.restore_session(&session_id);
++
++        // Should have the original message + reload success message in display
++        assert_eq!(app.display_messages().len(), 2);
++        assert_eq!(app.display_messages()[0].role, "user");
++        assert_eq!(app.display_messages()[0].content, "test message");
++        assert_eq!(app.display_messages()[1].role, "system");
++        assert!(
++            app.display_messages()[1]
++                .content
++                .contains("Reload complete - continuing.")
++        );
+ 
+-    // Local restore keeps provider messages lazy until the next active turn.
+-    assert_eq!(app.messages.len(), 0);
+-    assert_eq!(
+-        app.session.debug_memory_profile()["provider_messages_cache"]["count"],
+-        0
+-    );
++        // Local restore keeps provider messages lazy until the next active turn.
++        assert_eq!(app.messages.len(), 0);
++        assert_eq!(
++            app.session.debug_memory_profile()["provider_messages_cache"]["count"],
++            0
++        );
+ 
+-    // Provider session ID should be cleared (Claude sessions don't persist across restarts)
+-    assert!(app.provider_session_id.is_none());
++        // Provider session ID should be cleared (Claude sessions don't persist across restarts)
++        assert!(app.provider_session_id.is_none());
+ 
+-    // Clean up
+-    let _ = std::fs::remove_file(crate::session::session_path(&session_id).unwrap());
++        // Clean up
++        let _ = std::fs::remove_file(crate::session::session_path(&session_id).unwrap());
++    });
+ }
+ 
+ #[test]
+ fn test_restore_session_with_selfdev_reload_tool_result_queues_continuation() {
+-    use crate::session::Session;
++    with_temp_jcode_home(|| {
++        use crate::session::Session;
+ 
+-    let mut app = create_test_app();
++        let mut app = create_test_app();
+ 
+-    let mut session = Session::create(None, None);
+-    session.add_message(
+-        Role::User,
+-        vec![ContentBlock::ToolResult {
+-            tool_use_id: "tool_selfdev_reload".to_string(),
+-            content: "Reload initiated. Process restarting...".to_string(),
+-            is_error: Some(false),
+-        }],
+-    );
+-    let session_id = session.id.clone();
+-    session.save().unwrap();
++        let mut session = Session::create(None, None);
++        session.add_message(
++            Role::User,
++            vec![ContentBlock::ToolResult {
++                tool_use_id: "tool_selfdev_reload".to_string(),
++                content: "Reload initiated. Process restarting...".to_string(),
++                is_error: Some(false),
++            }],
++        );
++        let session_id = session.id.clone();
++        session.save().unwrap();
+ 
+-    app.restore_session(&session_id);
++        app.restore_session(&session_id);
+ 
+-    assert!(
+-        app.hidden_queued_system_messages
+-            .iter()
+-            .any(|message| message.contains("Continue exactly where you left off"))
+-    );
+-    assert!(app.pending_turn);
+-    assert!(matches!(app.status, ProcessingStatus::Sending));
++        assert!(
++            app.hidden_queued_system_messages
++                .iter()
++                .any(|message| message.contains("Continue exactly where you left off"))
++        );
++        assert!(app.pending_turn);
++        assert!(matches!(app.status, ProcessingStatus::Sending));
+ 
+-    let _ = std::fs::remove_file(crate::session::session_path(&session_id).unwrap());
++        let _ = std::fs::remove_file(crate::session::session_path(&session_id).unwrap());
++    });
+ }
+ 
+ #[test]
+@@ -1209,22 +1213,24 @@ fn test_save_and_restore_reload_state_preserves_split_view_mode() {
+ 
+ #[test]
+ fn test_new_for_remote_restores_observe_mode_from_reload_state() {
+-    let mut app = create_test_app();
+-    let session_id = format!("test-remote-observe-{}", std::process::id());
++    with_temp_jcode_home(|| {
++        let mut app = create_test_app();
++        let session_id = format!("test-remote-observe-{}", std::process::id());
+ 
+-    app.set_observe_mode_enabled(true, true);
+-    app.observe_page_markdown = "# Observe\n\nRestored after reload.".to_string();
+-    app.observe_page_updated_at_ms = 99;
+-    app.save_input_for_reload(&session_id);
++        app.set_observe_mode_enabled(true, true);
++        app.observe_page_markdown = "# Observe\n\nRestored after reload.".to_string();
++        app.observe_page_updated_at_ms = 99;
++        app.save_input_for_reload(&session_id);
+ 
+-    let restored = App::new_for_remote(Some(session_id));
+-    assert!(restored.observe_mode_enabled());
+-    let page = restored
+-        .side_panel()
+-        .focused_page()
+-        .expect("observe page should be focused");
+-    assert_eq!(page.id, "observe");
+-    assert!(page.content.contains("Restored after reload."));
++        let restored = App::new_for_remote(Some(session_id));
++        assert!(restored.observe_mode_enabled());
++        let page = restored
++            .side_panel()
++            .focused_page()
++            .expect("observe page should be focused");
++        assert_eq!(page.id, "observe");
++        assert!(page.content.contains("Restored after reload."));
++    });
+ }
+ 
+ #[test]
+diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+index 0c14ce0..fc6204e 100644
+--- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
++++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+@@ -1789,24 +1789,26 @@ fn test_azure_login_completion_switches_local_model_without_completion() {
+ 
+ #[test]
+ fn test_local_model_picker_surfaces_antigravity_models_from_multiprovider() {
+-    let mut app = create_antigravity_picker_test_app();
+-    app.open_model_picker();
+-    wait_for_model_picker_load(&mut app);
++    with_temp_jcode_home(|| {
++        let mut app = create_antigravity_picker_test_app();
++        app.open_model_picker();
++        wait_for_model_picker_load(&mut app);
+ 
+-    let picker = app
+-        .inline_interactive_state
+-        .as_ref()
+-        .expect("model picker should be open");
++        let picker = app
++            .inline_interactive_state
++            .as_ref()
++            .expect("model picker should be open");
+ 
+-    let antigravity_entry = picker
+-        .entries
+-        .iter()
+-        .find(|entry| entry.name == "claude-sonnet-4-6")
+-        .expect("antigravity model should be shown after login");
++        let antigravity_entry = picker
++            .entries
++            .iter()
++            .find(|entry| entry.name == "claude-sonnet-4-6")
++            .expect("antigravity model should be shown after login");
+ 
+-    assert!(antigravity_entry.options.iter().any(|route| {
+-        route.provider == "Antigravity" && route.api_method == "cli" && route.available
+-    }));
++        assert!(antigravity_entry.options.iter().any(|route| {
++            route.provider == "Antigravity" && route.api_method == "cli" && route.available
++        }));
++    });
+ }
+ 
+ #[test]
+@@ -1842,33 +1844,35 @@ fn test_local_antigravity_model_picker_selection_preserves_antigravity_provider(
+ 
+ #[test]
+ fn test_local_model_picker_openrouter_bare_openai_route_uses_openai_catalog_prefix() {
+-    let (mut app, set_model_calls) = create_openrouter_spec_capture_test_app();
+-    app.open_model_picker();
+-    wait_for_model_picker_load(&mut app);
++    with_temp_jcode_home(|| {
++        let (mut app, set_model_calls) = create_openrouter_spec_capture_test_app();
++        app.open_model_picker();
++        wait_for_model_picker_load(&mut app);
+ 
+-    let picker = app
+-        .inline_interactive_state
+-        .as_ref()
+-        .expect("model picker should be open");
+-    let model_idx = picker
+-        .entries
+-        .iter()
+-        .position(|entry| entry.name == "gpt-5.4 (high)")
+-        .expect("openrouter-backed OpenAI effort entry should be in picker");
+-    let filtered_pos = picker
+-        .filtered
+-        .iter()
+-        .position(|&i| i == model_idx)
+-        .expect("entry should be in filtered list");
++        let picker = app
++            .inline_interactive_state
++            .as_ref()
++            .expect("model picker should be open");
++        let model_idx = picker
++            .entries
++            .iter()
++            .position(|entry| entry.name == "gpt-5.4 (high)")
++            .expect("openrouter-backed OpenAI effort entry should be in picker");
++        let filtered_pos = picker
++            .filtered
++            .iter()
++            .position(|&i| i == model_idx)
++            .expect("entry should be in filtered list");
+ 
+-    app.inline_interactive_state.as_mut().unwrap().selected = filtered_pos;
+-    app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+-        .expect("model picker selection should succeed");
++        app.inline_interactive_state.as_mut().unwrap().selected = filtered_pos;
++        app.handle_key(KeyCode::Enter, KeyModifiers::empty())
++            .expect("model picker selection should succeed");
+ 
+-    assert_eq!(
+-        set_model_calls.lock().unwrap().as_slice(),
+-        ["openai/gpt-5.4@OpenAI"]
+-    );
++        assert_eq!(
++            set_model_calls.lock().unwrap().as_slice(),
++            ["openai/gpt-5.4@OpenAI"]
++        );
++    });
+ }
+ 
+ #[test]
+diff --git a/crates/jcode-tui/src/tui/ui_tests/basic/interaction_links.rs b/crates/jcode-tui/src/tui/ui_tests/basic/interaction_links.rs
+index 978259f..9d686e5 100644
+--- a/crates/jcode-tui/src/tui/ui_tests/basic/interaction_links.rs
++++ b/crates/jcode-tui/src/tui/ui_tests/basic/interaction_links.rs
+@@ -75,6 +75,8 @@ fn test_prompt_entry_bg_color_pulses_then_fades() {
+ 
+ #[test]
+ fn test_prompt_entry_shimmer_color_moves_across_positions() {
++    // Compare blends in truecolor rather than a host-dependent quantized palette.
++    jcode_tui_style::color::pin_truecolor_for_tests();
+     let base = user_text();
+     let left_early = prompt_entry_shimmer_color(base, 0.1, 0.1);
+     let right_early = prompt_entry_shimmer_color(base, 0.9, 0.1);

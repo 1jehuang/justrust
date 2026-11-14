@@ -167,6 +167,7 @@ SNAPSHOTS = {
             ("jcode-desktop", "bench/patches/desktop-github-applet-readiness.patch"),
             ("jcode", "bench/patches/jcode-description-consent.patch"),
             ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
+            ("jcode", "bench/patches/jcode-tui-fixture-state.patch"),
         ],
     },
     "justrust": {
