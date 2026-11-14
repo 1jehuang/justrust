@@ -259,6 +259,11 @@ pub(in crate::compiler) fn layout(
                 }
                 result.align = result.align.max(field.align);
             }
+            if let ir::Ty::Struct(s) = ty
+                && let Some(alignment) = s.def().repr_align
+            {
+                result.align = result.align.max(alignment as usize);
+            }
             result.size = align_up(result.size, result.align)?;
             Ok(Some(result))
         }

@@ -58,6 +58,9 @@ pub(super) const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 // Reserved in every dynamically aligned frame. This is the stack address after
 // saving the caller's rbp, not the aligned local-storage base.
 const INCOMING_FRAME: i32 = -8;
+/// Largest `repr(align(N))` with native storage: frames realign to it and
+/// every heap allocation is an mmap page (4096-byte aligned).
+pub(super) const MAX_REPR_ALIGN: i32 = 4096;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
@@ -580,6 +583,16 @@ fn private_alignment(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Resu
         }
         _ => {
             let mut alignment = 8;
+            if let ir::Ty::Struct(structure) = ty
+                && let Some(explicit) = structure.def().repr_align
+            {
+                alignment = alignment.max(
+                    i32::try_from(explicit)
+                        .ok()
+                        .filter(|value| *value <= MAX_REPR_ALIGN)
+                        .ok_or("unsupported: repr(align) above 4096 is not implemented")?,
+                );
+            }
             if let Some(count) = ty.field_count() {
                 for index in 0..count {
                     let field = ty
@@ -1274,12 +1287,21 @@ impl<'a> Emitter<'a> {
     /// Establish an aligned local base below a disjoint mirrored frame header.
     /// The incoming header remains untouched for exact argument access/return,
     /// while ordinary rbp-chain walkers see the same saved rbp and return PC.
-    fn enter_frame(&mut self, frame_bytes: i32) {
+    /// `alignment` is a power of two in 16..=MAX_REPR_ALIGN: the local base
+    /// A and every rbp-relative slot rounded to it share that alignment.
+    fn enter_aligned_frame(&mut self, frame_bytes: i32, alignment: i32) {
         self.bytes(&[
             0x55, // push rbp
             0x48, 0x89, 0xe0, // rax = original incoming frame P
             0x48, 0x83, 0xec, 16, // room for the complete mirrored header
-            0x48, 0x83, 0xe4, 0xf0, // rsp = A = (P - 16) & -16
+        ]);
+        if alignment <= 16 {
+            self.bytes(&[0x48, 0x83, 0xe4, 0xf0]); // rsp = A = (P - 16) & -16
+        } else {
+            self.bytes(&[0x48, 0x81, 0xe4]); // rsp = A = (P - 16) & -alignment
+            self.i32(-alignment);
+        }
+        self.bytes(&[
             0x48, 0x89, 0xe5, // rbp = aligned local base A
             0x48, 0x81, 0xec, // sub rsp, frame_bytes
         ]);
@@ -4776,6 +4798,12 @@ fn emit_native_cfg(
         .iter()
         .map(|local| allocate_value(&mut frame_bytes, &local.ty, budget))
         .collect::<Result<Vec<_>, _>>()?;
+    // Over-aligned (`repr(align)`) locals need a base aligned to them; the
+    // shared aggregate scratch may hold any of those values too.
+    let mut frame_alignment = 16;
+    for local in &function.locals {
+        frame_alignment = frame_alignment.max(frame_value_alignment(&local.ty, budget)?);
+    }
     let mut drop_flags = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
         let needs_drop = concrete.facts().has_normal_drop_impls()
@@ -4836,6 +4864,7 @@ fn emit_native_cfg(
             if let cfg::Statement::Assign { value, .. } = &statement.value {
                 let size = match value {
                     cfg::Rvalue::Aggregate { ty, .. } | cfg::Rvalue::Repeat { ty, .. } => {
+                        frame_alignment = frame_alignment.max(frame_value_alignment(ty, budget)?);
                         value_size(ty, budget)?
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => {
@@ -4868,7 +4897,7 @@ fn emit_native_cfg(
         frame_bytes
             .checked_add(scratch_size)
             .ok_or("function exceeds private frame limit")?,
-        16,
+        frame_alignment,
     )?;
     let aggregate_scratch = -frame_bytes;
     if needs_wide {
@@ -4922,7 +4951,7 @@ fn emit_native_cfg(
         traps: Vec::new(),
         edges: Vec::new(),
     };
-    emitter.enter_frame(frame_bytes);
+    emitter.enter_aligned_frame(frame_bytes, frame_alignment);
     for local in 0..function.locals.len() {
         emitter.set_drop_flag(LocalId(local), false);
     }
@@ -5176,39 +5205,48 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
         }
     }
-    // Immutable static items: one sixteen-byte aligned allocation per
-    // canonical declaration key, so every `&S` has one address.
-    let mut static_addresses: HashMap<&[u8], (u64, &[u8])> = HashMap::new();
+    // Immutable static items: one allocation per canonical declaration key,
+    // aligned to its storage (at least sixteen bytes), so every `&S` has one
+    // address.
+    let mut static_addresses: HashMap<&[u8], (u64, &[u8], usize)> = HashMap::new();
     for (name, object) in functions {
         let start = symbols[name.as_str()];
         for (at, blob) in &object.statics {
             if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
                 return Err("invalid static item relocation".into());
             }
-            let address = if let Some((address, bytes)) = static_addresses.get(blob.key.as_slice())
-            {
-                if *bytes != blob.bytes.as_slice() {
-                    return Err("static item storage differs between objects".into());
-                }
-                *address
-            } else {
-                let aligned = data
-                    .len()
-                    .checked_add(15)
-                    .map(|n| n & !15)
-                    .ok_or("ELF immutable data alignment overflow")?;
-                aligned
-                    .checked_add(blob.bytes.len())
-                    .ok_or("ELF immutable data size overflow")?;
-                data.resize(aligned, 0);
-                let address = BASE
-                    .checked_add(data_offset as u64)
-                    .and_then(|a| a.checked_add(data.len() as u64))
-                    .ok_or("ELF address overflow")?;
-                data.extend_from_slice(&blob.bytes);
-                static_addresses.insert(blob.key.as_slice(), (address, blob.bytes.as_slice()));
-                address
-            };
+            let address =
+                if let Some((address, bytes, align)) = static_addresses.get(blob.key.as_slice()) {
+                    if *bytes != blob.bytes.as_slice() || *align != blob.align {
+                        return Err("static item storage differs between objects".into());
+                    }
+                    *address
+                } else {
+                    if !blob.align.is_power_of_two() || blob.align > MAX_REPR_ALIGN as usize {
+                        return Err("invalid static item alignment".into());
+                    }
+                    // The data segment base is page aligned, so a data offset
+                    // aligned to `align` is an address aligned to it.
+                    let mask = blob.align.max(16) - 1;
+                    let aligned = (data_offset + data.len())
+                        .checked_add(mask)
+                        .map(|n| (n & !mask) - data_offset)
+                        .ok_or("ELF immutable data alignment overflow")?;
+                    aligned
+                        .checked_add(blob.bytes.len())
+                        .ok_or("ELF immutable data size overflow")?;
+                    data.resize(aligned, 0);
+                    let address = BASE
+                        .checked_add(data_offset as u64)
+                        .and_then(|a| a.checked_add(data.len() as u64))
+                        .ok_or("ELF address overflow")?;
+                    data.extend_from_slice(&blob.bytes);
+                    static_addresses.insert(
+                        blob.key.as_slice(),
+                        (address, blob.bytes.as_slice(), blob.align),
+                    );
+                    address
+                };
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
         }
     }
@@ -6467,7 +6505,7 @@ mod tests {
         }
         e.bytes(&[0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b]);
         let callee = e.position();
-        e.enter_frame(frame);
+        e.enter_aligned_frame(frame, 16);
         e.bytes(&[0x48, 0x89, 0xe8, 0x83, 0xe0, 15, 0x85, 0xc0]); // rbp % 16
         failures.push(e.jump(&[0x0f, 0x85]));
         e.bytes(&[0x48, 0x8b, 0x95]); // rdx = original incoming frame P

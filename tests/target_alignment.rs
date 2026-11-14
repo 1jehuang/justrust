@@ -107,23 +107,17 @@ fn representation_alignment_invalid_unused_declarations_are_semantic() {
 }
 
 #[test]
-fn representation_alignment_valid_syntax_stays_explicitly_unsupported() {
+fn representation_alignment_above_page_size_stays_explicitly_unsupported() {
+    // Native frames realign and heap mappings are page aligned, so up to
+    // 4096 is implemented. Larger valid alignments fail closed.
     for (tag, source) in [
-        (
-            "one",
-            "#[repr(align(1))] struct Record { value:u8 } fn main(){}",
-        ),
-        (
-            "normal",
-            "#[repr(align(8))] struct Record { value:u8 } fn main(){}",
-        ),
         (
             "maximum",
             "#[repr(align(536870912))] struct Record { value:u8 } fn main(){}",
         ),
         (
-            "trailing",
-            "#[repr(align(8,),)] struct Record { value:u8 } fn main(){}",
+            "above-page",
+            "#[repr(align(8192))] struct Record { value:u8 } fn main(){}",
         ),
     ] {
         let (root, output) = stock(source, tag);
@@ -137,19 +131,52 @@ fn representation_alignment_valid_syntax_stays_explicitly_unsupported() {
                 assert!(
                     failure
                         .to_string()
-                        .contains("unsupported: repr(align) layout"),
+                        .contains("unsupported: repr(align) above 4096"),
                     "{tag}: {failure}"
                 );
                 assert!(
                     !failure.to_string().contains("E0589"),
                     "valid alignment was mislabeled invalid"
                 );
-                let report = failure.report.unwrap();
-                assert!(report.published_kind(121) && report.published_kind(101));
-                assert!(!report.published_kind(105));
             }
         }
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn representation_alignment_layout_matches_stock() {
+    for (tag, source) in [
+        (
+            "unused",
+            "#[repr(align(1))] struct A { value:u8 } #[repr(align(8,),)] struct B { value:u8 } fn main(){}",
+        ),
+        (
+            "page_alignment",
+            r#"#[repr(align(4096))] struct Page(u8);
+static TABLE: Page = Page(7);
+fn local(n: u8) -> usize { let p = Page(n); let address = &p as *const Page as usize; if n == 0 { address % 4096 } else { address % 4096 + local(n - 1) } }
+fn main() { let p = Box::new(Page(3)); let r = std::rc::Rc::new(Page(5)); println!("{} {} {} {} {}", std::mem::align_of::<Page>(), local(3), &*p as *const Page as usize % 4096, &*r as *const Page as usize % 4096, &TABLE as *const Page as usize % 4096); println!("{} {} {}", p.0, r.0, TABLE.0); }"#,
+        ),
+        (
+            "layout",
+            r#"#[repr(align(64))] struct Aligned {field:u8}
+#[repr(align(32))] #[derive(Clone, Copy)] struct Big { a: u8, b: u16 }
+#[repr(C, align(8))] struct W8<T>(T);
+fn depth(n: u32) -> usize { let x = Big { a: n as u8, b: 2 }; let a = &x as *const Big as usize % 32; if n == 0 { a } else { a + depth(n - 1) } }
+fn main(){
+    let b = Big { a: 1, b: 2 }; let bb = [b, b, b];
+    let w = W8([3u8, 4]);
+    let boxed = Box::new(Aligned { field: 9 });
+    let v = vec![b, b];
+    println!("{} {} {}", std::mem::align_of::<Aligned>(), std::mem::align_of::<Big>(), std::mem::align_of::<W8<[u8; 2]>>());
+    println!("{} {} {}", (&bb[2] as *const Big as usize) % 32, bb[1].b + bb[2].a as u16, w.0[1]);
+    println!("{} {} {}", (&*boxed as *const Aligned as usize) % 64, boxed.field, depth(5));
+    println!("{} {}", (&v[1] as *const Big as usize) % 32, v[1].b);
+}"#,
+        ),
+    ] {
+        physical_matches_stock(source, tag);
     }
 }
 
@@ -580,10 +607,6 @@ fn target_alignment_unknown_layouts_fail_explicitly_instead_of_using_private_sto
             "closure",
             "fn alignment<T>(value:T)->usize{std::mem::align_of::<T>()} fn main(){let closure=||1i32; println!(\"{}\",alignment(closure));}",
         ),
-        (
-            "overaligned",
-            "#[repr(align(64))] struct Aligned {field:u8} fn main(){println!(\"{}\",std::mem::align_of::<Aligned>());}",
-        ),
     ] {
         let (root, compiled) = stock(source, tag);
         assert!(
@@ -597,19 +620,10 @@ fn target_alignment_unknown_layouts_fail_explicitly_instead_of_using_private_sto
                     .err()
                     .expect("invalid or unsupported alignment must be rejected")
                     .to_string();
-                if tag == "overaligned" {
-                    // Original syntax is published, but valid over-aligned storage
-                    // remains unsupported until its layout is implemented.
-                    assert!(
-                        error.contains("unsupported: repr(align) layout"),
-                        "{tag}: {error}"
-                    );
-                } else {
-                    assert!(
-                        error.to_lowercase().contains("unsupported"),
-                        "{tag}: workers={workers}, check={check}: {error}"
-                    );
-                }
+                assert!(
+                    error.to_lowercase().contains("unsupported"),
+                    "{tag}: workers={workers}, check={check}: {error}"
+                );
             }
         }
         fs::remove_dir_all(root).unwrap();

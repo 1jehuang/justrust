@@ -1,6 +1,7 @@
 //! `&S` of an immutable static item: one interned `&'static T` per declaration.
-//! Only closed scalar and array initializers are admitted; any other static
-//! borrow gets an explicit unsupported diagnostic.
+//! Admitted types have only integer, `bool` and `char` leaves under arrays,
+//! tuples and structs, with literal initializers. Any other static borrow
+//! gets an explicit unsupported diagnostic.
 use super::*;
 
 impl Checker<'_> {
@@ -54,44 +55,125 @@ impl Checker<'_> {
             } else {
                 return Err("contract: static item absent from registry".into());
             };
-        let ty = static_type(ty, &budget, 0)?;
+        let ty = self.static_type(ty, &budget)?;
         let mut values = Vec::new();
-        static_values(initializer, &ty, &mut values, &budget, 0)?;
+        self.static_values(initializer, &ty, &mut values, &budget, 0)?;
         ir::StaticData::new(declaration, ty, values, &budget)
+    }
+
+    /// The declared type, admitted when every leaf is an integer, `bool` or
+    /// `char` reached through arrays, tuples and structs.
+    fn static_type(&self, source: &Type, budget: &ir::PlanBudget) -> Result<ir::Ty, String> {
+        // Lowering is a pure type query; the closed-leaf walk below is what
+        // admits the type (no references, enums, generics or drop glue).
+        let ty = self
+            .checked_type_actual(source)
+            .map_err(|_| UNSUPPORTED.to_string())?;
+        closed_static_shape(&ty, budget, 0)?;
+        Ok(ty)
+    }
+
+    fn static_values(
+        &self,
+        expr: &Expr,
+        ty: &ir::Ty,
+        values: &mut Vec<ir::PromotedScalar>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        if depth > 128 || values.len() > ir::MAX_ARRAY_LEN {
+            return Err(UNSUPPORTED.into());
+        }
+        match (expr, ty) {
+            (Expr::Tuple(elements), ir::Ty::Tuple(fields)) if elements.len() == fields.len() => {
+                for (value, field) in elements.iter().zip(fields.iter()) {
+                    self.static_values(value, field, values, budget, depth + 1)?;
+                }
+                Ok(())
+            }
+            (Expr::TupleStruct { name, fields }, ir::Ty::Struct(structure))
+                if self.static_constructor(name, structure)? =>
+            {
+                let definition = structure.def();
+                let declared = definition.fields.read(budget)?;
+                if fields.len() != declared.len() {
+                    return Err("E0061: tuple struct constructor arity mismatch".into());
+                }
+                for (value, field) in fields.iter().zip(declared.iter()) {
+                    self.static_values(value, &field.ty, values, budget, depth + 1)?;
+                }
+                Ok(())
+            }
+            (Expr::Struct { name, fields }, ir::Ty::Struct(structure))
+                if self.static_constructor(name, structure)? =>
+            {
+                let declared = structure.def().fields.read(budget)?;
+                let mut ordered: Vec<Option<&Expr>> = vec![None; declared.len()];
+                for (field, value) in fields {
+                    let (index, _) = self.field_type(ty, &FieldSelector::Named(*field))?;
+                    let slot = ordered.get_mut(index).ok_or(UNSUPPORTED)?;
+                    if slot.replace(value).is_some() {
+                        return Err("E0062: field specified more than once".into());
+                    }
+                }
+                for (value, field) in ordered.into_iter().zip(declared.iter()) {
+                    let value = value.ok_or("E0063: missing field in static initializer")?;
+                    self.static_values(value, &field.ty, values, budget, depth + 1)?;
+                }
+                Ok(())
+            }
+            _ => static_values(expr, ty, values, budget, depth, |value, element, values| {
+                self.static_values(value, element, values, budget, depth + 1)
+            }),
+        }
+    }
+
+    /// The constructor path names exactly the static's declared struct.
+    fn static_constructor(&self, name: &AstPath, structure: &ir::StructTy) -> Result<bool, String> {
+        Ok(self.nominal_decl(name)? == structure.def().source_decl)
     }
 }
 
-const UNSUPPORTED: &str =
-    "unsupported: borrowed statics require a closed scalar or array type and literal initializer";
-
-fn static_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Result<ir::Ty, String> {
+/// Every leaf is a closed integer, `bool` or `char`: the payload is exactly
+/// its flattened scalars, with no references, padding-visible enums or drops.
+fn closed_static_shape(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<(), String> {
     budget.charge_work(1)?;
     if depth > 128 {
         return Err(UNSUPPORTED.into());
     }
-    Ok(match ty {
-        Type::Int(ty) => ir::Ty::Int(*ty),
-        Type::Bool => ir::Ty::Bool,
-        Type::Char => ir::Ty::Char,
-        Type::Array(element, len) if *len <= ir::MAX_ARRAY_LEN => ir::Ty::Array {
-            element: Arc::new(static_type(element, budget, depth + 1)?),
-            len: *len,
-        },
-        _ => return Err(UNSUPPORTED.into()),
-    })
+    match ty {
+        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char => Ok(()),
+        ir::Ty::Array { element, len } if *len <= ir::MAX_ARRAY_LEN => {
+            closed_static_shape(element, budget, depth + 1)
+        }
+        ir::Ty::Tuple(fields) if !fields.is_empty() => {
+            for field in fields.iter() {
+                closed_static_shape(field, budget, depth + 1)?;
+            }
+            Ok(())
+        }
+        ir::Ty::Struct(structure) if !structure.def().fields.is_empty() => {
+            for field in structure.def().fields.read(budget)?.iter() {
+                closed_static_shape(&field.ty, budget, depth + 1)?;
+            }
+            Ok(())
+        }
+        _ => Err(UNSUPPORTED.into()),
+    }
 }
 
+const UNSUPPORTED: &str = "unsupported: borrowed statics require integer, bool or char leaves (through arrays, tuples and structs) and a literal initializer";
+
+/// Scalar leaves, arrays and repeats. `nested` checks one element.
 fn static_values(
     expr: &Expr,
     ty: &ir::Ty,
     values: &mut Vec<ir::PromotedScalar>,
     budget: &ir::PlanBudget,
-    depth: usize,
+    _depth: usize,
+    mut nested: impl FnMut(&Expr, &ir::Ty, &mut Vec<ir::PromotedScalar>) -> Result<(), String>,
 ) -> Result<(), String> {
-    budget.charge_work(1)?;
-    if depth > 128 || values.len() > ir::MAX_ARRAY_LEN {
-        return Err(UNSUPPORTED.into());
-    }
     let scalar = match (expr, ty) {
         (Expr::Integer(literal), ir::Ty::Int(_)) => {
             ir::PromotedScalar::Int(resolve_integer(literal, false, Some(ty))?)
@@ -115,7 +197,7 @@ fn static_values(
         }),
         (Expr::Array(elements), ir::Ty::Array { element, len }) if elements.len() == *len => {
             for value in elements {
-                static_values(value, element, values, budget, depth + 1)?;
+                nested(value, element, values)?;
             }
             return Ok(());
         }
@@ -123,7 +205,7 @@ fn static_values(
             if count == len && *len > 0 =>
         {
             let start = values.len();
-            static_values(value, element, values, budget, depth + 1)?;
+            nested(value, element, values)?;
             let width = values.len() - start;
             for _ in 1..*len {
                 for index in start..start + width {

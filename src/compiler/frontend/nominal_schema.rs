@@ -1611,9 +1611,15 @@ impl PlanState {
                             let name = self.schema_path_text(registry, &d.name, budget)?;
                             // A `?Sized` parameter may make the tail unsizable,
                             // which keeps the last field out of the sort.
-                            let field_order = if d.repr_align.is_some()
-                                || d.bounds.iter().any(|bound| bound.maybe_unsized)
-                            {
+                            // The well-formedness proof rejects (E0589) any
+                            // alignment that is not a power of two up to 2^29.
+                            let repr_align = d
+                                .repr_align
+                                .as_ref()
+                                .map(|alignment| alignment.value(registry.names.as_ref(), d))
+                                .transpose()?
+                                .map(|value| u32::try_from(value).unwrap_or(u32::MAX));
+                            let field_order = if d.bounds.iter().any(|bound| bound.maybe_unsized) {
                                 ir::FieldOrder::Unknown
                             } else if d.repr_c {
                                 ir::FieldOrder::Declaration
@@ -1629,6 +1635,7 @@ impl PlanState {
                                 visibility: d.visibility.clone(),
                                 fields: fields.into(),
                                 field_order,
+                                repr_align,
                             };
                             ir::Ty::Struct(ir::StructTy::new(definition))
                         }

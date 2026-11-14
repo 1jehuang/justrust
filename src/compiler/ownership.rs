@@ -9102,6 +9102,7 @@ mod tests {
             module: modules.source_root().unwrap(),
             visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             field_order: crate::compiler::ir::FieldOrder::Optimized,
+            repr_align: None,
             fields: fields
                 .into_iter()
                 .enumerate()

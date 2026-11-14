@@ -200,7 +200,7 @@ pub fn object_with_panic(
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
     let mut type_offsets: BTreeMap<&[u8], usize> = BTreeMap::new();
-    let mut static_offsets: BTreeMap<&[u8], (usize, &[u8])> = BTreeMap::new();
+    let mut static_offsets: BTreeMap<&[u8], (usize, &[u8], usize)> = BTreeMap::new();
     if entry {
         let at = if unwind { 24 } else { 21 };
         relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
@@ -235,19 +235,27 @@ pub fn object_with_panic(
                 return Err("invalid static item relocation".into());
             }
             let offset = match static_offsets.get(blob.key.as_slice()) {
-                Some((offset, bytes)) => {
-                    if *bytes != blob.bytes.as_slice() {
+                Some((offset, bytes, align)) => {
+                    if *bytes != blob.bytes.as_slice() || *align != blob.align {
                         return Err("static item storage differs between objects".into());
                     }
                     *offset
                 }
                 None => {
+                    // This relocatable .rodata promises 16-byte section
+                    // alignment, so more-aligned statics cannot be placed.
+                    if blob.align > 16 {
+                        return Err("unsupported: repr(align) statics in C ABI objects".into());
+                    }
                     while data.len() % 16 != 0 {
                         data.push(0);
                     }
                     let offset = data.len();
                     data.extend_from_slice(&blob.bytes);
-                    static_offsets.insert(blob.key.as_slice(), (offset, blob.bytes.as_slice()));
+                    static_offsets.insert(
+                        blob.key.as_slice(),
+                        (offset, blob.bytes.as_slice(), blob.align),
+                    );
                     offset
                 }
             };
@@ -304,8 +312,9 @@ pub fn object_with_panic(
     ];
     let mut result = vec![0; 64];
     let mut offsets = Vec::new();
-    for section in &sections {
-        while !result.len().is_multiple_of(8) {
+    for (index, section) in sections.iter().enumerate() {
+        let alignment = if index == 1 || index == 2 { 16 } else { 8 };
+        while !result.len().is_multiple_of(alignment) {
             result.push(0);
         }
         offsets.push(result.len());
@@ -349,7 +358,7 @@ pub fn object_with_panic(
         );
         u64_(&mut result, at + 24, offsets[n] as u64);
         u64_(&mut result, at + 32, sections[n].len() as u64);
-        u64_(&mut result, at + 48, if n == 1 { 16 } else { 8 });
+        u64_(&mut result, at + 48, if n == 1 || n == 2 { 16 } else { 8 });
         if n == 3 || n == 4 {
             u32_(&mut result, at + 40, 5);
             u32_(&mut result, at + 44, if n == 3 { 1 } else { 2 });

@@ -17050,6 +17050,7 @@ mod tests {
             visibility: crate::compiler::ir::Visibility::Restricted(module),
             fields: Arc::<[FieldDef]>::from([]).into(),
             field_order: crate::compiler::ir::FieldOrder::Optimized,
+            repr_align: None,
         }))
     }
     fn case() -> Case {

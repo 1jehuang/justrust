@@ -171,6 +171,126 @@ impl type_check::Checker<'_> {
         Ok(Some(id))
     }
 
+    /// `&(*&S).f`, `&(*&S)[i]`: a place rooted at a static item's interned
+    /// storage. The `&'static T` is held in a temporary and the borrow names
+    /// the projection through it, so it aliases the one static address and
+    /// keeps `'static` provenance (stock: `S.0.get(i)` is `Option<&'static _>`).
+    pub(super) fn borrow_static_rooted(
+        &mut self,
+        kind: ir::BorrowKind,
+        value: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let mut steps = Vec::new();
+        let mut cursor = value;
+        let reference = loop {
+            if steps.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            match cursor {
+                Expr::Field { base, field } => {
+                    steps.push(IndexedBorrowStep::Field(field));
+                    cursor = base;
+                }
+                Expr::Index { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Const(*index, cursor));
+                    cursor = base;
+                }
+                Expr::DynamicIndex { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Runtime(index, cursor));
+                    cursor = base;
+                }
+                Expr::Deref { value } if matches!(value.as_ref(), Expr::StaticRef(_)) => {
+                    break value.as_ref();
+                }
+                _ => return Ok(None),
+            }
+        };
+        if kind == ir::BorrowKind::Mut {
+            return Err("E0596: cannot borrow immutable static item as mutable".into());
+        }
+        steps.reverse();
+        let carrier = self.expr(reference)?;
+        let carrier_ty = self.exprs[carrier.0].ty.clone();
+        let local = self.temporary("$static_place", carrier_ty.clone(), true)?;
+        self.register_borrow_temporary(local, false, None)?;
+        let mut statements = vec![ir::TypedStmt::Assign {
+            local,
+            value: carrier,
+        }];
+        let ir::Ty::Ref { referent, .. } = carrier_ty else {
+            return Err("contract: static reference is not a reference".into());
+        };
+        let mut ty = referent.as_ref().clone();
+        let mut projection = vec![ir::Projection::Deref];
+        for step in steps {
+            self.charge_node(std::mem::size_of::<ir::Projection>())?;
+            match step {
+                IndexedBorrowStep::Field(field) => {
+                    let (index, field_ty) = self.field_type(&ty, field)?;
+                    projection.push(ir::Projection::Field(index));
+                    ty = field_ty;
+                }
+                IndexedBorrowStep::Const(index, _) => {
+                    ty = self.index_type(&ty, index)?;
+                    projection.push(ir::Projection::ConstantIndex(index));
+                }
+                IndexedBorrowStep::Runtime(index, original) => {
+                    let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+                    let index = self.expr_expected(index, Some(&usize_ty))?;
+                    self.require_index(&self.flow(index))?;
+                    if !self.flow(index).completes {
+                        statements.push(ir::TypedStmt::Expr(index));
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+                        let id = ir::ExprId(self.exprs.len());
+                        self.exprs.push(ir::TypedExpr {
+                            ty: ir::Ty::Never,
+                            completion: ir::Completion::Never,
+                            kind: ir::ExprKind::Block(ir::TypedBlock {
+                                statements,
+                                tail: None,
+                            }),
+                        });
+                        return Ok(Some(id));
+                    }
+                    let saved = self.temporary("$static_index", usize_ty.clone(), false)?;
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                    statements.push(ir::TypedStmt::Let {
+                        local: saved,
+                        value: index,
+                    });
+                    let checked = self.for_expr(usize_ty, ir::ExprKind::Local(saved))?;
+                    self.index_bounds_probe(
+                        &ir::Place {
+                            local,
+                            projection: projection.clone(),
+                        },
+                        checked,
+                        original,
+                        &mut statements,
+                    )?;
+                    let ir::Ty::Array { element, .. } = ty else {
+                        return Ok(None);
+                    };
+                    ty = element.as_ref().clone();
+                    projection.push(ir::Projection::DynamicIndex(saved));
+                }
+                IndexedBorrowStep::Deref => unreachable!(),
+            }
+        }
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty: self.exprs[borrowed.0].ty.clone(),
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements,
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(Some(id))
+    }
+
     /// Lower `&place` / `&mut place` for an indexed local-rooted place or a
     /// dereferenced call result. Returns `None` for other place shapes.
     pub(super) fn borrow_indexed_place(

@@ -215,10 +215,12 @@ impl ValidatedTraitWorld {
                     "E0589: invalid repr(align) attribute: alignment must be a power of two no larger than 2^29",
                 ));
             }
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: repr(align) layout is not implemented",
-            ));
+            if alignment > 4096 {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: repr(align) above 4096 is not implemented",
+                ));
+            }
         }
         for predicate in schema.predicates.iter() {
             self.validate_predicate_metadata(predicate, &schema.env)?;

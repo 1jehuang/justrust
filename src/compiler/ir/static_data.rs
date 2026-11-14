@@ -3,8 +3,9 @@
 //! Unlike rvalue promotion, every borrow of one static declaration denotes the
 //! same address (stock guarantees `ptr::eq(&S, &S)`). The checked payload is
 //! keyed by the canonical declaration identity, and the linker interns one
-//! data symbol per identity. Only closed scalar and array initializers are
-//! admitted; `static mut` and interior mutability stay unsupported.
+//! data symbol per identity. The payload is the flattened integer/bool/char
+//! leaves of arrays, tuples and structs in declaration order; `static mut`
+//! and interior mutability stay unsupported.
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -102,6 +103,18 @@ fn check_shape(
             }
             Ok(())
         }
-        _ => Err("unsupported: static data type is not a closed scalar array".into()),
+        Ty::Tuple(fields) if !fields.is_empty() => {
+            for field in fields.iter() {
+                check_shape(field, values, next, budget, depth + 1)?;
+            }
+            Ok(())
+        }
+        Ty::Struct(structure) if !structure.def().fields.is_empty() => {
+            for field in structure.def().fields.read(budget)?.iter() {
+                check_shape(&field.ty, values, next, budget, depth + 1)?;
+            }
+            Ok(())
+        }
+        _ => Err("unsupported: static data type has a non-scalar leaf".into()),
     }
 }

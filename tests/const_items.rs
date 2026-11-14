@@ -58,6 +58,38 @@ fn general_constants_match_stock_output() {
             "5 true true\n[-4, 9] true x true\n[7, 7, 7, 7] 4 5\n",
         ),
         (
+            "static_aggregates",
+            "#[repr(C, align(8))] struct Align8<T>(T);
+             #[repr(C, align(64))] struct Align64<T>(T);
+             struct R { lo: u16, hi: u16, tag: bool }
+             static TRIE: Align8<[u8; 4]> = Align8([0, 1, 2, 1]);
+             static LEAF: Align64<[u8; 6]> = Align64([0x0f, 0xf0, 0xaa, 0x55, 0xff, 0x00]);
+             static ZERO: u8 = 0;
+             static T: (u8, char, i64) = (3, 'x', -5);
+             static P: [(char, char); 3] = [('a', 'c'), ('x', 'z'), ('0', '9')];
+             static RS: [R; 2] = [R { lo: 1, hi: 9, tag: true }, R { tag: false, hi: 300, lo: 200 }];
+             fn bit(ch: u32) -> bool {
+                 let chunk = *TRIE.0.get(ch as usize / 8).unwrap_or(&ZERO);
+                 let offset = chunk as usize * 2 + ch as usize / 8 % 2;
+                 unsafe { LEAF.0.get_unchecked(offset) }.wrapping_shr(ch % 8) & 1 != 0
+             }
+             fn find(c: char) -> bool { let t = &P; let mut i = 0; while i < t.len() { if t[i].0 <= c && c <= t[i].1 { return true; } i += 1; } false }
+             fn first() -> &'static (char, char) { &P[0] }
+             fn main(){
+                 let mut n = 0; for c in 0..40u32 { if bit(c) { n += 1; } }
+                 println!(\"{} {} {}\", n, (&LEAF as *const Align64<[u8; 6]> as usize) % 64, &P as *const [(char, char); 3] as usize == first() as *const (char, char) as usize);
+                 let t = &T; println!(\"{} {} {} {}\", T.0, t.1, T.2, first().1);
+                 println!(\"{} {} {}\", find('b'), find('m'), find('5'));
+                 let r = &RS[1]; println!(\"{} {} {} {}\", r.lo, r.hi, r.tag, RS[0].tag);
+             }",
+            "24 0 true\n3 x -5 c\ntrue false true\n200 300 false true\n",
+        ),
+        (
+            "wrapping_shifts",
+            "fn main(){ println!(\"{} {} {} {}\", 129u8.wrapping_shr(8), 1u16.wrapping_shl(17), (-2i32).wrapping_shr(33), 1u64.wrapping_shl(127)); println!(\"{} {} {} {}\", 1u128.wrapping_shl(129), (-4i128).wrapping_shr(129), 1usize.wrapping_shl(65), (-8isize).wrapping_shr(66)); }",
+            "129 2 -1 9223372036854775808\n2 -2 2 -2\n",
+        ),
+        (
             "aggregate",
             "const A: [i32; 3] = [1, 2, 3]; struct P { x: i32 } const O: P = P { x: 3 }; fn main(){ let v = A[1]; let o = O.x; println!(\"{} {}\", v, o); }",
             "2 3\n",
@@ -108,10 +140,30 @@ fn invalid_constants_reject_even_when_unused() {
             "E0594",
         ),
         ("static S: i32 = 1; fn main(){ let _r: &u8 = &S; }", "E0308"),
-        // Borrowed statics outside the closed scalar/array subset fail closed.
+        // Borrowed statics outside the integer/bool/char-leaf subset fail closed.
         (
             "static S: &str = \"x\"; fn main(){ let r = &S; println!(\"{}\", r); }",
             "unsupported",
+        ),
+        (
+            "static S: (u8, &str) = (1, \"x\"); fn main(){ let r = &S; println!(\"{}\", r.0); }",
+            "unsupported",
+        ),
+        (
+            "struct P { x: u8 } static S: P = P { x: 1 }; fn main(){ let r = &mut S.x; *r = 2; }",
+            "E0596",
+        ),
+        (
+            "static S: (u8, u8) = (1, 2); fn main(){ S.0 = 3; }",
+            "E0594",
+        ),
+        (
+            "struct P { x: u8, y: u8 } static S: P = P { x: 1 }; fn main(){ let r = &S; println!(\"{}\", r.x); }",
+            "E0063",
+        ),
+        (
+            "static S: (u8, u8) = (1, 300); fn main(){ let r = &S; println!(\"{}\", r.0); }",
+            "",
         ),
         (
             "fn f()->[i32;1]{[1]} const A:[i32;1]=f(); fn main(){}",

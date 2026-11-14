@@ -800,6 +800,9 @@ impl IntMethods for usize {
 pub trait CheckedShiftMethods: Sized {
     fn checked_shl(self, rhs: u32) -> Option<Self>;
     fn checked_shr(self, rhs: u32) -> Option<Self>;
+    /// The count is masked to the value width, as stock does.
+    fn wrapping_shl(self, rhs: u32) -> Self;
+    fn wrapping_shr(self, rhs: u32) -> Self;
 }
 
 impl CheckedShiftMethods for i8 {
@@ -808,6 +811,12 @@ impl CheckedShiftMethods for i8 {
     }
     fn checked_shr(self, rhs: u32) -> Option<i8> {
         if rhs < 8u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> i8 {
+        self << (rhs & 7u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> i8 {
+        self >> (rhs & 7u32)
     }
 }
 
@@ -818,6 +827,12 @@ impl CheckedShiftMethods for i16 {
     fn checked_shr(self, rhs: u32) -> Option<i16> {
         if rhs < 16u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> i16 {
+        self << (rhs & 15u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> i16 {
+        self >> (rhs & 15u32)
+    }
 }
 
 impl CheckedShiftMethods for i32 {
@@ -826,6 +841,12 @@ impl CheckedShiftMethods for i32 {
     }
     fn checked_shr(self, rhs: u32) -> Option<i32> {
         if rhs < 32u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> i32 {
+        self << (rhs & 31u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> i32 {
+        self >> (rhs & 31u32)
     }
 }
 
@@ -836,6 +857,12 @@ impl CheckedShiftMethods for i64 {
     fn checked_shr(self, rhs: u32) -> Option<i64> {
         if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> i64 {
+        self << (rhs & 63u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> i64 {
+        self >> (rhs & 63u32)
+    }
 }
 
 impl CheckedShiftMethods for i128 {
@@ -844,6 +871,12 @@ impl CheckedShiftMethods for i128 {
     }
     fn checked_shr(self, rhs: u32) -> Option<i128> {
         if rhs < 128u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> i128 {
+        self << (rhs & 127u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> i128 {
+        self >> (rhs & 127u32)
     }
 }
 
@@ -854,6 +887,12 @@ impl CheckedShiftMethods for isize {
     fn checked_shr(self, rhs: u32) -> Option<isize> {
         if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> isize {
+        self << (rhs & 63u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> isize {
+        self >> (rhs & 63u32)
+    }
 }
 
 impl CheckedShiftMethods for u8 {
@@ -862,6 +901,12 @@ impl CheckedShiftMethods for u8 {
     }
     fn checked_shr(self, rhs: u32) -> Option<u8> {
         if rhs < 8u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> u8 {
+        self << (rhs & 7u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> u8 {
+        self >> (rhs & 7u32)
     }
 }
 
@@ -872,6 +917,12 @@ impl CheckedShiftMethods for u16 {
     fn checked_shr(self, rhs: u32) -> Option<u16> {
         if rhs < 16u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> u16 {
+        self << (rhs & 15u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> u16 {
+        self >> (rhs & 15u32)
+    }
 }
 
 impl CheckedShiftMethods for u32 {
@@ -880,6 +931,12 @@ impl CheckedShiftMethods for u32 {
     }
     fn checked_shr(self, rhs: u32) -> Option<u32> {
         if rhs < 32u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> u32 {
+        self << (rhs & 31u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> u32 {
+        self >> (rhs & 31u32)
     }
 }
 
@@ -890,6 +947,12 @@ impl CheckedShiftMethods for u64 {
     fn checked_shr(self, rhs: u32) -> Option<u64> {
         if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> u64 {
+        self << (rhs & 63u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> u64 {
+        self >> (rhs & 63u32)
+    }
 }
 
 impl CheckedShiftMethods for u128 {
@@ -899,6 +962,12 @@ impl CheckedShiftMethods for u128 {
     fn checked_shr(self, rhs: u32) -> Option<u128> {
         if rhs < 128u32 { Option::Some(self >> rhs) } else { Option::None }
     }
+    fn wrapping_shl(self, rhs: u32) -> u128 {
+        self << (rhs & 127u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> u128 {
+        self >> (rhs & 127u32)
+    }
 }
 
 impl CheckedShiftMethods for usize {
@@ -907,6 +976,12 @@ impl CheckedShiftMethods for usize {
     }
     fn checked_shr(self, rhs: u32) -> Option<usize> {
         if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+    fn wrapping_shl(self, rhs: u32) -> usize {
+        self << (rhs & 63u32)
+    }
+    fn wrapping_shr(self, rhs: u32) -> usize {
+        self >> (rhs & 63u32)
     }
 }
 

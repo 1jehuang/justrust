@@ -231,7 +231,7 @@ fn walk_alignment(
         ir::Ty::Ref { .. } => Ok(Some(8)),
         ir::Ty::Array { element, .. } => walk_alignment(element, budget, depth + 1, private),
         ir::Ty::Tuple(fields) => field_alignment(fields.iter(), budget, depth + 1, private),
-        ir::Ty::Struct(structure) => field_alignment(
+        ir::Ty::Struct(structure) => Ok(field_alignment(
             structure
                 .def()
                 .fields
@@ -241,7 +241,8 @@ fn walk_alignment(
             budget,
             depth + 1,
             private,
-        ),
+        )?
+        .map(|natural| natural.max(structure.def().repr_align.unwrap_or(1) as usize))),
         ir::Ty::AssociatedType(_) => {
             Err("unsupported: unresolved associated target alignment".into())
         }

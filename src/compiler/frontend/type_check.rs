@@ -3188,7 +3188,7 @@ impl<'a> Checker<'a> {
     pub(super) fn path_key(&self, path: &AstPath, namespace: Namespace) -> Result<PathKey, String> {
         name_scope::path_key(self.names()?, path, namespace)
     }
-    fn nominal_decl(&self, path: &AstPath) -> Result<ir::DeclId, String> {
+    pub(super) fn nominal_decl(&self, path: &AstPath) -> Result<ir::DeclId, String> {
         self.signatures
             .plan()?
             .registry
@@ -6029,6 +6029,9 @@ impl<'a> Checker<'a> {
                 end.as_deref(),
                 *inclusive,
             );
+        }
+        if let Some(id) = self.borrow_static_rooted(kind, value)? {
+            return Ok(id);
         }
         // The parser keeps literal index occurrences until the receiver type
         // is known. Preserve existing static array/raw-place borrowing when

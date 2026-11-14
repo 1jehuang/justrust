@@ -4505,6 +4505,7 @@ impl Resolver<'_> {
         if self.static_borrow(expr, module, locals)? {
             return Ok(());
         }
+        self.static_receiver(expr, module, locals)?;
         match expr {
             Expr::Cell(call) => {
                 if let Some(argument) = &mut call.source.argument {

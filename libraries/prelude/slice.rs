@@ -196,6 +196,9 @@ impl<'a, T> SliceMutRefMethods<'a, T> for &'a mut [T] {
 /// carries the element without a `[T]` trait-argument boundary.
 pub trait SliceRefMethods<'a, T> {
     fn get(self, index: usize) -> super::option::Option<&'a T>;
+    /// # Safety
+    /// `index` must be in bounds.
+    unsafe fn get_unchecked(self, index: usize) -> &'a T;
     fn first(self) -> super::option::Option<&'a T>;
     fn last(self) -> super::option::Option<&'a T>;
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]);
@@ -210,6 +213,12 @@ impl<'a, T> SliceRefMethods<'a, T> for &'a [T] {
         } else {
             super::option::Option::None
         }
+    }
+
+    /// A valid caller keeps `index` in bounds, so the checked element is the
+    /// same place; an out-of-bounds index is undefined behavior in stock.
+    unsafe fn get_unchecked(self, index: usize) -> &'a T {
+        &self[index]
     }
 
     fn split_at(self, mid: usize) -> (&'a [T], &'a [T]) {

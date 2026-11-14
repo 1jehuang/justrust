@@ -119,6 +119,44 @@ impl Resolver<'_> {
         Ok(true)
     }
 
+    /// `S.m()`, `S.f.m()`, `S[i].m()`: a static is a place, so an autoref
+    /// receiver borrows its one interned storage rather than a value copy
+    /// (stock: `S.0.get(i)` returns `Option<&'static T>`). By-value receivers
+    /// read `*&S`, which copies exactly as a direct read does.
+    pub(super) fn static_receiver(
+        &mut self,
+        expr: &mut Expr,
+        module: ModuleId,
+        locals: &[std::collections::HashSet<LocalKey>],
+    ) -> Result<(), String> {
+        let Expr::MethodCall { receiver, .. } = expr else {
+            return Ok(());
+        };
+        let mut root: &mut Expr = receiver;
+        loop {
+            match root {
+                Expr::Index { base, .. }
+                | Expr::DynamicIndex { base, .. }
+                | Expr::Field { base, .. } => root = base,
+                _ => break,
+            }
+        }
+        let Expr::Var(name) = root else {
+            return Ok(());
+        };
+        if name.anchor() == PathAnchor::SelfModule && name.is_empty() {
+            return Ok(());
+        }
+        let name = name.clone();
+        let Some(path) = self.static_path(&name, module, locals)? else {
+            return Ok(());
+        };
+        *root = Expr::Deref {
+            value: Box::new(Expr::StaticRef(path)),
+        };
+        Ok(())
+    }
+
     /// `S = v`, `S OP= v`, `S.f = v` on an immutable static item.
     pub(super) fn static_assignment(
         &mut self,

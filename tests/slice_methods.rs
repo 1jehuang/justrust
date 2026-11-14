@@ -528,11 +528,6 @@ fn slice_mut_pointer_unproved_physical_layout_is_rejected() {
             "target aggregate size",
         ),
         (
-            "explicit_alignment",
-            "#[repr(align(16))]struct V{n:u32}fn main(){let mut a=[V{n:1},V{n:2}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
-            "repr(align) layout is not implemented",
-        ),
-        (
             "packed_layout",
             "#[repr(packed)]struct V{n:u32}fn main(){let mut a=[V{n:1},V{n:2}];let p=a.as_mut_ptr();unsafe{let _=p.add(1);}}",
             "repr(C)/repr(align(N))",
@@ -616,6 +611,16 @@ fn slice_mut_pointer_invalid_boundaries() {
                 name: "generic_shared_receiver",
                 source: "fn bad<T>(s:&[T]){let _=s.as_mut_ptr();}fn main(){}",
                 expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unchecked_access_requires_unsafe",
+                source: "fn bad<T>(s:&[T]){let _=s.get_unchecked(0);}fn main(){}",
+                expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "unchecked_reference_cannot_escape",
+                source: "fn bad<'a>()->&'a i32{let a=[1];unsafe{a.get_unchecked(0)}}fn main(){}",
+                expect: Expect::Invalid("E0515"),
             },
             Case {
                 name: "generic_add_requires_unsafe",

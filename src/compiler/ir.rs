@@ -6871,6 +6871,7 @@ impl StructDef {
             visibility: Visibility::Public,
             fields: Vec::<FieldDef>::new().into(),
             field_order: FieldOrder::Unknown,
+            repr_align: None,
         }
     }
 }
@@ -7464,6 +7465,9 @@ pub struct StructDef {
     pub fields: NominalFields,
     /// How the target orders this struct's fields in memory.
     pub field_order: FieldOrder,
+    /// `#[repr(align(N))]`: a validated power of two raising the struct's
+    /// alignment (and so its rounded size). `None` for natural alignment.
+    pub repr_align: Option<u32>,
 }
 
 /// Source representation facts that decide in-memory field order.
@@ -20975,6 +20979,7 @@ mod tests {
             module: modules.core_root(),
             visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             field_order: FieldOrder::Optimized,
+            repr_align: None,
             fields: fields
                 .into_iter()
                 .enumerate()
