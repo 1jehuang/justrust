@@ -55,6 +55,9 @@ the shared dependency/fingerprint file bytes before releasing its lock, and an
 uncontended follow-up runs both tests against the shared target again.
 `--expect-isolated` additionally requires a real slot, less than 0.5 seconds of
 reported target-lock wait, and completion while the shared lock is still held.
+Overlap uses the holder's original host timestamps in its recorded
+`output.jsonl` and the contender's host summary, with a 250ms release margin.
+Client result finalization/upload delays are not mistaken for lock wait.
 Results record actual filesystem magic and hosted machine identity. Comparisons
 reject different fixture bytes, hold protocols, execution modes, controls, or
 hosted machines. `--local` is only for diagnosing the harness, not hosted evidence.

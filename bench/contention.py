@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -164,6 +165,32 @@ def sample(summary, run, wall, remote):
             **({"remote": suite.remote_measurement(summary)} if remote else {})}
 
 
+def recorded_lock_overlap(holder_id, contender):
+    """Use one build machine's recorder clock, not delayed client finalization.
+
+    The fixture already flushes both markers. Its output.jsonl is transferred
+    with the normal run record and has the original host epoch timestamps.
+    Leave a conservative 250ms margin before the release marker so a near-tie
+    is not accepted as proof of independent progress.
+    """
+    records = [json.loads(line) for line in
+               (suite.JR_HOME / "runs" / holder_id / "output.jsonl").read_text().splitlines()]
+    ready = [record["t"] for record in records if READY in record.get("l", "")]
+    release = [record["t"] for record in records if SAFE in record.get("l", "")]
+    start, wall = contender.get("start"), contender.get("wall")
+    values = [*ready, *release, start, wall]
+    if (len(ready) != 1 or len(release) != 1
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in values)
+            or release[0] - ready[0] < 19 or wall < 0):
+        raise ValueError("contention: missing or invalid recorded host lock interval")
+    end = start + wall
+    margin = 0.25
+    return {"clock": "recorded-host-epoch", "ready": ready[0], "release": release[0],
+            "contender_start": start, "contender_end": end, "margin_secs": margin,
+            "finished_before_release_secs": round(release[0] - end, 3),
+            "finished_under_lock": ready[0] <= start and end + margin < release[0]}
+
+
 def validate_acceptance(holder, contender, followup, finished_under_lock, isolated):
     ready = re.search(r"BENCH_LOCK_READY filesystem_magic=([0-9a-f]+) files=(\d+)", "".join(holder.lines))
     if not ready or SAFE not in "".join(holder.lines):
@@ -256,9 +283,11 @@ def run(args):
                             f"bench-contention-probe-{iteration}")
             contender_summary, wall, ended = contender.finish(remote)
             holder_summary, _, _ = holder.finish(remote)
-            # Output timestamps are conservative: success must reach the caller
-            # before the holder's release marker reaches it.
-            under_lock = holder.released_at is not None and ended < holder.released_at
+            # Hosted result finalization can take longer than the lock hold.
+            # Compare the original host recorder timestamps, never clocks on
+            # different machines or completion of the client's record upload.
+            overlap = recorded_lock_overlap(holder.id, contender_summary)
+            under_lock = overlap["finished_under_lock"]
             follow = Run(["test", "--lib", "--target-dir", "target", "--", "probe_"], root, remote,
                          f"bench-contention-probe-{iteration}")
             follow_summary, follow_wall, _ = follow.finish(remote)
@@ -277,7 +306,9 @@ def run(args):
                              "followup_units": follow_summary.get("units", {}).get("compiled", 0),
                              "followup_tests_passed": follow_summary.get("tests", {}).get("passed", 0),
                              "lock_ready_delay": round(contender.started - holder.ready_at, 3),
-                             "finished_before_release_secs": round(holder.released_at - ended, 3),
+                             "finished_before_release_secs": overlap["finished_before_release_secs"],
+                             "host_lock_interval": overlap,
+                             "client_finished_under_lock": holder.released_at is not None and ended < holder.released_at,
                              "finished_under_lock": under_lock, "shared_artifacts_unchanged": True,
                              "filesystem_magic": fs_magic})
             samples.append(measured)

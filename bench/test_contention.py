@@ -30,6 +30,24 @@ def result():
 
 
 class ContentionTests(unittest.TestCase):
+    def test_host_overlap_ignores_caller_finalize_delay_and_rejects_near_ties(self):
+        records = "\n".join(json.dumps(record) for record in (
+            {"t": 100, "l": "BENCH_LOCK_READY filesystem_magic=ef53 files=12"},
+            {"t": 120, "l": "BENCH_SHARED_ARTIFACTS_UNCHANGED files=12"}))
+        with mock.patch.object(Path, "read_text", return_value=records):
+            overlap = contention.recorded_lock_overlap("holder", {"start": 103, "wall": 1})
+            self.assertTrue(overlap["finished_under_lock"])
+            self.assertEqual(overlap["finished_before_release_secs"], 16)
+            self.assertFalse(contention.recorded_lock_overlap(
+                "holder", {"start": 119, "wall": 0.9})["finished_under_lock"])
+            self.assertFalse(contention.recorded_lock_overlap(
+                "holder", {"start": 99, "wall": 1})["finished_under_lock"])
+            with self.assertRaisesRegex(ValueError, "host lock interval"):
+                contention.recorded_lock_overlap("holder", {"wall": 1})
+        with mock.patch.object(Path, "read_text", return_value=""):
+            with self.assertRaisesRegex(ValueError, "host lock interval"):
+                contention.recorded_lock_overlap("holder", {"start": 103, "wall": 1})
+
     def test_holder_compile_failure_is_reported_without_full_ready_timeout(self):
         holder = contention.Run.__new__(contention.Run)
         holder.id = "failed-holder"
