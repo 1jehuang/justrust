@@ -70,6 +70,15 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_DEPCACHE_EXPLAIN",
     "JUSTRUST_PASSES",
     "JUSTRUST_RECORD_PHASE_TRACE",
+    // Portable slot policy must reach the machine that owns Cargo's locks.
+    // Never forward target-directory paths from the caller's filesystem.
+    "JUSTRUST_SLOTS",
+    "JUSTRUST_SLOT_REFRESH",
+    "JUSTRUST_SLOTS_GC",
+    "JUSTRUST_SLOTS_MAX_AGE_DAYS",
+    "JUSTRUST_SLOTS_MAX_GB",
+    "JUSTRUST_JOIN",
+    "JUSTRUST_JOIN_WAIT",
     "JUSTRUST_SLOT_WARM_REUSE",
     // The agent that asked owns the slot on the machine too, so a prebuild
     // (which drops JCODE_SESSION_ID) warms the target dir its request uses.
@@ -2373,6 +2382,14 @@ mod tests {
             "JUSTRUST_TEST_JOBS",
             "JUSTRUST_TEST_SPLIT",
             "JUSTRUST_CARGO_SUBTREE_CACHE",
+            "JUSTRUST_SLOTS",
+            "JUSTRUST_SLOT_REFRESH",
+            "JUSTRUST_SLOTS_GC",
+            "JUSTRUST_SLOTS_MAX_AGE_DAYS",
+            "JUSTRUST_SLOTS_MAX_GB",
+            "JUSTRUST_JOIN",
+            "JUSTRUST_JOIN_WAIT",
+            "JUSTRUST_SLOT_WARM_REUSE",
             "JUSTRUST_SLOT_SESSION",
         ] {
             for value in ["1", "8", "0", "off", ""] {
@@ -2441,6 +2458,9 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY",
             "JUSTRUST_HOME",
             "JUSTRUST_LOCALCACHE_DIR",
+            "CARGO_TARGET_DIR",
+            "CARGO_BUILD_TARGET_DIR",
+            "CARGO_BUILD_BUILD_DIR",
             "JUSTRUST_RUN_DIR",
             "JUSTRUST_REAL_RUSTC",
             "JUSTRUST_SHADOW_CHILD",
