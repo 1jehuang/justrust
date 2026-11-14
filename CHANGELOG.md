@@ -17,6 +17,10 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 - Hosted checkpoint verification includes source SHA-256 hashes. Native TLS
   transport support remains subject to explicit operator and per-lease gates,
   with native-only mode off by default and SSH compatibility retained.
+- Native artifact downloads drain diagnostics concurrently, avoiding a stderr
+  pipe-capacity deadlock while retaining complete failure output.
+- Changing hosted native transport policy replaces the sync daemon before new
+  work executes, while existing sessions drain without replay.
 - Personal dashboards distinguish hosted execution from self-managed remotes.
 - Local cache publication uses bounded optional writer admission so background
   cache work cannot indefinitely hold up the build result.

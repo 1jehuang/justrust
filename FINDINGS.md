@@ -22,10 +22,32 @@ removed to produce one.
 The following native run was stopped through the benchmark's source-restoring
 signal handler after an artifact download stalled following successful build
 `20261113-211512235-2241620936`. The observation also exposed reuse of an SSH
-daemon after selecting required native transport. Both require regression
-fixes and fresh validation before shipping this candidate. The interrupted
-run is not a completed comparison. No native speedup, default promotion, or
-permanent fleet-wide SSH removal is established by this experiment.
+daemon after selecting required native transport. Both observations now have
+regression fixes: `fb90df46a` drains artifact stderr
+concurrently, and `71e9a835d` reconnects before execution when normalized
+transport policy changes. A bounded real-pipe 1 MiB stderr regression failed
+before the first fix (`20261114-123219953-2312432`) and passed afterward
+(`20261114-123405931-2318421`). This proves the pipe-backpressure defect, not
+that it necessarily caused the original 18-minute stall. Hosted validation
+passed 26 native integration tests (`20261114-123407805-2318492`), 1,233 total
+tests (`20261114-123450996-2320153`), and warning-free all-target clippy
+(`20261114-123507897-2320742`).
+
+A fresh required-hosted release-profile build of `71e9a835d` produced candidate
+SHA-256 `c9446c8d37abc4a0e5d9986a9bcbc79a030d3514e99f2a04138bfd3e7740dbdf`
+(`20261114-123924223-2340866`). On the original pinned Desktop build workload,
+it completed a real native TLS artifact download of 72.8 MB, two artifacts,
+one delta (`20261114-124017980-2343188`, exit 0). In the same isolated home,
+SSH-only followed by required-native builds both passed
+(`20261114-124125028-2346378`, `20261114-124128107-2346630`); daemon logs show
+separate `native=off` and `native=required` identities, and the latter verified
+public native TLS. These are acceptance checks, not matched speed comparisons.
+An earlier candidate build accidentally selected local execution and is
+explicitly excluded from hosted evidence (`20261114-123753523-2330741`).
+
+The interrupted synthetic run remains incomplete. No native speedup, global
+default promotion, or permanent fleet-wide SSH removal is established by this
+experiment.
 
 ## 2026-11-13: link checkpoints replace the checksum rsync after a reconnect (opt-in)
 
