@@ -22,6 +22,23 @@ It does not change justrust credentials, service routing, the installed client,
 or automatically send a build to the canary. Plain justrust still uses its
 existing configured service until an explicit supported canary route exists.
 
+## Implementation map
+
+The private experimental checkout owns multitenant resource control and storage.
+Start with `~/justrust-cloud-resource-lab/docs/resource-sharing-integration.md`
+for the component contracts and outstanding acceptance gates. Its pure allocator
+is `pool/resource_policy.py`, the confirmed RAM actuator is
+`pool/resource_controller.py`, and trusted-public immutable disk publication is
+`pool/shared_artifacts.py`. Guest, compiler-pmem and isolated client-dogfood
+runners live under `infra/resource-canary-*` with corresponding tests and docs.
+
+The public client does not need a new default installation just to exercise an
+owner-authorized experimental SSH route. The dogfood runner uses a separate
+client home and ephemeral transport identity. A successful self-managed route
+is not proof of production hosted admission or billing integration. Do not run
+these routes against retained account data or describe public file-page sharing
+as shared private compiler heaps.
+
 ## Delivery sequence
 
 1. Verify a dedicated canary host, KVM, isolated disks, and bounded lifecycle.
