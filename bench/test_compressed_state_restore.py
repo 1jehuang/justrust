@@ -78,6 +78,22 @@ class CompressedStateRestoreTests(unittest.TestCase):
         json.dumps(report)
         self.preserved()
 
+    def test_guest_cold_only_evicts_private_compressed_frames(self):
+        calls = []
+        def evict(snapshot, inventory):
+            self.assertNotEqual(snapshot, self.source)
+            self.assertTrue(all(name.endswith('.zst') for name in inventory['files']))
+            self.assertEqual(set(inventory['files']), {p.name for p in snapshot.iterdir()})
+            calls.append(snapshot)
+        with mock.patch.object(harness, 'evict_snapshot_cache', side_effect=evict), \
+             mock.patch.object(harness, 'read_bytes_counter', side_effect=[100, 200] * 9):
+            report = harness.benchmark(self.source, self.disk, chunk_bytes=1024, evict_source_cache=True)
+        self.assertEqual(len(calls), 9)
+        self.assertTrue(report['evict_source_cache'])
+        self.assertIn('Advisory guest-cold', report['cache_note'])
+        self.assertTrue(all(r['read_bytes_delta'] == 100 for r in report['runs']))
+        self.preserved()
+
     def test_cli_custom_settings_json(self):
         output = io.StringIO()
         with redirect_stdout(output):

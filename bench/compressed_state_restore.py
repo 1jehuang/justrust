@@ -20,9 +20,16 @@ import tempfile
 import time
 
 try:
-    from .disk_state_restore import CACHE_NOTE, manifest, parse_workers, validate_paths, verify
+    from .disk_state_restore import EVICT_CACHE_NOTE, evict_snapshot_cache, read_bytes_counter, manifest, parse_workers, validate_paths, verify
 except ImportError:
-    from disk_state_restore import CACHE_NOTE, manifest, parse_workers, validate_paths, verify
+    from disk_state_restore import EVICT_CACHE_NOTE, evict_snapshot_cache, read_bytes_counter, manifest, parse_workers, validate_paths, verify
+
+
+CACHE_NOTE = (
+    "Warm-page-cache compressed-chunk extraction benchmark. Encoding, verification "
+    "and repeated restores warm caches. No global cache dropping or fsync. "
+    "Times measure restoration completion, not durable storage writes."
+)
 
 
 class Zstd:
@@ -121,7 +128,7 @@ def restore(snapshot, destination, inventory, chunks, codec, workers):
 
 
 def benchmark(source, directory, workers=(1, 4, 16), repetitions=3,
-              chunk_bytes=4 * 1024 * 1024, level=3):
+              chunk_bytes=4 * 1024 * 1024, level=3, evict_source_cache=False):
     source, directory = validate_paths(source, directory)
     workers = list(workers)
     if not workers or any(type(n) is not int or n < 1 for n in workers) or len(set(workers)) != len(workers):
@@ -151,19 +158,31 @@ def benchmark(source, directory, workers=(1, 4, 16), repetitions=3,
             order = workers if repetition % 2 else list(reversed(workers))
             for count in order:
                 destination = root / "restore"
+                preparation_seconds = 0.0
+                if evict_source_cache:
+                    preparation_started = time.perf_counter()
+                    evict_snapshot_cache(snapshot, {"files": {c["frame"]: {} for c in chunks}})
+                    preparation_seconds = time.perf_counter() - preparation_started
+                read_before = read_bytes_counter()
                 started = time.perf_counter()
                 codec_seconds = restore(snapshot, destination, inventory, chunks, codec, count)
                 elapsed = time.perf_counter() - started
+                read_after = read_bytes_counter()
                 verify(destination, inventory)
                 runs.append({"workers": count, "repetition": repetition, "seconds": elapsed,
                              "codec_thread_seconds_sum": codec_seconds, "files": files,
                              "bytes": size, "compressed_bytes": compressed_bytes,
-                             "verified": True, "bytes_per_second": size / elapsed if elapsed else None})
+                             "verified": True, "cache_preparation_seconds": preparation_seconds,
+                             "read_bytes_delta": (read_after - read_before
+                                                  if read_before is not None and read_after is not None else None),
+                             "bytes_per_second": size / elapsed if elapsed else None})
                 shutil.rmtree(destination)
         verify(source, inventory)
     return {"schema_version": 1, "source": str(source), "disk_path": str(directory),
             "scope": "independent compressed file chunks, not compiler query/heap deserialization",
-            "cache_note": CACHE_NOTE,
+            "cache_note": EVICT_CACHE_NOTE if evict_source_cache else CACHE_NOTE,
+            "evict_source_cache": evict_source_cache,
+            "read_bytes_note": "Guest storage-read accounting around extraction, not proof of physical-device cold reads.",
             "timed_region": "fresh tree creation/preallocation, compressed reads, zstd decode, pwrite, executor lifecycle; no hashes or deletion",
             "codec_timing_note": "codec thread seconds are summed elapsed call times, may exceed wall time under parallelism, not CPU time",
             "metadata_note": "file contents and empty directories restored; file metadata not restored",
@@ -192,10 +211,11 @@ def main(argv=None):
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--chunk-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--level", type=int, default=3)
+    parser.add_argument("--evict-source-cache", action="store_true")
     args = parser.parse_args(argv)
     try:
         report = benchmark(args.source, args.directory, args.workers, args.repetitions,
-                           args.chunk_bytes, args.level)
+                           args.chunk_bytes, args.level, args.evict_source_cache)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     print(json.dumps(report, indent=2))
