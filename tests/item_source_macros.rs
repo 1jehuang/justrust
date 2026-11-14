@@ -53,6 +53,20 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Syntax,
         },
         Case {
+            name: "qualified_exported_item_macro_at_module_level",
+            source: r#"#[macro_export] macro_rules! make { ($n:ident, $v:expr) => { fn $n() -> i32 { $v } }; } crate::make!(seven, 7); mod inner { crate::make!(eight, 8); pub fn get() -> i32 { eight() } } fn main() { println!("{} {}", seven(), inner::get()); }"#,
+            stdout: Some("7 8\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "qualified_exported_item_macro_invalid_body",
+            source: r#"#[macro_export] macro_rules! make { ($n:ident) => { fn $n() -> i32 { true } }; } crate::make!(bad); fn main() {}"#,
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
             name: "macro_use_inline_module_extends_textual_scope",
             source: r#"#[macro_use] mod macros { macro_rules! double { ($x:expr) => { $x * 2 } } pub fn inner() -> i32 { double!(4) } } mod later { pub fn use_it() -> i32 { double!(10) } } fn main() { println!("{} {} {}", macros::inner(), later::use_it(), double!(1)); }"#,
             stdout: Some("8 20 2\n"),
@@ -609,8 +623,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (30, 22));
-    assert_eq!(partition, (25, 9, 12, 6));
+    assert_eq!(counts, (31, 23));
+    assert_eq!(partition, (26, 9, 13, 6));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -804,8 +818,8 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 208);
-    assert_eq!(modes, (50, 50, 42, 42, 12, 12));
+    assert_eq!(gates, 216);
+    assert_eq!(modes, (52, 52, 44, 44, 12, 12));
     eprintln!(
         "NATIVE ITEM SOURCE:176 cells, modes{modes:?};42 executed native images;28 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );
@@ -938,6 +952,13 @@ fn exported_original_cases() -> Vec<Case> {
         Case {
             name: "unused_export_preserves_ordinary_item_macro",
             source: r#"#[macro_export] macro_rules! exported {()=>{9};} macro_rules! make{()=>{fn helper()->i32{7}};} make!(); fn main(){if helper()==7{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "active_item_macro_preserves_original_export_completeness",
+            source: r#"#[macro_export] macro_rules! exported{()=>{7};} macro_rules! make{()=>{fn helper()->i32{7}};}make!();fn main(){if crate::exported!()==helper(){println!("export7");}}"#,
             stdout: Some("export7\n"),
             stock_diagnostic: None,
             outcome: Outcome::Runtime,
@@ -1190,10 +1211,6 @@ fn private_source_imports_are_semantic_despite_open_macro_namespace() {
 fn exported_namespace_open_authority_is_unsupported_not_absent_workers1_8() {
     let rustc = stock_rustc::stock_rustc();
     for (name, text) in [
-        (
-            "active-item-may-add-duplicate",
-            r#"#[macro_export] macro_rules! exported{()=>{7};} macro_rules! make{()=>{fn helper()->i32{7}};}make!();fn main(){let n:i32=crate::exported!();}"#,
-        ),
         (
             "configured-root-reexport",
             r#"mod hidden{#[macro_export]macro_rules! exported{()=>{7};}}pub use crate::exported as alias;fn main(){let n:i32=crate::alias!();}"#,

@@ -22,7 +22,6 @@ struct Declaration {
 pub(in crate::compiler) struct LocalExports {
     file: crate::compiler::keys::SourceFile,
     child_count: usize,
-    has_item_macro_invocations: bool,
     has_unresolved_imports: bool,
     names: Arc<NameStore>,
     root: SourceFileHandle,
@@ -188,23 +187,13 @@ impl ExportSubtree {
                 message: "exported macro lookup requires configured macro import/reexport completeness",
             });
         }
-        // Source-tree completeness is not declaration completeness. Any active
-        // unexpanded item invocation may add an export or a duplicate, even
-        // when an original declaration already matches this lookup.
+        // Original declarations are the complete export set: item macro
+        // output may never define macros (generated `macro_rules!` is
+        // rejected in item expansion, see `item_macro_invocation` and
+        // `module_macro_definition`), so active item invocations cannot add
+        // an export or a duplicate. Lifting that rejection must restore an
+        // item-invocation completeness check here.
         let mut pending = BudgetVec::new(names.budget(), Storage::Temporary)?;
-        pending.push(self)?;
-        while let Some(tree) = pending.pop() {
-            names.budget().charge(Counter::Work, 1)?;
-            if tree.local.has_item_macro_invocations {
-                return Err(DriverError::Unsupported {
-                    span: invocation,
-                    message: "exported macro lookup requires admitted item-macro declaration completeness",
-                });
-            }
-            for child in tree.children.as_slice().iter().rev() {
-                pending.push(child.as_ref())?;
-            }
-        }
         pending.push(self)?;
         while let Some(tree) = pending.pop() {
             if !names.session().serves(tree.local.names.session().id()) {
@@ -536,7 +525,6 @@ impl LocalExports {
         Ok(Self {
             file: file_key,
             child_count,
-            has_item_macro_invocations: source.has_item_macro_invocations,
             has_unresolved_imports,
             names,
             root,

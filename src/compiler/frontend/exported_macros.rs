@@ -131,4 +131,57 @@ impl Parser<'_, '_> {
             expanded_adapter::lower(slice, self.names, self.names.edition(), eof, &admission)?;
         Ok((buffer, admission, depth))
     }
+
+    /// `crate::m!(..);` / `$crate::m!(..);` / `krate::m!(..);` in module item
+    /// position: an exported macro selected by declaration completeness,
+    /// expanded as one item expansion at the current module frontier.
+    pub(super) fn qualified_item_macro(
+        &mut self,
+        module: ModuleId,
+        module_path: &AstPath,
+        parsed: &mut ParsedDeclarations,
+    ) -> Result<(), ParseError> {
+        if self.item_expansion.is_some() {
+            return Err(self.unsupported("nested item macro products are unsupported"));
+        }
+        let path = self.path()?;
+        let name = path
+            .segments()
+            .last()
+            .copied()
+            .ok_or_else(|| self.error("exported macro name missing"))?;
+        let span = self.names.span(name).map_err(native_adapter::name_error)?;
+        self.expect("!")?;
+        let braced = self.is("{");
+        let args = self.macro_group()?;
+        if braced {
+            self.eat(";");
+        } else if !self.eat(";") {
+            return Err(self.error(
+                "macros that expand to items must be delimited with braces or followed by a semicolon",
+            ));
+        }
+        let call = self
+            .module_frontier
+            .ok_or_else(|| self.unsupported("exported item macro requires a module macro scope"))?;
+        let namespace = self
+            .lexical
+            .exports
+            .clone()
+            .ok_or_else(|| self.unsupported("exported macro namespace unavailable"))?;
+        let selected = namespace
+            .select(&path, self.names)
+            .map_err(|error| self.driver_error(error))?
+            .ok_or_else(|| self.error("no exported macro at this crate-root path"))?;
+        let expanded = selected
+            .expand(
+                self.names,
+                args,
+                super::super::macro_rules::CallSite { span, parent: None },
+            )
+            .map_err(|error| self.driver_error(error))?;
+        // An exported definition is path-visible from every module of its
+        // crate: the call frontier itself is the definition's textual anchor.
+        self.finish_item_expansion(expanded, call, call, module, module_path, parsed)
+    }
 }

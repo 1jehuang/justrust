@@ -12686,6 +12686,26 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.names,
             )
             .map_err(|error| self.driver_error(error))?;
+        self.finish_item_expansion(
+            expanded,
+            selected.definition(),
+            selected.call(),
+            module,
+            module_path,
+            parsed,
+        )
+    }
+    /// Parse and publish one admitted item-macro expansion. `definition` must
+    /// be textually visible from `call` (both module frontiers).
+    pub(super) fn finish_item_expansion(
+        &mut self,
+        expanded: super::macro_rules::ExpandedTokens,
+        definition: super::semantic_scope::ModuleFrontierId,
+        call: super::semantic_scope::ModuleFrontierId,
+        module: ModuleId,
+        module_path: &AstPath,
+        parsed: &mut ParsedDeclarations,
+    ) -> Result<(), ParseError> {
         let expansion = expanded
             .expansion(self.names.session())
             .map_err(|error| self.driver_error(error.into()))?;
@@ -12696,13 +12716,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
         let proof = scopes
-            .anchor_item_expansion(
-                self.names,
-                &*self.modules,
-                expansion,
-                selected.definition(),
-                selected.call(),
-            )
+            .anchor_item_expansion(self.names, &*self.modules, expansion, definition, call)
             .map_err(scope_parse_error)?;
         let eof = self
             .names
@@ -16467,6 +16481,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 continue;
             }
             if !explicit_visibility && self.inactive_qualified_macro_item()? {
+                continue;
+            }
+            if !explicit_visibility
+                && self.purpose == ParserPurpose::Active
+                && self.lexical.exports.is_some()
+                && self.qualified_macro_ahead()?
+            {
+                self.qualified_item_macro(module, module_path, parsed)?;
                 continue;
             }
             if self.token().is_ident()
