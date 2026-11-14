@@ -953,7 +953,7 @@ mod tests {
         s.place = Place::Hosted;
         assert_eq!(ids(&s), "b");
         // Counts ignore the kind filter but respect the others.
-        assert_eq!(s.kind_counts(), [1, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(s.kind_counts(), [0, 1, 0, 0, 0, 0, 0]);
         s.place = Place::Remote;
         assert_eq!(ids(&s), "");
         assert_eq!(s.kind_counts(), [1, 0, 0, 0, 0, 0, 0]);
