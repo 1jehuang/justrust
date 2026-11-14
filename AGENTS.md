@@ -1,5 +1,16 @@
 # Agent Instructions for justrust
 
+## Resource Lab checkout exception
+
+In `~/justrust-resource-lab`, the user explicitly requested the isolated
+`experiment/resource-sharing` branch. Work on that branch in this checkout,
+not stable. This exception applies only to the experimental clone. Read
+`docs/resource-lab.md` before working on resource sharing. Keep the original
+`~/justrust` checkout on stable and preserve its unrelated uncommitted work.
+Do not install experimental client builds as the default or silently route
+ordinary hosted builds to the canary. All security and measurement rules below
+still apply. No worktrees.
+
 ## Branch layout (2026-10-19)
 
 This checkout (`~/justrust`) is the `stable` branch: the shipping justrust

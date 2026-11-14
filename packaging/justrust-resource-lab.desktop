@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Justrust Resource Lab
+Comment=Open Jcode on the isolated resource-sharing experiment branch
+Exec=/usr/bin/kitty --class justrust-resource-lab --title "Justrust Resource Lab" /bin/bash /home/jeremy/justrust-resource-lab/scripts/resource-lab-launch.sh
+Path=/home/jeremy/justrust-resource-lab
+Icon=/home/jeremy/justrust-resource-lab/assets/justrust-icon.png
+Terminal=false
+StartupNotify=true
+StartupWMClass=justrust-resource-lab
+Categories=Development;
+Keywords=justrust;jcode;resource;sharing;canary;experiment;branch;ram;cache;
