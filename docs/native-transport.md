@@ -6,6 +6,37 @@ router have implementation paths. Their presence in source, or a router canary,
 is not evidence that the published client and fleet offer the complete path.
 SSH remains the compatibility transport and must not be disabled yet.
 
+### Live acceptance, 2026-11-14 03:45 UTC
+
+The unpublished alpha.27 client built from `7d2504b42`, SHA-256
+`4e49b9de1b51d8a7c73b4cb451fa622d3b209132f1d93682348bff2ea9a4b18c`,
+passed `scripts/native-hosted-acceptance.py` against the actual public SNI router
+and the canary guest supervisor. The supervisor remains the earlier pinned
+`c0c10710` artifact, not a claim that the fleet already runs the new client bytes.
+The published default client was not replaced.
+
+The isolated run forbade SSH execution and passed real hosted check/build/test,
+source edits/deletion/protection, pinned executable upload, a real TCP-stream
+kill with same-session reattachment and one execution, stderr and exit-status
+preservation, wrong-pin rejection without execution, and non-root commands that
+positively received permission denials for both root secrets. It waited
+65.0001 seconds without control-plane refresh, confirmed fresh-key rejection,
+then resumed using the previously enrolled identity without a fresh key.
+
+Automatically recorded builds: `20261113-194459029-1942743`,
+`20261113-194516009-1944104`, `20261113-194519534-1944341`,
+`20261113-194522857-1944475`, `20261113-194526561-1944681`, and the deliberately
+failing-test receipt `20261113-194546544-1945644`. These are correctness gates,
+not a native-versus-SSH speed measurement.
+
+The separate SSH-retirement canary obtained a trusted supervisor receipt and
+account acknowledgment, and the host reported the public DNAT disabled. It did
+not pass the independent external closed-port gate: TCP timed out rather than
+returning connection refused. The harness correctly refused to count that as
+success and rolled back the exact lease, verifying fresh pinned SSH afterward.
+Permanent retirement and default promotion remain gated on that acceptance,
+exact-revision cross-platform CI, and a valid comprehensive comparison.
+
 Goal: carry hosted builds over justrust's protocol on TCP 443, so networks that
 block public SSH ports can connect without an SSH relay, and interrupted builds
 can reattach without starting another execution. No native-versus-SSH speedup
