@@ -316,6 +316,20 @@ class RetirementTests(unittest.TestCase):
                 api.post("build/host/native-only", {"lease_id": LEASE})
         self.assertEqual(str(error.exception), "control-plane request failed (HTTP 409)")
 
+    def test_api_identifies_acceptance_without_changing_authority_or_redirect_policy(self):
+        api = D.API("https://example.invalid/v1", "private-key", 1)
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"native_only":false,"ssh":"restoring"}'
+        with patch.object(api.opener, "open", return_value=response) as request:
+            api.post("build/host/native-only", {"action": "rollback", "lease_id": LEASE})
+        sent = request.call_args.args[0]
+        self.assertEqual(sent.get_header("User-agent"), "justrust-native-acceptance/1")
+        self.assertEqual(sent.get_header("Authorization"), "Bearer private-key")
+        self.assertEqual(sent.full_url, "https://example.invalid/v1/build/host/native-only")
+        self.assertEqual(request.call_args.kwargs["timeout"], 1)
+
     def test_main_private_temporary_files_removed_on_failure(self):
         roots = []
         def execute(retirement):

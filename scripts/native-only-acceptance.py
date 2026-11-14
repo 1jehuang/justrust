@@ -63,7 +63,8 @@ class API:
     def post(self, path, body):
         request = urllib.request.Request(self.base + "/" + path,
             data=json.dumps(body).encode(), method="POST",
-            headers={"Authorization": "Bearer " + self.key, "Content-Type": "application/json"})
+            headers={"Authorization": "Bearer " + self.key, "Content-Type": "application/json",
+                     "User-Agent": "justrust-native-acceptance/1"})
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 result = json.loads(response.read(1024 * 1024))
