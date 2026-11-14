@@ -27,6 +27,43 @@ feature toggles as stack comparisons. See
 identity, cache, correctness, repetition and coverage contract. These focused
 results do not replace the comprehensive synthetic gate below.
 
+## Hosted ext4 target-lock contention acceptance
+
+The ordinary suite forces a target directory, which intentionally disables
+agent build slots. `bench/contention.py` instead measures a tiny content-pinned,
+dependency-free fixture with an eligible default target on hosted ext4:
+
+```sh
+python3 bench/contention.py -n 3 --out bench/results/contention-before.json
+JUSTRUST=/absolute/path/to/candidate python3 bench/contention.py -n 3 \
+  --expect-isolated --out bench/results/contention-after.json
+python3 bench/suite.py compare bench/results/contention-before.json bench/results/contention-after.json
+```
+
+Run the baseline with the installed published client, without installing source
+over it. Hosted agent code must also be the intended baseline/candidate: a local
+client override alone does not replace the binary running on the hosted machine.
+Each real Cargo command goes through justrust and keeps its run ID. The harness
+writes normal suite results and uploads them through `justrust records`.
+
+The holder is a real hosted integration test with an explicit shared target.
+It holds Cargo's actual `target/debug/.cargo-build-lock` for 20 seconds and
+flushes a readiness marker before the independent test command starts. Only the
+holder, warmup, and shared-target follow-up force their target, never the measured
+contender. The contender must pass two unrelated unit tests. The holder compares
+the shared dependency/fingerprint file bytes before releasing its lock, and an
+uncontended follow-up runs both tests against the shared target again.
+`--expect-isolated` additionally requires a real slot, less than 0.5 seconds of
+reported target-lock wait, and completion while the shared lock is still held.
+Results record actual filesystem magic and hosted machine identity. Comparisons
+reject different fixture bytes, hold protocols, execution modes, controls, or
+hosted machines. `--local` is only for diagnosing the harness, not hosted evidence.
+
+The fixture lives under `~/.cache/justrust-bench/work/contention/<content hash>`.
+No live Jcode/Desktop files are edited or copied, and no large project target is
+created. This is a controlled lock-contention acceptance test, not a claim of
+general speedup or a replacement for the comprehensive synthetic gate.
+
 ## Measurement policy: comprehensive first, focused when diagnosing
 
 The primary score is **mean agent-visible wait across the session-weighted

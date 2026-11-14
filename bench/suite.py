@@ -1701,6 +1701,11 @@ def named_test_failure_issues(result: dict) -> list[str]:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if any(result.get("schema") == "contention_suite_v1" for result in (a, b)):
+        from contention import comparison_issues
+        issues = comparison_issues(a, b)
+        if issues:
+            sys.exit("bench: contention comparison blocked: " + "; ".join(issues))
     if getattr(args, "require_valid", False) and not (
             "synth" in a and "synth" in b
             and not a.get("schema", "").startswith("native_resident")
