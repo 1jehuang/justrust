@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn tied_newest_and_recent_older_generations_are_retained() {
-        let (root, old, newest, _, p) = fixture("output-ranking");
+        let (root, old, newest, _, mut p) = fixture("output-ranking");
         assert_eq!(candidates(&root, &p).unwrap().len(), 1);
 
         // An idle tie must retain both hashes, independent of readdir order.
@@ -164,6 +164,9 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dev = std::fs::metadata(&old).unwrap().dev();
         assert_eq!(tree_time(&old, dev).unwrap(), tree_time(&newest, dev).unwrap());
+        // The fixture deliberately future-dates newest to separate its rank.
+        // Advance the injected observation clock so this tie is idle too.
+        p.now = p.now.max(tree_time(&old, dev).unwrap() + IDLE.as_secs() + 1);
         assert!(tree_time(&old, dev).unwrap() + IDLE.as_secs() <= p.now);
         assert!(candidates(&root, &p).unwrap().is_empty());
 
