@@ -70,11 +70,27 @@ class GithubAppletReadinessTests(unittest.TestCase):
         namespace["section_search"] = lambda section, *args: [row] if section in ("review", "prs") else []
         app.refresh_all()
         self.assertEqual(len(jobs), len(namespace["SECTIONS"]))
+        jobs[2]()  # An unrelated section may finish first without either fact.
+        document = json.dumps(messages[-1]["document"])
+        self.assertNotIn("acme/app#7", document)
+        self.assertNotIn("Review requested 1", document)
         jobs[1]()  # My PRs finishes while review remains queued.
         document = json.dumps(messages[-1]["document"])
         self.assertIn("acme/app#7", document)  # Original wait returns too early.
         self.assertNotIn("Review requested 1", document)  # Original assertion fails.
         jobs[0]()  # Review now completes, satisfying both readiness conditions.
+        document = json.dumps(messages[-1]["document"])
+        self.assertIn("acme/app#7", document)
+        self.assertIn("Review requested 1", document)
+
+        # Reverse order is also valid: review rows themselves can satisfy both
+        # conditions, so readiness must not depend on every section finishing.
+        app = namespace["App"]()
+        app.instance = "github#launch1"
+        app.spawn = lambda fn, *args: jobs.append(lambda: fn(*args))
+        jobs.clear()
+        app.refresh_all()
+        jobs[0]()
         document = json.dumps(messages[-1]["document"])
         self.assertIn("acme/app#7", document)
         self.assertIn("Review requested 1", document)
