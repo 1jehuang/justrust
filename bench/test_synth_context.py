@@ -86,7 +86,8 @@ class SyntheticContextTests(unittest.TestCase):
         self.assertNotIn("JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256", child)
 
     def test_controls_reach_a_real_exec_child(self):
-        with mock.patch.dict(os.environ, self.controls(), clear=True):
+        with mock.patch.dict(os.environ, {**self.controls(), "JUSTRUST_LOCAL": "on",
+                                         "JUSTRUST_LOCAL_REASON": "controlled-benchmark"}, clear=True):
             child, _ = self.synthetic_child()
         output = subprocess.check_output([sys.executable, "-c",
                                           "import json,os; print(json.dumps(dict(os.environ)))"], env=child)
@@ -95,6 +96,48 @@ class SyntheticContextTests(unittest.TestCase):
         self.assertEqual(executed.get("JUSTRUST_CARGO_CRITICAL_PATH"), "1")
         self.assertEqual(executed.get("CARGO_BUILD_JOBS"), "24")
         self.assertEqual(executed.get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS"), str(self.hints))
+        self.assertEqual(executed.get("JUSTRUST_LOCAL"), "on")
+        self.assertEqual(executed.get("JUSTRUST_LOCAL_REASON"), "controlled-benchmark")
+
+    def test_local_policy_override_on_off_and_absent_is_scoped_and_recorded(self):
+        self.home.mkdir()
+        policy = self.home / "no-local"
+        policy.write_text("battery policy, do not change\n")
+        for override in ("on", "off", None):
+            with self.subTest(override=override):
+                env = {"JUSTRUST_LOCAL_REASON": "private benchmark explanation",
+                       "JUSTRUST_REMOTE": "force"}
+                if override is not None:
+                    env["JUSTRUST_LOCAL"] = override
+                with mock.patch.dict(os.environ, env, clear=True):
+                    child, result = self.synthetic_child()
+                    baseline = versus.stack_env(versus.Stack("default", "control", True),
+                                                self.scenario, self.root / "target", "run")
+                    stock = versus.stack_env(versus.Stack("stock", "control", False),
+                                             self.scenario, self.root / "target", "run")
+                self.assertEqual(child.get("JUSTRUST_LOCAL"), override)
+                if override is None:
+                    self.assertNotIn("JUSTRUST_LOCAL", child)
+                self.assertEqual(child["JUSTRUST_LOCAL_REASON"], env["JUSTRUST_LOCAL_REASON"])
+                self.assertEqual(child["JUSTRUST_REMOTE"], "0")
+                self.assertEqual(result["env"]["routing_policy"], {
+                    "scope": "local-single-stack-synthetic", "remote": "0",
+                    "local_override": override,
+                    "local_policy_source": "client-policy" if override is None else "command-environment",
+                    "local_reason_present": True,
+                })
+                self.assertNotIn("private benchmark explanation", json.dumps(result))
+                for other in (baseline, stock):
+                    self.assertNotIn("JUSTRUST_LOCAL", other)
+                    self.assertNotIn("JUSTRUST_LOCAL_REASON", other)
+                self.assertEqual(policy.read_text(), "battery policy, do not change\n")
+                self.assertFalse((self.home / "local-on").exists())
+
+    def test_absent_local_reason_is_not_invented(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            child, result = self.synthetic_child()
+        self.assertNotIn("JUSTRUST_LOCAL_REASON", child)
+        self.assertFalse(result["env"]["routing_policy"]["local_reason_present"])
 
     def test_versus_default_keeps_home_but_does_not_inherit_optimization(self):
         with mock.patch.dict(os.environ, self.controls(), clear=True), \

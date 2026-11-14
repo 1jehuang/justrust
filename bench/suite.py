@@ -1384,10 +1384,13 @@ def synthetic_stack_controls() -> dict[str, str]:
 
     Paths belong only in the private child environment. Published provenance
     uses optimization_env(), which replaces the optional hint path with a hash.
-    Routing and run IDs remain owned by the runner, not the caller environment.
+    Remote routing and run IDs remain owned by the runner. Local policy is
+    caller-controlled for this local single-stack workload only, never for
+    implicit versus baselines. Do not write the persistent policy files.
     """
     names = (*OPTIMIZATION_CONTROLS, "JUSTRUST_CARGO_CRITICAL_PATH_COSTS",
-             "JUSTRUST_NO_UPDATE", "JUSTRUST_TOOLCHAIN_AUTO_INSTALL")
+             "JUSTRUST_NO_UPDATE", "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
+             "JUSTRUST_LOCAL", "JUSTRUST_LOCAL_REASON")
     return {name: os.environ[name] for name in names if name in os.environ}
 
 
@@ -1629,6 +1632,15 @@ def cmd_run_synth(args, identity=None) -> None:
     st = versus.Stack("suite" if TOOLCHAIN == "system" else f"suite-{TOOLCHAIN}", "justrust defaults", True,
                       controls, private_cache=True)
     info = env_info()
+    # Report the selected override, not effective persistent policy. Reasons
+    # are arbitrary private text and must not enter public records.
+    info["routing_policy"] = {
+        "scope": "local-single-stack-synthetic",
+        "remote": "0",
+        "local_override": controls.get("JUSTRUST_LOCAL"),
+        "local_policy_source": "command-environment" if "JUSTRUST_LOCAL" in controls else "client-policy",
+        "local_reason_present": bool(controls.get("JUSTRUST_LOCAL_REASON")),
+    }
     before_identity = identity.verify_files() if identity is not None else None
     options = {"identity": identity} if identity is not None else {}
     if getattr(args, "stop_on_invalid", False):

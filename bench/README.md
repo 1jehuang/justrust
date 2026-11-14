@@ -84,6 +84,22 @@ execution mode fixed. Inspect command/change breakdowns for regressions as
 well as the aggregate. Do not refresh weights between baseline and candidate.
 Repeat measurements when noise or sampling makes a conclusion uncertain.
 
+For `suite.py run --synth` only, an explicit per-command `JUSTRUST_LOCAL`
+override and `JUSTRUST_LOCAL_REASON` reach the measured justrust child. For
+example, on AC with permission to run controlled local measurements:
+
+```sh
+JUSTRUST_LOCAL=on JUSTRUST_LOCAL_REASON=controlled-benchmark bench/suite.py run --synth 1 -n 1
+```
+
+The runner still forces `JUSTRUST_REMOTE=0`. An explicit `off` remains `off`,
+and an absent override remains absent, leaving persistent client policy in
+charge. No policy files are changed. Results record `env.routing_policy` with
+the selected override, its source, and whether a reason was supplied, never
+the private reason text. This exception does not affect versus/stock stacks,
+hosted routing, native defaults, workload fixtures, or CPU-noise eligibility.
+Use the same routing policy for baseline and candidate measurements.
+
 Snapshot format 2 retains the exact pinned Git commit in an independent shallow
 repository beside each extracted tree. Git-aware tests can inspect the worktree
 without sharing the live checkout's configuration, remotes, hooks, credentials,
