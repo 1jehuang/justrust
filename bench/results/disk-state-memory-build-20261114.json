@@ -1,0 +1,292 @@
+{
+  "schema": 1,
+  "source": "/home/jeremy/.jcode/scratch/disk-state-20261114-build-b/state-snapshot",
+  "files": 261,
+  "bytes": 695913032,
+  "chunks": 376,
+  "chunk_bytes": 4194304,
+  "cpu_count": 16,
+  "loadavg": [
+    67.25439453125,
+    74.744140625,
+    45.53466796875
+  ],
+  "scope": "Raw bytes loaded into RAM, not compiler semantic deserialization; compressed frames are RAM-resident",
+  "rows": [
+    {
+      "mode": "raw-warm",
+      "workers": 1,
+      "repetition": 0,
+      "seconds": 0.3040210119997937,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 4,
+      "repetition": 0,
+      "seconds": 0.0927673149999464,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 16,
+      "repetition": 0,
+      "seconds": 0.12694400299915287,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 16,
+      "repetition": 1,
+      "seconds": 0.09998707399972773,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 4,
+      "repetition": 1,
+      "seconds": 0.09581210400028795,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 1,
+      "repetition": 1,
+      "seconds": 0.2799662339994029,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 1,
+      "repetition": 2,
+      "seconds": 0.27047175400002743,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 4,
+      "repetition": 2,
+      "seconds": 0.08583952499975567,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 16,
+      "repetition": 2,
+      "seconds": 0.05584167599954526,
+      "read_bytes_delta": 0,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 1,
+      "repetition": 0,
+      "seconds": 25.901641716000086,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 4,
+      "repetition": 0,
+      "seconds": 9.720196971000405,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 16,
+      "repetition": 0,
+      "seconds": 5.701618090000011,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 16,
+      "repetition": 1,
+      "seconds": 5.279305225999451,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 4,
+      "repetition": 1,
+      "seconds": 4.788249803999861,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 1,
+      "repetition": 1,
+      "seconds": 5.337246322000283,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 1,
+      "repetition": 2,
+      "seconds": 12.91174115099966,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 4,
+      "repetition": 2,
+      "seconds": 6.038487909999276,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 16,
+      "repetition": 2,
+      "seconds": 7.5858805179996125,
+      "read_bytes_delta": 696451072,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 1,
+      "repetition": 0,
+      "seconds": 0.578067786000247,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 4,
+      "repetition": 0,
+      "seconds": 0.3172927820005498,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 16,
+      "repetition": 0,
+      "seconds": 0.31832773099995393,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 16,
+      "repetition": 1,
+      "seconds": 0.3596586780004145,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 4,
+      "repetition": 1,
+      "seconds": 0.27056034300039755,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 1,
+      "repetition": 1,
+      "seconds": 0.5461493669999982,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 1,
+      "repetition": 2,
+      "seconds": 0.5411702179999338,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 4,
+      "repetition": 2,
+      "seconds": 0.3384580990004906,
+      "verified": true
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 16,
+      "repetition": 2,
+      "seconds": 0.318719680999493,
+      "verified": true
+    }
+  ],
+  "compression": {
+    "level": 3,
+    "version": "1.5.5",
+    "bytes": 186463291,
+    "seconds": 1.4967821210002512,
+    "ratio": 0.26794050754318965
+  },
+  "summaries": [
+    {
+      "mode": "raw-warm",
+      "workers": 1,
+      "median_seconds": 0.2799662339994029,
+      "median_read_bytes": 0
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 4,
+      "median_seconds": 0.0927673149999464,
+      "median_read_bytes": 0
+    },
+    {
+      "mode": "raw-warm",
+      "workers": 16,
+      "median_seconds": 0.09998707399972773,
+      "median_read_bytes": 0
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 1,
+      "median_seconds": 12.91174115099966,
+      "median_read_bytes": 696451072
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 4,
+      "median_seconds": 6.038487909999276,
+      "median_read_bytes": 696451072
+    },
+    {
+      "mode": "raw-guest-cold",
+      "workers": 16,
+      "median_seconds": 5.701618090000011,
+      "median_read_bytes": 696451072
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 1,
+      "median_seconds": 0.5461493669999982,
+      "median_read_bytes": 0
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 4,
+      "median_seconds": 0.3172927820005498,
+      "median_read_bytes": 0
+    },
+    {
+      "mode": "zstd-RAM-frames",
+      "workers": 16,
+      "median_seconds": 0.318719680999493,
+      "median_read_bytes": 0
+    }
+  ],
+  "cache_note": "Guest-cold uses per-private-snapshot advisory eviction without fsync; read_bytes confirms guest storage activity where present, not physical-device coldness. No output writes. Codec frames are in RAM. Hash verification outside timing. Host load uncontrolled.",
+  "helper_sha256": {
+    "disk_state_restore": "cd62d01310d391629dcdfa6ee54fd9cb089b3a8f0447b98cabf0b98f8772f698",
+    "compressed_state_restore": "bf6e088a167fe08a6ca366bfb0c115a4027828739c9c1cda034d643521cfe7d7"
+  }
+}

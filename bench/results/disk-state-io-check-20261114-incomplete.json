@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "source": "/home/jeremy/.jcode/scratch/disk-state-20261114-a/state-snapshot",
+  "scratch": "/home/jeremy/.jcode/scratch/disk-state-io-work",
+  "helper_sha256": {
+    "disk_state_restore": "cd62d01310d391629dcdfa6ee54fd9cb089b3a8f0447b98cabf0b98f8772f698",
+    "compressed_state_restore": "bf6e088a167fe08a6ca366bfb0c115a4027828739c9c1cda034d643521cfe7d7"
+  },
+  "measurements": {
+    "plain-warm": {
+      "schema_version": 1,
+      "cache_note": "Warm-page-cache file-copy benchmark. Hash verification and repeated copies warm the page cache; no global cache dropping, compression, or fsync. Times measure copy completion, not durable storage writes.",
+      "evict_source_cache": false,
+      "read_bytes_note": "Linux /proc/self/io read_bytes delta around copy only, excluding verification and cache preparation; null when unavailable. Guest storage accounting, not physical-device read proof.",
+      "copy_method": "shutil.copy2 (platform fast-copy allowed), one task per file",
+      "timed_region": "fresh directory creation, file copy, metadata copy, executor startup/shutdown",
+      "verification": "SHA-256 of every file plus exact file/directory inventory, outside timed regions",
+      "source": "/home/jeremy/.jcode/scratch/disk-state-20261114-a/state-snapshot",
+      "disk_path": "/home/jeremy/.jcode/scratch/disk-state-io-work",
+      "machine": {
+        "cpu_count": 16,
+        "platform": "Linux-6.1.155+-x86_64-with-glibc2.39",
+        "architecture": "x86_64",
+        "hostname": "ip-172-31-47-214",
+        "python": "3.12.3",
+        "disk_device": 65040
+      },
+      "files": 5,
+      "bytes": 147770326,
+      "snapshot": {
+        "seconds": 171.30861126000036,
+        "workers": 1,
+        "verified": true,
+        "files": 5,
+        "bytes": 147770326
+      },
+      "runs": [
+        {
+          "workers": 1,
+          "repetition": 1,
+          "seconds": 0.0699987259995396,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 2111043078.140764
+        },
+        {
+          "workers": 4,
+          "repetition": 1,
+          "seconds": 0.048215206999884686,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 12288,
+          "bytes_per_second": 3064807457.953119
+        },
+        {
+          "workers": 16,
+          "repetition": 1,
+          "seconds": 0.045617658000082884,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 3239322939.369915
+        },
+        {
+          "workers": 16,
+          "repetition": 2,
+          "seconds": 0.04329994799991255,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 3412713705.806262
+        },
+        {
+          "workers": 4,
+          "repetition": 2,
+          "seconds": 0.045953757999996014,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 3215630939.2588267
+        },
+        {
+          "workers": 1,
+          "repetition": 2,
+          "seconds": 0.0682372060000489,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 2165538929.0102835
+        },
+        {
+          "workers": 1,
+          "repetition": 3,
+          "seconds": 0.06495218600048247,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 2275063167.2181497
+        },
+        {
+          "workers": 4,
+          "repetition": 3,
+          "seconds": 0.1539888110000902,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 959617293.2325157
+        },
+        {
+          "workers": 16,
+          "repetition": 3,
+          "seconds": 0.04767464700034907,
+          "files": 5,
+          "bytes": 147770326,
+          "verified": true,
+          "cache_preparation_seconds": 0.0,
+          "read_bytes_delta": 0,
+          "bytes_per_second": 3099557842.5345874
+        }
+      ],
+      "summaries": [
+        {
+          "workers": 1,
+          "repetitions": 3,
+          "min_seconds": 0.06495218600048247,
+          "median_seconds": 0.0682372060000489,
+          "mean_seconds": 0.06772937266669032,
+          "max_seconds": 0.0699987259995396
+        },
+        {
+          "workers": 4,
+          "repetitions": 3,
+          "min_seconds": 0.045953757999996014,
+          "median_seconds": 0.048215206999884686,
+          "mean_seconds": 0.08271925866665697,
+          "max_seconds": 0.1539888110000902
+        },
+        {
+          "workers": 16,
+          "repetitions": 3,
+          "min_seconds": 0.04329994799991255,
+          "median_seconds": 0.045617658000082884,
+          "mean_seconds": 0.04553075100011483,
+          "max_seconds": 0.04767464700034907
+        }
+      ]
+    }
+  }
+}

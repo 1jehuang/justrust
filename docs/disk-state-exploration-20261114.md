@@ -4,7 +4,7 @@
 
 Can saving compiler work to disk and restoring it in parallel beat recompiling, and is a more ambitious disk tier worth implementing?
 
-## Preliminary recommendation
+## Recommendation
 
 Preserve and reuse disk state: yes. Treat bulk extraction using every core as the main optimization: not yet. Existing Rust incremental persistence already makes a large difference. The remaining compiler work and the breadth/precision of saved state are larger opportunities than shaving a few milliseconds from copying warm files. These are focused hosted experiments, not a comprehensive workload result or production promotion.
 
@@ -48,6 +48,61 @@ Inspected the owned compiler source, not just a conceptual cache model:
 * `toolchain/rustc/compiler/rustc_middle/src/dep_graph/serialized.rs` reconstructs dependency graph arrays from serialized nodes. Parallelizing or redesigning this representation is a narrower hypothesis than blindly unpacking everything.
 
 These source observations do not prove that a particular loading routine dominates the installed toolchain's critical path. Current phase receipts do not isolate all load/decode time.
+
+## Direct disk-to-RAM loading and decompression
+
+A second, read-only experiment avoids copying restored state back to disk. It loads existing immutable snapshot bytes into anonymous RAM buffers with independently readable 4 MiB chunks, then verifies every chunk's SHA-256 outside timing. Each mode has three samples at 1/4/16 workers, with alternating worker order. No compiler executes during these byte/codec measurements.
+
+For guest-cold rows, `POSIX_FADV_DONTNEED` targets only our private immutable snapshot before timing. `/proc/self/io` confirms guest storage reads: a median 147,779,584 bytes for the 147,770,326-byte snapshot and 696,451,072 bytes for the 695,913,032-byte snapshot. Padding/readahead makes the accounting slightly larger than file sizes. Host filesystem/device caches remain uncontrolled, so these are **guest-cold reads**, not physical-device cold benchmarks. Warm rows record zero storage-read bytes.
+
+| Snapshot and operation | 1 worker | 4 workers | 16 workers |
+| --- | ---: | ---: | ---: |
+| 148 MB check state, warm load into RAM | 62.9 ms | 19.8 ms | 13.9 ms |
+| 148 MB check state, guest-cold load | 0.767 s | 0.550 s | 0.381 s |
+| 148 MB check state, decode zstd frames already in RAM | 116.6 ms | 49.0 ms | 55.9 ms |
+| 696 MB codegen state, warm load into RAM | 0.280 s | 0.093 s | 0.100 s |
+| 696 MB codegen state, guest-cold load | 12.912 s | 6.038 s | 5.702 s |
+| 696 MB codegen state, decode zstd frames already in RAM | 0.546 s | 0.317 s | 0.319 s |
+
+All cells are medians. The larger snapshot includes real generated object files from a successful hosted `build --lib` preparation: 261 files and 376 chunks. It is not a full LLVM heap checkpoint. The smaller snapshot contains 38 chunks.
+
+Parallel raw loading improved the observed guest-cold median about **2.01x** for the smaller snapshot and **2.26x** for the larger snapshot. Four workers already achieve most of the large-snapshot loading benefit. Zstd decompression improved about **2.38x** with four workers for the smaller state and **1.72x** for the larger state; sixteen did not improve those codec medians. This supports a bounded/adaptive pool rather than assuming every core should decode.
+
+### Compression cost and capacity
+
+Real zstd 1.5.5, level 3, independent 4 MiB frames:
+
+| Snapshot | Original bytes | Compressed bytes | Space reduction | One-time encode wall |
+| --- | ---: | ---: | ---: | ---: |
+| Check state | 147,770,326 | 52,845,782 | 64.24% | 0.433 s |
+| Codegen state | 695,913,032 | 186,463,291 | 73.21% | 1.497 s |
+
+The codec rows above decode **RAM-resident compressed frames**. They do not include reading those compressed frames from SSD, persistence cost, or reconstructing compiler semantic values. Do not report 0.317s as a complete 696 MB cold restore. A roughly bandwidth-proportional reduction in storage time is a hypothesis, not a measured compressed-SSD result.
+
+The measurements ran on a busy shared guest: recorded load averages at the start were about 103 for the check-state read experiment and 67 for the codegen-state experiment, on 16 vCPUs. This is useful deployed-system evidence, not an isolated-machine performance promise. Cold-load results are especially sensitive to shared storage contention.
+
+Raw receipts:
+
+* `bench/results/disk-state-memory-check-20261114.json`
+* `bench/results/disk-state-memory-build-20261114.json`
+
+Harness and local protocol tests: `bench/hosted_state_memory.py`, `bench/test_hosted_state_memory.py`. The helper hashes are retained in each receipt. The check-state run preceded the later empty/symlink input guards, which do not change timed work. Both runs verified all restored chunks; the full owned harness suite passes **38 tests**.
+
+## Incomplete backend and write-heavy attempts
+
+The broader backend compile comparison prepared a valid 695,913,032-byte snapshot, then completed only six of twelve planned edit rows before the background runner's 600-second limit. Early examples ranged from 26.13s compiling without incremental state to 5.57s with restored state, but later restored compiles took 28.71s and 72.97s under contention. One client call spent 134.5s waiting for another workspace's source sync. One copy took 29.9s instead of the earlier 0.159s. **No completed backend median speedup is claimed.** Partial receipts: `bench/results/disk-state-hosted-build-20261114-incomplete.json`.
+
+The file-materializing I/O harness completed a warm case (median copy 68.2ms serial, 48.2ms at four workers, 45.6ms at sixteen), but its overall setup took minutes. A remote process inspection found it blocked in `balance_dirty_pages` while guest load exceeded 100. The subsequent guest-cold/write-heavy attempt was cancelled rather than promoted as clean evidence. The process was confirmed gone; no other build was stopped. Partial receipts: `bench/results/disk-state-io-check-20261114-incomplete.json`.
+
+These results favor **loading state directly or mapping it in place**, rather than eagerly copying entire caches into new disk trees on every edit. They also show why multi-user I/O admission matters independently of compiler caching.
+
+## Is it worth implementing?
+
+1. **Existing disk reuse is clearly worth preserving.** The completed check experiment shows roughly 4x compiler-side benefit over throwing its incremental state away. This is not a new 4x improvement over today's correctly warmed incremental path.
+2. **Saving more expensive reusable state is worth a scoped prototype.** The measured smaller snapshot can be fetched from guest-cold storage in about 0.38s, while the remaining check compilation is several seconds. The missing experiment is whether broader state can be safely encoded, validated and reconstructed cheaply enough. Raw read time alone cannot answer that.
+3. **Compressed cold storage is promising, not a proven default.** Real snapshots shrink 2.8–3.7x and decode in 0.05–0.32s with four workers once frames are in RAM. Encoding costs 0.43–1.50s, so compressing the whole cache on every edit could regress the hot path. Prefer background compression on eviction/idle transitions, with versioned independent chunks and measured benefit per retained byte.
+4. **Do not build an all-cores bulk-unpacker first.** Use lazy, demand-driven state with a bounded pool. Extra threads beyond four produced little or no large-state/codec gain here, and they compete with actual compilation and other accounts.
+5. **Keep three tiers:** hot reusable state in RAM, directly usable/mapped local disk state, compact cold snapshots. Add strict tenant/config/schema identities, sound invalidation and memory/I/O budgets. Neither raw bytes nor stable-looking fingerprints justify retaining stale compiler answers.
 
 ## Limits and scope
 
