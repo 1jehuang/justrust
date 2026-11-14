@@ -388,6 +388,17 @@ fn append_once(manifest: &Path, line: &str) -> Option<()> {
 
 /// `justrust __localcache-finish <staged dir>`: background commit.
 pub fn finish_main(dir: PathBuf) -> ! {
+    // Idle I/O priority alone does not bound dirty page pressure: dozens of
+    // copies on ext4 can stall foreground compilers in balance_dirty_pages.
+    // Cache publication is optional. Drop a contending stage instead of
+    // queueing another writer or retaining its potentially huge outputs.
+    let Some(root) = dir.parent().and_then(Path::parent) else {
+        std::process::exit(0);
+    };
+    let Some(_admission) = finisher_admission(root) else {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::process::exit(0);
+    };
     crate::sys::lower_priority();
     // IOPRIO_WHO_PROCESS, class idle.
     // SAFETY: plain syscall on the current process.
@@ -411,6 +422,18 @@ pub fn finish_main(dir: PathBuf) -> ! {
         maybe_gc(root);
     }
     std::process::exit(0);
+}
+
+fn finisher_admission(root: &Path) -> Option<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join("finish.lock"))
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(file)
 }
 
 /// Hash and check the staged outputs, then publish them.
@@ -543,6 +566,23 @@ fn maybe_gc(root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finisher_admission_drops_contention_and_releases_on_exit() {
+        let root = std::env::temp_dir().join(format!(
+            "justrust-finisher-admission-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = finisher_admission(&root).unwrap();
+        assert!(finisher_admission(&root).is_none());
+        let other = root.join("independent-cache");
+        std::fs::create_dir_all(&other).unwrap();
+        assert!(finisher_admission(&other).is_some());
+        drop(first);
+        assert!(finisher_admission(&root).is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn generated_inputs_must_predate_the_rustc_invocation() {
