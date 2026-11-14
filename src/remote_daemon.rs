@@ -473,8 +473,16 @@ impl Daemon {
         {
             let _ = std::fs::remove_file(&p);
         }
-        if let Ok(mut l) = self.lock.lock() {
-            l.take();
+        if let Ok(mut l) = self.lock.lock()
+            && let Some(lock) = l.take()
+        {
+            // Closing our descriptor alone need not release the lock while a
+            // concurrently spawned child still holds an inherited descriptor.
+            // Explicitly unlock the shared open-file description before a
+            // replacement daemon attempts to acquire it.
+            if let Err(error) = lock.unlock() {
+                log(&format!("daemon lock release failed: {error}"));
+            }
         }
     }
 
@@ -2094,6 +2102,10 @@ mod tests {
         let lock_path = base.join("daemon.lock");
         let lock = std::fs::File::create(&lock_path).unwrap();
         lock.try_lock().unwrap();
+        // Model the descriptor retained across a concurrent fork. This keeps
+        // close-only retirement locked deterministically on Unix, rather than
+        // relying on another test's short fork-to-exec scheduling window.
+        let inherited_lock = lock.try_clone().unwrap();
         let mut child = Command::new("cat")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2149,6 +2161,7 @@ mod tests {
                 .try_lock()
                 .is_ok()
         );
+        drop(inherited_lock);
         assert!(Arc::ptr_eq(held.link.as_ref().unwrap(), &link));
         drop(held);
         let (client, server) = UnixStream::pair().unwrap();

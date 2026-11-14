@@ -45,6 +45,22 @@ public native TLS. These are acceptance checks, not matched speed comparisons.
 An earlier candidate build accidentally selected local execution and is
 explicitly excluded from hosted evidence (`20261114-123753523-2330741`).
 
+The fixed candidate also passed the complete public-router native security
+and interruption harness again: runs `20261114-124718218-2424308`,
+`20261114-124728975-2430414`, `20261114-124732873-2432834`,
+`20261114-124735101-2435269`, `20261114-124737396-2437040`, and
+`20261114-124755947-2444391`. This includes 65-second credential expiry,
+resume, wrong-pin rejection, guest secret isolation, and exactly-once recovery
+after a real established stream was killed.
+
+Final macOS CI exposed a lock-release race during daemon draining. Retirement
+now explicitly unlocks before dropping its descriptor, so a descriptor retained
+by a concurrent fork cannot block the replacement. The original route-preserving
+regression now holds a cloned descriptor to exercise this deterministically.
+Hosted all-target check (`20261114-124926770-2456379`), all 1,233 tests
+(`20261114-125001219-2463870`), and warning-free clippy
+(`20261114-125018715-2467143`) pass with that correction.
+
 The interrupted synthetic run remains incomplete. No native speedup, global
 default promotion, or permanent fleet-wide SSH removal is established by this
 experiment.
