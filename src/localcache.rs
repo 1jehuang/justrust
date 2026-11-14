@@ -35,6 +35,8 @@
 //!   and scanning it costs ~0.5 s. The shim only hashes the inputs and
 //!   reflinks the outputs into `s/` (milliseconds), then a detached, niced
 //!   `justrust __localcache-finish` hashes, checks, commits, and collects.
+//!   Only one finisher per cache publishes at a time. Contending finishers
+//!   discard their optional stages rather than building an I/O backlog.
 //! - **Off with hot patching** (`JUSTRUST_HOTPATCH=1`): the patcher tracks
 //!   the binaries it linked.
 //!
@@ -582,6 +584,17 @@ mod tests {
         drop(first);
         assert!(finisher_admission(&root).is_some());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finisher_admission_fails_open_when_cache_root_is_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "justrust-finisher-missing-root-{}",
+            std::process::id()
+        ));
+        assert!(!root.exists());
+        assert!(finisher_admission(&root).is_none());
+        assert!(!root.exists());
     }
 
     #[test]
