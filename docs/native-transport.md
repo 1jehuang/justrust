@@ -63,6 +63,23 @@ deltas and deletion semantics while replacing its remote shell. Native rsync
 uses secluded arguments so file paths travel in the rsync protocol. Replacing
 that engine requires separate correctness and throughput evidence.
 
+### Local rsync prerequisite
+
+Native Linux hosted bulk sync requires the local `rsync` on `PATH` to accept
+`--secluded-args`. Apple's stock macOS openrsync does not support that option.
+Install modern rsync with `brew install rsync` and put its `bin` directory
+before `/usr/bin` on `PATH` to use native bulk sync on macOS.
+
+Before requesting a hosted lease, the client probes the actual executable with
+`rsync --secluded-args --version`, without transferring files or contacting a
+worker. Automatic native selection falls back to the SSH compatibility path
+when this probe fails. Explicit required-native or native-only selection fails
+early with an actionable diagnostic instead of allocating an unusable native
+lease or silently downgrading. Explicit native-off and the separate Windows
+worker path do not run this probe. macOS CI retains stock openrsync for its
+existing tests and integration checks, then runs the unchanged native rsync
+shell-parser assertion with modern rsync.
+
 ## Historical measurements (one laptop, Wi-Fi, 2026-11-07 to 2026-11-13)
 
 These predate the hash-bearing checkpoint implementation and native acceptance

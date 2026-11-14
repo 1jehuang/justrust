@@ -20,6 +20,23 @@ pub const MAX_FILE: u64 = 8 << 20;
 /// Above this many changed files, rsync is cheaper than single frames.
 pub const RSYNC_ABOVE: usize = 300;
 
+/// Probe the actual executable on PATH, not its version string. Apple's
+/// openrsync does not implement the native transport's secluded arguments.
+/// `--version` prevents any transfer or remote-shell invocation.
+pub(crate) fn native_rsync_supported() -> bool {
+    rsync_supports_secluded_args(std::ffi::OsStr::new("rsync"))
+}
+
+fn rsync_supports_secluded_args(program: &std::ffi::OsStr) -> bool {
+    Command::new(program)
+        .args(["--secluded-args", "--version"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// Quote one word for rsync's `-e` parser, which is not a POSIX shell.
 /// Backslashes have no escape meaning there. A literal apostrophe is written
 /// as two adjacent apostrophes inside a single-quoted word instead.
@@ -846,6 +863,40 @@ fn rsync_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn native_rsync_probe_requires_option_acceptance_and_successful_execution() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "jr-rsync-capability-{} with spaces",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let executable = root.join("rsync");
+        // Accept only the exact non-transferring capability probe. A version
+        // string alone is not evidence that this option was implemented.
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$#\" = 2 ] && [ \"$1\" = --secluded-args ] && [ \"$2\" = --version ]\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(rsync_supports_secluded_args(executable.as_os_str()));
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf 'rsync version 99.0\\n'\nexit 1\n",
+        )
+        .unwrap();
+        assert!(!rsync_supports_secluded_args(executable.as_os_str()));
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!rsync_supports_secluded_args(executable.as_os_str()));
+        assert!(!rsync_supports_secluded_args(
+            root.join("missing").as_os_str()
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(unix)]
     #[test]

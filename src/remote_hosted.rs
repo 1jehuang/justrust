@@ -1622,6 +1622,25 @@ fn native_only_requested(native_mode: Option<bool>) -> bool {
         )
 }
 
+/// Resolve local capabilities before requesting a lease or creating keys.
+/// Windows has a separate transfer path and explicit SSH must not run rsync.
+fn native_mode_with_rsync(
+    native_mode: Option<bool>,
+    native_only: bool,
+    windows: bool,
+    supported: impl FnOnce() -> bool,
+) -> Result<Option<bool>> {
+    if windows || native_mode == Some(false) || supported() {
+        return Ok(native_mode);
+    }
+    if native_mode == Some(true) || native_only {
+        bail!(
+            "native hosted transport requires rsync with --secluded-args support, but rsync on PATH is missing or incompatible. On macOS, install modern rsync with `brew install rsync` and put it before Apple's rsync on PATH. Native-only/required mode cannot fall back to SSH; explicitly select JUSTRUST_HOSTED_NATIVE=off only if SSH compatibility is intended"
+        );
+    }
+    Ok(Some(false))
+}
+
 fn safe_host(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
@@ -2287,6 +2306,18 @@ pub fn ensure_ready_for_ssh() -> Result<Target> {
 }
 
 fn ensure_ready_mode(refresh: bool, native_mode: Option<bool>) -> Result<Target> {
+    let effective_native_mode = native_mode_with_rsync(
+        native_mode,
+        native_only_requested(native_mode),
+        crate::remote_windows::selected()?,
+        crate::remote_sync::native_rsync_supported,
+    )?;
+    if effective_native_mode != native_mode {
+        eprintln!(
+            "hosted: rsync on PATH lacks --secluded-args support; using SSH compatibility transport"
+        );
+    }
+    let native_mode = effective_native_mode;
     let d = dir()?;
     let _lock = Lock::take(&d)?;
     cached_or_refresh(
@@ -2710,6 +2741,72 @@ mod tests {
     }
 
     const READY: &str = r#"{"state":"running","ready":true,"address":"203.0.113.7","port":2222,"user":"ubuntu","host_keys":["ssh-ed25519 AAAAC3Nza host1","ecdsa-sha2-nistp256 AAAAE2V"],"key_valid_seconds":60,"credits":{"available_microcredits":7200000000,"rate_microcredits_per_second":1000000}}"#;
+
+    #[test]
+    fn native_rsync_preflight_preserves_supported_modes_and_bypasses_windows_and_off() {
+        for mode in [None, Some(true)] {
+            for native_only in [false, true] {
+                assert_eq!(
+                    native_mode_with_rsync(mode, native_only, false, || true).unwrap(),
+                    mode
+                );
+            }
+        }
+        for mode in [None, Some(false), Some(true)] {
+            for native_only in [false, true] {
+                assert_eq!(
+                    native_mode_with_rsync(mode, native_only, true, || {
+                        panic!("Windows must not probe the Linux native rsync path")
+                    })
+                    .unwrap(),
+                    mode
+                );
+            }
+        }
+        assert_eq!(
+            native_mode_with_rsync(Some(false), true, false, || {
+                panic!("explicit native off must not execute rsync")
+            })
+            .unwrap(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn native_rsync_preflight_only_downgrades_auto_and_never_required_or_native_only() {
+        assert_eq!(
+            native_mode_with_rsync(None, false, false, || false).unwrap(),
+            Some(false)
+        );
+        for (mode, native_only) in [(Some(true), false), (Some(true), true), (None, true)] {
+            let error = native_mode_with_rsync(mode, native_only, false, || false)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("--secluded-args"), "{error}");
+            assert!(error.contains("brew install rsync"), "{error}");
+            assert!(error.contains("cannot fall back to SSH"), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_rsync_auto_downgrade_does_not_advertise_native_to_control_plane() {
+        let mode = native_mode_with_rsync(None, false, false, || false).unwrap();
+        let (c, seen) = mock(vec![(200, READY)]);
+        connect_with_mode(
+            &c,
+            "ssh-ed25519 AAAA me",
+            Duration::ZERO,
+            Duration::from_secs(1),
+            mode,
+            |_| {},
+        )
+        .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let body: Value = serde_json::from_str(&seen[0].body).unwrap();
+        assert_eq!(body["native_transport"], false);
+        assert_eq!(body["native_only"], false);
+    }
 
     #[test]
     fn polls_202_until_ready() {
