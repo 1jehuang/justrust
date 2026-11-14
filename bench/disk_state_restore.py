@@ -7,6 +7,9 @@ TemporaryDirectory below it is removed. Stop builds that write SOURCE first.
 Symlinks and special files are rejected, not followed or silently omitted.
 JSON goes to stdout. This is a warm-page-cache benchmark, not durable-storage
 throughput: verification warms caches, no caches are dropped and no fsync runs.
+With --evict-source-cache, only private snapshot files are fsynced and given
+POSIX_FADV_DONTNEED before each restore, outside timing. This is advisory guest
+cache eviction, not guaranteed cold physical storage or host-cache eviction.
 """
 
 import argparse
@@ -28,6 +31,36 @@ CACHE_NOTE = (
     "warm the page cache; no global cache dropping, compression, or fsync. "
     "Times measure copy completion, not durable storage writes."
 )
+
+EVICT_CACHE_NOTE = (
+    "Advisory guest-cold snapshot reads: private snapshot files are fsynced and "
+    "POSIX_FADV_DONTNEED is issued before every restore, outside timing. "
+    "Original source files are never evicted. No global cache dropping. "
+    "Eviction is not guaranteed and host/device caches may remain warm. "
+    "Destination writes are not fsynced; times are not durable-storage latency."
+)
+
+
+def read_bytes_counter():
+    """Linux process storage-read accounting, including worker threads, if available."""
+    try:
+        for line in Path("/proc/self/io").read_text().splitlines():
+            key, value = line.split(":", 1)
+            if key == "read_bytes":
+                return int(value.strip())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def evict_snapshot_cache(snapshot, inventory):
+    """Only called on the benchmark-owned copy, never on original source files."""
+    if not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"):
+        raise ValueError("--evict-source-cache requires POSIX_FADV_DONTNEED support")
+    for relative in inventory["files"]:
+        with (snapshot / relative).open("rb") as stream:
+            os.fsync(stream.fileno())
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
 
 
 def validate_paths(source, directory):
@@ -93,7 +126,7 @@ def copy_tree(source, destination, inventory, workers):
                 pass
 
 
-def benchmark(source, directory, workers=(1, 4, 16), repetitions=3):
+def benchmark(source, directory, workers=(1, 4, 16), repetitions=3, evict_source_cache=False):
     source, directory = validate_paths(source, directory)
     workers = list(workers)
     if not workers or any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in workers):
@@ -121,13 +154,23 @@ def benchmark(source, directory, workers=(1, 4, 16), repetitions=3):
             order = workers if repetition % 2 else list(reversed(workers))
             for count in order:
                 destination = root / "restore"
+                preparation_seconds = 0.0
+                if evict_source_cache:
+                    preparation_started = time.perf_counter()
+                    evict_snapshot_cache(snapshot, inventory)
+                    preparation_seconds = time.perf_counter() - preparation_started
+                read_before = read_bytes_counter()
                 started = time.perf_counter()
                 copy_tree(snapshot, destination, inventory, count)
                 elapsed = time.perf_counter() - started
+                read_after = read_bytes_counter()
                 verify(destination, inventory)  # Deliberately outside timed region.
                 runs.append({"workers": count, "repetition": repetition,
                              "seconds": elapsed, "files": file_count,
                              "bytes": byte_count, "verified": True,
+                             "cache_preparation_seconds": preparation_seconds,
+                             "read_bytes_delta": (read_after - read_before
+                                                  if read_before is not None and read_after is not None else None),
                              "bytes_per_second": byte_count / elapsed if elapsed else None})
                 shutil.rmtree(destination)  # Only our own private restore tree.
         verify(snapshot, inventory)
@@ -140,7 +183,10 @@ def benchmark(source, directory, workers=(1, 4, 16), repetitions=3):
                           "median_seconds": statistics.median(seconds),
                           "mean_seconds": statistics.mean(seconds),
                           "max_seconds": max(seconds)})
-    return {"schema_version": 1, "cache_note": CACHE_NOTE,
+    return {"schema_version": 1,
+            "cache_note": EVICT_CACHE_NOTE if evict_source_cache else CACHE_NOTE,
+            "evict_source_cache": evict_source_cache,
+            "read_bytes_note": "Linux /proc/self/io read_bytes delta around copy only, excluding verification and cache preparation; null when unavailable. Guest storage accounting, not physical-device read proof.",
             "copy_method": "shutil.copy2 (platform fast-copy allowed), one task per file",
             "timed_region": "fresh directory creation, file copy, metadata copy, executor startup/shutdown",
             "verification": "SHA-256 of every file plus exact file/directory inventory, outside timed regions",
@@ -171,9 +217,12 @@ def main(argv=None):
     parser.add_argument("directory", type=Path, help="existing, non-overlapping scratch parent")
     parser.add_argument("--workers", type=parse_workers, default=[1, 4, 16])
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--evict-source-cache", action="store_true",
+                        help="fsync and advise eviction of private snapshot files before each restore, outside timing")
     args = parser.parse_args(argv)
     try:
-        report = benchmark(args.source, args.directory, args.workers, args.repetitions)
+        report = benchmark(args.source, args.directory, args.workers, args.repetitions,
+                           evict_source_cache=args.evict_source_cache)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(json.dumps(report, indent=2))

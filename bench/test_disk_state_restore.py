@@ -170,6 +170,111 @@ class DiskStateRestoreTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "worker failed"):
                 harness.copy_tree(self.source, self.disk / "owned", self.original, 4)
 
+    def test_warm_default_never_evicts_or_fsyncs(self):
+        with mock.patch.object(harness, "evict_snapshot_cache") as evict, \
+                mock.patch.object(harness.os, "fsync") as fsync:
+            report = harness.benchmark(self.source, self.disk, workers=[1])
+        evict.assert_not_called()
+        fsync.assert_not_called()
+        self.assertFalse(report["evict_source_cache"])
+        self.assertTrue(all(run["cache_preparation_seconds"] == 0 for run in report["runs"]))
+        self.assert_preserved()
+
+    def test_eviction_only_private_snapshot_fsync_then_advise(self):
+        events = []
+
+        def fsync(fd):
+            path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+            self.assertIn(self.disk, path.parents)
+            self.assertEqual(path.relative_to(self.disk).parts[1], "snapshot")
+            self.assertNotIn(self.source, path.parents)
+            events.append(("fsync", path))
+
+        def advise(fd, offset, length, advice):
+            path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+            self.assertEqual(events[-1], ("fsync", path))
+            self.assertEqual((offset, length, advice), (0, 0, harness.os.POSIX_FADV_DONTNEED))
+            events.append(("advise", path))
+
+        with mock.patch.object(harness.os, "fsync", side_effect=fsync), \
+                mock.patch.object(harness.os, "posix_fadvise", side_effect=advise), \
+                mock.patch.object(harness, "read_bytes_counter", side_effect=[10, 110, 120, 320, 330, 630]):
+            report = harness.benchmark(self.source, self.disk, workers=[1], evict_source_cache=True)
+        self.assertEqual(len(events), 18)
+        self.assertEqual([r["read_bytes_delta"] for r in report["runs"]], [100, 200, 300])
+        self.assertTrue(report["evict_source_cache"])
+        self.assertIn("not guaranteed", report["cache_note"])
+        self.assert_preserved()
+
+    def test_eviction_and_read_accounting_outside_copy_timing(self):
+        events = []
+        original_copy = harness.copy_tree
+        original_verify = harness.verify
+
+        def copy(*args):
+            events.append("copy")
+            return original_copy(*args)
+
+        def verify(*args):
+            events.append("verify")
+            return original_verify(*args)
+
+        def clock():
+            events.append("clock")
+            return len(events)
+
+        def read_counter():
+            events.append("read_counter")
+            return 0
+
+        with mock.patch.object(harness, "copy_tree", side_effect=copy), \
+                mock.patch.object(harness, "verify", side_effect=verify), \
+                mock.patch.object(harness, "evict_snapshot_cache", side_effect=lambda *args: events.append("evict")), \
+                mock.patch.object(harness, "read_bytes_counter", side_effect=read_counter), \
+                mock.patch.object(harness.time, "perf_counter", side_effect=clock):
+            harness.benchmark(self.source, self.disk, workers=[1], evict_source_cache=True)
+        for index, event in enumerate(events):
+            if event == "evict":
+                self.assertEqual(events[index - 1:index + 8],
+                                 ["clock", "evict", "clock", "read_counter", "clock", "copy", "clock", "read_counter", "verify"])
+        self.assert_preserved()
+
+    def test_read_bytes_missing_or_malformed_is_nullable(self):
+        for data in ("read_bytes: 123\nrchar: 9", "read_bytes: invalid", "rchar: 9"):
+            with mock.patch.object(harness.Path, "read_text", return_value=data):
+                self.assertEqual(harness.read_bytes_counter(), 123 if "123" in data else None)
+        with mock.patch.object(harness.Path, "read_text", side_effect=OSError("unavailable")):
+            self.assertIsNone(harness.read_bytes_counter())
+        with mock.patch.object(harness, "read_bytes_counter", return_value=None):
+            report = harness.benchmark(self.source, self.disk, workers=[1])
+        self.assertTrue(all(run["read_bytes_delta"] is None for run in report["runs"]))
+
+    def test_eviction_failure_cleans_private_tree_only(self):
+        with mock.patch.object(harness.os, "posix_fadvise", side_effect=OSError("advice failed")):
+            with self.assertRaisesRegex(OSError, "advice failed"):
+                harness.benchmark(self.source, self.disk, workers=[1], evict_source_cache=True)
+        self.assert_preserved()
+
+    def test_cli_eviction_flag(self):
+        output = io.StringIO()
+        with mock.patch.object(harness, "evict_snapshot_cache") as evict, redirect_stdout(output):
+            harness.main([str(self.source), str(self.disk), "--workers", "1", "--evict-source-cache"])
+        self.assertEqual(evict.call_count, 3)
+        self.assertTrue(json.loads(output.getvalue())["evict_source_cache"])
+        self.assert_preserved()
+
+    @unittest.skipUnless(hasattr(os, "posix_fadvise"), "POSIX advice unavailable")
+    def test_real_private_snapshot_advice_smoke(self):
+        report = harness.benchmark(self.source, self.disk, workers=[1], evict_source_cache=True)
+        self.assertTrue(all(run["verified"] for run in report["runs"]))
+        self.assert_preserved()
+
+    def test_eviction_unsupported_is_explicit(self):
+        with mock.patch.object(harness, "hasattr", return_value=False, create=True):
+            with self.assertRaisesRegex(ValueError, "requires POSIX"):
+                harness.benchmark(self.source, self.disk, workers=[1], evict_source_cache=True)
+        self.assert_preserved()
+
 
 if __name__ == "__main__":
     unittest.main()
