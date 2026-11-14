@@ -45,6 +45,7 @@ class FailFastTests(unittest.TestCase):
             ctx.enter_context(mock.patch.object(runner.gen, "fingerprint", return_value="fixture"))
             ctx.enter_context(mock.patch.object(runner.gen, "restore_all", side_effect=restore))
             ctx.enter_context(mock.patch.object(runner, "run_point", side_effect=measure))
+            ctx.enter_context(mock.patch.object(runner, "checkpoint_identity", return_value={"schema": 1}))
             ctx.enter_context(contextlib.redirect_stderr(io.StringIO()))
             result = runner.run(stacks, 1, 3, reps, 0, partial=partial, stop_on_invalid=stop)
             saved = json.loads(partial.read_text())

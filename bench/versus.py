@@ -664,7 +664,7 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
     only = {int(x) for x in args.only_points.split(",")} if args.only_points else None
     res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
-                                 partial=suite.RESULTS / "partial" / f"synth{args.synth}.json", only=only,
+                                 partial=suite.synthetic_partial_path(args), only=only,
                                  resume=args.resume)
     suite.verify_binary_identity(info)
     if only:  # a subset is for debugging, never a result to compare

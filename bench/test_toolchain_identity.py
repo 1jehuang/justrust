@@ -116,12 +116,12 @@ class ToolchainIdentityTests(unittest.TestCase):
 
     def test_attested_partial_isolated_from_legacy_and_other_outputs(self):
         args = SimpleNamespace(synth=1, out='/private/A-recovered.json')
-        self.assertEqual(suite.synthetic_partial_path(args), suite.RESULTS / 'partial/synth1.json')
+        self.assertEqual(suite.synthetic_partial_path(args), Path('/private/A-recovered.json.partial.json'))
         self.assertEqual(suite.synthetic_partial_path(args, object()),
-                         suite.RESULTS / 'partial/A-recovered.json')
+                         Path('/private/A-recovered.json.partial.json'))
         args.out = '/private/B-fresh.json'
         self.assertEqual(suite.synthetic_partial_path(args, object()),
-                         suite.RESULTS / 'partial/B-fresh.json')
+                         Path('/private/B-fresh.json.partial.json'))
 
     def test_driver_helper_or_marker_replacement_rejects(self):
         for role in ('driver', 'rustdoc', 'clippy-driver', 'cargo-clippy', 'cargo'):

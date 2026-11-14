@@ -23,6 +23,7 @@ breakdown by command and by kind of change underneath.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -30,6 +31,7 @@ import shutil
 import statistics
 import sys
 import time
+import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -130,13 +132,63 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     return r
 
 
+def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
+    """Private environment values are bound by digest, never published verbatim.
+
+    Resolve rustup proxies to their actual selected tool bytes. Missing tools
+    fail closed instead of recording an identity that could match by accident.
+    """
+    from runtime_context import provenance
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+    def executable(command, env):
+        path = Path(shutil.which(str(command), path=env.get("PATH")) or command)
+        if path.resolve().name == "rustup":
+            path = Path(subprocess.check_output(
+                [str(path.resolve()), "which", path.name], env=env, text=True).strip())
+        return suite.binary_sha256(path)
+
+    definitions = []
+    for st in stacks:
+        scenario = suite.Scenario("checkpoint", "checkpoint", ["check"], None, "")
+        env = versus.stack_env(st, scenario, versus.WORK / "checkpoint", "checkpoint")
+        tools = {"driver": executable(suite.J if st.justrust else versus.STOCK_CARGO, env)}
+        spec = env.get("JUSTRUST_TOOLCHAIN", suite.TOOLCHAIN) if st.justrust else "system"
+        if spec != "system":
+            compiler = suite.toolchain_rustc(spec)
+            tools["rustc"] = executable(compiler, env)
+            cargo = compiler.with_name("cargo")
+            tools["cargo"] = executable(cargo if cargo.exists() else "cargo", env)
+        else:
+            tools["rustc"] = executable(env.get("RUSTC", "rustc"), env)
+            tools["cargo"] = executable(versus.STOCK_CARGO if not st.justrust else "cargo", env)
+        definitions.append({"name": st.name, "justrust": st.justrust,
+                            "private_cache": st.private_cache, "toolchain": spec,
+                            "tools": tools, "environment_sha256": digest(env)})
+    return {"schema": 1, "stacks": definitions, "runtime": provenance(),
+            "harness_sha256": {name: suite.binary_sha256(HERE.parent / name)
+                               for name in ("synth/run.py", "suite.py", "versus.py", "runtime_context.py")},
+            "snapshots": {name: {role: rev for role, (_, rev) in snap["repos"].items()}
+                          for name, snap in suite.SNAPSHOTS.items()},
+            "snapshot_format": suite.SNAPSHOT_FORMAT,
+            "measurement_home_sha256": digest(str(suite.JR_HOME.resolve())),
+            "work_sha256": digest(str(versus.WORK.resolve())),
+            "controls": suite.optimization_env(), "noise_policy": suite.NOISE_POLICY,
+            "foreign_rustc_policy": suite.FOREIGN_RUSTC_POLICY,
+            "quiet_wait": quiet_wait, "only": sorted(only) if only else None,
+            "retry_noisy": retry_noisy}
+
+
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
         partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
         identity=None, stop_on_invalid: bool = False, retry_noisy: int = 0) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
-    generator and stacks (a spot interruption killed the run), run the rest.
+    generator, stacks and exact executable/runtime provenance, run the rest.
+    Legacy or mismatching checkpoints are errors, never silently overwritten.
     `stop_on_invalid`: finish and persist the first erroneous or noisy point,
     then stop before the next point. Cannot be combined with resume.
     `retry_noisy`: remeasure a noisy sample up to this many times, after waiting
@@ -151,21 +203,44 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     plans = [gen.plan(p, seed) for p in pts]
     if only:
         plans = [p for p in plans if p.point.i in only]
-    for snap in {p.snap for p in plans}:
-        gen.restore_all(snap)
+    binding = checkpoint_identity(stacks, quiet_wait, only, retry_noisy) if partial else None
     base = int(time.time()) % 100000 * 100
     res_points = []
     if resume and partial and partial.exists():
         old = json.loads(partial.read_text())
+        if binding is None or old.get("checkpoint_identity") != binding:
+            raise ValueError("bench: resume checkpoint provenance missing or changed; use a new --out")
         if (old.get("seed"), old.get("points"), old.get("reps"), old.get("generator"), old.get("stack_names")) == \
                 (seed, points, reps, gen.fingerprint(), [s.name for s in stacks]):
-            res_points = old["results"]
+            res_points = old.get("results")
+            if (not isinstance(res_points, list)
+                    or any(not isinstance(p, dict) or type(p.get("i")) is not int
+                           or p["i"] not in {plan.point.i for plan in plans}
+                           or not isinstance(p.get("samples"), dict)
+                           or not isinstance(p.get("errors"), dict) for p in res_points)
+                    or len({p["i"] for p in res_points}) != len(res_points)):
+                raise ValueError("bench: malformed resume checkpoint results")
             print(f"  synth: resuming after {len(res_points)} measured points", file=sys.stderr)
         else:
-            print("  synth: partial result is from another run, starting over", file=sys.stderr)
+            raise ValueError("bench: resume checkpoint workload changed; use a new --out")
     done = {p["i"] for p in res_points}
     t_start = time.monotonic()
     stopped = {}
+
+    def save_checkpoint():
+        if partial:
+            partial.parent.mkdir(parents=True, exist_ok=True)
+            temporary = partial.with_name(partial.name + ".tmp")
+            temporary.write_text(json.dumps({"seed": seed, "points": points, "reps": reps, "partial": True,
+                                            "generator": gen.fingerprint(), "sample_info": info,
+                                            "checkpoint_identity": binding,
+                                            "stack_names": [s.name for s in stacks], "results": res_points, **stopped}))
+            temporary.replace(partial)
+
+    # Replace stale evidence before point zero, even if its pre-build is interrupted.
+    save_checkpoint()
+    for snap in {p.snap for p in plans}:
+        gen.restore_all(snap)
     for k, plan in enumerate(plans):
         if plan.point.i in done:
             continue
@@ -214,17 +289,14 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                 reasons.append("noisy samples")
             if reasons:
                 stopped = {"stopped_early": f"point {plan.point.i}: " + ", ".join(reasons)}
-        if partial:
-            partial.parent.mkdir(parents=True, exist_ok=True)
-            partial.write_text(json.dumps({"seed": seed, "points": points, "reps": reps, "partial": True,
-                                           "generator": gen.fingerprint(), "sample_info": info,
-                                           "stack_names": [s.name for s in stacks], "results": res_points, **stopped}))
+        save_checkpoint()
         if stopped:
             break
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
     return {"seed": seed, "points": points, "reps": reps, "generator": gen.fingerprint(), "sample_info": info,
-            "stack_names": [s.name for s in stacks], "results": res_points, **stopped}
+            "stack_names": [s.name for s in stacks], "results": res_points,
+            **({"checkpoint_identity": binding} if binding is not None else {}), **stopped}
 
 
 # --- reporting --------------------------------------------------------------

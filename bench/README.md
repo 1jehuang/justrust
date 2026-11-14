@@ -279,7 +279,20 @@ every invocation. This is a completeness check, not attestation of all library
 bytes. Retain a separate donor/library hash inventory and actual compile/link/run
 smoke evidence when assembling a prefix. Matched comparisons require the same
 declared target. With explicit output names, attested runs keep separate partial
-files under `bench/results/partial/<output-stem>.json`, preserving earlier failures.
+files adjacent to the complete output path as `<output>.partial.json`, preserving
+earlier failures. This applies to every synthetic run with explicit `--out`, not
+only attested runs. Without `--out`, the default remains
+`bench/results/partial/synth<seed>.json`.
+
+Synthetic `--resume` fails closed unless the checkpoint binds the same executable
+and compiler/Cargo bytes, measurement home, effective stack environment, toolchain,
+runtime policy, sampling settings, snapshots, and noise controls. Private paths
+and effective environment values are hashed rather than copied into checkpoints.
+Legacy checkpoints without this binding cannot resume. A mismatch raises an error
+without replacing the evidence, so choose a new output path for a different run.
+Matching resume retains failed and noisy points, and does not make them valid for
+comparison. New runs atomically initialize an empty checkpoint before point zero,
+so an interrupted pre-build cannot leave an older run's points behind.
 
 New measurements record `foreign_rustc_policy` in environment provenance. The
 live-process policy excludes only proven `/proc/<pid>/stat` zombie/dead states

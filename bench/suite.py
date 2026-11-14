@@ -1614,8 +1614,9 @@ def _synth():
 
 
 def synthetic_partial_path(args, identity=None) -> Path:
-    if identity is not None and args.out:
-        return RESULTS / "partial" / (Path(args.out).stem + ".json")
+    if getattr(args, "out", None):
+        out = Path(args.out).resolve()
+        return out.with_name(out.name + ".partial.json")
     return RESULTS / "partial" / f"synth{args.synth}.json"
 
 
