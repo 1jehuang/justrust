@@ -23,9 +23,10 @@
 //!   busy it falls back to the shared dir and never waits.
 //!   `JUSTRUST_SLOT_WARM_REUSE=0` restores allocation-before-idle-reuse for
 //!   controlled comparisons. It does not disable existing join behavior.
-//! - A new slot is seeded with a reflink copy of the shared profile dir, so
-//!   dependencies are fresh and the copy shares disk extents. Without reflink
-//!   support (not btrfs/xfs) slots are disabled: a full copy would be huge.
+//! - A new slot is seeded with a reflink copy when the shared profile is idle.
+//!   Without reflinks, an uncontended command keeps the shared fast path; a
+//!   contended command starts a private slot without copying mutable artifacts
+//!   or the large incremental cache. Later commands reuse that warm slot.
 //! - Fails open: any error means "use the shared target dir".
 
 use crate::paths;
@@ -150,7 +151,13 @@ pub fn eligible(args: &[OsString]) -> bool {
     if std::env::var("JUSTRUST_SLOTS").as_deref() == Ok("0") {
         return false;
     }
-    if env_set("CARGO_TARGET_DIR") || env_set("CARGO_BUILD_TARGET_DIR") {
+    if env_set("CARGO_TARGET_DIR")
+        || env_set("CARGO_BUILD_TARGET_DIR")
+        || env_set("CARGO_BUILD_BUILD_DIR")
+    {
+        return false;
+    }
+    if std::env::var("CARGO_UNSTABLE_FINE_GRAIN_LOCKING").as_deref() == Ok("true") {
         return false;
     }
     let all = std::env::var_os("JUSTRUST_SLOTS_ALL").is_some_and(|v| v != "0");
@@ -158,6 +165,20 @@ pub fn eligible(args: &[OsString]) -> bool {
 }
 
 fn eligible_args(args: &[OsString], all: bool) -> bool {
+    // Native per-unit locks allow independent builds to share artifacts without
+    // copying. More importantly, their shared build-directory lock no longer
+    // guarantees a stable source tree for slot seeding or refresh.
+    let mut flags = args.iter().take_while(|a| *a != "--");
+    while let Some(arg) = flags.next() {
+        let feature = if arg == "-Z" {
+            flags.next().and_then(|s| s.to_str())
+        } else {
+            arg.to_str().and_then(|s| s.strip_prefix("-Z"))
+        };
+        if feature == Some("fine-grain-locking") {
+            return false;
+        }
+    }
     let Some(sub) = crate::record::subcommand(args) else {
         return false;
     };
@@ -171,7 +192,13 @@ fn eligible_args(args: &[OsString], all: bool) -> bool {
         .map(|a| a.to_string_lossy())
         .take_while(|a| a != "--");
     for a in cargo_args {
-        if a == "--target-dir" || a.starts_with("--target-dir=") || a.contains("target-dir") {
+        if a == "--target-dir"
+            || a.starts_with("--target-dir=")
+            || a.contains("target-dir")
+            || a == "--build-dir"
+            || a.starts_with("--build-dir=")
+            || a.contains("build.build-dir")
+        {
             return false;
         }
     }
@@ -244,17 +271,37 @@ fn capacity() -> usize {
 /// The shared target dir for the workspace, as cargo resolves it (config,
 /// workspace root). About 20 ms.
 fn shared_target_dir(args: &[OsString]) -> Option<PathBuf> {
-    target_dir_in(Path::new("."), args)
+    let metadata = directory_metadata(Path::new("."), args).ok()?;
+    shared_target_from_metadata(&metadata)
 }
 
-/// [`shared_target_dir`] for a build run in `cwd`.
-pub fn target_dir_in(cwd: &Path, args: &[OsString]) -> Option<PathBuf> {
-    target_dir_in_result(cwd, args).ok()
+fn shared_target_from_metadata(metadata: &serde_json::Value) -> Option<PathBuf> {
+    let target = metadata.get("target_directory")?.as_str()?;
+    // A configured separate build dir would still serialize all targets and
+    // makes the target-profile lock an invalid snapshot guard.
+    if metadata
+        .get("build_directory")
+        .and_then(|value| value.as_str())
+        .is_some_and(|build| build != target)
+    {
+        return None;
+    }
+    Some(PathBuf::from(target))
 }
 
 /// Resolve Cargo's output root, retaining causal diagnostics for artifact
 /// downloads. Slot selection intentionally discards these errors and fails open.
 pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    let metadata = directory_metadata(cwd, args)?;
+    metadata
+        .get("target_directory")
+        .and_then(|value| value.as_str())
+        .map(PathBuf::from)
+        .context("Cargo metadata returned no target_directory")
+}
+
+fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_json::Value> {
     use anyhow::{Context, bail};
     let cargo = paths::real_cargo().context("locating Cargo for target-directory metadata")?;
     let mut cmd = Command::new(cargo);
@@ -280,21 +327,25 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    let v: serde_json::Value =
+    let mut v: serde_json::Value =
         serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")?;
     // `metadata` has no --target-dir option. The build's explicit selector
     // takes precedence over environment and config, relative to its cwd.
     if let Some(target) = explicit_target {
-        return Ok(if target.is_absolute() {
+        let target = if target.is_absolute() {
             target
         } else {
             cwd.join(target)
-        });
+        };
+        let object = v
+            .as_object_mut()
+            .context("Cargo metadata returned no object")?;
+        object.insert(
+            "target_directory".into(),
+            serde_json::Value::String(target.to_string_lossy().into_owned()),
+        );
     }
-    v.get("target_directory")
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
-        .context("Cargo metadata returned no target_directory")
+    Ok(v)
 }
 
 fn target_metadata_options(args: &[OsString]) -> anyhow::Result<(Vec<OsString>, Option<PathBuf>)> {
@@ -1002,14 +1053,30 @@ pub fn heal_after_failure<'a>(
     }
 }
 
-fn try_lock_shared(path: &Path) -> Option<File> {
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(path)
-        .ok()?;
-    f.try_lock_shared().is_ok().then_some(f)
+/// Exclude native, fine-grained, and legacy Cargo writers without waiting.
+fn snapshot_guard(profile: &Path) -> Option<(File, File)> {
+    let native = try_lock(&profile.join(".cargo-build-lock"))?;
+    let legacy = try_lock(&profile.join(".cargo-lock"))?;
+    Some((native, legacy))
+}
+
+fn has_compatible_profile(
+    root: &Path,
+    profile: &Path,
+    metas: &[Option<SlotMeta>],
+    owner: &str,
+    key: &str,
+    warm_reuse: bool,
+) -> bool {
+    metas.iter().enumerate().any(|(n, meta)| {
+        meta.as_ref().is_some_and(|meta| {
+            (meta.owner == owner
+                || (warm_reuse
+                    && std::fs::read_to_string(root.join(format!("{n}.req")))
+                        .is_ok_and(|request| request == key)))
+                && has_units(&root.join(n.to_string()).join(profile))
+        })
+    })
 }
 
 /// Locality hint for joining and idle reuse: working dir, cargo arguments
@@ -1134,11 +1201,11 @@ fn reflink_available(
         return true;
     }
     if !probe(root) {
-        // Best effort only: diagnostics must not prevent the shared-dir fallback.
+        // Best effort only: a diagnostic write failure must not affect allocation.
         let _ = writeln!(
             diagnostic,
-            "justrust: build slots disabled for this run: reflink probe failed. \
-             Using the shared target directory (concurrent builds may wait for Cargo's lock)"
+            "justrust: reflink probe failed; isolated build slots cannot be seeded or refreshed \
+             (no artifact copies)"
         );
         return false;
     }
@@ -1148,6 +1215,10 @@ fn reflink_available(
 
 /// Choose and lock a slot for this run. None means "run exactly as before".
 pub fn acquire(args: &[OsString]) -> Option<Slot> {
+    acquire_with_probe(args, reflink_supported)
+}
+
+fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> Option<Slot> {
     if !eligible(args) {
         return None;
     }
@@ -1161,18 +1232,25 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     }
     let root = target.join("justrust-slots");
     std::fs::create_dir_all(&root).ok()?;
-    if !reflink_available(&root, reflink_supported, &mut std::io::stderr().lock()) {
-        return None;
-    }
+    let can_seed = reflink_available(&root, probe, &mut std::io::stderr().lock());
+    let shared_idle = snapshot_guard(&shared_profile).is_some();
 
     let cap = capacity();
     let me = session_key();
     let key = request_key(args);
     let warm_reuse = std::env::var("JUSTRUST_SLOT_WARM_REUSE").as_deref() != Ok("0");
-    let (joined, join_wait) = join_identical(&root, cap, &key);
     let metas: Vec<Option<SlotMeta>> = (0..cap)
         .map(|i| read_meta(&root.join(format!("{i}.json"))))
         .collect();
+    // Do not trade a warm uncontended ext4 call for an unnecessary cold build.
+    // The availability probe is advisory only; Cargo still enforces locking.
+    if !can_seed
+        && shared_idle
+        && !has_compatible_profile(&root, &profile, &metas, &me, &key, warm_reuse)
+    {
+        return None;
+    }
+    let (joined, join_wait) = join_identical(&root, cap, &key);
     let mut locks: Vec<Option<File>> = (0..cap).map(|_| None).collect();
     let (picked, busy) = match joined {
         Some((n, lock)) => {
@@ -1235,12 +1313,20 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     let mut refresh_secs = 0.0;
     let mut refreshed_units = 0;
     let slot_profile = slot_dir.join(&profile);
-    // Shared lock on the shared dir's build lock: cargo takes it exclusively
-    // while building, so holding it means the shared dir is not being written.
-    // Never wait for it: a busy shared dir means skip, the slot is still valid.
-    let shared_guard = try_lock_shared(&shared_profile.join(".cargo-build-lock"));
+    // Do not hold shared-directory locks across identical-request joining.
+    let shared_guard = snapshot_guard(&shared_profile);
+    // Never copy a profile while Cargo can mutate its artifacts. Native
+    // fine-grained Cargo writers hold a shared build lock, so snapshot_guard
+    // excludes them as well as older directory-locking Cargo versions.
     let stamp = shared_stamp(&shared_profile);
-    if !meta.seeded || !has_units(&slot_profile) {
+    if !can_seed || shared_guard.is_none() {
+        // The slot lease still provides isolation on ext4. Creating an empty
+        // target costs no copied bytes and never waits for the shared Cargo
+        // lock. Keep any existing warm slot artifacts, even if this mount has
+        // lost reflink support since they were built.
+        std::fs::create_dir_all(&slot_profile).ok()?;
+        meta.seeded = true;
+    } else if !meta.seeded || !has_units(&slot_profile) {
         eprintln!(
             "justrust: seeding build slot {n} from {} (reflink copy, once per slot)",
             shared_profile.display()
@@ -1764,8 +1850,8 @@ mod tests {
         assert_eq!(message.lines().count(), 1);
         assert!(message.len() < 200);
         assert!(message.contains("reflink probe failed"));
-        assert!(message.contains("shared target directory"));
-        assert!(message.contains("Cargo's lock"));
+        assert!(message.contains("isolated build slots"));
+        assert!(message.contains("no artifact copies"));
         assert!(!root.join(".reflink-ok").exists());
 
         let mut diagnostic = Vec::new();
@@ -1827,6 +1913,101 @@ mod tests {
         assert!(!eligible(&os(&["metadata"])));
         // Arguments after `--` belong to the test binary.
         assert!(eligible(&os(&["test", "--", "--target-dir"])));
+        assert!(!eligible(&os(&[
+            "check",
+            "--config",
+            "build.build-dir='other'"
+        ])));
+        assert!(!eligible(&os(&["check", "--build-dir", "other"])));
+        assert!(!eligible(&os(&["check", "--build-dir=other"])));
+        assert!(eligible(&os(&["test", "--", "--build-dir"])));
+    }
+
+    #[test]
+    fn snapshots_exclude_legacy_and_fine_grained_cargo_writers() {
+        let root =
+            std::env::temp_dir().join(format!("justrust-slot-snapshot-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in [".cargo-build-lock", ".cargo-lock"] {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(root.join(name))
+                .unwrap();
+            file.try_lock_shared().unwrap();
+            assert!(snapshot_guard(&root).is_none(), "shared writer lock {name}");
+            // Other parallel tests spawn children. Explicit unlock also releases
+            // any copy briefly inherited between fork and exec.
+            file.unlock().unwrap();
+            drop(file);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(guard) = snapshot_guard(&root) {
+                    guard.0.unlock().unwrap();
+                    guard.1.unlock().unwrap();
+                    break;
+                }
+                assert!(Instant::now() < deadline, "released writer lock {name}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let snapshot = snapshot_guard(&root).unwrap();
+        for name in [".cargo-build-lock", ".cargo-lock"] {
+            assert!(try_lock(&root.join(name)).is_none());
+        }
+        snapshot.0.unlock().unwrap();
+        snapshot.1.unlock().unwrap();
+        drop(snapshot);
+        assert!(snapshot_guard(&root).is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_separate_build_directory_disables_slot_snapshotting() {
+        for (metadata, expected) in [
+            (
+                serde_json::json!({"target_directory": "/work/target"}),
+                Some("/work/target"),
+            ),
+            (
+                serde_json::json!({"target_directory": "/work/target", "build_directory": "/work/target"}),
+                Some("/work/target"),
+            ),
+            (
+                serde_json::json!({"target_directory": "/work/target", "build_directory": "/shared/build"}),
+                None,
+            ),
+            (
+                serde_json::json!({"build_directory": "/shared/build"}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                shared_target_from_metadata(&metadata),
+                expected.map(PathBuf::from)
+            );
+        }
+    }
+
+    #[test]
+    fn native_unit_locking_bypasses_slot_copying() {
+        for args in [
+            os(&["check", "-Zfine-grain-locking"]),
+            os(&["-Z", "fine-grain-locking", "test"]),
+            os(&["clippy", "-Z", "fine-grain-locking"]),
+        ] {
+            assert!(!eligible_args(&args, false), "{args:?}");
+        }
+        assert!(eligible_args(
+            &os(&["check", "-Zbuild-dir-new-layout"]),
+            false
+        ));
+        assert!(eligible_args(
+            &os(&["test", "--", "-Zfine-grain-locking"]),
+            false
+        ));
     }
 
     #[test]
