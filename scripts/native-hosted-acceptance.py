@@ -6,6 +6,8 @@ activates a client, changes the default backend, or copies account credentials.
 All justrust state and recorded runs belong to a fresh private JUSTRUST_HOME.
 A temporary PATH guard refuses SSH. Fault injection kills only that isolated
 home's live native session client, closing its real established TCP socket.
+Before builds, a mandatory 65-second direct-only gate proves expired fresh
+keys fail while enrolled resume authentication survives without an API refresh.
 """
 import argparse
 import hashlib
@@ -20,6 +22,61 @@ import sys
 import tempfile
 import threading
 import time
+
+
+GUEST_SECURITY_PROBE = '''import json
+import os
+from pathlib import Path
+import pwd
+
+uid = os.geteuid()
+user = pwd.getpwuid(uid).pw_name
+if uid == 0 or user != "ubuntu":
+    raise RuntimeError("native command must execute as non-root ubuntu")
+denied = []
+for secret in ("/run/pool/token", "/work/.pool/native/key.der"):
+    try:
+        fd = os.open(secret, os.O_RDONLY | os.O_CLOEXEC)
+    except PermissionError:
+        denied.append(secret)
+    except OSError:
+        raise RuntimeError("root secret must positively deny access, not merely be absent") from None
+    else:
+        os.close(fd)
+        raise RuntimeError("native command can open a privileged root secret")
+views = []
+for name in ("/proc/cmdline", "/proc/bootconfig"):
+    try:
+        content = Path(name).read_bytes()
+    except FileNotFoundError:
+        if name == "/proc/bootconfig":
+            continue
+        raise
+    if b"pool.token" in content.lower() or b"pool.api" in content.lower():
+        raise RuntimeError("kernel command-line/bootconfig exposes pool credentials")
+    views.append(name)
+print(json.dumps({"user": user, "uid": uid, "root_secrets_denied": len(denied), "kernel_views": views}))
+'''
+
+
+def direct_environment(env, home):
+    # A successful direct resume must not depend on account credentials or a
+    # /connect refresh. Guest-side lease authorization still runs normally.
+    direct = env.copy()
+    direct.pop("JCODE_API_KEY", None)
+    direct["JCODE_HOME"] = str(home / "no-control-plane-credentials")
+    direct["JCODE_API_BASE"] = "https://127.0.0.1:9"
+    direct["JUSTRUST_BUILD_BASE"] = "https://127.0.0.1:9"
+    return direct
+
+
+def wait_fresh_key_expiry():
+    started = time.monotonic()
+    while True:
+        remaining = 65 - (time.monotonic() - started)
+        if remaining <= 0:
+            return time.monotonic() - started
+        time.sleep(remaining)
 
 
 def digest_file(path):
@@ -180,10 +237,10 @@ class Acceptance:
         self.seen = set()
         self.nonce = root.name.replace("'", "")
 
-    def run(self, *args, expected=0, quiet=False):
+    def run(self, *args, expected=0, quiet=False, env=None):
         print("+ candidate " + shlex.join(args), flush=True)
         result = subprocess.run([str(self.candidate), *args], cwd=self.project,
-                                env=self.env, text=True, errors="replace",
+                                env=self.env if env is None else env, text=True, errors="replace",
                                 capture_output=True, timeout=self.timeout)
         if not quiet or result.returncode != expected:
             print(result.stdout, end="", flush=True)
@@ -210,6 +267,56 @@ class Acceptance:
 
     def remote(self, script, expected=0):
         return self.run("remote", "ssh", script, expected=expected)
+
+    def direct(self, endpoint, script, expected=0):
+        return self.run("__native", "client", json.dumps(endpoint), script,
+                        expected=expected, env=direct_environment(self.env, self.home))
+
+    def expiry_and_security(self, endpoint):
+        state_path = self.home / "remote/hosted/state.json"
+        before_state = digest_file(state_path)
+        before_key = digest_file(Path(endpoint["key_path"]))
+        enrolled = dict(endpoint, resume_path=str(self.home / "expiry enrolled resume"))
+        self.direct(enrolled, "printf NATIVE_EXPIRY_ENROLLED")
+        # Removing the fresh identity path makes accidental fallback fail even
+        # before expiry. The enrolled resume key alone must authenticate.
+        resume_only = dict(enrolled, key_path=str(self.home / "fresh-key-must-not-be-used"))
+        security = self.direct(resume_only, "python3 - <<'NATIVE_SECURITY_PROBE'\n"
+                               + GUEST_SECURITY_PROBE + "NATIVE_SECURITY_PROBE\n")
+        security_receipt = json.loads(security.stdout)
+        if (security_receipt.get("user") != "ubuntu" or security_receipt.get("uid", 0) == 0
+                or security_receipt.get("root_secrets_denied") != 2
+                or "/proc/cmdline" not in security_receipt.get("kernel_views", [])):
+            raise RuntimeError("native guest security receipt is incomplete")
+
+        suffix = hashlib.sha256(os.fsencode(self.root)).hexdigest()[:24]
+        pin_marker = "/tmp/justrust-native-wrong-pin-" + suffix
+        fresh_marker = "/tmp/justrust-native-expired-key-" + suffix
+        self.direct(resume_only, "test ! -e " + shlex.quote(pin_marker)
+                    + " && test ! -e " + shlex.quote(fresh_marker))
+        pin = endpoint["certificate_sha256"]
+        wrong = dict(resume_only, certificate_sha256=("0" if pin[0] != "0" else "1") + pin[1:])
+        rejected = self.direct(wrong, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(pin_marker), expected=1)
+        if "pin mismatch" not in rejected.stderr.lower():
+            raise RuntimeError("wrong certificate pin did not fail specifically on pin verification")
+        self.direct(resume_only, "test ! -e " + shlex.quote(pin_marker))
+
+        print("Waiting at least 65 seconds with no client control-plane credentials or refresh", flush=True)
+        elapsed = wait_fresh_key_expiry()
+        if elapsed < 65:
+            raise RuntimeError("fresh-key expiry gate did not wait the required 65 seconds")
+        fresh_only = dict(endpoint, resume_path=str(self.home / "unenrolled after expiry"))
+        expired = self.direct(fresh_only, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(fresh_marker), expected=1)
+        if "authentication" not in expired.stderr.lower() or "rejected" not in expired.stderr.lower():
+            raise RuntimeError("fresh expired slot key did not receive explicit authentication rejection")
+        resumed = self.direct(resume_only, "test ! -e " + shlex.quote(fresh_marker)
+                              + " && printf NATIVE_EXPIRED_KEY_RESUME_OK")
+        if resumed.stdout != "NATIVE_EXPIRED_KEY_RESUME_OK":
+            raise RuntimeError("enrolled native resume did not survive fresh-key expiry")
+        if digest_file(state_path) != before_state or digest_file(Path(endpoint["key_path"])) != before_key:
+            raise RuntimeError("hosted state or fresh slot identity changed during direct-only expiry gate")
+        return {"fresh_key_expiry_wait_seconds": elapsed, "direct_resume_after_expiry": True,
+                "wrong_pin_failed_closed": True, "guest_security": security_receipt}
 
     def write_project(self, revision):
         source = self.project / "src"
@@ -323,6 +430,7 @@ mod tests {{
         state = json.loads((self.home / "remote/hosted/state.json").read_text())
         if not state.get("native"):
             raise RuntimeError("control plane did not select native transport")
+        security = self.expiry_and_security(state["native"])
         subprocess.run(["git", "init", "-q", str(self.project)], check=True)
         self.write_project(1)
         stale = self.project / "stale ' source.txt"
@@ -344,8 +452,7 @@ mod tests {{
         self.resume()
         # Exercise the exact byte-stream client without control-plane readiness
         # diagnostics sharing stderr with the command under test.
-        channels = self.run("__native", "client", json.dumps(state["native"]),
-                            "printf NATIVE_STDOUT; printf NATIVE_STDERR >&2; exit 37", expected=37)
+        channels = self.direct(state["native"], "printf NATIVE_STDOUT; printf NATIVE_STDERR >&2; exit 37", expected=37)
         if channels.stdout != "NATIVE_STDOUT" or channels.stderr != "NATIVE_STDERR":
             raise RuntimeError("native shell corrupted stdout/stderr channels")
         failure = self.build("test", "--lib", "failing_status", "--", "--nocapture", expected=101)
@@ -353,7 +460,7 @@ mod tests {{
             raise RuntimeError("failing hosted test lost its stderr")
         return {"candidate_sha256": self.candidate_sha256,
                 "state": str(self.home), "run_ids": self.run_ids,
-                "native_only": True, "socket_drop_resumed_once": True}
+                "native_only": True, "socket_drop_resumed_once": True, **security}
 
 
 def main(argv=None):
@@ -362,7 +469,8 @@ def main(argv=None):
                         help="explicit unpublished executable, never installed")
     parser.add_argument("--work-dir", type=Path, default=Path.home() / ".cache/justrust-native-acceptance")
     parser.add_argument("--build-base", help="explicit already-deployed control-plane URL")
-    parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument("--timeout", type=float, default=900,
+                        help="per-command timeout; the expiry gate always waits at least 65 seconds")
     args = parser.parse_args(argv)
     if sys.platform != "linux":
         parser.error("real socket/process fault injection currently requires Linux /proc")
