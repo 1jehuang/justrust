@@ -117,7 +117,11 @@ class NativeAcceptanceTests(unittest.TestCase):
             self.assertEqual(len(calls), 7)
             fresh = [call for call in calls if call[0]["resume_path"].endswith("unenrolled after expiry")]
             self.assertEqual(fresh[0][0]["key_path"], endpoint["key_path"])
-            self.assertEqual(fresh[0][2], 1)
+            self.assertEqual(fresh[0][2], 255)
+            wrong_pin = [call for call in calls
+                         if call[0]["certificate_sha256"] != endpoint["certificate_sha256"]]
+            self.assertEqual(len(wrong_pin), 1)
+            self.assertEqual(wrong_pin[0][2], 255)
             resumed = calls[-1]
             self.assertTrue(resumed[0]["key_path"].endswith("fresh-key-must-not-be-used"))
             self.assertIn("test ! -e /tmp/justrust-native-expired-key-", resumed[1])

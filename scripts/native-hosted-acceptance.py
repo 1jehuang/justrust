@@ -296,7 +296,7 @@ class Acceptance:
                     + " && test ! -e " + shlex.quote(fresh_marker))
         pin = endpoint["certificate_sha256"]
         wrong = dict(resume_only, certificate_sha256=("0" if pin[0] != "0" else "1") + pin[1:])
-        rejected = self.direct(wrong, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(pin_marker), expected=1)
+        rejected = self.direct(wrong, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(pin_marker), expected=255)
         if "pin mismatch" not in rejected.stderr.lower():
             raise RuntimeError("wrong certificate pin did not fail specifically on pin verification")
         self.direct(resume_only, "test ! -e " + shlex.quote(pin_marker))
@@ -306,7 +306,7 @@ class Acceptance:
         if elapsed < 65:
             raise RuntimeError("fresh-key expiry gate did not wait the required 65 seconds")
         fresh_only = dict(endpoint, resume_path=str(self.home / "unenrolled after expiry"))
-        expired = self.direct(fresh_only, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(fresh_marker), expected=1)
+        expired = self.direct(fresh_only, "printf SHOULD_NOT_EXECUTE > " + shlex.quote(fresh_marker), expected=255)
         if "authentication" not in expired.stderr.lower() or "rejected" not in expired.stderr.lower():
             raise RuntimeError("fresh expired slot key did not receive explicit authentication rejection")
         resumed = self.direct(resume_only, "test ! -e " + shlex.quote(fresh_marker)
