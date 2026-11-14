@@ -559,6 +559,31 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn missing_host_sources_are_installed_and_verified_once() {
+        if std::env::var_os("JR_RUST_SRC_TEST_CHILD").is_none() {
+            // Concurrent tests can fork while these scripts are open for
+            // writing. Their pre-exec children can retain the writable fd and
+            // cause ETXTBSY even after we close it or atomically rename it.
+            // Create and execute the fixture in a single-test child instead,
+            // preserving all provisioning assertions and exposing spawn errors.
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "arm64_tools::tests::missing_host_sources_are_installed_and_verified_once",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("JR_RUST_SRC_TEST_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("jr-rust-src-{}", std::process::id()));
         let bin = dir.join("bin");
