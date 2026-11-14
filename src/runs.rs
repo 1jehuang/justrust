@@ -286,7 +286,16 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         let _ = writeln!(o, "agent    {a}");
     }
     if let Some(r) = &s.remote {
-        let _ = writeln!(o, "where    remote on {}", r.machine);
+        let meta = std::fs::read(dir.join("meta.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<crate::record::Meta>(&b).ok());
+        let place = crate::summary::execution_place(
+            s.place
+                .as_deref()
+                .or_else(|| meta.as_ref().and_then(|m| m.place.as_deref())),
+            Some(&r.machine),
+        );
+        let _ = writeln!(o, "where    {place} on {}", r.machine);
     } else if let Some(why) = &s.route {
         let _ = writeln!(o, "where    local ({why})");
     }
@@ -621,6 +630,32 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tail_tests {
     use super::*;
+
+    #[test]
+    fn show_reports_saved_execution_location_not_generic_remote() {
+        for (place, machine, expected) in [
+            (Some("hosted"), "Windows x86_64 (MSVC)", "hosted"),
+            (Some("hosted"), "fleet-17", "hosted"),
+            (Some("remote"), "ssh:personal", "remote"),
+            (None, "hosted", "hosted"),
+            (None, "ssh:hosted", "remote"),
+        ] {
+            let summary = Summary {
+                place: place.map(str::to_owned),
+                remote: Some(crate::summary::RemoteInfo {
+                    machine: machine.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let missing = std::path::Path::new("/nonexistent/justrust-provenance-test");
+            let report = render(&summary, missing);
+            assert!(
+                report.contains(&format!("where    {expected} on {machine}")),
+                "{report}"
+            );
+        }
+    }
 
     fn line(id: &str) -> String {
         serde_json::to_string(&IndexEntry {

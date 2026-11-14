@@ -358,12 +358,8 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             args: entry.args,
             exit: Some(entry.exit),
             wall: entry.wall,
-            place: if entry.remote.is_some() {
-                "remote"
-            } else {
-                "local"
-            }
-            .into(),
+            place: crate::summary::execution_place(entry.place.as_deref(), entry.remote.as_deref())
+                .into(),
             machine: entry.remote,
             origin: "local".into(),
             failure: entry.failure,
@@ -500,6 +496,11 @@ pub(crate) struct Live {
     /// The control plane deployment that answered.
     pub deployment: Option<String>,
     pub deployed_at: Option<String>,
+    pub deployment_tag: Option<String>,
+    /// Immutable worker-side bundle used to provision build machines.
+    pub pool_bundle: Option<String>,
+    /// None when talking to an older service that does not report this flag.
+    pub toolchain_dist: Option<bool>,
     /// The compiler hosted builds use when a project pins none.
     pub toolchain: Option<String>,
     pub protocol: Option<u32>,
@@ -517,6 +518,9 @@ pub(crate) fn live(text: &str) -> Option<Live> {
         auto_update: v["release"]["auto_update"].as_bool().unwrap_or(true),
         deployment: text(&v["service"]["id"]),
         deployed_at: text(&v["service"]["deployed_at"]),
+        deployment_tag: text(&v["service"]["tag"]),
+        pool_bundle: text(&v["pool_bundle"]),
+        toolchain_dist: v["toolchain_dist"].as_bool(),
         toolchain: text(&v["toolchain"]["toolchain"]),
         protocol: v["toolchain"]["protocol"]
             .as_u64()
@@ -592,7 +596,7 @@ impl Versions {
     /// The whole picture as text, for the detail view.
     pub(crate) fn report(&self) -> String {
         use std::fmt::Write;
-        let mut o = String::from("Versions\n\n");
+        let mut o = String::from("Justrust Personal Dashboard · Versions\n\n");
         let _ = writeln!(
             o,
             "Client\n  justrust {} ({})\n  {}",
@@ -615,6 +619,17 @@ impl Versions {
                 let or = |v: &Option<String>| v.clone().unwrap_or_else(|| "not reported".into());
                 let _ = writeln!(o, "  deployment  {}", or(&l.deployment));
                 let _ = writeln!(o, "  deployed    {}", or(&l.deployed_at));
+                let _ = writeln!(o, "  build tag   {}", or(&l.deployment_tag));
+                let _ = writeln!(o, "  host bundle {}", or(&l.pool_bundle));
+                let _ = writeln!(
+                    o,
+                    "  distribution {}",
+                    match l.toolchain_dist {
+                        Some(true) => "enabled",
+                        Some(false) => "disabled",
+                        None => "not reported",
+                    }
+                );
                 let _ = writeln!(
                     o,
                     "  release     {}{}",
@@ -658,7 +673,13 @@ impl Versions {
         if let Some(e) = &self.error {
             let _ = writeln!(o, "  error: {e}");
         }
-        let _ = writeln!(o, "\nBuild machine");
+        let _ = writeln!(
+            o,
+            "\nBuild machine (your configured machine, not the whole fleet)"
+        );
+        if self.machine.is_empty() && self.machine_note.is_none() {
+            let _ = writeln!(o, "  component versions have not been reported yet");
+        }
         for (name, value) in &self.machine {
             let _ = writeln!(o, "  {name:<11} {value}");
         }
@@ -806,6 +827,58 @@ mod tests {
     }
 
     #[test]
+    fn personal_inventory_includes_control_plane_and_every_machine_component() {
+        let metadata = live(r#"{"service":{"id":"deploy-future","tag":"build-future"},"release":{"version":"9.0.0"},"pool_bundle":"sha256-future","toolchain_dist":true}"#).unwrap();
+        assert_eq!(metadata.deployment_tag.as_deref(), Some("build-future"));
+        assert_eq!(metadata.pool_bundle.as_deref(), Some("sha256-future"));
+        assert_eq!(metadata.toolchain_dist, Some(true));
+        let inventory = Versions {
+            live: Some(metadata),
+            machine: [
+                "rustc",
+                "llvm",
+                "cargo",
+                "jr-cargo",
+                "wild",
+                "agent",
+                "cc",
+                "clang",
+                "mold",
+                "ld.lld",
+                "ld",
+                "os",
+                "kernel",
+                "future-component",
+            ]
+            .into_iter()
+            .map(|name| (name.into(), format!("{name}-version-future")))
+            .collect(),
+            ..Default::default()
+        };
+        let report = inventory.report();
+        assert!(report.starts_with("Justrust Personal Dashboard · Versions"));
+        for expected in [
+            "build-future",
+            "sha256-future",
+            "distribution enabled",
+            "not the whole fleet",
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+        for (_, version) in &inventory.machine {
+            assert!(report.contains(version), "missing {version} in {report}");
+        }
+        let old = live(r#"{"service":{},"release":{},"toolchain":null}"#).unwrap();
+        assert_eq!(old.pool_bundle, None);
+        assert_eq!(old.toolchain_dist, None);
+        assert!(
+            Versions::default()
+                .report()
+                .contains("not been reported yet")
+        );
+    }
+
+    #[test]
     fn defaults_are_simple_empty_snapshots() {
         let snapshot = Snapshot::default();
         assert!(snapshot.active.is_empty() && snapshot.runs.is_empty());
@@ -909,6 +982,34 @@ mod tests {
                 .unwrap();
         assert_eq!(unknown.failure, None);
         assert!(!unknown.compile_failed);
+    }
+
+    #[test]
+    fn completed_locations_preserve_hosted_remote_local_and_legacy_provenance() {
+        for (place, machine, expected) in [
+            (Some("hosted"), Some("fleet-1"), "hosted"),
+            (Some("remote"), Some("ssh:personal"), "remote"),
+            (Some("local"), None, "local"),
+            (None, Some("hosted"), "hosted"),
+            (None, Some("ssh:hosted"), "remote"),
+            (None, None, "local"),
+        ] {
+            let entry = crate::summary::IndexEntry {
+                id: "provenance-run".into(),
+                place: place.map(str::to_owned),
+                remote: machine.map(str::to_owned),
+                ..Default::default()
+            };
+            let rows = index_rows(&serde_json::to_string(&entry).unwrap());
+            assert_eq!(rows[0].place, expected);
+            assert_eq!(
+                rows[0].origin, "local",
+                "record storage is not execution location"
+            );
+            let row = hosted_row(&serde_json::json!({"id":"cloud-run", "machine":"client-laptop", "summary":{"place":expected}})).unwrap();
+            assert_eq!(row.place, expected);
+            assert_eq!(row.origin, "hosted");
+        }
     }
 
     #[test]

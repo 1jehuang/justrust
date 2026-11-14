@@ -76,6 +76,7 @@ impl Kind {
 pub(crate) enum Place {
     #[default]
     Any,
+    Hosted,
     Remote,
     Local,
 }
@@ -83,7 +84,8 @@ pub(crate) enum Place {
 impl Place {
     fn next(self) -> Place {
         match self {
-            Place::Any => Place::Remote,
+            Place::Any => Place::Hosted,
+            Place::Hosted => Place::Remote,
             Place::Remote => Place::Local,
             Place::Local => Place::Any,
         }
@@ -92,6 +94,7 @@ impl Place {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Place::Any => "anywhere",
+            Place::Hosted => "hosted only",
             Place::Remote => "remote only",
             Place::Local => "local only",
         }
@@ -100,7 +103,8 @@ impl Place {
     fn matches(self, place: &str) -> bool {
         match self {
             Place::Any => true,
-            Place::Remote => matches!(place, "remote" | "hosted"),
+            Place::Hosted => place == "hosted",
+            Place::Remote => place == "remote",
             Place::Local => place == "local",
         }
     }
@@ -308,7 +312,7 @@ impl State {
                 self.place = if forward {
                     self.place.next()
                 } else {
-                    self.place.next().next()
+                    self.place.next().next().next()
                 };
                 self.selected_id = None;
             }
@@ -946,10 +950,13 @@ mod tests {
 
         s.kind = Some(Kind::Test);
         assert_eq!(ids(&s), "bd");
-        s.place = Place::Remote;
+        s.place = Place::Hosted;
         assert_eq!(ids(&s), "b");
         // Counts ignore the kind filter but respect the others.
         assert_eq!(s.kind_counts(), [1, 1, 0, 0, 0, 0, 0]);
+        s.place = Place::Remote;
+        assert_eq!(ids(&s), "");
+        assert_eq!(s.kind_counts(), [1, 0, 0, 0, 0, 0, 0]);
         s.place = Place::Local;
         assert_eq!(ids(&s), "d");
         s.place = Place::Any;
@@ -978,7 +985,29 @@ mod tests {
         assert_eq!(seen[Kind::ALL.len()], None);
         s.cycle_kind(false);
         assert_eq!(s.kind, Some(Kind::Other));
-        assert_eq!(Place::Any.next().next().next(), Place::Any);
+        assert_eq!(Place::Any.next().next().next().next(), Place::Any);
+    }
+
+    #[test]
+    fn location_filters_have_distinct_semantics_and_bidirectional_cycles() {
+        for (filter, location) in [
+            (Place::Hosted, "hosted"),
+            (Place::Remote, "remote"),
+            (Place::Local, "local"),
+        ] {
+            for candidate in ["hosted", "remote", "local", "unknown"] {
+                assert_eq!(filter.matches(candidate), candidate == location);
+            }
+            let mut state = State {
+                place: filter,
+                ..Default::default()
+            };
+            state.cycle(MenuRow::Place, true);
+            state.cycle(MenuRow::Place, false);
+            assert_eq!(state.place, filter);
+        }
+        assert_eq!(Place::Hosted.label(), "hosted only");
+        assert_eq!(Place::Remote.label(), "remote only");
     }
 
     #[test]

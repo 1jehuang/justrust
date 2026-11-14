@@ -134,7 +134,7 @@ fn measured_cpu(dir: &Path, meta: &Meta, now: f64) -> (usize, Option<f64>, Optio
 fn place_of(meta: Option<&Meta>, remote: bool) -> String {
     match meta.and_then(|m| m.place.clone()) {
         Some(p) => p,
-        None if remote => crate::remote_build::place_name().into(),
+        None if remote => "remote".into(),
         None => "local".into(),
     }
 }
@@ -542,7 +542,13 @@ pub fn collect() -> Result<Status> {
             let ago = now - (r.start + r.wall);
             if ago < SHOW_DONE_SECS && r.units_compiled > 0 {
                 let meta = read_meta(&runs.join(&r.id));
-                let place = place_of(meta.as_ref(), r.remote.is_some());
+                let place: String = crate::summary::execution_place(
+                    r.place
+                        .as_deref()
+                        .or_else(|| meta.as_ref().and_then(|m| m.place.as_deref())),
+                    r.remote.as_deref(),
+                )
+                .into();
                 status.recent = Some(Finished {
                     id: r.id.clone(),
                     label: label(&r.cwd, &r.args),
@@ -1054,6 +1060,19 @@ mod tests {
         assert_eq!(dur(3.25), "3.2s");
         assert_eq!(dur(42.0), "42s");
         assert_eq!(dur(125.0), "2m05s");
+    }
+
+    #[test]
+    fn active_locations_use_recorded_provenance_not_current_backend() {
+        for place in ["hosted", "remote", "local"] {
+            let meta = Meta {
+                place: Some(place.into()),
+                ..Default::default()
+            };
+            assert_eq!(place_of(Some(&meta), false), place);
+        }
+        assert_eq!(place_of(None, true), "remote");
+        assert_eq!(place_of(None, false), "local");
     }
 
     fn entry(id: &str, args: &[&str], units: usize) -> IndexEntry {

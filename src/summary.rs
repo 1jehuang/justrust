@@ -53,6 +53,9 @@ pub struct Summary {
     /// Set when the build ran on the remote machine (copied back locally).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteInfo>,
+    /// Execution provenance, independent of the account storing this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
     /// Specific split recommendations for the files this run edited, from
     /// the workspace's background-computed hints (`split_index`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -418,6 +421,22 @@ pub struct IndexEntry {
     /// Machine label when the run was remote. Absent for local runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+}
+
+/// Resolve saved provenance, never today's configured backend. Older clients
+/// used the exact backend label `hosted` for managed-service runs. Other remote
+/// labels (SSH destinations, AWS machines) do not imply managed service use.
+pub(crate) fn execution_place<'a>(place: Option<&'a str>, remote: Option<&str>) -> &'a str {
+    match place {
+        Some(p @ ("local" | "remote" | "hosted")) => p,
+        _ => match remote {
+            Some("hosted") => "hosted",
+            Some(_) => "remote",
+            None => "local",
+        },
+    }
 }
 
 pub fn load_units(run_dir: &Path) -> Vec<Unit> {
@@ -1179,6 +1198,7 @@ pub fn build(
         locks_waited,
         sched: None,
         remote: None,
+        place: meta.place.clone(),
         split_hints: Vec::new(),
         toolchain: meta.toolchain.clone(),
         route: meta.route.clone(),
@@ -1306,6 +1326,13 @@ impl Summary {
             agent_session: self.agent_session.clone(),
             failure: self.diagnostics.failure.as_ref().map(|f| f.class),
             remote: self.remote.as_ref().map(|r| r.machine.clone()),
+            place: Some(
+                execution_place(
+                    self.place.as_deref(),
+                    self.remote.as_ref().map(|r| r.machine.as_str()),
+                )
+                .into(),
+            ),
         }
     }
 
@@ -1673,6 +1700,39 @@ fn trunc(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn execution_provenance_survives_summary_and_index_roundtrips() {
+        for (place, machine, expected) in [
+            (Some("hosted"), Some("fleet-17"), "hosted"),
+            (Some("remote"), Some("ssh:my-box"), "remote"),
+            (Some("local"), None, "local"),
+            (None, Some("hosted"), "hosted"),
+            (None, Some("ssh:hosted"), "remote"),
+            (None, Some("aws-instance"), "remote"),
+            (None, None, "local"),
+            (Some("remote"), Some("hosted"), "remote"),
+        ] {
+            let summary = Summary {
+                place: place.map(str::to_owned),
+                remote: machine.map(|machine| RemoteInfo {
+                    machine: machine.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut wire = serde_json::to_value(&summary).unwrap();
+            if place.is_none() {
+                wire.as_object_mut().unwrap().remove("place");
+            }
+            let saved: Summary = serde_json::from_value(wire).unwrap();
+            let index: IndexEntry =
+                serde_json::from_str(&serde_json::to_string(&saved.index_entry()).unwrap())
+                    .unwrap();
+            assert_eq!(index.place.as_deref(), Some(expected));
+            assert_eq!(execution_place(saved.place.as_deref(), machine), expected);
+        }
+    }
+
     #[test]
     fn measurement_coverage_reports_sample_gaps_and_preserves_old_unknowns() {
         let sample = |t| Sample {

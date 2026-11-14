@@ -1438,6 +1438,7 @@ fn run_remote_inner(
                 &serde_json::to_vec(&summary)?,
                 &[],
                 "Windows x86_64 (MSVC)",
+                "hosted",
                 0.0,
                 None,
                 None,
@@ -1693,6 +1694,7 @@ fn run_remote_inner(
                     &summary,
                     &run_files,
                     &machine,
+                    crate::summary::execution_place(None, Some(&machine)),
                     ms,
                     sync_timing,
                     timing,
@@ -1911,6 +1913,7 @@ fn record_remote(
     summary: &[u8],
     run_files: &[u8],
     machine: &str,
+    place: &str,
     sync_ms: f64,
     sync_timing: Option<crate::e2e::SyncTiming>,
     run_timing: Option<crate::remote_proto::RunTiming>,
@@ -1930,13 +1933,15 @@ fn record_remote(
     {
         crate::remote::log_event(&format!("run {run_id}: remote run files: {e:#}"));
     }
-    // The machine recorded the run as local to itself.
+    // The machine recorded the run as local to itself. Persist the client's
+    // provenance in every representation, not just the live-run metadata.
+    s.place = Some(place.into());
     let meta_path = dir.join("meta.json");
     if let Some(mut m) = std::fs::read(&meta_path)
         .ok()
         .and_then(|b| serde_json::from_slice::<crate::record::Meta>(&b).ok())
     {
-        m.place = Some(place_name().into());
+        m.place = s.place.clone();
         if let Ok(b) = serde_json::to_vec_pretty(&m) {
             let _ = std::fs::write(&meta_path, b);
         }
@@ -1975,6 +1980,7 @@ fn record_remote(
     crate::split_index::maybe_refresh(&s);
     crate::test_reuse::store(&s, wall);
     crate::telemetry::record_run(&s, true);
+    crate::export::upload_run(&s);
     crate::telemetry::maybe_spawn_background();
     // The machine printed its own report, which cannot see the client's side
     // of the wait (sync, admission, artifacts) or this machine's history.
@@ -2242,6 +2248,7 @@ mod tests {
             b"not-json",
             &[],
             "private-machine",
+            "remote",
             0.0,
             None,
             None,

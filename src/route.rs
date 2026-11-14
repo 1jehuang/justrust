@@ -1245,6 +1245,7 @@ mod tests {
             agent_session: None,
             failure: None,
             remote: remote.then(|| "m".to_string()),
+            place: None,
         }
     }
 
