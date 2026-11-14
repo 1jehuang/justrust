@@ -4,7 +4,9 @@ Status: candidate implementation and coordinated validation, not production
 promotion. The client, guest supervisor, control-plane negotiation and host SNI
 router have implementation paths. Their presence in source, or a router canary,
 is not evidence that the published client and fleet offer the complete path.
-SSH remains the compatibility transport and must not be disabled yet.
+SSH remains the compatibility transport. Explicit, lease-bound native-only
+promotion is reversible and has passed the independent acceptance below, but
+must not be enabled globally without the remaining promotion gates.
 
 ### Live acceptance, 2026-11-14 03:45 UTC
 
@@ -29,13 +31,18 @@ Automatically recorded builds: `20261113-194459029-1942743`,
 failing-test receipt `20261113-194546544-1945644`. These are correctness gates,
 not a native-versus-SSH speed measurement.
 
-The separate SSH-retirement canary obtained a trusted supervisor receipt and
-account acknowledgment, and the host reported the public DNAT disabled. It did
-not pass the independent external closed-port gate: TCP timed out rather than
-returning connection refused. The harness correctly refused to count that as
-success and rolled back the exact lease, verifying fresh pinned SSH afterward.
-Permanent retirement and default promotion remain gated on that acceptance,
-exact-revision cross-platform CI, and a valid comprehensive comparison.
+The initial local SSH-retirement canary obtained a trusted supervisor receipt
+and account acknowledgment, but timed out rather than returning connection
+refused. That failure was not counted as success. The host subsequently emitted
+verified TCP resets, and the unchanged strict harness passed from an independent
+GitHub Ubuntu runner on 2026-11-14 at 04:29 UTC, workflow run `43556833928`,
+using source `0d726e4cc` and the immutable candidate above. It confirmed the
+supervisor receipt and account acknowledgment, actual public SSH refusal, a
+native command after closure, and exact-lease rollback with fresh pinned SSH.
+The workflow's independent always-run rollback was also accepted. This proves
+reversible, opt-in retirement for the tested lease, not permanent fleet-wide
+SSH removal or default promotion. Those remain gated on exact-revision
+cross-platform CI and a valid comprehensive comparison.
 
 Goal: carry hosted builds over justrust's protocol on TCP 443, so networks that
 block public SSH ports can connect without an SSH relay, and interrupted builds
