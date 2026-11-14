@@ -5,6 +5,22 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.27
+
+- **Contended agent checks and tests can use private build slots on ext4.**
+  Reflinks are no longer required for isolation. Busy shared targets use a
+  private no-copy slot, while idle commands retain the warm shared fast path.
+  Snapshot guards exclude both legacy and fine-grained Cargo writers, and
+  explicit target/build directories remain authoritative.
+- Portable slot, refresh, capacity, GC, and identical-request join controls
+  now reach the hosted machine that owns Cargo's locks.
+- Hosted checkpoint verification includes source SHA-256 hashes. Native TLS
+  transport support remains subject to explicit operator and per-lease gates,
+  with native-only mode off by default and SSH compatibility retained.
+- Personal dashboards distinguish hosted execution from self-managed remotes.
+- Local cache publication uses bounded optional writer admission so background
+  cache work cannot indefinitely hold up the build result.
+
 - **Hosted-first is the default: signed-in builds no longer compile on your
   machine.** Builds hosted can run go there whatever the history says,
   debug `build` included, and a hosted failure ends the command instead of
