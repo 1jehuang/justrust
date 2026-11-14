@@ -12647,9 +12647,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .map_err(native_adapter::transport_error)?;
             return Ok(());
         }
-        if self.item_expansion.is_some() {
-            return Err(self.unsupported("nested item macro products are unsupported"));
-        }
+        let parent = if let Some(proof) = self.item_expansion {
+            proof
+                .validate_span(self.names.session(), span)
+                .map_err(scope_parse_error)?;
+            Some(proof.expansion(self.names).map_err(scope_parse_error)?)
+        } else {
+            None
+        };
         if self.module_frontier.is_none() || self.lexical.item_macros.is_none() {
             return Err(native_adapter::expanded_error(
                 self.names.session(),
@@ -12683,7 +12688,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             .expand(
                 selected,
                 args,
-                super::macro_rules::CallSite { span, parent: None },
+                super::macro_rules::CallSite { span, parent },
                 self.names,
             )
             .map_err(|error| self.driver_error(error))?;
@@ -12707,6 +12712,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         module_path: &AstPath,
         parsed: &mut ParsedDeclarations,
     ) -> Result<(), ParseError> {
+        let depth = self.expansion_depth.checked_add(1).ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+        })?;
+        self.names
+            .budget()
+            .check_depth(super::expansion_budget::Depth::Expansion, depth)
+            .map_err(|e| native_adapter::transport_error(e.into()))?;
         let expansion = expanded
             .expansion(self.names.session())
             .map_err(|error| self.driver_error(error.into()))?;
@@ -12716,9 +12728,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
-        let proof = scopes
-            .anchor_item_expansion(self.names, &*self.modules, expansion, definition, call)
-            .map_err(scope_parse_error)?;
+        let proof = if let Some(parent) = self.item_expansion {
+            scopes.anchor_nested_item_expansion(
+                self.names,
+                &*self.modules,
+                expansion,
+                definition,
+                call,
+                &parent,
+            )
+        } else {
+            scopes.anchor_item_expansion(self.names, &*self.modules, expansion, definition, call)
+        }
+        .map_err(scope_parse_error)?;
         let eof = self
             .names
             .item_expansion_eof(&proof)
@@ -12786,6 +12808,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             use_expansion_bytes: self.use_expansion_bytes,
             local_consts: local_consts::LocalConsts::default(),
         };
+        child.expansion_depth = depth;
         let mut product = ParsedDeclarations {
             program: ProgramDeclarations::default(),
             items: HashMap::new(),
@@ -12801,6 +12824,25 @@ impl<'input, 'names> Parser<'input, 'names> {
             child.retain_generated_item_metadata()?;
             let metadata_end = child.generated_metadata.len();
             let (visibility, explicit_visibility) = child.visibility(module)?;
+            if !explicit_visibility {
+                let qualified = child.lexical.exports.is_some() && child.qualified_macro_ahead()?;
+                let textual = !child.is("macro_rules")
+                    && child.token().is_ident()
+                    && child.cursor.peek(1).is_some_and(|t| t.matches("!"));
+                if qualified || textual {
+                    if metadata_start != metadata_end {
+                        return Err(child.unsupported(
+                            "generated attributes on nested item macro invocations are unsupported",
+                        ));
+                    }
+                    if qualified {
+                        child.qualified_item_macro(module, module_path, &mut product)?;
+                    } else {
+                        child.item_macro_invocation(module, module_path, &mut product)?;
+                    }
+                    continue;
+                }
+            }
             if child.is("unsafe") {
                 child.reject_forbidden_unsafe()?;
             }
@@ -13044,37 +13086,42 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.error("expected macro delimiter"));
         }
         let open = self.token().span;
-        let body =
-            if self.purpose == ParserPurpose::InactiveSyntax || self.lexical.function.is_none() {
-                let source = self
-                    .input
-                    .macro_source()
-                    .cloned()
-                    .ok_or_else(|| self.error("macro source inventory is unavailable"))?;
-                let source = super::macro_cursor::TokenSlice::roots(self.names.session(), source)
-                    .map_err(native_adapter::transport_error)?;
-                super::source_item_macro::group_body(&source, open, self.names)
-                    .map_err(native_adapter::transport_error)?
+        let body = if self.item_expansion.is_some() {
+            let source = self.input.current_macro_slice().ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            super::source_item_macro::group_body(source, open, self.names)
+                .map_err(native_adapter::transport_error)?
+        } else if self.purpose == ParserPurpose::InactiveSyntax || self.lexical.function.is_none() {
+            let source = self
+                .input
+                .macro_source()
+                .cloned()
+                .ok_or_else(|| self.error("macro source inventory is unavailable"))?;
+            let source = super::macro_cursor::TokenSlice::roots(self.names.session(), source)
+                .map_err(native_adapter::transport_error)?;
+            super::source_item_macro::group_body(&source, open, self.names)
+                .map_err(native_adapter::transport_error)?
+        } else {
+            let function = self
+                .lexical
+                .function
+                .as_ref()
+                .ok_or_else(|| self.unsupported("function-local macro context required"))?;
+            let driver = function.driver.as_ref().ok_or_else(|| {
+                self.unsupported("user macros in generated functions are unsupported")
+            })?;
+            if let Some(source) = self.input.current_macro_slice() {
+                driver.group_body_in(source, open, self.names)
+            } else if self.expansion.is_some() {
+                return Err(native_adapter::transport_error(
+                    super::token_session::TokenError::InvalidHandle,
+                ));
             } else {
-                let function = self
-                    .lexical
-                    .function
-                    .as_ref()
-                    .ok_or_else(|| self.unsupported("function-local macro context required"))?;
-                let driver = function.driver.as_ref().ok_or_else(|| {
-                    self.unsupported("user macros in generated functions are unsupported")
-                })?;
-                if let Some(source) = self.input.current_macro_slice() {
-                    driver.group_body_in(source, open, self.names)
-                } else if self.expansion.is_some() {
-                    return Err(native_adapter::transport_error(
-                        super::token_session::TokenError::InvalidHandle,
-                    ));
-                } else {
-                    driver.group_body(open, self.names)
-                }
-                .map_err(|error| self.driver_error(error))?
-            };
+                driver.group_body(open, self.names)
+            }
+            .map_err(|error| self.driver_error(error))?
+        };
         let mut stack = super::token_session::BudgetVec::new(
             self.names.budget(),
             super::expansion_budget::Storage::Temporary,

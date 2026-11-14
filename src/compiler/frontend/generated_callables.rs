@@ -88,6 +88,12 @@ impl Parser<'_, '_> {
                     super::super::token_session::TokenError::InvalidHandle,
                 )
             })?;
+            if !scopes
+                .item_product_is_direct(self.names, &*self.modules, proof, function, declaration)
+                .map_err(scope_parse_error)?
+            {
+                continue;
+            }
             scopes
                 .seal_item_product(self.names, &*self.modules, proof, function, declaration)
                 .map_err(scope_parse_error)?;
@@ -98,6 +104,18 @@ impl Parser<'_, '_> {
             })?;
         }
         for recipe in generated_metadata::debug_recipes(&product.generated_metadata) {
+            if !scopes
+                .item_product_is_direct(
+                    self.names,
+                    &*self.modules,
+                    proof,
+                    recipe.scope,
+                    recipe.method,
+                )
+                .map_err(scope_parse_error)?
+            {
+                continue;
+            }
             self.names
                 .budget()
                 .charge(super::super::expansion_budget::Counter::Work, 1)

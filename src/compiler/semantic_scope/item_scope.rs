@@ -64,6 +64,8 @@ pub(crate) struct ItemExpansionAdmission {
     owner: NonZeroU64,
     session: SessionId,
     expansion: ExpansionId,
+    anchor: u32,
+    parent: Option<ExpansionId>,
     definition: ModuleFrontierId,
     call: ModuleFrontierId,
     definition_module: ModuleId,
@@ -78,7 +80,9 @@ impl ItemExpansionAdmission {
         if !session.serves(self.session) {
             return Err(ScopeError::ForeignNames);
         }
-        session.expansion(self.expansion)?;
+        if session.expansion(self.expansion)?.parent != self.parent {
+            return Err(ScopeError::ConflictingAssociation);
+        }
         Ok(())
     }
     pub(crate) fn check_names(&self, names: &impl NameAccess) -> Result<(), ScopeError> {
@@ -121,10 +125,8 @@ impl ItemExpansionAdmission {
                 parent,
                 expansion,
                 transparency: Transparency::SemiTransparent,
-            } if expansion == self.expansion
-                && matches!(session.context(parent)?, ContextData::Root) =>
-            {
-                Ok(())
+            } if matches!(session.context(parent)?, ContextData::Root) => {
+                self.validate_ancestor(session, expansion)
             }
             _ => Err(ScopeError::UnsupportedProjection),
         }
@@ -136,6 +138,25 @@ impl ItemExpansionAdmission {
     ) -> Result<(), ScopeError> {
         token.validate(session)?;
         self.validate_span(session, token.span)
+    }
+    fn validate_ancestor(
+        &self,
+        session: &TokenSession,
+        expansion: ExpansionId,
+    ) -> Result<(), ScopeError> {
+        let mut current = Some(self.expansion);
+        let mut depth = 0u32;
+        while let Some(candidate) = current {
+            session.budget().charge(Counter::Work, 1)?;
+            depth = depth.checked_add(1).ok_or(TokenError::IdExhausted)?;
+            session.budget().check_depth(Depth::Expansion, depth)?;
+            let record = session.expansion(candidate)?;
+            if candidate == expansion {
+                return Ok(());
+            }
+            current = record.parent;
+        }
+        Err(ScopeError::UnsupportedProjection)
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -204,6 +225,9 @@ struct ItemProduct {
 #[derive(Clone, Copy, Debug)]
 struct ItemAnchor {
     proof: ItemExpansionAdmission,
+    parent_slot: Option<u32>,
+    direct_count: usize,
+    sealed_count: usize,
     // Builder-only close, issued after complete output consumption and all
     // product seals. Some(0) is an explicitly consumed empty expansion.
     completed_count: Option<usize>,
@@ -214,9 +238,10 @@ pub(super) struct ItemScopeState {
     source_root: Option<ModuleId>,
     points: BudgetVec<ModulePoint>,
     anchors: BudgetVec<ItemAnchor>,
+    open: Option<u32>,
     // Pushed only for freshly created function scopes, so ordered by
-    // `function.index` (binary search) and grouped by anchor in anchor order
-    // (a product is admitted only while its anchor is the open last one).
+    // `function.index` (binary search). Nested invocation products may
+    // interleave, but each product retains its exact anchor slot.
     products: BudgetVec<ItemProduct>,
 }
 impl ItemScopeState {
@@ -226,6 +251,7 @@ impl ItemScopeState {
             source_root: None,
             points: BudgetVec::new(b, Storage::Retained)?,
             anchors: BudgetVec::new(b, Storage::Retained)?,
+            open: None,
             products: BudgetVec::new(b, Storage::Retained)?,
         })
     }
@@ -345,6 +371,28 @@ impl ScopeArenaBuilder {
         definition: ModuleFrontierId,
         call: ModuleFrontierId,
     ) -> Result<ItemExpansionAdmission, ScopeError> {
+        self.admit_item_expansion(names, modules, expansion, definition, call, None)
+    }
+    pub(crate) fn anchor_nested_item_expansion(
+        &mut self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        expansion: ExpansionId,
+        definition: ModuleFrontierId,
+        call: ModuleFrontierId,
+        parent: &ItemExpansionAdmission,
+    ) -> Result<ItemExpansionAdmission, ScopeError> {
+        self.admit_item_expansion(names, modules, expansion, definition, call, Some(parent))
+    }
+    fn admit_item_expansion(
+        &mut self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        expansion: ExpansionId,
+        definition: ModuleFrontierId,
+        call: ModuleFrontierId,
+        parent: Option<&ItemExpansionAdmission>,
+    ) -> Result<ItemExpansionAdmission, ScopeError> {
         self.check_names(names)?;
         self.arena.transition()?;
         let root = self
@@ -359,11 +407,43 @@ impl ScopeArenaBuilder {
             return Err(ScopeError::ConflictingAssociation);
         }
         let record = names.session().expansion(expansion)?;
-        if record.parent.is_some() {
+        let parent_slot = if let Some(parent) = parent {
+            parent.check_modules(names, modules)?;
+            self.arena.check_item_proof(parent)?;
+            self.arena.check_item_open(parent)?;
+            if record.parent != Some(parent.expansion) || parent.target_module != target_module {
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            parent.validate_span(names.session(), record.call)?;
+            Some(parent.anchor)
+        } else {
+            if record.parent.is_some() || self.arena.items.open.is_some() {
+                // Repeating the current root admission is idempotent, but
+                // cannot open a sibling while another expansion owns scope.
+                if let Some(previous) = self.arena.item_anchor(expansion)? {
+                    if previous.parent.is_none()
+                        && previous.definition == definition
+                        && previous.call == call
+                    {
+                        self.arena.check_item_open(&previous)?;
+                        return Ok(previous);
+                    }
+                }
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            None
+        };
+        let definition_data = names.session().span(record.definition)?;
+        if definition_data.expansion.is_some()
+            || !matches!(
+                names.session().context(definition_data.context)?,
+                ContextData::Root
+            )
+        {
             return Err(ScopeError::UnsupportedProjection);
         }
-        for span in [record.definition, record.call] {
-            let data = names.session().span(span)?;
+        if parent.is_none() {
+            let data = names.session().span(record.call)?;
             if data.expansion.is_some()
                 || !matches!(names.session().context(data.context)?, ContextData::Root)
             {
@@ -374,6 +454,8 @@ impl ScopeArenaBuilder {
             owner: self.arena.owner,
             session: self.arena.names,
             expansion,
+            anchor: self.arena.index(self.arena.items.anchors.len())?,
+            parent: record.parent,
             definition,
             call,
             definition_module,
@@ -390,8 +472,12 @@ impl ScopeArenaBuilder {
         }
         self.arena.items.anchors.push(ItemAnchor {
             proof,
+            parent_slot,
+            direct_count: 0,
+            sealed_count: 0,
             completed_count: None,
         })?;
+        self.arena.items.open = Some(proof.anchor);
         Ok(proof)
     }
     #[cfg(test)]
@@ -442,6 +528,11 @@ impl ScopeArenaBuilder {
             occurrence,
             sealed: false,
         })?;
+        let anchor = &mut self.arena.items.anchors.as_mut_slice()[proof.anchor as usize];
+        anchor.direct_count = anchor
+            .direct_count
+            .checked_add(1)
+            .ok_or(TokenError::IdExhausted)?;
         Ok(frontier)
     }
     pub(crate) fn seal_item_product(
@@ -467,13 +558,75 @@ impl ScopeArenaBuilder {
             .arena
             .item_product_slot(function)?
             .ok_or(ScopeError::InvalidHandle)?;
-        self.arena.items.products.as_mut_slice()[slot].sealed = true;
+        self.arena.check_item_open(proof)?;
+        if !p.sealed {
+            self.arena.items.products.as_mut_slice()[slot].sealed = true;
+            let anchor = &mut self.arena.items.anchors.as_mut_slice()[proof.anchor as usize];
+            anchor.sealed_count = anchor
+                .sealed_count
+                .checked_add(1)
+                .ok_or(TokenError::IdExhausted)?;
+        }
         Ok(())
     }
+    /// A parent may contain a child's already sealed declarations, but may
+    /// neither re-own them nor accept products from a sibling expansion.
+    pub(crate) fn item_product_is_direct(
+        &self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        proof: &ItemExpansionAdmission,
+        function: ScopeId,
+        declaration: AstIdent,
+    ) -> Result<bool, ScopeError> {
+        self.check_names(names)?;
+        proof.check_modules(names, modules)?;
+        self.arena.check_item_proof(proof)?;
+        self.arena.check_item_open(proof)?;
+        let product = self
+            .arena
+            .item_product(function)?
+            .ok_or(ScopeError::InvalidHandle)?;
+        if product.occurrence != semantic_name::occurrence_index(names, declaration)? {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        self.arena.check_item_proof(&product.proof)?;
+        if product.proof == *proof {
+            return Ok(true);
+        }
+        if !product.sealed || product.proof.target_module != proof.target_module {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        let mut slot = product.proof.anchor;
+        let mut depth = 0u32;
+        loop {
+            self.arena.budget.charge(Counter::Work, 1)?;
+            depth = depth.checked_add(1).ok_or(TokenError::IdExhausted)?;
+            self.arena.budget.check_depth(Depth::Expansion, depth)?;
+            let anchor = self
+                .arena
+                .items
+                .anchors
+                .as_slice()
+                .get(slot as usize)
+                .ok_or(ScopeError::InvalidHandle)?;
+            if anchor.completed_count.is_none() {
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            let parent = anchor
+                .parent_slot
+                .ok_or(ScopeError::ConflictingAssociation)?;
+            if parent == proof.anchor {
+                return Ok(false);
+            }
+            if parent >= slot {
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            slot = parent;
+        }
+    }
     /// Close only the current invocation, after the parser has consumed EOF.
-    /// Item expansion cannot recursively create another item expansion. The
-    /// existing paid anchor slot therefore suffices, without another retained
-    /// allocation, resource carrier, or mutable state in published facts.
+    /// Closing restores the parent only after every child has completed.
     pub(crate) fn complete_item_expansion(
         &mut self,
         names: &impl NameAccess,
@@ -485,36 +638,12 @@ impl ScopeArenaBuilder {
         proof.check_modules(names, modules)?;
         self.arena.check_item_proof(proof)?;
         self.arena.check_item_open(proof)?;
-        // This open anchor's products are the contiguous tail.
-        let mut count = 0usize;
-        for product in self.arena.items.products.as_slice().iter().rev() {
-            self.arena.budget.charge(Counter::Work, 1)?;
-            if product.proof != *proof {
-                break;
-            }
-            if !product.sealed {
-                return Err(ScopeError::ConflictingAssociation);
-            }
-            count = count.checked_add(1).ok_or(TokenError::IdExhausted)?;
-        }
-        if count != expected_count {
+        let anchor = &mut self.arena.items.anchors.as_mut_slice()[proof.anchor as usize];
+        if anchor.direct_count != expected_count || anchor.sealed_count != expected_count {
             return Err(ScopeError::ConflictingAssociation);
         }
-        let anchor = self
-            .arena
-            .items
-            .anchors
-            .last()
-            .copied()
-            .ok_or(ScopeError::UnregisteredExpansion)?;
-        if anchor.proof != *proof {
-            return Err(ScopeError::ConflictingAssociation);
-        }
-        self.arena.items.anchors.pop();
-        self.arena.items.anchors.push(ItemAnchor {
-            proof: *proof,
-            completed_count: Some(count),
-        })?;
+        anchor.completed_count = Some(expected_count);
+        self.arena.items.open = anchor.parent_slot;
         Ok(())
     }
     #[cfg(test)]
@@ -698,14 +827,25 @@ impl ScopeArena {
         if p.owner != self.owner || p.session != self.names {
             return Err(ScopeError::ForeignOwner);
         }
-        if self.item_anchor(p.expansion)? != Some(*p) {
+        if self
+            .items
+            .anchors
+            .as_slice()
+            .get(p.anchor as usize)
+            .map(|a| a.proof)
+            != Some(*p)
+        {
             return Err(ScopeError::UnregisteredExpansion);
         }
         Ok(())
     }
     fn check_item_open(&self, proof: &ItemExpansionAdmission) -> Result<(), ScopeError> {
         self.budget.check()?;
-        match self.items.anchors.last() {
+        match self
+            .items
+            .open
+            .and_then(|slot| self.items.anchors.as_slice().get(slot as usize))
+        {
             Some(anchor) if anchor.proof == *proof && anchor.completed_count.is_none() => Ok(()),
             _ => Err(ScopeError::ConflictingAssociation),
         }
@@ -736,31 +876,50 @@ impl ScopeArena {
     }
     pub(super) fn check_item_completion(&self) -> Result<(), ScopeError> {
         self.budget.check()?;
-        // Products are grouped by anchor in anchor order: one merged walk.
-        let products = self.items.products.as_slice();
-        let mut next = 0usize;
-        for p in self.items.anchors.as_slice() {
+        if self.items.open.is_some() {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        // Direct owners can interleave under nesting. Count once by stable
+        // owner slot rather than rescanning products for every invocation.
+        let mut counts = BudgetVec::new(&self.budget, Storage::Temporary)?;
+        for _ in self.items.anchors.as_slice() {
+            counts.push(0usize)?;
+        }
+        for product in self.items.products.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
+            self.check_item_proof(&product.proof)?;
+            if !product.sealed {
+                return Err(ScopeError::ConflictingAssociation);
+            }
+            let count = &mut counts.as_mut_slice()[product.proof.anchor as usize];
+            *count = count.checked_add(1).ok_or(TokenError::IdExhausted)?;
+        }
+        for (slot, p) in self.items.anchors.as_slice().iter().enumerate() {
+            self.budget.charge(Counter::Work, 1)?;
+            if p.proof.anchor as usize != slot {
+                return Err(ScopeError::ConflictingAssociation);
+            }
             let expected = p
                 .completed_count
                 .ok_or(ScopeError::ConflictingAssociation)?;
-            let mut count = 0usize;
-            while let Some(product) = products.get(next)
-                && product.proof == p.proof
-            {
-                self.budget.charge(Counter::Work, 1)?;
-                if !product.sealed {
+            if let Some(parent) = p.parent_slot {
+                if parent as usize >= slot
+                    || self.items.anchors.as_slice()[parent as usize]
+                        .proof
+                        .expansion
+                        != p.proof.parent.ok_or(ScopeError::ConflictingAssociation)?
+                {
                     return Err(ScopeError::ConflictingAssociation);
                 }
-                count += 1;
-                next += 1;
-            }
-            if count != expected {
+            } else if p.proof.parent.is_some() {
                 return Err(ScopeError::ConflictingAssociation);
             }
-        }
-        if next != products.len() {
-            return Err(ScopeError::ConflictingAssociation);
+            if counts.as_slice()[slot] != expected
+                || p.direct_count != expected
+                || p.sealed_count != expected
+            {
+                return Err(ScopeError::ConflictingAssociation);
+            }
         }
         Ok(())
     }
@@ -878,11 +1037,9 @@ impl ScopeArena {
         let p = self
             .item_product(function)?
             .ok_or(ScopeError::FunctionMismatch)?;
-        if p.proof.expansion != e {
-            return Err(ScopeError::FunctionMismatch);
-        }
         self.check_item_proof(&p.proof)?;
-        p.proof.check_names(names)
+        p.proof.check_names(names)?;
+        p.proof.validate_ancestor(names.session(), e)
     }
     pub(crate) fn check_occurrence_in(
         &self,
@@ -1096,6 +1253,122 @@ mod tests {
         scopes
             .anchor_item_expansion(&f.names, &f.modules, f.expansion, point, point)
             .unwrap()
+    }
+
+    #[test]
+    fn nested_item_admissions_close_children_first_and_never_reown_products() {
+        let mut f = fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(
+            &f.names,
+            crate::compiler::owner_path::standalone_issued(
+                f.names.budget(),
+                crate::compiler::owner_path::OwnerDomain::ScopeArena,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let parent = anchor(&f, &mut scopes);
+        let defining_crate = f
+            .names
+            .session()
+            .expansion(f.expansion)
+            .unwrap()
+            .defining_crate;
+        let record = ExpansionRecord {
+            definition: f.original,
+            call: f.marked.span,
+            parent: Some(f.expansion),
+            defining_crate,
+            edition: Edition::E2024,
+        };
+        let child_id = f.names.session_mut().add_expansion(record).unwrap();
+        let sibling_id = f.names.session_mut().add_expansion(record).unwrap();
+        let child = scopes
+            .anchor_nested_item_expansion(
+                &f.names,
+                &f.modules,
+                child_id,
+                parent.definition,
+                parent.call,
+                &parent,
+            )
+            .unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &parent, 0)
+                .is_err()
+        );
+        assert!(
+            scopes
+                .anchor_nested_item_expansion(
+                    &f.names,
+                    &f.modules,
+                    sibling_id,
+                    parent.definition,
+                    parent.call,
+                    &parent,
+                )
+                .is_err()
+        );
+        let context = f.names.session().span(f.marked.span).unwrap().context;
+        let span = f
+            .names
+            .session_mut()
+            .reissue_span(f.original, context, child_id)
+            .unwrap();
+        let token = Token { span, ..f.marked };
+        child.validate_token(f.names.session(), token).unwrap();
+        assert!(parent.validate_token(f.names.session(), token).is_err());
+        let foreign_context = f
+            .names
+            .session()
+            .span(f.unrelated_marked.span)
+            .unwrap()
+            .context;
+        let bad = f
+            .names
+            .session_mut()
+            .reissue_span(f.original, foreign_context, child_id)
+            .unwrap();
+        assert!(child.validate_span(f.names.session(), bad).is_err());
+        let declaration = f
+            .names
+            .admit_item_token(token, Edition::E2024, &child)
+            .unwrap();
+        let frontier = scopes
+            .generated_function_root(&f.names, &f.modules, &child, declaration)
+            .unwrap();
+        let function = scopes.function(frontier).unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &child, 1)
+                .is_err()
+        );
+        scopes
+            .seal_item_product(&f.names, &f.modules, &child, function, declaration)
+            .unwrap();
+        scopes
+            .complete_item_expansion(&f.names, &f.modules, &child, 1)
+            .unwrap();
+        assert!(
+            !scopes
+                .item_product_is_direct(&f.names, &f.modules, &parent, function, declaration)
+                .unwrap()
+        );
+        assert!(
+            scopes
+                .seal_item_product(&f.names, &f.modules, &parent, function, declaration)
+                .is_err()
+        );
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &parent, 1)
+                .is_err()
+        );
+        scopes
+            .complete_item_expansion(&f.names, &f.modules, &parent, 0)
+            .unwrap();
+        scopes.check_item_authority(&f.names, &f.modules).unwrap();
     }
 
     #[test]

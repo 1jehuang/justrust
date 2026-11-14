@@ -411,8 +411,7 @@ impl SourceItemMacroDriver {
             || definition.source_crate != selected.source_crate
             || super::source_macro_binding::invocation_root(names.session(), site.span)?
                 != selected.source_crate
-            || site.parent.is_some()
-            || names.session().span(site.span)?.expansion.is_some()
+            || names.session().span(site.span)?.expansion != site.parent
         {
             return Err(TokenError::InvalidHandle.into());
         }

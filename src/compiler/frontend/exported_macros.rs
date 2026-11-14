@@ -141,9 +141,6 @@ impl Parser<'_, '_> {
         module_path: &AstPath,
         parsed: &mut ParsedDeclarations,
     ) -> Result<(), ParseError> {
-        if self.item_expansion.is_some() {
-            return Err(self.unsupported("nested item macro products are unsupported"));
-        }
         let path = self.path()?;
         let name = path
             .segments()
@@ -151,6 +148,14 @@ impl Parser<'_, '_> {
             .copied()
             .ok_or_else(|| self.error("exported macro name missing"))?;
         let span = self.names.span(name).map_err(native_adapter::name_error)?;
+        let parent = if let Some(proof) = self.item_expansion {
+            proof
+                .validate_span(self.names.session(), span)
+                .map_err(scope_parse_error)?;
+            Some(proof.expansion(self.names).map_err(scope_parse_error)?)
+        } else {
+            None
+        };
         self.expect("!")?;
         let braced = self.is("{");
         let args = self.macro_group()?;
@@ -177,7 +182,7 @@ impl Parser<'_, '_> {
             .expand(
                 self.names,
                 args,
-                super::super::macro_rules::CallSite { span, parent: None },
+                super::super::macro_rules::CallSite { span, parent },
             )
             .map_err(|error| self.driver_error(error))?;
         // An exported definition is path-visible from every module of its
