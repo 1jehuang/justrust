@@ -83,13 +83,17 @@ waterfall across runs to show where agent wait goes.
 
 Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
-### Human dashboard, explicitly interactive
+### Justrust Personal Dashboard, explicitly interactive
 
-The normal justrust install includes a terminal dashboard in the same binary:
+The normal justrust install includes the **Justrust Personal Dashboard**, a
+read-only terminal dashboard in the same binary:
 
 ```sh
 justrust interactive dashboard
 ```
+
+The separate **Justrust Admin Dashboard** (`jr-ops` / `jr-ops-tui`) is for
+service operators.
 
 Only the `interactive` namespace enters a terminal UI. There is no automatic
 TUI detection, and redirected stdin or stdout is rejected immediately. Existing
@@ -116,13 +120,19 @@ always states which are on, with the changed ones highlighted.
 |---|---|
 | Project | all projects, or any project with recorded runs (most runs first) |
 | Command | check, test, build, release (a release-profile build), clippy, run, other. The kind bar shows how many runs each choice would list. |
-| Where | anywhere, remote only, local only |
+| Where | anywhere, hosted only, remote only, local only |
 | Result | all, failed, passed, failed on your code, failed on the toolchain or infrastructure |
 | Search | command, project path and run ID (Enter keeps it, Esc cancels) |
 
 Shortcuts outside the menu: **c** / **Tab** steps the command kind (back with
 **C** / **Shift+Tab**), **w** steps where, **f** toggles failures, **h** toggles
 the project you launched from, **/** searches, and **x** or **Esc** clears all.
+
+**Hosted** means the build ran on Justrust's managed service. **Remote** means
+it ran on a user-managed machine other than the client machine, such as a
+self-hosted SSH server. **Local** means it ran on the client machine. These
+locations retain their meaning after a build finishes and are independent of
+whether its recording is stored locally or in your account.
 
 The Runs card says what happened instead of a bare exit code: `compile error`,
 `tests failed`, `your code failed`, `toolchain fault`, `infra fault`,
@@ -150,13 +160,17 @@ shorter than 40 rows show only the overall profile.
 is a published release or a source build), the hosted service deployment, and
 the compiler the service names for hosted builds with its protocol. The border
 says `up to date`, `update available`, `ahead of release`, or `update required`
-when the client cannot drive the hosted toolchain. The build machine installs
-whatever compiler the service names, so it is mentioned only while it still
-has a different one. It sits beside the account card at 110
-columns or more, below it otherwise, and is hidden on narrow terminals shorter
-than 30 rows. **v** opens the full list, including everything the build
-machine reports (toolchain, rustc, linkers, agent, OS). It is refreshed every
-minute and on **r**.
+when the client cannot drive the hosted toolchain. The card also shows the
+build machine's rustc and reported component count, with a warning if its
+toolchain differs from the service default. It sits beside the account card
+at 110 columns or more, below it otherwise, and is hidden on narrow terminals
+shorter than 30 rows. **v** opens the scrollable full inventory: service build
+tag, provisioning bundle hash, toolchain distribution status, and every component
+the configured build machine reports (including future component names, rustc,
+LLVM, Cargo, jr-cargo, linkers, C compilers, agent, OS and kernel). This is your
+configured machine, not the administrator's fleet inventory. Missing versions
+are marked as unreported, not guessed. Versions refresh every minute and on
+**r** from the main dashboard.
 
 **Selected run** sits directly above Runs and follows the highlighted row as
 you move with **↑/↓**. It shows the result, wall time, location, command,
