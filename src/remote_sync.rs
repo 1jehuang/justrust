@@ -20,6 +20,54 @@ pub const MAX_FILE: u64 = 8 << 20;
 /// Above this many changed files, rsync is cheaper than single frames.
 pub const RSYNC_ABOVE: usize = 300;
 
+/// Quote one word for rsync's `-e` parser, which is not a POSIX shell.
+/// Backslashes have no escape meaning there. A literal apostrophe is written
+/// as two adjacent apostrophes inside a single-quoted word instead.
+pub(crate) fn rsync_shell_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', "''"))
+}
+
+/// Keep rsync's mature traversal, delta, filter and deletion semantics while
+/// selecting the target's byte-stream transport. Native exec replaces only the
+/// remote shell, not rsync itself. Secluded arguments carry paths in the rsync
+/// protocol instead of asking a second shell to interpret filename quoting.
+pub(crate) fn configure_rsync(command: &mut Command, target: &Target) {
+    command.args(["-z", "-e", &target.rsync_shell()]);
+    if target.native.is_some() {
+        command.arg("--secluded-args");
+    }
+}
+
+/// Native endpoints already contain routing and authentication. A neutral host
+/// keeps rsync from expanding `user@host` into SSH-specific `-l user` arguments.
+pub(crate) fn rsync_destination(target: &Target, remote: &str) -> String {
+    let host = if target.native.is_some() {
+        "justrust-native"
+    } else {
+        &target.dest
+    };
+    format!("{host}:{remote}")
+}
+
+/// Upload exact bytes to a remote path (including private executable receipts).
+/// Pass raw paths: rsync protects SSH arguments itself, and native exec uses
+/// secluded arguments. Pre-quoting adds literal quotes with modern rsync.
+pub(crate) fn upload_file(target: &Target, source: &Path, remote: &str) -> Result<()> {
+    let mut command = Command::new("rsync");
+    configure_rsync(&mut command, target);
+    let status = command
+        .arg(source)
+        .arg(rsync_destination(target, remote))
+        .stdin(Stdio::null())
+        .status()
+        .context("rsync executable upload (is it installed?)")?;
+    anyhow::ensure!(
+        status.success(),
+        "rsync executable upload failed ({status})"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp {
     pub mtime_ns: i128,
@@ -707,8 +755,8 @@ impl Mirror {
         ]);
         let dst = match &self.target {
             Some(t) => {
-                c.args(["-z", "-e", &t.rsync_shell()]);
-                format!("{}:{remote}/", t.dest)
+                configure_rsync(&mut c, t);
+                rsync_destination(t, &format!("{remote}/"))
             }
             None => format!("{remote}/"),
         };
@@ -798,6 +846,103 @@ fn rsync_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rsync_shell_parser_preserves_quoted_program_and_endpoint() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "jr-rsync-shell-parser-{} with 'quotes'",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let executable = root.join("native client with 'quotes'");
+        let receipt = root.join("argv");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nprintf '%s\\000' \"$@\" > {}\nexit 37\n",
+                shell_quote(&receipt.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let endpoint = r#"{"key_path":"/private/a 'quoted' \\ key","address":"127.0.0.1"}"#;
+        let shell = format!(
+            "{} __native rsync {}",
+            rsync_shell_quote(&executable.to_string_lossy()),
+            rsync_shell_quote(endpoint)
+        );
+        let source = root.join("source");
+        std::fs::write(&source, b"payload").unwrap();
+        let output = Command::new("rsync")
+            .args(["--secluded-args", "-e", &shell])
+            .arg(&source)
+            .arg("justrust-native:/unused")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let received = std::fs::read(&receipt).unwrap_or_else(|error| {
+            panic!(
+                "rsync did not invoke quoted shell: {error}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        let args: Vec<_> = received.split(|byte| *byte == 0).collect();
+        assert_eq!(
+            &args[..5],
+            &[
+                b"__native".as_slice(),
+                b"rsync",
+                endpoint.as_bytes(),
+                b"justrust-native",
+                b"rsync"
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rsync_native_uses_secluded_arguments_without_ssh() {
+        let mut target = Target {
+            dest: "ubuntu@native.invalid".into(),
+            opts: vec!["-o".into(), "ProxyCommand=must-not-run".into()],
+            native: None,
+        };
+        let mut ssh = Command::new("rsync");
+        configure_rsync(&mut ssh, &target);
+        let ssh_args: Vec<_> = ssh.get_args().map(|s| s.to_string_lossy()).collect();
+        assert_eq!(ssh_args[0], "-z");
+        assert_eq!(ssh_args[1], "-e");
+        assert!(ssh_args[2].starts_with("ssh "));
+        assert!(!ssh_args.iter().any(|s| s == "--secluded-args"));
+        assert_eq!(
+            rsync_destination(&target, "/a 'quoted' path"),
+            "ubuntu@native.invalid:/a 'quoted' path"
+        );
+
+        target.native = Some(crate::remote_native::Endpoint {
+            address: "127.0.0.1".into(),
+            port: 443,
+            server_name: "justrust-native".into(),
+            certificate_sha256: "ab".repeat(32),
+            key_path: "/private/key with 'quotes'".into(),
+            resume_path: "/private/resume with spaces".into(),
+        });
+        let mut native = Command::new("rsync");
+        configure_rsync(&mut native, &target);
+        let native_args: Vec<_> = native.get_args().map(|s| s.to_string_lossy()).collect();
+        assert_eq!(native_args[0], "-z");
+        assert_eq!(native_args[1], "-e");
+        assert!(native_args[2].contains(" __native rsync "));
+        assert!(!native_args[2].contains("ProxyCommand"));
+        assert_eq!(native_args[3], "--secluded-args");
+        assert_eq!(
+            rsync_destination(&target, "/a 'quoted' path"),
+            "justrust-native:/a 'quoted' path"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

@@ -610,13 +610,7 @@ pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSession
     pin.validate()?;
     if fields[0] == "UPLOAD" {
         let publish = session_executable_publish_script(&pin, fields[2])?;
-        let status = Command::new("rsync")
-            .args(["-z", "-e", &target.rsync_shell()])
-            .arg(&exe)
-            .arg(format!("{}:{}", target.dest, shell_quote(fields[2])))
-            .stdin(Stdio::null())
-            .status();
-        if !status.is_ok_and(|status| status.success()) {
+        if crate::remote_sync::upload_file(target, &exe, fields[2]).is_err() {
             // Only our random private temporary receipt may be removed.
             let _ = target
                 .command()
@@ -830,13 +824,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             .stdin(Stdio::null())
             .status()?
             .success()
-            && Command::new("rsync")
-                .args(["-z", "-e", &t.rsync_shell()])
-                .arg(&exe)
-                .arg(format!("{}:{tmp}", t.dest))
-                .stdin(Stdio::null())
-                .status()?
-                .success()
+            && crate::remote_sync::upload_file(t, &exe, tmp).is_ok()
             && t.command()
                 .arg(format!(
                     "chmod +x ~/{tmp} && (command -v codesign >/dev/null 2>&1 && codesign -s - -f ~/{tmp} 2>/dev/null || true) && mv ~/{tmp} ~/.cargo/bin/justrust"
@@ -899,8 +887,10 @@ fn build_justrust_on_machine(t: &Target) -> Result<()> {
             .stdin(Stdio::null())
             .status();
         let src = format!("{}/", manifest_dir.display());
-        let dst = format!("{}:.justrust/bootstrap-src/", t.dest);
-        let synced = Command::new("rsync")
+        let dst = crate::remote_sync::rsync_destination(t, ".justrust/bootstrap-src/");
+        let mut sync = Command::new("rsync");
+        crate::remote_sync::configure_rsync(&mut sync, t);
+        let synced = sync
             .args([
                 "-az",
                 "--delete",
@@ -910,8 +900,6 @@ fn build_justrust_on_machine(t: &Target) -> Result<()> {
                 "--exclude=/toolchain/",
                 "--exclude=/bench/",
                 "--exclude=/data/",
-                "-e",
-                &t.rsync_shell(),
             ])
             .arg(&src)
             .arg(&dst)
