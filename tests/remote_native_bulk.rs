@@ -142,6 +142,34 @@ fn native_bulk_shell_preserves_stdout_stderr_and_exit_status() {
 }
 
 #[test]
+fn native_bulk_early_failure_drains_stderr_with_unconsumed_input() {
+    let fixture = Fixture::new();
+    fixture._runtime.block_on(async {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        // More than the pipe and TLS buffers, while the child explicitly closes
+        // stdin before writing its diagnostic and returning a nonzero status.
+        let input = vec![0xa5; 4 * 1024 * 1024];
+        let code = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            remote_native::exec_endpoint_io(
+                &fixture.endpoint,
+                "exec 0<&-; printf 'early failure\\n' >&2; exit 37",
+                &mut input.as_slice(),
+                &mut stdout,
+                &mut stderr,
+            ),
+        )
+        .await
+        .expect("early native failure stalled")
+        .unwrap();
+        assert_eq!(code, 37);
+        assert!(stdout.is_empty());
+        assert_eq!(stderr, b"early failure\n");
+    });
+}
+
+#[test]
 fn native_bulk_transfer_preserves_quoted_names_deletes_stale_and_protects_outputs() {
     let fixture = Fixture::new();
     let source = fixture.root.join("source ' tree");

@@ -736,9 +736,10 @@ async fn serve_connection(
     .await;
     match result {
         Ok(Ok(code)) => write_frame(&mut output, EXIT, &code.to_be_bytes()).await?,
-        Ok(Err(_)) => {
-            let _ = write_frame(&mut output, ERROR, b"native command I/O failed").await;
-            bail!("native command I/O failed");
+        Ok(Err(error)) => {
+            let message = format!("native command I/O failed: {error:#}");
+            let _ = write_frame(&mut output, ERROR, message.as_bytes()).await;
+            return Err(error.context("native command I/O failed"));
         }
         Err(_) => {
             let _ = write_frame(&mut output, ERROR, b"native command deadline exceeded").await;
@@ -746,6 +747,17 @@ async fn serve_connection(
         }
     }
     output.shutdown().await?;
+    // EXIT is already flushed and the child is reaped. Keep consuming residual
+    // upload bytes until the client observes EXIT and closes, instead of dropping
+    // a socket with unread input (which can reset TCP and lose the final output).
+    // execute's frame reader may have been cancelled midway through a frame, so
+    // this terminal cleanup deliberately drains bytes, not protocol frames.
+    // Peer disconnect/errors here cannot change the command result already sent.
+    let _ = tokio::time::timeout(
+        IO_TIMEOUT,
+        tokio::io::copy(&mut input, &mut tokio::io::sink()),
+    )
+    .await;
     Ok(())
 }
 
@@ -1038,14 +1050,21 @@ async fn exec_key_enroll_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: Asyn
     let send = async {
         let mut buffer = vec![0; 32768];
         loop {
-            let len = stdin.read(&mut buffer).await?;
+            let len = stdin
+                .read(&mut buffer)
+                .await
+                .map_err(|error| CommandInputError::Source(error.into()))?;
             if len == 0 {
-                write_frame(&mut write, EOF, &[]).await?;
+                write_frame(&mut write, EOF, &[])
+                    .await
+                    .map_err(CommandInputError::Transport)?;
                 break;
             }
-            write_frame(&mut write, STDIN, &buffer[..len]).await?;
+            write_frame(&mut write, STDIN, &buffer[..len])
+                .await
+                .map_err(CommandInputError::Transport)?;
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, CommandInputError>(())
     };
     let receive = async {
         loop {
@@ -1068,16 +1087,58 @@ async fn exec_key_enroll_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, E: Asyn
             }
         }
     };
-    tokio::pin!(send);
-    tokio::pin!(receive);
-    tokio::time::timeout(EXEC_TIMEOUT + IO_TIMEOUT, async {
-        tokio::select! {
-            result = &mut receive => result,
-            result = &mut send => { result?; receive.await }
-        }
-    })
+    tokio::time::timeout(
+        EXEC_TIMEOUT + IO_TIMEOUT,
+        drain_command_response(send, receive),
+    )
     .await
     .context("native command deadline exceeded")?
+}
+
+enum CommandInputError {
+    Source(anyhow::Error),
+    Transport(anyhow::Error),
+}
+
+// A command can exit without consuming all of stdin. Its EXIT and final stderr
+// may already be buffered when the concurrent upload observes the closed TLS
+// connection. Never cancel the response reader on that upload failure.
+async fn drain_command_response(
+    send: impl std::future::Future<Output = std::result::Result<(), CommandInputError>>,
+    receive: impl std::future::Future<Output = Result<i32>>,
+) -> Result<i32> {
+    tokio::pin!(send);
+    tokio::pin!(receive);
+    tokio::select! {
+        result = &mut receive => result,
+        result = &mut send => match result {
+            Ok(()) => receive.await,
+            Err(failure) => {
+                let (error, closed_transport) = match failure {
+                    CommandInputError::Source(error) => (error, false),
+                    CommandInputError::Transport(error) => {
+                        let closed = error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                            matches!(e.kind(), std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::NotConnected)
+                        });
+                        (error, closed)
+                    }
+                };
+                // Bound draining if this is a genuine input/transport failure
+                // rather than a peer that has finished the command.
+                match tokio::time::timeout(IO_TIMEOUT, receive).await {
+                    Ok(Ok(code)) if closed_transport => Ok(code),
+                    Ok(Ok(_)) => Err(error.context("native stdin failed")),
+                    Ok(Err(response_error)) => Err(response_error.context(format!(
+                        "native stdin failed: {error:#}"
+                    ))),
+                    Err(_) => Err(error.context("native response drain timeout after stdin failure")),
+                }
+            }
+        }
+    }
 }
 
 fn resume_identity(path: &Path) -> Result<ssh_key::PrivateKey> {
@@ -1413,6 +1474,90 @@ mod tests {
         ));
         (address, pin, server)
     }
+    #[tokio::test]
+    async fn upload_close_before_response_drains_stderr_and_preserves_exit() {
+        // The response cannot finish until the upload has failed. This forces
+        // the select branch that used to drop the reader, without timing sleeps.
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::NotConnected,
+        ] {
+            let (sent, failed) = tokio::sync::oneshot::channel();
+            let mut stderr = Vec::new();
+            let result = drain_command_response(
+                async {
+                    sent.send(()).unwrap();
+                    Err(CommandInputError::Transport(
+                        std::io::Error::from(kind).into(),
+                    ))
+                },
+                async {
+                    failed.await.unwrap();
+                    stderr.extend_from_slice(b"remote command failed\n");
+                    Ok(37)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, 37);
+            assert_eq!(stderr, b"remote command failed\n");
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_failure_drains_but_does_not_hide_genuine_errors() {
+        for source in [true, false] {
+            let (sent, failed) = tokio::sync::oneshot::channel();
+            let mut stderr = Vec::new();
+            let error = drain_command_response(
+                async {
+                    sent.send(()).unwrap();
+                    let error = std::io::Error::new(
+                        if source {
+                            std::io::ErrorKind::BrokenPipe
+                        } else {
+                            std::io::ErrorKind::Other
+                        },
+                        "injected input failure",
+                    )
+                    .into();
+                    Err(if source {
+                        CommandInputError::Source(error)
+                    } else {
+                        CommandInputError::Transport(error)
+                    })
+                },
+                async {
+                    failed.await.unwrap();
+                    stderr.extend_from_slice(b"final stderr");
+                    Ok(0)
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(format!("{error:#}").contains("injected input failure"));
+            assert_eq!(stderr, b"final stderr");
+        }
+        let (sent, failed) = tokio::sync::oneshot::channel();
+        let error = drain_command_response(
+            async {
+                sent.send(()).unwrap();
+                Err(CommandInputError::Transport(
+                    std::io::Error::from(std::io::ErrorKind::BrokenPipe).into(),
+                ))
+            },
+            async {
+                failed.await.unwrap();
+                bail!("injected malformed EXIT")
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("injected malformed EXIT"));
+    }
+
     #[tokio::test]
     async fn tls_exec_binary_stdin_stderr_and_exit() {
         let key = key();
