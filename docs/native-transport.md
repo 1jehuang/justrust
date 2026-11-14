@@ -1,44 +1,51 @@
-# Native hosted transport (design, 2026-11-13)
+# Native hosted transport (implementation status, 2026-11-14 UTC)
 
-Status: design. Nothing here is implemented. ssh stays the transport until
-each stage below is measured against it.
+Status: candidate implementation and coordinated validation, not production
+promotion. The client, guest supervisor, control-plane negotiation and host SNI
+router have implementation paths. Their presence in source, or a router canary,
+is not evidence that the published client and fleet offer the complete path.
+SSH remains the compatibility transport and must not be disabled yet.
 
-Goal: carry hosted builds over justrust's own protocol on TCP 443 instead of
-ssh, so that hosted works on networks that only pass web ports without a
-relay hop, build machines need no public ssh ports, and a dropped connection
-resumes instead of starting over.
+Goal: carry hosted builds over justrust's protocol on TCP 443, so networks that
+block public SSH ports can connect without an SSH relay, and interrupted builds
+can reattach without starting another execution. No native-versus-SSH speedup
+has been established by this implementation work.
 
-## What ssh carries today
+## Current component boundaries
 
-| Use | Where | Shape |
+| Use | Implementation | Current shape |
 |---|---|---|
-| Daemon to agent link | `remote_daemon::ensure_link` | One long-lived `ssh ... justrust __agent`, frames from `remote_proto` on stdin/stdout |
-| Durable session | `remote_session` | A broker on the machine owns the agent. ssh carries sequenced input and journal offsets |
-| First mirror of a root, and re-verification after a reconnect | `remote_sync` | `rsync --checksum` with `-e ssh` |
-| Peer dependency cache | `peercache` | `Cache*` frames on the daemon link |
-| Setup and one-off commands | `remote_build` (23 call sites), `remote`, `remote_resume`, `remote_artifacts` | `ssh host 'script'`, some with rsync |
-| Installing the client on the machine | `remote_build::ensure_remote_justrust` | rsync or scp of the binary |
-| Windows workers | `remote_windows` | ssh exec of a fixed PowerShell invocation |
+| Command byte stream | `src/remote_native.rs`, `remote_backend::Target` | TLS 1.3 native exec with authenticated stdin/stdout/stderr/exit frames, or the existing SSH path |
+| Daemon to agent link | `remote_daemon::ensure_link`, `remote_proto` | Existing agent frames carried by the selected target transport |
+| Durable session | `src/remote_session.rs` | A private broker owns the agent, sequenced input and output journal; transport reconnect attaches to that broker |
+| First mirror and bulk changes | `src/remote_sync.rs` | Rsync remains the transfer engine; native targets use `__native rsync` as its remote shell |
+| Executable uploads | `remote_sync::upload_file`, `remote_build` | Rsync over the selected native or SSH transport |
+| Reconnect mirror evidence | `src/remote_checkpoint.rs` | Opt-in `checkpoint-hash`, with token, sizes and source-snapshot SHA-256 hashes |
+| Peer dependency cache | `src/peercache.rs` | Existing `Cache*` frames on the daemon link |
+| Guest privilege boundary | Native root supervisor | Root-only server key and slot token, authenticated commands executed as `ubuntu` |
+| Pool ingress and authorization | `~/justrust-cloud` | Lease-scoped SNI passthrough, guest readiness, authenticated endpoint offers and slot authorization |
+| Windows workers | `src/remote_windows.rs` | Separate compatibility path; current native hosted offers reject Windows |
 
-The framing is already ours. `remote_proto` says the same frames run over
-the ssh channel and the daemon's unix socket "so a future hosted backend only
-has to provide a byte stream". The agent serves stdin and stdout. The part of
-ssh that is hard to replace is not the build stream, it is rsync and the
-scattered one-off commands.
+Rsync over native exec is a transitional integration, not a claim that a native
+bulk-file protocol has replaced rsync. It preserves rsync traversal, filters,
+deltas and deletion semantics while replacing its remote shell. Native rsync
+uses secluded arguments so file paths travel in the rsync protocol. Replacing
+that engine requires separate correctness and throughput evidence.
 
-## Measurements (one laptop, wifi, 2026-11-07 to 2026-11-13)
+## Historical measurements (one laptop, Wi-Fi, 2026-11-07 to 2026-11-13)
 
-These describe this machine during a week of heavy development on an
-unreliable network. They are not a fleet-wide sample.
+These predate the hash-bearing checkpoint implementation and native acceptance
+work below. They describe one machine during heavy development on an unreliable
+network, not the fleet or a current native-versus-SSH comparison.
 
 Warm path:
 
-- Three warm no-change `justrust check` runs on this repo spawned zero ssh
+- Three warm no-change `justrust check` runs on this repo spawned zero SSH
   processes from the client. Everything went through the daemon's existing
   link. Wall 2.3 to 2.7 s for the second and third run.
-- One ssh command on the warm master: median 166 ms (min 74, max 324, n=10).
-  TCP connect to the same port: median 32 ms. So a one-off command costs
-  roughly five round trips, but the warm build path does not issue any.
+- One SSH command on the warm master: median 166 ms (min 74, max 324, n=10).
+  TCP connect to the same port: median 32 ms. A one-off command incurred
+  additional setup, but those warm builds did not issue one.
 
 Reconnect path, from `~/.justrust/remote/daemon.log`:
 
@@ -58,121 +65,161 @@ Reconnect path, from `~/.justrust/remote/daemon.log`:
   n=392, 51 minutes in total over the week. For this repo (95,386 files) it
   was 10.8 to 22.3 s per reconnect with zero or one file actually sent.
 - Session reattach failed with `Permission denied (publickey)` three times
-  out of three in the observed case: the per-connect key is accepted for 60 s,
-  so a reattach after the master died has no valid key. The run was lost
-  ("build was not resubmitted").
+  out of three in the observed case: the per-connect key was accepted for
+  60 s, so reattachment after the master died had no valid key. The run was
+  lost ("build was not resubmitted").
 
-Conclusion: ssh is not the bottleneck of a warm build, and replacing it will
-not speed one up. The cost is at connection boundaries: establishing the
-link, re-proving the mirror, and failed reattachment. That is where a native
-transport can win, together with the blocked-port and exposure problems. Any
-speed claim must be about reconnect and cold-connect wait, not warm builds.
+These observations motivated work on connection setup, mirror evidence and
+reattachment. They do not measure the new transport, the new content hashing,
+or a general warm-build benefit.
 
-## Design
+## Implemented architecture
 
-### Stream
+### TLS command stream
 
-TLS 1.3 over TCP 443, then the existing `remote_proto` frames. No QUIC in the
-first version: the networks that block ssh ports commonly block UDP as well,
-so QUIC would need a TCP fallback anyway. Multiple logical channels (build
-link, file transfer, one-off commands) are multiplexed as frame streams on one
-connection, replacing the ssh ControlMaster.
+`src/remote_native.rs` implements TLS 1.3 over TCP with ALPN
+`justrust-native-v1`. Each authenticated exec connection carries bounded native
+frames for stdin, EOF, stdout, stderr, exit status and errors. Existing agent
+and durable-session protocols run inside those command byte streams. This is
+not yet a multiplexed replacement for SSH ControlMaster with many independent
+exec channels on one TLS connection.
 
-### Reaching a slot on 443
+The client pins the SHA-256 of the guest's DER certificate supplied by the
+authenticated control plane, rather than trusting a public CA. The server still
+proves possession of its private key during TLS. TLS 1.2, missing native ALPN
+and a wrong certificate pin are rejected. TLS session resumption and tickets
+are disabled in this implementation; application-level resume is separate.
 
-A pool host serves up to 32 slots and has one port 443. The host runs a
-router that reads only the TLS ClientHello, picks the slot from the server
-name (`slot-N`), and forwards the untouched byte stream to that guest. The
-host holds no TLS key and sees only ciphertext, which is the same trust
-position as today's DNAT rule. TLS terminates inside the guest.
+A client Ed25519 SSH identity signs a protocol-namespaced transcript containing
+the TLS exporter, a fresh server challenge, the command and any requested resume
+identity enrollment. This binds authorization to the connection and command.
+The guest fetches fresh `{keys, account_id, lease_id}` authorization using its
+slot credential, rather than accepting an account or lease chosen by the
+client.
 
-The router is multitenant infrastructure and lives in `~/justrust-cloud`.
-It is new attack surface on the host (a parser facing the internet), so it
-must be small, bounded (ClientHello size and time limits, per-source
-connection caps) and unable to reach anything but slot guest addresses.
+### Root supervisor and lease-scoped resume
 
-### Identity, same roots as today
+The guest supervisor reads its TLS private key and slot token from root-owned,
+private files. It starts authenticated commands as the fixed `ubuntu` user,
+dropping supplementary groups, GID and UID and constructing a clean command
+environment. Neither the slot credential nor the TLS private key is lent to the
+build user. Pool provisioning, credential isolation and readiness are owned by
+`~/justrust-cloud/pool/NATIVE-TLS.md`.
 
-- Server: each guest has a long-lived key, as it has an ssh host key now. The
-  API returns its public key with the connect response and the client pins
-  exactly that key. No certificate authority is trusted.
-- Client: each connect generates a fresh ed25519 key and registers it through
-  the authenticated API, as now. The client proves possession by signing the
-  TLS exporter value, so the proof is bound to this connection and cannot be
-  replayed on another.
-- Tenant isolation is unchanged: the guest asks the API which keys are valid
-  for its slot, with its slot token. The destination is still chosen by the
-  server from the account's record, never by the request.
+After proving possession of a currently authorized connect key, a client can
+enroll a separate Ed25519 resume public key. Its private key is stored locally
+in a private, owner-checked file. Enrollment is bound to the control-plane
+account and lease and retained in supervisor memory with an expiry. Every
+subsequent authentication fetches current lease authorization and discards
+expired or mismatched enrollment. A resume identity cannot enroll another
+identity. Supervisor restart loses this in-memory enrollment, and lease change
+must not carry it forward.
 
-### Resume
+This credential is not a durable job by itself. `remote_session` still owns the
+broker, input sequence acknowledgements and output journal offsets. Reattachment
+continues the existing broker session. A missing broker or host reboot is a
+lost job, never permission to create or resubmit a build. Application resume
+must not be confused with TLS session resumption.
 
-After authentication the guest issues a resume secret bound to the session
-and the account. A reconnect presents it with the last acknowledged journal
-offset and continues the same broker session. This replaces the ssh
-reattach that fails once the 60 s key window has passed. The secret is
-valid only while the broker lives and only for that session, and a resume
-never starts or resubmits a build (the existing rule in `remote_session`).
+### Lease-scoped SNI routing on 443
 
-### Mirror verification without rsync
+The host router in `~/justrust-cloud/pool/sni-router.py` reads a bounded TLS
+ClientHello and forwards the original TLS bytes to a fixed guest address on
+443. TLS terminates in the guest. The router holds no TLS key and does not
+select arbitrary caller-supplied upstream addresses.
 
-Shipped as link checkpoints (`src/remote_checkpoint.rs`, opt-in with
-`JUSTRUST_REMOTE_CHECKPOINT=1`, negotiated through `Hello.caps`). It does not
-depend on the new stream and runs over the ssh link.
+Production routing uses a root-owned, expiring route snapshot published by the
+pool agent. The SNI name encodes the current lease hash, not merely a reusable
+`slot-N` number. Missing, expired, malformed or unassigned routes fail closed.
+Static slot routing is a development mode, not the production lease contract.
+SNI is a routing hint, not account authorization: certificate pinning and guest
+account/lease authorization remain required.
 
-- Once a root is in sync the daemon sends `Checkpoint{path, token}`. The agent
-  applies it in frame order, after every earlier write, and stores the token
-  in `<root>/.justrust/mirror-token`. It refuses while a write or delete
-  under that root is still failed.
-- The daemon records every path it sends after the checkpoint.
-- After a reconnect the daemon sends `Verify` with the token and the size of
-  every file it had not sent since. The agent checks the token and each size,
-  then replaces the token. On success the daemon resends the recorded paths
-  plus local changes. On any failure the token is forgotten and the checksum
-  mirror runs.
-- A write or delete from any other connection removes the token, and the
-  connection that held it reports the root as lost at the next barrier, so
-  the daemon stops trusting it and the build does not start.
+The control plane offers `{address, port: 443, server_name,
+certificate_sha256}` only when its readiness and lease checks pass. Client
+validation requires the offered host to match the authenticated worker address
+and keeps local key/resume paths out of the API-deserialized offer. See
+`~/justrust-cloud/pool/SNI-ROUTER.md` and `pool/NATIVE-TLS.md` there for routing,
+readiness and coordinated canary requirements. An installed listener alone is
+not native guest readiness or production promotion.
 
-The rule "the daemon never guesses that the machine is in sync" stays: the
-token is the machine's own record that a checkpoint was applied and that
-nothing else has written since, and the sizes are read from the machine's
-disk. What it does not do is hash content: a file changed on the machine to
-the same size by something other than an agent is not detected, where the
-checksum rsync would repair it. That gap is the reason this is still opt-in.
-A per-file content hash kept by the agent would close it.
+### Hash-bearing mirror checkpoints
 
-### Fallback and versioning
+Link checkpoints remain opt-in with `JUSTRUST_REMOTE_CHECKPOINT=1` and work over
+the selected byte stream, including SSH. Commit `d373f2c2c` closes the prior
+settled same-size external-mutation hole:
 
-- The transport is negotiated: the connect response says whether the machine
-  offers the native endpoint. Old clients and old machines keep using ssh.
-- Order of preference once promoted: native on 443, direct ssh, ssh through
-  the 443 relay.
-- The stream has its own version number next to `remote_proto::VERSION`.
+- The daemon captures SHA-256 hashes from its source snapshot before initial
+  or bulk rsync. For incremental writes it hashes the exact `Write` payload.
+  It retains those hashes instead of rereading mutable local files when
+  checkpointing or reconnecting.
+- Once a root is in sync, `Checkpoint{path, token}` is applied in frame order.
+  The agent writes `<root>/.justrust/mirror-token` only if no earlier write or
+  delete under that root remains failed. The daemon tracks paths sent later
+  as dirty.
+- On reconnect, `Verify` carries the token plus size, SHA-256 and path for
+  every settled entry. The agent checks regular-file type, size and content,
+  and rechecks that the token survived the scan before replacing it. On
+  confirmation, the daemon resends dirty paths and local changes.
+- Missing snapshot hashes or failed verification cause the full mirror path.
+  A same-size external change, even with preserved mtime, no longer passes
+  solely because its length matches.
+- The new `checkpoint-hash` capability is deliberately distinct from legacy
+  `checkpoint`. Older peers do not interpret the new list format, and a
+  daemon without negotiated hash support uses the full mirror path.
 
-## Stages
+This closes the specific settled-content gap, not every concurrent-writer
+problem. The final token recheck is conservative detection, not atomic
+exclusion of another agent or unmanaged writer during verification and token
+replacement. Cross-process writer exclusion remains a separate correctness
+concern before broader promotion. Daemon-restart mirror resume in
+`remote_resume` is also a separate mechanism, not upgraded to content hashing
+by this checkpoint change.
 
-Each stage ships behind an opt-in setting and is promoted only on
-before/after numbers.
+The implementation adds source reads before initial/bulk copies, hashing of
+incremental payloads and remote content reads on reconnect. There are no
+before/after benchmark results for this hash-bearing path. Historical
+size-only checkpoint timings in `FINDINGS.md` must not be presented as its
+performance.
 
-1. **Mirror verification over the existing ssh link.** Done as link
-   checkpoints, opt-in. Reconnect sync on a 94k-file copy of this repo went
-   from 11.4 to 47.7 s (checksum rsync) to 0.8 to 1.3 s (`FINDINGS.md`,
-   2026-11-13). Promotion to default needs the content-hash gap above closed
-   and a fleet agent that advertises the capability.
-2. **Native stream for the daemon link**, in the guest and the host router,
-   with pinned server key, signed client proof and resume. ssh remains for
-   setup commands and first mirrors. Measure link time (today median 2.46 s)
-   and reattach success on an interrupted connection.
-3. **Move one-off commands and first mirrors onto the stream** (an exec
-   channel and bulk file frames), then client installation.
-4. **Close the public ssh ports** for accounts on a client that no longer
-   needs them. Windows workers are a separate decision.
+### Negotiation and compatibility
 
-## Open questions
+The authenticated connect response advertises a native endpoint when available.
+`JUSTRUST_HOSTED_NATIVE=1` requires an offer, `=0` selects compatibility behavior,
+and the candidate's normal selection can use an offered endpoint. This source
+behavior is not a statement that native transport is production-promoted.
+Old clients and workers without the offer retain SSH. Native authentication
+errors must not be hidden by silently replaying a possibly started command on
+another transport.
 
-- Whether the host router is acceptable under the cloud security invariants,
-  or whether slots should get per-slot public addresses instead. This needs
-  a decision before stage 2.
-- Bulk transfer throughput against rsync with compression on a first mirror.
-  Not measured.
-- Dedicated (non-pool) hosts and Windows workers: same design or ssh only.
+The native stream has its own protocol namespace and ALPN alongside
+`remote_proto::VERSION`. Exec framing, checkpoint capabilities and the durable
+session protocol are distinct versioning boundaries. SSH remains available
+while those paths are validated together.
+
+## Validation and promotion gates
+
+As of 2026-11-14 02:02 UTC, hosted storage exhaustion (`ENOSPC`) blocks remaining
+integrated acceptance. Builds are paused pending recovery, not redirected to
+local execution for this work. No release/default promotion or public SSH
+closure follows from the current implementation status.
+
+Checkpoint unit tests passed on hosted: run `20261113-174810145-1092885`, three
+tests. The source also contains a process-level same-size, mtime-preserved
+remote-corruption regression and a daemon retained-source-snapshot regression.
+Their remaining hosted acceptance, along with integration and lint checks, is
+pending recovery.
+This is partial validation, not an all-tests-pass claim.
+
+| Stage | Implemented candidate work | Still required before promotion |
+|---|---|---|
+| 1. Mirror verification on the existing link | Hash-bearing checkpoints in `d373f2c2c`; original size-only gap closed | Remaining hosted regressions/lints, concurrent-writer correctness review, compatible fleet agent, before/after measurements of this version |
+| 2. Native daemon/session stream and ingress | TLS 1.3 exec, exporter-bound Ed25519 proof, root supervisor, lease-scoped enrollment and SNI routing paths | Coordinated client/guest/router/control-plane acceptance, interrupted-session checks and representative measurements |
+| 3. One-off commands, first mirrors and installation | Target-selected native exec and transitional rsync-over-native for bulk copies/uploads | Real cold/incremental build and file-transfer correctness, throughput comparisons and fallback validation; a native bulk engine is not implemented by this adapter |
+| 4. Remove public SSH exposure | Not promoted | Published clients and deployed fleet no longer requiring SSH, validated rollback and security review; Windows and non-pool hosts need separate decisions |
+
+For general speed claims or default promotion, run the same comprehensive
+session-weighted `bench/suite.py run --synth 1 -n 1` workload before and after,
+then cite `bench/suite.py compare` and recorded run IDs. Add reconnect, cold
+build, interrupted-session and isolation checks relevant to this transport.
+Focused historical observations and functional tests do not replace that gate.

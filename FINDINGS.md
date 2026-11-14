@@ -2,12 +2,14 @@
 
 ## 2026-11-13: link checkpoints replace the checksum rsync after a reconnect (opt-in)
 
-Stage 1 of `docs/native-transport.md`. After the daemon's connection to the
-agent is replaced, it used to run a checksum rsync over every tracked root
-before the next build. With `JUSTRUST_REMOTE_CHECKPOINT=1` and an agent that
-advertises the capability, the agent confirms a token and the size of every
-settled file instead, and the daemon resends only the paths it sent after
-the checkpoint (`src/remote_checkpoint.rs`).
+Stage 1 of `docs/native-transport.md`, historical size-only checkpoint results.
+After the daemon's connection to the agent was replaced, it used to run a
+checksum rsync over every tracked root before the next build. In the measured
+candidate, `JUSTRUST_REMOTE_CHECKPOINT=1` and the legacy `checkpoint` capability
+let the agent confirm a token and the size of every settled file instead. The
+daemon then resent the paths it sent after the checkpoint
+(`src/remote_checkpoint.rs`). These measurements do not cover the later
+hash-bearing implementation.
 
 Measured on hosted with a candidate build of `93cbf89a0` as both client and
 agent, an isolated daemon, and a private copy of this repo (94,295 files).
@@ -28,12 +30,24 @@ Limits, stated so the numbers are not over-read:
   under identical load (the 48.3 s one was a first mirror of a new path).
 - A fifth attempt, on the real checkout while the production daemon was also
   serving it, was correctly not confirmed ("checkpoint token missing or
-  replaced", 1.1 s) and fell back to the 16.4 s rsync. Two daemons on one
-  root never keep a checkpoint.
-- Sizes are compared, not content. A same-size change made on the machine
-  outside an agent is not detected. Not a default until that is closed.
-- The fleet agent does not advertise the capability yet, so the setting has
-  no effect on a published client today.
+  replaced", 1.1 s) and fell back to the 16.4 s rsync. That observation
+  demonstrates token invalidation in that case, not atomic exclusion of
+  competing writers.
+- The measured version compared sizes, not content, so a same-size external
+  mutation was not detected. Commit `d373f2c2c` (2026-11-14 UTC) closes that
+  settled-content gap with the distinct `checkpoint-hash` capability: the
+  daemon retains hashes from its pre-rsync source snapshot or exact `Write`
+  payloads, and reconnect verifies settled remote files with SHA-256. Mutable
+  local rereads cannot redefine the expected snapshot at checkpoint/reconnect.
+  Missing snapshot evidence or incompatible peers take the full mirror path.
+- The historical timings above are not measurements of content hashing or
+  native TLS. No speed claim or default promotion follows from closing the
+  gap. Checkpoint units passed on hosted in run
+  `20261113-174810145-1092885` (3 tests), but remaining daemon/integration/lint
+  acceptance is blocked by hosted `ENOSPC` as of 2026-11-14 02:02 UTC. Fleet
+  capability, concurrent-writer correctness, representative benchmarks and
+  coordinated release remain promotion gates. See `docs/native-transport.md`
+  for the current candidate architecture and stage status.
 
 ## 2026-11-08: test result reuse, in-stream artifact deltas, mirror resume
 
