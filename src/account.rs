@@ -639,6 +639,18 @@ fn checkout_body(plan: u32, trial: bool) -> Value {
 
 pub fn wait_can_build(c: &Creds, timeout: Duration, every: Duration) -> Result<Builds> {
     let t0 = Instant::now();
+    wait_can_build_with_clock(c, timeout, every, &|| t0.elapsed(), &std::thread::sleep)
+}
+
+// Keep wall-clock request/scheduler delays out of polling tests without changing
+// the production deadline, request ordering, or sleep behavior.
+fn wait_can_build_with_clock(
+    c: &Creds,
+    timeout: Duration,
+    every: Duration,
+    elapsed: &dyn Fn() -> Duration,
+    sleep: &dyn Fn(Duration),
+) -> Result<Builds> {
     loop {
         if let Ok(m) = hosted::me(c)
             && let Some(b) = m.builds
@@ -646,13 +658,13 @@ pub fn wait_can_build(c: &Creds, timeout: Duration, every: Duration) -> Result<B
         {
             return Ok(b);
         }
-        if t0.elapsed() >= timeout {
+        if elapsed() >= timeout {
             bail!(
                 "no completed payment after {} minutes. Run `justrust upgrade` again, or `justrust remote status` to check.",
                 timeout.as_secs() / 60
             );
         }
-        std::thread::sleep(every);
+        sleep(every);
     }
 }
 
@@ -889,8 +901,53 @@ mod tests {
             ),
         ]);
         let c = Creds::new(base, "jk".into()).unwrap();
-        let b = wait_can_build(&c, Duration::from_secs(5), Duration::from_millis(1)).unwrap();
+        // A slow first HTTP request or delayed scheduling on Windows CI can
+        // consume the wall-clock budget before the second response is polled.
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let every = Duration::from_secs(1);
+        let b = wait_can_build_with_clock(&c, every * 2, every, &|| elapsed.get(), &|d| {
+            elapsed.set(elapsed.get() + d)
+        })
+        .unwrap();
         assert_eq!(b.left(), 500);
-        assert!(seen.lock().unwrap()[0].starts_with("GET /v1/me"));
+        assert_eq!(elapsed.get(), every);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen.iter().all(|r| r == "GET /v1/me  +auth"));
+    }
+
+    #[test]
+    fn upgrade_stops_at_deadline_without_an_extra_sleep() {
+        let pending = r#"{"builds":{"can_build":false}}"#;
+        let (base, seen) = mock(vec![(200, pending), (200, pending)]);
+        let c = Creds::new(base, "jk".into()).unwrap();
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let every = Duration::from_secs(60);
+        let err = wait_can_build_with_clock(&c, every, every, &|| elapsed.get(), &|d| {
+            elapsed.set(elapsed.get() + d)
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("no completed payment after 1 minutes")
+        );
+        assert_eq!(elapsed.get(), every);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn upgrade_accepts_confirmed_build_access_even_at_deadline() {
+        let (base, seen) = mock(vec![(200, r#"{"builds":{"can_build":true}}"#)]);
+        let c = Creds::new(base, "jk".into()).unwrap();
+        let b = wait_can_build_with_clock(
+            &c,
+            Duration::ZERO,
+            Duration::from_secs(1),
+            &|| panic!("confirmed access must be checked before the deadline"),
+            &|_| panic!("confirmed access must not sleep"),
+        )
+        .unwrap();
+        assert!(b.can_build);
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }
