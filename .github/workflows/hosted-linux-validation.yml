@@ -3,6 +3,31 @@ name: Validate hosted Linux releases
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Validation mode (retirement requires coordinator approval and account fence)"
+        type: choice
+        options:
+          - linux-build
+          - native-retirement
+        default: linux-build
+        required: true
+      source_ref:
+        description: "Reviewed 40-character stable commit containing the acceptance harness"
+        required: false
+      candidate_url:
+        description: "Immutable official HTTPS candidate URL (allowlisted below)"
+        required: false
+      candidate_sha256:
+        description: "Reviewed lowercase SHA256 of the candidate executable"
+        required: false
+      expected_lease:
+        description: "Exact existing lease SHA256 for the JCODE_API_KEY account"
+        required: false
+      exclusive_canary_fence:
+        description: "Coordinator approved this run and exclusively fenced this account"
+        type: boolean
+        default: false
+        required: false
       ref:
         description: "Trusted ref to build without publishing"
         default: stable
@@ -25,6 +50,7 @@ env:
 
 jobs:
   linux:
+    if: inputs.mode == 'linux-build' || inputs.mode == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -73,3 +99,157 @@ jobs:
           path: |
             target/x86_64-unknown-linux-musl/release/justrust
             target/aarch64-unknown-linux-musl/release/justrust
+
+  retirement:
+    if: inputs.mode == 'native-retirement' && github.ref == 'refs/heads/stable'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_REF: ${{ inputs.source_ref }}
+      CANDIDATE_URL: ${{ inputs.candidate_url }}
+      CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+      EXPECTED_LEASE: ${{ inputs.expected_lease }}
+      EXCLUSIVE_CANARY_FENCE: ${{ inputs.exclusive_canary_fence }}
+      BUILD_BASE: https://build.jcode.sh/v1
+    steps:
+      - name: Validate immutable inputs before checkout or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXCLUSIVE_CANARY_FENCE" == true ]]
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_LEASE" =~ ^[0-9a-f]{64}$ ]]
+          printf '::add-mask::%s\n' "$EXPECTED_LEASE"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+          # The vendored compiler is not needed for this no-build gate.
+          sparse-checkout: |
+            scripts/native-only-acceptance.py
+            scripts/native-hosted-acceptance.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Require reviewed source on trusted stable history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$SOURCE_REF^{commit}"
+          git merge-base --is-ancestor "$SOURCE_REF" refs/remotes/origin/stable
+          git checkout --detach "$SOURCE_REF"
+          test -f scripts/native-only-acceptance.py
+          test -f scripts/native-hosted-acceptance.py
+
+      - name: Download and verify immutable official candidate without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import time
+          import urllib.request
+
+          url = os.environ['CANDIDATE_URL']
+          digest = os.environ['CANDIDATE_SHA256']
+          # Fixed official origin/path only, no userinfo, ports, query strings,
+          # fragments, percent escapes, redirects, or arbitrary download hosts.
+          allowed = (r'https://jcode-justrust-prebuilt-production-280196252242\.s3\.amazonaws\.com/v1/native/'
+                     + digest + r'/justrust')
+          if re.fullmatch(allowed, url) is None:
+              raise SystemExit('Candidate URL is outside the immutable official allowlist')
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise RuntimeError('Candidate redirects are forbidden')
+
+          opener = urllib.request.build_opener(NoRedirect())
+          target = Path(os.environ['RUNNER_TEMP']) / 'native-retirement-candidate'
+          sha = hashlib.sha256()
+          size = 0
+          deadline = time.monotonic() + 120
+          try:
+              with opener.open(url, timeout=60) as response, target.open('xb') as output:
+                  while block := response.read(1024 * 1024):
+                      if time.monotonic() > deadline:
+                          raise RuntimeError('Candidate download deadline exceeded')
+                      size += len(block)
+                      if size > 256 * 1024 * 1024:
+                          raise RuntimeError('Candidate exceeds download bound')
+                      sha.update(block)
+                      output.write(block)
+              if not size or sha.hexdigest() != digest:
+                  raise RuntimeError('Candidate SHA256 verification failed')
+              target.chmod(0o700)
+          except Exception:
+              target.unlink(missing_ok=True)
+              raise SystemExit('Candidate download or verification failed') from None
+          print('Official candidate SHA256 verified')
+          PY
+
+      - name: Exact-lease retirement, native command, and fresh SSH rollback gates
+        id: harness
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${JCODE_API_KEY:?Existing JCODE_API_KEY repository secret is required}"
+          command -v ssh
+          command -v ssh-keygen
+          # The existing harness performs non-allocating exact-lease preflight,
+          # verifies receipt/ack bindings, requires actual connection refusal
+          # (timeouts remain failures), and finally restores fresh pinned SSH.
+          # Never wrap it in an external timeout that could interrupt rollback.
+          python3 scripts/native-only-acceptance.py \
+            --candidate "$RUNNER_TEMP/native-retirement-candidate" \
+            --expected-lease "$EXPECTED_LEASE" \
+            --build-base "$BUILD_BASE" \
+            --timeout 60
+
+      - name: Independent exact-lease rollback after attempted harness
+        if: always() && steps.harness.outcome != 'skipped' && steps.harness.outcome != ''
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Independent of checked-out code, candidate, and harness finally block.
+          # No connect endpoint, no response body logging, no lease allocation.
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+
+          try:
+              lease = os.environ['EXPECTED_LEASE']
+              key = os.environ['JCODE_API_KEY']
+              if re.fullmatch(r'[0-9a-f]{64}', lease) is None or not key:
+                  raise RuntimeError('invalid rollback credentials or lease')
+              class NoRedirect(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, *args, **kwargs):
+                      raise RuntimeError('redirect forbidden')
+              request = urllib.request.Request(
+                  'https://build.jcode.sh/v1/build/host/native-only',
+                  data=json.dumps({'action': 'rollback', 'lease_id': lease}).encode(),
+                  headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+                  method='POST')
+              with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
+                  result = json.loads(response.read(1024 * 1024))
+              if result.get('native_only') is not False or result.get('ssh') != 'restoring':
+                  raise RuntimeError('rollback not accepted')
+          except Exception:
+              raise SystemExit('Independent exact-lease rollback FAILED. Coordinator attention required. Private details suppressed.') from None
+          print('Independent exact-lease rollback accepted')
+          PY
+
+      - name: Remove downloaded executable
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/native-retirement-candidate"
