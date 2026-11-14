@@ -67,6 +67,14 @@ mod tests {
 
     #[test]
     fn pressure_reclaims_recent_root_outputs_but_retains_newest_and_sources() {
+        // Parallel tests can fork while a dry-run flock is held and briefly
+        // retain it after this test drops it. Keep all assertions, but exercise
+        // this lock-lifetime sequence without unrelated inheriting children.
+        if crate::remote_evict::lock_tests::isolated_lock_test(
+            "remote_evict::outputs::tests::pressure_reclaims_recent_root_outputs_but_retains_newest_and_sources",
+        ) {
+            return;
+        }
         let (root, old, newest, registry, p) = fixture("output-pressure");
         assert_eq!(
             pressure_collect(
