@@ -39,6 +39,35 @@ is not proof of production hosted admission or billing integration. Do not run
 these routes against retained account data or describe public file-page sharing
 as shared private compiler heaps.
 
+## Validated prototype, November 14, 2026
+
+The private branch now has real disposable-VM acceptance for these boundaries:
+
+- Two unprivileged VMs consume the same sealed public artifact snapshot while
+  private scratch and guest writes remain isolated.
+- The native RAM controller confirms a 128 MiB guest-capacity shrink before
+  requesting another VM's growth. Failure journaling blocks further admission
+  until explicit reconciliation. This is not an equal physical-RSS claim.
+- A public compiler dependency maps 1856 KiB of shared clean pages per VMM,
+  with proportional share 928 KiB each. A flushed direct write produces one
+  private dirty page only in the writer, leaving the other guest and backing
+  image unchanged. Private compiler heaps are not shared.
+- The installed published client completes remote check, test and a one-line
+  edit/retest in a networkless guest through an isolated operator SSH route.
+  Post-edit record `20261113-193741409-1904527` confirms two compiler units and
+  two passing tests. Its local-date ID corresponds to November 14 UTC.
+
+Exact SSM receipts and normal client record locations are in the private
+`docs/resource-canary-guests.md`, `docs/resource-canary-pmem.md`, and
+`docs/resource-canary-dogfood.md`. The disposable host is not a persistent
+development endpoint. Recreate a bounded canary for subsequent live work.
+The launcher and both experimental branches remain usable after teardown.
+
+This is not a finished production service. Authenticated tenant lifecycle and
+billing integration, persistent private-disk quotas/eviction, larger real
+projects and owned-toolchain compatibility, and the comprehensive identical-input
+before/after benchmark remain promotion gates. No general speedup is claimed.
+
 ## Delivery sequence
 
 1. Verify a dedicated canary host, KVM, isolated disks, and bounded lifecycle.
