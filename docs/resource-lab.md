@@ -13,8 +13,11 @@ from the shipping checkout and has no copied target directory.
 - Private infrastructure experiment: `~/justrust-cloud-resource-lab`, same branch.
 - Original shipping checkouts remain `~/justrust` and `~/justrust-cloud`.
 
-Read the private checkout's canary documentation before provisioning or running
-host experiments. The desktop launcher opens Jcode on the experimental branch.
+Read `~/justrust-cloud-resource-lab/docs/resource-canary.md` for the dedicated
+canary lifecycle and acceptance boundary. The canary starts as a disposable,
+time-bounded infrastructure probe, not a production-sized benchmark host or a
+finished hosted-build route. Do not put retained account data on its scratch disk.
+The desktop launcher opens Jcode on the experimental branch.
 It does not change justrust credentials, service routing, the installed client,
 or automatically send a build to the canary. Plain justrust still uses its
 existing configured service until an explicit supported canary route exists.
