@@ -1846,7 +1846,16 @@ pub fn destroy() -> Result<()> {
 
 pub fn ssh(cmd: Vec<String>) -> Result<()> {
     let mut c = match crate::remote_backend::load() {
-        Some(Backend::Hosted) => crate::remote_hosted::ensure_ready()?.command(),
+        Some(Backend::Hosted) => {
+            if cmd.is_empty() {
+                // Native exec preserves byte streams, not terminal/PTY control.
+                // Renew SSH compatibility admission explicitly, even after a
+                // previous native-only lease acknowledgement.
+                crate::remote_hosted::ensure_ready_for_ssh()?.ssh_command()
+            } else {
+                crate::remote_hosted::ensure_ready()?.command()
+            }
+        }
         Some(Backend::Ssh { host, opts }) => {
             crate::remote_backend::ssh_target(&host, &opts)?.command()
         }

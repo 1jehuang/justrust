@@ -13,6 +13,7 @@ fn pinned_launcher_rejects_changed_executable_path_or_digest_before_connecting()
     let target = Target {
         dest: "not-contacted".into(),
         opts: Vec::new(),
+        native: None,
     };
     let mut pin = pinned_executable();
     pin.sha256 = "b".repeat(64);
@@ -114,6 +115,7 @@ fn exact_prefix_is_preserved_in_agent_bridge_and_identity() {
     let target = Target {
         dest: "host".into(),
         opts: Vec::new(),
+        native: None,
     };
     let executable = pinned_executable();
     let command = command_with_executable(&target, prefix, &executable).unwrap();

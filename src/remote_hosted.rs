@@ -1398,7 +1398,7 @@ pub struct HostedStatus {
     pub builds: Option<Builds>,
     /// The cached ssh destination, when a session was opened before.
     pub address: Option<String>,
-    /// The local ControlMaster is alive.
+    /// A live local SSH master or authenticated native daemon link.
     pub connected: bool,
     pub error: Option<String>,
 }
@@ -1431,7 +1431,7 @@ pub fn status_cached(refresh: bool) -> HostedStatus {
         }
         _ => HostedStatus::default(),
     };
-    s.connected = master_alive();
+    s.connected = transport_alive();
     s.address = load_state().map(|st| st.address);
     s
 }
@@ -1447,7 +1447,7 @@ pub fn refresh_status_cache() -> Result<HostedStatus> {
 pub fn status() -> HostedStatus {
     let mut s = HostedStatus {
         at: now(),
-        connected: master_alive(),
+        connected: transport_alive(),
         address: load_state().map(|st| st.address),
         ..Default::default()
     };
@@ -1527,6 +1527,99 @@ pub struct Ready {
     /// The release the hosted fleet expects clients to run (`fleet_version`).
     pub fleet_version: Option<String>,
     pub ssh_certificate: Option<String>,
+    pub native: Option<NativeOffer>,
+    pub native_only: Option<NativeOnlyOffer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOnlyOffer {
+    pub account_id: String,
+    pub nonce: String,
+    pub expires_at: u64,
+    pub lease_id: String,
+    pub certificate_sha256: String,
+    pub acknowledged: bool,
+}
+
+impl NativeOnlyOffer {
+    fn validate(&self, endpoint: Option<&NativeOffer>) -> Result<()> {
+        let hex = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        if self.account_id.is_empty()
+            || self.account_id.len() > 64
+            || !self
+                .account_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || !hex(&self.nonce)
+            || !hex(&self.lease_id)
+            || !hex(&self.certificate_sha256)
+            || endpoint.is_none_or(|e| e.certificate_sha256 != self.certificate_sha256)
+            || (!self.acknowledged
+                && (self.expires_at <= now() || self.expires_at > now().saturating_add(300)))
+        {
+            bail!("invalid lease-bound native-only offer, refusing SSH retirement");
+        }
+        Ok(())
+    }
+}
+
+/// Public, authenticated control-plane offer. Local credential paths are never
+/// deserialized from the API, even when the guest offers the native transport.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOffer {
+    pub address: String,
+    pub port: u16,
+    pub server_name: String,
+    pub certificate_sha256: String,
+}
+
+impl NativeOffer {
+    fn validate(&self, address: &str) -> Result<()> {
+        if self.address != address
+            || !safe_host(&self.address)
+            || self.port != 443
+            || self.server_name.len() > 253
+            || !self.server_name.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+            || self.certificate_sha256.len() != 64
+            || !self
+                .certificate_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())
+        {
+            bail!("the hosted API returned an invalid native transport offer, refusing to connect");
+        }
+        Ok(())
+    }
+}
+
+fn native_setting() -> Option<bool> {
+    match setting("JUSTRUST_HOSTED_NATIVE").as_deref() {
+        Some("1" | "on" | "true" | "require") => Some(true),
+        Some("0" | "off" | "false") => Some(false),
+        _ => None,
+    }
+}
+
+fn native_only_requested(native_mode: Option<bool>) -> bool {
+    native_mode != Some(false)
+        && matches!(
+            setting("JUSTRUST_HOSTED_NATIVE_ONLY").as_deref(),
+            Some("1" | "on" | "true" | "require")
+        )
 }
 
 fn safe_host(s: &str) -> bool {
@@ -1592,7 +1685,30 @@ fn parse_ready_for(b: &Value, windows: bool) -> Result<Ready> {
     if host_keys.is_empty() || !host_keys.iter().all(valid) {
         bail!("the Jcode API returned no usable host keys for the build host, refusing to connect");
     }
+    let native = b
+        .get("native")
+        .filter(|v| !v.is_null())
+        .map(|value| serde_json::from_value::<NativeOffer>(value.clone()))
+        .transpose()
+        .context("invalid native transport offer")?;
+    if let Some(offer) = &native {
+        if windows {
+            bail!("native transport is not supported for Windows workers");
+        }
+        offer.validate(&address)?;
+    }
+    let native_only = b
+        .get("native_only")
+        .filter(|v| !v.is_null())
+        .map(|value| serde_json::from_value::<NativeOnlyOffer>(value.clone()))
+        .transpose()
+        .context("invalid native-only offer")?;
+    if let Some(offer) = &native_only {
+        offer.validate(native.as_ref())?;
+    }
     Ok(Ready {
+        native,
+        native_only,
         address,
         port: port as u16,
         user,
@@ -1613,23 +1729,49 @@ fn parse_ready_for(b: &Value, windows: bool) -> Result<Ready> {
 
 /// POST connect and poll until the host is ready. `progress` sees each new
 /// server message while the machine starts.
-pub fn connect_with(
+#[cfg(test)]
+fn connect_with(
     c: &Creds,
     public_key: &str,
     poll: Duration,
     timeout: Duration,
+    progress: impl FnMut(&str),
+) -> Result<Ready> {
+    connect_with_mode(c, public_key, poll, timeout, native_setting(), progress)
+}
+
+fn connect_with_mode(
+    c: &Creds,
+    public_key: &str,
+    poll: Duration,
+    timeout: Duration,
+    native_mode: Option<bool>,
     mut progress: impl FnMut(&str),
 ) -> Result<Ready> {
     let start = Instant::now();
     let windows = crate::remote_windows::selected()?;
-    let body = if windows {
+    let mut body = if windows {
         json!({ "public_key": public_key.trim(), "platform": "windows", "target": crate::remote_windows::TARGET })
     } else {
-        json!({ "public_key": public_key.trim(), "platform": "linux" })
+        json!({ "public_key": public_key.trim(), "platform": "linux", "native_transport": native_mode != Some(false), "native_only": native_only_requested(native_mode) })
     };
     let mut last = String::new();
     loop {
         let r = request(c, "POST", "build/host/connect", Some(&body))?;
+        if !windows
+            && native_mode != Some(true)
+            && !native_only_requested(native_mode)
+            && r.code == 400
+            && r.body["error"]["code"] == "invalid_request"
+            && body.get("native_transport").is_some()
+        {
+            // Older control planes reject unknown capability fields before
+            // admission. Retry only that negotiation, never a command/build,
+            // and never silently downgrade an explicitly required native path.
+            body.as_object_mut().unwrap().remove("native_transport");
+            body.as_object_mut().unwrap().remove("native_only");
+            continue;
+        }
         match r.code {
             200 if r.body["ready"].as_bool() != Some(false) => {
                 let ready = parse_ready_for(&r.body, windows)?;
@@ -1797,6 +1939,7 @@ pub fn target_via(d: &Path, user: &str, address: &str, port: u16, proxy: Option<
     Target {
         dest: format!("{user}@{address}"),
         opts,
+        native: None,
     }
 }
 
@@ -1817,6 +1960,8 @@ pub struct State {
     /// machine's ssh port.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tunnel: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<crate::remote_native::Endpoint>,
 }
 
 /// `JUSTRUST_HOSTED_TUNNEL`: `on` always relays over 443, `off` never does,
@@ -1891,13 +2036,26 @@ pub fn load_state() -> Option<State> {
 pub fn cached_target() -> Option<Target> {
     let st = load_state()?;
     let d = state_file()?.parent()?.to_path_buf();
-    Some(target_via(
+    let mut target = target_via(
         &d,
         &st.user,
         &st.address,
         st.port,
         proxy_for(st.tunnel).as_deref(),
-    ))
+    );
+    if native_setting() != Some(false) {
+        target.native = st.native;
+    }
+    Some(target)
+}
+
+/// Local connection evidence only. A saved native endpoint is not a live link.
+fn transport_alive() -> bool {
+    if cached_target().is_some_and(|target| target.native.is_some()) {
+        return crate::remote_daemon::status()
+            .is_some_and(|(_, machine, _, connected)| machine == "hosted" && connected);
+    }
+    master_alive()
 }
 
 /// `ssh -O check`: a local socket query, no network.
@@ -1905,7 +2063,12 @@ pub fn master_alive() -> bool {
     let Some(t) = cached_target() else {
         return false;
     };
-    t.command()
+    if t.native.is_some() {
+        // Native TLS has no SSH ControlMaster. Reachability is verified on
+        // connect, rather than treating a token file as a live connection.
+        return false;
+    }
+    t.ssh_command()
         .args(["-O", "check"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1920,7 +2083,11 @@ pub fn master_alive() -> bool {
 pub fn probably_up() -> bool {
     match load_state() {
         None => false,
-        Some(st) => now().saturating_sub(st.ready_at) < RECENT_READY_S || master_alive(),
+        Some(st) => {
+            st.native.is_some()
+                || now().saturating_sub(st.ready_at) < RECENT_READY_S
+                || master_alive()
+        }
     }
 }
 
@@ -1975,6 +2142,27 @@ fn new_key(d: &Path) -> Result<String> {
 /// moment after the API reports ready, so retry inside the key window. The
 /// persisted master inherits stdio, so it gets a log file, not a pipe.
 fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
+    if let Some(endpoint) = &t.native {
+        let result = t
+            .command()
+            .arg("true")
+            .stdin(Stdio::null())
+            .output()
+            .context("native hosted authentication probe")?;
+        if !result.status.success() {
+            bail!(
+                "cannot authenticate native hosted TLS at {}:{}: {}",
+                endpoint.address,
+                endpoint.port,
+                String::from_utf8_lossy(&result.stderr).trim()
+            );
+        }
+        eprintln!(
+            "hosted: native TLS verified at {}:{}",
+            endpoint.address, endpoint.port
+        );
+        return Ok(());
+    }
     if crate::remote_windows::selected()? {
         return crate::remote_windows::probe(t);
     }
@@ -2012,6 +2200,63 @@ fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
     }
 }
 
+fn validate_native_receipt(offer: &NativeOnlyOffer, receipt: &Value) -> Result<()> {
+    if receipt["accepted"] != true
+        || receipt["account_id"] != offer.account_id
+        || receipt["nonce"] != offer.nonce
+        || receipt["lease_id"] != offer.lease_id
+        || receipt["certificate_sha256"] != offer.certificate_sha256
+    {
+        bail!("native supervisor receipt does not match the current account, lease and identity");
+    }
+    Ok(())
+}
+
+fn acknowledge_native_only(c: &Creds, target: &Target, offer: &NativeOnlyOffer) -> Result<()> {
+    let endpoint = target
+        .native
+        .as_ref()
+        .context("cannot retire SSH without an authenticated native endpoint")?;
+    if offer.acknowledged {
+        return Ok(());
+    }
+    let result = Command::new(std::env::current_exe()?)
+        .args([
+            "__native",
+            "accept",
+            &serde_json::to_string(endpoint)?,
+            &offer.nonce,
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .context("request native supervisor acceptance receipt")?;
+    if !result.status.success() {
+        bail!(
+            "native supervisor acceptance failed, SSH was not retired: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        );
+    }
+    let receipt: Value = serde_json::from_slice(&result.stdout)
+        .context("invalid native supervisor acceptance receipt")?;
+    validate_native_receipt(offer, &receipt)?;
+    // This request is account-authenticated. The API independently requires a
+    // supervisor-authenticated receipt already stored for this exact lease.
+    let ack = ok(request(
+        c,
+        "POST",
+        "build/host/native-only",
+        Some(&json!({
+            "action": "ack", "lease_id": offer.lease_id,
+            "nonce": offer.nonce, "certificate_sha256": offer.certificate_sha256,
+        })),
+    )?)?;
+    if ack["native_only"] != true || ack["lease_id"] != offer.lease_id {
+        bail!("the hosted API did not acknowledge this native-only lease");
+    }
+    eprintln!("hosted: native lease accepted, public SSH retirement requested");
+    Ok(())
+}
+
 /// Make the hosted machine reachable and return its ssh destination.
 pub fn ensure_ready() -> Result<Target> {
     ensure_ready_with_refresh(false)
@@ -2031,15 +2276,38 @@ fn cached_or_refresh<T>(
 }
 
 pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
+    ensure_ready_mode(refresh, native_setting())
+}
+
+/// Interactive terminals require the explicit SSH/PTY compatibility path.
+/// Requesting that path also asks the control plane to restore this lease's
+/// public SSH admission before returning a destination.
+pub fn ensure_ready_for_ssh() -> Result<Target> {
+    ensure_ready_mode(true, Some(false))
+}
+
+fn ensure_ready_mode(refresh: bool, native_mode: Option<bool>) -> Result<Target> {
     let d = dir()?;
     let _lock = Lock::take(&d)?;
     cached_or_refresh(
-        refresh || crate::remote_windows::selected()?,
+        refresh
+            || crate::remote_windows::selected()?
+            || native_mode == Some(true)
+            || native_only_requested(native_mode),
         || {
             if !master_alive() {
                 return None;
             }
             let t = cached_target()?;
+            if native_mode == Some(true) && t.native.is_none() {
+                return None;
+            }
+            if native_mode != Some(false)
+                && t.native.is_none()
+                && load_state().is_none_or(|st| now().saturating_sub(st.ready_at) >= RECENT_READY_S)
+            {
+                return None;
+            }
             let tunnel = load_state().is_some_and(|st| st.tunnel);
             if master_matches_setting(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), tunnel) {
                 return Some(t);
@@ -2047,7 +2315,7 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             // Both paths share one control path: the master on the other
             // path has to go before the requested one can be opened.
             let _ = t
-                .command()
+                .ssh_command()
                 .args(["-O", "exit"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -2063,7 +2331,7 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
                 // A new short-lived certificate must be exercised on a new
                 // authenticated connection, not shadowed by an older master.
                 let _ = old
-                    .command()
+                    .ssh_command()
                     .args(["-O", "exit"])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -2073,7 +2341,9 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             let pubkey = new_key(&d)?;
             eprintln!("hosted: connecting to a build machine...");
             let timeout = connect_timeout(crate::remote_windows::selected()?);
-            let r = connect_with(&c, &pubkey, POLL, timeout, |m| eprintln!("hosted: {m}"))?;
+            let r = connect_with_mode(&c, &pubkey, POLL, timeout, native_mode, |m| {
+                eprintln!("hosted: {m}")
+            })?;
             write_private(&d.join("known_hosts"), known_hosts(&r).as_bytes())?;
             if let Some(cert) = &r.ssh_certificate {
                 write_private(&d.join("id_ed25519-cert.pub"), cert.as_bytes())?;
@@ -2082,12 +2352,24 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             let _ = std::fs::remove_file(d.join("state.json"));
             let _ = std::fs::remove_file(d.join("status.json"));
             let direct = target(&d, &r.user, &r.address, r.port);
-            let mut tunnel = use_tunnel(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), || {
-                direct_reachable(&r.address, r.port)
-            });
+            let native = if native_mode == Some(false) {
+                None
+            } else {
+                r.native.as_ref()
+            };
+            if (native_mode == Some(true) || native_only_requested(native_mode)) && native.is_none()
+            {
+                bail!(
+                    "native hosted transport was required, but this worker does not advertise it"
+                );
+            }
+            let mut tunnel = native.is_none()
+                && use_tunnel(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), || {
+                    direct_reachable(&r.address, r.port)
+                });
             let proxy = proxy_for(tunnel);
             tunnel = proxy.is_some();
-            let t = if tunnel {
+            let mut t = if tunnel {
                 eprintln!(
                     "hosted: this network blocks ssh port {}, connecting through the 443 relay",
                     r.port
@@ -2095,7 +2377,7 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
                 // The direct master (if any) is unreachable and shares the
                 // control path: drop it so the relay connection is used.
                 let _ = direct
-                    .command()
+                    .ssh_command()
                     .args(["-O", "exit"])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -2105,8 +2387,25 @@ pub fn ensure_ready_with_refresh(refresh: bool) -> Result<Target> {
             } else {
                 direct
             };
+            if let Some(offer) = native {
+                t.native = Some(crate::remote_native::Endpoint {
+                    address: offer.address.clone(),
+                    port: offer.port,
+                    server_name: offer.server_name.clone(),
+                    certificate_sha256: offer.certificate_sha256.clone(),
+                    key_path: d.join("id_ed25519"),
+                    resume_path: d.join(format!("native-resume-{}", offer.certificate_sha256)),
+                });
+            }
             open_master(&t, &d, Duration::from_secs(45))?;
+            if native_only_requested(native_mode) {
+                let offer = r.native_only.as_ref().context(
+                    "native-only transport was required, but the worker does not offer lease-safe SSH retirement",
+                )?;
+                acknowledge_native_only(&c, &t, offer)?;
+            }
             let st = State {
+                native: t.native.clone(),
                 address: r.address.clone(),
                 user: r.user.clone(),
                 port: r.port,
@@ -2157,7 +2456,7 @@ pub fn down() -> Result<()> {
     )?)?;
     if let Some(t) = cached_target() {
         let _ = t
-            .command()
+            .ssh_command()
             .args(["-O", "exit"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -2445,6 +2744,60 @@ mod tests {
         assert_eq!(seen[0].auth.as_deref(), Some("Bearer sk-secret-123"));
         let b: Value = serde_json::from_str(&seen[0].body).unwrap();
         assert_eq!(b["public_key"], "ssh-ed25519 AAAA me");
+    }
+
+    #[test]
+    fn interactive_connect_explicitly_restores_ssh_without_native_optin() {
+        let (c, seen) = mock(vec![(200, READY)]);
+        connect_with_mode(
+            &c,
+            "ssh-ed25519 AAAA me",
+            Duration::ZERO,
+            Duration::from_secs(5),
+            Some(false),
+            |_| {},
+        )
+        .unwrap();
+        let requests = seen.lock().unwrap();
+        let body: Value = serde_json::from_str(&requests[0].body).unwrap();
+        assert_eq!(body["native_transport"], false);
+        assert_eq!(body["native_only"], false);
+    }
+
+    #[test]
+    fn legacy_control_plane_retries_only_capability_negotiation() {
+        let rejected = r#"{"error":{"code":"invalid_request","message":"unknown field"}}"#;
+        let (c, seen) = mock(vec![(400, rejected), (200, READY)]);
+        connect_with_mode(
+            &c,
+            "ssh-ed25519 AAAA me",
+            Duration::ZERO,
+            Duration::from_secs(5),
+            Some(false),
+            |_| {},
+        )
+        .unwrap();
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let legacy: Value = serde_json::from_str(&requests[1].body).unwrap();
+        assert_eq!(legacy["public_key"], "ssh-ed25519 AAAA me");
+        assert!(legacy.get("native_transport").is_none());
+        assert!(legacy.get("native_only").is_none());
+        assert_eq!(requests[0].auth, requests[1].auth);
+
+        let (c, seen) = mock(vec![(400, rejected)]);
+        assert!(
+            connect_with_mode(
+                &c,
+                "ssh-ed25519 AAAA me",
+                Duration::ZERO,
+                Duration::from_secs(5),
+                Some(true),
+                |_| {},
+            )
+            .is_err()
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -3263,6 +3616,8 @@ mod tests {
         )
         .unwrap();
         assert!(!old.tunnel);
+        assert!(old.native.is_none());
+        assert!(!serde_json::to_string(&old).unwrap().contains("native"));
         assert!(!serde_json::to_string(&old).unwrap().contains("tunnel"));
         let relayed = State {
             tunnel: true,
@@ -3270,6 +3625,101 @@ mod tests {
         };
         let back: State = serde_json::from_str(&serde_json::to_string(&relayed).unwrap()).unwrap();
         assert!(back.tunnel);
+    }
+
+    #[test]
+    fn native_offer_pins_only_the_authenticated_hosts_endpoint() {
+        let mut body: Value = serde_json::from_str(READY).unwrap();
+        body["native"] = json!({
+            "address": "203.0.113.7", "port": 443,
+            "server_name": "slot-1.pool.example", "certificate_sha256": "a".repeat(64),
+        });
+        assert!(parse_ready(&body).unwrap().native.is_some());
+        for (key, value) in [
+            ("address", json!("169.254.169.254")),
+            ("port", json!(22)),
+            ("server_name", json!("slot-1.pool.example\nanything")),
+            ("server_name", json!("slot-1..pool.example")),
+            ("server_name", json!("slot-1.-pool.example")),
+            ("server_name", json!(format!("{}.example", "a".repeat(64)))),
+            ("certificate_sha256", json!("x".repeat(64))),
+            ("key_path", json!("/tmp/untrusted-key")),
+            ("resume_path", json!("/tmp/untrusted-token")),
+        ] {
+            let mut invalid = body.clone();
+            invalid["native"][key] = value;
+            assert!(parse_ready(&invalid).is_err(), "accepted {key}");
+        }
+    }
+
+    #[test]
+    fn native_only_offer_requires_fresh_exact_lease_and_certificate_binding() {
+        let endpoint = NativeOffer {
+            address: "203.0.113.7".into(),
+            port: 443,
+            server_name: "slot-1.pool.example".into(),
+            certificate_sha256: "a".repeat(64),
+        };
+        let offer = NativeOnlyOffer {
+            account_id: "account-1".into(),
+            nonce: "b".repeat(64),
+            expires_at: now() + 120,
+            lease_id: "c".repeat(64),
+            certificate_sha256: endpoint.certificate_sha256.clone(),
+            acknowledged: false,
+        };
+        assert!(offer.validate(Some(&endpoint)).is_ok());
+        let receipt = json!({
+            "accepted": true, "account_id": offer.account_id,
+            "nonce": offer.nonce, "lease_id": offer.lease_id,
+            "certificate_sha256": offer.certificate_sha256,
+        });
+        assert!(validate_native_receipt(&offer, &receipt).is_ok());
+        for field in [
+            "accepted",
+            "account_id",
+            "nonce",
+            "lease_id",
+            "certificate_sha256",
+        ] {
+            let mut invalid = receipt.clone();
+            invalid[field] = json!("wrong");
+            assert!(
+                validate_native_receipt(&offer, &invalid).is_err(),
+                "{field}"
+            );
+        }
+        assert!(offer.validate(None).is_err());
+        for invalid in [
+            NativeOnlyOffer {
+                nonce: "x".repeat(64),
+                ..offer.clone()
+            },
+            NativeOnlyOffer {
+                lease_id: "".into(),
+                ..offer.clone()
+            },
+            NativeOnlyOffer {
+                certificate_sha256: "d".repeat(64),
+                ..offer.clone()
+            },
+            NativeOnlyOffer {
+                expires_at: now().saturating_sub(1),
+                ..offer.clone()
+            },
+            NativeOnlyOffer {
+                expires_at: now() + 1000,
+                ..offer.clone()
+            },
+        ] {
+            assert!(invalid.validate(Some(&endpoint)).is_err(), "{invalid:?}");
+        }
+        let acknowledged = NativeOnlyOffer {
+            acknowledged: true,
+            expires_at: 1,
+            ..offer
+        };
+        assert!(acknowledged.validate(Some(&endpoint)).is_ok());
     }
 
     #[test]

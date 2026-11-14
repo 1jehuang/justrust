@@ -110,6 +110,7 @@ mod remote_status_watch;
 mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_checkpoint;
+mod remote_native;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
 mod remote_resume;
@@ -932,6 +933,16 @@ pub fn main() -> anyhow::Result<()> {
         Some(remote_hosted::EVENT_SENDER_ARG) => remote_hosted::event_sender_main(),
         Some(records_queue::ARG) => records_queue::sender_main(),
         Some(remote_tunnel::ARG) => remote_tunnel::main(),
+        Some("__native") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            match remote_native::cli(&args) {
+                Ok(code) => std::process::exit(code),
+                Err(error) => {
+                    eprintln!("justrust native: {error:#}");
+                    std::process::exit(255);
+                }
+            }
+        }
         Some("__agent") => {
             let prefix = match std::env::args().nth(2).as_deref() {
                 Some("--prefix") => std::env::args().nth(3),

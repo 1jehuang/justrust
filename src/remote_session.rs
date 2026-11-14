@@ -1,4 +1,4 @@
-//! Durable hosted SSH transport. Reattachment never starts or resubmits a build.
+//! Durable hosted transport. Reattachment never starts or resubmits a build.
 //!
 //! A private broker owns the original agent and its pipes. SSH connections only
 //! carry sequenced input and journal offsets. Losing SSH therefore does not close
@@ -1202,7 +1202,7 @@ fn command_with_executable(
 ) -> Result<Command> {
     check_prefix(prefix)?;
     executable.validate()?;
-    let config = serde_json::json!({ "dest": target.dest, "opts": target.opts, "prefix": prefix, "executable": executable });
+    let config = serde_json::json!({ "dest": target.dest, "opts": target.opts, "native": target.native, "prefix": prefix, "executable": executable });
     let mut command = Command::new(std::env::current_exe()?);
     command.args([ARG, "client", &config.to_string()]);
     Ok(command)
@@ -1222,6 +1222,7 @@ pub fn main() -> ! {
                     Target {
                         dest: serde_json::from_value(config["dest"].clone())?,
                         opts: serde_json::from_value(config["opts"].clone())?,
+                        native: serde_json::from_value(config["native"].clone())?,
                     },
                     serde_json::from_value(config["prefix"].clone())?,
                     serde_json::from_value(config["executable"].clone())?,

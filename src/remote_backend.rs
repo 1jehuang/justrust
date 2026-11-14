@@ -97,6 +97,7 @@ impl Backend {
                 Ok(Target {
                     dest: format!("{}@{ip}", remote::SSH_USER),
                     opts: remote::ssh_opts()?,
+                    native: None,
                 })
             }
             Backend::Hosted => crate::remote_hosted::ensure_ready(),
@@ -146,18 +147,36 @@ pub fn ssh_target(host: &str, extra_opts: &[String]) -> Result<Target> {
     Ok(Target {
         dest: host.to_owned(),
         opts,
+        native: None,
     })
 }
 
-/// An ssh destination plus the options every connection uses.
-#[derive(Clone, Debug)]
+/// A remote destination with an explicitly negotiated transport.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Target {
     pub dest: String,
     pub opts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<crate::remote_native::Endpoint>,
 }
 
 impl Target {
     pub fn command(&self) -> Command {
+        if let Some(endpoint) = &self.native {
+            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("justrust"));
+            let mut c = Command::new(exe);
+            c.args([
+                "__native",
+                "client",
+                &serde_json::to_string(endpoint).expect("native endpoint JSON"),
+            ]);
+            return c;
+        }
+        self.ssh_command()
+    }
+
+    /// Explicit compatibility path for SSH control operations, never used for native exec.
+    pub fn ssh_command(&self) -> Command {
         let mut c = Command::new("ssh");
         c.args(&self.opts).arg(&self.dest);
         c
@@ -165,6 +184,16 @@ impl Target {
 
     /// `ssh <opts>` for `rsync -e`.
     pub fn rsync_shell(&self) -> String {
+        if let Some(endpoint) = &self.native {
+            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("justrust"));
+            return format!(
+                "{} __native rsync {}",
+                crate::remote_sync::rsync_shell_quote(&exe.to_string_lossy()),
+                crate::remote_sync::rsync_shell_quote(
+                    &serde_json::to_string(endpoint).expect("native endpoint JSON")
+                )
+            );
+        }
         let mut s = String::from("ssh");
         for o in &self.opts {
             s.push(' ');
@@ -338,6 +367,7 @@ mod tests {
     fn env_lines_eval_in_a_shell() {
         let t = Target {
             dest: "ubuntu@203.0.113.7".into(),
+            native: None,
             opts: vec![
                 "-i".into(),
                 "/home/me/my keys/id".into(),
@@ -357,6 +387,43 @@ mod tests {
             String::from_utf8_lossy(&out.stdout),
             "hosted|ubuntu@203.0.113.7|ssh;-i;/home/me/my keys/id;-o;ControlPath=/run/x/cm-%C;"
         );
+    }
+
+    #[test]
+    fn native_target_keeps_scripts_and_endpoint_as_separate_arguments() {
+        let endpoint = crate::remote_native::Endpoint {
+            address: "203.0.113.7".into(),
+            port: 443,
+            server_name: "slot-1.pool.example".into(),
+            certificate_sha256: "a".repeat(64),
+            key_path: PathBuf::from("/home/me/key with 'quotes'"),
+            resume_path: PathBuf::from("/home/me/resume"),
+        };
+        let target = Target {
+            dest: "ubuntu@203.0.113.7".into(),
+            opts: Vec::new(),
+            native: Some(endpoint),
+        };
+        let mut command = target.command();
+        let script = "printf '%s' 'unchanged; $(literal)'";
+        command.arg(script);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(args[..2], ["__native", "client"]);
+        assert_eq!(args[3], script);
+        let encoded: serde_json::Value = serde_json::from_str(args[2]).unwrap();
+        assert_eq!(encoded["key_path"], "/home/me/key with 'quotes'");
+        assert_ne!(command.get_program(), "ssh");
+        assert!(target.rsync_shell().contains("__native rsync"));
+        let roundtrip: Target =
+            serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+        assert_eq!(roundtrip.native, target.native);
+        let legacy: Target =
+            serde_json::from_str(r#"{"dest":"ubuntu@203.0.113.7","opts":["-p","22001"]}"#).unwrap();
+        assert!(legacy.native.is_none());
+        assert_eq!(legacy.command().get_program(), "ssh");
     }
 
     #[test]

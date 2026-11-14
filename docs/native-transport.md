@@ -82,7 +82,10 @@ or a general warm-build benefit.
 frames for stdin, EOF, stdout, stderr, exit status and errors. Existing agent
 and durable-session protocols run inside those command byte streams. This is
 not yet a multiplexed replacement for SSH ControlMaster with many independent
-exec channels on one TLS connection.
+exec channels on one TLS connection. Interactive `justrust remote ssh` still
+uses the explicit SSH compatibility path because native exec does not negotiate
+a PTY. A working native build stream alone is not permission to close the SSH
+port used by interactive sessions.
 
 The client pins the SHA-256 of the guest's DER certificate supplied by the
 authenticated control plane, rather than trusting a public CA. The server still
@@ -192,6 +195,24 @@ Old clients and workers without the offer retain SSH. Native authentication
 errors must not be hidden by silently replaying a possibly started command on
 another transport.
 
+### Explicit per-lease SSH retirement
+
+`JUSTRUST_HOSTED_NATIVE_ONLY=1` is a separate, default-off client opt-in. It
+requires both operator gates and a fresh account/lease/certificate-bound offer.
+After ordinary native authentication, `__native accept` asks the privileged
+supervisor to submit the offer nonce to the control plane with its root-only
+slot credential. This is a separately signed operation, not a shell command.
+The client checks the returned account, lease, nonce and certificate before
+sending its own account-authenticated acknowledgment. The API independently
+requires its stored supervisor receipt and fresh host readiness evidence.
+
+Only that accepted lease can request removal of its public SSH DNAT rule.
+Host lifecycle locking fences the rule change against slot reassignment.
+Native/control-plane failure restores SSH and invalidates promotion evidence.
+Legacy clients and interactive terminal requests opt back into compatibility
+and wait until SSH is restored. This code is implemented behind gates, not
+proof that production ports have been closed or that native acceptance passed.
+
 The native stream has its own protocol namespace and ALPN alongside
 `remote_proto::VERSION`. Exec framing, checkpoint capabilities and the durable
 session protocol are distinct versioning boundaries. SSH remains available
@@ -216,7 +237,7 @@ This is partial validation, not an all-tests-pass claim.
 | 1. Mirror verification on the existing link | Hash-bearing checkpoints in `d373f2c2c`; original size-only gap closed | Remaining hosted regressions/lints, concurrent-writer correctness review, compatible fleet agent, before/after measurements of this version |
 | 2. Native daemon/session stream and ingress | TLS 1.3 exec, exporter-bound Ed25519 proof, root supervisor, lease-scoped enrollment and SNI routing paths | Coordinated client/guest/router/control-plane acceptance, interrupted-session checks and representative measurements |
 | 3. One-off commands, first mirrors and installation | Target-selected native exec and transitional rsync-over-native for bulk copies/uploads | Real cold/incremental build and file-transfer correctness, throughput comparisons and fallback validation; a native bulk engine is not implemented by this adapter |
-| 4. Remove public SSH exposure | Not promoted | Published clients and deployed fleet no longer requiring SSH, validated rollback and security review; Windows and non-pool hosts need separate decisions |
+| 4. Remove public SSH exposure | Default-off supervisor receipt, account/lease-bound acknowledgment and reversible per-slot SSH DNAT control | Published client/fleet native-only acceptance, real rollback and isolation tests, security review and representative measurement; Windows and non-pool hosts need separate decisions |
 
 For general speed claims or default promotion, run the same comprehensive
 session-weighted `bench/suite.py run --synth 1 -n 1` workload before and after,
