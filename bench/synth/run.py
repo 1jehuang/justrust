@@ -132,6 +132,51 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     return r
 
 
+def installed_toolchain_identity(home):
+    """Conservatively bind every local default/pinned selection candidate.
+
+    A suite label of 'system' means no explicit pin, not necessarily stock:
+    the client can choose the cached service policy or newest active jr prefix.
+    Bind selection inputs instead of duplicating that native resolver here.
+    Refresh timestamps are not policy changes. Malformed policy fails closed.
+    """
+    home = Path(home)
+    policy_path = home / "toolchain-policy.json"
+    policy = None
+    if policy_path.exists():
+        try:
+            value = json.loads(policy_path.read_text())
+            if (not isinstance(value, dict) or not isinstance(value.get("toolchain"), str)
+                    or not value["toolchain"] or type(value.get("protocol")) is not int
+                    or value["protocol"] < 1):
+                raise ValueError("invalid policy fields")
+            policy = {key: value[key] for key in ("toolchain", "protocol")}
+        except (OSError, ValueError) as error:
+            raise ValueError("bench: cannot bind default toolchain policy") from error
+    root = home / "toolchains"
+    inventory = {}
+    for namespace in (root, root / "staged"):
+        if not namespace.exists():
+            continue
+        for prefix in sorted(namespace.iterdir()):
+            marker = prefix / "justrust-toolchain.json"
+            if not marker.is_file():
+                continue
+            files = [marker]
+            # Include jr-cargo even when currently disabled, so enabling it or
+            # replacing a donor cannot reuse older samples under the same label.
+            binary_dir = prefix / "bin"
+            if binary_dir.is_dir():
+                files.extend(path for path in sorted(binary_dir.iterdir()) if path.is_file())
+            files.extend(sorted((prefix / "lib").glob("*rustc_driver*")))
+            files.extend(sorted((prefix / "lib" / "rustlib").glob("*/codegen-backends/*")))
+            inventory[str(prefix.relative_to(root))] = {
+                str(path.relative_to(prefix)): {"sha256": suite.binary_sha256(path),
+                                              "executable": os.access(path, os.X_OK)}
+                for path in files if path.is_file()}
+    return {"policy": policy, "prefixes": inventory}
+
+
 def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
     """Private environment values are bound by digest, never published verbatim.
 
@@ -151,6 +196,7 @@ def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
         return suite.binary_sha256(path)
 
     definitions = []
+    installed = {}
     for st in stacks:
         scenario = suite.Scenario("checkpoint", "checkpoint", ["check"], None, "")
         env = versus.stack_env(st, scenario, versus.WORK / "checkpoint", "checkpoint")
@@ -164,8 +210,15 @@ def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
         else:
             tools["rustc"] = executable(env.get("RUSTC", "rustc"), env)
             tools["cargo"] = executable(versus.STOCK_CARGO if not st.justrust else "cargo", env)
+        local_toolchains = None
+        if st.justrust:
+            home = str(Path(env["JUSTRUST_HOME"]).resolve())
+            if home not in installed:
+                installed[home] = installed_toolchain_identity(home)
+            local_toolchains = installed[home]
         definitions.append({"name": st.name, "justrust": st.justrust,
                             "private_cache": st.private_cache, "toolchain": spec,
+                            "installed_toolchains": local_toolchains,
                             "tools": tools, "environment_sha256": digest(env)})
     return {"schema": 1, "stacks": definitions, "runtime": provenance(),
             "harness_sha256": {name: suite.binary_sha256(HERE.parent / name)

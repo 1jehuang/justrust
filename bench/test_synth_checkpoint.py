@@ -91,6 +91,93 @@ class CheckpointTests(unittest.TestCase):
             compiler.write_bytes(b"compiler two")
             self.assert_rejected()
 
+    def default_prefix(self, spec="jr-default", *, staged=False):
+        home = self.root / "home"
+        home.mkdir(exist_ok=True)
+        (home / "toolchain-policy.json").write_text(json.dumps(
+            {"toolchain": spec, "protocol": 1, "fetched_at": 1}))
+        prefix = home / "toolchains"
+        if staged:
+            prefix = prefix / "staged"
+        prefix = prefix / spec
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "justrust-toolchain.json").write_text(json.dumps(
+            {"id": spec, "installed_at": 10}))
+        for name in ("rustc", "cargo", "jr-cargo", "rustdoc"):
+            (prefix / "bin" / name).write_bytes(name.encode())
+            (prefix / "bin" / name).chmod(0o755)
+        (prefix / "lib").mkdir()
+        (prefix / "lib" / "librustc_driver-fixture.so").write_bytes(b"compiler driver")
+        return prefix
+
+    def test_system_label_binds_policy_selected_rustc_bytes(self):
+        prefix = self.default_prefix()
+        self.run_fixture()
+        (prefix / "bin" / "rustc").write_bytes(b"new default compiler")
+        self.assert_rejected()
+
+    def test_system_label_binds_policy_selected_jr_cargo_bytes(self):
+        prefix = self.default_prefix()
+        self.run_fixture()
+        (prefix / "bin" / "jr-cargo").write_bytes(b"new fork")
+        self.assert_rejected()
+
+    def test_system_label_binds_default_compiler_shared_library(self):
+        prefix = self.default_prefix()
+        self.run_fixture()
+        (prefix / "lib" / "librustc_driver-fixture.so").write_bytes(b"new compiler driver")
+        self.assert_rejected()
+
+    def test_default_cargo_fork_executable_permission_change_rejected(self):
+        prefix = self.default_prefix()
+        self.run_fixture()
+        (prefix / "bin" / "jr-cargo").chmod(0o644)
+        self.assert_rejected()
+
+    def test_new_default_candidate_rejected(self):
+        self.default_prefix()
+        (self.root / "home/toolchain-policy.json").unlink()
+        self.run_fixture()
+        self.default_prefix("jr-newer")
+        (self.root / "home/toolchain-policy.json").unlink()
+        self.assert_rejected()
+
+    def test_changed_policy_selection_rejected(self):
+        self.default_prefix()
+        self.run_fixture()
+        (self.root / "home/toolchain-policy.json").write_text(json.dumps(
+            {"toolchain": "jr-other", "protocol": 1, "fetched_at": 2}))
+        self.assert_rejected()
+
+    def test_policy_timestamp_refresh_does_not_change_identity(self):
+        self.default_prefix()
+        original = self.run_fixture()
+        (self.root / "home/toolchain-policy.json").write_text(json.dumps(
+            {"toolchain": "jr-default", "protocol": 1, "fetched_at": 200}))
+        self.assertEqual(original["results"], self.run_fixture(resume=True)["results"])
+
+    def test_newest_active_fallback_metadata_changed_rejects(self):
+        prefix = self.default_prefix()
+        (self.root / "home/toolchain-policy.json").unlink()
+        self.run_fixture()
+        (prefix / "justrust-toolchain.json").write_text(json.dumps(
+            {"id": "jr-default", "installed_at": 20}))
+        self.assert_rejected()
+
+    def test_staged_default_candidate_bytes_bound(self):
+        prefix = self.default_prefix(staged=True)
+        self.run_fixture()
+        (prefix / "bin" / "jr-cargo").write_bytes(b"new staged fork")
+        self.assert_rejected()
+
+    def test_malformed_policy_fails_closed(self):
+        self.default_prefix()
+        (self.root / "home/toolchain-policy.json").write_text('{"toolchain": null}')
+        with self.assertRaisesRegex(ValueError, "default toolchain policy"):
+            self.run_fixture()
+        self.restore.assert_not_called()
+        self.measure.assert_not_called()
+
     def test_legacy_checkpoint_rejected(self):
         self.run_fixture()
         old = json.loads(self.partial.read_text())

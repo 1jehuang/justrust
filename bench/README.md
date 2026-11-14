@@ -294,6 +294,15 @@ Matching resume retains failed and noisy points, and does not make them valid fo
 comparison. New runs atomically initialize an empty checkpoint before point zero,
 so an interrupted pre-build cannot leave an older run's points behind.
 
+The suite's `system` label means no explicit toolchain pin, not necessarily stock
+Rust: the client may select its cached service policy or newest active local jr
+toolchain. Checkpoints therefore also bind the policy's toolchain/protocol and
+the installed and staged candidate inventory, including installation markers,
+`jr-cargo`, compiler driver libraries, and codegen backends. A policy timestamp
+refresh alone is harmless, but changed selection inputs or candidate bytes reject
+resume. This deliberately conservative inventory avoids guessing which native
+fallback the client will choose.
+
 New measurements record `foreign_rustc_policy` in environment provenance. The
 live-process policy excludes only proven `/proc/<pid>/stat` zombie/dead states
 `Z`, `X`, and `x`. Sleeping, blocked, stopped, and runnable compilers still count.
