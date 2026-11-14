@@ -220,27 +220,43 @@ while those paths are validated together.
 
 ## Validation and promotion gates
 
-As of 2026-11-14 02:02 UTC, hosted storage exhaustion (`ENOSPC`) blocks remaining
-integrated acceptance. Builds are paused pending recovery, not redirected to
-local execution for this work. No release/default promotion or public SSH
-closure follows from the current implementation status.
+As of 2026-11-14 02:37 UTC, the hosted filesystem has been recovered without
+data deletion and the integrated candidate `bc873aeac` passes hosted all-target
+check and clippy. The following real hosted gates passed:
 
-Checkpoint unit tests passed on hosted: run `20261113-174810145-1092885`, three
-tests. The source also contains a process-level same-size, mtime-preserved
-remote-corruption regression and a daemon retained-source-snapshot regression.
-Their remaining hosted acceptance, along with integration and lint checks, is
-pending recovery.
-This is partial validation, not an all-tests-pass claim.
+- All-target check: `20261113-183327586-1431030`.
+- Sixteen native TLS/security tests: `20261113-183412456-1435514`.
+- Thirty-one agent integration tests, including checkpoint corruption:
+  `20261113-183457017-1439834`.
+- All-target clippy: `20261113-183532221-1442813`.
+- 283 remote unit tests, including daemon snapshot regressions:
+  `20261113-183557908-1445920`.
+- Nineteen native bulk/CLI tests: `20261113-183604429-1446413`.
+- Release-profile candidate build: `20261113-183609116-1446699`.
+
+Independent CI also passed Linux fmt/clippy/tests and MSRV on the integrated
+commit. Cross-platform CI, production positive native routing, live socket-drop
+acceptance, and representative comparison remain separate gates. No release,
+default promotion, or public SSH closure follows from these test results.
+
+The explicit unpublished candidate has SHA-256
+`c0c10710a1882e09a055ed4928db40b25746894cd411af45e6d6d466167c09fe`.
+Its package version remains `0.1.0-alpha.26`, but it is not the published
+artifact and has not replaced the default installed production client.
 
 | Stage | Implemented candidate work | Still required before promotion |
 |---|---|---|
-| 1. Mirror verification on the existing link | Hash-bearing checkpoints in `d373f2c2c`; original size-only gap closed | Remaining hosted regressions/lints, concurrent-writer correctness review, compatible fleet agent, before/after measurements of this version |
+| 1. Mirror verification on the existing link | Hash-bearing checkpoints in `d373f2c2c`; original size-only gap closed | Concurrent-writer correctness review, compatible fleet agent, before/after measurements of this version |
 | 2. Native daemon/session stream and ingress | TLS 1.3 exec, exporter-bound Ed25519 proof, root supervisor, lease-scoped enrollment and SNI routing paths | Coordinated client/guest/router/control-plane acceptance, interrupted-session checks and representative measurements |
 | 3. One-off commands, first mirrors and installation | Target-selected native exec and transitional rsync-over-native for bulk copies/uploads | Real cold/incremental build and file-transfer correctness, throughput comparisons and fallback validation; a native bulk engine is not implemented by this adapter |
 | 4. Remove public SSH exposure | Default-off supervisor receipt, account/lease-bound acknowledgment and reversible per-slot SSH DNAT control | Published client/fleet native-only acceptance, real rollback and isolation tests, security review and representative measurement; Windows and non-pool hosts need separate decisions |
 
 For general speed claims or default promotion, run the same comprehensive
 session-weighted `bench/suite.py run --synth 1 -n 1` workload before and after,
-then cite `bench/suite.py compare` and recorded run IDs. Add reconnect, cold
+then cite `bench/suite.py compare` and recorded run IDs. Hosted-only transport
+measurements use `bench/versus.py run --synth 1 -n 1 --only remote --remote`
+and `bench/versus.py compare`, because the suite runner does not support remote
+synthetic runs. Keep the candidate bytes, seed, all 40 points, snapshots,
+generator, weights, and execution mode matched. Add reconnect, cold
 build, interrupted-session and isolation checks relevant to this transport.
 Focused historical observations and functional tests do not replace that gate.
