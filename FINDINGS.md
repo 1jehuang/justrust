@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-11-14: native correctness passed, comprehensive promotion gate blocked
+
+The complete public-router native canary passed real hosted build/check/test,
+credential expiry/resume, wrong-pin rejection, root-secret isolation, and a
+real stream interruption with same-session reattachment. Recorded runs are
+listed in `docs/native-transport.md`. Independent GitHub workflow `43556833928`
+then passed actual SSH refusal, native execution after closure, and fresh
+pinned SSH after exact-lease rollback. These are correctness observations,
+not evidence of a speedup.
+
+A matched hosted synthetic comparison used seed 1, 40 points, one replicate,
+the same immutable candidate `5b71ef3e6a11c3e1ea177e1988f06363b696f4c0369d34f545e6f0551702da09`
+(source `0d726e4cc`), pinned snapshots, and an isolated daemon home. The SSH
+baseline recorded all 40 observations as
+`bench/versus-synth1-20261113-211315-0d726e4cc335d5544279e12d0f10d28e51dddebd`.
+Its expected-session report was blocked by noise provenance and failed pinned
+workload tests. No aggregate result is accepted, and failing points are not
+removed to produce one.
+
+The following native run was stopped through the benchmark's source-restoring
+signal handler after an artifact download stalled following successful build
+`20261113-211512235-2241620936`. The observation also exposed reuse of an SSH
+daemon after selecting required native transport. Both require regression
+fixes and fresh validation before shipping this candidate. The interrupted
+run is not a completed comparison. No native speedup, default promotion, or
+permanent fleet-wide SSH removal is established by this experiment.
+
 ## 2026-11-13: link checkpoints replace the checksum rsync after a reconnect (opt-in)
 
 Stage 1 of `docs/native-transport.md`, historical size-only checkpoint results.
