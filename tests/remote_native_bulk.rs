@@ -142,6 +142,137 @@ fn native_bulk_shell_preserves_stdout_stderr_and_exit_status() {
 }
 
 #[test]
+fn native_artifacts_request_eof_completes_before_response_and_exit() {
+    use tokio::io::AsyncWriteExt;
+
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"native-artifact-eof\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir(fixture.root.join("src")).unwrap();
+    fs::write(fixture.root.join("src/lib.rs"), "").unwrap();
+    fs::create_dir_all(fixture.root.join("target/debug")).unwrap();
+    fixture._runtime.block_on(async {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_justrust"));
+        // The real artifact server reads its entire request until stdin EOF
+        // before emitting Hello. A cat-style streaming echo misses this cycle.
+        let shell_quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+        let rustup_home = std::env::var_os("RUSTUP_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap()).join(".rustup"));
+        let script = format!(
+            "export PATH={}; export RUSTUP_HOME={}; export JUSTRUST_REAL_CARGO={}; {} __artifacts",
+            shell_quote(&std::env::var("PATH").unwrap()),
+            shell_quote(&rustup_home.to_string_lossy()),
+            shell_quote(env!("CARGO")),
+            shell_quote(env!("CARGO_BIN_EXE_justrust"))
+        );
+        command
+            .args([
+                "__native",
+                "client",
+                &serde_json::to_string(&fixture.endpoint).unwrap(),
+                &script,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let mut child = command.spawn().unwrap();
+            let request = serde_json::to_vec(&serde_json::json!({
+                "cwd": fixture.root,
+                "args": ["build"],
+                "start": 0.0,
+                "have": []
+            }))
+            .unwrap();
+            let mut input = child.stdin.take().unwrap();
+            input.write_all(&request).await.unwrap();
+            drop(input);
+            child.wait_with_output().await.unwrap()
+        })
+        .await
+        .expect("native artifact request EOF/response/exit cycle deadlocked");
+        success(&output);
+        assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+        let frames: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(frames.len(), 2, "{frames:?}");
+        assert_eq!(frames[0]["t"], "Hello");
+        assert_eq!(frames[1]["t"], "End");
+
+        // A terminal input close must also preserve the actual artifact
+        // server's failure, not turn a drained connection into success.
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let mut child = command.spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            input.write_all(b"{").await.unwrap();
+            drop(input);
+            child.wait_with_output().await.unwrap()
+        })
+        .await
+        .expect("invalid artifact request EOF/diagnostic/exit cycle deadlocked");
+        assert_eq!(failed.status.code(), Some(1));
+        assert!(failed.stdout.is_empty(), "{:?}", failed.stdout);
+        assert!(
+            String::from_utf8_lossy(&failed.stderr).contains("justrust artifacts: bad request"),
+            "{:?}",
+            failed.stderr
+        );
+    });
+}
+
+#[test]
+fn native_artifacts_large_stderr_preserves_full_diagnostic_and_failure() {
+    use tokio::io::AsyncWriteExt;
+
+    let fixture = Fixture::new();
+    fixture._runtime.block_on(async {
+        let script = format!(
+            "head -c 1048576 /dev/zero >&2; '{}' __artifacts",
+            env!("CARGO_BIN_EXE_justrust").replace('\'', "'\\''")
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_justrust"));
+        command
+            .args([
+                "__native",
+                "client",
+                &serde_json::to_string(&fixture.endpoint).unwrap(),
+                &script,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let mut child = command.spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            input.write_all(b"{").await.unwrap();
+            drop(input);
+            child.wait_with_output().await.unwrap()
+        })
+        .await
+        .expect("native artifact stderr/EOF/failure exchange stalled");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+        assert!(output.stderr.len() > 1048576);
+        assert_eq!(&output.stderr[..1048576], vec![0; 1048576]);
+        assert!(
+            String::from_utf8_lossy(&output.stderr[1048576..])
+                .contains("justrust artifacts: bad request"),
+            "{:?}",
+            &output.stderr[1048576..]
+        );
+    });
+}
+
+#[test]
 fn native_bulk_early_failure_drains_stderr_with_unconsumed_input() {
     let fixture = Fixture::new();
     fixture._runtime.block_on(async {

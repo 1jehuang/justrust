@@ -1055,6 +1055,36 @@ pub(crate) fn fetch_tests(
     retry_full(|| fetch_inner(args, start, Some(run_id)))
 }
 
+fn artifact_command_response<T>(
+    child: &mut std::process::Child,
+    receive: impl FnOnce(&mut BufReader<std::process::ChildStdout>) -> T,
+) -> Result<(T, std::process::ExitStatus, Vec<u8>)> {
+    let mut stdout = BufReader::new(child.stdout.take().context("stdout")?);
+    let mut stderr = child.stderr.take().context("stderr")?;
+    // The native client forwards stderr synchronously while receiving frames.
+    // Waiting for End before reading stderr can fill this pipe and prevent the
+    // client from ever reading End. SSH peers can hit the same pipe cycle.
+    // Retain every diagnostic byte, independently of stdout protocol parsing.
+    let diagnostics = std::thread::Builder::new()
+        .name("jr-artifact-stderr".into())
+        .spawn(move || {
+            let mut diagnostics = Vec::new();
+            stderr.read_to_end(&mut diagnostics).map(|_| diagnostics)
+        })
+        .context("start artifact stderr reader")?;
+    let response = receive(&mut stdout);
+    // End and parser failures are both terminal for this stdout consumer. Do
+    // not keep an unread pipe open while waiting for a peer's remaining output.
+    drop(stdout);
+    let status = child.wait();
+    let diagnostics = diagnostics
+        .join()
+        .map_err(|_| anyhow::anyhow!("artifact stderr reader panicked"))?
+        .context("read artifact stderr")?;
+    let status = status?;
+    Ok((response, status, diagnostics))
+}
+
 fn fetch_inner(
     args: &[String],
     start: f64,
@@ -1150,8 +1180,6 @@ fn fetch_inner(
         let mut si = child.stdin.take().context("stdin")?;
         serde_json::to_writer(&mut si, &req)?;
     }
-    let mut r = BufReader::new(child.stdout.take().context("stdout")?);
-    let mut stderr = child.stderr.take().context("stderr")?;
     let mut files = 0;
     let mut patched = 0;
     let mut bytes = 0u64;
@@ -1159,7 +1187,7 @@ fn fetch_inner(
     let mut remote_darwin_target: Option<&'static str> = None;
     let mut selected = None;
     let mut streamed: std::collections::HashSet<String> = Default::default();
-    let res = (|| -> Result<()> {
+    let (res, st, err) = artifact_command_response(&mut child, |r| -> Result<()> {
         let mut line = String::new();
         loop {
             line.clear();
@@ -1292,10 +1320,8 @@ fn fetch_inner(
                 Frame::End => return Ok(()),
             }
         }
-    })();
-    let mut err = String::new();
-    let _ = stderr.read_to_string(&mut err);
-    let st = child.wait()?;
+    })?;
+    let err = String::from_utf8_lossy(&err);
     if let Ok(p) = records_path() {
         let _ = std::fs::write(p, serde_json::to_vec(&records)?);
     }
@@ -1308,7 +1334,13 @@ fn fetch_inner(
         }
     })?;
     if !st.success() {
+        if err.trim().is_empty() {
+            bail!("artifact command failed ({st})");
+        }
         bail!("{}", err.trim());
+    }
+    if !err.is_empty() {
+        eprint!("{err}");
     }
     let selected = if test_run.is_some() {
         let artifacts = selected.context("host did not return selected test manifest")?;
@@ -1371,6 +1403,60 @@ pub fn available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_response_drains_large_stderr_before_end_and_preserves_status() {
+        use std::os::unix::process::CommandExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        for code in [0, 37] {
+            // Real pipe backpressure, not an in-memory reader: stderr exceeds
+            // pipe capacity before the peer can emit its terminal stdout frame.
+            let mut child = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "head -c 1048576 /dev/zero >&2; printf '{{\"t\":\"End\"}}\\n'; exit {code}"
+                    ),
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            let (finished, completion) = mpsc::channel();
+            let watchdog = std::thread::spawn(move || {
+                if completion.recv_timeout(Duration::from_secs(10)).is_err() {
+                    // Kill only this fixture's process group, including head,
+                    // so a regression fails boundedly without leaking a child.
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                    true
+                } else {
+                    false
+                }
+            });
+            let result = artifact_command_response(&mut child, |stdout| {
+                let mut line = String::new();
+                stdout.read_line(&mut line).map(|_| line)
+            });
+            let _ = finished.send(());
+            assert!(
+                !watchdog.join().unwrap(),
+                "artifact response deadlocked on a full stderr pipe before End (exit {code})"
+            );
+            let (line, status, diagnostics) = result.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Frame>(&line.unwrap()).unwrap(),
+                Frame::End
+            );
+            assert_eq!(status.code(), Some(code));
+            assert_eq!(diagnostics, vec![0; 1048576]);
+        }
+    }
 
     fn pe_fixture(machine: u16, dll: bool) -> Vec<u8> {
         let mut bytes = vec![0; 1024];
