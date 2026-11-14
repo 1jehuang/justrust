@@ -23,7 +23,7 @@ pub use associated_const::AssociatedConstOperand;
 pub use promotion::PromotedArray;
 #[path = "ir/static_data.rs"]
 mod static_data;
-pub use static_data::StaticData;
+pub use static_data::{StaticData, StaticValue};
 #[path = "ir/schema_metadata.rs"]
 mod schema_metadata;
 pub(super) use schema_metadata::{
@@ -13082,7 +13082,7 @@ impl CheckedFunction {
                 ExprKind::ByteRepeat { .. } => storage(budget, 1, 16)?,
                 ExprKind::PromotedArray(array) => storage(budget, array.values().len(), 32)?,
                 ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
-                ExprKind::StaticRef(data) => storage(budget, data.values().len(), 32)?,
+                ExprKind::StaticRef(data) => data.retain_storage(budget)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::ConstParameter(operand) => operand.validate(facts, budget)?,
                 ExprKind::ParamRepeat { length, .. } => length.validate(facts, budget)?,

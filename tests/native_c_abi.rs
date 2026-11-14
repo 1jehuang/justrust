@@ -56,6 +56,52 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 #[test]
+fn reference_static_payload_relocations_match_stock_at_workers_1_8() {
+    let scratch = Scratch::new();
+    let source = scratch.file("statics.rs");
+    fs::write(&source, r#"
+        struct Table { text: &'static str, ranges: &'static [(char, char)] }
+        static T: Table = Table { text: "letters", ranges: &[('a', 'c'), ('x', 'z')] };
+        static TEXT: &str = "hello";
+        fn first(i: usize) -> &'static (char, char) { &T.ranges[i] }
+        #[unsafe(no_mangle)] pub extern "C" fn static_score(i: usize) -> u32 {
+            let t = &T;
+            let last = t.ranges[i].1;
+            if (&T.ranges[0] as *const (char, char) as usize) != (first(0) as *const (char, char) as usize) { return 0; }
+            last as u32 + first(0).0 as u32 + TEXT.len() as u32 + t.text.len() as u32
+        }
+        fn main() { println!("{}", static_score(1)); }
+    "#).unwrap();
+    let stock = scratch.file("stock");
+    run(Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "-Cpanic=abort"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&stock));
+    let expected = run(&mut Command::new(stock));
+    assert_eq!(expected.stdout, b"231\n");
+    let harness = scratch.file("main.c");
+    fs::write(&harness, "#include <stdint.h>\n#include <stdio.h>\nextern uint32_t static_score(uintptr_t);\nint main(void){printf(\"%u\\n\",static_score(1));return 0;}\n").unwrap();
+    for workers in [1, 8] {
+        let object = scratch.file(&format!("native-{workers}.o"));
+        run(Command::new(cli())
+            .arg(&source)
+            .args(["--workers", &workers.to_string(), "--emit-object", "-o"])
+            .arg(&object));
+        let binary = scratch.file(&format!("native-{workers}"));
+        run(Command::new("cc")
+            .arg("-no-pie")
+            .arg(&harness)
+            .arg(&object)
+            .arg("-o")
+            .arg(&binary));
+        let output = run(&mut Command::new(binary));
+        assert_eq!(output.stdout, expected.stdout);
+        assert_eq!(output.stderr, expected.stderr);
+    }
+}
+
+#[test]
 fn captured_native_link_ignores_ambient_path_driver_specs_and_library_environment() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new();

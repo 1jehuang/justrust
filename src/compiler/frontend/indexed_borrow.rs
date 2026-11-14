@@ -224,7 +224,40 @@ impl type_check::Checker<'_> {
         let mut projection = vec![ir::Projection::Deref];
         for step in steps {
             self.charge_node(std::mem::size_of::<ir::Projection>())?;
+            // Preserve indirection through stored shared references, so the
+            // resulting element loan aliases the static's promoted target.
+            while let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &ty
+            {
+                self.charge_node(std::mem::size_of::<ir::Projection>())?;
+                projection.push(ir::Projection::Deref);
+                ty = referent.as_ref().clone();
+            }
             match step {
+                IndexedBorrowStep::Const(index, _) if matches!(ty, ir::Ty::Slice { .. }) => {
+                    let ir::Ty::Slice { element } = &ty else {
+                        unreachable!()
+                    };
+                    let element = element.as_ref().clone();
+                    let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+                    let value = self.for_expr(
+                        usize_ty.clone(),
+                        ir::ExprKind::Int(ir::IntValue {
+                            ty: ir::IntTy::Usize,
+                            bits: index as u128,
+                        }),
+                    )?;
+                    let saved = self.temporary("$static_slice_index", usize_ty, false)?;
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                    statements.push(ir::TypedStmt::Let {
+                        local: saved,
+                        value,
+                    });
+                    projection.push(ir::Projection::DynamicIndex(saved));
+                    ty = element;
+                }
                 IndexedBorrowStep::Field(field) => {
                     let (index, field_ty) = self.field_type(&ty, field)?;
                     projection.push(ir::Projection::Field(index));
@@ -259,17 +292,19 @@ impl type_check::Checker<'_> {
                         value: index,
                     });
                     let checked = self.for_expr(usize_ty, ir::ExprKind::Local(saved))?;
-                    self.index_bounds_probe(
-                        &ir::Place {
-                            local,
-                            projection: projection.clone(),
-                        },
-                        checked,
-                        original,
-                        &mut statements,
-                    )?;
-                    let ir::Ty::Array { element, .. } = ty else {
-                        return Ok(None);
+                    if !matches!(ty, ir::Ty::Slice { .. }) {
+                        self.index_bounds_probe(
+                            &ir::Place {
+                                local,
+                                projection: projection.clone(),
+                            },
+                            checked,
+                            original,
+                            &mut statements,
+                        )?;
+                    }
+                    let (ir::Ty::Array { element, .. } | ir::Ty::Slice { element }) = ty else {
+                        return Err("static index target is not an array or slice".into());
                     };
                     ty = element.as_ref().clone();
                     projection.push(ir::Projection::DynamicIndex(saved));

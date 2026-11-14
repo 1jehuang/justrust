@@ -239,19 +239,21 @@ impl Checker<'_> {
         // (value id, native, borrow-or-value id for the native Format)
         let mut evaluated: Vec<(ir::ExprId, bool, ir::ExprId)> = Vec::new();
         for (argument, spec) in arguments.iter().zip(specs) {
-            let mut checked_index_reference =
-                if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
-                    self.format_indexed_place_borrow(argument)?
-                } else if matches!(argument, Expr::Field { .. })
-                    && !static_source_place(argument)
-                        .is_ok_and(|place| self.checked_place(&place).is_ok())
-                {
-                    // `v[0].name` through an overloaded Index: borrow the
-                    // field behind the returned reference instead of moving it.
-                    self.borrow_call_rooted_field(ir::BorrowKind::Shared, argument)?
-                } else {
-                    None
-                };
+            let static_reference = self.borrow_static_rooted(ir::BorrowKind::Shared, argument)?;
+            let mut checked_index_reference = if static_reference.is_some() {
+                static_reference
+            } else if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
+                self.format_indexed_place_borrow(argument)?
+            } else if matches!(argument, Expr::Field { .. })
+                && !static_source_place(argument)
+                    .is_ok_and(|place| self.checked_place(&place).is_ok())
+            {
+                // `v[0].name` through an overloaded Index: borrow the
+                // field behind the returned reference instead of moving it.
+                self.borrow_call_rooted_field(ir::BorrowKind::Shared, argument)?
+            } else {
+                None
+            };
             if checked_index_reference.is_none() {
                 checked_index_reference =
                     self.borrow_owned_projection(ir::BorrowKind::Shared, argument)?;

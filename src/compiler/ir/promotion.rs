@@ -94,7 +94,15 @@ fn closed_type(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<bool, Strin
         return Err("unsupported: promoted array type nesting exceeds 128".into());
     }
     Ok(match ty {
-        Ty::Int(_) | Ty::Bool | Ty::Char => true,
+        Ty::Unit | Ty::Int(_) | Ty::Bool | Ty::Char => true,
+        Ty::Tuple(fields) => {
+            for field in fields.iter() {
+                if !closed_type(field, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => {
             closed_type(element, budget, depth + 1)?
         }
@@ -147,6 +155,27 @@ fn collect(
                     negated & ((1u128 << bits) - 1)
                 },
             }))
+        }
+        ExprKind::Block(block)
+            if expression.ty == Ty::Unit && block.statements.is_empty() && block.tail.is_none() =>
+        {
+            return Ok(true);
+        }
+        ExprKind::Tuple(elements) => {
+            let Ty::Tuple(fields) = &expression.ty else {
+                return Ok(false);
+            };
+            if fields.len() != elements.len() {
+                return Ok(false);
+            }
+            for (child, field) in elements.iter().zip(fields.iter()) {
+                if expressions.get(child.0).is_none_or(|e| e.ty != *field)
+                    || !collect(*child, expressions, values, budget, depth + 1)?
+                {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
         }
         ExprKind::Array(elements) => {
             let Ty::Array { element, len } = &expression.ty else {

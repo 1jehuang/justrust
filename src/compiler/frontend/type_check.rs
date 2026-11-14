@@ -6194,7 +6194,6 @@ impl<'a> Checker<'a> {
         // acquire immutable static storage through array rvalue promotion.
         if kind == ir::BorrowKind::Shared
             && self.canonical.is_some()
-            && !matches!(expected, Some(ir::Ty::Ref { referent, .. }) if matches!(referent.as_ref(), ir::Ty::Slice { .. }))
             && matches!(source, Expr::Array(_) | Expr::Repeat { .. })
             && !self.canonical.unwrap().promotion_reads_static(source, 0)?
             && let Some(array) = ir::PromotedArray::from_expression(
@@ -9710,6 +9709,29 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if matches!(
+            e,
+            Expr::Field { .. } | Expr::Index { .. } | Expr::DynamicIndex { .. }
+        ) {
+            if let Some(reference) = self.borrow_static_rooted(ir::BorrowKind::Shared, e)? {
+                let ty = match &self.exprs[reference.0].ty {
+                    ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                    _ => return Err("contract: static projection borrow is not a reference".into()),
+                };
+                if !self.facts().must_copy(&ty)? {
+                    return Err("E0507: cannot move out of an immutable static item".into());
+                }
+                let completion = self.exprs[reference.0].completion;
+                self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty,
+                    kind: ir::ExprKind::Deref { value: reference },
+                    completion,
+                });
+                return Ok(id);
+            }
+        }
         if let Expr::Var(path) = e {
             let plan = self.signatures.plan()?;
             if let Some(value) =
@@ -13669,7 +13691,7 @@ impl<'a> Checker<'a> {
                         // read, not a builtin place path.
                         let builtin_place = static_source_place(receiver)
                             .is_ok_and(|place| self.checked_place(&place).is_ok());
-                        if !matches!(receiver, Expr::Var(_))
+                        if !matches!(receiver, Expr::Var(_) | Expr::StaticRef(_))
                             && !genuine_call(receiver)
                             && (builtin_place || !matches!(receiver, Expr::Index { .. }))
                         {

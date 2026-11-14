@@ -4078,6 +4078,45 @@ impl CarrierBuilder<'_, '_> {
             self.budget,
         )
     }
+    /// A target-free reborrow may still have an issued immutable allocation.
+    /// Follow only original reborrow parents, requiring every terminal source
+    /// to be this analysis's StaticRef origin. Empty unknown origins are never
+    /// evidence of static storage, and any ordinary storage target declines.
+    fn static_storage_trace(&mut self, trace: &[ReferenceOriginId]) -> Result<bool, Exhausted> {
+        if trace.is_empty() {
+            return Ok(false);
+        }
+        let Some(static_origin) = self.static_origin else {
+            return Ok(false);
+        };
+        self.budget.spend(trace.len() + 1)?;
+        self.budget
+            .reserve_bytes(mul(trace.len(), size_of::<ReferenceOriginId>())?)?;
+        let mut pending = trace.to_vec();
+        let mut seen = Set::new(self.targets.len());
+        self.budget
+            .reserve_bytes(mul(seen.0.len(), size_of::<u64>())?)?;
+        let mut found = false;
+        while let Some(origin) = pending.pop() {
+            self.budget.spend(1)?;
+            if origin == static_origin {
+                found = true;
+                continue;
+            }
+            if seen.has(origin.0) {
+                continue;
+            }
+            seen.insert(origin.0);
+            if !self.targets[origin.0].is_empty() || self.parents[origin.0].count() == 0 {
+                return Ok(false);
+            }
+            for parent in self.parents[origin.0].members() {
+                checked_vec_growth(&mut pending, self.budget)?;
+                pending.push(ReferenceOriginId(parent));
+            }
+        }
+        Ok(found)
+    }
     fn owned_shared_family_result_source(
         &mut self,
         signature: &ir::Signature,
@@ -4246,7 +4285,7 @@ impl CarrierBuilder<'_, '_> {
             let path = value_projection(location);
             let mut component = place.clone();
             component.projection.extend_from_slice(&path);
-            let (targets, _, mut failure) = self.lens(state, &component)?;
+            let (targets, trace, mut failure) = self.lens(state, &component)?;
             let semantic = ir::carrier_at(ty, location, &self.ledger).map_err(|_| Exhausted)?;
             let Some(channel) = key_channel(&semantic) else {
                 continue;
@@ -4258,6 +4297,17 @@ impl CarrierBuilder<'_, '_> {
             )?;
             let mut origins = CarrierOrigins::new(self.targets.len(), self.family_inputs.len());
             let mut matched_cell = false;
+            // StaticRef is an issued immutable allocation whose reference
+            // leaves also point into static program storage. Its lens trace
+            // authenticates that source even though it has no mutable cells.
+            // Preserve other alternatives and any incomplete-cover failure.
+            if let Some(origin) = self.static_origin
+                && trace.contains(&origin)
+            {
+                self.budget.spend(trace.len() + 1)?;
+                origins.references.0.insert(origin.0);
+                matched_cell = true;
+            }
             for target in targets {
                 if let Some(cover) = read_cell_cover_with_ledger(
                     self.family_cover_locals
@@ -5472,11 +5522,27 @@ impl CarrierBuilder<'_, '_> {
         statement: usize,
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
+            Rvalue::StaticRef(data) => {
+                // Every reference stored by a static initializer points into
+                // immutable program storage, including nested reference leaves.
+                let locations = ir::carrier_locations(&data.reference_ty(), &self.ledger)
+                    .map_err(|_| Exhausted)?;
+                self.budget.spend(locations.len() + 1)?;
+                let origin = self.static_origin.ok_or(Exhausted)?;
+                let mut rows = Vec::new();
+                rows.try_reserve_exact(locations.len())
+                    .map_err(|_| Exhausted)?;
+                for location in locations.iter() {
+                    let mut origins = self.empty_origins()?;
+                    origins.references.0.insert(origin.0);
+                    rows.push((location.clone(), origins));
+                }
+                Ok(rows)
+            }
             Rvalue::ByteStr(_)
             | Rvalue::ByteRepeat { .. }
             | Rvalue::PromotedArray(_)
-            | Rvalue::PromotedScalar(_)
-            | Rvalue::StaticRef(_) => {
+            | Rvalue::PromotedScalar(_) => {
                 let origin = self.static_origin.ok_or(Exhausted)?;
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(origin.0);
@@ -5590,6 +5656,10 @@ impl CarrierBuilder<'_, '_> {
             Rvalue::Borrow(id) => {
                 let site = &self.f.loan_sites[id.0];
                 let (targets, trace, failure) = self.lens(state, &site.place)?;
+                let static_storage = failure.is_none()
+                    && targets.is_empty()
+                    && site.kind == BorrowKind::Shared
+                    && self.static_storage_trace(&trace)?;
                 if let Some(failure) = failure.filter(|_| self.diagnosing) {
                     self.problem(
                         block,
@@ -5628,6 +5698,12 @@ impl CarrierBuilder<'_, '_> {
                 }
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(id.0);
+                if static_storage {
+                    origins
+                        .references
+                        .0
+                        .insert(self.static_origin.ok_or(Exhausted)?.0);
+                }
                 Ok(vec![(
                     fixed_location(ReferencePosition { depth: 0 }),
                     origins,

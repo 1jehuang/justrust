@@ -3614,8 +3614,21 @@ impl Provider for CompilerProvider {
                                 .saturating_add(std::mem::size_of::<(usize, Vec<u8>)>());
                         }
                         for (_, blob) in &object.statics {
-                            let entry = blob.key.len()
-                                + std::mem::size_of::<(usize, backend::StaticBlob)>();
+                            let relocation_bytes = blob
+                                .relocations
+                                .len()
+                                .checked_mul(std::mem::size_of::<(usize, usize)>())
+                                .ok_or_else(|| {
+                                    Error::new("generic static relocation storage overflow")
+                                })?;
+                            let entry = blob
+                                .key
+                                .len()
+                                .checked_add(std::mem::size_of::<(usize, backend::StaticBlob)>())
+                                .and_then(|n| n.checked_add(relocation_bytes))
+                                .ok_or_else(|| {
+                                    Error::new("generic static relocation storage overflow")
+                                })?;
                             bytes = bytes
                                 .checked_add(blob.bytes.len())
                                 .and_then(|n| n.checked_add(entry))

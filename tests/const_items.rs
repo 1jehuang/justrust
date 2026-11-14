@@ -85,6 +85,26 @@ fn general_constants_match_stock_output() {
             "24 0 true\n3 x -5 c\ntrue false true\n200 300 false true\n",
         ),
         (
+            "static_reference_aggregates",
+            "struct Table { label: &'static str, ranges: &'static [(char, char)] }
+             static TEXT: &str = \"hello\";
+             static T: (u8, &str) = (7, \"world\");
+             static TABLE: Table = Table { label: \"letters\", ranges: &[('a', 'c'), ('x', 'z')] };
+             static REPEAT: [&str; 3] = [\"same\"; 3];
+             static EMPTY: &[()] = &[(); 3];
+             fn text() -> &'static str { let rr = &*&TEXT; *rr }
+             fn label() -> &'static str { (&TABLE).label }
+             fn first(i: usize) -> &'static (char, char) { &TABLE.ranges[i] }
+             fn main(){
+                 let t = &T; let table = &TABLE;
+                 let last = table.ranges[1].1;
+                 println!(\"{} {} {} {} {}\", text(), t.0, t.1, label(), last);
+                 println!(\"{} {} {} {}\", (&TEXT as *const &str as usize) == (&TEXT as *const &str as usize), (&T as *const (u8, &str) as usize) == (t as *const (u8, &str) as usize), (&TABLE.ranges[0] as *const (char, char) as usize) == (first(0) as *const (char, char) as usize), (&REPEAT as *const [&str; 3] as usize) == (&REPEAT as *const [&str; 3] as usize));
+                 println!(\"{} {} {}\", EMPTY.len(), table.ranges.len(), first(1).0);
+             }",
+            "hello 7 world letters z\ntrue true true true\n3 2 x\n",
+        ),
+        (
             "wrapping_shifts",
             "fn main(){ println!(\"{} {} {} {}\", 129u8.wrapping_shr(8), 1u16.wrapping_shl(17), (-2i32).wrapping_shr(33), 1u64.wrapping_shl(127)); println!(\"{} {} {} {}\", 1u128.wrapping_shl(129), (-4i128).wrapping_shr(129), 1usize.wrapping_shl(65), (-8isize).wrapping_shr(66)); }",
             "129 2 -1 9223372036854775808\n2 -2 2 -2\n",
@@ -110,6 +130,32 @@ fn general_constants_match_stock_output() {
             "5 6\n",
         ),
     ];
+    for (tag, source, expected) in cases
+        .iter()
+        .filter(|(tag, _, _)| *tag == "static_reference_aggregates")
+    {
+        let dir =
+            std::env::temp_dir().join(format!("justrust-const-stock-{}-{tag}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("main.rs");
+        let binary = dir.join("stock");
+        fs::write(&input, source).unwrap();
+        let checked = Command::new(stock_rustc::stock_rustc())
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "stock {tag}: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let output = Command::new(&binary).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), *expected);
+    }
     for workers in [1, 8] {
         for (tag, source, expected) in cases {
             assert_eq!(run(source, workers, tag), expected, "{tag}");
@@ -140,15 +186,17 @@ fn invalid_constants_reject_even_when_unused() {
             "E0594",
         ),
         ("static S: i32 = 1; fn main(){ let _r: &u8 = &S; }", "E0308"),
-        // Borrowed statics outside the integer/bool/char-leaf subset fail closed.
+        // Static alternatives must not erase a local reference's lifetime.
         (
-            "static S: &str = \"x\"; fn main(){ let r = &S; println!(\"{}\", r); }",
-            "unsupported",
+            "static S: (&str,) = (\"forever\",); fn bad(flag: bool) -> &'static str { let owned = String::from(\"local\"); let local = (owned.as_str(),); let choice = if flag { &S } else { &local }; choice.0 } fn main(){}",
+            "E0597",
         ),
+        // Non-Copy static values cannot be moved out of their allocation.
         (
-            "static S: (u8, &str) = (1, \"x\"); fn main(){ let r = &S; println!(\"{}\", r.0); }",
-            "unsupported",
+            "struct P { name: &'static str } static S: P = P { name: \"x\" }; fn main(){ let p = S; println!(\"{}\", p.name); }",
+            "cannot move",
         ),
+        // Mutable aggregate storage is still rejected.
         (
             "struct P { x: u8 } static S: P = P { x: 1 }; fn main(){ let r = &mut S.x; *r = 2; }",
             "E0596",

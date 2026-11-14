@@ -2790,34 +2790,9 @@ impl<'a> Emitter<'a> {
             return Err("unsupported: promoted array alignment exceeds 16".into());
         }
         let size = extent.max(16);
-        budget.charge_work(size)?;
-        budget.retain_bytes(size)?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(size)
-            .map_err(|_| "promoted array allocation failed")?;
-        for scalar in values {
-            scalar.validate()?;
-            match scalar {
-                ir::PromotedScalar::Int(value) if value.ty.bits() == 128 => {
-                    bytes.extend_from_slice(&value.bits.to_le_bytes())
-                }
-                ir::PromotedScalar::Int(value) => {
-                    let width = scalar_memory_bytes(&scalar.value_ty()) as usize;
-                    bytes.extend_from_slice(&value.bits.to_le_bytes()[..width]);
-                }
-                ir::PromotedScalar::Bool(value) => bytes.push(u8::from(*value)),
-                ir::PromotedScalar::Char(value) => {
-                    bytes.extend_from_slice(&value.value.to_le_bytes())
-                }
-            }
-        }
-        if bytes.len() != extent {
-            return Err("promoted array payload differs from target extent".into());
-        }
-        // Empty arrays still have a non-null, suitably aligned static address.
-        if bytes.is_empty() {
-            bytes.resize(16, 0);
+        let bytes = static_items::promoted_scalar_image(ty, values, &budget)?;
+        if bytes.len() > size {
+            return Err("promoted array payload exceeds target extent".into());
         }
         Ok(bytes)
     }
@@ -5208,7 +5183,7 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
     // Immutable static items: one allocation per canonical declaration key,
     // aligned to its storage (at least sixteen bytes), so every `&S` has one
     // address.
-    let mut static_addresses: HashMap<&[u8], (u64, &[u8], usize)> = HashMap::new();
+    let mut static_addresses: HashMap<&[u8], (u64, &StaticBlob)> = HashMap::new();
     for (name, object) in functions {
         let start = symbols[name.as_str()];
         for (at, blob) in &object.statics {
@@ -5216,8 +5191,8 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
                 return Err("invalid static item relocation".into());
             }
             let address =
-                if let Some((address, bytes, align)) = static_addresses.get(blob.key.as_slice()) {
-                    if *bytes != blob.bytes.as_slice() || *align != blob.align {
+                if let Some((address, existing)) = static_addresses.get(blob.key.as_slice()) {
+                    if *existing != blob {
                         return Err("static item storage differs between objects".into());
                     }
                     *address
@@ -5241,10 +5216,8 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
                         .and_then(|a| a.checked_add(data.len() as u64))
                         .ok_or("ELF address overflow")?;
                     data.extend_from_slice(&blob.bytes);
-                    static_addresses.insert(
-                        blob.key.as_slice(),
-                        (address, blob.bytes.as_slice(), blob.align),
-                    );
+                    blob.relocate(address, &mut data[aligned..])?;
+                    static_addresses.insert(blob.key.as_slice(), (address, blob));
                     address
                 };
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());

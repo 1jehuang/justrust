@@ -261,6 +261,7 @@ impl Resolver<'_> {
         }
         let mut ty = declaration.ty.clone();
         let mut value = declaration.initializer.clone();
+        let static_storage = declaration.storage == ConstantStorage::Static;
         let previous_params = std::mem::take(&mut self.type_params);
         locals.push(std::collections::HashSet::new());
         let result = self
@@ -269,6 +270,19 @@ impl Resolver<'_> {
         locals.pop();
         self.type_params = previous_params;
         result?;
+        if static_storage
+            && (matches!(ty, Type::Ref { .. })
+                || static_literal_storage(&value, &self.alias_budget, 0)?
+                || static_initializer_has_reference(&value, &self.alias_budget, 0)?)
+        {
+            // Copy the value from its canonical allocation. Re-inlining a
+            // reference-bearing initializer would allocate a different target
+            // from the one observed by `&S` or by an autoref receiver.
+            *expr = Expr::Deref {
+                value: Box::new(Expr::StaticRef(target.clone())),
+            };
+            return Ok(true);
+        }
         // The hidden const checker body is qualified with every other const
         // declaration before signature publication, including unused items.
         // Built after resolution: the binding is a fresh local whose name
@@ -283,6 +297,95 @@ impl Resolver<'_> {
             tail: Some(Box::new(Expr::Var(local))),
         });
         Ok(true)
+    }
+}
+
+fn static_literal_storage(
+    expr: &Expr,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match expr {
+        Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Str(_) => Ok(true),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            value,
+            ..
+        } => Ok(matches!(value.as_ref(), Expr::Integer(_))),
+        Expr::Tuple(values) | Expr::Array(values) | Expr::TupleStruct { fields: values, .. } => {
+            for value in values {
+                if !static_literal_storage(value, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::Struct { fields, .. } => {
+            for (_, value) in fields {
+                if !static_literal_storage(value, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expr::Repeat { value, .. } => static_literal_storage(value, budget, depth + 1),
+        Expr::BorrowValue {
+            kind: ir::BorrowKind::Shared,
+            value,
+        } if matches!(value.as_ref(), Expr::Array(_) | Expr::Repeat { .. }) => {
+            static_literal_storage(value, budget, depth + 1)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn static_initializer_has_reference(
+    expr: &Expr,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match expr {
+        Expr::Str(_)
+        | Expr::ByteStr(_)
+        | Expr::Borrow { .. }
+        | Expr::BorrowValue { .. }
+        | Expr::StaticRef(_) => Ok(true),
+        Expr::Array(values) | Expr::Tuple(values) | Expr::TupleStruct { fields: values, .. } => {
+            for value in values {
+                if static_initializer_has_reference(value, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Expr::Repeat { value, .. } => static_initializer_has_reference(value, budget, depth + 1),
+        Expr::Struct { fields, .. } => {
+            for (_, value) in fields {
+                if static_initializer_has_reference(value, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Expr::Block(block) => {
+            for statement in &block.statements {
+                if let Stmt::Let { value, .. } | Stmt::LetPattern { value, .. } | Stmt::Expr(value) =
+                    statement
+                    && static_initializer_has_reference(value, budget, depth + 1)?
+                {
+                    return Ok(true);
+                }
+            }
+            match block.tail.as_deref() {
+                Some(value) => static_initializer_has_reference(value, budget, depth + 1),
+                None => Ok(false),
+            }
+        }
+        _ => Ok(false),
     }
 }
 

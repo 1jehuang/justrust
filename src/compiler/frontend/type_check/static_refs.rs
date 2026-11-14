@@ -1,7 +1,6 @@
 //! `&S` of an immutable static item: one interned `&'static T` per declaration.
-//! Admitted types have only integer, `bool` and `char` leaves under arrays,
-//! tuples and structs, with literal initializers. Any other static borrow
-//! gets an explicit unsupported diagnostic.
+//! Literal scalar/aggregate initializers and immutable promoted string/slice
+//! leaves are stored once per declaration, with explicit native relocations.
 use super::*;
 
 impl Checker<'_> {
@@ -61,14 +60,19 @@ impl Checker<'_> {
         ir::StaticData::new(declaration, ty, values, &budget)
     }
 
-    /// The declared type, admitted when every leaf is an integer, `bool` or
-    /// `char` reached through arrays, tuples and structs.
+    /// The declaration's closed scalar, aggregate and immutable reference
+    /// storage type, read from its canonical graph type facts.
     fn static_type(&self, source: &Type, budget: &ir::PlanBudget) -> Result<ir::Ty, String> {
-        // Lowering is a pure type query; the closed-leaf walk below is what
-        // admits the type (no references, enums, generics or drop glue).
-        let ty = self
-            .checked_type_actual(source)
-            .map_err(|_| UNSUPPORTED.to_string())?;
+        // Lowering is a pure type query. The closed-leaf walk admits only
+        // scalars and immutable promoted reference leaves.
+        // This is the declaration's storage type, not a caller's explicit
+        // generic actual. Its lifetimes were checked on the initializer body.
+        // Do not reinterpret its 'static regions in the caller's environment.
+        let ty = self.source_type_actual(source)?;
+        self.facts().validate_ty_metadata_with_budget(&ty, budget)?;
+        if ty.contains_slice(budget)? {
+            ir::validate_slice_carrier_with_facts(&ty, self.facts())?;
+        }
         closed_static_shape(&ty, budget, 0)?;
         Ok(ty)
     }
@@ -77,7 +81,7 @@ impl Checker<'_> {
         &self,
         expr: &Expr,
         ty: &ir::Ty,
-        values: &mut Vec<ir::PromotedScalar>,
+        values: &mut Vec<ir::StaticValue>,
         budget: &ir::PlanBudget,
         depth: usize,
     ) -> Result<(), String> {
@@ -86,6 +90,50 @@ impl Checker<'_> {
             return Err(UNSUPPORTED.into());
         }
         match (expr, ty) {
+            (Expr::Tuple(elements), ir::Ty::Unit) if elements.is_empty() => Ok(()),
+            (Expr::Block(block), ir::Ty::Unit)
+                if block.statements.is_empty() && block.tail.is_none() =>
+            {
+                Ok(())
+            }
+            (Expr::Str(text), ty) if ty.is_shared_str() => {
+                budget.retain_bytes(text.len())?;
+                values.push(ir::StaticValue::Text(Arc::from(text.as_str())));
+                Ok(())
+            }
+            (
+                Expr::BorrowValue {
+                    kind: ir::BorrowKind::Shared,
+                    value,
+                },
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent,
+                },
+            ) => {
+                let ir::Ty::Slice { element } = referent.as_ref() else {
+                    return Err(UNSUPPORTED.into());
+                };
+                let len = match value.as_ref() {
+                    Expr::Array(elements) => elements.len(),
+                    Expr::Repeat { len, .. } => *len,
+                    _ => return Err(UNSUPPORTED.into()),
+                };
+                if len > ir::MAX_ARRAY_LEN {
+                    return Err(UNSUPPORTED.into());
+                }
+                let array = ir::Ty::Array {
+                    element: element.clone(),
+                    len,
+                };
+                let mut contents = Vec::new();
+                self.static_values(value, &array, &mut contents, budget, depth + 1)?;
+                values.push(ir::StaticValue::Slice {
+                    len,
+                    values: contents.into(),
+                });
+                Ok(())
+            }
             (Expr::Tuple(elements), ir::Ty::Tuple(fields)) if elements.len() == fields.len() => {
                 for (value, field) in elements.iter().zip(fields.iter()) {
                     self.static_values(value, field, values, budget, depth + 1)?;
@@ -135,25 +183,33 @@ impl Checker<'_> {
     }
 }
 
-/// Every leaf is a closed integer, `bool` or `char`: the payload is exactly
-/// its flattened scalars, with no references, padding-visible enums or drops.
+/// The payload consists only of closed scalar or immutable promoted reference
+/// leaves. Enums and mutable reference payloads stay unsupported.
 fn closed_static_shape(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<(), String> {
     budget.charge_work(1)?;
     if depth > 128 {
         return Err(UNSUPPORTED.into());
     }
     match ty {
-        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char => Ok(()),
+        ir::Ty::Unit | ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char => Ok(()),
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } => match referent.as_ref() {
+            ir::Ty::Str => Ok(()),
+            ir::Ty::Slice { element } => closed_static_shape(element, budget, depth + 1),
+            _ => Err(UNSUPPORTED.into()),
+        },
         ir::Ty::Array { element, len } if *len <= ir::MAX_ARRAY_LEN => {
             closed_static_shape(element, budget, depth + 1)
         }
-        ir::Ty::Tuple(fields) if !fields.is_empty() => {
+        ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
                 closed_static_shape(field, budget, depth + 1)?;
             }
             Ok(())
         }
-        ir::Ty::Struct(structure) if !structure.def().fields.is_empty() => {
+        ir::Ty::Struct(structure) => {
             for field in structure.def().fields.read(budget)?.iter() {
                 closed_static_shape(&field.ty, budget, depth + 1)?;
             }
@@ -163,16 +219,16 @@ fn closed_static_shape(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Re
     }
 }
 
-const UNSUPPORTED: &str = "unsupported: borrowed statics require integer, bool or char leaves (through arrays, tuples and structs) and a literal initializer";
+const UNSUPPORTED: &str = "unsupported: borrowed static initializer requires closed scalar, string or shared-slice leaves through arrays, tuples and structs";
 
 /// Scalar leaves, arrays and repeats. `nested` checks one element.
 fn static_values(
     expr: &Expr,
     ty: &ir::Ty,
-    values: &mut Vec<ir::PromotedScalar>,
+    values: &mut Vec<ir::StaticValue>,
     budget: &ir::PlanBudget,
     _depth: usize,
-    mut nested: impl FnMut(&Expr, &ir::Ty, &mut Vec<ir::PromotedScalar>) -> Result<(), String>,
+    mut nested: impl FnMut(&Expr, &ir::Ty, &mut Vec<ir::StaticValue>) -> Result<(), String>,
 ) -> Result<(), String> {
     let scalar = match (expr, ty) {
         (Expr::Integer(literal), ir::Ty::Int(_)) => {
@@ -201,9 +257,10 @@ fn static_values(
             }
             return Ok(());
         }
-        (Expr::Repeat { value, len: count }, ir::Ty::Array { element, len })
-            if count == len && *len > 0 =>
-        {
+        (Expr::Repeat { value, len: count }, ir::Ty::Array { element, len }) if count == len => {
+            if *len == 0 {
+                return Ok(());
+            }
             let start = values.len();
             nested(value, element, values)?;
             let width = values.len() - start;
@@ -213,7 +270,7 @@ fn static_values(
                         return Err(UNSUPPORTED.into());
                     }
                     budget.charge_work(1)?;
-                    values.push(values[index]);
+                    values.push(values[index].clone());
                 }
             }
             return Ok(());
@@ -221,6 +278,6 @@ fn static_values(
         _ => return Err(UNSUPPORTED.into()),
     };
     scalar.validate()?;
-    values.push(scalar);
+    values.push(ir::StaticValue::Scalar(scalar));
     Ok(())
 }

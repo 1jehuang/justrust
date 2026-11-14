@@ -2,7 +2,10 @@
 //! Rust compiler is involved. Native linking uses an immutable toolchain capsule
 //! behind an enforced filesystem and process boundary, never an ambient driver.
 pub use super::controlled_link::ControlledToolchain;
-use crate::compiler::{backend::Object, ir};
+use crate::compiler::{
+    backend::{Object, StaticBlob},
+    ir,
+};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default)]
 pub struct LinkOptions {
@@ -69,12 +72,18 @@ pub fn object_with_panic(
     budget: &ir::PlanBudget,
 ) -> Result<Vec<u8>, String> {
     let bound = functions.iter().try_fold(4096usize, |n, (name, o)| {
+        let static_relocations = o
+            .statics
+            .iter()
+            .try_fold(0usize, |n, (_, blob)| n.checked_add(blob.relocations.len()))
+            .ok_or("ELF static relocation count overflow")?;
         let reloc = o
             .calls
             .len()
             .checked_add(o.strings.len())
             .and_then(|n| n.checked_add(o.type_ids.len()))
             .and_then(|n| n.checked_add(o.statics.len()))
+            .and_then(|n| n.checked_add(static_relocations))
             .and_then(|n| {
                 n.checked_add(
                     o.vtables
@@ -200,7 +209,7 @@ pub fn object_with_panic(
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
     let mut type_offsets: BTreeMap<&[u8], usize> = BTreeMap::new();
-    let mut static_offsets: BTreeMap<&[u8], (usize, &[u8], usize)> = BTreeMap::new();
+    let mut static_offsets: BTreeMap<&[u8], (usize, &StaticBlob)> = BTreeMap::new();
     if entry {
         let at = if unwind { 24 } else { 21 };
         relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
@@ -235,8 +244,8 @@ pub fn object_with_panic(
                 return Err("invalid static item relocation".into());
             }
             let offset = match static_offsets.get(blob.key.as_slice()) {
-                Some((offset, bytes, align)) => {
-                    if *bytes != blob.bytes.as_slice() || *align != blob.align {
+                Some((offset, existing)) => {
+                    if *existing != blob {
                         return Err("static item storage differs between objects".into());
                     }
                     *offset
@@ -251,11 +260,19 @@ pub fn object_with_panic(
                         data.push(0);
                     }
                     let offset = data.len();
+                    blob.validate_relocations()?;
                     data.extend_from_slice(&blob.bytes);
-                    static_offsets.insert(
-                        blob.key.as_slice(),
-                        (offset, blob.bytes.as_slice(), blob.align),
-                    );
+                    for (from, target) in &blob.relocations {
+                        let at = offset
+                            .checked_add(*from)
+                            .ok_or("ELF static relocation offset overflow")?;
+                        let target = offset
+                            .checked_add(*target)
+                            .and_then(|n| i64::try_from(n).ok())
+                            .ok_or("ELF static target offset overflow")?;
+                        relocation(&mut rel_data, at, 1, 1, target);
+                    }
+                    static_offsets.insert(blob.key.as_slice(), (offset, blob));
                     offset
                 }
             };
