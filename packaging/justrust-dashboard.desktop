@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=justrust Account Dashboard (Terminal)
+Name=Justrust Personal Dashboard
 GenericName=Build history and account usage
-Comment=Your justrust builds, results, logs and account allowance (read-only terminal dashboard)
+Comment=Your justrust builds, results, logs, versions and account allowance (read-only personal dashboard)
 Exec=justrust interactive dashboard
 Icon=justrust
 Terminal=true
 Categories=Development;Monitor;
-Keywords=justrust;rust;cargo;builds;dashboard;account;history;tui;
+Keywords=justrust;rust;cargo;builds;dashboard;personal;account;history;versions;tui;

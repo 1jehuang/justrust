@@ -375,7 +375,7 @@ fn account(f: &mut Frame, area: Rect, state: &State, lines: Vec<Line<'static>>) 
             )
         })
         .unwrap_or_default();
-    Card::new("justrust")
+    Card::new("Justrust Personal Dashboard")
         .note("Your account")
         .status(status)
         .footer(footer)
@@ -481,6 +481,23 @@ fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
         ));
     }
     lines.push(detail("Compiler", compiler, width));
+    if let Some(rustc) = v.machine("rustc") {
+        lines.push(detail("Rustc", vec![span(clean(rustc), VALUE)], width));
+    }
+    let inventory = if v.machine.is_empty() {
+        v.machine_note
+            .as_deref()
+            .unwrap_or("waiting for build machine versions")
+            .to_owned()
+    } else {
+        format!("{} components reported", v.machine.len())
+    };
+    lines.push(detail(
+        "Machine",
+        vec![span(clean(&inventory), LABEL)],
+        width,
+    ));
+    lines.push(line("v  full component inventory", ACCENT, width));
     lines
 }
 
@@ -1073,7 +1090,12 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
             .skip(scroll)
             .map(|s| line(s, VALUE, width))
             .collect();
-        Card::new("Run details")
+        let title = if text.starts_with("Justrust Personal Dashboard · Versions\n") {
+            "Versions"
+        } else {
+            "Run details"
+        };
+        Card::new(title)
             .note(format!("line {} of {}", scroll + 1, line_count))
             .draw(f, body, lines);
         f.render_widget(
@@ -1332,12 +1354,10 @@ mod tests {
             shown.contains("Compiler jr-ac20de5e7921  protocol 1"),
             "{shown}"
         );
-        // A build machine on the named compiler is not worth a row.
-        assert!(
-            !shown.contains("Machine") && !shown.contains("agent"),
-            "{shown}"
-        );
-        assert_eq!(shown.lines().count(), 3, "{shown}");
+        assert!(shown.contains("Rustc    rustc 1.99.1"), "{shown}");
+        assert!(shown.contains("Machine  3 components reported"), "{shown}");
+        assert!(shown.contains("v  full component inventory"), "{shown}");
+        assert_eq!(shown.lines().count(), 6, "{shown}");
         assert!(!shown.contains('▲'), "{shown}");
         assert_eq!(status(&current), "● up to date");
 
@@ -1379,7 +1399,7 @@ mod tests {
         let shown = text(version_lines(&unknown, 120));
         assert!(shown.contains("▲ Could not resolve host"), "{shown}");
         assert!(shown.contains("Compiler not reported"), "{shown}");
-        assert!(!shown.contains("no session open"), "{shown}");
+        assert!(shown.contains("no session open"), "{shown}");
         assert_eq!(status(&unknown), "● unreachable");
         // Rows are clipped, never wrapped.
         for l in version_lines(&behind, 30) {
@@ -1399,7 +1419,7 @@ mod tests {
             .find(|l| l.contains("Versions"))
             .unwrap_or_else(|| panic!("{wide}"));
         assert!(
-            row.contains("justrust") && row.contains("up to date"),
+            row.contains("Justrust Personal Dashboard") && row.contains("up to date"),
             "{wide}"
         );
         assert!(wide.contains("jr-ac20de5e7921"), "{wide}");
@@ -1417,6 +1437,26 @@ mod tests {
         assert!(card > account, "{narrow}");
         // A short terminal keeps the run list.
         assert!(!screen(&state, 90, 26).contains("Versions"));
+    }
+
+    #[test]
+    fn full_versions_inventory_is_scrollable_and_has_its_own_title() {
+        let mut inventory = versions("0.1.0-alpha.26", "0.1.0-alpha.26");
+        inventory
+            .machine
+            .push(("future-component".into(), "future-version".into()));
+        let state = State {
+            detail: Some(inventory.report()),
+            ..Default::default()
+        };
+        let full = screen(&state, 120, 60);
+        assert!(full.contains("╭─ Versions"), "{full}");
+        assert!(!full.contains("Run details"), "{full}");
+        assert!(full.contains("future-component future-version"), "{full}");
+        assert!(full.contains("esc back"), "{full}");
+        let narrow = screen(&state, 30, 12);
+        assert!(narrow.contains("╭─ Versions"), "{narrow}");
+        assert!(narrow.contains('…'), "{narrow}");
     }
 
     fn screen(state: &State, w: u16, h: u16) -> String {
@@ -1847,7 +1887,7 @@ mod tests {
                 assert!("╭│╰".contains(first), "{w}x{h}: {row}");
                 assert!("╮│╯".contains(last), "{w}x{h}: {row}");
             }
-            assert!(text.contains("╭─ justrust"), "{text}");
+            assert!(text.contains("╭─ Justrust Personal"), "{text}");
             assert!(text.contains("╭─ Runs · 1 "), "{text}");
         }
         let text = screen(&state, 150, 45);
