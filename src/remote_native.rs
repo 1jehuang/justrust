@@ -860,11 +860,15 @@ async fn execute<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         let mut status = None;
         while out_open || err_open || status.is_none() {
             tokio::select! {
-                read = stdout.read(&mut out_buf), if out_open => {
-                    let len = read?; if len == 0 { out_open = false; } else { write_frame(output, STDOUT, &out_buf[..len]).await?; }
-                }
+                // rsync can terminate its transport as soon as it sees a fatal
+                // stdout protocol message. Forward already-ready diagnostics
+                // first, rather than letting that message overtake stderr.
+                biased;
                 read = stderr.read(&mut err_buf), if err_open => {
                     let len = read?; if len == 0 { err_open = false; } else { write_frame(output, STDERR, &err_buf[..len]).await?; }
+                }
+                read = stdout.read(&mut out_buf), if out_open => {
+                    let len = read?; if len == 0 { out_open = false; } else { write_frame(output, STDOUT, &out_buf[..len]).await?; }
                 }
                 exit = child.wait(), if status.is_none() => { status = Some(exit?); }
             }

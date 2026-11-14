@@ -247,8 +247,24 @@ fn native_bulk_binary_candidate_upload_is_byte_exact_and_failure_is_not_success(
     success(&fixture.output(&mut fixture.rsync(&source, &destination)));
     assert_eq!(fs::read(&destination).unwrap(), bytes);
     let missing_parent = fixture.root.join("absent parent/candidate");
-    let failed = fixture.output(&mut fixture.rsync(&source, &missing_parent));
-    assert!(!failed.status.success());
-    assert!(!failed.stderr.is_empty());
-    assert!(!missing_parent.exists());
+    // Exercise both pipe-read scheduling orders repeatedly. A fatal rsync
+    // stdout message can make the sender kill its transport before stderr is
+    // forwarded, so a nonzero status alone is not sufficient coverage.
+    for attempt in 0..32 {
+        let failed = fixture.output(&mut fixture.rsync(&source, &missing_parent));
+        assert!(!failed.status.success());
+        assert!(
+            !failed.stderr.is_empty(),
+            "failed upload lost diagnostics on attempt {attempt}: status {}\nstdout: {:?}\nstderr: {:?}",
+            failed.status,
+            String::from_utf8_lossy(&failed.stdout),
+            String::from_utf8_lossy(&failed.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&failed.stderr).contains("absent parent"),
+            "failed upload did not preserve receiver diagnostic on attempt {attempt}: {:?}",
+            String::from_utf8_lossy(&failed.stderr)
+        );
+        assert!(!missing_parent.exists());
+    }
 }
