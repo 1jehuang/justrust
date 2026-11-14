@@ -1168,7 +1168,10 @@ fn reverify(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Option<Resul
                 .iter()
                 .filter(|(p, s)| **s != UNKNOWN && !r.mark.dirty.contains(*p))
         };
-        let list = remote_checkpoint::encode(settled().map(|(p, s)| (p.as_path(), s.size)))?;
+        let entries: Option<Vec<_>> = settled()
+            .map(|(p, s)| Some((p.as_path(), s.size, r.mark.hashes.get(p)?.as_str())))
+            .collect();
+        let list = remote_checkpoint::encode(entries?.into_iter())?;
         (token, list, settled().count())
     };
     let next = remote_checkpoint::new_token();
@@ -1241,7 +1244,8 @@ fn checkpoint(st: &mut Sync, link: &Link, root: &Path, force: bool) -> Result<()
     }
     let token = remote_checkpoint::new_token();
     // Forget the old one first: if this frame is lost, nothing is claimed.
-    r.mark = Default::default();
+    r.mark.token = None;
+    r.mark.dirty.clear();
     link.send(
         &Msg::Checkpoint {
             path: root.display().to_string(),
@@ -1261,6 +1265,13 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     // Scan before rsync: a file edited during the copy then differs from
     // the manifest and is pushed again by the next flush.
     let scan = remote_sync::scan(root)?;
+    // Capture before the out-of-band copy, never by rereading at checkpoint
+    // or reconnect. Missing evidence forces a full mirror on reconnect.
+    let hashes = if link.checkpoint {
+        snapshot_hashes(root, &scan.files)
+    } else {
+        Default::default()
+    };
     let scanned = total.elapsed();
     let t = Instant::now();
     // Keyed by backend, not address: hosted machines change addresses, and
@@ -1345,7 +1356,10 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             watch_dirs: Some(watch_dirs),
             oversized: scan.oversized,
             needs_full_sync: false,
-            mark: Default::default(),
+            mark: remote_checkpoint::Mark {
+                hashes,
+                ..Default::default()
+            },
         },
     );
     checkpoint(st, link, root, true)?;
@@ -1366,6 +1380,19 @@ fn read_settled(p: &Path, scanned: Option<remote_sync::Stamp>) -> Option<Vec<u8>
     let now = s as i128 * 1_000_000_000 + ns as i128;
     (data.len() as u64 == scanned.size && after.len() == scanned.size && now == scanned.mtime_ns)
         .then_some(data)
+}
+
+fn snapshot_hashes(
+    root: &Path,
+    manifest: &Manifest,
+) -> std::collections::BTreeMap<PathBuf, String> {
+    manifest
+        .iter()
+        .filter_map(|(path, stamp)| {
+            let bytes = read_settled(&root.join(path), Some(*stamp))?;
+            Some((path.clone(), remote_checkpoint::digest(&bytes)))
+        })
+        .collect()
 }
 
 /// Push every difference between `root` and its manifest. Returns files sent.
@@ -1394,6 +1421,9 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
             // A branch switch or a big generated change: one rsync is cheaper.
             // It bypasses the agent, so drop saved mirror state here.
             remote_resume::invalidate(&link.mirror, root);
+            if link.checkpoint {
+                st.roots.get_mut(root).unwrap().mark.hashes = snapshot_hashes(root, &new);
+            }
             let t = Instant::now();
             let n = link.mirror.rsync(root)?;
             bulk = true;
@@ -1434,6 +1464,14 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
                             },
                             &data,
                         )?;
+                        if link.checkpoint {
+                            st.roots
+                                .get_mut(root)
+                                .unwrap()
+                                .mark
+                                .hashes
+                                .insert(rel.clone(), remote_checkpoint::digest(&data));
+                        }
                     }
                     // Gone, grown, or rewritten since the scan: try again
                     // next time.
@@ -1443,6 +1481,7 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
                 }
             }
             for rel in &diff.deleted {
+                st.roots.get_mut(root).unwrap().mark.hashes.remove(rel);
                 link.send(
                     &Msg::Delete {
                         path: root.join(rel).display().to_string(),
@@ -2331,6 +2370,20 @@ mod tests {
         let mut st = d.sync.lock().unwrap();
         let name = root.display().to_string();
         let path = |rel: &str| root.join(rel).display().to_string();
+        st.roots.get_mut(&root).unwrap().mark.hashes =
+            snapshot_hashes(&root, &st.roots[&root].manifest);
+        // Model a source mutation after the copy's source snapshot but before
+        // Checkpoint. Even metadata restored by cp -p must not redefine the
+        // remote snapshot's expected content hash.
+        let c = root.join("c.rs");
+        let modified = std::fs::metadata(&c).unwrap().modified().unwrap();
+        std::fs::write(&c, b"diff").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&c)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
 
         // In sync and nothing to send: the agent is asked to remember that.
         assert_eq!(push_root(&d, &mut st, &root).unwrap(), 0);
@@ -2338,6 +2391,24 @@ mod tests {
             Msg::Checkpoint { path, token } if path == name => token,
             other => panic!("expected Checkpoint, got {other:?}"),
         };
+        let hash = st
+            .roots
+            .get_mut(&root)
+            .unwrap()
+            .mark
+            .hashes
+            .remove(Path::new("c.rs"))
+            .unwrap();
+        assert!(
+            reverify(&d, &mut st, &link, &root).is_none(),
+            "missing source snapshot evidence must force a full mirror"
+        );
+        st.roots
+            .get_mut(&root)
+            .unwrap()
+            .mark
+            .hashes
+            .insert(PathBuf::from("c.rs"), hash);
         assert_eq!(st.roots[&root].mark.token.as_deref(), Some(first.as_str()));
 
         // Later frames are recorded, not checkpointed one by one.
@@ -2379,11 +2450,17 @@ mod tests {
         };
         st.invalidate_sources();
         assert!(st.needs_mirror(&root));
+        // Mutation after checkpoint must not become the expected remote hash.
+        // This also proves reconnect does not hash the current local tree.
+        std::fs::write(root.join("c.rs"), b"oops").unwrap();
         let agent = answer(true, frames);
-        assert_eq!(mirror_root(&d, &mut st, &link, &root).unwrap(), 2);
+        assert_eq!(mirror_root(&d, &mut st, &link, &root).unwrap(), 3);
         let (mut frames, token, next, list) = agent.join().unwrap();
         assert_eq!(token, first);
-        assert_eq!(list, b"4\0c.rs\0");
+        assert_eq!(
+            list,
+            format!("4\0{}\0c.rs\0", remote_checkpoint::digest(b"c.rs")).as_bytes()
+        );
         assert!(!st.needs_mirror(&root));
         assert_eq!(st.roots[&root].mark.token.as_deref(), Some(next.as_str()));
         // What the old connection may not have applied goes again.
@@ -2397,6 +2474,8 @@ mod tests {
                 b"edited".to_vec()
             )
         );
+        assert!(matches!(read_frame(&mut frames).unwrap().unwrap(),
+            (Msg::Write { path: p, .. }, data) if p == path("c.rs") && data == b"oops"));
         assert!(matches!(
             read_frame(&mut frames).unwrap().unwrap().0,
             Msg::Delete { path: p } if p == path("b.rs")
@@ -2415,6 +2494,8 @@ mod tests {
 
         // An agent that does not confirm leaves no claim behind.
         st.roots.get_mut(&root).unwrap().mark.token = Some("stale".into());
+        st.roots.get_mut(&root).unwrap().mark.hashes =
+            snapshot_hashes(&root, &st.roots[&root].manifest);
         let agent = answer(false, frames);
         assert!(reverify(&d, &mut st, &link, &root).is_none());
         agent.join().unwrap();

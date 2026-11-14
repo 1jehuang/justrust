@@ -155,7 +155,7 @@ impl Agent {
             a.recv().0,
             Msg::Hello {
                 version: VERSION,
-                caps: vec!["checkpoint".into()],
+                caps: vec!["checkpoint-hash".into()],
             }
         );
         a
@@ -1426,7 +1426,7 @@ fn serves_v1_daemons() {
         read_frame(&mut r).unwrap().unwrap().0,
         Msg::Hello {
             version: 1,
-            caps: vec!["checkpoint".into()],
+            caps: vec!["checkpoint-hash".into()],
         }
     );
     assert!(matches!(
@@ -1794,12 +1794,25 @@ fn peer_cache_relays_shim_requests_to_the_daemon() {
     }
 }
 
-/// `remote_checkpoint::encode`: `size NUL path NUL` per file, gzipped.
+/// Hash-bearing checkpoint list: `size NUL sha256 NUL path NUL`, gzipped.
 fn sizes(files: &[(&str, u64)]) -> Vec<u8> {
     use std::io::Write;
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     for (path, size) in files {
-        write!(gz, "{size}\0{path}\0").unwrap();
+        let data: &[u8] = match (*path, *size) {
+            ("src/lib.rs", 5) => b"three",
+            ("src/lib.rs", 3) => b"one",
+            ("Cargo.toml", 9) => b"[package]",
+            _ => panic!("test needs explicit snapshot bytes"),
+        };
+        let hash = rustls::crypto::ring::cipher_suite::TLS13_AES_128_GCM_SHA256
+            .tls13()
+            .unwrap()
+            .common
+            .hash_provider
+            .hash(data);
+        let hex: String = hash.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        write!(gz, "{size}\0{hex}\0{path}\0").unwrap();
     }
     gz.finish().unwrap()
 }
@@ -1940,5 +1953,39 @@ fn checkpoint_survives_a_reconnect_only_while_nothing_else_wrote() {
     assert!(!verify(&mut third, 19, "t6", "t7", &[]));
     // `old` removes the shared scratch directory last.
     drop(third);
+    drop(new);
+}
+
+#[test]
+fn checkpoint_reconnect_rejects_same_size_external_corruption() {
+    let mut old = Agent::start("checkpoint-corruption");
+    write(&mut old, "/w/src/lib.rs", b"three");
+    old.send(
+        Msg::Checkpoint {
+            path: "/w".into(),
+            token: "snapshot".into(),
+        },
+        &[],
+    );
+    assert!(lost(&mut old, 1).is_empty());
+    // Bypass the agent, preserving both length and the checkpoint token.
+    let path = old.at("/w/src/lib.rs");
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::fs::write(&path, b"WRONG").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    let mut new = Agent::beside(&old);
+    assert!(!verify(
+        &mut new,
+        2,
+        "snapshot",
+        "next",
+        &[("src/lib.rs", 5)]
+    ));
+    assert!(!old.at("/w/.justrust/mirror-token").exists());
     drop(new);
 }

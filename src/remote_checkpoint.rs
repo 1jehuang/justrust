@@ -16,11 +16,11 @@
 //! connection dies.
 //!
 //! On the next connection the daemon sends `Verify` with the token and the
-//! size of every file outside the dirty set. The agent confirms the token
-//! is still the one on disk and that every size matches, and replaces it
+//! size and SHA-256 of every file outside the dirty set. The agent confirms
+//! the token is still the one on disk and that every size and hash matches, and replaces it
 //! with a new token in the same step. The daemon then sends the dirty paths
 //! again together with whatever changed locally. Anything else (no token,
-//! another connection's token, a size mismatch, an agent without the
+//! another connection's token, a content mismatch, an agent without the
 //! capability) falls back to the full mirror.
 //!
 //! The token is removed by every change the daemon would not know about:
@@ -32,11 +32,12 @@
 //! in its next barrier acknowledgement: the daemon mirrors it in full
 //! before anything builds on it.
 //!
-//! Sizes and a token are the same evidence `remote_resume` accepts across a
-//! daemon restart, and both use the same token file. Agents and clients
-//! from before this module therefore still remove a checkpoint whenever
-//! they write or rsync under the root, and a restart save simply replaces
-//! it.
+//! Hashes are captured from the source snapshot before rsync or from exact
+//! Write payloads, not from a mutable local reread when reconnecting. Unknown
+//! snapshot hashes force a full mirror. The `checkpoint-hash` capability is
+//! distinct from the legacy size-only `checkpoint` capability: older peers
+//! never interpret the new list format. Both use the same token file as
+//! `remote_resume`, so old clients still invalidate checkpoints on writes.
 //! Opt-in: `JUSTRUST_REMOTE_CHECKPOINT=1` in the daemon's environment.
 
 use std::collections::{BTreeSet, HashMap};
@@ -45,7 +46,7 @@ use std::path::Component;
 use std::path::{Path, PathBuf};
 
 /// `Hello` capability of an agent that serves `Checkpoint` and `Verify`.
-pub const CAP: &str = "checkpoint";
+pub const CAP: &str = "checkpoint-hash";
 pub const TOKEN_FILE: &str = ".justrust/mirror-token";
 
 /// Unix clients only: relative paths travel as raw bytes.
@@ -63,6 +64,8 @@ pub struct Mark {
     pub token: Option<String>,
     /// Relative paths sent since that checkpoint.
     pub dirty: BTreeSet<PathBuf>,
+    /// Hashes of the source snapshot actually mirrored, never reread on reconnect.
+    pub hashes: std::collections::BTreeMap<PathBuf, String>,
 }
 
 impl Mark {
@@ -92,16 +95,35 @@ pub fn new_token() -> String {
     h.hex()
 }
 
-/// `size NUL path NUL` for each file, gzipped.
-pub fn encode<'a>(files: impl Iterator<Item = (&'a Path, u64)>) -> Option<Vec<u8>> {
+/// SHA-256 using the in-process provider already shipped for TLS.
+pub fn digest(data: &[u8]) -> String {
+    let hash = rustls::crypto::ring::cipher_suite::TLS13_AES_128_GCM_SHA256
+        .tls13()
+        .unwrap()
+        .common
+        .hash_provider
+        .hash(data);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(64);
+    for b in hash.as_ref() {
+        hex.push(HEX[(b >> 4) as usize] as char);
+        hex.push(HEX[(b & 15) as usize] as char);
+    }
+    hex
+}
+
+/// `size NUL sha256 NUL path NUL` for each file, gzipped.
+pub fn encode<'a>(files: impl Iterator<Item = (&'a Path, u64, &'a str)>) -> Option<Vec<u8>> {
     use std::io::Write;
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    for (path, size) in files {
+    for (path, size, hash) in files {
         let b = path.as_os_str().as_encoded_bytes();
         if b.contains(&0) {
             return None;
         }
         gz.write_all(size.to_string().as_bytes()).ok()?;
+        gz.write_all(b"\0").ok()?;
+        gz.write_all(hash.as_bytes()).ok()?;
         gz.write_all(b"\0").ok()?;
         gz.write_all(b).ok()?;
         gz.write_all(b"\0").ok()?;
@@ -129,7 +151,7 @@ pub fn write(dir: &Path, token: &str) -> std::io::Result<()> {
 }
 
 /// Machine side of `Verify`: the token under `dir` is `token` and every
-/// listed file is a regular file of the listed size, else why not.
+/// listed file is a regular file of the listed size and SHA-256, else why not.
 #[cfg(unix)]
 pub fn check(dir: &Path, token: &str, list: &[u8]) -> Result<(), String> {
     use std::io::Read;
@@ -141,12 +163,16 @@ pub fn check(dir: &Path, token: &str, list: &[u8]) -> Result<(), String> {
     flate2::read::GzDecoder::new(list)
         .read_to_end(&mut raw)
         .map_err(|_| "unreadable file list".to_string())?;
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let raw = raw.strip_suffix(&[0]).ok_or("truncated file list")?;
     let mut fields = raw.split(|b| *b == 0);
-    loop {
-        let size = match fields.next() {
-            Some([]) | None => return Ok(()),
-            Some(size) => size,
-        };
+    while let Some(size) = fields.next() {
+        let hash = fields.next().ok_or("truncated file list")?;
+        if hash.len() != 64 || !hash.iter().all(|b| b.is_ascii_hexdigit()) {
+            return Err("malformed content hash".into());
+        }
         let name = fields.next().ok_or("truncated file list")?;
         let size: u64 = std::str::from_utf8(size)
             .ok()
@@ -167,7 +193,19 @@ pub fn check(dir: &Path, token: &str, list: &[u8]) -> Result<(), String> {
             }
             _ => return Err(format!("{} missing on the machine", rel.display())),
         }
+        let bytes = std::fs::read(dir.join(rel))
+            .map_err(|_| format!("{} unreadable on the machine", rel.display()))?;
+        if bytes.len() as u64 != size || digest(&bytes).as_bytes() != hash {
+            return Err(format!("{} content differs on the machine", rel.display()));
+        }
     }
+    // A scan reads contents, not just metadata, and may take long enough for
+    // another connection to displace the token. This is conservative
+    // detection, not an atomic exclusion of concurrent external writers.
+    if token_on_disk(dir).as_deref() != Some(token) {
+        return Err("checkpoint token replaced during verification".into());
+    }
+    Ok(())
 }
 
 /// Machine side, before applying a source write or delete at `path`: a
@@ -205,7 +243,22 @@ mod tests {
     use super::*;
 
     fn list(files: &[(&str, u64)]) -> Vec<u8> {
-        encode(files.iter().map(|(p, s)| (Path::new(*p), *s))).unwrap()
+        let hashes: Vec<_> = files
+            .iter()
+            .map(|(p, _)| {
+                digest(match *p {
+                    "src/a b.rs" => b"twelve bytes",
+                    _ => b"seven..",
+                })
+            })
+            .collect();
+        encode(
+            files
+                .iter()
+                .zip(&hashes)
+                .map(|((p, s), h)| (Path::new(*p), *s, h.as_str())),
+        )
+        .unwrap()
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -236,6 +289,12 @@ mod tests {
         );
         write(root, "tok").unwrap();
         assert_eq!(check(root, "tok", &ok), Ok(()));
+        std::fs::write(root.join("c.rs"), b"CORRUPT").unwrap();
+        assert_eq!(
+            check(root, "tok", &ok),
+            Err("c.rs content differs on the machine".into())
+        );
+        std::fs::write(root.join("c.rs"), b"seven..").unwrap();
         assert_eq!(check(root, "tok", &list(&[])), Ok(()));
         assert!(check(root, "other", &ok).is_err());
         assert!(check(root, "", &ok).is_err());
@@ -254,6 +313,23 @@ mod tests {
         assert!(check(root, "tok", &list(&[("../c.rs", 7)])).is_err());
         assert!(check(root, "tok", b"not gzip").is_err());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sha256_and_legacy_payload_rejection() {
+        use std::io::Write;
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let root = scratch("legacy");
+        write(&root, "tok").unwrap();
+        for raw in [b"3\0a.rs\0".as_slice(), b"3\0", b"\0", b"3", b"3\0a.rs"] {
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            gz.write_all(raw).unwrap();
+            assert!(check(&root, "tok", &gz.finish().unwrap()).is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
