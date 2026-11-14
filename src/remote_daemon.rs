@@ -68,25 +68,53 @@ pub fn build_id() -> String {
     .clone()
 }
 
+/// Run/RunSync carries the build environment, not the daemon's connection
+/// policy. Freeze that policy alongside the binary identity so a process
+/// started with native=off cannot serve a later native=require client.
+/// Keep this separate from build_id: artifact and session binary identities
+/// must not change when only the local transport policy changes.
+fn daemon_id() -> String {
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| policy_identity(&build_id(), crate::remote_hosted::setting))
+        .clone()
+}
+
+fn policy_identity(binary: &str, setting: impl Fn(&str) -> Option<String>) -> String {
+    let mode = match setting("JUSTRUST_HOSTED_NATIVE").as_deref() {
+        Some("1" | "on" | "true" | "require") => "required",
+        Some("0" | "off" | "false") => "off",
+        _ => "auto",
+    };
+    let only = mode != "off"
+        && matches!(
+            setting("JUSTRUST_HOSTED_NATIVE_ONLY").as_deref(),
+            Some("1" | "on" | "true" | "require")
+        );
+    format!("{binary}:native={mode}:only={only}")
+}
+
 // ------------------------------------------------------------------ client
 
 /// Connect to the daemon, starting it if needed (or replacing a daemon from
-/// another justrust build).
+/// another justrust build or hosted transport policy).
 pub fn connect() -> Result<UnixStream> {
     let sock = sock_path()?;
-    let me = build_id();
+    let me = policy_identity(&build_id(), crate::remote_hosted::setting);
     if let Ok(s) = UnixStream::connect(&sock) {
         match ping(&s) {
-            // A client whose own binary was replaced (empty id) cannot tell
-            // which build is current: use whatever daemon runs.
-            Ok(p) if p.build == me || me.is_empty() => return Ok(s),
+            // Retire incompatible daemons, but retain their active sessions.
+            // No Run has been sent on this connection, so replacement cannot
+            // replay a build or make its execution status ambiguous.
+            Ok(p) if p.build == me => return Ok(s),
             _ => shutdown_and_wait(&s),
         }
     }
     spawn()?;
     let t = Instant::now();
     loop {
-        if let Ok(s) = UnixStream::connect(&sock) {
+        if let Ok(s) = UnixStream::connect(&sock)
+            && ping(&s).is_ok_and(|p| p.build == me)
+        {
             return Ok(s);
         }
         if t.elapsed() > Duration::from_secs(5) {
@@ -461,7 +489,7 @@ impl Daemon {
         std::process::exit(0)
     }
 
-    /// `Shutdown` (a newer build or a backend change): retire at once so a
+    /// `Shutdown` (a newer build, backend or transport policy): retire at once so a
     /// replacement can start, but let runs in flight finish streaming
     /// rather than cutting off another agent's build.
     fn shutdown(self: &Arc<Self>) {
@@ -469,16 +497,9 @@ impl Daemon {
         if active == 0 {
             self.exit("shutdown requested");
         }
-        if self.draining.swap(true, Ordering::SeqCst) {
+        if !self.begin_draining(active) {
             return;
         }
-        log(&format!(
-            "shutdown requested, finishing {active} run(s) in flight"
-        ));
-        // Still the only daemon (we hold the lock): save now, while no
-        // replacement can be writing to the machine.
-        save_mirrors(self);
-        self.retire();
         let d = self.clone();
         std::thread::spawn(move || {
             loop {
@@ -488,6 +509,20 @@ impl Daemon {
                 }
             }
         });
+    }
+
+    fn begin_draining(&self, active: u64) -> bool {
+        if self.draining.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        log(&format!(
+            "shutdown requested, finishing {active} run(s) in flight"
+        ));
+        // Still the only daemon (we hold the lock): save now, while no
+        // replacement can be writing to the machine.
+        save_mirrors(self);
+        self.retire();
+        true
     }
 }
 
@@ -537,7 +572,7 @@ fn daemon() -> Result<()> {
     log(&format!(
         "daemon up, backend {}, build {}",
         backend.label(),
-        build_id()
+        daemon_id()
     ));
     let (wtx, wrx) = channel::<PathBuf>();
     let d = Arc::new(Daemon {
@@ -675,7 +710,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                         machine: i.machine.clone(),
                         pushed: i.pushed,
                         connected: alive.unwrap_or(i.connected),
-                        build: build_id(),
+                        build: daemon_id(),
                         active: i.active,
                         skipped: i.skipped,
                     }
@@ -1742,6 +1777,9 @@ fn run(
     let (link, files, note, timing) = {
         let mut st = d.sync.lock().unwrap();
         let locked = t.elapsed();
+        if d.draining.load(Ordering::SeqCst) {
+            bail!("sync daemon transport policy changed; reconnect before starting a build");
+        }
         let res = (|| -> Result<_> {
             let link = ensure_link(d, &mut st, start)?;
             let linked = t.elapsed();
@@ -2012,6 +2050,152 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daemon_transport_policy_identity_invalidates_mode_changes_not_aliases() {
+        let identity = |mode: Option<&str>, only: Option<&str>| {
+            policy_identity("binary", |key| match key {
+                "JUSTRUST_HOSTED_NATIVE" => mode.map(str::to_owned),
+                "JUSTRUST_HOSTED_NATIVE_ONLY" => only.map(str::to_owned),
+                _ => None,
+            })
+        };
+        let off = identity(Some("off"), None);
+        let required = identity(Some("require"), None);
+        let auto = identity(None, None);
+        assert_ne!(off, required);
+        assert_ne!(off, auto);
+        assert_ne!(required, auto);
+        for alias in ["0", "off", "false"] {
+            assert_eq!(off, identity(Some(alias), Some("require")));
+        }
+        for alias in ["1", "on", "true", "require"] {
+            assert_eq!(required, identity(Some(alias), None));
+            assert_eq!(identity(None, Some("require")), identity(None, Some(alias)));
+        }
+        assert_ne!(required, identity(Some("require"), Some("true")));
+        assert_ne!(auto, identity(None, Some("require")));
+        // A pre-policy daemon's binary-only pong must also be retired.
+        assert_ne!(off, "binary");
+        assert_ne!(required, "binary");
+        assert_ne!(
+            policy_identity("", |_| None),
+            policy_identity("", |_| Some("off".into()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_transport_policy_drain_preserves_active_route_without_resubmission() {
+        let base = std::env::temp_dir().join(format!("jr-policy-drain-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let sock = base.join("daemon.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let md = std::fs::metadata(&sock).unwrap();
+        let lock_path = base.join("daemon.lock");
+        let lock = std::fs::File::create(&lock_path).unwrap();
+        lock.try_lock().unwrap();
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap())));
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let link = Arc::new(Link {
+            child: Mutex::new(child),
+            stdin,
+            routes: Mutex::default(),
+            peer: peercache::Relay::new(true, |_, _| true),
+            checkpoint: false,
+            mirror: Mirror {
+                target: None,
+                prefix: String::new(),
+            },
+        });
+        let reader_link = link.clone();
+        let reader = std::thread::spawn(move || read_agent(&reader_link, stdout, None));
+        let (tx, rx) = channel();
+        link.routes.lock().unwrap().runs.insert(77, tx);
+        let d = Daemon {
+            status_hint: None,
+            sync: Mutex::new(Sync {
+                backend: Backend::Hosted,
+                link: Some(link.clone()),
+                roots: BTreeMap::new(),
+            }),
+            info: Mutex::new(Info {
+                active: 1,
+                ..Default::default()
+            }),
+            next_id: AtomicU64::new(100),
+            watcher: Watcher::new(channel().0).unwrap(),
+            sock: (sock.clone(), crate::sys::file_id(&md)),
+            lock: Mutex::new(Some(lock)),
+            draining: AtomicBool::new(false),
+            peer: Arc::default(),
+            peer_sock: Mutex::default(),
+        };
+        // Simulate a sync already in progress. Retirement must not wait on it
+        // or replace its link, kill its process, cancel, or resubmit its run.
+        let held = d.sync.lock().unwrap();
+        assert!(d.begin_draining(1));
+        assert!(!d.begin_draining(1));
+        assert!(!sock.exists());
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&lock_path)
+                .unwrap()
+                .try_lock()
+                .is_ok()
+        );
+        assert!(Arc::ptr_eq(held.link.as_ref().unwrap(), &link));
+        drop(held);
+        let (client, server) = UnixStream::pair().unwrap();
+        let mut r = BufReader::new(server.try_clone().unwrap());
+        let mut w = BufWriter::new(server);
+        let error = run(
+            &d,
+            &mut r,
+            &mut w,
+            "/".into(),
+            vec![],
+            vec![],
+            vec![],
+            false,
+            "new-run".into(),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("transport policy changed"));
+        assert_eq!(link.routes.lock().unwrap().runs.len(), 1);
+        assert!(link.alive());
+        assert!(link.child.lock().unwrap().try_wait().unwrap().is_none());
+        link.send(
+            &Msg::Exit {
+                id: 77,
+                code: 0,
+                timing: None,
+            },
+            &[],
+        )
+        .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap().0,
+            Msg::Exit {
+                id: 77,
+                code: 0,
+                ..
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+        link.kill();
+        reader.join().unwrap();
+        drop(client);
+        drop(listener);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn status_hint_tracks_only_displayed_changes() {
         let mut info = Info::default();
