@@ -164,6 +164,7 @@ SNAPSHOTS = {
             ("jcode-desktop", "bench/patches/desktop-settled-tab-assertions.patch"),
             ("jcode-desktop", "bench/patches/desktop-hint-updater-state.patch"),
             ("jcode-desktop", "bench/patches/desktop-row-click-updater-state.patch"),
+            ("jcode-desktop", "bench/patches/desktop-github-applet-readiness.patch"),
             ("jcode", "bench/patches/jcode-description-consent.patch"),
             ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
         ],

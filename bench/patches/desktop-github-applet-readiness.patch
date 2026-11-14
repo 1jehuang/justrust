@@ -1,0 +1,17 @@
+diff --git a/crates/jcode-desktop-ui/src/applet_runtime.rs b/crates/jcode-desktop-ui/src/applet_runtime.rs
+--- a/crates/jcode-desktop-ui/src/applet_runtime.rs
++++ b/crates/jcode-desktop-ui/src/applet_runtime.rs
+@@ -810,6 +810,12 @@
+                 .unwrap_or_default()
+         };
+-        wait("inbox rows", &|r| doc(r).contains("acme/app#7"));
++        // Sections refresh independently. My PRs can mount its row before the
++        // review request finishes, so wait for both facts asserted below.
++        wait("inbox rows and review count", &|r| {
++            let document = doc(r);
++            document.contains("acme/app#7")
++                && document.contains("Review requested 1")
++        });
+         assert!(doc(&runtime).contains("Review requested 1"));
+ 
+         let open = jcode_applet_types::view::Action {
