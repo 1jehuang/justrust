@@ -129,6 +129,16 @@ class Run:
             raise ValueError(f"contention: failing tests in {self.id}")
         return summary, ended - self.started, ended
 
+    def wait_ready(self, remote, timeout=120):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.ready.wait(timeout=0.1):
+                return
+            if self.process.poll() is not None:
+                self.finish(remote)
+                break
+        raise ValueError(f"contention: lock owner did not become ready, run {self.id}")
+
 
 def sample(summary, run, wall, remote):
     resources = summary.get("resources", {})
@@ -241,8 +251,7 @@ def run(args):
                      root, remote, f"bench-contention-holder-{iteration}")
         contender = None
         try:
-            if not holder.ready.wait(timeout=120):
-                raise ValueError(f"contention: lock owner did not become ready, run {holder.id}")
+            holder.wait_ready(remote)
             contender = Run(["test", "--lib", "--", "probe_"], root, remote,
                             f"bench-contention-probe-{iteration}")
             contender_summary, wall, ended = contender.finish(remote)

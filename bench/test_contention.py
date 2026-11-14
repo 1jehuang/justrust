@@ -30,6 +30,18 @@ def result():
 
 
 class ContentionTests(unittest.TestCase):
+    def test_holder_compile_failure_is_reported_without_full_ready_timeout(self):
+        holder = contention.Run.__new__(contention.Run)
+        holder.id = "failed-holder"
+        holder.ready = mock.Mock()
+        holder.ready.wait.return_value = False
+        holder.process = mock.Mock()
+        holder.process.poll.return_value = 1
+        holder.finish = mock.Mock(side_effect=ValueError("original Cargo diagnostic"))
+        with self.assertRaisesRegex(ValueError, "original Cargo diagnostic"):
+            holder.wait_ready(True)
+        holder.finish.assert_called_once_with(True)
+
     def test_target_overrides_removed_from_child_but_no_new_override(self):
         with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/bad", "CARGO_BUILD_TARGET_DIR": "/bad",
                                           "JUSTRUST_DISABLE": "1"}):
