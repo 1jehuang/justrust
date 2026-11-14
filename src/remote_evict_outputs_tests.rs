@@ -37,8 +37,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        // Deliberately future-date the retained generation. ctime cannot be
-        // backdated, so inject observation time rather than weakening checks.
+        // Derive the clock from the observed tree too: filesystem timestamps
+        // can be ahead of the wall clock (and ctime cannot be backdated).
+        use std::os::unix::fs::MetadataExt;
+        let now = now.max(tree_time(&old, std::fs::metadata(&build).unwrap().dev()).unwrap());
+        // Deliberately future-date the retained generation. Inject observation
+        // time rather than weakening the production age or ctime checks.
         std::fs::File::open(&newest)
             .unwrap()
             .set_modified(UNIX_EPOCH + Duration::from_secs(now + 60))
@@ -76,6 +80,9 @@ mod tests {
             return;
         }
         let (root, old, newest, registry, p) = fixture("output-pressure");
+        let planned = candidates(&root, &p).unwrap();
+        assert_eq!(planned.len(), 1, "fixture must have exactly one idle output");
+        assert_eq!(planned[0].0, old, "newest output must not be a candidate");
         assert_eq!(
             pressure_collect(
                 &registry,
@@ -140,6 +147,41 @@ mod tests {
             Some(1 << 30),
             "insufficient reclaim must still refuse admission"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tied_newest_and_recent_older_generations_are_retained() {
+        let (root, old, newest, _, p) = fixture("output-ranking");
+        assert_eq!(candidates(&root, &p).unwrap().len(), 1);
+
+        // An idle tie must retain both hashes, independent of readdir order.
+        let newest_time = std::fs::metadata(&newest).unwrap().modified().unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(newest_time)
+            .unwrap();
+        use std::os::unix::fs::MetadataExt;
+        let dev = std::fs::metadata(&old).unwrap().dev();
+        assert_eq!(tree_time(&old, dev).unwrap(), tree_time(&newest, dev).unwrap());
+        assert!(tree_time(&old, dev).unwrap() + IDLE.as_secs() <= p.now);
+        assert!(candidates(&root, &p).unwrap().is_empty());
+
+        // The older tree is not the newest, but its nested file is still too
+        // recent to reclaim. This exercises age separately from newest rank.
+        std::fs::File::open(&newest)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(p.now + 60))
+            .unwrap();
+        std::fs::File::open(old.join("out/nested/file"))
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(p.now - IDLE.as_secs() + 1))
+            .unwrap();
+        assert!(tree_time(&old, dev).unwrap() < tree_time(&newest, dev).unwrap());
+        assert!(tree_time(&old, dev).unwrap() + IDLE.as_secs() > p.now);
+        assert!(candidates(&root, &p).unwrap().is_empty());
+        assert!(old.join("out/nested/file").exists());
+        assert!(newest.exists() && root.join("Cargo.toml").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
