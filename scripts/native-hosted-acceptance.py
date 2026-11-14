@@ -467,7 +467,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", type=Path, required=True,
                         help="explicit unpublished executable, never installed")
-    parser.add_argument("--work-dir", type=Path, default=Path.home() / ".cache/justrust-native-acceptance")
+    # Leave room for the quoted state directory and daemon socket suffix under
+    # Linux's 108-byte sockaddr_un limit. Long fixtures fail before any build.
+    parser.add_argument("--work-dir", type=Path, default=Path.home() / ".cache/jn")
     parser.add_argument("--build-base", help="explicit already-deployed control-plane URL")
     parser.add_argument("--timeout", type=float, default=900,
                         help="per-command timeout; the expiry gate always waits at least 65 seconds")
@@ -478,7 +480,9 @@ def main(argv=None):
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
         parser.error("candidate must be an existing executable")
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="native 'acceptance'-", dir=args.work_dir.resolve()))
+    root = Path(tempfile.mkdtemp(prefix="n-", dir=args.work_dir.resolve()))
+    if len(os.fsencode(root / "isolated state with 'quotes'" / "remote/daemon.sock")) >= 108:
+        parser.error("--work-dir is too long for isolated daemon Unix sockets; choose a shorter directory")
     print(f"Isolated fixture and automatic build records retained at {root}", flush=True)
     acceptance = Acceptance(candidate, root, args.build_base, args.timeout)
     failed = True

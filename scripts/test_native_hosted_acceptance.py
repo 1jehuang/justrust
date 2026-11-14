@@ -22,6 +22,17 @@ SPEC.loader.exec_module(DRIVER)
 
 
 class NativeAcceptanceTests(unittest.TestCase):
+    def test_default_fixture_can_bind_real_daemon_socket_with_quoted_state(self):
+        base = Path.home() / ".cache/jn"
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="n-", dir=base) as directory:
+            fixture = DRIVER.Acceptance(Path("/bin/true"), Path(directory), None, 5)
+            daemon = fixture.home / "remote/daemon.sock"
+            daemon.parent.mkdir()
+            with socket.socket(socket.AF_UNIX) as listener:
+                listener.bind(str(daemon))
+            self.assertIn("'", str(fixture.home))
+
     def test_direct_environment_cannot_refresh_control_plane_credentials(self):
         original = {"JCODE_API_KEY": "do-not-propagate", "JCODE_HOME": "/normal/config",
                     "JUSTRUST_HOME": "/isolated", "PATH": "/guard:/usr/bin"}
