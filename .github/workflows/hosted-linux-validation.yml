@@ -238,7 +238,8 @@ jobs:
               request = urllib.request.Request(
                   'https://build.jcode.sh/v1/build/host/native-only',
                   data=json.dumps({'action': 'rollback', 'lease_id': lease}).encode(),
-                  headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+                  headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
+                           'User-Agent': 'justrust-native-acceptance/1'},
                   method='POST')
               with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
                   result = json.loads(response.read(1024 * 1024))

@@ -61,6 +61,7 @@ class RegisteredRetirementTests(original.RetirementWorkflowTests):
         self.assertEqual(request.full_url, 'https://build.jcode.sh/v1/build/host/native-only')
         self.assertEqual(json.loads(request.data), {'action': 'rollback', 'lease_id': 'b' * 64})
         self.assertEqual(opener.open.call_args.kwargs, {'timeout': 15})
+        self.assertEqual(request.get_header('User-agent'), 'justrust-native-acceptance/1')
 
     def test_independent_rollback_failures_are_suppressed_and_fail_closed(self):
         for response in ({}, {'native_only': True, 'ssh': 'restoring'}, {'native_only': False, 'ssh': 'ready'}):
