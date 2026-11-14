@@ -61,7 +61,16 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --locked
-      - run: cargo test --locked
+      # Native rsync requires secluded arguments, which Apple's openrsync does
+      # not implement. Keep the other tests on the stock macOS implementation.
+      - run: cargo test --locked -- --skip remote_sync::tests::rsync_shell_parser_preserves_quoted_program_and_endpoint
+      - name: Native rsync shell parser
+        run: |
+          brew install rsync
+          rsync_prefix="$(brew --prefix rsync)"
+          export PATH="$rsync_prefix/bin:$PATH"
+          rsync --version
+          cargo test --locked --lib remote_sync::tests::rsync_shell_parser_preserves_quoted_program_and_endpoint -- --exact
       - name: Native test bundle handoff
         run: bash ci/check-test-bundle.sh "$PWD/target/debug/justrust"
       # The recorder, sampler, and report on a real macOS build.
