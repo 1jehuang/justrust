@@ -852,32 +852,13 @@ async fn execute<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         #[allow(unreachable_code)]
         Ok::<(), anyhow::Error>(())
     };
-    let receive_output = async {
-        let mut out_open = true;
-        let mut err_open = true;
-        let mut out_buf = vec![0; 32768];
-        let mut err_buf = vec![0; 32768];
-        let mut status = None;
-        while out_open || err_open || status.is_none() {
-            tokio::select! {
-                // rsync can terminate its transport as soon as it sees a fatal
-                // stdout protocol message. Forward already-ready diagnostics
-                // first, rather than letting that message overtake stderr.
-                biased;
-                read = stderr.read(&mut err_buf), if err_open => {
-                    let len = read?; if len == 0 { err_open = false; } else { write_frame(output, STDERR, &err_buf[..len]).await?; }
-                }
-                read = stdout.read(&mut out_buf), if out_open => {
-                    let len = read?; if len == 0 { out_open = false; } else { write_frame(output, STDOUT, &out_buf[..len]).await?; }
-                }
-                exit = child.wait(), if status.is_none() => { status = Some(exit?); }
-            }
-        }
-        let status = status.context("missing command exit")?;
+    let wait = async {
+        let status = child.wait().await?;
         Ok(status
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
     };
+    let receive_output = forward_command_output(&mut stdout, &mut stderr, output, wait);
     tokio::pin!(send_input);
     tokio::pin!(receive_output);
     tokio::select! {
@@ -885,6 +866,38 @@ async fn execute<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         result = &mut send_input => { result?; receive_output.await }
     }
 }
+
+#[cfg(unix)]
+async fn forward_command_output(
+    stdout: &mut (impl AsyncRead + Unpin),
+    stderr: &mut (impl AsyncRead + Unpin),
+    output: &mut (impl AsyncWrite + Unpin),
+    wait: impl std::future::Future<Output = Result<i32>>,
+) -> Result<i32> {
+    tokio::pin!(wait);
+    let mut out_open = true;
+    let mut err_open = true;
+    let mut out_buf = vec![0; 32768];
+    let mut err_buf = vec![0; 32768];
+    let mut status = None;
+    while out_open || err_open || status.is_none() {
+        tokio::select! {
+            // rsync can terminate its transport as soon as it sees a fatal
+            // stdout protocol message. Forward already-ready diagnostics
+            // first, rather than letting that message overtake stderr.
+            biased;
+            read = stderr.read(&mut err_buf), if err_open => {
+                let len = read?; if len == 0 { err_open = false; } else { write_frame(output, STDERR, &err_buf[..len]).await?; }
+            }
+            read = stdout.read(&mut out_buf), if out_open => {
+                let len = read?; if len == 0 { out_open = false; } else { write_frame(output, STDOUT, &out_buf[..len]).await?; }
+            }
+            exit = &mut wait, if status.is_none() => { status = Some(exit?); }
+        }
+    }
+    status.context("missing command exit")
+}
+
 #[cfg(not(unix))]
 async fn execute<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     _: &str,
@@ -1478,6 +1491,90 @@ mod tests {
         ));
         (address, pin, server)
     }
+    #[tokio::test]
+    async fn ready_stderr_precedes_fatal_stdout_and_exit() {
+        // Both pipes and exit are ready on the first poll, without process or
+        // timer scheduling. A fatal rsync stdout message can kill the transport,
+        // so its already-ready diagnostic must be sent before that message.
+        for _ in 0..64 {
+            let mut stdout = b"fatal rsync protocol message".as_slice();
+            let diagnostic = vec![b'e'; 3 * 32768 + 17];
+            let mut stderr = diagnostic.as_slice();
+            let mut output = Vec::new();
+            assert_eq!(
+                forward_command_output(&mut stdout, &mut stderr, &mut output, async { Ok(3) })
+                    .await
+                    .unwrap(),
+                3
+            );
+            let mut frames = output.as_slice();
+            let mut received_stderr = Vec::new();
+            for _ in 0..4 {
+                let (kind, body) = read_frame(&mut frames).await.unwrap();
+                assert_eq!(kind, STDERR, "fatal stdout overtook ready diagnostic");
+                received_stderr.extend_from_slice(&body);
+            }
+            assert_eq!(received_stderr, diagnostic);
+            let (kind, body) = read_frame(&mut frames).await.unwrap();
+            assert_eq!(kind, STDOUT);
+            assert_eq!(body, b"fatal rsync protocol message");
+            assert!(frames.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn stderr_priority_does_not_block_stdout_or_hide_wait_errors() {
+        let (mut stderr_source, mut stderr) = tokio::io::duplex(128);
+        let (mut frames, mut output) = tokio::io::duplex(128);
+        let task = tokio::spawn(async move {
+            forward_command_output(
+                &mut b"stdout while stderr pending".as_slice(),
+                &mut stderr,
+                &mut output,
+                async { Ok(37) },
+            )
+            .await
+        });
+        // No stderr is available yet. Stdout must still be forwarded, without
+        // waiting for stderr EOF or the child's exit.
+        let (kind, body) = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut frames))
+            .await
+            .expect("ready stdout blocked behind pending stderr")
+            .unwrap();
+        assert_eq!(kind, STDOUT);
+        assert_eq!(body, b"stdout while stderr pending");
+        stderr_source.write_all(b"late diagnostic").await.unwrap();
+        stderr_source.shutdown().await.unwrap();
+        let (kind, body) = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut frames))
+            .await
+            .expect("late stderr was not drained")
+            .unwrap();
+        assert_eq!(kind, STDERR);
+        assert_eq!(body, b"late diagnostic");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .expect("output drain did not finish after stderr EOF")
+                .unwrap()
+                .unwrap(),
+            37
+        );
+
+        let mut output = Vec::new();
+        let error = forward_command_output(
+            &mut b"".as_slice(),
+            &mut b"diagnostic before wait error".as_slice(),
+            &mut output,
+            async { bail!("injected child wait failure") },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("injected child wait failure"));
+        let (kind, body) = read_frame(&mut output.as_slice()).await.unwrap();
+        assert_eq!(kind, STDERR);
+        assert_eq!(body, b"diagnostic before wait error");
+    }
+
     #[tokio::test]
     async fn upload_close_before_response_drains_stderr_and_preserves_exit() {
         // The response cannot finish until the upload has failed. This forces
