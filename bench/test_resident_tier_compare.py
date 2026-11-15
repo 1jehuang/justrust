@@ -3,6 +3,7 @@
 import argparse
 from contextlib import ExitStack
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -88,12 +89,77 @@ class MockNative:
         assert env['RA_JIT_IDLE_SECS'] == '3600'
 
 
+class MockBudgetNative:
+    def __init__(self, evict=True):
+        self.states = {}
+        self.next_pid = 2000
+        self.evict = evict
+
+    def identity(self, pid):
+        live = any(pid == state['daemon'] or pid in state['projects'].values()
+                   for state in self.states.values())
+        return dict(pid=pid, start_ticks=pid * 10, state='S') if live else None
+
+    def run(self, command, cwd, env, prefix, timeout):
+        state = self.states.setdefault(env['JR_ENGINE_HOME'], dict(daemon=None, projects={}))
+        operation = command[1]
+        status = 0
+        if operation == '--version':
+            text = 'jr-engine synthetic-budget\n'
+        elif operation == 'stop':
+            state.update(daemon=None, projects={})
+            text = 'daemon: stopped\n'
+        elif operation == 'status':
+            text = f"daemon: pid {state['daemon']}, version mock, exits never, no limit\n" if state['daemon'] else 'daemon: not running\n'
+            for project, pid in state['projects'].items():
+                log = Path(env['JR_ENGINE_HOME']) / (project.name + '.log')
+                text += f'  worker: pid {pid}, {project}, holds 100 MB, log {log}\n    {project}: ready\n'
+        else:
+            assert env['RA_JIT_SPARE'] == '0'
+            assert env['RA_JIT_MEMORY_MAX'] in ('off', '1M')
+            if not state['daemon']:
+                self.next_pid += 1
+                state['daemon'] = self.next_pid
+                (Path(env['JR_ENGINE_HOME']) / 'resident-v1/runtime/daemon.log').write_text('daemon starts\n')
+            cold = cwd not in state['projects']
+            log = Path(env['JR_ENGINE_HOME']) / (cwd.name + '.log')
+            if cold:
+                self.next_pid += 1
+                state['projects'][cwd] = self.next_pid
+                log.write_text('native worker loading\n')
+            else:
+                with log.open('a') as stream:
+                    stream.write('edit-to-binary: 10ms\n')
+            if self.evict and env['RA_JIT_MEMORY_MAX'] != 'off':
+                with (Path(env['JR_ENGINE_HOME']) / 'resident-v1/runtime/daemon.log').open('a') as stream:
+                    for project in state['projects']:
+                        if project != cwd:
+                            stream.write(f'worker abc of {project} stopped: the workers hold 200 MB, '
+                                         'over the 1 MB of BLAZE_MEMORY_MAX, and it was asked longest ago\n')
+                state['projects'] = {cwd: state['projects'][cwd]}
+            data = (cwd / 'src/summary.rs').read_text()
+            nonce = env['JR_MATRIX_NONCE']
+            text = "blaze: worker not loaded; `fixture` is cargo's to build\n" if cold else ''
+            if 'JR_MATRIX_TYPE_' in data:
+                status = 101
+                text += 'error[E0308]: JR_MATRIX_TYPE_' + nonce
+            else:
+                failing = 'JR_MATRIX_FAILURE_' in data
+                status = 101 if failing else 0
+                text += test_output(failing) + 'JR_MATRIX_RUNTIME_' + nonce + '\n'
+                text += ('JR_MATRIX_FAILURE_' + nonce if failing else
+                         re.search(r'JR_RUNTIME_EXECUTED_\d+', data).group()) + '\n'
+        prefix.with_suffix('.stdout').write_text(text)
+        prefix.with_suffix('.stderr').write_text('')
+        return dict(command=command, status=status, timed_out=False, error=None, elapsed_seconds=0.1)
+
+
 class HarnessTests(unittest.TestCase):
     def test_status_parse_and_not_running(self):
         value = tier.parse_status('daemon: pid 12, version abc\n'
             '  worker: pid 15, /x, log /y\n/x: 2 builds by the daemon, 1 by cargo\n')
         self.assertEqual(value, dict(daemon=12, workers=[15], served=2, counters_available=True,
-            worker_details=[dict(pid=15, project='/x', log='/y')]))
+            worker_details=[dict(pid=15, project='/x', log='/y')], ready_projects=[]))
         self.assertIsNone(tier.parse_status('daemon: not running')['daemon'])
 
     def test_lifecycle_strictly_distinguishes_modes(self):
@@ -238,6 +304,91 @@ class HarnessTests(unittest.TestCase):
                    elapsed_seconds=1, total_seconds=1)
         self.assertTrue(tier.summarize([row], 5, True)['edit'][tier.MODES[0]]['excluded'])
         self.assertTrue(tier.summarize([row], 1, False)['edit'][tier.MODES[0]]['excluded'])
+
+    def run_budget(self, native):
+        with tempfile.TemporaryDirectory(prefix='bt-', dir='/tmp') as directory:
+            root = Path(directory)
+            source = root / 'source'
+            (source / 'src').mkdir(parents=True)
+            original = tier.matrix.ANCHOR + b' assert!(true); }\n'
+            (source / 'src/summary.rs').write_bytes(original)
+            engine = root / 'native'
+            engine.write_bytes(b'\x7fELFfake-never-executed')
+            engine.chmod(0o700)
+            tc = root / tier.shared.TOOLCHAIN_NAME
+            tc.mkdir()
+            args = argparse.Namespace(engine=engine, source=source, output=root / 'o',
+                toolchain=tc, proc_macro_server=None, samples=5, timeout=10,
+                settle_timeout=0.02, memory_max='1M')
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(tier.shared, 'pinned_source'))
+                stack.enter_context(patch.object(tier.shared, 'toolchain_identity', return_value={'mock': 'fixed'}))
+                stack.enter_context(patch.object(tier.runtime, 'run_process', side_effect=native.run))
+                stack.enter_context(patch.object(tier, 'process_identity', side_effect=native.identity))
+                stack.enter_context(patch.object(tier, 'memory_snapshot', return_value=[]))
+                stack.enter_context(patch.object(tier.time, 'sleep'))
+                try:
+                    result = tier.execute_budget(args)
+                except ValueError:
+                    result = 'raised'
+            self.assertEqual((source / 'src/summary.rs').read_bytes(), original)
+            self.assertTrue(all(not state['daemon'] for state in native.states.values()))
+            return result, {name: json.loads((args.output / name).read_text())
+                for name in ('metadata.json', 'records.json', 'receipts.json', 'summary.json')}
+
+    def test_budget_real_two_project_hot_and_evicted_paths(self):
+        result, files = self.run_budget(MockBudgetNative())
+        self.assertEqual(result, 0, files['metadata.json'].get('error'))
+        rows = files['records.json']
+        self.assertEqual(len(rows), 60)
+        self.assertTrue(files['metadata.json']['copy_identities_restored'])
+        self.assertTrue(files['metadata.json']['raw_receipts_unchanged'])
+        for rep in range(5):
+            for phase in tier.BUDGET_PHASES:
+                pair = [r for r in rows if r['replicate'] == rep and r['phase'] == phase]
+                self.assertEqual(pair[0]['source_sha256'], pair[1]['source_sha256'])
+                self.assertEqual(pair[0]['nonce'], pair[1]['nonce'])
+                self.assertTrue(all(r['accepted'] for r in pair))
+            miss = next(r for r in rows if r['replicate'] == rep and r['phase'] == 'after-peer-edit' and r['mode'] == 'bounded')
+            self.assertEqual(miss['native_evidence']['classification'], 'cargo-reload-with-native-worker-ready')
+            self.assertIn('eviction_log', miss['transition'])
+            self.assertNotEqual(miss['transition']['old_a_identity']['pid'],
+                                tier.project_workers(miss['after'], Path(miss['cwd']))[0]['pid'])
+            hot = next(r for r in rows if r['replicate'] == rep and r['phase'] == 'hot-edit' and r['mode'] == 'bounded')
+            self.assertEqual(hot['native_evidence']['classification'], 'native-worker-edit')
+        self.assertNotIn('weighted', files['summary.json'])
+
+    def test_budget_missing_actual_eviction_fails_closed(self):
+        result, files = self.run_budget(MockBudgetNative(evict=False))
+        self.assertEqual(result, 'raised')
+        self.assertIn('readiness/eviction timeout', files['metadata.json']['error'])
+        self.assertEqual(files['summary.json']['status'], 'failed/incomplete')
+        self.assertTrue(files['summary.json']['states']['after-peer-edit']['bounded']['excluded'])
+
+    def test_budget_eviction_requires_fresh_budget_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            log = home / 'resident-v1/runtime/daemon.log'
+            log.parent.mkdir(parents=True)
+            log.write_text('worker old of /a stopped: over BLAZE_MEMORY_MAX, asked longest ago\n')
+            before = tier.worker_log_snapshot(dict(worker_details=[dict(pid=12,
+                project='/a', log=str(log))]), home)
+            with log.open('a') as stream:
+                stream.write('worker crashed unexpectedly\n')
+            with self.assertRaisesRegex(ValueError, 'no fresh native budget eviction'):
+                tier.budget_eviction_receipt(before, home, Path('/a'), home / 'crash')
+            with log.open('a') as stream:
+                stream.write('worker abc of /a stopped: over BLAZE_MEMORY_MAX, asked longest ago\n')
+            receipt = tier.budget_eviction_receipt(before, home, Path('/a'), home / 'evicted')
+            self.assertEqual(tier.runtime.base.digest(Path(receipt['path'])), receipt['sha256'])
+
+    def test_process_identity_reuse_and_zombie_exit(self):
+        old = dict(pid=4, start_ticks=10, state='S')
+        for now, expected in ((old, False), (None, True),
+                (dict(pid=4, start_ticks=11, state='S'), True),
+                (dict(pid=4, start_ticks=10, state='Z'), True)):
+            with patch.object(tier, 'process_identity', return_value=now):
+                self.assertEqual(tier.process_gone(old), expected)
 
 
 if __name__ == '__main__':
