@@ -37,6 +37,7 @@ class MockNative:
         self.calls.append((list(command), dict(env)))
         state = self.states.setdefault(env['JR_ENGINE_HOME'], dict(pid=None, workers=[], served=0))
         operation = command[1]
+        log = Path(env['JR_ENGINE_HOME']) / 'mock-worker.log'
         status = 0
         if operation == '--version':
             text = 'jr-engine experimental synthetic-never-executed\n'
@@ -46,17 +47,20 @@ class MockNative:
         elif operation == 'status':
             text = 'daemon: not running\n' if not state['pid'] else (
                 f"daemon: pid {state['pid']}, version mock, exits after 3600s idle\n"
-                f"  worker: pid {state['workers'][0]}, project, holds 1 MB, log /private/log\n")
+                f"  worker: pid {state['workers'][0]}, {cwd}, holds 1 MB, log {log}\n")
             text += f"project (test, key): {state['served']} builds by the daemon, 0 by cargo\n"
         else:
             if self.crash and prefix.name.endswith('-edit'):
                 raise RuntimeError('synthetic interruption')
             self.assert_controls(env)
             if not state['pid']:
+                log.write_text('worker loading\n')
                 self.next_pid += 2
                 state.update(pid=self.next_pid, workers=[self.next_pid + 1])
             if not self.fallback:
                 state['served'] += 1
+                with log.open('a') as stream:
+                    stream.write('edit-to-binary: 10ms\n')
             data = (cwd / 'src/summary.rs').read_text()
             nonce = env['JR_MATRIX_NONCE']
             if 'JR_MATRIX_TYPE_' in data:
@@ -88,7 +92,8 @@ class HarnessTests(unittest.TestCase):
     def test_status_parse_and_not_running(self):
         value = tier.parse_status('daemon: pid 12, version abc\n'
             '  worker: pid 15, /x, log /y\n/x: 2 builds by the daemon, 1 by cargo\n')
-        self.assertEqual(value, dict(daemon=12, workers=[15], served=2, counters_available=True))
+        self.assertEqual(value, dict(daemon=12, workers=[15], served=2, counters_available=True,
+            worker_details=[dict(pid=15, project='/x', log='/y')]))
         self.assertIsNone(tier.parse_status('daemon: not running')['daemon'])
 
     def test_lifecycle_strictly_distinguishes_modes(self):
@@ -100,6 +105,36 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(tier.lifecycle_errors(tier.MODES[1], before, stopped, after), [])
         self.assertTrue(tier.lifecycle_errors(tier.MODES[1], before, before, after))
         self.assertTrue(tier.lifecycle_errors(tier.MODES[1], before, stopped, before))
+
+    def test_native_status_without_served_counters(self):
+        status = tier.parse_status('daemon: pid 421, version native, exits never, no limit\n'
+            '  worker: pid 422, /source63, holds 832 MB, log /private/workers/abc/log\n'
+            '    /source63: warm\nstore: 12 MB, no limit, /private/store\n')
+        self.assertFalse(status['counters_available'])
+        self.assertEqual(status['worker_details'], [dict(pid=422, project='/source63',
+            log='/private/workers/abc/log')])
+
+    def test_worker_log_requires_fresh_non_refused_edit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            log = home / 'log'
+            log.write_text('edit-to-binary: historical\n')
+            status = dict(worker_details=[dict(pid=42, project='/source', log=str(log))])
+            before = tier.worker_log_snapshot(status, home)
+            stale = tier.worker_log_evidence(before, status, home, home / 'stale')
+            self.assertTrue(stale['failures'])
+            with log.open('a') as stream:
+                stream.write('edit-to-binary: 10ms\n')
+            fresh = tier.worker_log_evidence(before, status, home, home / 'fresh')
+            self.assertEqual(fresh['failures'], [])
+            self.assertEqual(fresh['classification'], 'native-worker-edit')
+            before = tier.worker_log_snapshot(status, home)
+            with log.open('a') as stream:
+                stream.write('refused: unsupported\nedit-to-binary: 1ms\n')
+            refused = tier.worker_log_evidence(before, status, home, home / 'refused')
+            self.assertTrue(refused['failures'])
+            error = tier.worker_log_evidence(before, status, home, home / 'type-error', phase='type-error')
+            self.assertEqual(error['failures'], [])
 
     def test_memory_present_and_missing(self):
         with tempfile.TemporaryDirectory() as directory:

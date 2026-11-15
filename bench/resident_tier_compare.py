@@ -50,9 +50,73 @@ def parse_status(text):
     daemon = re.findall(r'^daemon: pid (\d+),', text, re.M)
     workers = re.findall(r'^  worker: pid (\d+),', text, re.M)
     served = re.findall(r': (\d+) builds by the daemon,', text)
+    details = [dict(pid=int(pid), project=project, log=log)
+               for pid, project, log in re.findall(
+                   r'^  worker: pid (\d+), (.*?), (?:holds \d+ MB, )?log (.+)$', text, re.M)]
     return dict(daemon=int(daemon[0]) if len(daemon) == 1 else None,
-                workers=sorted(map(int, workers)), served=sum(map(int, served)),
-                counters_available=bool(served))
+                workers=sorted(map(int, workers)), worker_details=details,
+                served=sum(map(int, served)), counters_available=bool(served))
+
+
+def worker_log_snapshot(status, home):
+    result = {}
+    for worker in status.get('worker_details', []):
+        path = Path(worker['log'])
+        item = dict(worker, error=None)
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(home.resolve()):
+                raise ValueError('worker log is outside private engine home')
+            stat = path.stat()
+            if stat.st_size > matrix.MAX_RAW_BYTES:
+                raise ValueError('worker log exceeds parser limit')
+            data = path.read_bytes()
+            item.update(size=len(data), sha256=digest_bytes(data), device=stat.st_dev,
+                        inode=stat.st_ino)
+        except (OSError, ValueError) as exc:
+            item['error'] = repr(exc)
+        result[str(path)] = item
+    return result
+
+
+def worker_log_evidence(before, after, home, prefix, restart=False, phase='edit'):
+    """Admit only fresh worker edits, never a worker's unrelated historical work."""
+    evidence = dict(before=before, raw=[], failures=[], classification='unproven')
+    chunks = []
+    for worker in after.get('worker_details', []):
+        path = Path(worker['log'])
+        old = before.get(str(path))
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(home.resolve()):
+                raise ValueError('worker log is outside private engine home')
+            stat = path.stat()
+            if stat.st_size > matrix.MAX_RAW_BYTES:
+                raise ValueError('worker log exceeds parser limit')
+            data = path.read_bytes()
+            offset = 0
+            if not restart:
+                if not old or old.get('error'):
+                    raise ValueError('no readable pre-command worker-log receipt')
+                if (stat.st_dev, stat.st_ino, worker['pid']) != (old['device'], old['inode'], old['pid']):
+                    raise ValueError('worker log/process identity changed in hot mode')
+                offset = old['size']
+                if digest_bytes(data[:offset]) != old['sha256']:
+                    raise ValueError('worker log was truncated or its prefix changed')
+            chunk = data[offset:]
+            receipt = Path(str(prefix) + f'.worker-{worker["pid"]}.log')
+            matrix.durable(receipt, chunk, exclusive=True)
+            evidence['raw'].append(dict(path=str(receipt), sha256=digest_bytes(chunk),
+                bytes=len(chunk), source=str(path), offset=offset, pid=worker['pid']))
+            chunks.append(chunk.decode(errors='replace'))
+        except (OSError, ValueError) as exc:
+            evidence['failures'].append(repr(exc))
+    text = '\n'.join(chunks)
+    edited = bool(re.search(r'^edit-to-binary: ', text, re.M))
+    refused = bool(re.search(r'^refused:|not built:|^Error:', text, re.M))
+    if edited and (phase == 'type-error' or not refused):
+        evidence['classification'] = 'native-worker-edit'
+    else:
+        evidence['failures'].append('no fresh accepted native worker edit evidence')
+    return evidence
 
 
 def memory_snapshot(pids, proc=Path('/proc')):
@@ -257,6 +321,7 @@ def execute(args):
                     before_inputs = shared.source_hashes(args.source)
                     before, _ = control(env, label + '-before', 'status')
                     memory_before = memory_snapshot([before['daemon']] + before['workers']) if before['daemon'] else []
+                    log_before = worker_log_snapshot(before, Path(env['JR_ENGINE_HOME']))
                     stopped, stop_row = None, None
                     if mode == 'restart-disk-subset':
                         _, stop_row = control(env, label + '-stop', 'stop')
@@ -274,9 +339,10 @@ def execute(args):
                         memory_after=memory_snapshot([after['daemon']] + after['workers']) if after['daemon'] else [])
                     errors = correctness(row, text, phase, rep, nonce, expected)
                     errors += lifecycle_errors(mode, before, stopped, after)
-                    if phase != 'type-error' and (not before['counters_available'] or
-                            not after['counters_available'] or after['served'] <= before['served']):
-                        errors.append('native daemon-served counter did not advance, fallback not admitted')
+                    evidence = worker_log_evidence(log_before, after, Path(env['JR_ENGINE_HOME']),
+                        args.output / label, restart=mode == 'restart-disk-subset', phase=phase)
+                    row['native_evidence'] = evidence
+                    errors += evidence['failures']
                     if before_inputs != shared.source_hashes(args.source):
                         errors.append('source changed during invocation')
                     row.update(failures=errors, accepted=not errors)
@@ -305,6 +371,9 @@ def execute(args):
             metadata['toolchain_after'] = shared.toolchain_identity(args.toolchain)
             metadata['raw_receipts_unchanged'] = all(runtime.base.digest(Path(r['path'])) == r['sha256']
                 for receipt in receipts for r in receipt['raw'].values())
+            metadata['raw_receipts_unchanged'] = metadata['raw_receipts_unchanged'] and all(
+                runtime.base.digest(Path(item['path'])) == item['sha256']
+                for row in rows for item in row.get('native_evidence', {}).get('raw', []))
             unchanged = all(metadata[k + '_before'] == metadata[k + '_after']
                             for k in ('source', 'tools', 'toolchain'))
             metadata['toolchain_links_valid'] = all(
