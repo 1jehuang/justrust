@@ -62,6 +62,47 @@ The preceding managed v6 experiment's 149 original receipt hashes were also
 verified in `bench/results/hybrid-managed-hosted-20261115.tar.gz`. Its initial
 cleanup failure is preserved separately from the later independent empty probe.
 
+## Completed broad comparison: promotion rejected
+
+The immutable candidate finished **all 40 canonical points** at 16:23:35 UTC,
+after **1,995.344 seconds**. This completed after the requested three-hour work
+minimum instead of cutting the workload short. Final input-hash verification
+passed before any future generator-control changes.
+
+`compare --require-valid` returned **exit 2**, correctly blocking promotion:
+
+- Baseline: three unexpected failure points (zero-based 28, 35, 36) and eight
+  noisy points. Desktop fixtures lacked Git author identity under isolated HOME.
+- Candidate: four unexpected failure points (4, 28, 35, 36) and 31 noisy points.
+  Point 4 failed a TUI image-label assertion while on ordinary Cargo fallback.
+- Actual outcome-parity coverage was invalid at those four points. No failure
+  or noise gate was waived.
+- Every one of the **36 retained measured successful-sample logs** reported
+  Cargo fallback. **Zero measured samples committed to native execution.**
+  Some separate preparations succeeded, and others exposed unsupported macro
+  compilation or panics. This does not establish a single cause for every miss.
+- The sidecar retained all **85 raw logs**, with no reported overflow or missed
+  logs. The exact private local resident namespace shut down successfully
+  (`daemon: stopped`); the sidecar exited successfully. No owned hosted jobs
+  remain. No further benchmark runs are scheduled in this session.
+
+Consequently there is **no accepted broad speedup or native-coverage result**,
+and production defaults remain unchanged. The focused 32x result above must not
+be generalized to this workload. Final raw receipt paths and hashes are retained
+in `bench/results/hybrid-canonical-20261115.tar.gz` and
+`docs/results/hybrid-canonical-20261115.json`. Root independently verified the
+archive SHA-256, all **185 original retained log hashes**, and the three primary
+report hashes before closing the gate.
+
+After final source-hash verification and comparison completed, `8bc8e59e1`
+added a **future-run-only**, explicit `--fixture-git-identity` adapter control.
+It requires the isolated XDG fixture policy and gives both stacks the same
+literal benchmark-only author/committer identity without editing global Git
+configuration. Three added tests include real `git init`/`git commit` through
+both isolated adapters. Root's final hybrid Python discovery passed **72 tests**.
+No fresh canonical pair was run with this option, and the failed original pair
+was not rewritten or reclassified.
+
 ## Follow-through hardening after the frozen performance candidate
 
 These changes are separately tested and are **not** part of the frozen v6
@@ -102,9 +143,10 @@ the broad comparison or compile-time input requirements.
    Cargo fallback is not evidence that native compilation supports that workload.
    Repeated automatic preparation failures are a separate scheduling cost.
 3. Repair the **symmetric benchmark fixture environment** and rerun unchanged
-   broad gates. The isolated baseline lacks Git author identity for desktop
-   fixtures, and the candidate also recorded a TUI assertion mismatch while on
-   Cargo fallback. Keep those failures and the noise gates, rather than treating
+   broad gates. The isolated baseline lacked Git author identity for desktop fixtures. A
+   symmetric future adapter control now exists, but it has not yet been used in
+   a fresh full comparison. The candidate also recorded a TUI assertion mismatch
+   while on Cargo fallback. Keep those failures and the noise gates, rather than treating
    an invalid comparison as a promotion result.
 4. Rerun same-client ordinary managed Cargo versus resident routing without
    sync-daemon version churn or admission outages, retaining preparation,
