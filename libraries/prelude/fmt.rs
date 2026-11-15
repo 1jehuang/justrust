@@ -726,6 +726,45 @@ impl Display for char {
     }
 }
 
+/// Hex digits of `\u{..}` Debug escapes: lowercase, no padding.
+fn push_unicode_escape(s: &mut String, c: char) {
+    s.push_str("\\u{");
+    let code = c as u32;
+    let mut shift = 20u32;
+    let mut started = false;
+    loop {
+        let digit = (code >> shift) & 15u32;
+        if digit != 0u32 || started || shift == 0u32 {
+            started = true;
+            let byte = if digit < 10u32 { 48u32 + digit } else { 87u32 + digit };
+            s.push(byte as u8 as char);
+        }
+        if shift == 0u32 {
+            break;
+        }
+        shift -= 4u32;
+    }
+    s.push('}');
+}
+
+/// The exactly defined classes of `char::escape_debug_ext`
+/// (library/core/src/char/methods.rs, MIT OR Apache-2.0, Rust Project
+/// Contributors): control, whitespace and private use characters print as
+/// `\u{..}`. The table-driven classes (grapheme extenders, default
+/// ignorables, format controls, unassigned) are not ported yet.
+fn debug_needs_unicode_escape(c: char) -> bool {
+    let code = c as u32;
+    if code >= 32u32 && code <= 126u32 {
+        return false;
+    }
+    code < 32u32
+        || (code >= 127u32 && code <= 159u32)
+        || (code >= 0xE000u32 && code <= 0xF8FFu32)
+        || (code >= 0xF0000u32 && code <= 0xFFFFDu32)
+        || (code >= 0x100000u32 && code <= 0x10FFFDu32)
+        || super::string::char_is_whitespace(c)
+}
+
 pub fn escape_char_into(s: &mut String, c: char, quote: char) {
     if c == '\n' {
         s.push_str("\\n");
@@ -740,6 +779,8 @@ pub fn escape_char_into(s: &mut String, c: char, quote: char) {
     } else if c == quote {
         s.push('\\');
         s.push(c);
+    } else if debug_needs_unicode_escape(c) {
+        push_unicode_escape(s, c);
     } else {
         s.push(c);
     }

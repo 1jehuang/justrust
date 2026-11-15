@@ -149,3 +149,28 @@ fn structural_debug_matches_stock_and_preserves_evaluation() {
         ],
     );
 }
+
+#[test]
+fn debug_escapes_control_whitespace_and_private_use_scalars() {
+    use oracle::{Case, Expect};
+    oracle::check(
+        "debug-unicode-escapes",
+        &[Case {
+            name: "strings_chars_and_nested_values",
+            source: r#"fn main() {
+    let s = "a\u{1}b\u{7f}\u{85}\u{a0}c\u{2003}\u{3000}\u{e000}\u{f8ff}\u{10fffd}\u{e9}\u{4e2d}\u{1f600} '\"\\\n\r\t\0~";
+    println!("{:?}", s);
+    for c in s.chars() {
+        print!("{:?} ", c);
+    }
+    println!();
+    println!("{:?} {:?}", '\u{1b}', Some("x\u{2028}y".to_string()));
+    println!("{:>12?}|{:<10?}|", "\u{b}", '\u{a0}');
+    println!("{:?}", vec!["\u{feff0}", "\u{9f}", "\u{a1}", "\u{1f}", " "]);
+}"#,
+            expect: Expect::Run(
+                "\"a\\u{1}b\\u{7f}\\u{85}\\u{a0}c\\u{2003}\\u{3000}\\u{e000}\\u{f8ff}\\u{10fffd}é中😀 '\\\"\\\\\\n\\r\\t\\0~\"\n'a' '\\u{1}' 'b' '\\u{7f}' '\\u{85}' '\\u{a0}' 'c' '\\u{2003}' '\\u{3000}' '\\u{e000}' '\\u{f8ff}' '\\u{10fffd}' 'é' '中' '😀' ' ' '\\'' '\"' '\\\\' '\\n' '\\r' '\\t' '\\0' '~' \n'\\u{1b}' Some(\"x\\u{2028}y\")\n\"\\u{b}\"|'\\u{a0}'|\n[\"\\u{feff0}\", \"\\u{9f}\", \"¡\", \"\\u{1f}\", \" \"]\n",
+            ),
+        }],
+    );
+}
