@@ -28,3 +28,88 @@ fn main() { let E::A(x) | E::B(x) = E::A(42) else { return; }; println!("{}", x)
         ],
     );
 }
+
+#[test]
+fn let_else_initializer_temporaries_end_before_the_pattern_test() {
+    oracle::check(
+        "let-else-temporaries",
+        &[
+            Case {
+                name: "borrowed_and_owned_temporaries_in_initializers",
+                source: r#"struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl Noisy {
+    fn first(&self) -> Option<char> {
+        self.0.chars().next()
+    }
+}
+struct Cursor {
+    text: &'static str,
+    pos: usize,
+}
+impl Cursor {
+    fn bump(&mut self) -> Result<char, String> {
+        let Some(c) = self.text[self.pos..].chars().next() else {
+            return Err(format!("end at {}", self.pos));
+        };
+        self.pos += c.len_utf8();
+        Ok(c)
+    }
+}
+fn head(name: &'static str) -> char {
+    let Some(c) = Noisy(name).first() else {
+        println!("else {}", name);
+        return '?';
+    };
+    println!("bound {}", c);
+    c
+}
+fn parse(text: &str) -> i32 {
+    let Ok(n) = text.trim().to_string().parse::<i32>() else {
+        return -1;
+    };
+    n
+}
+fn main() {
+    let mut c = Cursor { text: "h\u{e9}!", pos: 0 };
+    println!("{:?} {:?} {:?} {:?}", c.bump(), c.bump(), c.bump(), c.bump());
+    println!("{} {}", head("abc"), head(""));
+    println!("{} {}", parse(" 42 "), parse("x"));
+    let v = vec![String::from("k=v"), String::from("bare")];
+    for item in &v {
+        let Some((k, val)) = item.as_str().split_once('=') else {
+            println!("no pair in {}", item);
+            continue;
+        };
+        println!("{} -> {}", k, val);
+    }
+}"#,
+                expect: Expect::Run(
+                    "Ok('h') Ok('é') Ok('!') Err(\"end at 4\")\ndrop abc\nbound a\ndrop \nelse \na ?\n42 -1\nk -> v\nno pair in bare\n",
+                ),
+            },
+            Case {
+                name: "binding_cannot_borrow_a_dropped_temporary",
+                source: r#"fn unused() -> usize {
+    let Some(s) = Some(String::from("temp").as_str()) else { return 0; };
+    s.len()
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0716"),
+            },
+            Case {
+                name: "else_block_must_diverge",
+                source: r#"fn unused(text: &str) -> char {
+    let Some(c) = text[1..].chars().next() else { 0u8 };
+    c
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

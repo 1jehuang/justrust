@@ -6359,8 +6359,23 @@ impl<'a> Checker<'a> {
                     value: wrapped,
                 }
             }
-            ir::TypedStmt::LetElse { .. } => {
-                return Err("unsupported: borrowed temporaries in let-else initializers".into());
+            // Non-extended temporaries of a let-else initializer end before
+            // the pattern is tested, so before the else block runs and before
+            // any binding is used. Pattern tests have no side effects, so
+            // ending them with the initializer is the same observable order.
+            ir::TypedStmt::LetElse {
+                value,
+                ty,
+                pattern,
+                else_branch,
+            } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::TypedStmt::LetElse {
+                    value: wrapped,
+                    ty,
+                    pattern,
+                    else_branch,
+                }
             }
             other => {
                 local_scope.push(other);
