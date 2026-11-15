@@ -403,6 +403,17 @@ fn installed_in(spec: &Spec, root: &Path) -> Result<Option<Toolchain>> {
     }))
 }
 
+/// Resolve an already-present compiler for an explicit build pin only.
+/// Native admission and local builds must agree that a trusted public bundle
+/// is available even when downloading or automatic installation is disabled.
+/// Mutation commands continue to use `installed`, never this lookup.
+pub(crate) fn available_for_build(spec: &Spec) -> Option<Toolchain> {
+    installed(spec)
+        .ok()
+        .flatten()
+        .or_else(|| shared::for_build(spec))
+}
+
 /// For a recorded run: the pinned toolchain, installed if needed. `None`
 /// means use the system toolchain (no pin, or it failed and was reported).
 pub fn for_build() -> Option<Toolchain> {
@@ -427,10 +438,7 @@ pub fn for_build() -> Option<Toolchain> {
             return None;
         }
     };
-    if let Ok(Some(tc)) = installed(&pin.spec) {
-        return Some(tc);
-    }
-    if let Some(tc) = shared::for_build(&pin.spec) {
+    if let Some(tc) = available_for_build(&pin.spec) {
         return Some(tc);
     }
     if matches!(

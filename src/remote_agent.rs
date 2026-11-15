@@ -804,11 +804,15 @@ fn hosted_default<'a>(
 /// from (by this machine or forwarded by the client) and automatic installs
 /// are not turned off.
 fn jr_obtainable(id: &str, env: &[(String, String)]) -> bool {
-    let installed = crate::toolchain::Spec::parse(id)
+    let available = crate::toolchain::Spec::parse(id)
         .ok()
-        .and_then(|spec| crate::toolchain::installed(&spec).ok().flatten())
+        .and_then(|spec| crate::toolchain::available_for_build(&spec))
         .is_some();
-    if installed {
+    jr_obtainable_with_local(available, env)
+}
+
+fn jr_obtainable_with_local(available: bool, env: &[(String, String)]) -> bool {
+    if available {
         return true;
     }
     let var = |name: &str| {
@@ -1636,6 +1640,28 @@ mod tests {
         assert_eq!(
             hosted_default(&args(&["check"]), &[], jr, false),
             STORE_TOOLCHAIN
+        );
+    }
+
+    #[test]
+    fn already_available_build_toolchains_need_no_download_authority() {
+        let env = vec![
+            ("JUSTRUST_TOOLCHAIN_DIST".into(), "off".into()),
+            ("JUSTRUST_TOOLCHAIN_AUTO_INSTALL".into(), "0".into()),
+        ];
+        // Both private installs and host-authorized public bundles enter this
+        // same branch. Disabling mutation/downloads must not force an upstream
+        // fallback when the exact compiler is already present for builds.
+        assert!(jr_obtainable_with_local(true, &env));
+        assert!(!jr_obtainable_with_local(false, &env));
+        assert_eq!(
+            hosted_default(
+                &["check".to_string()],
+                &env,
+                "jr-ac20de5e7921",
+                jr_obtainable_with_local(true, &env),
+            ),
+            "jr-ac20de5e7921"
         );
     }
 
