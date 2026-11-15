@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     fs::OpenOptions,
-    io::{BufRead as _, BufReader, Write as _},
+    io::{BufRead as _, BufReader, Read as _, Write as _},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -863,6 +863,87 @@ impl Worker {
     }
 }
 
+/// A committed ready-only connection owns precisely the worker it is currently
+/// dispatching. The caller keeps dispatch reservations until the watcher has joined.
+/// In particular, a late disconnect cannot kill a worker already reused by another build.
+struct CommittedRequest<'a> {
+    active: Mutex<Option<&'a Worker>>,
+    cancelled: AtomicBool,
+}
+
+impl<'a> CommittedRequest<'a> {
+    fn cancel(&self) {
+        let active = lock(&self.active);
+        self.cancelled.store(true, Relaxed);
+        if let Some(worker) = *active {
+            // stop uses the owned, unreaped Child, never a cached numeric PID.
+            // A stopped compiler's database is not valid for any of its checkouts.
+            worker.stop();
+            lock(&worker.checkouts).clear();
+        }
+    }
+
+    fn sync(&self, worker: &'a Worker, checkout: &Checkout) -> Reply {
+        {
+            let mut active = lock(&self.active);
+            if self.cancelled.load(Relaxed) {
+                return Reply::Cold { reason: "committed request disconnected".to_owned() };
+            }
+            *active = Some(worker);
+        }
+        *lock(&worker.asked) = Instant::now();
+        let reply = worker.sync_reserved(checkout);
+        *lock(&self.active) = None;
+        reply
+    }
+}
+
+/// Monitor EOF after the one commit acknowledgement. No further client bytes are
+/// valid. A finite read deadline lets normal completion (and unwinding) join the
+/// watcher without closing the connection needed for the final execution reply.
+fn committed_connection<'a, T>(
+    stream: &UnixStream,
+    run: impl FnOnce(&CommittedRequest<'a>) -> T,
+) -> std::io::Result<T> {
+    let mut watched = stream.try_clone()?;
+    watched.set_read_timeout(Some(Duration::from_millis(25)))?;
+    let request = CommittedRequest { active: Mutex::new(None), cancelled: AtomicBool::new(false) };
+    let done = AtomicBool::new(false);
+    struct Finished<'a>(&'a AtomicBool, &'a UnixStream);
+    impl Drop for Finished<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Relaxed);
+            // This request has no more client input. Read-half shutdown wakes the
+            // watcher immediately, but leaves the final reply's write half intact.
+            let _ = self.1.shutdown(std::net::Shutdown::Read);
+        }
+    }
+    Ok(std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut byte = [0];
+            while !done.load(Relaxed) {
+                match watched.read(&mut byte) {
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    _ => {
+                        if !done.load(Relaxed) {
+                            request.cancel();
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        let _finished = Finished(&done, stream);
+        run(&request)
+    }))
+}
+
 /// A worker started before a build asked for one. It has the library of the toolchain
 /// loaded and its names resolved, which the first build of a workspace then does not wait
 /// for, and reads the build it is the worker of from its standard input.
@@ -1378,14 +1459,13 @@ impl Daemon {
         BufReader::new(&*stream).read_line(&mut commit)?;
         anyhow::ensure!(commit == "commit\n", "ready-only reservation was not committed");
         stream.set_read_timeout(None)?;
-        let replies = selected
-            .into_iter()
-            .zip(checkouts)
-            .map(|(worker, checkout)| {
-                *lock(&worker.asked) = Instant::now();
-                worker.sync_reserved(checkout)
-            })
-            .collect();
+        let replies = committed_connection(stream, |request| {
+            selected
+                .into_iter()
+                .zip(checkouts)
+                .map(|(worker, checkout)| request.sync(worker, checkout))
+                .collect()
+        })?;
         drop(reservations);
         drop(workers);
         Ok(Reply::ReadyBuilt { replies })
@@ -1871,6 +1951,76 @@ mod tests {
                 let _ = child.wait();
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_disconnect_stops_only_active_owned_worker_and_releases_reservation() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let other = ReadyFixture::new(Warmth::Ready);
+        let workers = lock(&fixture.0.workers);
+        let worker = workers.values().next().unwrap();
+        let others = lock(&other.0.workers);
+        let untouched = others.values().next().unwrap();
+        let (server, mut client) = UnixStream::pair().unwrap();
+        std::thread::scope(|scope| {
+            let request = scope.spawn(|| {
+                let _reservation = lock(&worker.dispatch);
+                committed_connection(&server, |request| {
+                    *lock(&request.active) = Some(worker);
+                    (&server).write_all(b"dispatching\n").unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    while worker.ended().is_none() && Instant::now() < deadline {
+                        std::thread::sleep(POLL);
+                    }
+                    assert!(worker.ended().is_some(), "disconnect must stop the owned child");
+                    // Wait for invalidation and clear the active slot as sync does.
+                    *lock(&request.active) = None;
+                    assert!(lock(&worker.checkouts).is_empty());
+                    assert!(matches!(request.sync(untouched, &other.1), Reply::Cold { .. }));
+                })
+                .unwrap();
+            });
+            let mut dispatching = String::new();
+            BufReader::new(&mut client).read_line(&mut dispatching).unwrap();
+            assert_eq!(dispatching, "dispatching\n");
+            drop(client);
+            request.join().unwrap();
+        });
+        assert!(worker.dispatch.try_lock().is_ok(), "reservation must be released");
+        assert!(lock(&untouched.child).try_wait().unwrap().is_none(), "other worker must survive");
+        // Another connection can still dispatch normally after a cancelled request.
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        committed_connection(&server, |request| {
+            assert!(matches!(request.sync(untouched, &other.1), Reply::Synced { .. }));
+        })
+        .unwrap();
+        server.write_all(b"ready\n").unwrap();
+        let mut reply = String::new();
+        BufReader::new(&mut client).read_line(&mut reply).unwrap();
+        assert_eq!(reply, "ready\n", "watcher completion must preserve final reply writes");
+        assert!(lock(&untouched.child).try_wait().unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_disconnect_between_dispatches_does_not_stop_finished_workers() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let workers = lock(&fixture.0.workers);
+        let worker = workers.values().next().unwrap();
+        let (server, client) = UnixStream::pair().unwrap();
+        drop(client);
+        committed_connection(&server, |request| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !request.cancelled.load(Relaxed) && Instant::now() < deadline {
+                std::thread::sleep(POLL);
+            }
+            assert!(request.cancelled.load(Relaxed));
+            assert!(matches!(request.sync(worker, &fixture.1), Reply::Cold { .. }));
+        })
+        .unwrap();
+        assert!(lock(&worker.child).try_wait().unwrap().is_none());
+        assert!(!lock(&worker.checkouts).is_empty());
     }
 
     #[cfg(unix)]
