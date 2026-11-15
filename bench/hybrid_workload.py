@@ -31,7 +31,8 @@ def absolute(value):
 def put(root, name, text):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    if not path.exists() or path.read_text() != text:
+        path.write_text(text)
 
 
 def fixture(root, value=7):
@@ -46,7 +47,7 @@ def fixture(root, value=7):
     source(root, value)
 
 
-def source(root, expected=7, nonce=0, broken=False, config='one'):
+def source(root, expected=7, nonce=0, broken=False, config='one', macro=7, build='ready', feature=False):
     put(root, 'src/lib.rs', ('this is intentionally invalid Rust\n' if broken else f'''pub fn value() -> u32 {{ probe_dep::value() }}
 #[test]
 fn hybrid_side_effect() {{
@@ -54,10 +55,11 @@ fn hybrid_side_effect() {{
     let path = std::env::var("HYBRID_SIDE_EFFECT").unwrap();
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
     writeln!(file, "nonce={nonce}").unwrap();
-    assert_eq!(env!("PROBE_BUILD"), "ready");
+    assert_eq!(env!("PROBE_BUILD"), "{build}");
     assert_eq!(env!("PROBE_CONFIG"), "{config}");
     println!("HYBRID_OBSERVED nonce={nonce} dependency={{}} config={{}}", value(), env!("PROBE_CONFIG"));
-    assert_eq!(probe_macro::expected!(), 7);
+    assert_eq!(probe_macro::expected!(), {macro});
+    assert_eq!(cfg!(feature="changed"), {str(feature).lower()});
     assert_eq!(value(), {expected});
 }}
 '''))
@@ -97,20 +99,33 @@ def run(command, cwd, env, log, timeout):
     started = time.monotonic()
     peak = 0
     timed_out = False
+    error = None
     with log.open('xb') as stream:
-        proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
-                                stderr=subprocess.STDOUT, start_new_session=True)
-        while proc.poll() is None:
-            peak = max(peak, pss_kib(proc.pid))
-            if time.monotonic() - started > timeout:
-                timed_out = True
+        try:
+            proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as exc:
+            error = repr(exc)
+            status = None
+            stream.write((error + '\n').encode())
+        else:
+            try:
+                while proc.poll() is None:
+                    peak = max(peak, pss_kib(proc.pid))
+                    if time.monotonic() - started > timeout:
+                        timed_out = True
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        break
+                    time.sleep(0.02)
+            except BaseException:
                 os.killpg(proc.pid, signal.SIGKILL)
-                break
-            time.sleep(0.02)
-        status = proc.wait()
+                proc.wait()
+                raise
+            status = proc.wait()
     return {'command': command, 'cwd': str(cwd), 'returncode': status,
-            'timeout': timed_out, 'wall_seconds': time.monotonic() - started,
+            'timeout': timed_out, 'error': error, 'wall_seconds': time.monotonic() - started,
             'sampled_process_tree_peak_pss_kib': peak,
+            'measurement_scope': 'includes polling observer overhead, excludes detached resident workers',
             'log': str(log), 'log_sha256': digest(log)}
 
 
@@ -202,7 +217,9 @@ def execute(args):
               ('warm-edit', 1, 7, 'one', None), ('test-failure', 2, 7, 'one', 'test'),
               ('compile-error', 3, 7, 'one', 'compile'), ('recovery', 4, 7, 'one', None),
               ('dependency-edit', 5, 9, 'one', None), ('config-switch', 6, 9, 'two', None),
-              ('project-switch', 7, 7, 'one', None), ('project-return', 8, 9, 'two', None)]
+              ('project-switch', 7, 7, 'one', None), ('project-return', 8, 9, 'two', None),
+              ('macro-edit', 9, 9, 'two', None), ('build-script-edit', 10, 9, 'two', None),
+              ('manifest-edit', 11, 9, 'two', None)]
     for index, (name, nonce, dependency, config, failure) in enumerate(phases):
         pair = []
         for stack in (('shipping', 'hybrid') if index % 2 == 0 else ('hybrid', 'shipping')):
@@ -213,8 +230,18 @@ def execute(args):
             if name not in ('cold-test', 'warm-success'):
                 put(project, 'dep/src/lib.rs', f'pub fn value() -> u32 {{ {dependency} }}\n')
                 put(project, '.cargo/config.toml', f'[env]\nPROBE_CONFIG={{value="{config}",force=true}}\n')
+                macro = 11 if index >= 10 else 7
+                build = 'changed' if index >= 11 else 'ready'
+                if name == 'macro-edit':
+                    put(project, 'macro/src/lib.rs', 'extern crate proc_macro;\n#[proc_macro]\npub fn expected(_: proc_macro::TokenStream) -> proc_macro::TokenStream { "11u32".parse().unwrap() }\n')
+                if name == 'build-script-edit':
+                    put(project, 'build.rs', 'fn main() { println!("cargo:rustc-env=PROBE_BUILD=changed"); println!("cargo:rerun-if-changed=build.rs"); }\n')
+                if name == 'manifest-edit':
+                    manifest = project / 'Cargo.toml'
+                    manifest.write_text(manifest.read_text() + '\n[features]\ndefault=["changed"]\nchanged=[]\n')
                 source(project, expected=99 if failure == 'test' else dependency,
-                       nonce=nonce, broken=failure == 'compile', config=config)
+                       nonce=nonce, broken=failure == 'compile', config=config,
+                       macro=macro, build=build, feature=name == 'manifest-edit')
             if name == 'warm-success' and stack == 'hybrid' and args.prewarm:
                 side = project / 'side-effects.txt'
                 before = side_lines(side)

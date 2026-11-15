@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -60,7 +59,7 @@ class Contracts(unittest.TestCase):
                                       cold_route_regex=None, warm_route_regex=None, toolchain=None)
             status = workload.execute(args)
             report = json.loads((args.output / 'report.json').read_text())
-            self.assertEqual(len(report['rows']), 21)
+            self.assertEqual(len(report['rows']), 27)
             self.assertTrue(all(Path(row['log']).is_file() for row in report['rows']))
             self.assertTrue(all(len(row['log_sha256']) == 64 for row in report['rows']))
             return status, report
