@@ -255,7 +255,14 @@ fn real_resident_test_cancel_reaps_user_process_and_keeps_daemon_reusable() {
     let client = std::env::var_os("JUSTRUST_TEST_HOSTED_CLIENT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_justrust")));
-    let root = std::env::temp_dir().join(format!("jr-real-cancel-{}", std::process::id()));
+    let base = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").expect("HOME for native acceptance scratch"))
+                .join(".justrust/acceptance")
+        });
+    std::fs::create_dir_all(&base).unwrap();
+    let root = base.join(format!("jrc-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let home = root.join("native");
     std::fs::create_dir(&home).unwrap();
