@@ -34,6 +34,7 @@ assert not os.environ.get('RUSTC_WRAPPER')
 assert 'fallback-done' in (root / 'events').read_text().splitlines()
 event('prewarm-start')
 event('prewarm-priority=' + str(os.getpriority(os.PRIO_PROCESS, 0)))
+assert os.getpriority(os.PRIO_PROCESS, 0) == int(os.environ['PROBE_EXPECTED_PRIORITY'])
 event('prewarm-arguments=' + repr(sys.argv[4:]))
 print('PRIVATE_PREWARM_STDOUT', flush=True)
 print('PRIVATE_PREWARM_STDERR', file=sys.stderr, flush=True)
@@ -112,12 +113,17 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
+        // A resident daemon outlives preparation. Lowering this supervisor's nice
+        // value would permanently slow every future warm request via inheritance.
+        // SAFETY: getpriority reads scheduling state and has no memory preconditions.
+        let priority = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
         let mut command = Command::new(env!("CARGO_BIN_EXE_justrust"));
         command
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", &self.root)
             .env("PROBE_ROOT", &self.root)
+            .env("PROBE_EXPECTED_PRIORITY", priority.to_string())
             .env("JUSTRUST_HOME", self.root.join("state"))
             .env("JR_ENGINE_HOME", &self.home)
             .env("JUSTRUST_NATIVE_ENGINE", &self.engine)
@@ -161,6 +167,7 @@ impl Fixture {
     fn release(&self) {
         fs::write(self.root.join("release-prewarm"), "release").unwrap();
         self.wait_event("prewarm-done", 1);
+        self.wait_log("justrust hybrid: background prewarm finished status=0");
     }
 
     fn wait_log(&self, receipt: &str) {
@@ -247,7 +254,9 @@ fn successful_foreground_finishes_before_compile_only_prewarm_and_logs_privately
         "{events:?}"
     );
     assert!(!events.iter().any(|line| line == "prewarm-done"));
-    fixture.wait_event("prewarm-priority=19", 1);
+    // SAFETY: this read-only syscall observes the parent's priority.
+    let priority = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    fixture.wait_event(&format!("prewarm-priority={priority}"), 1);
     fixture.wait_event(
         "prewarm-arguments=['test', '--lib', '--', 'filter with spaces', '']",
         1,
@@ -334,6 +343,12 @@ fn background_compile_failure_does_not_replace_foreground_status() {
     );
     assert!(result.status.success(), "{}", text(&result));
     fixture.wait_event("prewarm-done", 1);
+    fixture.wait_log("background native preparation ended with");
+    assert!(
+        !fs::read_to_string(fixture.home.join("prewarm.log"))
+            .unwrap()
+            .contains("background prewarm finished status=0")
+    );
     assert_eq!(text(&result).matches("FOREGROUND_RESULT").count(), 1);
 }
 
@@ -393,6 +408,11 @@ fn committed_native_success_or_error_never_schedules_background_work() {
             text(&result)
         );
         assert_eq!(fixture.events(), ["ready-probe"]);
+        assert!(
+            text(&result).contains("justrust hybrid: resident committed"),
+            "{}",
+            text(&result)
+        );
         assert!(!fixture.home.join("prewarm.log").exists());
     }
 }
