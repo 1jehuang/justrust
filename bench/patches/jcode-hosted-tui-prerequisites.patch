@@ -346,3 +346,15 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs b/crat
      );
 +    });
  }
+diff --git a/crates/jcode-tui/src/tui/ui_header.rs b/crates/jcode-tui/src/tui/ui_header.rs
+--- a/crates/jcode-tui/src/tui/ui_header.rs
++++ b/crates/jcode-tui/src/tui/ui_header.rs
+@@ -1095,3 +1095,8 @@
+         static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
+
++        // This helper is test-only. Do not overwrite a scoped fixture's home.
++        let Ok(_env_lock) = crate::storage::test_env_lock().try_lock() else {
++            return;
++        };
++
+         if std::env::var_os("JCODE_HOME").is_some() {

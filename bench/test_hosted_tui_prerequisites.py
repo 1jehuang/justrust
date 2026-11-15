@@ -81,8 +81,10 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         if line.startswith("+++ b/")})
         targets = [line[6:] for line in (suite.ROOT / PATCH).read_text().splitlines()
                    if line.startswith("+++ b/")]
-        self.assertEqual(len(targets), 7)
+        self.assertEqual(len(targets), 8)
         for path in targets:
+            if path == "crates/jcode-tui/src/tui/ui_header.rs":
+                continue  # Authorized exception, runtime-byte proof below.
             self.assertTrue(path.startswith("crates/jcode-tui/src/tui/app/"), path)
             self.assertTrue("/tests/" in path or path.endswith(("/commands_tests.rs", "/remote_tests.rs")), path)
         repo, revision = spec["repos"]["jcode"]
@@ -121,7 +123,27 @@ class HostedTuiPrerequisites(unittest.TestCase):
                             "test_agent_model_picker_openrouter_bare_openai_route_saves_openai_catalog_prefix",
                         )):
                             self.assertRegex(block, r"fn \w+\(\) \{\s*with_local_jcode_home\(\|\| \{")
-                if path.endswith(("support_failover/part_01.rs", "/remote_tests.rs")):
+                if path.endswith("/ui_header.rs"):
+                    marker = "#[cfg(test)]\nmod tests {"
+                    self.assertEqual(original[path].count(marker), 1)
+                    self.assertEqual(updated.count(marker), 1)
+                    self.assertEqual(original[path].split(marker)[0], updated.split(marker)[0])
+                    # Stronger than a prefix check: the ONLY changed bytes are
+                    # this guard inside the existing test helper. All runtime
+                    # items, other test helpers and test bodies are identical.
+                    anchor = (
+                        "    fn ensure_test_jcode_home_if_unset() {\n"
+                        "        static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();\n\n"
+                    )
+                    insertion = (
+                        "        // This helper is test-only. Do not overwrite a scoped fixture's home.\n"
+                        "        let Ok(_env_lock) = crate::storage::test_env_lock().try_lock() else {\n"
+                        "            return;\n"
+                        "        };\n\n"
+                    )
+                    self.assertEqual(original[path].count(anchor), 1)
+                    self.assertEqual(original[path].replace(anchor, anchor + insertion), updated)
+                if path.endswith(("support_failover/part_01.rs", "/remote_tests.rs", "/ui_header.rs")):
                     helper = updated.split("fn ensure_test_jcode_home_if_unset() {", 1)[1].split("\n}", 1)[0]
                     self.assertRegex(helper, r"let Ok\(_env_lock\) = crate::storage::test_env_lock\(\).try_lock\(\) else \{\s*return;\s*\};")
                     self.assertLess(helper.index("let Ok(_env_lock)"), helper.index('crate::env::set_var("JCODE_HOME"'))
@@ -141,6 +163,8 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         text=True)
                     self.assertRegex(helper, r"fn with_temp_jcode_home[^\n]+\n\s*let _guard = crate::storage::lock_test_env\(\)")
                     self.assertIn('EnvRestoreGuard::capture(["JCODE_HOME"])', helper)
+            self.assertEqual(sum(len(test_names(source)) for source in original.values()), 254)
+            self.assertEqual(sum(len(assertions(source)) for source in original.values()), 1077)
             commands = subprocess.check_output(
                 ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/app/commands.rs"],
                 text=True)
