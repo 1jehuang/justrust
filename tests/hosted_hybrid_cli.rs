@@ -302,7 +302,15 @@ fn real_resident_test_cancel_reaps_user_process_and_keeps_daemon_reusable() {
         receipt = receipt.to_str().unwrap()
     );
     std::fs::write(project.join("src/lib.rs"), body).unwrap();
+    let guest_home = std::env::var("HOME").expect("HOME for managed guest PATH");
+    // PATH is a native worker identity input. Match start_run's guest PATH
+    // preparation exactly rather than accidentally warming another worker.
+    let managed_path = format!(
+        "{guest_home}/.cargo/bin:/opt/homebrew/bin:{guest_home}/.homebrew/bin:/usr/local/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
     let prepared = Command::new(&cleanup.client)
+        .env("PATH", managed_path)
         .args(["hybrid", "prewarm", "test", "--lib"])
         .current_dir(&project)
         .env("CARGO_BUILD_JOBS", "2")
@@ -414,10 +422,6 @@ fn real_resident_test_cancel_reaps_user_process_and_keeps_daemon_reusable() {
             break;
         }
     }
-    assert!(
-        !long_output.contains("Cargo fallback"),
-        "must cancel actual resident execution: {long_output}"
-    );
     let mut contents = String::new();
     std::fs::File::open(&receipt)
         .unwrap()
@@ -427,6 +431,10 @@ fn real_resident_test_cancel_reaps_user_process_and_keeps_daemon_reusable() {
     assert_eq!(lines.len(), 1, "test must start exactly once");
     let pid: u32 = lines[0].parse().unwrap();
     cleanup.user_process = Some((pid, process_start(pid).expect("live fixture test process")));
+    assert!(
+        !long_output.contains("Cargo fallback"),
+        "must cancel actual resident execution: {long_output}"
+    );
     assert!(PathBuf::from(format!("/proc/{pid}")).exists());
     let cancelled = Instant::now();
     write_frame(&mut writer, &Msg::Cancel { id: 1 }, &[]).unwrap();
