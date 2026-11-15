@@ -222,6 +222,9 @@ def summarize(rows, samples, unchanged, modes=MODES, phases=PHASES):
                 accepted=sum(bool(r.get('accepted')) for r in selected), excluded=not admitted,
                 median_workload_seconds=statistics.median(r['elapsed_seconds'] for r in selected) if admitted else None,
                 median_total_seconds=statistics.median(r['total_seconds'] for r in selected) if admitted else None,
+                median_ready_for_next_edit_seconds=statistics.median(
+                    r['ready_for_next_edit_seconds'] for r in selected)
+                    if admitted and all('ready_for_next_edit_seconds' in r for r in selected) else None,
                 failures=[dict(replicate=r['replicate'], reasons=r.get('failures', ['unvalidated']))
                           for r in selected if not r.get('accepted')])
     return result
@@ -488,7 +491,8 @@ def execute_budget(args):
         policy='Two-project native worker budget. A hot edit and A after-peer edit are separate states. '
                'Bounded misses may run cargo while a replacement worker loads. No blended hit/miss '
                'weight, full heap serialization, machine-cold claim or speedup claim. '
-               'All readiness/eviction waits, priming and peer commands are outside measured latency. '
+               'All priming and peer commands are outside measured response latency. '
+               'ready_for_next_edit includes post-result readiness waits and inspection probes; '
                'Cap is native soft worker budget, not total process or machine RSS limit. '
                'The newest or busy worker may exceed it. Baseline measured separately by coordinator.',
         tiers={'uncapped': 'RA_JIT_MEMORY_MAX=off, A+B workers retained',
@@ -510,8 +514,10 @@ def execute_budget(args):
         command = shared.command(args.engine, 'engine') if operation == 'test' else [str(args.engine), operation]
         prefix = args.output / label
         row = runtime.run_process(command, source, env, prefix, args.timeout)
+        result_returned = time.monotonic()
         raw, text, error = matrix.captured(prefix)
-        row.update(raw=raw, raw_error=error, cwd=str(source), label=label, nonce=nonce)
+        row.update(raw=raw, raw_error=error, cwd=str(source), label=label, nonce=nonce,
+                   result_returned_monotonic=result_returned)
         receipts.append(row)
         save()
         return row, text
@@ -646,6 +652,10 @@ def execute_budget(args):
                     current = after
                     if kind != 'type-error':
                         current, row['ready_wait'] = ready(mode, a, label + '-' + phase + '-ready')
+                    # Include readiness probes/inspection after the returned result so
+                    # asynchronous reloading is not presented as a completed restore.
+                    row['ready_for_next_edit_seconds'] = row['elapsed_seconds'] + max(
+                        0, time.monotonic() - row['result_returned_monotonic'])
                     save()
     except BaseException as exc:
         metadata['error'] = repr(exc)

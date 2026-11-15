@@ -299,6 +299,19 @@ class HarnessTests(unittest.TestCase):
         self.assertIn('synthetic interruption', files['metadata.json']['error'])
         self.assertEqual(files['summary.json']['status'], 'failed/incomplete')
 
+    def test_readiness_latency_is_separate_from_result_latency(self):
+        rows = [dict(mode=mode, phase='hot-edit', replicate=rep, accepted=True,
+                     elapsed_seconds=0.1, total_seconds=0.1,
+                     ready_for_next_edit_seconds=0.5)
+                for mode in tier.BUDGET_MODES for rep in range(5)]
+        states = tier.summarize(rows, 5, True, modes=tier.BUDGET_MODES, phases=('hot-edit',))
+        for state in states['hot-edit'].values():
+            self.assertEqual(state['median_workload_seconds'], 0.1)
+            self.assertEqual(state['median_ready_for_next_edit_seconds'], 0.5)
+        rows.pop()
+        self.assertTrue(tier.summarize(rows, 5, True, modes=tier.BUDGET_MODES,
+            phases=('hot-edit',))['hot-edit']['bounded']['excluded'])
+
     def test_summary_never_admits_incomplete_or_failed_identity(self):
         row = dict(mode=tier.MODES[0], phase='edit', replicate=0, accepted=True,
                    elapsed_seconds=1, total_seconds=1)
