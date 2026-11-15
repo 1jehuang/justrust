@@ -14,6 +14,7 @@ from pathlib import Path
 import shlex
 import shutil
 import statistics
+import time
 
 import hybrid_workload as core
 import hybrid_workload_pinned as pinned
@@ -36,6 +37,19 @@ def managed_preparation_command(command):
     # Match remote_agent::start_run's guest-side PATH prefix. PATH is also part
     # of native checkout identity, even when the pinned compiler is explicit.
     return 'PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH" ' + command
+
+
+def management_request(attempt, read_only=False, pause=time.sleep):
+    # Reads may safely retry after an unknown transport outcome. Never retry
+    # prewarm or a build: compile-time user code may already have executed.
+    limit = 3 if read_only else 1
+    for index in range(limit):
+        row, log = attempt(index)
+        if not (row['returncode'] or row['timeout'] or row['error']):
+            return row, log
+        if index + 1 < limit:
+            pause(index + 1)
+    return row, log
 
 
 def parse_side_effects(row, path):
@@ -107,16 +121,20 @@ def execute(args):
     states = {}
     def save():
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
-    def guest(command, prefix, cwd):
-        log = args.output / (prefix + '.log')
-        row = core.run([str(args.justrust), 'remote', 'ssh', command], cwd, clean, log, args.timeout)
-        report['management'].append(row)
-        save()
-        return row, log
+    def guest(command, prefix, cwd, read_only=False):
+        def attempt(index):
+            suffix = '' if index == 0 else f'-retry-{index}'
+            log = args.output / (prefix + suffix + '.log')
+            row = core.run([str(args.justrust), 'remote', 'ssh', command], cwd, clean, log, args.timeout)
+            row.update(management_read_only=read_only, management_attempt=index + 1)
+            report['management'].append(row)
+            save()
+            return row, log
+        return management_request(attempt, read_only=read_only)
     def effects(state, label):
         # The explicit remote shell owns only this benchmark's private fixture.
         code = 'import json,pathlib; p=pathlib.Path(' + repr(str(state['side'])) + '); print(json.dumps(p.read_text().splitlines() if p.exists() else []))'
-        row, log = guest('python3 -c ' + shlex.quote(code), label, state['project'])
+        row, log = guest('python3 -c ' + shlex.quote(code), label, state['project'], read_only=True)
         return parse_side_effects(row, log)
     for stack in ('shipping', 'hybrid-cold', 'hybrid-warm'):
         root = args.output / stack
@@ -194,7 +212,7 @@ def execute(args):
             command = shell_env(values) + ' ' + shlex.quote(str(args.guest_client)) + ' hybrid stop'
             try:
                 row, _ = guest(command, 'stop-' + stack, state['project'])
-                verification, log = guest(namespace_probe(state['home']), 'stopped-' + stack, state['project'])
+                verification, log = guest(namespace_probe(state['home']), 'stopped-' + stack, state['project'], read_only=True)
                 alive = parse_side_effects(verification, log)
                 report['cleanup'].append({'stack': stack, **row, 'remaining_namespace_pids': alive,
                                           'ok': row['returncode'] == 0 and not row['timeout'] and not row['error'] and not alive})

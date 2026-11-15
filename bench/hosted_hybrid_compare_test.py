@@ -4,6 +4,7 @@ import shlex
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 import hosted_hybrid_compare as subject
 
@@ -56,6 +57,35 @@ class HostedHarnessTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(),
                          '/guest/home/.cargo/bin:/opt/homebrew/bin:/guest/home/.homebrew/bin:/usr/local/bin:/original/bin')
+
+    def test_mutating_management_never_retries_unknown_outcome(self):
+        failed = ({'returncode': 1, 'timeout': False, 'error': None}, Path('/failed'))
+        attempt, pause = Mock(return_value=failed), Mock()
+        self.assertEqual(subject.management_request(attempt, pause=pause), failed)
+        attempt.assert_called_once_with(0)
+        pause.assert_not_called()
+
+    def test_read_only_management_retries_and_preserves_final_receipt(self):
+        failed = ({'returncode': 1, 'timeout': False, 'error': None}, Path('/first'))
+        timed_out = ({'returncode': None, 'timeout': True, 'error': None}, Path('/second'))
+        accepted = ({'returncode': 0, 'timeout': False, 'error': None}, Path('/third'))
+        attempt, pause = Mock(side_effect=[failed, timed_out, accepted]), Mock()
+        self.assertEqual(subject.management_request(attempt, read_only=True, pause=pause), accepted)
+        self.assertEqual([x.args for x in attempt.call_args_list], [(0,), (1,), (2,)])
+        self.assertEqual([x.args for x in pause.call_args_list], [(1,), (2,)])
+
+    def test_read_only_management_failure_stays_failure(self):
+        failed = ({'returncode': 1, 'timeout': False, 'error': 'unavailable'}, Path('/failed'))
+        attempt = Mock(return_value=failed)
+        self.assertEqual(subject.management_request(attempt, read_only=True, pause=Mock()), failed)
+        self.assertEqual(attempt.call_count, 3)
+
+    def test_read_only_management_success_is_not_repeated(self):
+        accepted = ({'returncode': 0, 'timeout': False, 'error': None}, Path('/first'))
+        attempt, pause = Mock(return_value=accepted), Mock()
+        self.assertEqual(subject.management_request(attempt, read_only=True, pause=pause), accepted)
+        attempt.assert_called_once_with(0)
+        pause.assert_not_called()
 
     def test_namespace_probe_is_valid_read_only_python_for_quoted_path(self):
         with tempfile.TemporaryDirectory() as directory:
