@@ -886,7 +886,9 @@ fn checkout(
     let generation = if strict {
         let native_config =
             blaze_manifest::Config::load(cwd, std::env::vars(), &asked.flags.config)?;
-        hybrid_generation(root, manifests.clone(), &lock, &native_config, std::env::vars())?
+        let generation =
+            hybrid_generation(root, manifests.clone(), &lock, &native_config, std::env::vars())?;
+        hybrid_compile_time_generation(asked, cwd, metadata, generation)?
     } else {
         checkout_generation(root, manifests.clone(), lock)
     };
@@ -1003,6 +1005,148 @@ fn hybrid_generation(
     let mut tag = [0; 16];
     tag.copy_from_slice(&digest[..16]);
     Ok(u128::from_le_bytes(tag) | (1 << 127))
+}
+
+/// Proc macros execute in retained workers, so editing their inputs is not a normal
+/// hot Rust source edit. Resolve an offline, locked superset of the selected graph and
+/// content-key local packages reachable from every proc macro. Never write a lock or
+/// fetch a missing dependency merely to decide whether a worker can be admitted.
+fn hybrid_compile_time_generation(
+    invocation: &Invocation,
+    cwd: &Path,
+    metadata: &Metadata,
+    generation: u128,
+) -> anyhow::Result<u128> {
+    use sha2::{Digest as _, Sha256};
+    let selection = invocation.selection();
+    let request = blaze_metadata::Asked {
+        cwd,
+        env: std::env::vars().collect(),
+        manifest_path: invocation.flags.manifest_path.as_deref(),
+        config: &invocation.flags.config,
+        features: &selection.features,
+        all_features: selection.all_features,
+        no_default_features: selection.no_default_features,
+        build: None,
+        platform: None,
+        offline: true,
+        store: None,
+        rustc_version: Some(crate::cargo::toolchain::ours_release()),
+    };
+    let resolved: Metadata = serde_json::from_str(&blaze_metadata::metadata_locked(&request)?)?;
+    let graph = resolved.resolve.as_ref().context("hybrid proc-macro graph has no resolution")?;
+    let packages: BTreeMap<_, _> =
+        resolved.packages.iter().map(|package| (package.id.to_string(), package)).collect();
+    let nodes: BTreeMap<_, _> =
+        graph.nodes.iter().map(|node| (node.id.to_string(), node)).collect();
+    let mut pending: Vec<_> = resolved
+        .packages
+        .iter()
+        .filter(|package| {
+            package
+                .targets
+                .iter()
+                .any(|target| target.kind.contains(&cargo_metadata::TargetKind::ProcMacro))
+        })
+        .map(|package| package.id.to_string())
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let package = packages.get(&id).context("hybrid proc-macro graph package is missing")?;
+        if package.source.is_none() {
+            roots.insert(super::state::package_dir(package));
+        }
+        let node = nodes.get(&id).context("hybrid proc-macro graph node is missing")?;
+        pending.extend(node.deps.iter().filter_map(|dependency| {
+            dependency
+                .dep_kinds
+                .iter()
+                .any(|kind| kind.kind != cargo_metadata::DependencyKind::Development)
+                .then(|| dependency.pkg.to_string())
+        }));
+    }
+    let mut hash = Sha256::new();
+    hybrid_frame(&mut hash, b"jr-engine/hybrid-compile-time-inputs/v1");
+    hybrid_frame(&mut hash, &generation.to_le_bytes());
+    let mut excluded = vec![resolved_directory_path(metadata.target_directory.as_std_path())?];
+    if let Some(build) = &metadata.build_directory {
+        excluded.push(resolved_directory_path(build.as_std_path())?);
+    }
+    for root in roots {
+        hybrid_package_inputs(&mut hash, &root, &excluded)?;
+    }
+    let digest = hash.finalize();
+    let mut tag = [0; 16];
+    tag.copy_from_slice(&digest[..16]);
+    Ok(u128::from_le_bytes(tag) | (1 << 127))
+}
+
+/// Hash package inputs, including non-Rust include data and build-script inputs. Do
+/// not use timestamps or a fallible best-effort source walker for this safety key.
+/// Directory symlinks and unbounded trees are unsupported rather than partly keyed.
+fn hybrid_package_inputs(
+    hash: &mut sha2::Sha256,
+    root: &Path,
+    excluded: &[PathBuf],
+) -> anyhow::Result<()> {
+    let root = root.canonicalize()?;
+    hybrid_frame(hash, root.as_os_str().as_encoded_bytes());
+    let mut pending = vec![root.clone()];
+    let mut files = BTreeMap::new();
+    let mut entries = 0usize;
+    let mut bytes_read = 0usize;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            entries += 1;
+            anyhow::ensure!(entries <= 100_000, "hybrid compile-time package tree is too large");
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            let name = entry.file_name();
+            if kind.is_dir() {
+                if name == ".git"
+                    || name == "target"
+                    || excluded.iter().any(|it| path.starts_with(it))
+                {
+                    continue;
+                }
+                pending.push(path);
+            } else {
+                let canonical = path.canonicalize()?;
+                anyhow::ensure!(
+                    canonical.is_file(),
+                    "hybrid compile-time input is not a regular file: {}",
+                    path.display()
+                );
+                anyhow::ensure!(
+                    std::fs::metadata(&canonical)?.len() <= 128 * 1024 * 1024,
+                    "hybrid compile-time input is too large"
+                );
+                let bytes = std::fs::read(&path)?;
+                bytes_read += bytes.len();
+                anyhow::ensure!(
+                    bytes_read <= 128 * 1024 * 1024,
+                    "hybrid compile-time package inputs are too large"
+                );
+                anyhow::ensure!(
+                    canonical == path.canonicalize()? && bytes == std::fs::read(&path)?,
+                    "hybrid compile-time input changed while reading: {}",
+                    path.display()
+                );
+                files.insert(path, (canonical, bytes));
+            }
+        }
+    }
+    for (path, (canonical, bytes)) in files {
+        hybrid_frame(hash, path.strip_prefix(&root)?.as_os_str().as_encoded_bytes());
+        hybrid_frame(hash, canonical.as_os_str().as_encoded_bytes());
+        hybrid_frame(hash, &bytes);
+    }
+    Ok(())
 }
 
 fn hybrid_frame(hash: &mut sha2::Sha256, bytes: &[u8]) {
@@ -1156,6 +1300,50 @@ mod hybrid_generation_tests {
             std::fs::write(&file, text).unwrap();
             file
         }
+    }
+
+    fn package_tag(root: &Path, excluded: &[PathBuf]) -> anyhow::Result<Vec<u8>> {
+        use sha2::Digest as _;
+        let mut hash = sha2::Sha256::new();
+        hybrid_package_inputs(&mut hash, root, excluded)?;
+        Ok(hash.finalize().to_vec())
+    }
+
+    #[test]
+    fn proc_macro_package_content_not_timestamps_is_the_identity() {
+        let f = Fixture::new();
+        let source = f.root.join("macro.rs");
+        std::fs::write(&source, "07u32").unwrap();
+        let first = package_tag(&f.root, &[]).unwrap();
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        std::fs::write(&source, "11u32").unwrap();
+        std::fs::File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
+        assert_ne!(first, package_tag(&f.root, &[]).unwrap());
+        let source = package_tag(&f.root, &[]).unwrap();
+        std::fs::write(f.root.join(".included-data"), "new non-Rust input").unwrap();
+        assert_ne!(source, package_tag(&f.root, &[]).unwrap());
+    }
+
+    #[test]
+    fn proc_macro_native_artifacts_and_git_do_not_invalidate_inputs() {
+        let f = Fixture::new();
+        let artifacts = f.root.join("private-artifacts");
+        std::fs::create_dir(&artifacts).unwrap();
+        std::fs::create_dir(f.root.join("target")).unwrap();
+        std::fs::create_dir(f.root.join(".git")).unwrap();
+        let first = package_tag(&f.root, std::slice::from_ref(&artifacts)).unwrap();
+        for directory in [&artifacts, &f.root.join("target"), &f.root.join(".git")] {
+            std::fs::write(directory.join("changed"), "artifact not source").unwrap();
+        }
+        assert_eq!(first, package_tag(&f.root, &[artifacts]).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_macro_directory_symlink_fails_closed() {
+        let f = Fixture::new();
+        std::os::unix::fs::symlink(&f.home, f.root.join("linked-directory")).unwrap();
+        assert!(package_tag(&f.root, &[]).is_err());
     }
 
     #[test]

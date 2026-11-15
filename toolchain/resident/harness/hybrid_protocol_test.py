@@ -180,6 +180,77 @@ pub fn value() -> u32 { 9 }
             "assert!(true);", "assert_eq!(external_dependency::value(), 7);"))
         return dependency
 
+    def add_proc_macro(self, helper=False):
+        macro = self.root / "macro"
+        (macro / "src").mkdir(parents=True)
+        (macro / "Cargo.toml").write_text('''[package]
+name="acceptance_macro"
+version="0.1.0"
+edition="2021"
+[lib]
+proc-macro=true
+''' + ('[dependencies]\nmacro_helper={path="../macro-helper"}\n' if helper else ''))
+        source = macro / "src/lib.rs"
+        source.write_text('''extern crate proc_macro;
+#[proc_macro]
+pub fn number(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    %s.parse().unwrap()
+}
+''' % ('macro_helper::value()' if helper else '"07u32"'))
+        changed = source
+        if helper:
+            dependency = self.root / "macro-helper"
+            (dependency / "src").mkdir(parents=True)
+            (dependency / "Cargo.toml").write_text('[package]\nname="macro_helper"\nversion="0.1.0"\nedition="2021"\n')
+            changed = dependency / "src/lib.rs"
+            changed.write_text('pub fn value() -> &\'static str { "07u32" }\n')
+        self.manifest.write_text(self.manifest.read_text() +
+                                 '\n[dependencies]\nacceptance_macro={path="../macro"}\n')
+        self.source.write_text(self.source.read_text().replace(
+            'assert!(true);', 'assert_eq!(acceptance_macro::number!(), 7);'))
+        return changed
+
+    def exercise_proc_macro_change(self, helper):
+        changed = self.add_proc_macro(helper=helper)
+        self.prewarm("test", "--lib")
+        initial = self.ready("test", "--lib")
+        self.assertEqual(initial[0:2], (0, b"committed\n"), initial)
+        self.assertEqual(self.executions(), ["fresh"])
+        self.change_preserving_timestamp(changed, '07u32', '11u32')
+        self.source.write_text(self.source.read_text().replace('number!(), 7', 'number!(), 11'))
+        missed = self.ready("test", "--lib")
+        self.assertEqual(missed[0:2], (0, b"miss\n"), missed)
+        self.assertEqual(self.executions(), ["fresh"])
+        # A stock Cargo oracle models the client's separate shipping fallback.
+        # It uses different artifacts and runs only after the positive miss.
+        shipping = dict(self.env, CARGO_TARGET_DIR=str(self.root / "shipping-target"),
+                        CARGO_BUILD_BUILD_DIR=str(self.root / "shipping-target/build"))
+        result = subprocess.run([str(Path(TOOLCHAIN) / "bin/cargo"), "test", "--lib"],
+                                cwd=self.project, env=shipping, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=180, check=False)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+        self.assertEqual(self.executions(), ["fresh", "fresh"])
+        prepared = self.invoke("hybrid-prewarm", "test", "--lib")
+        self.assertEqual(prepared[0], 0, prepared)
+        self.assertEqual(self.executions(), ["fresh", "fresh"])
+        fresh = self.ready("test", "--lib")
+        self.assertEqual(fresh[0:2], (0, b"committed\n"), fresh)
+        self.assertEqual(self.executions(), ["fresh", "fresh", "fresh"])
+
+    def test_ordinary_source_edit_with_proc_macro_keeps_ready_worker(self):
+        self.add_proc_macro()
+        self.prewarm("test", "--lib")
+        self.source.write_text(self.source.read_text() + '\n// ordinary hot source edit\n')
+        result = self.ready("test", "--lib")
+        self.assertEqual(result[0:2], (0, b"committed\n"), result)
+        self.assertEqual(self.executions(), ["fresh"])
+
+    def test_proc_macro_source_same_size_same_timestamp_change_is_miss_then_rewarms(self):
+        self.exercise_proc_macro_change(helper=False)
+
+    def test_proc_macro_path_dependency_same_timestamp_change_is_miss_then_rewarms(self):
+        self.exercise_proc_macro_change(helper=True)
+
     def test_invalid_syntax_is_committed_101_without_execution_and_recovers(self):
         self.prewarm("test", "--lib")
         self.source.write_text("this is intentionally invalid Rust\n")
