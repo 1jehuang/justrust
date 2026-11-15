@@ -85,6 +85,28 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcod
 diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 --- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+@@ -93,3 +93,6 @@
+ fn test_open_model_picker_without_routes_shows_actionable_guidance() {
++    // Pin config through the async route load so another fixture cannot
++    // invalidate its signature and leave the initial loading row in place.
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+@@ -105,3 +108,4 @@
+     assert!(last.content.contains("/account"));
+     assert!(last.content.contains("/model"));
++    });
+ }
+@@ -1145,3 +1149,4 @@
+ fn test_tui_openai_compatible_empty_catalog_does_not_switch_to_profile_default() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+@@ -1200,3 +1205,4 @@
+     assert!(!activity.message.contains("documented default"));
+     assert!(!activity.message.contains("qwen-3-coder-480b"));
++    });
+ }
 @@ -1444,3 +1444,4 @@
  fn test_login_completed_spawns_auth_refresh_when_runtime_is_available() {
 +    with_local_jcode_home(|| {

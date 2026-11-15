@@ -66,7 +66,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
         self.assertIn('Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value)', text)
         self.assertEqual(text.count("+    let git_fixture = create_real_git_repo_fixture();"), 2)
         self.assertEqual(text.count("+    with_temp_jcode_home(|| {"), 11)
-        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 10)
+        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 12)
         self.assertIn("crate::auth::antigravity::save_tokens", text)
         self.assertIn("expires_at: i64::MAX", text)
         self.assertIn('let _ssh = EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"]);', text)
@@ -116,13 +116,15 @@ class HostedTuiPrerequisites(unittest.TestCase):
                 if path.endswith("state_model_poke_03.rs"):
                     for block in blocks:
                         if any(name in block.splitlines()[0] for name in (
+                            "test_open_model_picker_without_routes_shows_actionable_guidance",
+                            "test_tui_openai_compatible_empty_catalog_does_not_switch_to_profile_default",
                             "test_login_completed_spawns_auth_refresh_when_runtime_is_available",
                             "test_model_picker_waits_for_async_post_login_catalog_activation",
                             "test_login_completed_surfaces_new_provider_models_in_local_model_picker",
                             "test_local_antigravity_model_picker_selection_preserves_antigravity_provider",
                             "test_agent_model_picker_openrouter_bare_openai_route_saves_openai_catalog_prefix",
                         )):
-                            self.assertRegex(block, r"fn \w+\(\) \{\s*with_local_jcode_home\(\|\| \{")
+                            self.assertRegex(block, r"fn \w+\(\) \{\s*(?://[^\n]*\n\s*)*with_local_jcode_home\(\|\| \{")
                 if path.endswith("/ui_header.rs"):
                     marker = "#[cfg(test)]\nmod tests {"
                     self.assertEqual(original[path].count(marker), 1)
