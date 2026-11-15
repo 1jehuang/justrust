@@ -680,8 +680,10 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    if args.synth is None and (args.stop_on_invalid or args.retry_noisy):
-        sys.exit("versus: --stop-on-invalid and --retry-noisy require --synth")
+    if args.synth is None and (args.stop_on_invalid or args.retry_noisy or args.retry_infra):
+        sys.exit("versus: --stop-on-invalid, --retry-noisy and --retry-infra require --synth")
+    if not 0 <= args.retry_infra <= 3:
+        sys.exit("versus: --retry-infra must be between 0 and 3")
     if args.retry_noisy < 0:
         sys.exit("versus: --retry-noisy must be nonnegative")
     stacks = [s for s in STACKS if not args.only or s.name in args.only.split(",")]
@@ -744,6 +746,8 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
         options["stop_on_invalid"] = True
     if args.retry_noisy:
         options["retry_noisy"] = args.retry_noisy
+    if args.retry_infra:
+        options["retry_infra"] = args.retry_infra
     res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
                                  partial=suite.synthetic_partial_path(args), only=only,
                                  resume=args.resume, **options)
@@ -845,6 +849,10 @@ def main() -> None:
     r.add_argument("--stop-on-invalid", action="store_true",
                    help="synthetic only: save and upload evidence, then exit nonzero after the first "
                         "failed or noisy point; incompatible with --resume")
+    r.add_argument("--retry-infra", type=int, default=0, metavar="N",
+                   help="synthetic only: retry explicitly identified hosted infrastructure failures up to N "
+                        "times (0..3, default 0), retaining all attempts, with 30/60/120s backoff. "
+                        "Use exactly the same value before and after; incompatible with --resume")
     r.add_argument("--retry-noisy", type=int, default=0, metavar="N",
                    help="synthetic only: remeasure a noisy sample up to N times after waiting for quiet "
                         "(default 0; discarded attempts retained)")

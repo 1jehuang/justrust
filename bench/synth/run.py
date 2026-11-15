@@ -87,22 +87,37 @@ def _keep_log(r: dict) -> None:
     Path(r.pop("log")).unlink(missing_ok=True)
 
 
-def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
+def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None, evidence=None) -> dict:
     """Steps 1-4 for one stack. Returns the measured sample or an error."""
     # Restoration mutates the shared snapshot too, even on a rerun with no edits.
     gen._locked()
     gen.restore_all(plan.snap)
     options = {"identity": identity} if identity is not None else {}
-    pre = _run(st, plan, plan.pre, "pre", **options)
+    def execute(cmd, tag):
+        raw = _run(st, plan, cmd, tag, **options)
+        if evidence is not None:
+            evidence.append({"stage": tag, "command": list(cmd), "raw": dict(raw),
+                             "log_text": Path(raw["log"]).read_text(errors="replace")})
+        return raw
+
+    def keep(raw):
+        if evidence is None:
+            _keep_log(raw)
+        else:
+            raw.pop("log", None)
+
+    pre = execute(plan.pre, "pre")
     if pre["exit"] != 0:
         return {"error": f"pre-build failed (exit {pre['exit']}), log {pre['log']}"}
-    _keep_log(pre)
+    keep(pre)
     created = None
     try:
         created = gen.apply(plan, n)
         if plan.prev:
-            prev = _run(st, plan, plan.prev, "prev", **options)
-            _keep_log(prev)
+            prev = execute(plan.prev, "prev")
+            if evidence is not None and prev["exit"] != 0:
+                return {"error": f"previous build failed (exit {prev['exit']}), log {prev['log']}"}
+            keep(prev)
         # The unmeasured steps above can leave a GB of dirty pages (a
         # depcache restore writes faster than a compile). Without a flush the
         # measured call's cargo startup paid 0.5-1.1 s of io stall in some
@@ -110,7 +125,7 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
         # time between calls, so writeback is done by then; same for every
         # stack.
         os.sync()
-        r = _run(st, plan, plan.cmd, "run", **options)
+        r = execute(plan.cmd, "run")
     finally:
         if created is None:
             # apply can fail after writing a source or creating a module. Its
@@ -123,7 +138,7 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     if r["tests_failed"] or r["compile_failed"] != plan.expect_fail or (r["exit"] != 0 and not r["compile_failed"]):
         return {"error": f"exit {r['exit']}, expected {'a compile error' if plan.expect_fail else 'success'}, "
                          f"log {r['log']}", "wall": r["wall"]}
-    _keep_log(r)
+    keep(r)
     r["pre_wall"] = pre["wall"]
     # The pre-build leaves the target dir warm for exactly these sources, so a
     # rerun (same command, nothing edited) must be near a no-op. If it is not,
@@ -133,6 +148,51 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     if plan.point.shape.get("change") == "rerun" and not plan.edits and r["wall"] > max(5.0, 0.5 * pre["wall"]):
         r["suspect"] = f"rerun took {r['wall']:.1f}s after a {pre['wall']:.1f}s pre-build (cache invalidated?)"
     return r
+
+
+def _infra_failure(st, result, evidence):
+    """Only anchored client diagnostics qualify, never a missing remote record alone."""
+    if not st.justrust or "error" not in result or not evidence:
+        return False
+    failed = False
+    for entry in evidence:
+        raw, text = entry["raw"], entry["log_text"]
+        if (raw.get("compile_failed") or raw.get("tests_failed")
+                or re.search(r"(?m)^(?:error(?:\[E\d+\])?:|test result: FAILED|failures:|"
+                             r"thread '[^\n]+' panicked at|test [^\n]+ \.\.\. FAILED)", text)):
+            return False
+        if raw.get("exit") == 0:
+            continue
+        failed = True
+        known = re.search(
+            r"(?mi)^justrust: (?:hosted build did not run: .+|"
+            r"(?:remote required, refusing local fallback: )?[^\n]*admission unavailable[^\n]*|"
+            r"(?:remote required, refusing local fallback: )?[^\n]*cannot authenticate native hosted TLS at [^\n]*(?:unexpected EOF|transport EOF|unexpected end of file)[^\n]*|"
+            r"[^\n]*could not reach https://build\.jcode\.sh(?:[/:][^\s]*)?: curl: \(28\) [^\n]*(?:timed out|Timeout)[^\n]*)$",
+            text)
+        if not known:
+            return False
+    return failed
+
+
+def run_point_infra(st, plan, n, retries, **options):
+    """Retry the entire failed point execution, never just its measured command."""
+    started = time.monotonic()
+    attempts = []
+    for attempt in range(retries + 1):
+        evidence = []
+        result = run_point(st, plan, n, evidence=evidence, **options)
+        retryable = _infra_failure(st, result, evidence)
+        delay = 30 * 2 ** attempt if retryable and attempt < retries else 0
+        attempts.append({"result": dict(result), "commands": evidence,
+                         "infra_failure": retryable, "backoff_seconds": delay})
+        if not delay:
+            break
+        print(f"  synth: hosted infrastructure failure, retry {attempt + 1}/{retries} "
+              f"after {delay}s: {result['error']}", file=sys.stderr)
+        time.sleep(delay)
+    return result, {"attempts": attempts, "elapsed_seconds": time.monotonic() - started,
+                    "backoff_seconds": sum(a["backoff_seconds"] for a in attempts)}
 
 
 def installed_toolchain_identity(home):
@@ -239,7 +299,8 @@ def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
         partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
-        identity=None, stop_on_invalid: bool = False, retry_noisy: int = 0) -> dict:
+        identity=None, stop_on_invalid: bool = False, retry_noisy: int = 0,
+        retry_infra: int = 0) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
@@ -249,7 +310,14 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     then stop before the next point. Cannot be combined with resume.
     `retry_noisy`: remeasure a noisy sample up to this many times, after waiting
     for a quiet machine. Discarded attempts are kept under `noisy_retries`; the
-    kept sample still has to pass the same noise check."""
+    kept sample still has to pass the same noise check.
+    `retry_infra`: bounded full point retries for anchored hosted failures only.
+    All raw attempts and backoff stay in the result. Wall samples exclude outages
+    and must not be interpreted as total agent wait."""
+    if type(retry_infra) is not int or not 0 <= retry_infra <= 3:
+        raise ValueError("bench: retry_infra must be between 0 and 3")
+    if retry_infra and resume:
+        raise ValueError("bench: retry_infra cannot be combined with resume")
     if stop_on_invalid and resume:
         raise ValueError("bench: stop_on_invalid cannot be combined with resume")
     if identity is not None and resume:
@@ -260,6 +328,8 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     if only:
         plans = [p for p in plans if p.point.i in only]
     binding = checkpoint_identity(stacks, quiet_wait, only, retry_noisy) if partial else None
+    if binding is not None and retry_infra:
+        binding["retry_infra"] = retry_infra
     base = int(time.time()) % 100000 * 100
     res_points = []
     if resume and partial and partial.exists():
@@ -282,15 +352,21 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     done = {p["i"] for p in res_points}
     t_start = time.monotonic()
     stopped = {}
+    retry_metadata = ({"retry_infra": retry_infra,
+                       "wall_scope": "successful samples conditioned on infrastructure availability; "
+                                     "not total agent wait", "infra_attempts": []} if retry_infra else {})
 
     def save_checkpoint():
+        if retry_infra:
+            retry_metadata["execution_elapsed_seconds"] = time.monotonic() - t_start
         if partial:
             partial.parent.mkdir(parents=True, exist_ok=True)
             temporary = partial.with_name(partial.name + ".tmp")
             temporary.write_text(json.dumps({"seed": seed, "points": points, "reps": reps, "partial": True,
                                             "generator": gen.fingerprint(), "sample_info": info,
                                             "checkpoint_identity": binding,
-                                            "stack_names": [s.name for s in stacks], "results": res_points, **stopped}))
+                                            "stack_names": [s.name for s in stacks], "results": res_points,
+                                            **retry_metadata, **stopped}))
             temporary.replace(partial)
 
     # Replace stale evidence before point zero, even if its pre-build is interrupted.
@@ -311,7 +387,14 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                 if quiet_wait:
                     suite.wait_quiet(quiet_wait)
                 options = {"identity": identity} if identity is not None else {}
-                r = run_point(st, plan, base + k * 10 + rep, **options)
+                def measure():
+                    if not retry_infra:
+                        return run_point(st, plan, base + k * 10 + rep, **options)
+                    value, history = run_point_infra(st, plan, base + k * 10 + rep, retry_infra, **options)
+                    retry_metadata["infra_attempts"].append({"point": plan.point.i, "stack": st.name,
+                                                           "rep": rep, **history})
+                    return value
+                r = measure()
                 for _ in range(retry_noisy):
                     if "error" in r or r.get("noisy") is False:
                         break
@@ -321,7 +404,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} noisy {r['wall']:.2f}s, "
                           "waiting for quiet and remeasuring", file=sys.stderr)
                     suite.wait_quiet(max(quiet_wait, 600))
-                    r = run_point(st, plan, base + k * 10 + rep, **options)
+                    r = measure()
                 if "error" in r:
                     errors[st.name] = r["error"]
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} ERROR {r['error']}", file=sys.stderr)
@@ -350,9 +433,11 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
             break
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
+    if retry_infra:
+        retry_metadata["execution_elapsed_seconds"] = time.monotonic() - t_start
     return {"seed": seed, "points": points, "reps": reps, "generator": gen.fingerprint(), "sample_info": info,
             "stack_names": [s.name for s in stacks], "results": res_points,
-            **({"checkpoint_identity": binding} if binding is not None else {}), **stopped}
+            **({"checkpoint_identity": binding} if binding is not None else {}), **retry_metadata, **stopped}
 
 
 # --- reporting --------------------------------------------------------------
@@ -570,6 +655,9 @@ def table(synth: dict) -> str:
             lines.append(row(f"{axis}: {k}", a, a[base]["n"]))
     if note := _instruction_note(synth):
         lines += ["", note]
+    if synth.get("retry_infra"):
+        lines += ["", "Infrastructure retry mode: " + synth["wall_scope"] + ". "
+                  "Raw attempts, backoff and elapsed time are retained in infra_attempts."]
     return "\n".join(lines)
 
 
@@ -602,6 +690,8 @@ def comparison_issues(a: dict, b: dict) -> list[str]:
     if _structure(a) or _structure(b):
         return reasons
     keys = ("seed", "points", "reps", "generator", "sample_info", "stack_names")
+    if a.get("retry_infra", 0) != b.get("retry_infra", 0):
+        reasons.append("different retry_infra: use exactly the same retry policy before and after")
     for key in keys:
         if key not in a or key not in b or a[key] != b[key]:
             reasons.append(f"different or missing {key}: compare identical workload identities")
