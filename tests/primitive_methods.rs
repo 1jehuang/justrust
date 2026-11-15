@@ -2280,3 +2280,70 @@ fn main() { let pair = (make(5), make(6)); let (first, _) = pair; println!("valu
         "make 5\nmake 6\nvalue 5\ndrop 5\ndrop 6\n",
     );
 }
+
+#[test]
+fn ascii_classification_paths_are_function_values() {
+    oracle::check(
+        "ascii-method-paths",
+        &[
+            Case {
+                name: "byte_and_char_paths_as_callbacks_and_direct_calls",
+                source: r#"fn count(bytes: &[u8], pred: impl Fn(&u8) -> bool) -> usize {
+    bytes.iter().filter(|b| pred(b)).count()
+}
+fn main() {
+    let b = b" a1F\t;Z\x7f";
+    println!("{}", b.iter().copied().take_while(u8::is_ascii_whitespace).count());
+    println!("{} {}", b.iter().all(u8::is_ascii), b.iter().any(u8::is_ascii_hexdigit));
+    println!(
+        "{} {} {} {} {} {} {} {} {}",
+        count(b, u8::is_ascii_digit),
+        count(b, u8::is_ascii_hexdigit),
+        count(b, u8::is_ascii_alphabetic),
+        count(b, u8::is_ascii_alphanumeric),
+        count(b, u8::is_ascii_uppercase),
+        count(b, u8::is_ascii_lowercase),
+        count(b, u8::is_ascii_whitespace),
+        count(b, u8::is_ascii_punctuation),
+        count(b, u8::is_ascii_graphic),
+    );
+    println!("{}", count(b, u8::is_ascii_control));
+    let up: Vec<u8> = b.iter().map(u8::to_ascii_uppercase).collect();
+    let low: Vec<u8> = b.iter().map(u8::to_ascii_lowercase).collect();
+    println!("{:?} {:?}", up, low);
+    let f = u8::is_ascii_whitespace;
+    println!("{} {}", f(&32u8), u8::is_ascii_digit(&b'7'));
+    let s = "a1 \u{e9}\u{2003}Z\n";
+    println!(
+        "{} {} {} {}",
+        s.chars().filter(char::is_ascii_digit).count(),
+        s.chars().filter(char::is_ascii).count(),
+        s.chars().filter(|c| char::is_whitespace(*c)).count(),
+        s.chars().map(char::len_utf8).sum::<usize>(),
+    );
+    println!("{} {}", s.chars().any(char::is_control), s.chars().all(char::is_whitespace));
+    let t: String = s.chars().map(|c| char::to_ascii_uppercase(&c)).collect();
+    println!("{:?}", t);
+    println!("{:?}", "x9".chars().next().map_or(0, char::len_utf8));
+    println!("{} {}", b'q'.is_ascii_lowercase(), 'Q'.is_ascii_uppercase());
+    println!("{}", Some(b' ').as_ref().is_some_and(u8::is_ascii_whitespace));
+}"#,
+                expect: Expect::Run(
+                    "1\ntrue true\n1 3 3 4 2 1 2 1 5\n2\n[32, 65, 49, 70, 9, 59, 90, 127] [32, 97, 49, 102, 9, 59, 122, 127]\ntrue true\n1 5 3 10\ntrue false\n\"A1 é\\u{2003}Z\\n\"\n1\ntrue true\ntrue\n",
+                ),
+            },
+            Case {
+                name: "wider_integers_have_no_ascii_whitespace_path",
+                source: r#"fn unused(v: &[u16]) -> bool { v.iter().all(u16::is_ascii_whitespace) }
+fn main() {}"#,
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "by_reference_path_rejects_by_value_items",
+                source: r#"fn unused(v: &[u8]) -> usize { v.iter().copied().filter(u8::is_ascii_digit).map(u8::is_ascii_digit).count() }
+fn main() {}"#,
+                expect: Expect::Invalid("E0631"),
+            },
+        ],
+    );
+}

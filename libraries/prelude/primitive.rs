@@ -18,6 +18,24 @@ pub trait CharMethods {
     fn is_uppercase(self) -> bool;
     fn len_utf8(self) -> usize;
     fn eq_ignore_ascii_case(&self, other: &char) -> bool;
+    // Path forms (`char::is_ascii_digit` as a value or a direct call) of the
+    // compiler-lowered classification methods. Method calls keep using the
+    // built-in lowering, which is also what these bodies reach.
+    fn is_ascii(&self) -> bool;
+    fn is_ascii_digit(&self) -> bool;
+    fn is_ascii_hexdigit(&self) -> bool;
+    fn is_ascii_alphabetic(&self) -> bool;
+    fn is_ascii_alphanumeric(&self) -> bool;
+    fn is_ascii_uppercase(&self) -> bool;
+    fn is_ascii_lowercase(&self) -> bool;
+    fn is_ascii_whitespace(&self) -> bool;
+    fn is_ascii_punctuation(&self) -> bool;
+    fn is_ascii_graphic(&self) -> bool;
+    fn is_ascii_control(&self) -> bool;
+    fn to_ascii_uppercase(&self) -> char;
+    fn to_ascii_lowercase(&self) -> char;
+    fn is_whitespace(self) -> bool;
+    fn is_control(self) -> bool;
 }
 
 impl CharMethods for char {
@@ -83,17 +101,115 @@ impl CharMethods for char {
     fn eq_ignore_ascii_case(&self, other: &char) -> bool {
         self.to_ascii_lowercase() == other.to_ascii_lowercase()
     }
+    fn is_ascii(&self) -> bool {
+        (*self).is_ascii()
+    }
+    fn is_ascii_digit(&self) -> bool {
+        (*self).is_ascii_digit()
+    }
+    fn is_ascii_hexdigit(&self) -> bool {
+        (*self).is_ascii_hexdigit()
+    }
+    fn is_ascii_alphabetic(&self) -> bool {
+        (*self).is_ascii_alphabetic()
+    }
+    fn is_ascii_alphanumeric(&self) -> bool {
+        (*self).is_ascii_alphanumeric()
+    }
+    fn is_ascii_uppercase(&self) -> bool {
+        (*self).is_ascii_uppercase()
+    }
+    fn is_ascii_lowercase(&self) -> bool {
+        (*self).is_ascii_lowercase()
+    }
+    fn is_ascii_whitespace(&self) -> bool {
+        (*self).is_ascii_whitespace()
+    }
+    fn is_ascii_punctuation(&self) -> bool {
+        (*self).is_ascii_punctuation()
+    }
+    fn is_ascii_graphic(&self) -> bool {
+        (*self).is_ascii_graphic()
+    }
+    fn is_ascii_control(&self) -> bool {
+        (*self).is_ascii_control()
+    }
+    fn to_ascii_uppercase(&self) -> char {
+        (*self).to_ascii_uppercase()
+    }
+    fn to_ascii_lowercase(&self) -> char {
+        (*self).to_ascii_lowercase()
+    }
+    fn is_whitespace(self) -> bool {
+        self.is_whitespace()
+    }
+    fn is_control(self) -> bool {
+        self.is_control()
+    }
 }
 
 // ---- u8 ----
 
 pub trait ByteMethods {
     fn eq_ignore_ascii_case(&self, other: &u8) -> bool;
+    // Path forms of the compiler-lowered ASCII methods, as for `char` above.
+    fn is_ascii(&self) -> bool;
+    fn is_ascii_digit(&self) -> bool;
+    fn is_ascii_hexdigit(&self) -> bool;
+    fn is_ascii_alphabetic(&self) -> bool;
+    fn is_ascii_alphanumeric(&self) -> bool;
+    fn is_ascii_uppercase(&self) -> bool;
+    fn is_ascii_lowercase(&self) -> bool;
+    fn is_ascii_whitespace(&self) -> bool;
+    fn is_ascii_punctuation(&self) -> bool;
+    fn is_ascii_graphic(&self) -> bool;
+    fn is_ascii_control(&self) -> bool;
+    fn to_ascii_uppercase(&self) -> u8;
+    fn to_ascii_lowercase(&self) -> u8;
 }
 
 impl ByteMethods for u8 {
     fn eq_ignore_ascii_case(&self, other: &u8) -> bool {
         self.to_ascii_lowercase() == other.to_ascii_lowercase()
+    }
+    fn is_ascii(&self) -> bool {
+        (*self).is_ascii()
+    }
+    fn is_ascii_digit(&self) -> bool {
+        (*self).is_ascii_digit()
+    }
+    fn is_ascii_hexdigit(&self) -> bool {
+        (*self).is_ascii_hexdigit()
+    }
+    fn is_ascii_alphabetic(&self) -> bool {
+        (*self).is_ascii_alphabetic()
+    }
+    fn is_ascii_alphanumeric(&self) -> bool {
+        (*self).is_ascii_alphanumeric()
+    }
+    fn is_ascii_uppercase(&self) -> bool {
+        (*self).is_ascii_uppercase()
+    }
+    fn is_ascii_lowercase(&self) -> bool {
+        (*self).is_ascii_lowercase()
+    }
+    fn is_ascii_whitespace(&self) -> bool {
+        (*self).is_ascii_whitespace()
+    }
+    fn is_ascii_punctuation(&self) -> bool {
+        (*self).is_ascii_punctuation()
+    }
+    fn is_ascii_graphic(&self) -> bool {
+        (*self).is_ascii_graphic()
+    }
+    fn is_ascii_control(&self) -> bool {
+        (*self).is_ascii_control()
+    }
+    fn to_ascii_uppercase(&self) -> u8 {
+        (*self).to_ascii_uppercase()
+    }
+    fn to_ascii_lowercase(&self) -> u8 {
+        (*self).to_ascii_lowercase()
     }
 }
 
