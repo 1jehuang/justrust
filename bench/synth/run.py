@@ -324,7 +324,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} ERROR {r['error']}", file=sys.stderr)
                     continue
                 samples[st.name].append(r)
-                ins = f" {r['instructions'] / 1e9:6.1f}G" if r["instructions"] else ""
+                ins = f" {r['instructions'] / 1e9:6.1f}G instructions" if r["instructions"] else ""
                 print(f"  synth {k + 1}/{len(plans)} {st.name:12s} {r['wall']:7.2f}s{ins}  "
                       f"{' '.join(plan.cmd)}{' noisy' if r['noisy'] else ''}", file=sys.stderr)
         elapsed = time.monotonic() - t_start
