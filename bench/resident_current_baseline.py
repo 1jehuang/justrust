@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import statistics
 import uuid
@@ -31,6 +32,13 @@ def environment(output):
                JUSTRUST_SLOTS='0', JUSTRUST_PREBUILT='off',
                CARGO_TARGET_DIR=str(output / 'target'))
     return env
+
+
+def recorded_run_id(text):
+    ids = set(re.findall(r'justrust log (\d{8}-\d{9}-\d+)', text))
+    if len(ids) != 1:
+        raise ValueError('expected exactly one explicit recorded baseline run ID')
+    return ids.pop()
 
 
 def command(tool):
@@ -86,6 +94,20 @@ def execute(args):
         row.update(raw=raw, raw_error=error, label=label)
         receipts.append(row)
         save()
+        if len(argv) > 1 and argv[1] == 'test':
+            # Agent console output omits passing names. Recover only this invocation's
+            # full recording after timing, never combine it with duplicate console text.
+            run_id = recorded_run_id(text)
+            log_prefix = args.output / (label + '-recorded')
+            log_row = runtime.run_process([str(args.justrust), 'log', run_id], project, env,
+                                          log_prefix, args.timeout)
+            log_raw, text, log_error = matrix.captured(log_prefix)
+            log_row.update(raw=log_raw, raw_error=log_error, label=label + '-recorded')
+            receipts.append(log_row)
+            row['recorded_run'] = dict(run_id=run_id, raw=log_raw)
+            save()
+            if not runtime.base.succeeded(log_row) or log_error:
+                raise ValueError('could not retrieve exact full baseline recording')
         return row, text
 
     try:

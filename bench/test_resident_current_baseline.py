@@ -57,6 +57,13 @@ class BaselineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 baseline.execute(args)
 
+    def test_recorded_run_requires_explicit_unambiguous_id(self):
+        run = '20261115-065547143-557208'
+        self.assertEqual(baseline.recorded_run_id('more `justrust log ' + run + '`'), run)
+        for text in ('', 'justrust log last', 'justrust log ' + run + '\njustrust log 20261115-065547144-557209'):
+            with self.assertRaises(ValueError):
+                baseline.recorded_run_id(text)
+
     def test_exact_resident_edit_recipe_is_reused(self):
         source = b'fn shares_overlapping_time() {\n}\n'
         edited = baseline.tier.contents(source, 'edit', 3, 'invocation')
