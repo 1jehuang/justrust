@@ -5,8 +5,11 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
 import hybrid_workload as workload
 
@@ -76,6 +79,8 @@ class Contracts(unittest.TestCase):
                                       cold_route_regex=None, warm_route_regex=None, toolchain=None)
             status = workload.execute(args)
             report = json.loads((args.output / 'report.json').read_text())
+            self.assertTrue(report['cleanup_passed'], report['cleanup'])
+            self.assertEqual(len(report['cleanup']), 2)
             expected = 26 + (3 if evict else 0) + (0 if automatic else 1)
             expected += (6 if automatic else 7) if operations else 0
             self.assertEqual(len(report['rows']), expected)
@@ -138,6 +143,63 @@ class Contracts(unittest.TestCase):
                                            'AUTOMATIC_SUCCESS', root / 'evidence')
             self.assertFalse(row['ok'])
             self.assertFalse(row['side_effects_unchanged'])
+
+    def test_exact_recording_replaces_compact_console_without_duplication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fake = root / 'fake'
+            fake.write_text('#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:] == ["log", "20261115-135300000-123"]\nprint("FULL_RECORDING")\n')
+            fake.chmod(0o700)
+            text, receipt, ok = workload.full_output(fake,
+                'FULL_RECORDING\nmore: justrust log 20261115-135300000-123\n', root,
+                dict(os.environ), root / 'recorded.log', 5)
+            self.assertTrue(ok)
+            self.assertEqual(text, 'FULL_RECORDING\n')
+            self.assertEqual(receipt['run_id'], '20261115-135300000-123')
+
+    def test_ambiguous_recordings_never_choose_latest(self):
+        text, receipt, ok = workload.full_output('/must/not/run',
+            'justrust log 20261115-135300000-123\njustrust log 20261115-135300001-124',
+            Path('/'), {}, Path('/must/not/write'), 1)
+        self.assertFalse(ok)
+        self.assertEqual(text, '')
+        self.assertEqual(len(receipt['run_ids']), 2)
+
+    def test_cleanup_does_not_claim_success_when_namespace_process_remains(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fake = root / 'fake'
+            fake.write_text('#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:] == ["hybrid", "stop"]\n')
+            fake.chmod(0o700)
+            snapshot = {'process_pss_kib': {'123': 2}, 'unavailable_pids': [], 'pss_kib': 2}
+            with patch.object(workload, 'namespace_pss', return_value=snapshot):
+                row = workload.cleanup_namespace(fake, root,
+                    dict(os.environ, JR_ENGINE_HOME=str(root / 'home')),
+                    root / 'stop.log', 0.01)
+            self.assertEqual(row['returncode'], 0)
+            self.assertFalse(row['ok'])
+            self.assertFalse(row['process_disappearance_verified'])
+
+    def test_cleanup_verifies_owned_synthetic_process_disappears(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = dict(os.environ, JR_ENGINE_HOME=str(root / 'private-home'))
+            child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)'], env=env)
+            reaper = threading.Thread(target=child.wait)
+            reaper.start()
+            try:
+                fake = root / 'fake'
+                fake.write_text(f'#!/usr/bin/env python3\nimport os,signal\nos.kill({child.pid}, signal.SIGTERM)\n')
+                fake.chmod(0o700)
+                row = workload.cleanup_namespace(fake, root, env, root / 'stop.log', 2)
+                self.assertTrue(row['ok'], row)
+                self.assertIn(str(child.pid), row['namespace_before']['process_pss_kib'])
+                self.assertEqual(row['namespace_before']['process_nice'][str(child.pid)], os.getpriority(os.PRIO_PROCESS, 0))
+                self.assertEqual(row['namespace_after']['process_pss_kib'], {})
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                reaper.join(timeout=5)
 
     def test_prewarm_side_effect_rejected(self):
         status, report = self.run_matrix(['FAKE_BAD_PREWARM=1'])

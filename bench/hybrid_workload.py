@@ -115,19 +115,36 @@ def namespace_pss(home):
     and inaccessible or vanished processes are listed rather than estimated.
     """
     marker = b'JR_ENGINE_HOME=' + os.fsencode(home)
-    processes, unavailable = {}, []
+    processes, unavailable, nice, starts = {}, [], {}, {}
     for path in Path('/proc').iterdir():
         if not path.name.isdigit():
             continue
         try:
+            if path.stat().st_uid != os.geteuid():
+                continue
             if marker not in (path / 'environ').read_bytes().split(b'\0'):
                 continue
+        except (OSError, ValueError):
+            if path.exists():
+                unavailable.append(int(path.name))
+            continue
+        try:
             processes[path.name] = sum(int(line.split()[1]) for line in
                                       (path / 'smaps_rollup').read_text().splitlines()
                                       if line.startswith('Pss:'))
         except (OSError, ValueError):
-            unavailable.append(int(path.name))
-    return {'pss_kib': sum(processes.values()), 'process_pss_kib': processes,
+            processes[path.name] = None
+        try:
+            # The command name may contain spaces and parentheses. Fields after
+            # its final ')' begin at stat field 3. Nice is field 19.
+            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+            nice[path.name] = int(fields[16])
+            starts[path.name] = fields[19]
+        except (OSError, ValueError, IndexError):
+            nice[path.name] = None
+    return {'pss_kib': sum(value for value in processes.values() if value is not None), 'process_pss_kib': processes,
+            'process_nice': nice,
+            'process_start_ticks': starts,
             'unavailable_pids': unavailable, 'scope': 'outside-timing exact JR_ENGINE_HOME environment match, not peak'}
 
 
@@ -203,6 +220,100 @@ def run(command, cwd, env, log, timeout):
             'log': str(log), 'log_sha256': digest(log)}
 
 
+def full_output(tool, console, cwd, env, evidence, timeout):
+    """The shipping console is compact. Read only its explicit recording, untimed."""
+    ids = set(re.findall(r'justrust log (\d{8}-\d{9}-\d+)', console))
+    if not ids:
+        return console, {'source': 'direct console', 'ok': True}, True
+    if len(ids) != 1:
+        return '', {'source': 'ambiguous recorded run IDs', 'ok': False,
+                    'run_ids': sorted(ids)}, False
+    run_id = ids.pop()
+    receipt = run([str(tool), 'log', run_id], cwd, env, evidence, timeout)
+    good = receipt['returncode'] == 0 and not receipt['timeout'] and not receipt['error']
+    receipt.update(source='exact recorded invocation, retrieved outside timing', run_id=run_id, ok=good)
+    # Never concatenate: passing test summaries could otherwise be counted twice.
+    return evidence.read_text(errors='replace') if good else '', receipt, good
+
+
+def cleanup_namespace(client, cwd, env, evidence, timeout):
+    """Use lifecycle stop only. Never kill processes selected by name or broad pattern."""
+    home = env['JR_ENGINE_HOME']
+    before = namespace_pss(home)
+    observed = dict(before.get('process_start_ticks', {}))
+    def remaining_observed():
+        remaining = []
+        for pid, started in observed.items():
+            try:
+                fields = Path('/proc', pid, 'stat').read_text().rsplit(')', 1)[1].split()
+                if fields[19] == started:
+                    remaining.append(pid)
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, IndexError):
+                remaining.append(pid)
+        return remaining
+    effects = {key: side_lines(Path(env[key])) for key in
+               ('HYBRID_SIDE_EFFECT', 'HYBRID_PROGRAM_SIDE_EFFECT') if key in env}
+    local = dict(env)
+    local.pop('JUSTRUST_HYBRID_PREWARM', None)
+    row = run([str(client), 'hybrid', 'stop'], cwd, local, evidence, timeout)
+    deadline = time.monotonic() + timeout
+    after = namespace_pss(home)
+    observed.update(after.get('process_start_ticks', {}))
+    while (after['process_pss_kib'] or remaining_observed()) and time.monotonic() < deadline:
+        time.sleep(0.05)
+        after = namespace_pss(home)
+        observed.update(after.get('process_start_ticks', {}))
+    effects_unchanged = all(side_lines(Path(env[key])) == lines for key, lines in effects.items())
+    row.update(namespace=home, namespace_before=before, namespace_after=after,
+               process_disappearance_verified=not after['process_pss_kib'] and not remaining_observed(),
+               observed_process_start_ticks=observed, remaining_observed_pids=remaining_observed(),
+               inaccessible_unattributed_pids=after['unavailable_pids'],
+               side_effects_unchanged=effects_unchanged,
+               scope='all observed exact JR_ENGINE_HOME members disappeared; unrelated unreadable processes are not attributed; lifecycle stop only, no broad kill')
+    row['ok'] = (row['returncode'] == 0 and not row['timeout'] and not row['error']
+                 and row['process_disappearance_verified'] and effects_unchanged)
+    return row
+
+
+def cleanup_after_execute(function):
+    def execute_with_cleanup(args):
+        args._cleanup_states = []
+        args._cleanup_report = None
+        cleanup_rows = []
+        try:
+            result = function(args)
+        finally:
+            for state in args._cleanup_states:
+                try:
+                    row = cleanup_namespace(state['client'], state['cwd'], state['env'],
+                                            state['log'], min(args.timeout, 30))
+                    row['stack'] = state['stack']
+                except Exception as exc:
+                    row = {'ok': False, 'stack': state['stack'], 'error': repr(exc)}
+                cleanup_rows.append(row)
+            report = args._cleanup_report
+            if report is not None:
+                report['cleanup'] = cleanup_rows
+                report['cleanup_passed'] = all(row['ok'] for row in cleanup_rows)
+                if not report['cleanup_passed']:
+                    if 'correctness_passed' in report:
+                        report['correctness_passed'] = False
+                    if 'status' in report:
+                        report['status'] = 'failed'
+                    report['focused_edit_medians_seconds'] = {}
+                (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+                final_status = report.get('status')
+                if final_status is None:
+                    final_status = ('passed' if report['correctness_passed'] else 'failed') if 'correctness_passed' in report else 'incomplete'
+                print(json.dumps({'status': final_status,
+                                  'cleanup_passed': report['cleanup_passed'],
+                                  'report': str(args.output / 'report.json')}))
+        return result if all(row['ok'] for row in cleanup_rows) else 1
+    return execute_with_cleanup
+
+
 TEST_ARGS = ['test', '--lib', '--', 'hybrid_side_effect', '--exact', '--nocapture']
 
 
@@ -228,6 +339,7 @@ def input_hashes(root):
             and p.name not in ('Cargo.lock', 'side-effects.txt', 'program-side-effects.txt')}
 
 
+@cleanup_after_execute
 def execute(args):
     automatic = getattr(args, 'automatic', False)
     automatic_pattern = getattr(args, 'automatic_ready_regex', None)
@@ -260,6 +372,7 @@ def execute(args):
               'roles': {'shipping': str(shipping), 'hybrid': str(args.justrust), 'engine': str(args.engine)},
               'environment': environment_receipt(env),
               'rows': rows}
+    args._cleanup_report = report
     def save():
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     states = {}
@@ -274,6 +387,10 @@ def execute(args):
             local['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
         Path(local['JR_ENGINE_HOME']).mkdir(mode=0o700)
         states[stack] = (state, project, local)
+        args._cleanup_states.append({'client': args.justrust, 'cwd': project,
+                                     'env': dict(local, HYBRID_SIDE_EFFECT=str(project / 'side-effects.txt'),
+                                                 HYBRID_PROGRAM_SIDE_EFFECT=str(project / 'program-side-effects.txt')),
+                                     'log': args.output / ('cleanup-' + stack + '.log'), 'stack': stack})
 
     def step(name, stack, root, nonce=0, dependency=7, config='one', failure=None):
         side = root / 'side-effects.txt'
@@ -287,12 +404,16 @@ def execute(args):
         row.update(namespace_pss_before=memory_before,
                    namespace_pss_after=namespace_pss(local_env['JR_ENGINE_HOME']))
         text = Path(row['log']).read_text(errors='replace')
+        semantic_text, receipt, recovered = full_output(
+            command[0], text, root, local_env,
+            args.output / (name + '-' + stack + '-recorded.log'), args.timeout)
+        row['full_output'] = receipt
         after = side_lines(side)
-        row.update(contract(row, text, after[len(before):], nonce, dependency, config, failure))
+        row.update(contract(row, semantic_text, after[len(before):], nonce, dependency, config, failure))
         row.update(name=name, stack=stack, input_sha256=inputs,
                    environment=environment_receipt(local_env),
                    inputs_unchanged=inputs == input_hashes(root), side_prefix_preserved=after[:len(before)] == before)
-        row['ok'] = row['ok'] and row['inputs_unchanged'] and row['side_prefix_preserved']
+        row['ok'] = row['ok'] and recovered and row['inputs_unchanged'] and row['side_prefix_preserved']
         route = args.cold_route_regex if name in ('cold-test', 'evicted-test') else args.warm_route_regex if name in ('warm-success', 'warm-edit') else None
         row['route_verified'] = bool(re.search(route, text)) if route and stack == 'hybrid' else None
         if route and stack == 'hybrid':
@@ -400,10 +521,16 @@ def execute(args):
                 row.update(namespace_pss_before=memory_before,
                            namespace_pss_after=namespace_pss(local['JR_ENGINE_HOME']))
                 text = Path(row['log']).read_text(errors='replace')
+                semantic_text, receipt, recovered = full_output(
+                    command[0], text, project,
+                    dict(local, CARGO_TARGET_DIR=str(project / 'target'),
+                         HYBRID_SIDE_EFFECT=str(tests), HYBRID_PROGRAM_SIDE_EFFECT=str(side)),
+                    args.output / (operation + '-' + stack + '-recorded.log'), args.timeout)
+                row['full_output'] = receipt
                 after = side_lines(side)
                 expected_effects = ['program-nonce=13'] if operation == 'run' else []
-                markers = re.findall(r'HYBRID_PROGRAM_EXECUTED_\d+', text)
-                good = (row['returncode'] == 0 and not row['timeout'] and not row['error']
+                markers = re.findall(r'HYBRID_PROGRAM_EXECUTED_\d+', semantic_text)
+                good = (recovered and row['returncode'] == 0 and not row['timeout'] and not row['error']
                         and after == before + expected_effects and side_lines(tests) == tests_before
                         and markers == (['HYBRID_PROGRAM_EXECUTED_13'] if operation == 'run' else []))
                 if automatic and stack == 'hybrid' and row['returncode'] == 0:

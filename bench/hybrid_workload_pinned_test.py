@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Synthetic pinned-runner validation, not compiler correctness evidence."""
 import argparse
+import io
 import json
 from pathlib import Path
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,6 +22,7 @@ def transcript(nonce=1, failed=False):
 
 FAKE = '''#!/usr/bin/env python3
 import os, pathlib, re, sys
+if 'stop' in sys.argv: sys.exit(0)
 text = pathlib.Path('src/summary.rs').read_text()
 if 'prewarm' in sys.argv:
     sys.exit(0)
@@ -64,6 +68,26 @@ class PinnedContracts(unittest.TestCase):
         self.assertIn(b'JR_RUNTIME_TYPE_ERROR', content)
         self.assertNotIn(b'HYBRID_SIDE_EFFECT', content)
 
+    def test_portable_tree_verifies_real_pin_without_checkout_metadata(self):
+        repo = Path(__file__).resolve().parent.parent
+        archive = subprocess.check_output(['git', 'archive', pinned.resident.PIN], cwd=repo)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
+                bundle.extractall(root, filter='data')
+            self.assertEqual(pinned.source_tree(root), pinned.PIN_TREE)
+            pinned.pinned_source(root)
+            (root / 'src/summary.rs').write_text('changed')
+            with self.assertRaises(ValueError):
+                pinned.pinned_source(root)
+
+    def test_portable_tree_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'link').symlink_to('/etc/passwd')
+            with self.assertRaises(ValueError):
+                pinned.source_tree(root)
+
     def run_matrix(self, automatic=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -79,10 +103,11 @@ class PinnedContracts(unittest.TestCase):
                                       prewarm=not automatic, cold_route_regex=None, warm_route_regex=None,
                                       automatic=automatic, automatic_ready_regex='AUTOMATIC_SUCCESS' if automatic else None)
             # Explicitly synthetic: bypass pin only here, never in the executable.
-            with patch.object(pinned.resident, 'pinned_source'):
+            with patch.object(pinned, 'pinned_source'):
                 self.assertEqual(pinned.execute(args), 0)
             report = json.loads((args.output / 'report.json').read_text())
             self.assertEqual(report['status'], 'passed')
+            self.assertTrue(report['cleanup_passed'], report['cleanup'])
             self.assertEqual(len(report['rows']), 16 if automatic else 17)
             self.assertEqual((source / 'src/summary.rs').read_bytes(), original)
             self.assertFalse(report['routing_evidence_complete'])

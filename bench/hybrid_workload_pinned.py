@@ -18,6 +18,45 @@ import hybrid_workload as core
 import resident_engine_compare as resident
 
 
+PIN_TREE = '76fcd81383914fa70ca2d42ed346fb4fc81d3ed8'
+
+
+def source_tree(root):
+    """Reconstruct Git's tree digest directly, without Git or a repository on host."""
+    def object_id(kind, payload):
+        return hashlib.sha1(kind + b' ' + str(len(payload)).encode() + b'\0' + payload).digest()
+    def visit(directory):
+        entries = []
+        for path in directory.iterdir():
+            if path.name == '.git':
+                continue
+            if path.is_symlink():
+                raise ValueError(f'pinned source must not contain symlinks: {path}')
+            name = os.fsencode(path.name)
+            if path.is_dir():
+                subtree = visit(path)
+                if subtree is None:
+                    continue  # Git does not track empty directories.
+                entries.append((name + b'/', b'40000', name, subtree))
+            elif path.is_file():
+                mode = b'100755' if path.stat().st_mode & 0o111 else b'100644'
+                entries.append((name, mode, name, object_id(b'blob', path.read_bytes())))
+            else:
+                raise ValueError(f'pinned source contains a special file: {path}')
+        if not entries:
+            return None
+        payload = b''.join(mode + b' ' + name + b'\0' + oid
+                           for _, mode, name, oid in sorted(entries))
+        return object_id(b'tree', payload)
+    tree = visit(root)
+    return tree.hex() if tree is not None else object_id(b'tree', b'').hex()
+
+
+def pinned_source(root):
+    if source_tree(root) != PIN_TREE:
+        raise ValueError(f'source tree must exactly match pinned {resident.PIN} ({PIN_TREE})')
+
+
 def edited(original, nonce, kind='edit'):
     anchor = b'fn shares_overlapping_time() {'
     if original.count(anchor) != 1:
@@ -51,6 +90,7 @@ def accepted(row, text, effects, nonce, kind, expected=None):
     return bool(good), parsed
 
 
+@core.cleanup_after_execute
 def execute(args):
     automatic = getattr(args, 'automatic', False)
     automatic_pattern = getattr(args, 'automatic_ready_regex', None)
@@ -60,7 +100,7 @@ def execute(args):
         raise ValueError('output must be fresh and disjoint from source')
     if args.samples < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError('positive samples and finite positive timeout required')
-    resident.pinned_source(args.source)
+    pinned_source(args.source)
     shipping = getattr(args, 'shipping_justrust', None) or args.justrust
     tools = (args.justrust, args.engine, shipping)
     for tool in tools:
@@ -77,11 +117,12 @@ def execute(args):
         env['JUSTRUST_HYBRID_TOOLCHAIN'] = str(args.toolchain)
     args.output.mkdir(parents=True, mode=0o700)
     rows = []
-    report = {'schema': 1, 'pin': resident.PIN, 'scope': __doc__, 'status': 'incomplete',
+    report = {'schema': 1, 'pin': resident.PIN, 'pin_tree': PIN_TREE, 'scope': __doc__, 'status': 'incomplete',
               'tool_sha256': {str(p): core.digest(p) for p in tools},
               'roles': {'shipping': str(shipping), 'hybrid': str(args.justrust), 'engine': str(args.engine)},
               'environment': core.environment_receipt(env),
               'source_sha256': resident.source_hashes(args.source), 'rows': rows}
+    args._cleanup_report = report
     def save():
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     states = {}
@@ -97,6 +138,8 @@ def execute(args):
         if automatic and stack == 'hybrid':
             local['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
         states[stack] = (project, local)
+        args._cleanup_states.append({'client': args.justrust, 'cwd': project, 'env': local,
+                                     'log': args.output / ('cleanup-' + stack + '.log'), 'stack': stack})
     expected = None
     phases = [('cold', 0, 'edit'), ('prewarm', 0, 'prewarm'), ('warm', 0, 'edit'),
               ('type-error', 1, 'type-error'), ('type-recovery', 2, 'edit'),
@@ -125,12 +168,16 @@ def execute(args):
                 row.update(namespace_pss_before=memory_before,
                            namespace_pss_after=core.namespace_pss(local['JR_ENGINE_HOME']))
                 text = '\n'.join(prefix.with_suffix('.' + suffix).read_text(errors='replace') for suffix in ('stdout', 'stderr'))
+                semantic_text, receipt, recovered = core.full_output(
+                    command[0], text, project, local,
+                    args.output / f'{index:02d}-{phase}-{stack}-recorded.log', args.timeout)
+                row['full_output'] = receipt
                 after = core.side_lines(side)
                 effects = after[len(before):]
                 if kind == 'prewarm':
                     good, parsed = row['status'] == 0 and not row['timed_out'] and not row['error'] and after == before, None
                 else:
-                    good, parsed = accepted(row, text, effects, nonce, kind, expected)
+                    good, parsed = accepted(row, semantic_text, effects, nonce, kind, expected)
                     if expected is None and stack == 'shipping' and good:
                         expected = parsed
                 route = args.cold_route_regex if phase == 'cold' else args.warm_route_regex if phase in ('warm', 'edit') else None
@@ -148,6 +195,7 @@ def execute(args):
                         row['namespace_pss_prepared'] = core.namespace_pss(local['JR_ENGINE_HOME'])
                     elif phase == 'cold':
                         good = False
+                good = good and recovered
                 row.update(phase=phase, nonce=nonce, stack=stack, parsed=parsed,
                            environment=core.environment_receipt(local),
                            side_effect_delta=effects, route_verified=route_verified,
@@ -177,7 +225,6 @@ def execute(args):
         raise
     finally:
         save()
-    print(json.dumps({'status': report['status'], 'report': str(args.output / 'report.json')}))
     return 0 if report['status'] == 'passed' else 1
 
 
