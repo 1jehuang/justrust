@@ -18,7 +18,7 @@ and JUSTRUST_HYBRID_TOOLCHAIN pointing to its matching toolchain directory.\n\
 JR_ENGINE_HOME overrides the private hybrid namespace. Ordinary commands are\n\
 unchanged unless JUSTRUST_HYBRID=ready explicitly opts build/test/check/run in.\n\
 This is an experiment, not a production default or a Rust parity claim.\n\
-JUSTRUST_HYBRID_PREWARM=after-success opts into low-priority background preparation\n\
+JUSTRUST_HYBRID_PREWARM=after-success opts into background preparation\n\
 after a successful Cargo fallback. Only one preparation runs per namespace.\n";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -204,10 +204,11 @@ fn schedule_prewarm(
             .stderr(log);
         // SAFETY: only process-local libc system calls run between fork and exec.
         // A dedicated session prevents terminal signals from cancelling unrelated
-        // future foreground requests, and the low priority protects their CPU.
+        // future foreground requests. Do not lower inherited process priority:
+        // a newly started resident daemon would keep that priority for later edits.
         unsafe {
             child.pre_exec(|| {
-                if libc::setsid() < 0 || libc::setpriority(libc::PRIO_PROCESS, 0, 19) < 0 {
+                if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())

@@ -34,7 +34,7 @@ errors instead of being silently repurposed.
 
 ## Deferred preparation, separately opt-in
 
-`JUSTRUST_HYBRID_PREWARM=after-success` additionally requests low-priority
+`JUSTRUST_HYBRID_PREWARM=after-success` additionally requests
 background preparation **after** a successful Cargo fallback has completed.
 Without it, preparation is manual. Failed fallback commands do not trigger it.
 Only one preparation runs at a time in a hybrid namespace, protected by an
@@ -42,7 +42,9 @@ OS-held lock rather than a persistent PID or lockfile-existence guess. Its
 output goes to the private home's `prewarm.log`. A preparation-launch failure
 does not change the already-completed foreground result.
 
-The internal supervisor has its own session and nice19 priority. It waits for a
+The internal supervisor has its own session and preserves process priority.
+Lowering its nice priority would also permanently lower newly started resident
+workers, including later foreground edits. It waits for a
 compile-only native preparation operation and holds the deduplication lock
 until that operation finishes. Prewarming must never execute user tests or
 `run` programs. Build scripts and proc macros are compile-time code, so
