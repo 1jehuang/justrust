@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod bundle;
+mod shared;
 
 /// The host triple pinned toolchains are downloaded for.
 pub const TARGET: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
@@ -427,6 +428,9 @@ pub fn for_build() -> Option<Toolchain> {
         }
     };
     if let Ok(Some(tc)) = installed(&pin.spec) {
+        return Some(tc);
+    }
+    if let Some(tc) = shared::for_build(&pin.spec) {
         return Some(tc);
     }
     if matches!(
