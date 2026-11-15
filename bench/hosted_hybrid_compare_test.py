@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 import shlex
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import hosted_hybrid_compare as subject
@@ -35,6 +36,17 @@ class HostedHarnessTests(unittest.TestCase):
         value = "/path/with space/'quote;$(exit 3)"
         words = shlex.split(subject.shell_env({'JR_ENGINE_HOME': value, 'CARGO_BUILD_JOBS': '4'}))
         self.assertEqual(words, ['env', 'CARGO_BUILD_JOBS=4', 'JR_ENGINE_HOME=' + value])
+
+    def test_preparation_matches_managed_cargo_home_and_jobs(self):
+        args = SimpleNamespace(guest_engine=Path('/guest/engine'),
+                               guest_toolchain=Path('/guest/toolchain'),
+                               cargo_home=Path('/caller/.cargo'))
+        values = subject.preparation_environment(args, {'home': Path('/guest/private')})
+        self.assertEqual(values['CARGO_HOME'], Path('/caller/.cargo'))
+        self.assertEqual(values['CARGO_BUILD_JOBS'], '4')
+        self.assertEqual(values['JR_ENGINE_HOME'], Path('/guest/private'))
+        self.assertEqual({k for k in values if k.startswith('CARGO_')},
+                         {'CARGO_HOME', 'CARGO_BUILD_JOBS'})
 
     def test_namespace_probe_is_valid_read_only_python_for_quoted_path(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -24,6 +24,14 @@ def shell_env(values):
     return 'env ' + ' '.join(shlex.quote(k + '=' + str(v)) for k, v in sorted(values.items()))
 
 
+def preparation_environment(args, state):
+    # Managed admission mirrors the caller's explicit Cargo home into the guest.
+    # The complete CARGO_* namespace participates in resident generation identity.
+    return {'JR_ENGINE_HOME': state['home'], 'JUSTRUST_NATIVE_ENGINE': args.guest_engine,
+            'JUSTRUST_HYBRID_TOOLCHAIN': args.guest_toolchain, 'CARGO_BUILD_JOBS': '4',
+            'CARGO_HOME': args.cargo_home}
+
+
 def parse_side_effects(row, path):
     if row['returncode'] != 0 or row['timeout'] or row['error']:
         raise ValueError('could not read authoritative guest side effects')
@@ -88,7 +96,7 @@ def execute(args):
     tools_before = {str(p): core.digest(p) for p in (args.justrust, args.shipping_justrust)}
     report = {'schema': 1, 'status': 'incomplete', 'scope': __doc__, 'pin': resident.PIN,
               'tool_sha256': tools_before, 'source_sha256': resident.source_hashes(args.source),
-              'guest_inputs': {k: str(getattr(args, k)) for k in ('guest_client', 'guest_engine', 'guest_toolchain', 'guest_home')},
+              'guest_inputs': {k: str(getattr(args, k)) for k in ('guest_client', 'guest_engine', 'guest_toolchain', 'guest_home', 'cargo_home')},
               'rows': [], 'management': [], 'cleanup': []}
     states = {}
     def save():
@@ -111,7 +119,7 @@ def execute(args):
         shutil.copytree(args.source, project)
         home = args.guest_home / stack
         side = root / 'side-effect'
-        env = dict(clean, CARGO_BUILD_JOBS='4')
+        env = dict(clean, CARGO_BUILD_JOBS='4', CARGO_HOME=str(args.cargo_home))
         if stack != 'shipping':
             env.update(JUSTRUST_HOSTED_HYBRID='ready', JUSTRUST_HOSTED_HYBRID_ENGINE=str(args.guest_engine),
                        JUSTRUST_HOSTED_HYBRID_TOOLCHAIN=str(args.guest_toolchain), JUSTRUST_HOSTED_HYBRID_HOME=str(home))
@@ -158,8 +166,7 @@ def execute(args):
                     raise ValueError(f'actual managed hosted contract failed: {stack} {phase}')
             if phase == 'prepare':
                 state = states['hybrid-warm']
-                values = {'JR_ENGINE_HOME': state['home'], 'JUSTRUST_NATIVE_ENGINE': args.guest_engine,
-                          'JUSTRUST_HYBRID_TOOLCHAIN': args.guest_toolchain, 'CARGO_BUILD_JOBS': '4'}
+                values = preparation_environment(args, state)
                 command = 'cd ' + shlex.quote(str(state['project'])) + ' && ' + shell_env(values) + ' ' + shlex.quote(str(args.guest_client)) + ' hybrid prewarm test ' + ' '.join(map(shlex.quote, resident.FILTER))
                 before = effects(state, 'prewarm-before')
                 row, _ = guest(command, 'prewarm', state['project'])
@@ -201,6 +208,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('justrust', 'shipping-justrust', 'source', 'output', 'guest-client', 'guest-engine', 'guest-toolchain', 'guest-home'):
         parser.add_argument('--' + name, required=True, type=core.absolute)
+    parser.add_argument('--cargo-home', type=core.absolute, default=Path.home() / '.cargo',
+                        help='explicit caller Cargo home mirrored by managed admission, also used for guest preparation')
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=360)
     return execute(parser.parse_args())
