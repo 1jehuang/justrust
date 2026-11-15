@@ -2,6 +2,82 @@
 use super::*;
 
 impl SchemaAdapter {
+    pub(super) fn source_declaration_predicate_domains(
+        &self,
+    ) -> Result<Vec<tr::DeclarationPredicateDomain>, String> {
+        let mut domains = Vec::new();
+        for info in &self.registry.declarations {
+            self.budget.charge_work(1)?;
+            if info.source_index == usize::MAX {
+                continue;
+            }
+            let bounds = match info.kind {
+                ir::DeclKind::Struct => {
+                    &self
+                        .program
+                        .structs
+                        .get(info.source_index)
+                        .ok_or("missing original struct predicate domain")?
+                        .bounds
+                }
+                ir::DeclKind::Enum => {
+                    &self
+                        .program
+                        .enums
+                        .get(info.source_index)
+                        .ok_or("missing original enum predicate domain")?
+                        .bounds
+                }
+                ir::DeclKind::Impl => {
+                    &self
+                        .program
+                        .impls
+                        .get(info.source_index)
+                        .ok_or("missing original inherent implementation predicate domain")?
+                        .bounds
+                }
+                _ => continue,
+            };
+            let mut bindings = generic_bindings(&self.registry, &info.env, &self.budget)?;
+            let mut state = self.scratch();
+            state.source_context = Some(self.registry.source_type_context(info.id)?);
+            if info.kind == ir::DeclKind::Impl {
+                let self_ty = state.source_ty(
+                    &self.registry,
+                    &self.program.impls[info.source_index].self_ty,
+                    &bindings,
+                    ir::FactsCtx::Universal(&info.env),
+                    &self.budget,
+                    0,
+                    false,
+                )?;
+                bindings.insert(GenericBindingKey::SelfType, self_ty);
+            }
+            let mut predicates = Vec::new();
+            append_implicit_sized(&self.registry, &info.env, &mut predicates, &self.budget)?;
+            append_source_bounds(
+                &mut state,
+                &self.registry,
+                &bindings,
+                bounds,
+                &mut predicates,
+                ir::FactsCtx::Universal(&info.env),
+                &self.budget,
+            )?;
+            self.budget
+                .retain_bytes(std::mem::size_of::<tr::DeclarationPredicateDomain>())?;
+            domains
+                .try_reserve_exact(1)
+                .map_err(|_| "declaration predicate domain allocation failed")?;
+            domains.push(tr::DeclarationPredicateDomain {
+                declaration: info.id,
+                env: info.env.clone(),
+                predicates: predicates.into(),
+            });
+        }
+        Ok(domains)
+    }
+
     pub(super) fn nominal_source_schema(
         &self,
         declaration: ir::DeclId,

@@ -33,13 +33,15 @@ mod closure_results;
 mod closures;
 mod const_patterns;
 mod constant_members;
+mod declaration_predicates;
+mod owner_lifetimes;
+pub use declaration_predicates::DeclarationPredicateDomain;
 mod dynamic_objects;
 mod equality;
 mod fn_items;
 mod generic_methods;
 mod impl_constraints;
 mod impl_disjoint;
-mod owner_lifetimes;
 pub use impl_disjoint::CrateOrigin;
 mod inherent_constants;
 mod native_source_call;
@@ -856,6 +858,9 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    fn declaration_predicate_domains(&self) -> Result<Vec<DeclarationPredicateDomain>> {
+        Ok(Vec::new())
+    }
     /// An exact original inherent-impl parameter's declared Sized predicate.
     /// No caller or unrelated method may supply this source declaration fact.
     /// Missing original declaration authority is a denial, never a default.
@@ -4862,17 +4867,15 @@ impl ValidatedTraitWorld {
         maybe_unsized: Option<ParamId>,
         replays: &mut NominalReplays,
         caller: Option<&ValidatedFacts>,
-        executable_storage: bool,
+        _executable_storage: bool,
     ) -> Result<()> {
         if caller.is_none() {
-            return replays.raw_formations.check_for_use(
-                self,
+            return self.validate_declaration_predicate_formation(
                 ty,
                 env,
                 usage,
                 maybe_unsized,
-                0,
-                executable_storage,
+                replays,
             );
         }
         replays.predicate_formations.logical_nominals = true;
@@ -10690,6 +10693,7 @@ impl ValidatedTraitWorld {
     fn build_environments(&mut self) -> Result<()> {
         // Header schemas are now globally validated. These environments remain
         // inaccessible until the immutable world is successfully returned.
+        self.build_declaration_predicate_domains()?;
         for item in self.headers.items.iter() {
             let mut predicates = Vec::new();
             for p in item.schema.predicates.iter() {
@@ -12273,9 +12277,12 @@ impl ValidatedTraitWorld {
                 "schema substitution lost authoritative Trait Self membership",
             ));
         }
-        if let Some(caller) = context.metadata_facts()
+        if context.executable_storage
+            && let Some(caller) = context.metadata_facts()
             && self.same_env(context.env(), caller.env())?
         {
+            // This is the same complete physical root check, retained only
+            // under its original checked caller and signature-root policy.
             scratch
                 .signature_formations
                 .check_signature_root(caller, actual)?;
@@ -12285,7 +12292,10 @@ impl ValidatedTraitWorld {
                 context.env(),
                 0,
                 TypeUse::Root,
-                &mut TypeWalk::default(),
+                &mut TypeWalk {
+                    logical_nominals: !context.executable_storage,
+                    ..TypeWalk::default()
+                },
                 context.metadata_facts(),
             )?;
         }
@@ -12399,12 +12409,13 @@ impl ValidatedTraitWorld {
             ));
         }
         if !expands {
-            self.validate_signature_shape_with_scratch(
+            self.validate_signature_shape_for_use(
                 &instantiated.signature,
                 context.env(),
                 None,
                 context.metadata_facts(),
                 Some(&mut scratch.signature_formations),
+                context.executable_storage,
             )?;
             return Ok((instantiated, None));
         }
@@ -12593,12 +12604,13 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut fixed_regions, *region)?;
         }
         instantiated.signature.ref_contract = realized.clone();
-        self.validate_signature_shape_with_scratch(
+        self.validate_signature_shape_for_use(
             &instantiated.signature,
             context.env(),
             None,
             context.metadata_facts(),
             Some(&mut scratch.signature_formations),
+            context.executable_storage,
         )?;
         self.validate_position_coverage(&instantiated.signature)?;
         retain::<Ty>(&self.budget, arguments.len())?;
@@ -13246,8 +13258,9 @@ impl ValidatedTraitWorld {
             let instantiated =
                 match self.instantiate_logical_implementation_head(&schema, &args, facts, active) {
                     Ok(instantiated) => instantiated,
-                    // An absent associated projection makes this candidate
-                    // inapplicable, without invalidating other implementations.
+                    // A structurally matching head can still require an absent
+                    // associated projection. That makes this candidate inapplicable,
+                    // not the other implementations of the requested trait invalid.
                     Err(error) if error.kind == FactsErrorKind::Unproved => continue,
                     Err(error) => return Err(error),
                 };
@@ -15374,9 +15387,89 @@ pub(crate) mod test_support {
         declarations: Vec<SchemaDecl>,
         schemas: Vec<(DeclId, GenericSchema)>,
         nominals: Vec<Ty>,
+        nominal_sources: Vec<NominalDeclarationSchema>,
         catalog: Option<Arc<CoreCatalog>>,
     }
     impl FixtureSchema {
+        fn register_nominal_source(&mut self, ty: &Ty) -> Result<()> {
+            let (declaration, kind, arguments) = match ty {
+                Ty::Struct(owner) => (
+                    owner.def().source_decl,
+                    DeclKind::Struct,
+                    &owner.def().type_args,
+                ),
+                Ty::Enum(owner) => (
+                    owner.def().source_decl,
+                    DeclKind::Enum,
+                    &owner.def().type_args,
+                ),
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "fixture nominal source requires a nominal type",
+                    ));
+                }
+            };
+            for source in &self.nominal_sources {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if source.declaration == declaration {
+                    let info = self
+                        .declarations
+                        .iter()
+                        .find(|info| info.declaration == declaration)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "fixture nominal source lost its declaration",
+                            )
+                        })?;
+                    if source.env.total_arity() != arguments.len() || info.kind != kind {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "fixture nominal source changed kind or argument arity",
+                        ));
+                    }
+                    return Ok(());
+                }
+            }
+            if self
+                .declarations
+                .iter()
+                .any(|info| info.declaration == declaration)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "fixture nominal source collides with another declaration",
+                ));
+            }
+            retain::<ParamEnv>(&self.budget, 1)?;
+            let binder = Arc::new(charged(
+                &self.budget,
+                ParamEnv::new(BinderId { declaration }, arguments.len()),
+            )?);
+            retain::<GenericEnv>(&self.budget, 1)?;
+            let env = Arc::new(charged(
+                &self.budget,
+                GenericEnv::new(&[binder], &self.budget),
+            )?);
+            self.register(declaration, kind, env.clone(), None, ReceiverMode::None)?;
+            // The fixture constructor authors no nominal bounds or defaults.
+            // Canonical applications register that original empty schema once,
+            // never infer declaration premises from their fields or callers.
+            push(
+                &self.budget,
+                &mut self.nominal_sources,
+                NominalDeclarationSchema {
+                    representation_alignment: None,
+                    declaration,
+                    env,
+                    predicates: Arc::from([]),
+                    projections: Arc::from([]),
+                    defaults: Arc::from([]),
+                },
+            )
+        }
+
         fn register(
             &mut self,
             declaration: DeclId,
@@ -15439,6 +15532,7 @@ pub(crate) mod test_support {
                         "fixture nominal belongs to another snapshot",
                     ));
                 }
+                self.register_nominal_source(ty)?;
                 for old in &self.nominals {
                     charged(&self.budget, self.budget.charge_work(1))?;
                     if nominal_id(old) == Some(id) {
@@ -15557,6 +15651,7 @@ pub(crate) mod test_support {
             declarations: Vec::new(),
             schemas: Vec::new(),
             nominals: Vec::new(),
+            nominal_sources: Vec::new(),
             catalog: None,
         };
         for h in headers.traits.iter() {
@@ -15762,6 +15857,37 @@ pub(crate) mod test_support {
                 &self.budget,
                 "fixture has no original declaration schema",
             ))
+        }
+        fn nominal_declaration_schema(
+            &self,
+            declaration: DeclId,
+        ) -> Result<NominalDeclarationSchema> {
+            self.declaration_info(declaration)?;
+            for source in &self.nominal_sources {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if source.declaration == declaration {
+                    return Ok(source.clone());
+                }
+            }
+            Err(FactsError::invalid(
+                &self.budget,
+                "fixture has no original nominal declaration schema",
+            ))
+        }
+        fn declaration_predicate_domains(&self) -> Result<Vec<DeclarationPredicateDomain>> {
+            let mut domains = Vec::new();
+            for source in &self.nominal_sources {
+                push(
+                    &self.budget,
+                    &mut domains,
+                    DeclarationPredicateDomain {
+                        declaration: source.declaration,
+                        env: source.env.clone(),
+                        predicates: source.predicates.clone(),
+                    },
+                )?;
+            }
+            Ok(domains)
         }
         fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
             self.declaration_info(id)?;
@@ -15971,6 +16097,7 @@ pub(crate) mod test_support {
             declarations: Vec::new(),
             schemas: Vec::new(),
             nominals: Vec::new(),
+            nominal_sources: Vec::new(),
             catalog: None,
         };
         for ty in types
@@ -17205,6 +17332,38 @@ mod tests {
             leaf,
             boxed,
         }
+    }
+
+    #[test]
+    fn fixture_nominal_sources_keep_exact_declarations_and_original_binders() {
+        let c = case();
+        let raw =
+            test_support::adapter(c.modules.clone(), &c.headers, &c.types, &c.budget).unwrap();
+        let Ty::Struct(boxed) = &c.boxed else {
+            panic!("fixture nominal")
+        };
+        let declaration = boxed.def().source_decl;
+        let source = raw.nominal_declaration_schema(declaration).unwrap();
+        assert_eq!(source.declaration, declaration);
+        assert_eq!(source.env.total_arity(), 1);
+        assert_eq!(source.env.scopes()[0].binder().declaration, declaration);
+        assert!(source.predicates.is_empty());
+        assert_eq!(
+            raw.declaration_info(declaration).unwrap().kind,
+            DeclKind::Struct
+        );
+        let unknown = test_support::source_decl(declaration.snapshot, 99, &c.budget).unwrap();
+        assert!(raw.nominal_declaration_schema(unknown).is_err());
+        let wrong_arity = nominal(
+            c.modules.core_root(),
+            declaration.snapshot,
+            99,
+            declaration,
+            Vec::new(),
+        );
+        let mut types = c.types.clone();
+        types.push(wrong_arity);
+        assert!(test_support::adapter(c.modules.clone(), &c.headers, &types, &c.budget).is_err());
     }
 
     #[test]
@@ -20246,6 +20405,84 @@ mod tests {
         }));
         assert!(universal.validate_ty(&symbolic).is_err());
         assert!(universal.validate_ty_metadata(&symbolic).is_err());
+        let binder = BinderId {
+            declaration: default,
+        };
+        let scope = ir::ParamEnv::new(binder, 2)
+            .unwrap()
+            .with_slot_kinds(
+                &[
+                    ir::GenericParamKind::Type,
+                    ir::GenericParamKind::Const(ir::ConstType::Int(ir::IntTy::Usize)),
+                ],
+                &c.budget,
+            )
+            .unwrap();
+        let env = GenericEnv::new(&[Arc::new(scope)], &c.budget).unwrap();
+        let pattern = Ty::DependentArray {
+            element: Arc::new(Ty::Param(ir::ParamId {
+                owner: binder,
+                index: 0,
+            })),
+            length: ir::ConstParamId {
+                owner: binder,
+                index: 1,
+            },
+        };
+        let mut header = c.headers.impls[0].clone();
+        header.schema_env = Arc::new(env.clone());
+        header.trait_ref.self_ty = pattern.clone();
+        header.trait_ref.args = Arc::from([]);
+        header.predicates = Arc::from([]);
+        world.validate_impl_parameter_constraints(&header).unwrap();
+        header.trait_ref.self_ty = Ty::Param(ir::ParamId {
+            owner: binder,
+            index: 0,
+        });
+        assert!(
+            world
+                .validate_impl_parameter_constraints(&header)
+                .unwrap_err()
+                .to_string()
+                .contains("E0207")
+        );
+        let array = |len| Ty::Array {
+            element: Arc::new(Ty::Int(ir::IntTy::I32)),
+            len,
+        };
+        let mut slots = [None, None];
+        assert!(
+            world
+                .match_head(&pattern, &array(3), &env, &mut slots, 0)
+                .unwrap()
+        );
+        assert_eq!(
+            slots,
+            [Some(Ty::Int(ir::IntTy::I32)), Some(constant.clone())]
+        );
+        assert!(
+            world
+                .match_head(&pattern, &array(3), &env, &mut slots, 0)
+                .unwrap()
+        );
+        assert!(
+            !world
+                .match_head(&pattern, &array(4), &env, &mut slots, 0)
+                .unwrap()
+        );
+        assert!(world.eq_ty(&constant, &constant, 0).unwrap());
+        assert!(
+            !world
+                .eq_ty(
+                    &constant,
+                    &Ty::Const(ir::ConstArgument::Integer {
+                        ty: ir::IntTy::U8,
+                        bits: 3,
+                    }),
+                    0,
+                )
+                .unwrap()
+        );
     }
 
     #[test]
@@ -23315,21 +23552,26 @@ mod tests {
                 .unwrap();
             assert_eq!(replays.raw_formations.retained_roots(), roots);
         }
-        // Logical formation must not borrow physical answers or grant a later
-        // physical root authority. Both policies retain their own complete walk.
+        // Both predicate entry points use logical formation. Neither grants a
+        // later physical root authority, which needs its own complete walk.
         world
             .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
             .unwrap();
-        let logical_roots = replays.raw_formations.retained_roots();
-        assert!(logical_roots > roots);
+        assert_eq!(replays.raw_formations.retained_roots(), roots);
+        replays
+            .raw_formations
+            .check(&world, &goal.self_ty, facts.env(), TypeUse::Root, None, 0)
+            .unwrap();
+        let physical_roots = replays.raw_formations.retained_roots();
+        assert!(physical_roots > roots);
         world
             .validate_ref_with(&goal, facts.env(), None, &mut replays)
             .unwrap();
-        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
+        assert_eq!(replays.raw_formations.retained_roots(), physical_roots);
         world
             .validate_ref_with_facts_for_use(&goal, facts.env(), None, &mut replays, None, false)
             .unwrap();
-        assert_eq!(replays.raw_formations.retained_roots(), logical_roots);
+        assert_eq!(replays.raw_formations.retained_roots(), physical_roots);
         let Ty::Struct(original) = &c.leaf else {
             panic!("nominal fixture")
         };

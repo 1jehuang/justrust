@@ -626,6 +626,38 @@ impl ir::SubstitutionCx for ReadSubstitution<'_> {
     fn realizes_executable_nominals(&self) -> bool {
         self.executable.is_some()
     }
+    fn normalize_substituted_nominal_argument(
+        &mut self,
+        argument: ir::Ty,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        // Executable graph coordinates have their own normalization and typed
+        // read replay below. Only the exact source-closing traversal may
+        // normalize these unsealed descriptors before source field expansion.
+        if self.executable.is_some() {
+            return Ok(argument);
+        }
+        let Some(remint) = &mut self.remint else {
+            return Ok(argument);
+        };
+        if !ir::contains_associated_types(&argument, budget)? {
+            return Ok(argument);
+        }
+        let facts = caller
+            .validated()
+            .ok_or("source nominal argument normalization lost checked destination")?;
+        facts
+            .normalize_substituted_source_type(
+                &argument,
+                remint.source,
+                remint.environment,
+                remint.parent_arguments,
+                budget,
+                &mut remint.destination_scratch,
+            )
+            .map_err(|error| error.into_legacy_diagnostic(budget))
+    }
     fn realize_alignment_query(
         &mut self,
         query: &mut ir::TypeAlignmentQuery,

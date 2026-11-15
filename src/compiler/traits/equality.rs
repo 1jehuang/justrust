@@ -361,6 +361,9 @@ impl ValidatedTraitWorld {
                 }
             }
         }
+        for env in &self.environments {
+            self.validate_declaration_nominal_membership(env)?;
+        }
         Ok(())
     }
     pub(super) fn has_declared_callable_equalities(&self, declaration: DeclId) -> Result<bool> {
@@ -2115,7 +2118,7 @@ impl ValidatedTraitWorld {
         self.map_equality_type_for_use(ty, env, depth, true, reduce)
     }
 
-    fn map_equality_type_for_use(
+    pub(super) fn map_equality_type_for_use(
         &self,
         ty: &Ty,
         env: &GenericEnv,
