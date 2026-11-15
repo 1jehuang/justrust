@@ -1,11 +1,11 @@
 # Snapshot-only prerequisites for hosted TUI tests at abff94eeb.
-# Serialize local /colors fixtures with SSH env writers, create owned Git
-# repositories instead of depending on mirrored .git, and give the authenticated
-# Antigravity render fixture its own credentials. No production code changes.
+# Scope environment-sensitive readers and writers with the shared test-env lock.
+# Restore aggregate environment guards before unlocking. No production changes.
 diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/src/tui/app/commands_tests.rs
 --- a/crates/jcode-tui/src/tui/app/commands_tests.rs
 +++ b/crates/jcode-tui/src/tui/app/commands_tests.rs
-@@ -207,6 +207,30 @@ mod colors {
+@@ -206,10 +206,34 @@
+             .map(|message| message.content.clone())
              .unwrap_or_default()
      }
 
@@ -36,12 +36,21 @@ diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/s
      fn colors_lists_every_role_with_its_hex_value() {
 +        let _local = local_environment();
          let mut app = create_test_app();
-@@ -233,3 +257,4 @@ mod colors {
+         assert!(
+             dispatch_local_command(&mut app, "/colors"),
+             "/colors should be claimed by the shared dispatch table"
+@@ -229,8 +253,9 @@
+     }
+
+     #[test]
      fn colors_harmony_reports_a_score_and_named_criteria() {
 +        let _local = local_environment();
          let mut app = create_test_app();
          assert!(dispatch_local_command(&mut app, "/colors harmony"));
-@@ -347,6 +372,7 @@ mod colors {
+         let output = last_message(&app);
+         assert!(
+@@ -348,8 +373,9 @@
+     #[test]
      fn unrelated_commands_are_not_swallowed() {
          // `/colors` shares a prefix with nothing today, but a future `/color*`
          // command must not be silently captured by this handler.
@@ -49,10 +58,12 @@ diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/s
          let mut app = create_test_app();
          assert!(
              !dispatch_local_command(&mut app, "/colorscheme dracula"),
+             "/colorscheme must not be claimed by /colors"
 diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
 --- a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
-@@ -1582,6 +1582,10 @@ fn recent_project_review_prompt_is_bounded_read_only_and_requires_approval() {
+@@ -1581,9 +1581,13 @@
+ }
 
  #[test]
  fn preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn() {
@@ -63,7 +74,10 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcod
 +    app.session.working_dir = Some(git_fixture.path().to_string_lossy().into_owned());
      let repository = app
          .onboarding_recent_project_path()
-@@ -1593,10 +1597,15 @@ fn preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn() {
+         .expect("test session should start in a Git repository");
+     let expected = App::onboarding_recent_project_review_prompt(&repository);
+@@ -1592,13 +1596,18 @@
+
      assert!(!app.onboarding_flow_active());
      assert_eq!(app.input, expected);
      assert_eq!(app.cursor_pos, app.input.len());
@@ -79,7 +93,10 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcod
 +    app.session.working_dir = Some(git_fixture.path().to_string_lossy().into_owned());
      let repository = app
          .onboarding_recent_project_path()
-@@ -1618,6 +1629,7 @@ fn starting_recent_project_review_runs_as_a_visible_local_turn() {
+         .expect("test session should start in a Git repository");
+     let expected = App::onboarding_recent_project_review_prompt(&repository);
+@@ -1617,8 +1626,9 @@
+             })
          }),
          Some(expected.as_str())
      );
@@ -87,82 +104,334 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcod
  }
 
  #[test]
+ fn starting_recent_project_review_queues_remote_turn_without_stuck_sending() {
 diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 --- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
-@@ -93,3 +93,6 @@
+@@ -47,8 +47,9 @@
+ }
+
+ #[test]
+ fn test_model_picker_preview_arrow_keys_navigate() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     configure_test_remote_models(&mut app);
+
+     // Type /model to open preview
+@@ -86,12 +87,16 @@
+     assert_eq!(picker.selected, initial_selected);
+
+     // Opening the preview should place the cursor in the model filter argument.
+     assert_eq!(app.input(), "/model ");
++    });
+ }
+
+ #[test]
  fn test_open_model_picker_without_routes_shows_actionable_guidance() {
 +    // Pin config through the async route load so another fixture cannot
 +    // invalidate its signature and leave the initial loading row in place.
 +    with_local_jcode_home(|| {
      let mut app = create_test_app();
 
-@@ -105,3 +108,4 @@
+     app.open_model_picker();
+     wait_for_model_picker_load(&mut app);
+@@ -103,12 +108,14 @@
+     assert_eq!(last.role, "system");
+     assert!(last.content.contains("/login"));
      assert!(last.content.contains("/account"));
      assert!(last.content.contains("/model"));
 +    });
  }
-@@ -1145,3 +1149,4 @@
+
+ #[test]
+ fn test_remote_model_picker_during_startup_waits_for_session_catalog() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::LoadingSession);
+     app.remote_provider_model = Some("gpt-5.6-sol".to_string());
+@@ -123,12 +130,14 @@
+         .expect("loading model picker should be open");
+     assert_eq!(picker.entries.len(), 1);
+     assert_eq!(picker.entries[0].name, "gpt-5.6-sol");
+     assert_eq!(picker.entries[0].options[0].detail, "updating model list…");
++    });
+ }
+
+ #[test]
+ fn test_remote_model_command_opens_picker_without_catalog_request() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     configure_test_remote_models(&mut app);
+     app.input = "/model".to_string();
+     app.cursor_pos = app.input.len();
+@@ -149,8 +158,9 @@
+         remote.next_request_id_for_test(),
+         request_id_before,
+         "opening /model must not refresh or request a remote catalog"
+     );
++    });
+ }
+
+ #[derive(Clone)]
+ struct CountingModelRoutesProvider {
+@@ -545,8 +555,9 @@
+ }
+
+ #[test]
+ fn test_subagent_model_large_catalog_uses_cached_searchable_picker() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -599,12 +610,14 @@
+     app.handle_key(KeyCode::Enter, KeyModifiers::empty()).unwrap();
+     app.handle_key(KeyCode::Enter, KeyModifiers::empty()).unwrap();
+     assert!(app.session.subagent_model.is_some());
+     assert_eq!(app.provider.model(), "counting-a");
++    });
+ }
+
+ #[test]
+ fn test_model_picker_reuses_cached_entries_until_invalidated() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -640,12 +653,14 @@
+         calls.load(Ordering::SeqCst),
+         2,
+         "invalidating should force rebuilding provider routes"
+     );
++    });
+ }
+
+ #[test]
+ fn test_shift_tab_model_favorite_hotkey_preserves_input_line() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -669,12 +684,14 @@
+     wait_for_model_picker_load(&mut app);
+
+     assert_eq!(app.input(), "do not drop this draft");
+     assert_eq!(app.cursor_pos(), cursor);
++    });
+ }
+
+ #[test]
+ fn test_new_local_session_does_not_run_post_login_model_refresh() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+
+     let authed = StdArc::new(AtomicBool::new(false));
+@@ -717,12 +734,14 @@
+             .lock()
+             .unwrap()
+             .is_none()
+     );
++    });
+ }
+
+ #[test]
+ fn test_tui_api_key_auth_refreshes_catalog_shows_diff_without_opening_picker() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -798,8 +817,9 @@
+     assert_eq!(
+         app.status_notice(),
+         Some("Model → state-space-beta".to_string())
+     );
++    });
+ }
+
+ #[test]
+ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
+@@ -1142,8 +1162,9 @@
+ }
+
+ #[test]
  fn test_tui_openai_compatible_empty_catalog_does_not_switch_to_profile_default() {
 +    with_local_jcode_home(|| {
      ensure_test_jcode_home_if_unset();
      clear_persisted_test_ui_state();
-@@ -1200,3 +1205,4 @@
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1198,12 +1219,14 @@
+     assert!(activity.message.contains("Jcode is still processing"));
+     assert!(!activity.message.contains("did not switch models"));
      assert!(!activity.message.contains("documented default"));
      assert!(!activity.message.contains("qwen-3-coder-480b"));
 +    });
  }
-@@ -1444,3 +1444,4 @@
+
+ #[test]
+ fn test_tui_openai_compatible_local_refresh_failure_is_pending_not_final_failure() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1265,12 +1288,14 @@
+     assert!(activity.message.contains("fixture refresh failed"));
+     assert!(!activity.message.contains("Login: failed"));
+     assert!(!activity.message.contains("Unable to sign in"));
+     assert!(!activity.message.contains("did not switch models"));
++    });
+ }
+
+ #[test]
+ fn test_model_picker_opens_simplified_state_before_async_routes_complete() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1307,12 +1332,14 @@
+         .as_ref()
+         .expect("hydrated picker should still be open");
+     assert!(picker.entries.len() >= 2);
+     assert_eq!(app.status_notice(), Some("Model list updated".to_string()));
++    });
+ }
+
+ #[test]
+ fn test_model_picker_state_space_preserves_provider_labels_after_route_hydration() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1377,12 +1404,14 @@
+         chutes_rows, 1,
+         "opening the model list must not collapse every route to the recently authenticated direct provider: {:?}",
+         routes_by_model
+     );
++    });
+ }
+
+ #[test]
+ fn test_model_picker_does_not_cache_single_model_fallback() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1412,12 +1441,14 @@
+         calls.load(Ordering::SeqCst),
+         2,
+         "single-model fallback should be rebuilt so a later full catalog can surface"
+     );
++    });
+ }
+
+ #[test]
+ fn test_local_model_picker_selection_failure_keeps_picker_open_and_shows_next_steps() {
++    with_local_jcode_home(|| {
+     let mut app = create_failing_model_switch_test_app();
+
+     app.open_model_picker();
+     wait_for_model_picker_load(&mut app);
+@@ -1437,12 +1468,14 @@
+     assert!(last.content.contains("credentials expired"));
+     assert!(last.content.contains("/model"));
+     assert!(last.content.contains("/login"));
+     assert!(last.content.contains("/account"));
++    });
+ }
+
+ #[test]
  fn test_login_completed_spawns_auth_refresh_when_runtime_is_available() {
 +    with_local_jcode_home(|| {
      ensure_test_jcode_home_if_unset();
      clear_persisted_test_ui_state();
-@@ -1483,3 +1484,4 @@
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1481,12 +1514,14 @@
+             "background auth refresh did not complete"
+         );
          std::thread::sleep(Duration::from_millis(10));
      }
 +    });
  }
-@@ -1488,3 +1490,4 @@
+
+ #[test]
  fn test_model_picker_waits_for_async_post_login_catalog_activation() {
 +    with_local_jcode_home(|| {
      ensure_test_jcode_home_if_unset();
      clear_persisted_test_ui_state();
-@@ -1568,3 +1571,4 @@
+     crate::tui::ui::clear_test_render_state_for_tests();
+
+@@ -1566,12 +1601,14 @@
+             .entries
+             .iter()
              .any(|entry| entry.name == "grok-code-fast-1")
      );
 +    });
  }
-@@ -1573,3 +1577,4 @@
+
+ #[test]
  fn test_login_completed_surfaces_new_provider_models_in_local_model_picker() {
 +    with_local_jcode_home(|| {
      let mut app = create_auth_refresh_test_app();
 
-@@ -1611,3 +1616,4 @@
+     app.handle_login_completed(crate::bus::LoginCompleted {
+         provider: "copilot".to_string(),
+@@ -1611,8 +1648,9 @@
+             .iter()
+             .any(|route| route.provider == "Copilot" && route.detail.contains("recently added")),
          "recently authenticated provider should be prioritized and marked in /model"
      );
 +    });
  }
-@@ -1815,3 +1821,4 @@
+
+ #[derive(Clone)]
+ struct AzureLoginMockProvider {
+@@ -1812,8 +1850,9 @@
+ }
+
+ #[test]
  fn test_local_antigravity_model_picker_selection_preserves_antigravity_provider() {
 +    with_local_jcode_home(|| {
      let mut app = create_antigravity_picker_test_app();
      app.open_model_picker();
-@@ -1840,3 +1847,4 @@
+     wait_for_model_picker_load(&mut app);
+
+@@ -1839,8 +1878,9 @@
+
+     assert_eq!(app.provider.name(), "Antigravity");
      assert_eq!(app.provider.model(), "claude-sonnet-4-6");
      assert!(app.inline_interactive_state.is_none());
 +    });
  }
-@@ -1879,3 +1887,4 @@
+
+ #[test]
+ fn test_local_model_picker_openrouter_bare_openai_route_uses_openai_catalog_prefix() {
+@@ -1876,8 +1916,9 @@
+ }
+
+ #[test]
  fn test_agent_model_picker_openrouter_bare_openai_route_saves_openai_catalog_prefix() {
 +    with_local_jcode_home(|| {
      let (mut app, _set_model_calls) = create_openrouter_spec_capture_test_app();
 
-@@ -1907,3 +1916,4 @@
+     app.open_agent_model_picker(crate::tui::AgentModelTarget::Swarm);
+
+@@ -1906,12 +1947,25 @@
+         last.content.contains("openai/gpt-5.4@OpenAI"),
+         "message should show normalized saved spec, got: {}",
          last.content
      );
 +    });
  }
-@@ -1911,6 +1911,18 @@ fn test_local_model_picker_openrouter_bare_openai_route_uses_openai_catalog_prefix()
 
  #[test]
  fn test_local_model_picker_render_shows_antigravity_models_exactly_as_user_sees_them() {
@@ -181,7 +450,9 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/
      let mut app = create_antigravity_picker_test_app();
      app.display_messages = vec![DisplayMessage::system("seed render state")];
      app.bump_display_messages_version();
-@@ -1970,6 +1984,7 @@ GPT:
+     app.open_model_picker();
+@@ -1969,12 +2023,14 @@
+ {}",
          claude_text,
          gpt_text
      );
@@ -189,85 +460,316 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/
  }
 
  #[test]
+ fn test_login_smoke_model_picker_renders_unstacked_provider_rows() {
++    with_local_jcode_home(|| {
+     let mut app = create_login_smoke_model_app();
+     app.display_messages = vec![DisplayMessage::system("seed render state")];
+     app.bump_display_messages_version();
+     app.open_model_picker();
+@@ -2100,8 +2156,9 @@
+             "provider routes should not be hidden behind stacked option counts, got:\n{}",
+             text
+         );
+     }
++    });
+ }
+
+ #[test]
+ fn test_model_picker_filter_text_includes_provider_and_method() {
+@@ -2134,8 +2191,9 @@
+ }
+
+ #[test]
+ fn test_login_picker_preview_stays_open_and_updates_filter() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     for c in "/login za".chars() {
+         app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+@@ -2155,12 +2213,14 @@
+             .iter()
+             .any(|&i| picker.entries[i].name == "Z.AI")
+     );
+     assert_eq!(app.input(), "/login za");
++    });
+ }
+
+ #[test]
+ fn test_login_picker_preview_enter_starts_login_flow() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     for c in "/login zai".chars() {
+         app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+@@ -2180,12 +2240,14 @@
+             assert_eq!(profile.id, crate::provider_catalog::ZAI_PROFILE.id);
+         }
+         ref other => panic!("unexpected pending login state: {other:?}"),
+     }
++    });
+ }
+
+ #[test]
+ fn test_typing_login_auto_inserts_filter_space() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     for c in "/login".chars() {
+         app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+@@ -2217,12 +2279,14 @@
+         .inline_interactive_state
+         .as_ref()
+         .expect("login picker preview should stay open");
+     assert_eq!(picker.filter, "za");
++    });
+ }
+
+ #[test]
+ fn test_login_preview_enter_without_selection_focuses_picker_instead_of_logging_in() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     for c in "/login".chars() {
+         app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+@@ -2240,12 +2304,14 @@
+     assert!(!picker.preview, "picker should be focused (not preview)");
+     assert_eq!(picker.kind, crate::tui::PickerKind::Login);
+     assert!(app.pending_login.is_none());
+     assert_eq!(app.input(), "");
++    });
+ }
+
+ #[test]
+ fn test_login_preview_enter_after_navigation_starts_selected_login() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     for c in "/login".chars() {
+         app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+@@ -2267,12 +2333,14 @@
+     assert!(
+         app.pending_login.is_some(),
+         "selected provider login flow should start"
+     );
++    });
+ }
+
+ #[test]
+ fn test_subagent_model_command_sets_and_resets_session_preference() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     assert!(super::commands::handle_session_command(
+         &mut app,
+@@ -2284,12 +2352,14 @@
+         &mut app,
+         "/subagent-model inherit"
+     ));
+     assert_eq!(app.session.subagent_model, None);
++    });
+ }
+
+ #[test]
+ fn test_autoreview_command_toggles_session_preference() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     assert!(super::commands::handle_session_command(
+         &mut app,
+@@ -2303,12 +2373,14 @@
+         "/autoreview off"
+     ));
+     assert_eq!(app.session.autoreview_enabled, Some(false));
+     assert!(!app.autoreview_enabled);
++    });
+ }
+
+ #[test]
+ fn test_autojudge_command_toggles_session_preference() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     assert!(super::commands::handle_session_command(
+         &mut app,
+@@ -2322,8 +2394,9 @@
+         "/autojudge off"
+     ));
+     assert_eq!(app.session.autojudge_enabled, Some(false));
+     assert!(!app.autojudge_enabled);
++    });
+ }
+
+ #[test]
+ fn test_transcript_path_command_reports_current_session_file() {
+@@ -2964,8 +3037,9 @@
+ }
+
+ #[test]
+ fn test_help_topic_shows_overnight_command_details() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.input = "/help overnight".to_string();
+     app.submit_input();
+
+@@ -2976,8 +3050,9 @@
+     assert_eq!(msg.role, "system");
+     assert!(msg.content.contains("/overnight <hours>[h|m] [mission]"));
+     assert!(msg.content.contains("review HTML page"));
+     assert!(msg.content.contains("/overnight status"));
++    });
+ }
+
+ #[test]
+ fn test_overnight_status_without_runs_is_handled() {
+@@ -2998,8 +3073,9 @@
+ }
+
+ #[test]
+ fn test_overnight_help_command_is_handled() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     assert!(super::commands::handle_session_command(
+         &mut app,
+         "/overnight help"
+@@ -3011,8 +3087,9 @@
+         .expect("missing overnight help response");
+     assert_eq!(msg.role, "system");
+     assert!(msg.content.contains("/overnight <hours>[h|m] [mission]"));
+     assert!(msg.content.contains("/overnight review"));
++    });
+ }
+
+ #[test]
+ fn test_overnight_start_runs_as_visible_local_turn() {
 diff --git a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
 --- a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
-@@ -1031,3 +1031,6 @@
+@@ -1028,8 +1028,11 @@
+ }
+
+ #[test]
  fn test_save_and_restore_reload_state_preserves_queued_messages() {
 +    // Save and restore both resolve process-global JCODE_HOME. Keep one owned
 +    // home and the shared env lock for each complete reload roundtrip below.
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-reload-{}", std::process::id());
-@@ -1051,3 +1054,4 @@
+
+     app.input = "draft".to_string();
+@@ -1049,12 +1052,14 @@
+         vec!["continue silently"]
+     );
 
      assert!(App::restore_input_for_reload(&session_id).is_none());
 +    });
  }
-@@ -1056,3 +1060,4 @@
+
+ #[test]
  fn test_new_for_remote_restored_queued_messages_stay_queued_until_remote_idle() {
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-remote-queued-restore-{}", std::process::id());
-@@ -1072,3 +1077,4 @@
+
+     app.queued_messages.push("queued one".to_string());
+@@ -1071,8 +1076,9 @@
+     );
+     assert!(!restored.pending_queued_dispatch);
      assert!(!restored.is_processing);
      assert!(matches!(restored.status, ProcessingStatus::Idle));
 +    });
  }
-@@ -1098,3 +1104,4 @@
+
+ #[test]
+ fn test_save_and_restore_startup_submission_preserves_pending_images() {
+@@ -1095,8 +1101,9 @@
+ }
+
+ #[test]
  fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-reload-pending-{}", std::process::id());
-@@ -1148,3 +1155,4 @@
+
+     app.input = "draft".to_string();
+@@ -1146,12 +1153,14 @@
+     assert!(pending.auto_retry);
+     assert_eq!(pending.retry_attempts, 2);
      assert!(pending.retry_at.is_some());
      assert!(restored.rate_limit_reset.is_some());
 +    });
  }
-@@ -1153,3 +1161,4 @@
+
+ #[test]
  fn test_save_and_restore_reload_state_promotes_inflight_prompt_to_startup_submission() {
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-reload-inflight-prompt-{}", std::process::id());
-@@ -1179,3 +1188,4 @@
+
+     app.rate_limit_pending_message = Some(PendingRemoteMessage {
+@@ -1177,12 +1186,14 @@
+     assert!(
+         restored.rate_limit_pending_message.is_none(),
          "promoted startup submission should not linger as a passive pending retry"
      );
 +    });
  }
-@@ -1184,3 +1194,4 @@
+
+ #[test]
  fn test_save_and_restore_reload_state_preserves_observe_mode() {
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-reload-observe-{}", std::process::id());
-@@ -1198,3 +1209,4 @@
+
+     app.set_observe_mode_enabled(true, true);
+@@ -1196,20 +1207,23 @@
+         restored.observe_page_markdown,
+         "# Observe\n\nPersist me through reload."
      );
      assert_eq!(restored.observe_page_updated_at_ms, 42);
 +    });
  }
-@@ -1203,3 +1215,4 @@
+
+ #[test]
  fn test_save_and_restore_reload_state_preserves_split_view_mode() {
 +    with_temp_jcode_home(|| {
      let mut app = create_test_app();
      let session_id = format!("test-reload-splitview-{}", std::process::id());
-@@ -1209,3 +1222,4 @@
+
+     app.set_split_view_enabled(true, true);
+     app.save_input_for_reload(&session_id);
+
      let restored = App::restore_input_for_reload(&session_id).expect("reload state should exist");
      assert!(restored.split_view_enabled);
 +    });
  }
-@@ -1257,3 +1271,4 @@
+
+ #[test]
+ fn test_new_for_remote_restores_observe_mode_from_reload_state() {
+@@ -1254,8 +1268,9 @@
+ }
+
+ #[test]
  fn test_restore_reload_state_supports_legacy_input_format() {
 +    with_temp_jcode_home(|| {
      let session_id = format!("test-reload-legacy-{}", std::process::id());
      let jcode_dir = crate::storage::jcode_dir().unwrap();
-@@ -1266,3 +1281,4 @@
+     let path = jcode_dir.join(format!("client-input-{}", session_id));
+     std::fs::write(&path, "2\nhello").unwrap();
+@@ -1264,8 +1279,9 @@
+         App::restore_input_for_reload(&session_id).expect("legacy reload state should restore");
+     assert_eq!(restored.input, "hello");
      assert_eq!(restored.cursor, 2);
      assert!(restored.queued_messages.is_empty());
 +    });
  }
+
+ #[test]
+ fn test_new_for_remote_requeues_restored_pending_soft_interrupts() {
 diff --git a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs b/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
 --- a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
-@@ -353,8 +353,8 @@
+@@ -352,12 +352,12 @@
+ ///
  /// The lock is acquired with `try_lock`, never blocking: tests like
  /// `with_temp_jcode_home` hold this same non-reentrant mutex for their whole
  /// body and may call `create_*_test_app` inside it, so a blocking lock here
@@ -280,7 +782,11 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs b/cr
 +/// to this caller's scoped fixture or another thread, never assume ownership.
 +/// A successful guard covers the complete check/set transition.
  /// The shared per-process test home that `create_test_app` installs when no
-@@ -382,7 +382,11 @@ fn ensure_test_jcode_home_if_unset() {
+ /// test has scoped its own `JCODE_HOME`.
+ fn shared_test_jcode_home() -> &'static std::path::Path {
+     static TEST_HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+@@ -381,9 +381,13 @@
+     // `try_lock` keeps the serialization when the lock is free and degrades
      // to the caller's own exclusion when this thread already holds it: if
      // try_lock fails because *we* hold the lock, no other thread can race
      // this read-modify-write anyway.
@@ -293,13 +799,15 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs b/cr
 
      if std::env::var_os("JCODE_HOME").is_some() {
          return;
-@@ -471,4 +475,14 @@ fn with_temp_jcode_home<T>(f: impl FnOnce() -> T) -> T {
+     }
+@@ -468,8 +472,18 @@
+     crate::config::invalidate_config_cache();
      result
  }
 
 +// Local command and provider fixtures must not inherit a concurrent SSH test.
 +// Keep the shared lock, owned home and SSH restore guard for their whole body.
-+fn with_local_jcode_home<T>(f: impl FnOnce() -> T) -> T {
++pub(super) fn with_local_jcode_home<T>(f: impl FnOnce() -> T) -> T {
 +    with_temp_jcode_home(|| {
 +        let _ssh = EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"]);
 +        crate::env::remove_var("JCODE_SSH_REMOTE");
@@ -308,10 +816,15 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs b/cr
 +}
 +
  /// Run `f` in a hermetic `JCODE_HOME` with reasoning display pinned to
+ /// `current`.
+ ///
+ /// The reasoning-region tests assert live-then-anchored ("current") behaviour, but
 diff --git a/crates/jcode-tui/src/tui/app/remote_tests.rs b/crates/jcode-tui/src/tui/app/remote_tests.rs
 --- a/crates/jcode-tui/src/tui/app/remote_tests.rs
 +++ b/crates/jcode-tui/src/tui/app/remote_tests.rs
-@@ -64,3 +64,8 @@ fn ensure_test_jcode_home_if_unset() {
+@@ -62,8 +62,13 @@
+     use std::sync::OnceLock;
+
      static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 +    // Do not repoint another fixture's home between its save and read.
@@ -320,55 +833,514 @@ diff --git a/crates/jcode-tui/src/tui/app/remote_tests.rs b/crates/jcode-tui/src
 +    };
 +
      if std::env::var_os("JCODE_HOME").is_some() {
+         return;
+     }
+
+@@ -86,18 +91,21 @@
+ }
+
+ #[test]
+ fn client_focus_defaults_to_true() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let app = create_test_app();
+     assert!(
+         app.client_focused(),
+         "a freshly created client should start focused so terminals that never \
+          report focus events still animate/redraw normally"
+     );
++    });
+ }
+
+ #[test]
+ fn idle_donut_pauses_while_unfocused() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+
+     // Whether the donut runs while focused depends on the machine's perf tier
+     // and `display.idle_animation` config, so we do not assert the focused case
+@@ -123,12 +131,14 @@
+     assert!(
+         !app.force_full_redraw,
+         "focus changes must not force an expensive full-terminal repaint"
+     );
++    });
+ }
+
+ #[test]
+ fn unfocused_redraw_warranted_tracks_live_activity() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     // `unfocused_redraw_warranted` is only consulted while unfocused, and the
+     // decorative donut is force-disabled when unfocused, so evaluate it in that
+     // state to mirror the run loop.
+@@ -146,12 +156,14 @@
+     assert!(
+         app.unfocused_redraw_warranted(),
+         "a processing session should keep redrawing while unfocused"
+     );
++    });
+ }
+
+ #[test]
+ fn client_interaction_restores_focus_so_scroll_redraws_at_full_rate() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression for the intermittent "can't scroll" bug. If a FocusGained is
+     // dropped (flaky under tiling WMs / multiplexers) the window can get stuck
+     // as "unfocused idle", which the run loop throttles to ~1 Hz. Any terminal
+     // input (key/mouse/scroll) is only delivered to the focused window, so it
+@@ -172,8 +184,9 @@
+     assert!(
+         app.client_focused(),
+         "interaction must restore focus so scrolling repaints at full rate"
+     );
++    });
+ }
+
+ #[test]
+ fn auth_provider_hint_maps_openai_compatible_login_providers() {
+@@ -400,20 +413,23 @@
+ }
+
+ #[test]
+ fn reload_wait_status_message_uses_waiting_language() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.resume_session_id = Some("ses_test_reload_wait".to_string());
+     let state = RemoteRunState::default();
+
+     let message = reconnect::reload_wait_status_message(&app, &state, "server reload in progress");
+
+     assert!(message.contains("waiting for handoff"));
+     assert!(!message.contains("retrying"));
++    });
+ }
+
+ #[test]
+ fn submit_prepared_remote_input_defers_until_history_loads() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression for the intermittent "first prompt vanishes / weird render"
+     // bug: when a manual submit lands before the bootstrap History payload is
+     // applied, the History handler's `session_changed` branch calls
+     // `clear_display_messages()` and wipes the just-echoed user message. The
+@@ -473,12 +489,14 @@
+     assert!(
+         app.is_processing,
+         "the held prompt should be sent once history is loaded"
+     );
++    });
+ }
+
+ #[test]
+ fn remote_skill_invocation_with_prompt_sends_remote_turn() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.runtime_mode = crate::tui::app::AppRuntimeMode::RemoteClient;
+     let temp = tempfile::tempdir().expect("create skill dir");
+@@ -514,12 +532,14 @@
+             .any(|message| message.role == "user"
+                 && message.content == "/remote-skill explain the change"),
+         "remote skill prompt should be visible as the submitted user turn"
+     );
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_auto_submits_staged_startup_prompt() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression for issues #267/#268/#76: a headed swarm spawn stages its
+     // initial prompt into `app.input` with `submit_input_on_startup = true`
+     // (not `queued_messages`). The post-connect dispatcher must still submit it;
+     // otherwise the spawned agent shows its prompt but never sends it.
+@@ -563,12 +583,14 @@
+             .any(|message| message.role == "user"
+                 && message.content == "Classify the issues in /tmp/batch.txt"),
+         "submitting the startup prompt should record it as a user message"
+     );
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_sends_startup_prompt_before_history_arrives() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.runtime_mode = crate::tui::app::AppRuntimeMode::RemoteClient;
+     app.input = "Start the fork immediately".to_string();
+@@ -631,8 +653,9 @@
+     assert!(app.display_messages().iter().any(|message| {
+         message.role == "user" && message.content == "Start the fork immediately"
+     }));
+     assert!(app.pending_startup_prompt_echo.is_none());
++    });
+ }
+
+ fn startup_history(session_id: &str) -> ServerEvent {
+     ServerEvent::History {
+@@ -674,8 +697,9 @@
+ }
+
+ #[test]
+ fn startup_send_state_is_not_preserved_for_real_session_switch() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.runtime_mode = crate::tui::app::AppRuntimeMode::RemoteClient;
+     app.remote_session_id = Some("previous-session".to_string());
+@@ -693,12 +717,14 @@
+     assert!(!app.is_processing);
+     assert!(app.rate_limit_pending_message.is_none());
+     assert!(app.processing_started.is_none());
+     assert!(matches!(app.status, crate::tui::ProcessingStatus::Idle));
++    });
+ }
+
+ #[test]
+ fn has_pending_startup_submission_requires_input_and_flag() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Guards the predicate that gates post-connect startup dispatch.
+     let mut app = create_test_app();
+     assert!(!app.has_pending_startup_submission());
+
+@@ -721,12 +747,14 @@
+     assert!(
+         !app.has_pending_startup_submission(),
+         "input without the auto-submit flag is just editor state, not pending"
+     );
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_auto_reloads_server_by_default() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     let rt = tokio::runtime::Runtime::new().expect("runtime");
+     let _guard = rt.enter();
+     let mut remote = crate::tui::backend::RemoteConnection::dummy();
+@@ -743,12 +771,14 @@
+         .last()
+         .expect("missing reload message");
+     assert_eq!(last.title.as_deref(), Some("Reload"));
+     assert!(last.content.contains("Reloading server with newer binary"));
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_reloads_server_even_before_history_loads() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression guard: when the server/client binaries differ, the History
+     // handler defers session state and sets `pending_server_reload = true`
+     // WITHOUT marking history as loaded. The reload must still fire; otherwise
+     // history stays unloaded forever and every typed prompt stalls on
+@@ -774,12 +804,14 @@
+         .last()
+         .expect("missing reload message");
+     assert_eq!(last.title.as_deref(), Some("Reload"));
+     assert!(last.content.contains("Reloading server with newer binary"));
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_respects_disabled_auto_server_reload() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     let rt = tokio::runtime::Runtime::new().expect("runtime");
+     let _guard = rt.enter();
+     let mut remote = crate::tui::backend::RemoteConnection::dummy();
+@@ -793,12 +825,14 @@
+     assert!(!app.pending_server_reload);
+     let last = app.display_messages().last().expect("missing info message");
+     assert_eq!(last.role, "system");
+     assert!(last.content.contains("display.auto_server_reload = false"));
++    });
+ }
+
+ #[test]
+ fn process_remote_followups_pauses_auto_reload_after_repeated_attempts() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression guard for issue #277: a false-positive "server has update" must
+     // not auto-reload forever. After the breaker threshold we stop reloading and
+     // surface a message instead.
+     let rt = tokio::runtime::Runtime::new().expect("runtime");
+@@ -825,8 +859,9 @@
+     assert!(
+         paused,
+         "auto-reload should eventually pause to avoid an infinite reload loop"
+     );
++    });
+ }
+
+ #[test]
+ fn handle_post_connect_dispatches_reload_followup_even_if_history_snapshot_looks_busy() {
+@@ -902,8 +937,9 @@
+ }
+
+ #[test]
+ fn handle_server_event_applies_remote_memory_activity_snapshot() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     crate::memory::clear_activity();
+
+     let rt = tokio::runtime::Runtime::new().expect("runtime");
+     let _guard = rt.enter();
+@@ -941,16 +977,18 @@
+     assert_eq!(pipeline.verify_progress, Some((1, 3)));
+     assert!(activity.state_since.elapsed().as_millis() >= 100);
+
+     crate::memory::clear_activity();
++    });
+ }
+
+ /// Reproduces the "stuck on loading session…" bug and verifies the watchdog
+ /// recovers it: a remote connection that never receives the bootstrap History
+ /// event (so `has_loaded_history()` stays false) must re-request `GetHistory`
+ /// once it has waited past the recovery delay, instead of staying stuck forever.
+ #[test]
+ fn remote_history_watchdog_rerequests_history_when_stuck() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     use std::time::{Duration, Instant};
+     use tokio::io::AsyncBufReadExt;
+
+     let mut app = create_test_app();
+@@ -995,14 +1033,16 @@
+         serde_json::from_str::<crate::protocol::Request>(&line)
+             .expect("history re-request should deserialize"),
+         crate::protocol::Request::GetHistory { .. }
+     ));
++    });
+ }
+
+ /// A partial inbound frame proves that the original History response is in
+ /// flight. The watchdog must not queue another full response behind it.
+ #[test]
+ fn remote_history_watchdog_does_not_rerequest_while_frame_is_arriving() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     use std::time::{Duration, Instant};
+     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+     let mut app = create_test_app();
+@@ -1044,13 +1084,15 @@
+                 .is_err(),
+             "watchdog must not write a duplicate GetHistory request"
+         );
+     });
++    });
+ }
+
+ /// Once history loads, the watchdog must clear its budget and do nothing.
+ #[test]
+ fn remote_history_watchdog_clears_budget_once_history_loads() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     use std::time::{Duration, Instant};
+
+     let mut app = create_test_app();
+     app.is_remote = true;
+@@ -1067,14 +1109,16 @@
+     assert!(!redraw);
+     assert!(app.remote_history_wait_started.is_none());
+     assert_eq!(app.remote_history_recovery_attempts, 0);
+     assert!(app.remote_history_recovery_last_attempt.is_none());
++    });
+ }
+
+ /// After exhausting re-requests the watchdog surfaces an actionable `/restart`
+ /// hint exactly once instead of silently leaving the user stuck.
+ #[test]
+ fn remote_history_watchdog_advises_restart_after_giving_up() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     use std::time::{Duration, Instant};
+
+     let mut app = create_test_app();
+     app.is_remote = true;
+@@ -1107,8 +1151,9 @@
+         super::recover_stuck_remote_history(&mut app, &mut remote).await
+     });
+     assert!(!redraw2);
+     assert_eq!(app.display_messages().len(), before + 1);
++    });
+ }
+
+ /// Regression for issue #427: picking an effort-variant model row (e.g.
+ /// "gpt-5.5 (high)") in remote mode must forward the chosen effort to the
+@@ -1116,8 +1161,9 @@
+ /// only to the local stand-in provider, so the server kept its configured
+ /// default (low by default) and silently ran the new model at low effort.
+ #[test]
+ fn forward_pending_reasoning_effort_sends_effort_request_to_server() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     use tokio::io::AsyncBufReadExt;
+
+     let mut app = create_test_app();
+     app.is_remote = true;
+@@ -1159,14 +1205,16 @@
+         app.remote_reasoning_effort.as_deref(),
+         Some("high"),
+         "requested effort should be tracked optimistically for the UI"
+     );
++    });
+ }
+
+ /// The dispatcher must be a no-op when no effort variant was staged (plain
+ /// model rows without an effort suffix).
+ #[test]
+ fn forward_pending_reasoning_effort_is_noop_without_staged_effort() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     assert!(app.pending_reasoning_effort.is_none());
+
+@@ -1177,12 +1225,14 @@
+     });
+
+     assert!(app.remote_reasoning_effort.is_none());
+     assert!(app.pending_reasoning_effort.is_none());
++    });
+ }
+
+ #[test]
+ fn remote_dropped_file_path_is_sent_as_a_prompt_not_a_slash_command() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Regression: a terminal file drop like `/tmp/shot.png` starts with `/`, so
+     // remote submit routed it to `submit_remote_slash_input`, which fell back to
+     // `App::submit_input`. That only sets `pending_turn`, which no remote run
+     // loop consumes, so the client hung in "Sending" forever.
+@@ -1221,12 +1271,14 @@
+     assert!(
+         !app.pending_turn,
+         "remote submissions must never park on the local-only pending_turn flag"
+     );
++    });
+ }
+
+ #[test]
+ fn remote_embedded_known_slash_commands_are_sent_as_prompt_text() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.runtime_mode = crate::tui::app::AppRuntimeMode::RemoteClient;
+
+@@ -1259,12 +1311,14 @@
+         app.display_messages()
+             .iter()
+             .any(|message| { message.role == "user" && message.content == prompt })
+     );
++    });
+ }
+
+ #[test]
+ fn remote_multiple_known_slash_commands_use_the_local_command_boundary() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.is_remote = true;
+     app.runtime_mode = crate::tui::app::AppRuntimeMode::RemoteClient;
+
+@@ -1288,12 +1342,14 @@
+     assert!(messages[0].content.contains("/compact"));
+     assert!(messages[1].content.contains("Usage: /test"));
+     assert!(!app.pending_turn);
+     assert!(!app.is_processing);
++    });
+ }
+
+ #[test]
+ fn remote_submit_input_never_strands_a_local_pending_turn() {
++    crate::tui::app::tests::with_local_jcode_home(|| {
+     // Safety net: any path that reaches `App::submit_input` while attached to a
+     // remote session must queue for the remote tick loop rather than set
+     // `pending_turn`, which only the local run loop consumes.
+     let mut app = create_test_app();
+@@ -1312,5 +1368,6 @@
+         app.queued_messages,
+         vec!["plain prompt".to_string()],
+         "the prompt should be queued for the remote tick loop"
+     );
++    });
+ }
 diff --git a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs b/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
 --- a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
-@@ -160,3 +160,4 @@
+@@ -157,8 +157,9 @@
+ }
+
+ #[test]
  fn decoded_shift_enter_inserts_a_newline_instead_of_submitting() {
 +    with_local_jcode_home(|| {
      use crossterm::event::{KeyCode, KeyModifiers};
 
-@@ -177,3 +178,4 @@
+     // The app-side half of the contract, independent of pty availability.
+     let mut app = create_test_app();
+@@ -174,8 +175,9 @@
+         app.display_messages().is_empty(),
+         "Shift+Enter must not submit: {:?}",
          app.display_messages()
      );
 +    });
  }
-@@ -188,3 +190,4 @@
+
+ // `/terminal-setup` must make Shift+Enter work, and must tell the truth about
+ // what it did.
+@@ -185,8 +187,9 @@
+ // registration, aliasing, and messaging are all covered.
+
+ #[test]
  fn terminal_setup_command_is_dispatched_and_reports_something_actionable() {
 +    with_local_jcode_home(|| {
      let mut app = create_test_app();
      app.set_input_for_test("/terminal-setup");
-@@ -207,3 +210,4 @@
+     app.submit_input();
+
+@@ -205,8 +208,9 @@
+         last.content.contains("Shift+Enter") || last.content.contains("Terminal.app"),
+         "message should explain the Shift+Enter situation: {}",
          last.content
      );
 +    });
  }
-@@ -226,3 +230,4 @@
+
+
+ #[test]
+@@ -223,8 +227,9 @@
+ }
+
+ #[test]
  fn unrelated_commands_are_not_swallowed_by_the_terminal_setup_handler() {
 +    with_local_jcode_home(|| {
      // A too-eager prefix match here would shadow other commands.
      let mut app = create_test_app();
-@@ -241,3 +246,4 @@
+     for command in ["/terminal", "/setup"] {
+         app.set_input_for_test(command);
+@@ -239,12 +244,14 @@
+             "{command} must not be treated as /terminal-setup: {}",
+             last.content
          );
      }
 +    });
  }
-@@ -246,3 +252,4 @@
+
+ #[test]
  fn falling_back_to_a_backslash_newline_points_at_terminal_setup_once() {
 +    with_local_jcode_home(|| {
      // Using the fallback means Shift+Enter did not work for this user, which is
      // fixable. Surface that once, then stay quiet.
-@@ -273,3 +280,4 @@
+     let mut app = create_test_app();
+     app.set_input_for_test("first\\");
+@@ -271,12 +278,14 @@
+         app.status_notice().as_deref(),
+         Some("something else"),
          "the tip must only appear once per session"
      );
 +    });
  }
-@@ -278,3 +286,4 @@
+
+ #[test]
  fn working_shift_enter_never_triggers_the_terminal_setup_tip() {
 +    with_local_jcode_home(|| {
      // Users whose terminal already reports the chord should never see the tip.
      let mut app = create_test_app();
-@@ -289,3 +298,4 @@
+     app.handle_key(KeyCode::Char('a'), KeyModifiers::empty())
+         .expect("type");
+@@ -287,5 +296,6 @@
+     assert!(
+         !app.terminal_setup_hint_shown_this_session,
          "Shift+Enter worked, so there is nothing to fix"
      );
 +    });
@@ -376,20 +1348,32 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs b/crat
 diff --git a/crates/jcode-tui/src/tui/ui_messages/tests.rs b/crates/jcode-tui/src/tui/ui_messages/tests.rs
 --- a/crates/jcode-tui/src/tui/ui_messages/tests.rs
 +++ b/crates/jcode-tui/src/tui/ui_messages/tests.rs
-@@ -1543,3 +1543,4 @@
+@@ -1540,8 +1540,9 @@
+ }
+
+ #[test]
  fn render_system_message_uses_scheduled_task_card() {
 +    let _glyph_env = system_glyph_env_lock();
      let msg = DisplayMessage::system(
          "[Scheduled task]\nA scheduled task for this session is now due.\n\nTask: Follow up on the scheduler test\nWorking directory: /home/jeremy/jcode\nRelevant files: src/tui/ui_messages.rs\nBranch: master\n\nBackground: Verify the scheduled task card styling\nSuccess criteria: The due task renders clearly\nScheduled by session: session_test",
-@@ -1567,3 +1568,4 @@
+     );
+
+@@ -1564,8 +1565,9 @@
+ }
+
+ #[test]
  fn render_tool_message_uses_scheduled_card() {
 +    let _glyph_env = system_glyph_env_lock();
      let msg = DisplayMessage {
          role: "tool".to_string(),
+         content: "Scheduled task 'Follow up on the scheduler test' for in 1m (id: sched_abc123)\nWorking directory: /home/jeremy/jcode\nRelevant files: src/tui/ui_messages.rs\nTarget: resume session session_test".to_string(),
+         tool_calls: Vec::new(),
 diff --git a/crates/jcode-tui/src/tui/ui_header.rs b/crates/jcode-tui/src/tui/ui_header.rs
 --- a/crates/jcode-tui/src/tui/ui_header.rs
 +++ b/crates/jcode-tui/src/tui/ui_header.rs
-@@ -1095,3 +1095,8 @@
+@@ -1093,8 +1093,13 @@
+
+     fn ensure_test_jcode_home_if_unset() {
          static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 +        // This helper is test-only. Do not overwrite a scoped fixture's home.
@@ -398,3 +1382,46 @@ diff --git a/crates/jcode-tui/src/tui/ui_header.rs b/crates/jcode-tui/src/tui/ui
 +        };
 +
          if std::env::var_os("JCODE_HOME").is_some() {
+             return;
+         }
+
+diff --git a/crates/jcode-tui/src/tui/app/helpers_tests.rs b/crates/jcode-tui/src/tui/app/helpers_tests.rs
+--- a/crates/jcode-tui/src/tui/app/helpers_tests.rs
++++ b/crates/jcode-tui/src/tui/app/helpers_tests.rs
+@@ -328,19 +328,20 @@
+ /// whether the developer machine has a published local build channel and of
+ /// other tests mutating JCODE_HOME in parallel. Returns the guards that keep
+ /// the environment pinned for the duration of the test.
+ fn pinned_resume_test_home() -> (
+-    std::sync::MutexGuard<'static, ()>,
+-    tempfile::TempDir,
+     EnvVarGuard,
++    tempfile::TempDir,
++    std::sync::MutexGuard<'static, ()>,
+ ) {
+     let env_lock = crate::storage::lock_test_env();
+     let temp = tempfile::tempdir().expect("tempdir");
+     let current = temp.path().join("builds").join("current");
+     std::fs::create_dir_all(&current).expect("create builds/current");
+     std::fs::write(current.join("jcode"), b"#!/bin/sh\n").expect("write fake jcode binary");
+     let home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+-    (env_lock, temp, home)
++    // Aggregate fields drop in declaration order: restore HOME before unlock.
++    (home, temp, env_lock)
+ }
+
+ #[test]
+ fn build_resume_command_uses_imported_jcode_session_for_claude_code() {
+diff --git a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_01/part_02.rs b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_01/part_02.rs
+--- a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_01/part_02.rs
++++ b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_01/part_02.rs
+@@ -423,8 +423,9 @@
+ }
+
+ #[test]
+ fn test_model_picker_remote_comtegra_model_uses_comtegra_route_not_copilot() {
++    let _env_lock = crate::storage::lock_test_env();
+     let prev_key = std::env::var("COMTEGRA_API_KEY").ok();
+     crate::env::set_var("COMTEGRA_API_KEY", "test-key");
+
+     let mut app = create_test_app();

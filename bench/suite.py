@@ -168,6 +168,8 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-description-consent.patch"),
             ("jcode", "bench/patches/jcode-appcore-fixture-state.patch"),
             ("jcode", "bench/patches/jcode-tui-fixture-state.patch"),
+            # Whole-fixture env exclusion for remote/model readers and their
+            # writers, including aggregate HOME restore-before-unlock ordering.
             ("jcode", "bench/patches/jcode-hosted-tui-prerequisites.patch"),
         ],
     },

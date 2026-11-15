@@ -43,6 +43,38 @@ def test_names(source):
     return re.findall(r"#\[test\]\s*(?:#\[[^\]]+\]\s*)*fn\s+(\w+)", source)
 
 
+def fixture_bodies(source):
+    """Unindented test items in the affected app fixture modules."""
+    return dict(re.findall(r"#\[test\]\nfn (\w+)\(\) \{\n(.*?)\n\}", source, re.S))
+
+
+def assert_reader_coverage(case, path, source):
+    """Derive coverage from fixture operations, not the latest failing names."""
+    bodies = fixture_bodies(source)
+    readers = {}
+    for name, body in bodies.items():
+        if path.endswith("/remote_tests.rs"):
+            reads_environment = "create_test_app()" in body
+            scoped = "crate::tui::app::tests::with_local_jcode_home"
+        else:
+            reads_environment = bool(re.search(
+                r"create_\w*(?:test_app|model_app)\(|App::new_for_test_harness\(", body))
+            scoped = "with_local_jcode_home"
+        if not reads_environment:
+            continue
+        readers[name] = body
+        # Existing owned fixtures keep their original single lock. New readers
+        # must hold a scoped home for the entire body, including async polling.
+        if "crate::storage::lock_test_env()" in body:
+            case.assertNotIn(f"{scoped}(|| {{", body, name)
+        elif not re.match(r"\s*(?:use [^;]+;\s*)*with_temp_jcode_home\(\|\| \{", body):
+            case.assertRegex(body, rf"\A\s*(?://[^\n]*\n\s*)*{re.escape(scoped)}\(\|\| \{{", name)
+            case.assertTrue(body.rstrip().endswith("});"), name)
+            case.assertNotRegex(body, r"(?:lock_test_env|lock_shared_state)\(", name)
+    case.assertEqual(len(readers), 26 if path.endswith("/remote_tests.rs") else 52)
+    return readers
+
+
 class HostedTuiPrerequisites(unittest.TestCase):
     def test_registration_and_provenance(self):
         spec = suite.SNAPSHOTS["desktop"]
@@ -57,6 +89,9 @@ class HostedTuiPrerequisites(unittest.TestCase):
         source = (suite.ROOT / "bench/suite.py").read_text()
         self.assertIn('"snapshot_fingerprints": {name: snapshot_fingerprint(name)', source)
         self.assertIn('"patches": [(repo, path, hashlib.sha256', source)
+        for name in ("test-retry-contention", "test-retry-storm"):
+            scenario = next(s for s in suite.SCENARIOS if s.name == name)
+            self.assertEqual(scenario.env["RUST_TEST_THREADS"], "16")
 
     def test_fixture_contracts(self):
         text = (suite.ROOT / PATCH).read_text()
@@ -66,7 +101,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
         self.assertIn('Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value)', text)
         self.assertEqual(text.count("+    let git_fixture = create_real_git_repo_fixture();"), 2)
         self.assertEqual(text.count("+    with_temp_jcode_home(|| {"), 11)
-        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 12)
+        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 36)
         self.assertIn("crate::auth::antigravity::save_tokens", text)
         self.assertIn("expires_at: i64::MAX", text)
         self.assertIn('let _ssh = EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"]);', text)
@@ -81,14 +116,14 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         if line.startswith("+++ b/")})
         targets = [line[6:] for line in (suite.ROOT / PATCH).read_text().splitlines()
                    if line.startswith("+++ b/")]
-        self.assertEqual(len(targets), 9)
+        self.assertEqual(len(targets), 11)
         for path in targets:
             if path == "crates/jcode-tui/src/tui/ui_header.rs":
                 continue  # Authorized exception, runtime-byte proof below.
             if path == "crates/jcode-tui/src/tui/ui_messages/tests.rs":
                 continue  # Entire file is the existing cfg(test) module.
             self.assertTrue(path.startswith("crates/jcode-tui/src/tui/app/"), path)
-            self.assertTrue("/tests/" in path or path.endswith(("/commands_tests.rs", "/remote_tests.rs")), path)
+            self.assertTrue("/tests/" in path or path.endswith(("/commands_tests.rs", "/remote_tests.rs", "/helpers_tests.rs")), path)
         repo, revision = spec["repos"]["jcode"]
         # Read the immutable object, never the live checkout or its Git metadata.
         archive = subprocess.check_output(["git", "-C", str(repo), "archive", revision, *paths])
@@ -111,6 +146,45 @@ class HostedTuiPrerequisites(unittest.TestCase):
                 self.assertEqual(assertions(original[path]), assertions(updated), path)
                 self.assertEqual(original[path].count("#[ignore"), updated.count("#[ignore"), path)
                 blocks = re.split(r"(?m)^#\[test\]\n", updated)[1:]
+                if path.endswith("support_failover/part_01.rs"):
+                    helper = updated.split("pub(super) fn with_local_jcode_home", 1)[1].split("\n}", 1)[0]
+                    self.assertEqual(helper.count("with_temp_jcode_home(|| {"), 1)
+                    self.assertNotIn("lock_test_env()", helper)
+                    self.assertIn('EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"])', helper)
+                    self.assertIn('crate::env::remove_var("JCODE_SSH_REMOTE")', helper)
+                if path.endswith(("/remote_tests.rs", "state_model_poke_03.rs")):
+                    assert_reader_coverage(self, path, updated)
+                    neighbor = ("idle_donut_pauses_while_unfocused" if path.endswith("/remote_tests.rs")
+                                else "test_model_picker_reuses_cached_entries_until_invalidated")
+                    helper = ("crate::tui::app::tests::with_local_jcode_home" if path.endswith("/remote_tests.rs")
+                              else "with_local_jcode_home")
+                    anchor = f"fn {neighbor}() {{\n    {helper}(|| {{\n"
+                    self.assertEqual(updated.count(anchor), 1)
+                    unguarded = updated.replace(anchor, f"fn {neighbor}() {{\n")
+                    with self.assertRaisesRegex(AssertionError, neighbor):
+                        assert_reader_coverage(self, path, unguarded)
+                    nested = updated.replace(anchor, anchor +
+                        "    let _nested = crate::storage::lock_test_env();\n")
+                    with self.assertRaisesRegex(AssertionError, neighbor):
+                        assert_reader_coverage(self, path, nested)
+                if path.endswith("/helpers_tests.rs"):
+                    # A tuple binding drops fields left to right, unlike local
+                    # bindings. Unlocking first lets its late HOME restore
+                    # overwrite the next fixture even when that fixture locks.
+                    self.assertRegex(updated, r"fn pinned_resume_test_home\(\) -> \(\s*EnvVarGuard,\s*tempfile::TempDir,\s*std::sync::MutexGuard<'static, \(\)>,\s*\)")
+                    self.assertIn("(home, temp, env_lock)", updated)
+                    self.assertNotIn("(env_lock, temp, home)", updated)
+                    self.assertEqual(updated.count("let _pinned = pinned_resume_test_home();"), 2)
+                    expected = original[path].replace(
+                        "    std::sync::MutexGuard<'static, ()>,\n    tempfile::TempDir,\n    EnvVarGuard,",
+                        "    EnvVarGuard,\n    tempfile::TempDir,\n    std::sync::MutexGuard<'static, ()>,")
+                    expected = expected.replace("    (env_lock, temp, home)",
+                        "    // Aggregate fields drop in declaration order: restore HOME before unlock.\n    (home, temp, env_lock)")
+                    self.assertEqual(expected, updated)
+                if path.endswith("remote_startup_input_01/part_02.rs"):
+                    anchor = "fn test_model_picker_remote_comtegra_model_uses_comtegra_route_not_copilot() {\n"
+                    self.assertEqual(original[path].replace(anchor, anchor +
+                        "    let _env_lock = crate::storage::lock_test_env();\n"), updated)
                 if path.endswith("/commands_tests.rs"):
                     self.assertRegex(updated, r"fn colors_harmony_reports_a_score_and_named_criteria\(\) \{\s*let _local = local_environment\(\);")
                 if path.endswith("/ui_messages/tests.rs"):
@@ -179,7 +253,8 @@ class HostedTuiPrerequisites(unittest.TestCase):
                     self.assertRegex(helper, r"fn with_temp_jcode_home[^\n]+\n\s*let _guard = crate::storage::lock_test_env\(\)")
                     self.assertIn('EnvRestoreGuard::capture(["JCODE_HOME"])', helper)
             previous_targets = {path: source for path, source in original.items()
-                                if not path.endswith("/ui_messages/tests.rs")}
+                                if not path.endswith(("/ui_messages/tests.rs", "/helpers_tests.rs",
+                                                     "/remote_startup_input_01/part_02.rs"))}
             self.assertEqual(sum(len(test_names(source)) for source in previous_targets.values()), 254)
             self.assertEqual(sum(len(assertions(source)) for source in previous_targets.values()), 1077)
             ui_messages = subprocess.check_output(
