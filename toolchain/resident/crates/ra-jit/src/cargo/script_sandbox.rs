@@ -270,6 +270,15 @@ pub(crate) fn plan(script: &Script<'_>) -> anyhow::Result<Plan> {
         readable.extend(sandboxed::workspace_root(script.cwd)?);
     }
     readable.extend(target_of(script.out_dir).map(Path::to_owned));
+    // The native engine is also the script's rustc wrapper. Its startup validates
+    // its explicit private namespace, even for compiler version/cfg probes. Keep
+    // that namespace visible read-only when temporary directories are emptied.
+    readable.extend(
+        script
+            .var("JR_ENGINE_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir() && emptied(path)),
+    );
     // The programs cargo names, and the directories of `PATH`, where a sandbox has empty
     // directories: `RUSTC` is ra-jit's own, which may be built below `/dev/shm`.
     let var = |name: &str| env.iter().find(|it| it.0 == name).map(|it| it.1.as_str());
@@ -409,7 +418,8 @@ pub(crate) fn given(name: &str) -> bool {
         "CXXSTDLIB",
         "LC_",
     ];
-    const NAMES: [&str; 29] = [
+    const NAMES: [&str; 30] = [
+        "JR_ENGINE_HOME",
         "OUT_DIR",
         "TARGET",
         "HOST",
@@ -829,6 +839,47 @@ mod tests {
             ..Spec::default()
         };
         assert_eq!(inputs(&lines, &script, &spec), ["/dev/shm/ws/pkg/VERSION", "/usr/lib/libc.so"]);
+    }
+
+    #[test]
+    fn a_native_rustc_wrapper_keeps_its_private_namespace_read_only() {
+        let dir =
+            std::env::temp_dir().join(format!("jr-engine-script-home-{}", std::process::id()));
+        let workspace = dir.join("workspace");
+        let home = dir.join("private-engine");
+        let out_dir = workspace.join("target/debug/build/pkg-1/out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        let env = [
+            ("CARGO_PKG_NAME".to_owned(), "pkg".to_owned()),
+            ("RUSTC".to_owned(), "/toolchain/bin/rustc".to_owned()),
+            ("JR_ENGINE_HOME".to_owned(), home.to_str().unwrap().to_owned()),
+            ("JR_HYBRID_DECISION_FD".to_owned(), "9".to_owned()),
+        ];
+        let script = Script {
+            real: Path::new("/nonexistent/build_script_build"),
+            args: &[],
+            cwd: &workspace,
+            env: &env,
+            out_dir: &out_dir,
+            scratch: out_dir.parent().unwrap(),
+            declared: &[],
+        };
+        let Plan::Sandboxed { spec, .. } = plan(&script).unwrap() else {
+            panic!("native build scripts must remain sandboxed")
+        };
+        assert!(
+            spec.env
+                .iter()
+                .any(|(name, value)| name == "JR_ENGINE_HOME" && value == home.to_str().unwrap())
+        );
+        assert!(!spec.env.iter().any(|(name, _)| name == "JR_HYBRID_DECISION_FD"));
+        assert!(spec.readable.iter().any(|path| home.starts_with(path)), "{:?}", spec.readable);
+        assert!(!spec.writable.iter().any(|path| home.starts_with(path)), "{:?}", spec.writable);
+        assert!(spec.env.iter().any(|(name, value)| name == "RUSTC"
+            && Path::new(value).file_name().is_some_and(|name| name == crate::as_rustc::NAME)));
+        _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
