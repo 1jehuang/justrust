@@ -1475,8 +1475,14 @@ mod relay_tests {
                     first.0
                 );
                 measured.push(wait);
-                a.shutdown(std::net::Shutdown::Both).unwrap();
-                b.shutdown(std::net::Shutdown::Both).unwrap();
+                // Darwin can report ENOTCONN once shutting down the first
+                // endpoint has already disconnected its peer. That is the
+                // intended terminal state, not a failed cache transfer.
+                for stream in [a, b] {
+                    if let Err(error) = stream.shutdown(std::net::Shutdown::Both) {
+                        assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
+                    }
+                }
                 client_reader.join().unwrap();
                 server_reader.join().unwrap();
             }
