@@ -36,6 +36,271 @@ const ACCEPT_AUTH: u8 = 11;
 const ACCEPT_RECEIPT: u8 = 12;
 const AUTH_REJECTION_BODY: &[u8] = b"native identity rejected before execution";
 
+// Native-only admission fence. This does not fence SSH, other services, or
+// supervisors started before this implementation. Never unlink these files:
+// replacing an inode would split the flock domain and invalidate a drain.
+#[cfg(unix)]
+const ADMISSION_DIR: &str = "/run/justrust-native-admission";
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct AdmissionGate {
+    path: PathBuf,
+    owner: u32,
+    directory_inode: (u64, u64),
+    lock_inodes: Option<[(u64, u64); 3]>,
+}
+
+#[cfg(unix)]
+impl AdmissionGate {
+    fn open(path: &Path) -> Result<Self> {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        ensure!(
+            unsafe { libc::geteuid() } == 0,
+            "native admission requires root"
+        );
+        // Validate every ancestor, not just the leaf. A root-owned leaf under a
+        // writable directory could otherwise be renamed out from underneath us.
+        for ancestor in path.ancestors().skip(1) {
+            let metadata = std::fs::symlink_metadata(ancestor)?;
+            ensure!(
+                metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+                "unsafe native admission ancestor"
+            );
+        }
+        match std::fs::DirBuilder::new().mode(0o700).create(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        Self::initialize(path, 0)
+    }
+
+    fn initialize(path: &Path, owner: u32) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path)?;
+        let mut gate = Self {
+            path: path.to_owned(),
+            owner,
+            directory_inode: (metadata.dev(), metadata.ino()),
+            lock_inodes: None,
+        };
+        gate.validate()?;
+        // Create/validate all lock domains before accepting any connection.
+        let intent = gate.file("intent")?.metadata()?;
+        let active = gate.file("active")?.metadata()?;
+        let controller = gate.file("controller")?.metadata()?;
+        gate.lock_inodes = Some([
+            (intent.dev(), intent.ino()),
+            (active.dev(), active.ino()),
+            (controller.dev(), controller.ino()),
+        ]);
+        Ok(gate)
+    }
+
+    fn validate(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(&self.path)?;
+        ensure!(
+            metadata.is_dir() && metadata.uid() == self.owner && metadata.mode() & 0o777 == 0o700,
+            "unsafe native admission directory"
+        );
+        ensure!(
+            (metadata.dev(), metadata.ino()) == self.directory_inode,
+            "native admission directory replaced"
+        );
+        Ok(())
+    }
+
+    fn file(&self, name: &str) -> Result<std::fs::File> {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        self.validate()?;
+        let path = self.path.join(name);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        let pathname = std::fs::symlink_metadata(&path)?;
+        ensure!(
+            metadata.is_file()
+                && metadata.uid() == self.owner
+                && metadata.mode() & 0o777 == 0o600
+                && metadata.nlink() == 1
+                && metadata.dev() == pathname.dev()
+                && metadata.ino() == pathname.ino(),
+            "unsafe native admission lock inode"
+        );
+        if let Some(inodes) = self.lock_inodes {
+            let index = match name {
+                "intent" => 0,
+                "active" => 1,
+                "controller" => 2,
+                _ => bail!("unknown native admission lock"),
+            };
+            ensure!(
+                (metadata.dev(), metadata.ino()) == inodes[index],
+                "native admission lock replaced"
+            );
+        }
+        Ok(file)
+    }
+
+    fn try_lock(file: &std::fs::File, exclusive: bool) -> Result<bool> {
+        use std::os::fd::AsRawFd;
+        let operation = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
+        if unsafe { libc::flock(file.as_raw_fd(), operation | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            Ok(false)
+        } else {
+            Err(error.into())
+        }
+    }
+
+    fn admit(&self) -> Result<Option<std::fs::File>> {
+        let intent = self.file("intent")?;
+        if !Self::try_lock(&intent, false)? {
+            return Ok(None);
+        }
+        if self.marker()?.is_some() {
+            return Ok(None);
+        }
+        let active = self.file("active")?;
+        ensure!(
+            Self::try_lock(&active, false)?,
+            "native admission lock inconsistent"
+        );
+        // The shared activity lock survives until the complete connection task
+        // exits, including child reaping and output delivery. FDs are CLOEXEC.
+        Ok(Some(active))
+    }
+
+    fn marker(&self) -> Result<Option<(std::fs::File, String)>> {
+        use std::io::Read;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        self.validate()?;
+        let path = self.path.join("draining");
+        let mut file = match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        let pathname = std::fs::symlink_metadata(&path)?;
+        ensure!(
+            metadata.is_file()
+                && metadata.uid() == self.owner
+                && metadata.mode() & 0o777 == 0o600
+                && metadata.nlink() == 1
+                && metadata.len() <= 64
+                && (metadata.dev(), metadata.ino()) == (pathname.dev(), pathname.ino()),
+            "unsafe native drain marker"
+        );
+        let mut generation = String::new();
+        file.read_to_string(&mut generation)?;
+        Self::generation(&generation)?;
+        Ok(Some((file, generation)))
+    }
+
+    fn generation(generation: &str) -> Result<()> {
+        ensure!(
+            generation.len() == 64 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "native drain generation must be 64 hex digits"
+        );
+        Ok(())
+    }
+
+    fn resume(&self, generation: &str) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        Self::generation(generation)?;
+        let controller = self.file("controller")?;
+        ensure!(
+            Self::try_lock(&controller, true)?,
+            "native drain controller still holds gate"
+        );
+        let intent = self.file("intent")?;
+        ensure!(
+            Self::try_lock(&intent, true)?,
+            "native drain controller still holds gate"
+        );
+        let (marker, current) = self.marker()?.context("native drain marker absent")?;
+        ensure!(current == generation, "native drain generation mismatch");
+        let pathname = std::fs::symlink_metadata(self.path.join("draining"))?;
+        let metadata = marker.metadata()?;
+        ensure!(
+            (metadata.dev(), metadata.ino()) == (pathname.dev(), pathname.ino()),
+            "native drain marker replaced"
+        );
+        std::fs::remove_file(self.path.join("draining"))?;
+        std::fs::File::open(&self.path)?.sync_all()?;
+        Ok(())
+    }
+
+    fn drain(
+        &self,
+        timeout: Duration,
+        generation: &str,
+    ) -> Result<(std::fs::File, std::fs::File, std::fs::File)> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        Self::generation(generation)?;
+        let deadline = std::time::Instant::now() + timeout;
+        let controller = self.file("controller")?;
+        ensure!(
+            Self::try_lock(&controller, true)?,
+            "native drain controller already active"
+        );
+        if let Some((_, current)) = self.marker()? {
+            ensure!(current == generation, "native drain generation mismatch");
+        } else {
+            // Denial is published before any bounded lock wait. Incomplete
+            // contents after a crash still deny. Only matching resume clears it.
+            let mut marker = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(self.path.join("draining"))?;
+            marker.write_all(generation.as_bytes())?;
+            marker.sync_all()?;
+            std::fs::File::open(&self.path)?.sync_all()?;
+        }
+        let intent = self.file("intent")?;
+        let active = self.file("active")?;
+        for file in [&intent, &active] {
+            loop {
+                if Self::try_lock(file, true)? {
+                    break;
+                }
+                ensure!(
+                    std::time::Instant::now() < deadline,
+                    "native drain timed out, active commands were not terminated; admission remains denied"
+                );
+                std::thread::sleep(
+                    Duration::from_millis(10)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+        }
+        Ok((controller, intent, active))
+    }
+}
+
 #[derive(Debug)]
 struct NativeAuthenticationRejected;
 impl std::fmt::Display for NativeAuthenticationRejected {
@@ -600,12 +865,17 @@ pub async fn serve_test(
         KeySource::Fixed(keys),
         user,
         pin,
+        None,
     )
     .await
 }
 
 /// Bind a production guest supervisor, with root-only secrets and ubuntu children.
 pub async fn serve(config: ServeConfig) -> Result<()> {
+    #[cfg(unix)]
+    let admission = Some(AdmissionGate::open(Path::new(ADMISSION_DIR))?);
+    #[cfg(not(unix))]
+    let admission = None;
     ensure!(
         config.slot_keys_url.starts_with("https://"),
         "slot keys API must use HTTPS"
@@ -629,6 +899,7 @@ pub async fn serve(config: ServeConfig) -> Result<()> {
         },
         user,
         pin,
+        admission,
     )
     .await
 }
@@ -638,11 +909,29 @@ async fn serve_listener(
     keys: KeySource,
     user: ExecutionUser,
     pin: String,
+    #[cfg(unix)] admission: Option<AdmissionGate>,
+    #[cfg(not(unix))] _admission: Option<()>,
 ) -> Result<()> {
     let capacity = Arc::new(tokio::sync::Semaphore::new(64));
     let resume = Arc::new(tokio::sync::Mutex::new(ResumeKeys::default()));
     loop {
         let (socket, _) = listener.accept().await?;
+        #[cfg(unix)]
+        let admission_guard = match &admission {
+            Some(gate) => match gate.admit() {
+                Ok(Some(guard)) => Some(guard),
+                Ok(None) => {
+                    drop(socket);
+                    continue;
+                }
+                Err(error) => {
+                    eprintln!("native admission rejected: {error}");
+                    drop(socket);
+                    continue;
+                }
+            },
+            None => None, // Only the test server bypasses the root gate.
+        };
         let Ok(permit) = capacity.clone().try_acquire_owned() else {
             drop(socket);
             continue;
@@ -653,6 +942,8 @@ async fn serve_listener(
         let resume = resume.clone();
         let pin = pin.clone();
         tokio::spawn(async move {
+            #[cfg(unix)]
+            let _admission_guard = admission_guard;
             let _permit = permit;
             if let Err(error) = serve_connection(socket, acceptor, keys, user, resume, pin).await {
                 // Do not echo credentials or untrusted command text in supervisor logs.
@@ -1333,6 +1624,34 @@ pub fn cli(args: &[String]) -> Result<i32> {
             .with_context(|| format!("missing value for {name}"))
     };
     match action.as_str() {
+        #[cfg(unix)]
+        "drain-hold" => {
+            // Descriptor hold is bounded, persistent denial is not. Timeout,
+            // termination and expiry require explicit generation-matched resume.
+            let timeout: u64 = option("--timeout-seconds")?.parse()?;
+            let hold: u64 = option("--hold-seconds")?.parse()?;
+            let generation = option("--generation")?;
+            ensure!(
+                (1..=3600).contains(&timeout) && (1..=3600).contains(&hold),
+                "native drain timeout and hold must each be 1..=3600 seconds"
+            );
+            let gate = AdmissionGate::open(Path::new(ADMISSION_DIR))?;
+            let _held = gate.drain(Duration::from_secs(timeout), &generation)?;
+            use std::io::Write;
+            println!(
+                "native-admission-held: participating native connections completed; SSH, legacy supervisors and other services are NOT fenced; generation={generation}; hold-seconds={hold}; explicit matching drain-resume required"
+            );
+            std::io::stdout().flush()?;
+            std::thread::sleep(Duration::from_secs(hold));
+            Ok(0)
+        }
+        #[cfg(unix)]
+        "drain-resume" => {
+            let gate = AdmissionGate::open(Path::new(ADMISSION_DIR))?;
+            gate.resume(&option("--generation")?)?;
+            println!("native-admission-resumed");
+            Ok(0)
+        }
         "accept" => {
             ensure!(
                 args.len() == 3,
@@ -1466,6 +1785,297 @@ fn write_private_new(path: &Path, data: &[u8]) -> Result<()> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    const DRAIN_GENERATION: &str =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    struct AdmissionFixture(PathBuf);
+    impl AdmissionFixture {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for AdmissionFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    #[cfg(unix)]
+    fn admission_fixture() -> (AdmissionFixture, AdmissionGate) {
+        use std::os::unix::fs::DirBuilderExt;
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = AdmissionFixture(std::env::temp_dir().join(format!(
+            "justrust-admission-{}-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(directory.path())
+            .unwrap();
+        // Only fixtures use the test user's uid. Production always calls open,
+        // which requires effective uid zero and validates all ancestors.
+        let gate = AdmissionGate::initialize(directory.path(), unsafe { libc::geteuid() }).unwrap();
+        (directory, gate)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_concurrent_and_bounded_timeout() {
+        let (_directory, gate) = admission_fixture();
+        let gate = Arc::new(gate);
+        let barrier = Arc::new(std::sync::Barrier::new(17));
+        let release = Arc::new(std::sync::Barrier::new(17));
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let (gate, barrier, release) = (gate.clone(), barrier.clone(), release.clone());
+                std::thread::spawn(move || {
+                    let _active = gate.admit().unwrap().expect("concurrent admission");
+                    barrier.wait();
+                    release.wait();
+                })
+            })
+            .collect();
+        barrier.wait();
+        let start = std::time::Instant::now();
+        assert!(
+            gate.drain(Duration::from_millis(40), DRAIN_GENERATION)
+                .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // Timeout preserves denial without terminating existing admissions.
+        assert!(gate.admit().unwrap().is_none());
+        release.wait();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let held = gate
+            .drain(Duration::from_secs(1), DRAIN_GENERATION)
+            .unwrap();
+        assert!(gate.admit().unwrap().is_none());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+        drop(held);
+        assert!(gate.admit().unwrap().is_none());
+        assert!(gate.resume(&"b".repeat(64)).is_err());
+        assert!(gate.admit().unwrap().is_none());
+        gate.resume(DRAIN_GENERATION).unwrap();
+        assert!(gate.admit().unwrap().is_some());
+        let intent = gate.file("intent").unwrap();
+        assert!(AdmissionGate::try_lock(&intent, false).unwrap());
+        assert!(
+            gate.drain(Duration::from_millis(20), DRAIN_GENERATION)
+                .is_err()
+        );
+        drop(intent);
+        assert!(
+            gate.admit().unwrap().is_none(),
+            "intent-lock timeout must preserve denial"
+        );
+        gate.resume(DRAIN_GENERATION).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_control_exit_keeps_denial() {
+        const CHILD: &str = "JUSTRUST_TEST_NATIVE_DRAIN_EXIT";
+        if let Some(path) = std::env::var_os(CHILD) {
+            let gate =
+                AdmissionGate::initialize(Path::new(&path), unsafe { libc::geteuid() }).unwrap();
+            let _held = gate
+                .drain(Duration::from_secs(1), DRAIN_GENERATION)
+                .unwrap();
+            if std::env::var_os("JUSTRUST_TEST_NATIVE_DRAIN_KILL").is_some() {
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
+                unreachable!();
+            }
+            // Bypass destructors just like a terminated foreground controller.
+            std::process::exit(0);
+        }
+        let (directory, gate) = admission_fixture();
+        for crash in [false, true] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "remote_native::tests::native_admission_control_exit_keeps_denial",
+                    "--nocapture",
+                ])
+                .env(CHILD, directory.path());
+            if crash {
+                command.env("JUSTRUST_TEST_NATIVE_DRAIN_KILL", "1");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.success(), !crash, "{output:?}");
+            assert!(gate.admit().unwrap().is_none());
+            assert!(gate.resume(&"b".repeat(64)).is_err());
+            gate.resume(DRAIN_GENERATION).unwrap();
+            assert!(gate.marker().unwrap().is_none());
+            // Parallel process-spawning tests can briefly inherit another
+            // thread's flock descriptor between fork and CLOEXEC. Denial during
+            // that interval is safe, but explicit resume must eventually admit.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while gate.admit().unwrap().is_none() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "resume did not restore admission"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_marker_spoof_and_incomplete_state_fail_closed() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let (directory, gate) = admission_fixture();
+        drop(
+            gate.drain(Duration::from_secs(1), DRAIN_GENERATION)
+                .unwrap(),
+        );
+        let marker = directory.path().join("draining");
+        let saved = directory.path().join("saved-marker");
+        std::fs::rename(&marker, &saved).unwrap();
+        symlink(&saved, &marker).unwrap();
+        assert!(gate.admit().is_err());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::hard_link(&saved, &marker).unwrap();
+        assert!(gate.admit().is_err());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+        std::fs::remove_file(&saved).unwrap();
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(gate.admit().is_err());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&marker, b"").unwrap();
+        // Crash during marker creation cannot turn the empty file into open.
+        assert!(gate.admit().is_err());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_rejects_unprivileged_and_spoofed_locks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let (directory, gate) = admission_fixture();
+        // /tmp is writable even when this test runs as root.
+        assert!(AdmissionGate::open(directory.path()).is_err());
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(
+                AdmissionGate::open(Path::new(ADMISSION_DIR))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires root")
+            );
+        }
+        let active = directory.path().join("active");
+        std::fs::rename(&active, directory.path().join("original")).unwrap();
+        symlink(directory.path().join("original"), &active).unwrap();
+        assert!(gate.admit().is_err());
+        std::fs::remove_file(&active).unwrap();
+        std::fs::write(&active, b"").unwrap();
+        std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(gate.admit().is_err(), "replacement inode must fail closed");
+        std::fs::remove_file(&active).unwrap();
+        std::fs::hard_link(directory.path().join("original"), &active).unwrap();
+        assert!(gate.admit().is_err(), "hard-linked lock must be rejected");
+        std::fs::remove_file(directory.path().join("original")).unwrap();
+        std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(gate.admit().is_err(), "writable lock must be rejected");
+        std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let wrong_owner =
+            AdmissionGate::initialize(directory.path(), unsafe { libc::geteuid() } ^ 1);
+        assert!(wrong_owner.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_admission_drain_preserves_active_command_and_rejects_new_connections() {
+        let (directory, gate) = admission_fixture();
+        let observer =
+            AdmissionGate::initialize(directory.path(), unsafe { libc::geteuid() }).unwrap();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let pin = certificate_pin(cert.cert.der());
+        let config =
+            server_config(cert.cert.der().to_vec(), cert.signing_key.serialize_der()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let identity = key();
+        let server = tokio::spawn(serve_listener(
+            listener,
+            config,
+            KeySource::Fixed(vec![identity.public_key().to_openssh().unwrap()]),
+            user(),
+            pin.clone(),
+            Some(gate),
+        ));
+        let (mut connection, _) = connect_request(
+            &address,
+            "localhost",
+            &pin,
+            &identity,
+            "sleep 0.1; printf completed; exit 23",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        write_frame(&mut connection, EOF, &[]).await.unwrap();
+        let drainer =
+            std::thread::spawn(move || observer.drain(Duration::from_secs(5), DRAIN_GENERATION));
+        let probe =
+            AdmissionGate::initialize(directory.path(), unsafe { libc::geteuid() }).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match probe.admit() {
+                    Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(1)).await,
+                    Ok(None) => break,
+                    Err(error) => {
+                        // Marker creation is deliberately deny-before-write.
+                        // Seeing its incomplete contents must also fail closed.
+                        assert!(
+                            error
+                                .to_string()
+                                .contains("generation must be 64 hex digits")
+                        );
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            connect_request(&address, "localhost", &pin, &identity, "exit 0", None, None)
+                .await
+                .is_err()
+        );
+        let mut stdout = Vec::new();
+        loop {
+            let (kind, body) = read_frame(&mut connection).await.unwrap();
+            match kind {
+                STDOUT => stdout.extend(body),
+                EXIT => {
+                    assert_eq!(body, 23i32.to_be_bytes());
+                    break;
+                }
+                STDERR => {}
+                _ => panic!("unexpected active command frame {kind}"),
+            }
+        }
+        assert_eq!(stdout, b"completed");
+        drop(connection);
+        let held = tokio::task::spawn_blocking(move || drainer.join().unwrap().unwrap())
+            .await
+            .unwrap();
+        assert!(probe.admit().unwrap().is_none());
+        drop(held);
+        assert!(probe.admit().unwrap().is_none());
+        probe.resume(DRAIN_GENERATION).unwrap();
+        assert!(probe.admit().unwrap().is_some());
+        server.abort();
+    }
+
     use super::*;
 
     #[derive(Default)]
@@ -1629,6 +2239,7 @@ mod tests {
             KeySource::Fixed(keys),
             user(),
             pin.clone(),
+            None,
         ));
         (address, pin, server)
     }
@@ -2428,6 +3039,7 @@ mod tests {
             source,
             user(),
             pin.clone(),
+            None,
         ));
         let request = AcceptanceRequest {
             challenge: "a".repeat(64),
