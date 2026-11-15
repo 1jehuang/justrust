@@ -15,9 +15,17 @@ FAKE = '''#!/usr/bin/env python3
 import os, pathlib, re, sys
 root = pathlib.Path.cwd()
 text = (root / 'src/lib.rs').read_text()
+if 'stop' in sys.argv:
+    sys.exit(0)
 if 'prewarm' in sys.argv:
     if os.environ.get('FAKE_BAD_PREWARM'):
         with open(os.environ['HYBRID_SIDE_EFFECT'], 'a') as f: f.write('bad\\n')
+    sys.exit(0)
+if 'build' in sys.argv or 'check' in sys.argv:
+    sys.exit(0)
+if 'run' in sys.argv:
+    with open(os.environ['HYBRID_PROGRAM_SIDE_EFFECT'], 'a') as f: f.write('program-nonce=13\\n')
+    print('HYBRID_PROGRAM_EXECUTED_13')
     sys.exit(0)
 if 'intentionally invalid' in text:
     print('error: invalid Rust')
@@ -48,18 +56,18 @@ class Contracts(unittest.TestCase):
         text = 'HYBRID_OBSERVED nonce=0 dependency=7 config=one\ntest result: ok. 1 passed; 0 failed; 0 ignored;'
         self.assertFalse(workload.contract({'returncode': 0, 'timeout': False}, text, ['nonce=0'], 1, 7, 'one')['ok'])
 
-    def run_matrix(self, override=()):
+    def run_matrix(self, override=(), evict=False, operations=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             fake = root / 'fake'
             fake.write_text(FAKE)
             fake.chmod(0o700)
             args = argparse.Namespace(output=root / 'out', justrust=fake, engine=fake,
-                                      env=list(override), timeout=5, prewarm=True,
+                                      env=list(override), timeout=5, prewarm=True, evict=evict, operations=operations,
                                       cold_route_regex=None, warm_route_regex=None, toolchain=None)
             status = workload.execute(args)
             report = json.loads((args.output / 'report.json').read_text())
-            self.assertEqual(len(report['rows']), 27)
+            self.assertEqual(len(report['rows']), (30 if evict else 27) + (7 if operations else 0))
             self.assertTrue(all(Path(row['log']).is_file() for row in report['rows']))
             self.assertTrue(all(len(row['log_sha256']) == 64 for row in report['rows']))
             return status, report
@@ -74,6 +82,25 @@ class Contracts(unittest.TestCase):
         status, report = self.run_matrix(['FAKE_DOUBLE=1'])
         self.assertEqual(status, 1)
         self.assertFalse(report['correctness_passed'])
+
+    def test_eviction_stop_does_not_execute_test(self):
+        status, report = self.run_matrix(evict=True)
+        self.assertEqual(status, 0)
+        self.assertTrue(next(row for row in report['rows'] if row['name'] == 'stop')['ok'])
+
+    def test_launch_failure_is_not_compile_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            row = workload.run([str(root / 'absent')], root, dict(os.environ), root / 'launch.log', 1)
+            self.assertIsNone(row['returncode'])
+            self.assertIsNotNone(row['error'])
+            self.assertFalse(workload.contract(row, 'error', [], 1, 7, 'one', 'compile')['ok'])
+
+    def test_build_check_run_matrix(self):
+        status, report = self.run_matrix(operations=True)
+        self.assertEqual(status, 0)
+        self.assertTrue(next(row for row in report['rows'] if row['name'] == 'run-prewarm')['ok'])
+        self.assertTrue(all(row['side_effect_delta'] == ['program-nonce=13'] for row in report['rows'] if row['name'] == 'run'))
 
     def test_prewarm_side_effect_rejected(self):
         status, report = self.run_matrix(['FAKE_BAD_PREWARM=1'])

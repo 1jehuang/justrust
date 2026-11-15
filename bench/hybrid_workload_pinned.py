@@ -57,7 +57,9 @@ def execute(args):
     if args.samples < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError('positive samples and finite positive timeout required')
     resident.pinned_source(args.source)
-    for tool in (args.justrust, args.engine):
+    shipping = getattr(args, 'shipping_justrust', None) or args.justrust
+    tools = (args.justrust, args.engine, shipping)
+    for tool in tools:
         if not tool.is_file() or not os.access(tool, os.X_OK):
             raise ValueError(f'not executable: {tool}')
     original = (args.source / 'src/summary.rs').read_bytes()
@@ -72,7 +74,9 @@ def execute(args):
     args.output.mkdir(parents=True, mode=0o700)
     rows = []
     report = {'schema': 1, 'pin': resident.PIN, 'scope': __doc__, 'status': 'incomplete',
-              'tool_sha256': {str(p): core.digest(p) for p in (args.justrust, args.engine)},
+              'tool_sha256': {str(p): core.digest(p) for p in tools},
+              'roles': {'shipping': str(shipping), 'hybrid': str(args.justrust), 'engine': str(args.engine)},
+              'environment': core.environment_receipt(env),
               'source_sha256': resident.source_hashes(args.source), 'rows': rows}
     def save():
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -100,13 +104,19 @@ def execute(args):
                 if kind == 'prewarm' and (stack == 'shipping' or not args.prewarm):
                     continue
                 project, local = states[stack]
-                (project / 'src/summary.rs').write_bytes(edited(original, nonce, 'edit' if kind == 'prewarm' else kind))
+                target = project / 'src/summary.rs'
+                contents = edited(original, nonce, 'edit' if kind == 'prewarm' else kind)
+                if target.read_bytes() != contents:
+                    target.write_bytes(contents)
                 side = Path(local['HYBRID_SIDE_EFFECT'])
                 before = core.side_lines(side)
-                command = [str(args.justrust)] + (['hybrid'] if stack == 'hybrid' else [])
+                command = [str(args.justrust if stack == 'hybrid' else shipping)] + (['hybrid'] if stack == 'hybrid' else [])
                 command += (['prewarm'] if kind == 'prewarm' else []) + ['test'] + resident.FILTER
                 prefix = args.output / f'{index:02d}-{phase}-{stack}'
+                memory_before = core.namespace_pss(local['JR_ENGINE_HOME'])
                 row = resident.runtime.run_process(command, project, local, prefix, args.timeout)
+                row.update(namespace_pss_before=memory_before,
+                           namespace_pss_after=core.namespace_pss(local['JR_ENGINE_HOME']))
                 text = '\n'.join(prefix.with_suffix('.' + suffix).read_text(errors='replace') for suffix in ('stdout', 'stderr'))
                 after = core.side_lines(side)
                 effects = after[len(before):]
@@ -121,6 +131,7 @@ def execute(args):
                 if stack == 'hybrid' and route:
                     good = good and route_verified
                 row.update(phase=phase, nonce=nonce, stack=stack, parsed=parsed,
+                           environment=core.environment_receipt(local),
                            side_effect_delta=effects, route_verified=route_verified,
                            source_sha256=hashlib.sha256((project / 'src/summary.rs').read_bytes()).hexdigest(),
                            ok=good and after[:len(before)] == before,
@@ -138,8 +149,11 @@ def execute(args):
         report['routing_evidence_complete'] = bool(args.prewarm and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit')))
         report['focused_edit_medians_seconds'] = {stack: statistics.median(row['elapsed_seconds'] for row in rows if row['stack'] == stack and row['phase'] == 'edit') for stack in ('shipping', 'hybrid')} if report['status'] == 'passed' else {}
         report['source_unchanged'] = resident.source_hashes(args.source) == report['source_sha256']
-        if not report['source_unchanged']:
+        report['tools_after'] = {str(p): core.digest(p) for p in tools}
+        report['tools_unchanged'] = report['tools_after'] == report['tool_sha256']
+        if not report['source_unchanged'] or not report['tools_unchanged']:
             report['status'] = 'failed'
+            report['focused_edit_medians_seconds'] = {}
     except BaseException as exc:
         report['error'] = repr(exc)
         raise
@@ -154,6 +168,7 @@ def main():
     for name in ('justrust', 'engine', 'source', 'output'):
         parser.add_argument('--' + name, required=True, type=core.absolute)
     parser.add_argument('--toolchain', type=core.absolute)
+    parser.add_argument('--shipping-justrust', type=core.absolute)
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--env', action='append', default=[])
