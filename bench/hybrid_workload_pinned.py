@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import statistics
+import time
 
 import hybrid_workload as core
 import resident_engine_compare as resident
@@ -165,6 +166,18 @@ def execute(args):
                 memory_before = core.namespace_pss(local['JR_ENGINE_HOME'])
                 offset = core.background_offset(local['JR_ENGINE_HOME'])
                 row = resident.runtime.run_process(command, project, local, prefix, args.timeout)
+                foreground_finished = time.monotonic()
+                first_after = core.side_lines(side)
+                followup = None
+                followup_after = first_after
+                if automatic and phase == 'cold' and row['status'] == 0:
+                    followup = core.run(command, project, local,
+                                        args.output / ('automatic-loading-' + stack + '.log'), args.timeout)
+                    followup_after = core.side_lines(side)
+                    followup.update(status=followup['returncode'], timed_out=followup['timeout'],
+                                    elapsed_seconds=followup['wall_seconds'],
+                                    immediate_start_gap_seconds=followup['started_monotonic'] - foreground_finished)
+                    row['readiness_wait_deferred_until_after'] = 'automatic-loading'
                 row.update(namespace_pss_before=memory_before,
                            namespace_pss_after=core.namespace_pss(local['JR_ENGINE_HOME']))
                 text = '\n'.join(prefix.with_suffix('.' + suffix).read_text(errors='replace') for suffix in ('stdout', 'stderr'))
@@ -172,7 +185,7 @@ def execute(args):
                     command[0], text, project, local,
                     args.output / f'{index:02d}-{phase}-{stack}-recorded.log', args.timeout)
                 row['full_output'] = receipt
-                after = core.side_lines(side)
+                after = first_after if followup is not None else core.side_lines(side)
                 effects = after[len(before):]
                 if kind == 'prewarm':
                     good, parsed = row['status'] == 0 and not row['timed_out'] and not row['error'] and after == before, None
@@ -189,9 +202,11 @@ def execute(args):
                     row['automatic_preparation_queued'] = queued
                     if queued:
                         row['automatic_preparation'] = core.wait_background(
-                            local['JR_ENGINE_HOME'], offset, side, after, args.timeout,
+                            local['JR_ENGINE_HOME'], offset, side, followup_after if followup is not None else after, args.timeout,
                             automatic_pattern, args.output / f'{index:02d}-{phase}-background.log')
                         good = good and row['automatic_preparation']['ok']
+                        if row['automatic_preparation']['ready_observed_monotonic'] is not None:
+                            row['readiness_observation_delay_after_foreground_seconds'] = row['automatic_preparation']['ready_observed_monotonic'] - foreground_finished
                         row['namespace_pss_prepared'] = core.namespace_pss(local['JR_ENGINE_HOME'])
                     elif phase == 'cold':
                         good = False
@@ -205,12 +220,36 @@ def execute(args):
                            stderr_sha256=core.digest(prefix.with_suffix('.stderr')))
                 rows.append(row)
                 pair.append(row)
+                if followup is not None:
+                    followup_console = Path(followup['log']).read_text(errors='replace')
+                    followup_text, followup_receipt, followup_recovered = core.full_output(
+                        command[0], followup_console, project, local,
+                        args.output / ('automatic-loading-' + stack + '-recorded.log'), args.timeout)
+                    followup_good, followup_parsed = accepted(
+                        followup, followup_text, followup_after[len(first_after):], nonce, kind, expected)
+                    followup.update(phase='automatic-loading', nonce=nonce, stack=stack,
+                                    parsed=followup_parsed, side_effect_delta=followup_after[len(first_after):],
+                                    full_output=followup_receipt, environment=core.environment_receipt(local),
+                                    ok=followup_good and followup_recovered and followup_after[:len(first_after)] == first_after,
+                                    source_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+                                    setup_scope='immediately after cold foreground, before readiness wait or recording retrieval')
+                    rows.append(followup)
                 save()
             if len(pair) == 2:
                 equal = all(pair[0][key] == pair[1][key] for key in ('status', 'parsed', 'side_effect_delta'))
                 for row in pair:
                     row.update(differential_equal=equal, ok=row['ok'] and equal)
                 save()
+        if automatic:
+            loading = [row for row in rows if row['phase'] == 'automatic-loading']
+            equal = len(loading) == 2 and all(loading[0][key] == loading[1][key]
+                        for key in ('status', 'parsed', 'side_effect_delta'))
+            for row in loading:
+                row.update(differential_equal=equal, ok=row['ok'] and equal)
+            report['automatic_interference'] = {
+                'paired_foregrounds_validated': equal and all(row['ok'] for row in loading),
+                'actual_loading_overlap_observed': any(row['preparation_overlap_observed'] for row in loading if row['stack'] == 'hybrid'),
+                'scope': 'sampled prewarm namespace lock while immediate foreground was running; blocking-wait edit timings unchanged; no readiness waits folded into latency'}
         report['status'] = 'passed' if all(row['ok'] for row in rows) else 'failed'
         report['routing_evidence_complete'] = bool((args.prewarm or automatic) and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit')))
         report['focused_edit_medians_seconds'] = {stack: statistics.median(row['elapsed_seconds'] for row in rows if row['stack'] == stack and row['phase'] == 'edit') for stack in ('shipping', 'hybrid')} if report['status'] == 'passed' else {}

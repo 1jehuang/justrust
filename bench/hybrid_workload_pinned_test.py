@@ -108,10 +108,13 @@ class PinnedContracts(unittest.TestCase):
             report = json.loads((args.output / 'report.json').read_text())
             self.assertEqual(report['status'], 'passed')
             self.assertTrue(report['cleanup_passed'], report['cleanup'])
-            self.assertEqual(len(report['rows']), 16 if automatic else 17)
+            self.assertEqual(len(report['rows']), 18 if automatic else 17)
             self.assertEqual((source / 'src/summary.rs').read_bytes(), original)
             self.assertFalse(report['routing_evidence_complete'])
-            self.assertTrue(all(Path(row['raw_prefix'] + '.stdout').is_file() for row in report['rows']))
+            self.assertTrue(all(Path(row['raw_prefix'] + '.stdout').is_file() if 'raw_prefix' in row else Path(row['log']).is_file() for row in report['rows']))
+            if automatic:
+                self.assertTrue(report['automatic_interference']['paired_foregrounds_validated'])
+                self.assertFalse(report['automatic_interference']['actual_loading_overlap_observed'])
 
     def test_synthetic_end_to_end(self):
         self.run_matrix()

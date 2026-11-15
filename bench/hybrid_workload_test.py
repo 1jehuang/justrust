@@ -81,7 +81,7 @@ class Contracts(unittest.TestCase):
             report = json.loads((args.output / 'report.json').read_text())
             self.assertTrue(report['cleanup_passed'], report['cleanup'])
             self.assertEqual(len(report['cleanup']), 2)
-            expected = 26 + (3 if evict else 0) + (0 if automatic else 1)
+            expected = 26 + (3 if evict else 0) + (2 if automatic else 1)
             expected += (6 if automatic else 7) if operations else 0
             self.assertEqual(len(report['rows']), expected)
             self.assertTrue(all(Path(row['log']).is_file() for row in report['rows']))
@@ -123,6 +123,14 @@ class Contracts(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertTrue(any('automatic_preparation' in row for row in report['rows']))
         self.assertFalse(any('JUSTRUST_HYBRID_PREWARM' in row.get('environment', {}) for row in report['rows'] if row['stack'] == 'shipping'))
+        self.assertTrue(report['automatic_interference']['paired_foregrounds_validated'])
+        self.assertFalse(report['automatic_interference']['actual_loading_overlap_observed'])
+        for stack in ('shipping', 'hybrid'):
+            cold = next(row for row in report['rows'] if row['name'] == 'cold-test' and row['stack'] == stack)
+            loading = next(row for row in report['rows'] if row['name'] == 'automatic-loading' and row['stack'] == stack)
+            self.assertGreaterEqual(loading['started_monotonic'], cold['finished_monotonic'])
+            if stack == 'hybrid':
+                self.assertGreaterEqual(cold['automatic_preparation']['ready_observed_monotonic'], loading['finished_monotonic'])
 
     def test_automatic_wait_rejects_stale_success_receipt(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -133,6 +141,20 @@ class Contracts(unittest.TestCase):
                                            'AUTOMATIC_SUCCESS', root / 'evidence')
             self.assertFalse(row['ok'])
             self.assertEqual((root / 'evidence').read_bytes(), b'')
+            self.assertTrue(row['timed_out'])
+
+    def test_foreground_overlap_requires_real_held_preparation_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = dict(os.environ, JR_ENGINE_HOME=str(root))
+            with (root / 'prewarm.lock').open('w') as lock:
+                workload.fcntl.flock(lock, workload.fcntl.LOCK_EX)
+                row = workload.run([sys.executable, '-c', 'import time; time.sleep(.08)'],
+                                   root, env, root / 'overlap.log', 2)
+                self.assertTrue(row['preparation_overlap_observed'])
+                self.assertGreater(row['preparation_lock_samples_during_foreground']['active'], 0)
+            row = workload.run([sys.executable, '-c', 'pass'], root, env, root / 'idle.log', 2)
+            self.assertFalse(row['preparation_overlap_observed'])
 
     def test_automatic_wait_rejects_execution_during_prewarm(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -6,6 +6,7 @@ The generated fixture has a local dependency, proc macro, build script, and an
 append-only test side effect. Setup and edits happen outside timed subprocesses.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -155,6 +156,28 @@ def background_offset(home):
         return 0
 
 
+def preparation_active(home):
+    if not home:
+        return False
+    try:
+        fd = os.open(Path(home) / 'prewarm.lock', os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
 def wait_background(home, offset, side, expected, timeout, pattern, evidence, extra_effects=()):
     """Wait outside foreground timing, and require NEW successful preparation output."""
     started = time.monotonic()
@@ -179,8 +202,11 @@ def wait_background(home, offset, side, expected, timeout, pattern, evidence, ex
             break
         time.sleep(0.01)
     evidence.write_bytes(raw)
+    finished = time.monotonic()
     return {'ok': ready and unchanged(),
-            'wait_seconds_outside_foreground_timing': time.monotonic() - started,
+            'wait_seconds_outside_foreground_timing': finished - started,
+            'ready_observed_monotonic': finished if ready else None,
+            'timed_out': not ready and unchanged() and finished - started >= timeout,
             'readiness_pattern': pattern, 'readiness_verified': ready,
             'side_effects_unchanged': unchanged(),
             'log': str(evidence), 'log_sha256': digest(evidence), 'source_log_offset': offset}
@@ -191,6 +217,7 @@ def run(command, cwd, env, log, timeout):
     peak = 0
     timed_out = False
     error = None
+    preparation_samples = {'active': 0, 'inactive': 0, 'unavailable': 0}
     with log.open('xb') as stream:
         try:
             proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
@@ -202,6 +229,9 @@ def run(command, cwd, env, log, timeout):
         else:
             try:
                 while proc.poll() is None:
+                    active = preparation_active(env.get('JR_ENGINE_HOME'))
+                    if proc.poll() is None:
+                        preparation_samples['unavailable' if active is None else 'active' if active else 'inactive'] += 1
                     peak = max(peak, pss_kib(proc.pid))
                     if time.monotonic() - started > timeout:
                         timed_out = True
@@ -213,8 +243,12 @@ def run(command, cwd, env, log, timeout):
                 proc.wait()
                 raise
             status = proc.wait()
+    finished = time.monotonic()
     return {'command': command, 'cwd': str(cwd), 'returncode': status,
-            'timeout': timed_out, 'error': error, 'wall_seconds': time.monotonic() - started,
+            'timeout': timed_out, 'error': error, 'wall_seconds': finished - started,
+            'started_monotonic': started, 'finished_monotonic': finished,
+            'preparation_lock_samples_during_foreground': preparation_samples,
+            'preparation_overlap_observed': preparation_samples['active'] > 0,
             'sampled_process_tree_peak_pss_kib': peak,
             'measurement_scope': 'includes polling observer overhead, excludes detached resident workers',
             'log': str(log), 'log_sha256': digest(log)}
@@ -401,14 +435,26 @@ def execute(args):
         memory_before = namespace_pss(local_env['JR_ENGINE_HOME'])
         offset = background_offset(local_env['JR_ENGINE_HOME'])
         row = run(command, root, local_env, args.output / (name + '-' + stack + '.log'), args.timeout)
+        first_after = side_lines(side)
+        followup = None
+        followup_after = first_after
+        if automatic and name == 'cold-test' and row['returncode'] == 0:
+            # No recording lookup, readiness wait, source edit, or /proc scan is
+            # allowed between the two foreground invocations.
+            followup = run(command, root, local_env,
+                           args.output / ('automatic-loading-' + stack + '.log'), args.timeout)
+            followup_after = side_lines(side)
+            followup['immediate_start_gap_seconds'] = followup['started_monotonic'] - row['finished_monotonic']
+            row['readiness_wait_deferred_until_after'] = 'automatic-loading'
         row.update(namespace_pss_before=memory_before,
-                   namespace_pss_after=namespace_pss(local_env['JR_ENGINE_HOME']))
+                   namespace_pss_after=namespace_pss(local_env['JR_ENGINE_HOME']),
+                   namespace_pss_after_scope='after immediate followup' if followup is not None else 'after foreground')
         text = Path(row['log']).read_text(errors='replace')
         semantic_text, receipt, recovered = full_output(
             command[0], text, root, local_env,
             args.output / (name + '-' + stack + '-recorded.log'), args.timeout)
         row['full_output'] = receipt
-        after = side_lines(side)
+        after = first_after if followup is not None else side_lines(side)
         row.update(contract(row, semantic_text, after[len(before):], nonce, dependency, config, failure))
         row.update(name=name, stack=stack, input_sha256=inputs,
                    environment=environment_receipt(local_env),
@@ -423,13 +469,30 @@ def execute(args):
             row['automatic_preparation_queued'] = queued
             if queued:
                 row['automatic_preparation'] = wait_background(
-                    local_env['JR_ENGINE_HOME'], offset, side, after, args.timeout,
+                    local_env['JR_ENGINE_HOME'], offset, side, followup_after if followup is not None else after, args.timeout,
                     automatic_pattern, args.output / (name + '-background.log'))
                 row['ok'] = row['ok'] and row['automatic_preparation']['ok']
+                if row['automatic_preparation']['ready_observed_monotonic'] is not None:
+                    row['readiness_observation_delay_after_foreground_seconds'] = row['automatic_preparation']['ready_observed_monotonic'] - row['finished_monotonic']
                 row['namespace_pss_prepared'] = namespace_pss(local_env['JR_ENGINE_HOME'])
             elif name in ('cold-test', 'evicted-test'):
                 row['ok'] = False
         rows.append(row)
+        if followup is not None:
+            followup_console = Path(followup['log']).read_text(errors='replace')
+            followup_text, followup_receipt, followup_recovered = full_output(
+                command[0], followup_console, root, local_env,
+                args.output / ('automatic-loading-' + stack + '-recorded.log'), args.timeout)
+            followup.update(contract(followup, followup_text,
+                                     followup_after[len(first_after):], nonce, dependency, config))
+            followup.update(name='automatic-loading', stack=stack, full_output=followup_receipt,
+                            environment=environment_receipt(local_env), input_sha256=inputs,
+                            inputs_unchanged=inputs == input_hashes(root),
+                            side_prefix_preserved=followup_after[:len(first_after)] == first_after,
+                            setup_scope='immediately after cold foreground, before readiness wait or recording retrieval')
+            followup['ok'] = (followup['ok'] and followup_recovered and followup['inputs_unchanged']
+                              and followup['side_prefix_preserved'])
+            rows.append(followup)
         save()
         return row
 
@@ -555,6 +618,16 @@ def execute(args):
                 for row in pair:
                     row.update(differential_equal=equal, ok=row['ok'] and equal)
                 save()
+    if automatic:
+        loading = [row for row in rows if row['name'] == 'automatic-loading']
+        equal = len(loading) == 2 and all(loading[0][key] == loading[1][key]
+                    for key in ('returncode', 'summaries', 'observations', 'side_effect_delta'))
+        for row in loading:
+            row.update(differential_equal=equal, ok=row['ok'] and equal)
+        report['automatic_interference'] = {
+            'paired_foregrounds_validated': equal and all(row['ok'] for row in loading),
+            'actual_loading_overlap_observed': any(row['preparation_overlap_observed'] for row in loading if row['stack'] == 'hybrid'),
+            'scope': 'sampled background prewarm lock held while immediate foreground process was running; no readiness waits folded into foreground latency'}
     report['correctness_passed'] = all(row['ok'] for row in rows)
     report['tools_after'] = {str(p): digest(p) for p in tools}
     report['tools_unchanged'] = report['tools_after'] == report['tools']
