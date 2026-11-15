@@ -60,6 +60,35 @@ class HybridSuiteGateTests(unittest.TestCase):
         child = subprocess.check_output([str(output / 'baseline-exec'), 'test', '--lib'], env=env, text=True)
         self.assertEqual(json.loads(child), [['test', '--lib'], None, None, None])
 
+    def test_fixture_xdg_mode_preserves_private_home_for_both_adapters(self):
+        from runtime_context import runtime_context
+        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME")}}))\n')
+        for native in (False, True):
+            adapter = self.root / ('fixture-native' if native else 'fixture-off')
+            adapter.write_text(gate.adapter_text(self.tool, self.tool if native else None,
+                                                self.toolchain if native else None,
+                                                fixture_xdg_home=True))
+            adapter.chmod(0o700)
+            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v2')
+            with patch.dict(os.environ, selected, clear=True):
+                with runtime_context(selected, self.root) as env:
+                    child = json.loads(subprocess.check_output([str(adapter), 'test'], env=env, text=True))
+                    self.assertIsNone(child['JCODE_HOME'])
+                    self.assertEqual(child['HOME'], env['HOME'])
+                    self.assertEqual(child['XDG_CONFIG_HOME'], str(Path(env['HOME']) / '.config'))
+                    self.assertNotEqual(child['HOME'], selected.get('HOME'))
+
+    def test_fixture_xdg_mode_refuses_inherited_runtime(self):
+        adapter = self.root / 'unsafe-fixture'
+        adapter.write_text(gate.adapter_text(self.tool, fixture_xdg_home=True))
+        adapter.chmod(0o700)
+        env = dict(os.environ)
+        env.pop('JUSTRUST_BENCH_RUNTIME_CONTEXT', None)
+        child = subprocess.run([str(adapter), 'test'], env=env, text=True, capture_output=True)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn('requires jcode-isolated-v2', child.stderr)
+        self.assertFalse(child.stdout)
+
     def test_missing_native_toolchain_refuses_before_creating_evidence(self):
         output = self.root / 'gate'
         args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,

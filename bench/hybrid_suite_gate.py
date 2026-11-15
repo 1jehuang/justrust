@@ -34,7 +34,7 @@ def executable(value):
     return path
 
 
-def adapter_text(binary, engine=None, toolchain=None):
+def adapter_text(binary, engine=None, toolchain=None, fixture_xdg_home=False):
     # Keep metadata, cache and toolchain commands on the ordinary client path.
     # Explicit engine selection lives inside the adapter, so both suite parents
     # inherit identical controls and the candidate engine is recorded separately.
@@ -45,6 +45,13 @@ binary = {str(binary)!r}
 engine = {str(engine) if engine is not None else None!r}
 toolchain = {str(toolchain) if toolchain is not None else None!r}
 args = sys.argv[1:]
+if {fixture_xdg_home!r}:
+    if os.environ.get('JUSTRUST_BENCH_RUNTIME_CONTEXT') != 'jcode-isolated-v2':
+        sys.exit('fixture XDG mode requires jcode-isolated-v2 private HOME runtime context')
+    # The pinned fixtures override XDG_CONFIG_HOME themselves. A forced
+    # JCODE_HOME takes precedence and defeats their own credential isolation.
+    # HOME and XDG remain private under the suite runtime context.
+    os.environ.pop('JCODE_HOME', None)
 os.environ.pop('JUSTRUST_HYBRID', None)
 if engine is not None and args and args[0] in {BUILD_COMMANDS!r}:
     os.environ['JUSTRUST_NATIVE_ENGINE'] = engine
@@ -96,12 +103,14 @@ def prepare(args):
     report = dict(schema=1, status='prepared', scope=__doc__, seed=args.seed,
                   points=40, reps=1, tools=identities(tools), runs={},
                   native_toolchain=str(toolchain),
+                  fixture_xdg_home=bool(getattr(args, 'fixture_xdg_home', False)),
                   native_identity_scope='engine, rustc and cargo executable hashes, not loaded libraries or routing proof',
                   policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
     for stack, binary in (('baseline', args.baseline), ('candidate', args.candidate)):
         adapter = output / (stack + '-exec')
         adapter.write_text(adapter_text(binary, args.engine if stack == 'candidate' else None,
-                                        toolchain if stack == 'candidate' else None))
+                                        toolchain if stack == 'candidate' else None,
+                                        fixture_xdg_home=report['fixture_xdg_home']))
         adapter.chmod(0o700)
         report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
         report.setdefault('commands', {})[stack] = suite_command(output, stack, args.seed)
@@ -255,6 +264,8 @@ def main(argv=None):
     p.add_argument('--engine', required=True, type=executable)
     p.add_argument('--native-toolchain', default=os.environ.get('JUSTRUST_HYBRID_TOOLCHAIN'),
                    help='existing matching engine toolchain, defaults to JUSTRUST_HYBRID_TOOLCHAIN')
+    p.add_argument('--fixture-xdg-home', action='store_true',
+                   help='both adapters remove forced JCODE_HOME, requires private jcode-isolated-v2 runtime context')
     p.add_argument('--seed', type=int, default=1)
     p.set_defaults(function=prepare)
     p = subs.add_parser('run', help='execute comprehensive suite, potentially hours')
