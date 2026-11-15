@@ -840,7 +840,19 @@ fn checkout(
     let asked_in = asked_in.strip_prefix(root).map_or(asked_in.clone(), Path::to_owned);
     let project = programs.first().map(|it| super::state::package_dir(&it.package));
     let project = project.as_deref().unwrap_or(root);
-    let config = WorkerConfig {
+    let members = metadata.workspace_packages();
+    let manifests = members.iter().map(|it| it.manifest_path.as_std_path().to_owned());
+    let lock = root.join("Cargo.lock");
+    let generation = if strict {
+        let native_config =
+            blaze_manifest::Config::load(cwd, std::env::vars(), &asked.flags.config)?;
+        let generation =
+            hybrid_generation(root, manifests.clone(), &lock, &native_config, std::env::vars())?;
+        hybrid_compile_time_generation(asked, cwd, metadata, generation)?
+    } else {
+        checkout_generation(root, manifests.clone(), lock)
+    };
+    let mut config = WorkerConfig {
         repository: repository(root),
         project: project.strip_prefix(root).unwrap_or(Path::new("")).to_owned(),
         cfg_test: unit_tests,
@@ -849,6 +861,15 @@ fn checkout(
         command_env: BTreeMap::new(),
         whole: true,
     };
+    if strict {
+        // A retained proc-macro process cannot unload libraries reliably. Give every
+        // immutable compile-time input generation both its own worker and artifacts.
+        // Ordinary Rust source edits are absent from this token and stay hot.
+        config.env.insert(
+            super::compile_time::HYBRID_INPUT_GENERATION.to_owned(),
+            format!("{generation:032x}"),
+        );
+    }
     // A worker links its programs where it was started to and builds again only what was
     // edited: another worker's build, of other features or flags, is not in its files.
     let worker = config.id();
@@ -878,20 +899,6 @@ fn checkout(
             shared,
         }
     });
-    let members = metadata.workspace_packages();
-    let manifests = members.iter().map(|it| it.manifest_path.as_std_path().to_owned());
-    let lock = root.join("Cargo.lock");
-    // A worker that loaded other manifests loads them again; one with the same is asked to
-    // build again what was edited since.
-    let generation = if strict {
-        let native_config =
-            blaze_manifest::Config::load(cwd, std::env::vars(), &asked.flags.config)?;
-        let generation =
-            hybrid_generation(root, manifests.clone(), &lock, &native_config, std::env::vars())?;
-        hybrid_compile_time_generation(asked, cwd, metadata, generation)?
-    } else {
-        checkout_generation(root, manifests.clone(), lock)
-    };
     for dir in &dirs {
         _ = std::fs::create_dir_all(dir);
     }

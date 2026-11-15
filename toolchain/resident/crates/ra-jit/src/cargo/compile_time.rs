@@ -45,6 +45,45 @@ const FOR_CARGO: [&str; 3] =
 /// The crate name cargo gives every build script.
 const SCRIPT: &str = "build_script_build";
 
+/// Whole hybrid admission supplies a content identity, never a caller's path. It
+/// also selects a fresh worker, so no loaded proc-macro image crosses generations.
+pub(super) const HYBRID_INPUT_GENERATION: &str = "RA_JIT_HYBRID_INPUT_GENERATION";
+
+fn compile_time_directory(target: &Path, generation: Option<&str>) -> anyhow::Result<PathBuf> {
+    let directory = target.join("compile-time");
+    match generation {
+        None => Ok(directory),
+        Some(generation) => {
+            anyhow::ensure!(
+                generation.len() == 32 && generation.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "invalid hybrid compile-time input generation"
+            );
+            Ok(directory.join(format!("hybrid-{generation}")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod hybrid_namespace_tests {
+    use super::compile_time_directory;
+    use std::path::Path;
+
+    #[test]
+    fn immutable_compile_time_generations_have_separate_artifacts() {
+        let target = Path::new("/native-target");
+        let a = "00000000000000000000000000000007";
+        let b = "00000000000000000000000000000011";
+        assert_eq!(compile_time_directory(target, None).unwrap(), target.join("compile-time"));
+        assert_ne!(
+            compile_time_directory(target, Some(a)).unwrap(),
+            compile_time_directory(target, Some(b)).unwrap()
+        );
+        for input in ["", "../shipping", "/shipping", "gggggggggggggggggggggggggggggggg"] {
+            assert!(compile_time_directory(target, Some(input)).is_err());
+        }
+    }
+}
+
 /// The hook that builds a load's build scripts and proc macros for the build `selection`
 /// names.
 pub(crate) fn own(selection: &Selection) -> OwnBuildScripts {
@@ -78,7 +117,8 @@ pub(crate) fn build(
         .target_dir_config
         .target_dir(Some(cargo.target_directory().as_ref()))
         .context("the load has no target directory of its own")?;
-    let own = PathBuf::from(own.as_str()).join("compile-time");
+    let generation = std::env::var(HYBRID_INPUT_GENERATION).ok();
+    let own = compile_time_directory(Path::new(own.as_str()), generation.as_deref())?;
     let dir = manifest.parent().unwrap_or(Path::new("/"));
     let mut driver = Driver::new(cargo, &graph, &toolchain, host, &own, dir, selection, config)?;
     driver.native = native;
