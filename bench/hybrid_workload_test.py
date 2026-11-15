@@ -30,7 +30,10 @@ if 'prewarm' in sys.argv:
         with open(os.environ['HYBRID_SIDE_EFFECT'], 'a') as f: f.write('bad\\n')
     sys.exit(0)
 if 'build' in sys.argv or 'check' in sys.argv:
-    maybe_queue()
+    if 'check' in sys.argv and os.environ.get('JUSTRUST_HYBRID_PREWARM') == 'after-success':
+        print('justrust hybrid: background preparation skipped (unsupported command: check)')
+    else:
+        maybe_queue()
     sys.exit(0)
 if 'run' in sys.argv:
     with open(os.environ['HYBRID_PROGRAM_SIDE_EFFECT'], 'a') as f: f.write('program-nonce=13\\n')
@@ -56,6 +59,21 @@ sys.exit(101 if failed else 0)
 
 
 class Contracts(unittest.TestCase):
+    def test_check_skip_requires_exact_receipt_no_queue_and_unchanged_log(self):
+        receipt = 'justrust hybrid: background preparation skipped (unsupported command: check)'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            before = workload.background_snapshot(root)
+            self.assertTrue(workload.check_skip_receipt(receipt, root, before)['ok'])
+            for text in ('', receipt + ' extra', receipt + '\n' + receipt,
+                         receipt + '\njustrust hybrid: queued background preparation'):
+                self.assertFalse(workload.check_skip_receipt(text, root, before)['ok'])
+            (root / 'prewarm.log').write_text('unexpected preparation\n')
+            self.assertFalse(workload.check_skip_receipt(receipt, root, before)['ok'])
+            before = workload.background_snapshot(root)
+            (root / 'prewarm.log').write_text('different preparation!\n')
+            self.assertFalse(workload.check_skip_receipt(receipt, root, before)['ok'])
+
     def test_reject_false_success(self):
         row = {'returncode': 0, 'timeout': False}
         self.assertFalse(workload.contract(row, '', ['nonce=1'], 1, 7, 'one')['ok'])

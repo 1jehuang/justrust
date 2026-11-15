@@ -156,6 +156,21 @@ def background_offset(home):
         return 0
 
 
+def background_snapshot(home):
+    path = Path(home) / 'prewarm.log'
+    return {'bytes': background_offset(home), 'sha256': digest(path) if path.exists() else None}
+
+
+def check_skip_receipt(text, home, before):
+    receipt = 'justrust hybrid: background preparation skipped (unsupported command: check)'
+    after = background_snapshot(home)
+    exact = text.splitlines().count(receipt) == 1
+    queued = 'justrust hybrid: queued background preparation' in text
+    return {'ok': exact and not queued and after == before,
+            'explicit_unsupported_check_skip': exact, 'no_preparation_queued': not queued,
+            'background_log_unchanged': after == before, 'before': before, 'after': after}
+
+
 def preparation_active(home):
     if not home:
         return False
@@ -583,6 +598,7 @@ def execute(args):
                 inputs = input_hashes(project)
                 memory_before = namespace_pss(local['JR_ENGINE_HOME'])
                 offset = background_offset(local['JR_ENGINE_HOME'])
+                check_background_before = background_snapshot(local['JR_ENGINE_HOME']) if automatic and stack == 'hybrid' and operation == 'check' else None
                 row = run(command, project,
                           dict(local, CARGO_TARGET_DIR=str(project / 'target'),
                                HYBRID_SIDE_EFFECT=str(tests), HYBRID_PROGRAM_SIDE_EFFECT=str(side)),
@@ -605,6 +621,9 @@ def execute(args):
                 if automatic and stack == 'hybrid' and row['returncode'] == 0:
                     queued = 'justrust hybrid: queued background preparation' in text
                     row['automatic_preparation_queued'] = queued
+                    if operation == 'check':
+                        row['automatic_preparation_skip'] = check_skip_receipt(text, local['JR_ENGINE_HOME'], check_background_before)
+                        good = good and row['automatic_preparation_skip']['ok']
                     if queued:
                         row['automatic_preparation'] = wait_background(
                             local['JR_ENGINE_HOME'], offset, side, after, args.timeout,
