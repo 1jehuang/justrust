@@ -49,13 +49,14 @@ class HostedHarnessTests(unittest.TestCase):
         self.assertEqual({k for k in values if k.startswith('CARGO_')},
                          {'CARGO_HOME', 'CARGO_BUILD_JOBS'})
 
-    def test_managed_preparation_path_matches_agent_prefix(self):
+    def test_managed_preparation_path_matches_session_and_agent_prefixes(self):
         command = subject.managed_preparation_command(
             "/usr/bin/env /usr/bin/python3 -c 'import os; print(os.environ[\"PATH\"])'")
         result = subprocess.run(['/bin/bash', '-c', command],
                                 env={'HOME': '/guest/home', 'PATH': '/original/bin'},
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(),
+                         '/guest/home/.cargo/bin:/opt/homebrew/bin:/guest/home/.homebrew/bin:/usr/local/bin:'
                          '/guest/home/.cargo/bin:/opt/homebrew/bin:/guest/home/.homebrew/bin:/usr/local/bin:/original/bin')
 
     def test_mutating_management_never_retries_unknown_outcome(self):

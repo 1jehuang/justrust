@@ -34,9 +34,11 @@ def preparation_environment(args, state):
 
 
 def managed_preparation_command(command):
-    # Match remote_agent::start_run's guest-side PATH prefix. PATH is also part
-    # of native checkout identity, even when the pinned compiler is explicit.
-    return 'PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH" ' + command
+    # The managed session prefixes PATH before __agent, which prefixes it again
+    # for the child. A normal remote shell has neither prefix. Match both layers
+    # exactly rather than weakening native checkout identity for the benchmark.
+    prefix = '$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:'
+    return 'PATH="' + prefix + prefix + '$PATH" ' + command
 
 
 def management_request(attempt, read_only=False, pause=time.sleep):
