@@ -33,6 +33,7 @@ def environment_receipt(env):
                'RUSTUP_TOOLCHAIN', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_HOME', 'RUSTUP_HOME',
                'CARGO_TARGET_DIR', 'JUSTRUST_REMOTE', 'JUSTRUST_NATIVE_ENGINE',
                'JUSTRUST_HYBRID_TOOLCHAIN', 'JR_ENGINE_HOME', 'HYBRID_SIDE_EFFECT',
+               'JUSTRUST_HYBRID_PREWARM',
                'HYBRID_PROGRAM_SIDE_EFFECT'}
     return {key: value for key, value in sorted(env.items())
             if key in allowed or key.startswith('CARGO_PROFILE_')}
@@ -130,6 +131,44 @@ def namespace_pss(home):
             'unavailable_pids': unavailable, 'scope': 'outside-timing exact JR_ENGINE_HOME environment match, not peak'}
 
 
+def background_offset(home):
+    try:
+        return (Path(home) / 'prewarm.log').stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def wait_background(home, offset, side, expected, timeout, pattern, evidence, extra_effects=()):
+    """Wait outside foreground timing, and require NEW successful preparation output."""
+    started = time.monotonic()
+    raw = b''
+    ready = False
+    protected = ((side, expected), *extra_effects)
+    def unchanged():
+        return all(side_lines(path) == lines for path, lines in protected)
+    while True:
+        try:
+            with (Path(home) / 'prewarm.log').open('rb') as stream:
+                stream.seek(offset)
+                raw = stream.read()
+        except FileNotFoundError:
+            pass
+        if not unchanged():
+            break
+        if re.search(pattern, raw.decode(errors='replace')):
+            ready = True
+            break
+        if time.monotonic() - started >= timeout:
+            break
+        time.sleep(0.01)
+    evidence.write_bytes(raw)
+    return {'ok': ready and unchanged(),
+            'wait_seconds_outside_foreground_timing': time.monotonic() - started,
+            'readiness_pattern': pattern, 'readiness_verified': ready,
+            'side_effects_unchanged': unchanged(),
+            'log': str(evidence), 'log_sha256': digest(evidence), 'source_log_offset': offset}
+
+
 def run(command, cwd, env, log, timeout):
     started = time.monotonic()
     peak = 0
@@ -190,6 +229,10 @@ def input_hashes(root):
 
 
 def execute(args):
+    automatic = getattr(args, 'automatic', False)
+    automatic_pattern = getattr(args, 'automatic_ready_regex', None)
+    if automatic and (args.prewarm or not automatic_pattern):
+        raise ValueError('--automatic requires --automatic-ready-regex and cannot combine with --prewarm')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError('timeout must be finite and positive')
     if args.output.exists():
@@ -227,6 +270,8 @@ def execute(args):
         fixture(project)
         local = dict(env, JR_ENGINE_HOME=str(state / 'engine-home'),
                      JUSTRUST_NATIVE_ENGINE=str(args.engine))
+        if automatic and stack == 'hybrid':
+            local['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
         Path(local['JR_ENGINE_HOME']).mkdir(mode=0o700)
         states[stack] = (state, project, local)
 
@@ -237,6 +282,7 @@ def execute(args):
         command = [str(args.justrust if stack == 'hybrid' else shipping)] + (['hybrid'] if stack == 'hybrid' else []) + TEST_ARGS
         inputs = input_hashes(root)
         memory_before = namespace_pss(local_env['JR_ENGINE_HOME'])
+        offset = background_offset(local_env['JR_ENGINE_HOME'])
         row = run(command, root, local_env, args.output / (name + '-' + stack + '.log'), args.timeout)
         row.update(namespace_pss_before=memory_before,
                    namespace_pss_after=namespace_pss(local_env['JR_ENGINE_HOME']))
@@ -251,6 +297,17 @@ def execute(args):
         row['route_verified'] = bool(re.search(route, text)) if route and stack == 'hybrid' else None
         if route and stack == 'hybrid':
             row['ok'] = row['ok'] and row['route_verified']
+        if automatic and stack == 'hybrid' and row['returncode'] == 0:
+            queued = 'justrust hybrid: queued background preparation' in text
+            row['automatic_preparation_queued'] = queued
+            if queued:
+                row['automatic_preparation'] = wait_background(
+                    local_env['JR_ENGINE_HOME'], offset, side, after, args.timeout,
+                    automatic_pattern, args.output / (name + '-background.log'))
+                row['ok'] = row['ok'] and row['automatic_preparation']['ok']
+                row['namespace_pss_prepared'] = namespace_pss(local_env['JR_ENGINE_HOME'])
+            elif name in ('cold-test', 'evicted-test'):
+                row['ok'] = False
         rows.append(row)
         save()
         return row
@@ -335,6 +392,7 @@ def execute(args):
                 command += ['prewarm', 'run'] if operation == 'run-prewarm' else [operation]
                 inputs = input_hashes(project)
                 memory_before = namespace_pss(local['JR_ENGINE_HOME'])
+                offset = background_offset(local['JR_ENGINE_HOME'])
                 row = run(command, project,
                           dict(local, CARGO_TARGET_DIR=str(project / 'target'),
                                HYBRID_SIDE_EFFECT=str(tests), HYBRID_PROGRAM_SIDE_EFFECT=str(side)),
@@ -348,6 +406,16 @@ def execute(args):
                 good = (row['returncode'] == 0 and not row['timeout'] and not row['error']
                         and after == before + expected_effects and side_lines(tests) == tests_before
                         and markers == (['HYBRID_PROGRAM_EXECUTED_13'] if operation == 'run' else []))
+                if automatic and stack == 'hybrid' and row['returncode'] == 0:
+                    queued = 'justrust hybrid: queued background preparation' in text
+                    row['automatic_preparation_queued'] = queued
+                    if queued:
+                        row['automatic_preparation'] = wait_background(
+                            local['JR_ENGINE_HOME'], offset, side, after, args.timeout,
+                            automatic_pattern, args.output / (operation + '-background.log'),
+                            extra_effects=((tests, tests_before),))
+                        good = good and row['automatic_preparation']['ok']
+                        row['namespace_pss_prepared'] = namespace_pss(local['JR_ENGINE_HOME'])
                 row.update(name=operation, stack=stack, ok=good, side_effect_delta=after[len(before):],
                            program_markers=markers, input_sha256=inputs,
                            inputs_unchanged=inputs == input_hashes(project))
@@ -364,7 +432,7 @@ def execute(args):
     report['tools_after'] = {str(p): digest(p) for p in tools}
     report['tools_unchanged'] = report['tools_after'] == report['tools']
     report['correctness_passed'] = report['correctness_passed'] and report['tools_unchanged']
-    report['routing_evidence_complete'] = bool(args.cold_route_regex and args.warm_route_regex and args.prewarm and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['name'] in ('cold-test', 'warm-success', 'warm-edit', 'evicted-test')))
+    report['routing_evidence_complete'] = bool(args.cold_route_regex and args.warm_route_regex and (args.prewarm or automatic) and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['name'] in ('cold-test', 'warm-success', 'warm-edit', 'evicted-test')))
     save()
     return 0 if report['correctness_passed'] else 1
 
@@ -381,6 +449,8 @@ def main():
     parser.add_argument('--prewarm', action='store_true', help='run hybrid prewarm test ARGS before warm measurements')
     parser.add_argument('--evict', action='store_true', help='stop the private resident worker, then verify fallback recovery')
     parser.add_argument('--operations', action='store_true', help='also check build/check/run and run-prewarm side effects')
+    parser.add_argument('--automatic', action='store_true', help='opt into after-success background preparation, with untimed readiness wait')
+    parser.add_argument('--automatic-ready-regex', help='required NEW success receipt in private prewarm.log for --automatic')
     parser.add_argument('--cold-route-regex', help='telemetry pattern required to prove cold fallback')
     parser.add_argument('--warm-route-regex', help='telemetry pattern required to prove resident warm route')
     args = parser.parse_args()

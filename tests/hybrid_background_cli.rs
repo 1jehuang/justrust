@@ -3,7 +3,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::{ffi::OsStringExt as _, fs::PermissionsExt as _, process::ExitStatusExt as _};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,9 +23,10 @@ def event(value):
 if sys.argv[1:3] == ['cargo', 'hybrid-ready']:
     event('ready-probe')
     fd = int(os.environ['JR_HYBRID_DECISION_FD'])
-    os.write(fd, b'miss\n')
+    committed = 'COMMITTED_STATUS' in os.environ
+    os.write(fd, b'committed\n' if committed else b'miss\n')
     os.close(fd)
-    sys.exit(0)
+    sys.exit(int(os.environ.get('COMMITTED_STATUS', '0')))
 assert sys.argv[1:4] == ['cargo', 'hybrid-prewarm', '--'], repr(sys.argv)
 assert 'JR_HYBRID_DECISION_FD' not in os.environ
 assert os.environ['RUSTC'] == str(root / 'toolchain/bin/rustc')
@@ -58,6 +59,7 @@ event('fallback-start')
 assert 'JR_HYBRID_DECISION_FD' not in os.environ
 assert os.environ['RUSTC'] == '/caller/stock-rustc'
 assert os.environ['CARGO_TARGET_DIR'] == '/caller/stock-target'
+assert os.environ['RUSTC_WRAPPER'] == '/caller/stock-wrapper'
 if os.environ.get('FALLBACK_BLOCK') == '1':
     deadline = time.monotonic() + 15
     while not (root / 'release-fallback').exists():
@@ -66,6 +68,9 @@ if os.environ.get('FALLBACK_BLOCK') == '1':
         time.sleep(.01)
 event('fallback-done')
 print('FOREGROUND_RESULT', flush=True)
+print('FALLBACK_ARGUMENTS=' + repr(sys.argv[1:]), flush=True)
+if 'FALLBACK_SIGNAL' in os.environ:
+    os.kill(os.getpid(), int(os.environ['FALLBACK_SIGNAL']))
 sys.exit(int(os.environ.get('FALLBACK_STATUS', '0')))
 "#;
 
@@ -156,6 +161,21 @@ impl Fixture {
     fn release(&self) {
         fs::write(self.root.join("release-prewarm"), "release").unwrap();
         self.wait_event("prewarm-done", 1);
+    }
+
+    fn wait_log(&self, receipt: &str) {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let log = fs::read_to_string(self.home.join("prewarm.log")).unwrap_or_default();
+            if log.contains(receipt) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waiting for log receipt {receipt:?}: {log}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -288,6 +308,7 @@ fn duplicate_cold_requests_share_one_prewarm_without_blocking_fallback() {
     );
     assert!(second.status.success(), "{}", text(&second));
     fixture.wait_event("fallback-done", 2);
+    fixture.wait_log("preparation already active in this namespace");
     assert_eq!(
         fixture
             .events()
@@ -349,7 +370,71 @@ fn simultaneous_foregrounds_do_not_wait_for_each_other_or_background_compile() {
     let first = output(first);
     assert!(first.status.success(), "{}", text(&first));
     fixture.wait_event("fallback-done", 2);
+    fixture.wait_log("preparation already active in this namespace");
     fixture.release();
+}
+
+#[test]
+fn committed_native_success_or_error_never_schedules_background_work() {
+    for status in ["0", "101"] {
+        let fixture = Fixture::new();
+        let result = output(
+            fixture
+                .command()
+                .env("COMMITTED_STATUS", status)
+                .arg("test")
+                .spawn()
+                .unwrap(),
+        );
+        assert_eq!(
+            result.status.code(),
+            Some(status.parse().unwrap()),
+            "{}",
+            text(&result)
+        );
+        assert_eq!(fixture.events(), ["ready-probe"]);
+        assert!(!fixture.home.join("prewarm.log").exists());
+    }
+}
+
+#[test]
+fn foreground_signal_is_preserved_without_scheduling_background_work() {
+    let fixture = Fixture::new();
+    let result = output(
+        fixture
+            .command()
+            .env("FALLBACK_SIGNAL", "15")
+            .arg("test")
+            .spawn()
+            .unwrap(),
+    );
+    assert_eq!(result.status.signal(), Some(15), "{}", text(&result));
+    assert_eq!(
+        fixture.events(),
+        ["ready-probe", "fallback-start", "fallback-done"]
+    );
+    assert!(!fixture.home.join("prewarm.log").exists());
+}
+
+#[test]
+fn non_utf8_workload_argument_is_preserved_without_background_preparation() {
+    let fixture = Fixture::new();
+    let result = output(
+        fixture
+            .command()
+            .arg("test")
+            .arg(std::ffi::OsString::from_vec(vec![255]))
+            .spawn()
+            .unwrap(),
+    );
+    assert!(result.status.success(), "{}", text(&result));
+    assert!(
+        text(&result).contains("FALLBACK_ARGUMENTS=['test', '\\udcff']"),
+        "{}",
+        text(&result)
+    );
+    assert_eq!(fixture.events(), ["fallback-start", "fallback-done"]);
+    assert!(!fixture.home.join("prewarm.log").exists());
 }
 
 #[test]

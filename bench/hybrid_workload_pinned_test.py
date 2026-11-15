@@ -34,6 +34,10 @@ for name in names:
 print('JR_RUNTIME_EXECUTED_' + nonce)
 if failed: print('JR_RUNTIME_FAILURE')
 print('test result: ' + ('FAILED. 3 passed; 1 failed;' if failed else 'ok. 4 passed; 0 failed;') + ' 0 ignored; 0 measured; 100 filtered out')
+if not failed and os.environ.get('JUSTRUST_HYBRID_PREWARM') == 'after-success':
+    with (pathlib.Path(os.environ['JR_ENGINE_HOME']) / 'prewarm.log').open('a') as f:
+        f.write('AUTOMATIC_SUCCESS\\n')
+    print('justrust hybrid: queued background preparation')
 sys.exit(101 if failed else 0)
 '''.replace('NAMES_VALUE', repr(NAMES))
 
@@ -60,7 +64,7 @@ class PinnedContracts(unittest.TestCase):
         self.assertIn(b'JR_RUNTIME_TYPE_ERROR', content)
         self.assertNotIn(b'HYBRID_SIDE_EFFECT', content)
 
-    def test_synthetic_end_to_end(self):
+    def run_matrix(self, automatic=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / 'fixture'
@@ -72,16 +76,23 @@ class PinnedContracts(unittest.TestCase):
             fake.chmod(0o700)
             args = argparse.Namespace(output=root / 'out', source=source, justrust=fake,
                                       engine=fake, toolchain=None, env=[], samples=2, timeout=5,
-                                      prewarm=True, cold_route_regex=None, warm_route_regex=None)
+                                      prewarm=not automatic, cold_route_regex=None, warm_route_regex=None,
+                                      automatic=automatic, automatic_ready_regex='AUTOMATIC_SUCCESS' if automatic else None)
             # Explicitly synthetic: bypass pin only here, never in the executable.
             with patch.object(pinned.resident, 'pinned_source'):
                 self.assertEqual(pinned.execute(args), 0)
             report = json.loads((args.output / 'report.json').read_text())
             self.assertEqual(report['status'], 'passed')
-            self.assertEqual(len(report['rows']), 17)
+            self.assertEqual(len(report['rows']), 16 if automatic else 17)
             self.assertEqual((source / 'src/summary.rs').read_bytes(), original)
             self.assertFalse(report['routing_evidence_complete'])
             self.assertTrue(all(Path(row['raw_prefix'] + '.stdout').is_file() for row in report['rows']))
+
+    def test_synthetic_end_to_end(self):
+        self.run_matrix()
+
+    def test_synthetic_automatic_prewarm(self):
+        self.run_matrix(automatic=True)
 
 
 if __name__ == '__main__':

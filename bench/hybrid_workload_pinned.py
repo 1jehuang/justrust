@@ -52,6 +52,10 @@ def accepted(row, text, effects, nonce, kind, expected=None):
 
 
 def execute(args):
+    automatic = getattr(args, 'automatic', False)
+    automatic_pattern = getattr(args, 'automatic_ready_regex', None)
+    if automatic and (args.prewarm or not automatic_pattern):
+        raise ValueError('--automatic requires --automatic-ready-regex and cannot combine with --prewarm')
     if args.output.exists() or args.output.is_relative_to(args.source) or args.source.is_relative_to(args.output):
         raise ValueError('output must be fresh and disjoint from source')
     if args.samples < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -90,6 +94,8 @@ def execute(args):
         home.mkdir(mode=0o700)
         local = dict(env, JUSTRUST_NATIVE_ENGINE=str(args.engine), JR_ENGINE_HOME=str(home),
                      CARGO_TARGET_DIR=str(state / 'target'), HYBRID_SIDE_EFFECT=str(state / 'side-effect'))
+        if automatic and stack == 'hybrid':
+            local['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
         states[stack] = (project, local)
     expected = None
     phases = [('cold', 0, 'edit'), ('prewarm', 0, 'prewarm'), ('warm', 0, 'edit'),
@@ -114,6 +120,7 @@ def execute(args):
                 command += (['prewarm'] if kind == 'prewarm' else []) + ['test'] + resident.FILTER
                 prefix = args.output / f'{index:02d}-{phase}-{stack}'
                 memory_before = core.namespace_pss(local['JR_ENGINE_HOME'])
+                offset = core.background_offset(local['JR_ENGINE_HOME'])
                 row = resident.runtime.run_process(command, project, local, prefix, args.timeout)
                 row.update(namespace_pss_before=memory_before,
                            namespace_pss_after=core.namespace_pss(local['JR_ENGINE_HOME']))
@@ -130,6 +137,17 @@ def execute(args):
                 route_verified = bool(route and re.search(route, text)) if stack == 'hybrid' and kind != 'prewarm' else None
                 if stack == 'hybrid' and route:
                     good = good and route_verified
+                if automatic and stack == 'hybrid' and row['status'] == 0:
+                    queued = 'justrust hybrid: queued background preparation' in text
+                    row['automatic_preparation_queued'] = queued
+                    if queued:
+                        row['automatic_preparation'] = core.wait_background(
+                            local['JR_ENGINE_HOME'], offset, side, after, args.timeout,
+                            automatic_pattern, args.output / f'{index:02d}-{phase}-background.log')
+                        good = good and row['automatic_preparation']['ok']
+                        row['namespace_pss_prepared'] = core.namespace_pss(local['JR_ENGINE_HOME'])
+                    elif phase == 'cold':
+                        good = False
                 row.update(phase=phase, nonce=nonce, stack=stack, parsed=parsed,
                            environment=core.environment_receipt(local),
                            side_effect_delta=effects, route_verified=route_verified,
@@ -146,7 +164,7 @@ def execute(args):
                     row.update(differential_equal=equal, ok=row['ok'] and equal)
                 save()
         report['status'] = 'passed' if all(row['ok'] for row in rows) else 'failed'
-        report['routing_evidence_complete'] = bool(args.prewarm and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit')))
+        report['routing_evidence_complete'] = bool((args.prewarm or automatic) and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit')))
         report['focused_edit_medians_seconds'] = {stack: statistics.median(row['elapsed_seconds'] for row in rows if row['stack'] == stack and row['phase'] == 'edit') for stack in ('shipping', 'hybrid')} if report['status'] == 'passed' else {}
         report['source_unchanged'] = resident.source_hashes(args.source) == report['source_sha256']
         report['tools_after'] = {str(p): core.digest(p) for p in tools}
@@ -173,6 +191,8 @@ def main():
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--env', action='append', default=[])
     parser.add_argument('--prewarm', action='store_true')
+    parser.add_argument('--automatic', action='store_true', help='after-success preparation with untimed readiness wait')
+    parser.add_argument('--automatic-ready-regex', help='required NEW successful preparation receipt in prewarm.log')
     parser.add_argument('--cold-route-regex')
     parser.add_argument('--warm-route-regex')
     raise SystemExit(execute(parser.parse_args()))
