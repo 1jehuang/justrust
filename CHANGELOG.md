@@ -5,6 +5,23 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.28
+
+- Background peer-cache warmup now yields between complete cache entries when
+  foreground builds arrive. Interrupted or failed transfer windows retain their
+  journal position, so yielding does not silently lose pending cache entries.
+- Added read-only lock-queue inventory and isolated package-cache lock protocol
+  diagnostics under `bench/`. Measured source-sync waits remain separate from
+  estimated Cargo lock waits and hosted admission.
+- Hosted source-mirror namespaces can be isolated explicitly without changing
+  the default transport or source ordering guarantees.
+- The owned Cargo source skips optional newer-version suggestions when its
+  download lock is busy, preserving core future-incompatibility diagnostics.
+  This native Cargo change requires a separately built and activated toolchain,
+  not just updating the client.
+- These are scoped contention improvements, not a claim of a measured overall
+  build-time speedup.
+
 ## 0.1.0-alpha.27
 
 - **Contended agent checks and tests can use private build slots on ext4.**
