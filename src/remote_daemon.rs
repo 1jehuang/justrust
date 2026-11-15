@@ -90,7 +90,8 @@ fn policy_identity(binary: &str, setting: impl Fn(&str) -> Option<String>) -> St
             setting("JUSTRUST_HOSTED_NATIVE_ONLY").as_deref(),
             Some("1" | "on" | "true" | "require")
         );
-    format!("{binary}:native={mode}:only={only}")
+    let isolated = hosted_mirror_isolation(setting("JUSTRUST_HOSTED_MIRROR_ISOLATION").as_deref());
+    format!("{binary}:native={mode}:only={only}:mirror-isolation={isolated}")
 }
 
 // ------------------------------------------------------------------ client
@@ -817,6 +818,23 @@ fn save_active_prefix(prefix: &str) {
     }
 }
 
+/// Each daemon owns its hosted source tree for its lifetime, including reconnects.
+/// Checkpoints cannot exclude another writer after a build has started.
+fn hosted_mirror_script(namespace: &str) -> String {
+    format!(
+        "mkdir -p ~/.justrust-mirror/{namespace} && cd ~/.justrust-mirror/{namespace} && pwd -P"
+    )
+}
+
+fn hosted_mirror_isolation(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "on" | "true" | "require"))
+}
+
+fn hosted_mirror_namespace() -> &'static str {
+    static NAMESPACE: OnceLock<String> = OnceLock::new();
+    NAMESPACE.get_or_init(remote_checkpoint::new_token)
+}
+
 const REMOTE_MIRROR_PREFIX_SCRIPT: &str =
     "mkdir -p ~/.justrust-mirror && cd ~/.justrust-mirror && pwd -P";
 
@@ -828,25 +846,32 @@ fn resolve_remote_prefix(
     backend: &crate::remote_backend::Backend,
     target: &crate::remote_backend::Target,
 ) -> Result<String> {
-    if !matches!(backend, crate::remote_backend::Backend::Ssh { .. }) {
+    let script = if matches!(backend, crate::remote_backend::Backend::Hosted)
+        && hosted_mirror_isolation(
+            crate::remote_hosted::setting("JUSTRUST_HOSTED_MIRROR_ISOLATION").as_deref(),
+        ) {
+        hosted_mirror_script(hosted_mirror_namespace())
+    } else if matches!(backend, crate::remote_backend::Backend::Ssh { .. }) {
+        if let Some(home) = dirs::home_dir()
+            && let Some(h) = home.to_str()
+            && target
+                .command()
+                .arg(remote_sync::prepare_script(h))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        {
+            return Ok(String::new());
+        }
+        REMOTE_MIRROR_PREFIX_SCRIPT.to_string()
+    } else {
         return Ok(String::new());
-    }
-    if let Some(home) = dirs::home_dir()
-        && let Some(h) = home.to_str()
-        && target
-            .command()
-            .arg(remote_sync::prepare_script(h))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    {
-        return Ok(String::new());
-    }
+    };
     let out = target
         .command()
-        .arg(REMOTE_MIRROR_PREFIX_SCRIPT)
+        .arg(script)
         .stdin(Stdio::null())
         .output()
         .context("resolving remote mirror prefix")?;
@@ -2091,6 +2116,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn daemon_mirror_isolation_policy_requires_explicit_opt_in_and_distinct_identity() {
+        let identity = |value: Option<&str>| {
+            policy_identity("binary", |key| {
+                if key == "JUSTRUST_HOSTED_MIRROR_ISOLATION" {
+                    value.map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+        };
+        let shared = identity(None);
+        let isolated = identity(Some("1"));
+        assert_ne!(shared, isolated);
+        for value in [None, Some("0"), Some("off"), Some("false"), Some("unknown")] {
+            assert!(!hosted_mirror_isolation(value));
+            assert_eq!(shared, identity(value));
+        }
+        for value in ["1", "on", "true", "require"] {
+            assert!(hosted_mirror_isolation(Some(value)));
+            assert_eq!(isolated, identity(Some(value)));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn daemon_transport_policy_drain_preserves_active_route_without_resubmission() {
@@ -2896,6 +2945,69 @@ mod tests {
         sync.roots.insert(a.clone(), make_root());
         assert!(!sync.needs_mirror(&a));
         assert!(sync.needs_mirror(&b));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn hosted_mirror_namespaces_isolate_late_full_sync_and_preserve_reconnect() {
+        let base = std::env::temp_dir().join(format!(
+            "jr-hosted-source-isolation-{}",
+            remote_checkpoint::new_token()
+        ));
+        let home = base.join("remote-home");
+        let source = base.join("client/project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(source.join("src")).unwrap();
+        let resolve = |namespace: &str| {
+            let out = Command::new("sh")
+                .args(["-c", &hosted_mirror_script(namespace)])
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        let old_namespace = remote_checkpoint::new_token();
+        let current_namespace = remote_checkpoint::new_token();
+        let old = Mirror {
+            target: None,
+            prefix: resolve(&old_namespace),
+        };
+        let current = Mirror {
+            target: None,
+            prefix: resolve(&current_namespace),
+        };
+        assert_ne!(old.prefix, current.prefix);
+        assert_eq!(current.prefix, resolve(&current_namespace));
+        assert_eq!(hosted_mirror_namespace(), hosted_mirror_namespace());
+
+        // The live daemon mirrors a new lib target and manifest.
+        let manifest = "[package]\nname='project'\nversion='0.1.0'\n[lib]\npath='src/lib.rs'\n";
+        std::fs::write(source.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(source.join("src/lib.rs"), "pub fn current() {}\n").unwrap();
+        current.prepare(&source).unwrap();
+        current.rsync(&source).unwrap();
+
+        // A retired daemon now sends an older complete checkout, including
+        // --delete. It must not remove the live lib or replace its manifest.
+        std::fs::write(source.join("Cargo.toml"), "[package]\nname='old'\n").unwrap();
+        std::fs::remove_file(source.join("src/lib.rs")).unwrap();
+        old.prepare(&source).unwrap();
+        old.rsync(&source).unwrap();
+        let live = PathBuf::from(current.remote(&source));
+        assert_eq!(
+            std::fs::read_to_string(live.join("Cargo.toml")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read_to_string(live.join("src/lib.rs")).unwrap(),
+            "pub fn current() {}\n"
+        );
+        assert!(
+            !PathBuf::from(old.remote(&source))
+                .join("src/lib.rs")
+                .exists()
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 

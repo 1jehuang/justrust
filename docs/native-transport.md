@@ -201,6 +201,29 @@ and keeps local key/resume paths out of the API-deserialized offer. See
 readiness and coordinated canary requirements. An installed listener alone is
 not native guest readiness or production promotion.
 
+### Experimental hosted source isolation
+
+`JUSTRUST_HOSTED_MIRROR_ISOLATION=1` opts a hosted sync daemon into its own
+random `~/.justrust-mirror/<namespace>` source tree. The namespace survives
+transport reconnects but changes when that daemon is replaced. A late full
+rsync or incremental write from another client or retiring daemon then cannot
+replace its Cargo.toml or delete newly added sources. This does not replace
+account authentication, admission, billing, or tenant isolation.
+
+This is a candidate opt-in, not the default. It uses the existing prefixed
+mirror transport: relative path dependencies work, but absolute manifest
+paths, absolute path dependencies, and source-absolute environment/CLI paths
+are not transparently rebased. Do not enable it for those workloads. Each new
+daemon also starts with a fresh target tree, so daemon churn can consume disk
+and lose warm build state. No performance improvement is claimed.
+
+The option is part of the daemon policy identity. Changing it replaces the
+local daemon while retaining its already-admitted active sessions. Coordinate
+that change with other agents using the same justrust home. Do not install an
+unpublished candidate as the default CLI or restart a shared daemon merely to
+try this option. A release and a representative hosted acceptance run are
+still required before production promotion.
+
 ### Hash-bearing mirror checkpoints
 
 Link checkpoints remain opt-in with `JUSTRUST_REMOTE_CHECKPOINT=1` and work over
