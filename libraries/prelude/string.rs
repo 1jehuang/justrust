@@ -649,6 +649,15 @@ pub trait StrPattern {
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize>;
     /// Whether the pattern matches a suffix ending exactly at `text.len()`.
     fn is_suffix_of(self, text: &str) -> bool;
+    /// Byte width of the match ending exactly at `text.len()`, for
+    /// `str::strip_suffix`. The pattern is consulted once, as upstream.
+    fn suffix_width(self, text: &str) -> Option<usize>;
+}
+
+// Width of the last scalar of a nonempty text, used by one-scalar patterns.
+fn last_scalar_width(text: &str) -> usize {
+    let (ptr, len) = str_parts(text);
+    len - char_boundary_before(ptr, len)
 }
 
 // Start of the last scalar in a nonempty UTF-8 text of `end` bytes.
@@ -664,6 +673,13 @@ impl StrPattern for char {
     fn is_suffix_of(self, text: &str) -> bool {
         let (ptr, len) = str_parts(text);
         len > 0usize && decode_utf8_at(ptr, char_boundary_before(ptr, len)) == self
+    }
+    fn suffix_width(self, text: &str) -> Option<usize> {
+        if self.is_suffix_of(text) {
+            Option::Some(last_scalar_width(text))
+        } else {
+            Option::None
+        }
     }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
@@ -703,6 +719,14 @@ impl StrPattern for &str {
     fn is_suffix_of(self, text: &str) -> bool {
         str_ends_with(text, self)
     }
+    fn suffix_width(self, text: &str) -> Option<usize> {
+        if str_ends_with(text, self) {
+            let (_, count) = str_parts(self);
+            Option::Some(count)
+        } else {
+            Option::None
+        }
+    }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
         let (pattern, count) = str_parts(*self);
@@ -732,6 +756,9 @@ impl StrPattern for &String {
     fn is_suffix_of(self, text: &str) -> bool {
         self.as_str().is_suffix_of(text)
     }
+    fn suffix_width(self, text: &str) -> Option<usize> {
+        self.as_str().suffix_width(text)
+    }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let mut pattern = self.as_str();
         pattern.match_at(text, at)
@@ -747,6 +774,9 @@ impl StrPattern for &String {
 impl StrPattern for &&str {
     fn is_suffix_of(self, text: &str) -> bool {
         (*self).is_suffix_of(text)
+    }
+    fn suffix_width(self, text: &str) -> Option<usize> {
+        (*self).suffix_width(text)
     }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let mut pattern = **self;
@@ -764,6 +794,14 @@ impl<F: FnMut(char) -> bool> StrPattern for F {
     fn is_suffix_of(mut self, text: &str) -> bool {
         let (ptr, len) = str_parts(text);
         len > 0usize && self(decode_utf8_at(ptr, char_boundary_before(ptr, len)))
+    }
+    fn suffix_width(mut self, text: &str) -> Option<usize> {
+        let (ptr, len) = str_parts(text);
+        if len > 0usize && self(decode_utf8_at(ptr, char_boundary_before(ptr, len))) {
+            Option::Some(last_scalar_width(text))
+        } else {
+            Option::None
+        }
     }
     fn match_at(&mut self, text: &str, at: usize) -> Option<usize> {
         let (ptr, len) = str_parts(text);
@@ -819,6 +857,8 @@ pub trait StrMethods {
     fn lines<'a>(&'a self) -> Lines<&'a str>;
     fn starts_with<P: StrPattern>(&self, pattern: P) -> bool;
     fn ends_with<P: StrPattern>(&self, pattern: P) -> bool;
+    fn strip_prefix<'a, P: StrPattern>(&'a self, prefix: P) -> Option<&'a str>;
+    fn strip_suffix<'a, P: StrPattern>(&'a self, suffix: P) -> Option<&'a str>;
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn rfind<P: StrPattern>(&self, pattern: P) -> Option<usize>;
     fn trim(&self) -> &str;
@@ -893,6 +933,39 @@ impl StrMethods for str {
 
     fn ends_with<P: StrPattern>(&self, pattern: P) -> bool {
         pattern.is_suffix_of(self)
+    }
+
+    fn strip_prefix<'a, P: StrPattern>(&'a self, mut prefix: P) -> Option<&'a str> {
+        let (ptr, len) = str_parts(self);
+        match prefix.match_at(self, 0usize) {
+            Option::Some(width) => {
+                if width > len {
+                    panic!("string pattern match exceeds the input");
+                }
+                if width < len && (read_u8(ptr + width) & 192u8) == 128u8 {
+                    panic!("string pattern match ends inside a UTF-8 scalar");
+                }
+                Option::Some(str_from_raw_parts(ptr + width, len - width))
+            }
+            Option::None => Option::None,
+        }
+    }
+
+    fn strip_suffix<'a, P: StrPattern>(&'a self, suffix: P) -> Option<&'a str> {
+        let (ptr, len) = str_parts(self);
+        match suffix.suffix_width(self) {
+            Option::Some(width) => {
+                if width > len {
+                    panic!("string pattern match exceeds the input");
+                }
+                let end = len - width;
+                if end < len && (read_u8(ptr + end) & 192u8) == 128u8 {
+                    panic!("string pattern match starts inside a UTF-8 scalar");
+                }
+                Option::Some(str_from_raw_parts(ptr, end))
+            }
+            Option::None => Option::None,
+        }
     }
 
     fn find<P: StrPattern>(&self, pattern: P) -> Option<usize> {

@@ -87,3 +87,57 @@ fn split_whitespace_matches_stock() {
         ],
     );
 }
+
+#[test]
+fn strip_prefix_and_suffix_match_stock() {
+    closure_oracle::check(
+        "str-strip",
+        &[
+            Case {
+                name: "text_scalar_and_predicate_patterns",
+                source: r#"fn ident(raw: &str) -> String {
+    raw.strip_prefix("r#").unwrap_or(raw).into()
+}
+fn tail<'a>(text: &'a str, cut: &str) -> Option<&'a str> {
+    text.strip_suffix(cut)
+}
+fn main() {
+    println!("{} {}", ident("r#type"), ident("plain"));
+    let s = String::from("héllo wörld\u{e9}");
+    println!("{:?} {:?}", s.strip_prefix('h'), s.strip_prefix("hé"));
+    println!("{:?} {:?}", s.strip_suffix('\u{e9}'), s.strip_suffix("ld\u{e9}"));
+    println!("{:?} {:?}", s.strip_prefix("x"), s.strip_suffix('d'));
+    println!("{:?} {:?} {:?}", "".strip_prefix(""), "".strip_suffix(""), "".strip_suffix('a'));
+    println!("{:?} {:?}", "abc".strip_prefix("abcd"), "abc".strip_suffix("zabc"));
+    println!("{:?} {:?}", "abc".strip_prefix("abc"), "abc".strip_suffix("abc"));
+    let mut calls = 0;
+    let got = "x12".strip_suffix(|c: char| { calls += 1; c.is_ascii_digit() });
+    println!("{:?} {}", got, calls);
+    println!("{:?}", "7up".strip_prefix(|c: char| c.is_ascii_digit()));
+    let owned = String::from("up");
+    println!("{:?} {:?}", "7up".strip_suffix(&owned), tail("a.rs", ".rs"));
+    let p = "pre";
+    println!("{:?}", "prefix".strip_prefix(&p));
+    if let Some(rest) = "key=value".strip_prefix("key=") {
+        println!("{}", rest);
+    }
+}"#,
+                expect: Expect::Run(
+                    "type plain\nSome(\"éllo wörldé\") Some(\"llo wörldé\")\nSome(\"héllo wörld\") Some(\"héllo wör\")\nNone None\nSome(\"\") Some(\"\") None\nNone None\nSome(\"\") Some(\"\")\nSome(\"x1\") 1\nSome(\"up\")\nSome(\"7\") Some(\"a\")\nSome(\"fix\")\nvalue\n",
+                ),
+            },
+            Case {
+                name: "stripped_text_cannot_outlive_its_owner",
+                source: r#"fn unused() -> Option<&'static str> { let s = String::from("ab"); s.strip_prefix("a") }
+fn main() {}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "integers_are_not_text_patterns",
+                source: r#"fn unused(s: &str) -> Option<&str> { s.strip_prefix(7u32) }
+fn main() {}"#,
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
