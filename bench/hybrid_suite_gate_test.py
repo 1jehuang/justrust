@@ -21,34 +21,77 @@ class HybridSuiteGateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.tool = self.root / 'tool'
-        self.tool.write_text(f'#!{sys.executable}\nimport os,sys,json\nprint(json.dumps([sys.argv[1:], os.environ.get("JUSTRUST_NATIVE_ENGINE")]))\n')
+        self.tool.write_text(f'#!{sys.executable}\nimport os,sys,json\nprint(json.dumps([sys.argv[1:], os.environ.get("JUSTRUST_NATIVE_ENGINE"), os.environ.get("JUSTRUST_HYBRID"), os.environ.get("JUSTRUST_HYBRID_TOOLCHAIN")]))\n')
         self.tool.chmod(0o700)
+        self.toolchain = self.root / 'toolchain'
+        (self.toolchain / 'bin').mkdir(parents=True)
+        for name in ('rustc', 'cargo'):
+            path = self.toolchain / 'bin' / name
+            path.write_text(self.tool.read_text())
+            path.chmod(0o700)
 
     def prepare(self):
         output = self.root / 'gate'
         args = argparse.Namespace(output=output, baseline=self.tool,
-                                  candidate=self.tool, engine=self.tool, seed=1)
+                                  candidate=self.tool, engine=self.tool, seed=1,
+                                  native_toolchain=self.toolchain)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gate.prepare(args), 0)
         return output
 
-    def test_candidate_adapter_real_subprocess_adds_hybrid_and_engine(self):
+    def test_candidate_adapter_real_subprocess_preserves_cli_opts_in_env(self):
         output = self.prepare()
-        child = subprocess.check_output([str(output / 'candidate-exec'), 'test', '--lib'], text=True)
-        self.assertEqual(json.loads(child), [['hybrid', 'test', '--lib'], str(self.tool)])
+        for command in ('build', 'check', 'test', 'run'):
+            child = subprocess.check_output([str(output / 'candidate-exec'), command, '--lib'], text=True)
+            self.assertEqual(json.loads(child), [[command, '--lib'], str(self.tool), 'ready', str(self.toolchain)])
 
     def test_candidate_adapter_control_commands_are_not_hybrid(self):
         output = self.prepare()
-        env = {k: v for k, v in os.environ.items() if k != 'JUSTRUST_NATIVE_ENGINE'}
-        for command in ('-V', 'cache', 'toolchain', 'early'):
+        env = {k: v for k, v in os.environ.items() if k not in ('JUSTRUST_NATIVE_ENGINE', 'JUSTRUST_HYBRID_TOOLCHAIN')}
+        env['JUSTRUST_HYBRID'] = 'ready'
+        for command in ('-V', 'cache', 'toolchain', 'early', 'clippy'):
             child = subprocess.check_output([str(output / 'candidate-exec'), command], env=env, text=True)
-            self.assertEqual(json.loads(child), [[command], None])
+            self.assertEqual(json.loads(child), [[command], None, None, None])
 
     def test_baseline_adapter_never_adds_hybrid(self):
         output = self.prepare()
-        env = {k: v for k, v in os.environ.items() if k != 'JUSTRUST_NATIVE_ENGINE'}
+        env = {k: v for k, v in os.environ.items() if k not in ('JUSTRUST_NATIVE_ENGINE', 'JUSTRUST_HYBRID_TOOLCHAIN')}
+        env['JUSTRUST_HYBRID'] = 'ready'
         child = subprocess.check_output([str(output / 'baseline-exec'), 'test', '--lib'], env=env, text=True)
-        self.assertEqual(json.loads(child), [['test', '--lib'], None])
+        self.assertEqual(json.loads(child), [['test', '--lib'], None, None, None])
+
+    def test_missing_native_toolchain_refuses_before_creating_evidence(self):
+        output = self.root / 'gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.tool, seed=1, native_toolchain=None)
+        with self.assertRaisesRegex(ValueError, 'refusing an all-fallback'):
+            gate.prepare(args)
+        self.assertFalse(output.exists())
+
+    def test_incomplete_native_toolchain_refuses_before_creating_evidence(self):
+        (self.toolchain / 'bin/cargo').unlink()
+        output = self.root / 'gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.tool, seed=1, native_toolchain=self.toolchain)
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, 'expected executable'):
+            gate.prepare(args)
+        self.assertFalse(output.exists())
+
+    def test_native_compiler_mutation_refuses_run(self):
+        output = self.prepare()
+        compiler = self.toolchain / 'bin/rustc'
+        compiler.write_text(compiler.read_text() + '# changed compiler\n')
+        with self.assertRaisesRegex(ValueError, 'input changed'):
+            gate.load_verified(output)
+
+    def test_missing_engine_refuses_before_creating_evidence(self):
+        output = self.root / 'gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.root / 'missing-engine', seed=1,
+                                  native_toolchain=self.toolchain)
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, 'expected executable'):
+            gate.prepare(args)
+        self.assertFalse(output.exists())
 
     def test_identity_change_refuses_run(self):
         output = self.prepare()
@@ -66,7 +109,9 @@ class HybridSuiteGateTests(unittest.TestCase):
     def test_prepare_refuses_existing_evidence(self):
         output = self.prepare()
         with self.assertRaises(FileExistsError):
-            gate.prepare(argparse.Namespace(output=output))
+            gate.prepare(argparse.Namespace(output=output, baseline=self.tool,
+                                           candidate=self.tool, engine=self.tool,
+                                           native_toolchain=self.toolchain))
 
     def test_comprehensive_commands_identical_controls(self):
         output = self.prepare()

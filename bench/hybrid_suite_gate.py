@@ -3,7 +3,7 @@
 
 This adds no benchmark semantics. suite.py owns generation, pinned snapshots,
 measurement, recording, noise rejection and comparison eligibility. The adapter
-only selects `justrust hybrid` for build commands. No automatic promotion occurs.
+only opts build/check/test/run into JUSTRUST_HYBRID=ready. No automatic promotion occurs.
 Prepare and run on the host that owns the supplied executable paths.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import sys
 import time
 
 HERE = Path(__file__).resolve().parent
-BUILD_COMMANDS = ('build', 'check', 'test', 'run', 'clippy')
+BUILD_COMMANDS = ('build', 'check', 'test', 'run')
 
 
 def sha256(path):
@@ -34,7 +34,7 @@ def executable(value):
     return path
 
 
-def adapter_text(binary, engine=None):
+def adapter_text(binary, engine=None, toolchain=None):
     # Keep metadata, cache and toolchain commands on the ordinary client path.
     # Explicit engine selection lives inside the adapter, so both suite parents
     # inherit identical controls and the candidate engine is recorded separately.
@@ -43,10 +43,13 @@ import os
 import sys
 binary = {str(binary)!r}
 engine = {str(engine) if engine is not None else None!r}
+toolchain = {str(toolchain) if toolchain is not None else None!r}
 args = sys.argv[1:]
+os.environ.pop('JUSTRUST_HYBRID', None)
 if engine is not None and args and args[0] in {BUILD_COMMANDS!r}:
     os.environ['JUSTRUST_NATIVE_ENGINE'] = engine
-    args.insert(0, 'hybrid')
+    os.environ['JUSTRUST_HYBRID_TOOLCHAIN'] = toolchain
+    os.environ['JUSTRUST_HYBRID'] = 'ready'
 os.execv(binary, [binary, *args])
 '''
 
@@ -66,20 +69,39 @@ def suite_command(output, stack, seed=1):
             '-n', '1', '--points', '40', '--stop-on-invalid', '-o', str(output / (stack + '.json'))]
 
 
+def native_toolchain(value):
+    if value is None:
+        raise ValueError('set --native-toolchain or JUSTRUST_HYBRID_TOOLCHAIN, refusing an all-fallback gate')
+    path = Path(value).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise ValueError('native toolchain must be an existing absolute directory')
+    path = path.resolve()
+    for name in ('rustc', 'cargo'):
+        executable(path / 'bin' / name)
+    return path
+
+
 def prepare(args):
     output = args.output
+    toolchain = native_toolchain(args.native_toolchain)
+    for tool in (args.baseline, args.candidate, args.engine):
+        executable(tool)
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
     tools = dict(baseline=args.baseline, candidate=args.candidate, engine=args.engine,
                  suite=HERE / 'suite.py', synth=HERE / 'synth/run.py',
                  generator=HERE / 'synth/gen.py', versus=HERE / 'versus.py',
                  runtime=HERE / 'runtime_context.py', weights=HERE / 'synth/weights.json',
-                 prerequisites=HERE / 'prerequisites.py', gate=Path(__file__).resolve())
+                 prerequisites=HERE / 'prerequisites.py', gate=Path(__file__).resolve(),
+                 native_rustc=toolchain / 'bin/rustc', native_cargo=toolchain / 'bin/cargo')
     report = dict(schema=1, status='prepared', scope=__doc__, seed=args.seed,
                   points=40, reps=1, tools=identities(tools), runs={},
+                  native_toolchain=str(toolchain),
+                  native_identity_scope='engine, rustc and cargo executable hashes, not loaded libraries or routing proof',
                   policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
     for stack, binary in (('baseline', args.baseline), ('candidate', args.candidate)):
         adapter = output / (stack + '-exec')
-        adapter.write_text(adapter_text(binary, args.engine if stack == 'candidate' else None))
+        adapter.write_text(adapter_text(binary, args.engine if stack == 'candidate' else None,
+                                        toolchain if stack == 'candidate' else None))
         adapter.chmod(0o700)
         report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
         report.setdefault('commands', {})[stack] = suite_command(output, stack, args.seed)
@@ -152,6 +174,7 @@ def run(args):
         env = dict(os.environ)
         env.pop('JUSTRUST_BIN', None)
         env.pop('JUSTRUST_NATIVE_ENGINE', None)
+        env.pop('JUSTRUST_HYBRID', None)
         env['JUSTRUST'] = report['adapters'][stack]['path']
         report['status'] = 'running-' + stack
         save(args.output, report)
@@ -196,6 +219,8 @@ def main(argv=None):
     p.add_argument('--baseline', required=True, type=executable)
     p.add_argument('--candidate', required=True, type=executable)
     p.add_argument('--engine', required=True, type=executable)
+    p.add_argument('--native-toolchain', default=os.environ.get('JUSTRUST_HYBRID_TOOLCHAIN'),
+                   help='existing matching engine toolchain, defaults to JUSTRUST_HYBRID_TOOLCHAIN')
     p.add_argument('--seed', type=int, default=1)
     p.set_defaults(function=prepare)
     p = subs.add_parser('run', help='execute comprehensive suite, potentially hours')
