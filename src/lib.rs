@@ -913,6 +913,9 @@ pub fn main() -> anyhow::Result<()> {
     {
         buildscript::main(PathBuf::from(real), rest.collect());
     }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__hybrid-prewarm")) {
+        return hybrid::background(std::env::args_os().skip(2).collect());
+    }
     // `justrust __test-runner <binary> ...`: cargo's runner during `test`.
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(test_runner::SUBCOMMAND))
     {

@@ -17,7 +17,9 @@ Requires a trusted owned engine (JUSTRUST_NATIVE_ENGINE or sibling jr-native)\n\
 and JUSTRUST_HYBRID_TOOLCHAIN pointing to its matching toolchain directory.\n\
 JR_ENGINE_HOME overrides the private hybrid namespace. Ordinary commands are\n\
 unchanged unless JUSTRUST_HYBRID=ready explicitly opts build/test/check/run in.\n\
-This is an experiment, not a production default or a Rust parity claim.\n";
+This is an experiment, not a production default or a Rust parity claim.\n\
+JUSTRUST_HYBRID_PREWARM=after-success opts into low-priority background preparation\n\
+after a successful Cargo fallback. Only one preparation runs per namespace.\n";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Decision {
@@ -103,6 +105,10 @@ fn native_command(engine: &Path, home: &Path, tc: &Path) -> anyhow::Result<Comma
     cmd.env("JR_ENGINE_HOME", home)
         .env("RUSTC", tc.join("bin/rustc"))
         .env("CARGO_TARGET_DIR", home.join("targets").join(&key[..24]))
+        .env(
+            "CARGO_BUILD_BUILD_DIR",
+            home.join("targets").join(&key[..24]).join("build"),
+        )
         .env("RA_JIT_SPARE", "0")
         .env("BLAZE_SPARE", "0")
         .env_remove("RUSTC_WRAPPER")
@@ -127,7 +133,7 @@ fn engine() -> anyhow::Result<Option<PathBuf>> {
     crate::native::engine_path(std::env::var_os("JUSTRUST_NATIVE_ENGINE"), &exe).map(Some)
 }
 
-fn fallback(args: &[OsString]) -> anyhow::Result<()> {
+fn fallback(args: &[OsString], prepare: Option<(&Path, &Path, &Path)>) -> anyhow::Result<()> {
     let executable = match std::env::var_os("JUSTRUST_HYBRID_FALLBACK") {
         Some(path) => {
             let path = PathBuf::from(path);
@@ -144,6 +150,19 @@ fn fallback(args: &[OsString]) -> anyhow::Result<()> {
         .args(args)
         .env_remove("JUSTRUST_HYBRID")
         .env_remove("JR_HYBRID_DECISION_FD");
+    if std::env::var_os("JUSTRUST_HYBRID_PREWARM").as_deref() == Some(OsStr::new("after-success"))
+        && let Some((engine, home, tc)) = prepare
+    {
+        let status = command
+            .status()
+            .context("execute unchanged justrust fallback")?;
+        if status.success()
+            && let Err(error) = schedule_prewarm(args, engine, home, tc)
+        {
+            eprintln!("justrust hybrid: background prewarm not started: {error:#}");
+        }
+        finish(status);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -152,6 +171,112 @@ fn fallback(args: &[OsString]) -> anyhow::Result<()> {
     #[cfg(not(unix))]
     {
         finish(command.status().context("execute justrust fallback")?)
+    }
+}
+
+fn schedule_prewarm(
+    args: &[OsString],
+    engine: &Path,
+    home: &Path,
+    tc: &Path,
+) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::{fs::OpenOptionsExt as _, process::CommandExt as _};
+        let log_path = home.join("prewarm.log");
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&log_path)?;
+        let mut child = Command::new(std::env::current_exe()?);
+        child
+            .arg("__hybrid-prewarm")
+            .args(args)
+            .env("JR_ENGINE_HOME", home)
+            .env("JUSTRUST_NATIVE_ENGINE", engine)
+            .env("JUSTRUST_HYBRID_TOOLCHAIN", tc)
+            .env_remove("JUSTRUST_HYBRID")
+            .env_remove("JR_HYBRID_DECISION_FD")
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
+        // SAFETY: only process-local libc system calls run between fork and exec.
+        // A dedicated session prevents terminal signals from cancelling unrelated
+        // future foreground requests, and the low priority protects their CPU.
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setsid() < 0 || libc::setpriority(libc::PRIO_PROCESS, 0, 19) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let process = child
+            .spawn()
+            .context("launch deferred native preparation")?;
+        eprintln!(
+            "justrust hybrid: queued background preparation (pid {}, log {})",
+            process.id(),
+            log_path.display()
+        );
+        // This child deliberately outlives the foreground CLI. Its namespace
+        // lock is held by the internal supervisor until the engine exits.
+        drop(process);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (args, engine, home, tc);
+        bail!("background native preparation requires Unix")
+    }
+}
+
+pub(crate) fn background(args: Vec<OsString>) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::{fd::AsRawFd as _, unix::fs::OpenOptionsExt as _};
+        if !is_workload(args.first().map(OsString::as_os_str))
+            || args.iter().any(|a| a.to_str().is_none())
+        {
+            bail!("invalid background native preparation command");
+        }
+        let home = private_home()?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(home.join("prewarm.lock"))?;
+        // SAFETY: flock only changes the lock of this owned open descriptor.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                eprintln!("justrust hybrid: preparation already active in this namespace");
+                return Ok(());
+            }
+            return Err(error).context("lock native preparation namespace");
+        }
+        let engine = engine()?.context("owned engine unavailable for preparation")?;
+        let tc = toolchain()?.context("matching native toolchain unavailable for preparation")?;
+        let status = native_command(&engine, &home, &tc)?
+            .args(["cargo", "hybrid-prewarm", "--"])
+            .args(args)
+            .status()
+            .context("prepare native worker")?;
+        if !status.success() {
+            bail!("background native preparation ended with {status}");
+        }
+        drop(lock);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = args;
+        bail!("background native preparation requires Unix")
     }
 }
 
@@ -242,19 +367,19 @@ pub(crate) fn main(mut args: Vec<OsString>) -> anyhow::Result<()> {
         if prewarm || lifecycle {
             bail!("native hybrid operations require UTF-8 arguments");
         }
-        return fallback(&args);
+        return fallback(&args, None);
     }
     let Some(engine) = engine()? else {
         if prewarm || lifecycle {
             bail!("owned native engine is unavailable, see justrust native --help");
         }
-        return fallback(&args);
+        return fallback(&args, None);
     };
     let Some(tc) = toolchain()? else {
         if prewarm || lifecycle {
             bail!("set JUSTRUST_HYBRID_TOOLCHAIN to the matching native toolchain directory");
         }
-        return fallback(&args);
+        return fallback(&args, None);
     };
     let home = private_home()?;
     let mut command = native_command(&engine, &home, &tc)?;
@@ -275,7 +400,7 @@ pub(crate) fn main(mut args: Vec<OsString>) -> anyhow::Result<()> {
     {
         let (decided, status) = attempt(command, &args)?;
         match decided {
-            Decision::Miss => fallback(&args),
+            Decision::Miss => fallback(&args, Some((&engine, &home, &tc))),
             Decision::Committed => finish(status),
         }
     }
