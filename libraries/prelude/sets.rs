@@ -455,6 +455,26 @@ impl<T: Clone> Clone for BTreeSet<T> {
     }
 }
 
+/// Equal length, then elements pairwise in ascending order, stopping at the
+/// first difference, as std's iterator comparison.
+impl<T: super::cmp::PartialEq> super::cmp::PartialEq for BTreeSet<T> {
+    fn eq(&self, other: &BTreeSet<T>) -> bool {
+        if self.items.len() != other.items.len() {
+            return false;
+        }
+        let mut i = 0usize;
+        while i < self.items.len() {
+            if !self.items.get_ref(i).eq(other.items.get_ref(i)) {
+                return false;
+            }
+            i += 1usize;
+        }
+        true
+    }
+}
+
+impl<T: super::cmp::Eq> super::cmp::Eq for BTreeSet<T> {}
+
 impl<T: super::fmt::Debug> super::fmt::Debug for BTreeSet<T> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
         let mut list = f.debug_set();

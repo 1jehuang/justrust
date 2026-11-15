@@ -678,6 +678,50 @@ fn main() { let mut m: BTreeMap<String, u32> = BTreeMap::new(); m.insert("a".to_
 fn main() { let mut s: BTreeSet<String> = BTreeSet::new(); s.insert("a".to_string()); let k = 3u32; println!("{}", s.contains(&k)); }"#,
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "set_equality_direct_derived_and_nested",
+                source: r#"use std::collections::{BTreeMap, BTreeSet};
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Cfg { flag: bool, names: BTreeSet<String>, values: BTreeMap<String, BTreeSet<String>> }
+fn set(items: &[&str]) -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() }
+fn nums(items: &[u32]) -> BTreeSet<u32> { let mut out = BTreeSet::new(); for item in items { out.insert(*item); } out }
+fn main() {
+    let a = nums(&[3, 1, 2]); let b = nums(&[1, 2, 3, 3]); let c = nums(&[1, 2]); let d = nums(&[1, 2, 4]);
+    println!("{} {} {} {}", a == b, a == c, a != d, c != c);
+    let e: BTreeSet<u32> = BTreeSet::new();
+    println!("{} {}", e == BTreeSet::new(), e == c);
+    let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
+    pairs.insert(("k".to_string(), "v".to_string()));
+    println!("{}", pairs == pairs.clone());
+    let mut values = BTreeMap::new();
+    values.insert("os".to_string(), set(&["linux"]));
+    let x = Cfg { flag: true, names: set(&["unix", "test"]), values };
+    let mut y = x.clone();
+    println!("{}", x == y);
+    y.names.insert("extra".to_string());
+    println!("{}", x == y);
+    y.names.remove("extra");
+    println!("{}", x == y);
+    y.flag = false;
+    println!("{} {}", x == y, x != y);
+    assert_eq!(set(&["a", "b"]), set(&["b", "a"]));
+    assert_ne!(set(&["a"]), set(&["b"]));
+    println!("{:?}", x);
+}"#,
+                expect: Expect::Run(
+                    "true false true false\ntrue false\ntrue\ntrue\nfalse\ntrue\nfalse true\nCfg { flag: true, names: {\"test\", \"unix\"}, values: {\"os\": {\"linux\"}} }\n",
+                ),
+            },
+            Case {
+                name: "set_equality_needs_element_equality",
+                source: "use std::collections::BTreeSet; struct Opaque(u32); fn unused(a:&BTreeSet<Opaque>,b:&BTreeSet<Opaque>)->bool{a==b} fn main(){}",
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "derived_eq_needs_total_element_equality",
+                source: "use std::collections::BTreeSet; #[derive(PartialEq,Eq)] struct Holder{items:BTreeSet<f64>} fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
         ],
     );
 }
