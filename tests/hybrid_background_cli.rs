@@ -227,6 +227,44 @@ fn text(output: &Output) -> String {
 }
 
 #[test]
+fn unsupported_check_preserves_fallback_and_never_starts_background_preparation() {
+    let fixture = Fixture::new();
+    let result = fixture.command().args(["check", "--lib"]).output().unwrap();
+    assert!(result.status.success(), "{}", text(&result));
+    assert!(text(&result).contains("FALLBACK_ARGUMENTS=['check', '--lib']"));
+    assert!(
+        text(&result).contains(
+            "justrust hybrid: background preparation skipped (unsupported command: check)"
+        )
+    );
+    assert!(!text(&result).contains("queued background preparation"));
+    assert_eq!(
+        fixture.events(),
+        ["ready-probe", "fallback-start", "fallback-done"]
+    );
+    assert!(!fixture.home.join("prewarm.log").exists());
+    assert!(!fixture.home.join("prewarm.lock").exists());
+}
+
+#[test]
+fn failed_check_preserves_failure_without_preparation_or_skip_success_receipt() {
+    let fixture = Fixture::new();
+    let result = fixture
+        .command()
+        .env("FALLBACK_STATUS", "37")
+        .arg("check")
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(37), "{}", text(&result));
+    assert!(!text(&result).contains("background preparation"));
+    assert!(!fixture.home.join("prewarm.log").exists());
+    assert_eq!(
+        fixture.events(),
+        ["ready-probe", "fallback-start", "fallback-done"]
+    );
+}
+
+#[test]
 fn successful_foreground_finishes_before_compile_only_prewarm_and_logs_privately() {
     let fixture = Fixture::new();
     let result = output(

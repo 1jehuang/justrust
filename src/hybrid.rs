@@ -180,6 +180,12 @@ fn schedule_prewarm(
     home: &Path,
     tc: &Path,
 ) -> anyhow::Result<()> {
+    if args.first().is_some_and(|arg| arg == "check") {
+        // Whole-program resident check is not implemented. Preserve ordinary
+        // Cargo check and do not launch a preparation guaranteed to fail.
+        eprintln!("justrust hybrid: background preparation skipped (unsupported command: check)");
+        return Ok(());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::{fs::OpenOptionsExt as _, process::CommandExt as _};
