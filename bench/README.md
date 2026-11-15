@@ -27,6 +27,38 @@ feature toggles as stack comparisons. See
 identity, cache, correctness, repetition and coverage contract. These focused
 results do not replace the comprehensive synthetic gate below.
 
+## Find the expensive lock queues first
+
+Read existing run summaries without starting builds or changing caches:
+
+```sh
+python3 bench/lock_report.py --since 1d --limit 1000
+python3 bench/lock_report.py --since 7d --format json
+```
+
+The inventory keeps measured source-sync queueing, estimated Cargo lock waits,
+and hosted admission separate. Cargo's legacy stderr-based durations can include
+time until the next output line, so they are not exact lock acquisition timings.
+Mixed package-cache/build-directory labels cannot allocate that aggregate to
+individual locks. Missing telemetry is unknown, not zero. Overlapping views
+must not be added together. Benchmark scratch runs are excluded by default.
+The output includes sample run IDs for `justrust show` and `justrust log`.
+
+To check the local Linux lock protocol independently of compilation:
+
+```sh
+python3 bench/package_cache_contention.py -n 3 --hold-seconds 0.1 \
+  --out bench/results/package-cache-protocol.json
+```
+
+This uses private temporary files to exercise all download/shared/mutate and
+same/different-target lock pairs and uploads the diagnostic through the normal
+record store. Download-exclusive and shared cache readers can coexist, whereas
+cache mutation must exclude readers. It does not invoke Cargo, measure hosted
+builds, or prove a speedup. Do not delete or bypass locks that protect cache
+mutation. Use the real target-lock acceptance below and the comprehensive gate
+for their respective claims.
+
 ## Hosted ext4 target-lock contention acceptance
 
 The ordinary suite forces a target directory, which intentionally disables
