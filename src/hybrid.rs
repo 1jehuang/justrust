@@ -42,6 +42,31 @@ fn is_workload(command: Option<&OsStr>) -> bool {
     )
 }
 
+#[cfg(unix)]
+fn daemon_socket_path_capacity() -> usize {
+    // SAFETY: sockaddr_un contains only integer fields, for which zero is valid.
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_path.len()
+}
+
+#[cfg(unix)]
+fn validate_daemon_socket_path(home: &Path) -> anyhow::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    // Keep this identical to the engine's socket_in(home), without changing the
+    // namespace or canonical identity. Unix pathname sockets need a trailing NUL.
+    let socket = home.join("daemon.sock");
+    let bytes = socket.as_os_str().as_bytes().len();
+    let capacity = daemon_socket_path_capacity();
+    if bytes >= capacity {
+        bail!(
+            "hybrid daemon socket path is too long: {} is {bytes} bytes, maximum {} bytes on this platform; set JR_ENGINE_HOME to a shorter existing canonical owner-only directory",
+            socket.display(),
+            capacity - 1
+        );
+    }
+    Ok(())
+}
+
 fn private_home() -> anyhow::Result<PathBuf> {
     let explicit = std::env::var_os("JR_ENGINE_HOME");
     let home = if let Some(home) = explicit.as_ref() {
@@ -75,6 +100,7 @@ fn private_home() -> anyhow::Result<PathBuf> {
         {
             bail!("JR_ENGINE_HOME must be an existing canonical owner-only directory");
         }
+        validate_daemon_socket_path(&home)?;
     }
     Ok(home)
 }
@@ -422,6 +448,35 @@ pub(crate) fn main(mut args: Vec<OsString>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn daemon_socket_path_boundary_counts_bytes_and_reserves_nul() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let capacity = daemon_socket_path_capacity();
+        for length in [capacity - 1, capacity, capacity + 1] {
+            // One leading slash and the "/daemon.sock" suffix are included.
+            let home = PathBuf::from(format!("/{}", "a".repeat(length - 13)));
+            assert_eq!(home.join("daemon.sock").as_os_str().len(), length);
+            assert_eq!(
+                validate_daemon_socket_path(&home).is_ok(),
+                length < capacity
+            );
+            // An invalid UTF-8 byte must not be replaced or expanded for counting.
+            let mut bytes = home.into_os_string().into_vec();
+            bytes[1] = 0xff;
+            let home = PathBuf::from(OsString::from_vec(bytes));
+            assert_eq!(
+                validate_daemon_socket_path(&home).is_ok(),
+                length < capacity
+            );
+        }
+        let home = PathBuf::from(format!("/{}", "é".repeat(capacity / 2)));
+        let error = validate_daemon_socket_path(&home).unwrap_err().to_string();
+        assert!(error.contains("bytes"));
+        assert!(error.contains("shorter"));
+        assert!(error.contains("JR_ENGINE_HOME"));
+    }
+
     #[test]
     fn decision_protocol_is_exact_not_a_child_exit_code() {
         assert_eq!(decision(b"miss\n").unwrap(), Decision::Miss);

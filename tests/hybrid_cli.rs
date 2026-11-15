@@ -1,7 +1,11 @@
 //! Real Unix subprocess contract for hybrid routing, with a controlled fake engine.
 #![cfg(unix)]
 use std::fs;
-use std::os::unix::{ffi::OsStringExt as _, fs::PermissionsExt as _, process::ExitStatusExt as _};
+use std::os::unix::{
+    ffi::{OsStrExt as _, OsStringExt as _},
+    fs::PermissionsExt as _,
+    process::ExitStatusExt as _,
+};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,6 +83,86 @@ const MISS: &str =
     "fd=int(os.environ['JR_HYBRID_DECISION_FD'])\nos.write(fd,b'miss\\n')\nos.close(fd)";
 const COMMIT: &str =
     "fd=int(os.environ['JR_HYBRID_DECISION_FD'])\nos.write(fd,b'committed\\n')\nos.close(fd)";
+
+fn socket_capacity() -> usize {
+    // SAFETY: sockaddr_un's integer fields all permit zero values.
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_path.len()
+}
+
+fn home_with_socket_bytes(fixture: &Fixture, length: usize, non_utf8: bool) -> PathBuf {
+    let prefix = fixture.root.join("x").join("daemon.sock");
+    let name_length = length - prefix.as_os_str().as_bytes().len() + 1;
+    let mut name = vec![b'a'; name_length];
+    if non_utf8 {
+        name[0] = 0xff;
+    }
+    let home = fixture.root.join(std::ffi::OsString::from_vec(name));
+    fs::create_dir(&home).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        home.join("daemon.sock").as_os_str().as_bytes().len(),
+        length
+    );
+    home
+}
+
+#[test]
+fn explicit_home_socket_byte_boundary_including_non_utf8() {
+    let capacity = socket_capacity();
+    for length in [capacity - 1, capacity, capacity + 1] {
+        for non_utf8 in [false, true] {
+            let fixture = Fixture::new(&format!("open('engine-started','w').close()\n{COMMIT}"));
+            let home = home_with_socket_bytes(&fixture, length, non_utf8);
+            let output = fixture
+                .command()
+                .env("JR_ENGINE_HOME", &home)
+                .arg("test")
+                .output()
+                .unwrap();
+            let out = text(&output);
+            assert_eq!(output.status.success(), length < capacity, "{out}");
+            assert_eq!(
+                fixture.root.join("engine-started").exists(),
+                length < capacity,
+                "{out}"
+            );
+            assert!(!out.contains("FALLBACK"), "{out}");
+            if length >= capacity {
+                assert!(out.contains(&format!("is {length} bytes")), "{out}");
+                assert!(
+                    out.contains(&format!("maximum {} bytes", capacity - 1)),
+                    "{out}"
+                );
+                assert!(
+                    out.contains("shorter") && out.contains("JR_ENGINE_HOME"),
+                    "{out}"
+                );
+                assert!(!home.join("targets").exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn impossible_explicit_socket_path_never_starts_native_management_or_preparation() {
+    for args in [vec!["prewarm", "build"], vec!["status"], vec!["stop"]] {
+        let fixture = Fixture::new("open('engine-started','w').close()");
+        let home = home_with_socket_bytes(&fixture, socket_capacity() + 2, false);
+        let output = fixture
+            .command()
+            .env("JR_ENGINE_HOME", &home)
+            .args(args)
+            .output()
+            .unwrap();
+        let out = text(&output);
+        assert!(!output.status.success(), "{out}");
+        assert!(out.contains("socket path is too long"), "{out}");
+        assert!(!fixture.root.join("engine-started").exists(), "{out}");
+        assert!(!out.contains("FALLBACK"), "{out}");
+        assert_eq!(fs::read_dir(home).unwrap().count(), 0);
+    }
+}
 
 #[test]
 fn positive_miss_falls_back_once_with_unchanged_arguments_and_compiler_environment() {
