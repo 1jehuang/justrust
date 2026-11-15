@@ -58,6 +58,41 @@ an owning hosted job's cleanup. Production hosted deployment requires validating
 that lifecycle, packaging and tenant isolation, not just running the binaries
 inside an authenticated guest shell.
 
+## Managed hosted experiment
+
+A separate opt-in reaches the existing managed hosted path, rather than trying
+an engine on the laptop first:
+
+```sh
+export JUSTRUST_HOSTED_HYBRID=ready
+export JUSTRUST_HOSTED_HYBRID_ENGINE=/absolute/guest/path/to/jr-engine
+export JUSTRUST_HOSTED_HYBRID_TOOLCHAIN=/absolute/guest/path/to/matching/toolchain
+export JUSTRUST_HOSTED_HYBRID_HOME=/absolute/guest/private/home
+justrust test --remote --lib -- test_filter
+```
+
+These are **guest paths**, not paths to upload or install. They must identify
+explicitly staged trusted artifacts and a private namespace in the account's
+guest. Ordinary remote admission, source synchronization, billing, cancellation
+and account isolation still apply. Local native paths are never automatically
+forwarded. The remote agent maps the hosted settings only into its unprivileged
+build child and removes the hosted markers there, preventing fallback recursion.
+
+The initial hosted experiment admits executing `test` and `check`. Commands
+that need local artifact delivery, including `build`, `run`, `test --no-run`,
+`--doc`, or explicit artifact-fetch/output options, retain Cargo routing and
+report why native routing was not selected. A successful native build in a
+private target directory is not equivalent to returning Cargo's artifacts to
+the laptop. Hosted automatic background preparation is not enabled by this
+integration. Prepare explicitly within the account only while validating the
+resident daemon's actual managed-request lifetime.
+
+Native execution currently has no Cargo phase summary. Its streamed output and
+exit status are authoritative, and the client reports unavailable Cargo
+telemetry rather than fabricating a Cargo failure or reusing another run's
+summary. This is an experiment, not a default rollout or an automatically
+packaged native toolchain.
+
 ## Exactly-once routing protocol
 
 1. The client launches `jr-engine cargo hybrid-ready -- COMMAND ARGS` with a
