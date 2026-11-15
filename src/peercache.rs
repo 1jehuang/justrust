@@ -845,13 +845,11 @@ impl Relay {
     }
 
     /// Offer entries to the peer, returning the ones it wants.
-    pub fn offer(&self, items: Vec<OfferItem>) -> Vec<String> {
-        let Some(rx) = self.request(|id| Msg::CacheOffer { id, items }) else {
-            return Vec::new();
-        };
+    pub fn offer(&self, items: Vec<OfferItem>) -> Option<Vec<String>> {
+        let rx = self.request(|id| Msg::CacheOffer { id, items })?;
         match rx.recv_timeout(Duration::from_secs(30)) {
-            Ok((Msg::CacheWant { outs, .. }, _)) => outs,
-            _ => Vec::new(),
+            Ok((Msg::CacheWant { outs, .. }, _)) => Some(outs),
+            _ => None,
         }
     }
 
@@ -882,9 +880,15 @@ impl Relay {
         }
     }
 
-    /// Push entries stored on this machine since `since` that the peer
-    /// lacks. Returns (entries sent, bytes, next offset).
-    pub fn push_new(&self, since: u64) -> (usize, u64, u64) {
+    /// Optional warmup must yield when a foreground build arrives. Finish an
+    /// entry already on the wire, but do not queue the rest of a 400-entry
+    /// window ahead of source and barrier frames on the same connection.
+    /// A partial window retains its cursor: the next offer filters entries
+    /// already installed, so yielding cannot silently lose the remainder.
+    pub fn push_new_while(&self, since: u64, keep_going: impl Fn() -> bool) -> (usize, u64, u64) {
+        if !keep_going() {
+            return (0, 0, since);
+        }
         let Some(root) = self.root.clone() else {
             return (0, 0, since);
         };
@@ -896,10 +900,18 @@ impl Relay {
         if items.is_empty() {
             return (0, 0, next);
         }
-        let want: HashSet<String> = self.offer(items.clone()).into_iter().collect();
+        if !keep_going() {
+            return (0, 0, since);
+        }
+        let Some(want) = self.offer(items.clone()) else {
+            return (0, 0, since);
+        };
+        let want: HashSet<String> = want.into_iter().collect();
         let (mut n, mut bytes) = (0, 0);
+        let mut completed = true;
         for i in items.iter().filter(|i| want.contains(&i.out)) {
-            if !self.put(&root, i) {
+            if !keep_going() || !self.put(&root, i) {
+                completed = false;
                 break;
             }
             n += 1;
@@ -908,12 +920,15 @@ impl Relay {
         if n > 0 {
             self.invalidate_keys();
         }
-        (n, bytes, next)
+        (n, bytes, if completed { next } else { since })
     }
 
-    /// Pull entries the peer stored since `since` that this machine wants.
-    /// Returns (entries installed, bytes, next offset).
-    pub fn pull_new(&self, since: u64) -> (usize, u64, u64) {
+    /// Like `push_new_while`, stop between whole entries, retaining the
+    /// journal cursor until every wanted entry in this window was installed.
+    pub fn pull_new_while(&self, since: u64, keep_going: impl Fn() -> bool) -> (usize, u64, u64) {
+        if !keep_going() {
+            return (0, 0, since);
+        }
         let Some(root) = self.root.clone() else {
             return (0, 0, since);
         };
@@ -923,7 +938,12 @@ impl Relay {
         let items = rank(items, usize::MAX);
         let want: HashSet<String> = wanted(&root, &items).into_iter().collect();
         let (mut n, mut bytes) = (0, 0);
+        let mut completed = true;
         for i in items.iter().filter(|i| want.contains(&i.out)) {
+            if !keep_going() {
+                completed = false;
+                break;
+            }
             let mut buf = Vec::new();
             let ok = self.fetch(&i.out, |c, _| {
                 buf.extend_from_slice(c);
@@ -932,9 +952,12 @@ impl Relay {
             if ok && install(&root, &i.base, &i.line, &i.out, &buf) {
                 n += 1;
                 bytes += i.bytes;
+            } else {
+                completed = false;
+                break;
             }
         }
-        (n, bytes, next)
+        (n, bytes, if completed { next } else { since })
     }
 }
 
@@ -1254,6 +1277,215 @@ mod serve_tests {
 #[cfg(test)]
 mod relay_tests {
     use super::*;
+
+    struct CacheFixture(PathBuf);
+
+    impl CacheFixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "jr-peer-yield-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            note_toolchain(&path, "fixture-compiler");
+            Self(path)
+        }
+
+        fn entries(&self) -> u64 {
+            for c in ['a', 'b'] {
+                let out = c.to_string().repeat(32);
+                let dir = self.0.join("o").join(&out);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("artifact"), [c as u8; 4096]).unwrap();
+                let meta = serde_json::json!({
+                    "files": [{"name": "artifact", "text": false,
+                        "hash": depcache::hash_file_content(&dir.join("artifact")).unwrap()}],
+                    "stderr": [], "wall": 4.0
+                });
+                std::fs::write(dir.join("meta.json"), meta.to_string()).unwrap();
+                let item = OfferItem {
+                    base: "c".repeat(32),
+                    line: format!(r#"{{"inputs":[],"env":[],"out":"{out}"}}"#),
+                    out,
+                    bytes: 4096,
+                    wall: 4.0,
+                    tc: "fixture-compiler".into(),
+                };
+                paths::append_line(&journal(&self.0), &serde_json::to_string(&item).unwrap())
+                    .unwrap();
+            }
+            std::fs::metadata(journal(&self.0)).unwrap().len()
+        }
+    }
+
+    impl Drop for CacheFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scripted_relay(
+        root: &Path,
+        respond: impl Fn(&Arc<Relay>, &Msg, &[u8]) -> bool + Send + Sync + 'static,
+    ) -> Arc<Relay> {
+        let slot: Arc<Mutex<std::sync::Weak<Relay>>> = Arc::default();
+        let weak = slot.clone();
+        let mut relay = Relay::new(true, move |msg, bytes| {
+            let relay = weak.lock().unwrap().upgrade().unwrap();
+            respond(&relay, msg, bytes)
+        });
+        let inner = Arc::get_mut(&mut relay).unwrap();
+        inner.root = Some(root.to_owned());
+        inner.capable = true;
+        *slot.lock().unwrap() = Arc::downgrade(&relay);
+        relay
+    }
+
+    #[test]
+    fn warmup_yields_before_requests_and_failed_offer_keeps_cursor() {
+        let cache = CacheFixture::new();
+        cache.entries();
+        let frames = Arc::new(AtomicU32::new(0));
+        let count = frames.clone();
+        let relay = scripted_relay(&cache.0, move |_, _, _| {
+            count.fetch_add(1, Ordering::SeqCst);
+            false
+        });
+        assert_eq!(relay.push_new_while(19, || false), (0, 0, 19));
+        assert_eq!(relay.pull_new_while(23, || false), (0, 0, 23));
+        assert_eq!(frames.load(Ordering::SeqCst), 0);
+        assert_eq!(relay.push_new_while(0, || true), (0, 0, 0));
+        assert_eq!(frames.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn push_warmup_yields_between_verified_bundles_and_resumes_without_loss() {
+        let source = CacheFixture::new();
+        let next = source.entries();
+        let peer = CacheFixture::new();
+        let peer_path = peer.0.clone();
+        let idle = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let state = idle.clone();
+        let chunks = Mutex::new(Vec::new());
+        let relay = scripted_relay(&source.0, move |relay, msg, bytes| {
+            match msg {
+                Msg::CacheOffer { id, items } => {
+                    relay.on_frame(
+                        &Msg::CacheWant {
+                            id: *id,
+                            outs: wanted(&peer_path, items),
+                        },
+                        &[],
+                    );
+                }
+                Msg::CachePut {
+                    last,
+                    base,
+                    line,
+                    out,
+                    ..
+                } => {
+                    let mut chunks = chunks.lock().unwrap();
+                    chunks.extend_from_slice(bytes);
+                    if *last {
+                        assert!(install(&peer_path, base, line, out, &chunks));
+                        chunks.clear();
+                        state.store(false, Ordering::SeqCst);
+                    }
+                }
+                _ => panic!("unexpected warmup frame: {msg:?}"),
+            }
+            true
+        });
+        let first = relay.push_new_while(0, || idle.load(Ordering::SeqCst));
+        assert_eq!(first, (1, 4096, 0));
+        assert_eq!(key_set(&peer.0).len(), 1);
+        assert_eq!(wanted(&peer.0, &journal_since(&source.0, 0).0).len(), 1);
+        let resumed = relay.push_new_while(first.2, || true);
+        assert_eq!(resumed, (1, 4096, next));
+        assert!(wanted(&peer.0, &journal_since(&source.0, 0).0).is_empty());
+    }
+
+    #[test]
+    fn pull_warmup_yields_between_verified_bundles_and_resumes_without_loss() {
+        let source = CacheFixture::new();
+        let next = source.entries();
+        let source_path = source.0.clone();
+        let local = CacheFixture::new();
+        let idle = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let state = idle.clone();
+        let relay = scripted_relay(&local.0, move |relay, msg, _| {
+            match msg {
+                Msg::CacheList { id, since } => {
+                    let (items, next) = journal_since(&source_path, *since);
+                    relay.on_frame(
+                        &Msg::CacheJournal {
+                            id: *id,
+                            items,
+                            next,
+                        },
+                        &[],
+                    );
+                }
+                Msg::CacheFetch { id, out } => {
+                    let bytes = bundle(&source_path, out).unwrap();
+                    relay.on_frame(
+                        &Msg::CacheData {
+                            id: *id,
+                            last: true,
+                            ok: true,
+                        },
+                        &bytes,
+                    );
+                    state.store(false, Ordering::SeqCst);
+                }
+                _ => panic!("unexpected warmup frame: {msg:?}"),
+            }
+            true
+        });
+        let first = relay.pull_new_while(0, || idle.load(Ordering::SeqCst));
+        assert_eq!(first, (1, 4096, 0));
+        let resumed = relay.pull_new_while(first.2, || true);
+        assert_eq!(resumed, (1, 4096, next));
+        assert!(wanted(&local.0, &journal_since(&source.0, 0).0).is_empty());
+    }
+
+    #[test]
+    fn failed_pull_keeps_window_retryable() {
+        let source = CacheFixture::new();
+        source.entries();
+        let local = CacheFixture::new();
+        let relay = scripted_relay(&local.0, move |relay, msg, _| {
+            match msg {
+                Msg::CacheList { id, since } => {
+                    let (items, next) = journal_since(&source.0, *since);
+                    relay.on_frame(
+                        &Msg::CacheJournal {
+                            id: *id,
+                            items,
+                            next,
+                        },
+                        &[],
+                    );
+                }
+                Msg::CacheFetch { id, .. } => {
+                    relay.on_frame(
+                        &Msg::CacheData {
+                            id: *id,
+                            last: true,
+                            ok: false,
+                        },
+                        &[],
+                    );
+                }
+                _ => panic!("unexpected warmup frame: {msg:?}"),
+            }
+            true
+        });
+        assert_eq!(relay.pull_new_while(0, || true), (0, 0, 0));
+    }
 
     /// A relay whose peer answers `CacheKeys` with `keys` and every
     /// `CacheQuery` with one line, counting the queries it sees.

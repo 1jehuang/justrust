@@ -2062,9 +2062,17 @@ fn peer_sync_loop(d: &Daemon) {
             continue;
         }
         let before = off;
-        let (sent, sbytes, next) = relay.push_new(off.pushed);
+        // A build may arrive after the idle check above. Recheck between
+        // entries instead of letting an optional multi-GB batch monopolize
+        // the connection used for source sync and barrier acknowledgements.
+        let idle = || {
+            !d.draining.load(Ordering::SeqCst)
+                && d.info.lock().is_ok_and(|i| i.active == 0)
+                && !crate::sys::battery_discharging()
+        };
+        let (sent, sbytes, next) = relay.push_new_while(off.pushed, idle);
         off.pushed = next;
-        let (got, gbytes, next) = relay.pull_new(off.pulled);
+        let (got, gbytes, next) = relay.pull_new_while(off.pulled, idle);
         off.pulled = next;
         if sent + got > 0 {
             log(&format!(
