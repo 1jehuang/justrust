@@ -120,6 +120,8 @@ def await_budget_eviction(args, project, local):
         raise ValueError('budget eviction requires daemon identity')
     daemon_identity = worker_identity(int(daemon[1]))
     log = home / 'resident-v1/runtime/daemon.log'
+    if log.stat().st_size > 64 * 1024 * 1024:
+        raise ValueError('budget daemon log exceeds evidence capture bound')
     old = log.read_bytes()
     stat = log.stat()
     peer = project.parent / 'budget-peer'
@@ -134,6 +136,8 @@ def await_budget_eviction(args, project, local):
     attempt = 0
     while True:
         current = invoke(['status'], project, f'budget-status-after-{attempt}')
+        if log.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError('budget daemon log exceeds evidence capture bound')
         data = log.read_bytes()
         now_stat = log.stat()
         if (now_stat.st_ino, now_stat.st_dev) != (stat.st_ino, stat.st_dev) or not data.startswith(old):
@@ -149,9 +153,16 @@ def await_budget_eviction(args, project, local):
         same_daemon = bool(live_daemon and daemon_identity and live_daemon['start_ticks'] == daemon_identity['start_ticks'])
         retained = any(Path(source) == project for _, source in re.findall(
             r'^  worker: pid (\d+), (.*?), (?:holds \d+ MB, )?log .+$', current, re.M))
+        raw = args.output / 'budget-eviction.log'
+        raw.write_bytes(fresh)
+        transition = {'budget_event_observed': bool(event), 'old_worker_identities': identities,
+                      'old_workers_after': observed, 'old_workers_exited': gone,
+                      'daemon_identity': daemon_identity, 'daemon_after': live_daemon,
+                      'daemon_retained': same_daemon, 'project_worker_retained': retained,
+                      'log_offset': len(old), 'log': str(raw), 'sha256': core.digest(raw),
+                      'elapsed_seconds': time.monotonic() - start, 'setup_receipts': receipts}
+        (args.output / 'budget-transition.json').write_text(json.dumps(transition, indent=2) + '\n')
         if event and gone and same_daemon and not retained:
-            raw = args.output / 'budget-eviction.log'
-            raw.write_bytes(fresh)
             return {'ok': core.side_lines(side) == effects, 'old_worker_identities': identities,
                     'daemon_identity': daemon_identity, 'old_workers_exited': gone,
                     'old_workers_after': observed,
