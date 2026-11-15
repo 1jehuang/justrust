@@ -184,6 +184,24 @@ impl Fixture {
             thread::sleep(Duration::from_millis(10));
         }
     }
+
+    fn wait_preparation_idle(&self) {
+        use std::os::fd::AsRawFd as _;
+        let lock = fs::File::open(self.home.join("prewarm.lock")).unwrap();
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            // SAFETY: flock only acts on this owned descriptor. Dropping it
+            // releases the test's observation lock before the next request.
+            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "preparation lock did not release"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 impl Drop for Fixture {
@@ -388,6 +406,133 @@ fn background_compile_failure_does_not_replace_foreground_status() {
             .contains("background prewarm finished status=0")
     );
     assert_eq!(text(&result).matches("FOREGROUND_RESULT").count(), 1);
+}
+
+#[test]
+fn failed_automatic_preparation_cools_down_then_retries_and_success_clears() {
+    let fixture = Fixture::new();
+    let first = fixture
+        .command()
+        .env("PREWARM_STATUS", "101")
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(first.status.success(), "{}", text(&first));
+    fixture.wait_log("60s failure cooldown recorded");
+    fixture.wait_preparation_idle();
+    let marker = fixture.home.join("prewarm.failed");
+    assert_eq!(fs::read(&marker).unwrap(), b"1");
+    assert_eq!(
+        fs::metadata(&marker).unwrap().permissions().mode() & 0o077,
+        0
+    );
+    for _ in 0..2 {
+        fs::write(fixture.home.join("prewarm.log"), "").unwrap();
+        let result = fixture.command().arg("test").output().unwrap();
+        assert!(result.status.success(), "{}", text(&result));
+        assert_eq!(text(&result).matches("FOREGROUND_RESULT").count(), 1);
+        fixture.wait_log("automatic preparation skipped (failure cooldown:");
+        fixture.wait_preparation_idle();
+        assert_eq!(
+            fixture
+                .events()
+                .iter()
+                .filter(|line| *line == "prewarm-start")
+                .count(),
+            1
+        );
+    }
+    // Age only the marker, without sleeping for the production cooldown.
+    fs::File::options()
+        .write(true)
+        .open(&marker)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(61))
+        .unwrap();
+    fs::write(fixture.home.join("prewarm.log"), "").unwrap();
+    let retry = fixture.command().arg("build").output().unwrap();
+    assert!(retry.status.success(), "{}", text(&retry));
+    fixture.wait_event("prewarm-done", 2);
+    fixture.wait_log("background prewarm finished status=0");
+    fixture.wait_preparation_idle();
+    assert_eq!(fs::metadata(&marker).unwrap().len(), 0);
+    fs::write(fixture.home.join("prewarm.log"), "").unwrap();
+    let after_success = fixture.command().arg("build").output().unwrap();
+    assert!(after_success.status.success(), "{}", text(&after_success));
+    fixture.wait_event("prewarm-done", 3);
+    fixture.wait_log("background prewarm finished status=0");
+    fixture.wait_preparation_idle();
+}
+
+#[test]
+fn manual_prewarm_ignores_automatic_failure_cooldown_without_modifying_marker() {
+    let fixture = Fixture::new();
+    let failed = fixture
+        .command()
+        .env("PREWARM_STATUS", "101")
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(failed.status.success(), "{}", text(&failed));
+    fixture.wait_log("60s failure cooldown recorded");
+    fixture.wait_preparation_idle();
+    let marker = fixture.home.join("prewarm.failed");
+    let modified = fs::metadata(&marker).unwrap().modified().unwrap();
+    let manual = fixture
+        .command()
+        .args(["prewarm", "build"])
+        .output()
+        .unwrap();
+    assert!(manual.status.success(), "{}", text(&manual));
+    assert_eq!(fs::read(&marker).unwrap(), b"1");
+    assert_eq!(fs::metadata(&marker).unwrap().modified().unwrap(), modified);
+    assert_eq!(
+        fixture
+            .events()
+            .iter()
+            .filter(|line| *line == "prewarm-start")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn unsafe_failure_markers_do_not_touch_targets_or_change_foreground_result() {
+    for kind in [
+        "symlink",
+        "hardlink",
+        "permissions",
+        "directory",
+        "oversized",
+    ] {
+        let fixture = Fixture::new();
+        let target = fixture.root.join("untouched");
+        fs::write(&target, "unchanged").unwrap();
+        let marker = fixture.home.join("prewarm.failed");
+        match kind {
+            "symlink" => std::os::unix::fs::symlink(&target, &marker).unwrap(),
+            "hardlink" => fs::hard_link(&target, &marker).unwrap(),
+            "directory" => fs::create_dir(&marker).unwrap(),
+            "permissions" => {
+                fs::write(&marker, "1").unwrap();
+                fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            "oversized" => {
+                fs::write(&marker, "invalid").unwrap();
+                fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let result = fixture.command().arg("build").output().unwrap();
+        assert!(result.status.success(), "{kind}: {}", text(&result));
+        fixture.wait_log("automatic preparation failure marker");
+        fixture.wait_preparation_idle();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "unchanged");
+        assert_eq!(
+            fixture.events(),
+            ["ready-probe", "fallback-start", "fallback-done"]
+        );
+    }
 }
 
 #[test]

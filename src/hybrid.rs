@@ -269,7 +269,10 @@ fn schedule_prewarm(
 pub(crate) fn background(args: Vec<OsString>) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
+        use std::io::Write as _;
+        use std::os::unix::fs::MetadataExt as _;
         use std::os::{fd::AsRawFd as _, unix::fs::OpenOptionsExt as _};
+        use std::time::{Duration, SystemTime};
         if !is_workload(args.first().map(OsString::as_os_str))
             || args.iter().any(|a| a.to_str().is_none())
         {
@@ -293,16 +296,69 @@ pub(crate) fn background(args: Vec<OsString>) -> anyhow::Result<()> {
             }
             return Err(error).context("lock native preparation namespace");
         }
+        // Only the automatic supervisor uses this marker, under prewarm.lock.
+        // Keep the file open through the attempt and never follow links or unlink
+        // a pathname on success. Empty means clear, one byte means failed.
+        let mut failure = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(home.join("prewarm.failed"))
+            .context("open automatic preparation failure marker")?;
+        let metadata = failure.metadata()?;
+        // SAFETY: geteuid has no memory preconditions.
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+            || metadata.nlink() != 1
+            || metadata.len() > 1
+        {
+            bail!(
+                "automatic preparation failure marker must be an owner-only regular single-link file of at most one byte"
+            );
+        }
+        if metadata.len() == 1 {
+            let elapsed = SystemTime::now()
+                .duration_since(metadata.modified()?)
+                // A wall-clock rollback must not create an unbounded cooldown.
+                .unwrap_or(Duration::from_secs(60));
+            if elapsed < Duration::from_secs(60) {
+                eprintln!(
+                    "justrust hybrid: automatic preparation skipped (failure cooldown: retry in {}s, 60s per namespace)",
+                    60 - elapsed.as_secs()
+                );
+                return Ok(());
+            }
+        }
         let engine = engine()?.context("owned engine unavailable for preparation")?;
         let tc = toolchain()?.context("matching native toolchain unavailable for preparation")?;
         let status = native_command(&engine, &home, &tc)?
             .args(["cargo", "hybrid-prewarm", "--"])
             .args(args)
-            .status()
-            .context("prepare native worker")?;
+            .status();
+        if !matches!(&status, Ok(status) if status.success()) {
+            let recorded = (|| -> std::io::Result<()> {
+                failure.set_len(0)?;
+                failure.write_all(b"1")?;
+                failure.set_modified(SystemTime::now())
+            })();
+            match recorded {
+                Ok(()) => eprintln!(
+                    "justrust hybrid: automatic preparation failed; 60s failure cooldown recorded for this namespace"
+                ),
+                Err(error) => eprintln!(
+                    "justrust hybrid: automatic preparation failed; could not record failure cooldown: {error}"
+                ),
+            }
+        }
+        let status = status.context("prepare native worker")?;
         if !status.success() {
             bail!("background native preparation ended with {status}");
         }
+        failure.set_len(0)?;
         eprintln!("justrust hybrid: background prewarm finished status=0");
         drop(lock);
         Ok(())
