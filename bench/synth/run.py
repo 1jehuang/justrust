@@ -164,11 +164,18 @@ def _infra_failure(st, result, evidence):
         if raw.get("exit") == 0:
             continue
         failed = True
+        # A no-run prefix alone also covers permanent auth/config/filesystem
+        # failures. Require one of the specific transient transport/admission
+        # reasons beneath a recognized client diagnostic prefix.
         known = re.search(
-            r"(?mi)^justrust: (?:hosted build did not run: .+|"
-            r"(?:remote required, refusing local fallback: )?[^\n]*admission unavailable[^\n]*|"
-            r"(?:remote required, refusing local fallback: )?[^\n]*cannot authenticate native hosted TLS at [^\n]*(?:unexpected EOF|transport EOF|unexpected end of file)[^\n]*|"
-            r"[^\n]*could not reach https://build\.jcode\.sh(?:[/:][^\s]*)?: curl: \(28\) [^\n]*(?:timed out|Timeout)[^\n]*)$",
+            r"(?mi)^justrust: (?:hosted build did not run: |"
+            r"remote required, refusing local fallback: |remote build failed: |"
+            r"(?=compiled tests remotely, but returning selected executables failed: ))"
+            r"[^\n]*(?:server: Hosted builds are temporarily unavailable\.|"
+            r"\badmission unavailable\b|"
+            r"cannot authenticate native hosted TLS at [^\n]*(?:unexpected EOF|transport EOF|unexpected end of file)|"
+            r"native connection/authentication failed [^\n]*peer closed connection without sending TLS close_notify|"
+            r"could not reach https://build\.jcode\.sh(?:[/:][^\s]*)?: curl: \(28\) [^\n]*(?:timed out|Timeout))[^\n]*$",
             text)
         if not known:
             return False

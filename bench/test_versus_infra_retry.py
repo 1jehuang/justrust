@@ -123,6 +123,9 @@ class InfraRetryTests(unittest.TestCase):
 
     def test_specific_transport_diagnostics_and_stock_refused(self):
         for text in [INFRA,
+                     'justrust: hosted build did not run: the hosted build service is unavailable right now. This is not a problem with your subscription. (server: Hosted builds are temporarily unavailable.)\n',
+                     'justrust: hosted build did not run: rsync /fixture/project failed (exit status: 255): justrust native: native connection/authentication failed (request outcome may be unknown): peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof\n',
+                     'justrust: remote build failed: compiled tests remotely, but returning selected executables failed: justrust native: native connection/authentication failed (request outcome may be unknown): peer closed connection without sending TLS close_notify: the machine closed the artifact stream early\n',
                      'justrust: remote required, refusing local fallback: admission unavailable\n',
                      'justrust: remote required, refusing local fallback: cannot authenticate native hosted TLS at host:443: unexpected EOF\n',
                      'justrust: compiled tests remotely, but returning selected executables failed: could not reach https://build.jcode.sh: curl: (28) Operation timed out after 30001 milliseconds with 0 bytes received. Builds run locally.\n']:
@@ -130,6 +133,23 @@ class InfraRetryTests(unittest.TestCase):
             self.assertTrue(runner._infra_failure(self.stack, {'error': 'failed'}, evidence), text)
             self.assertFalse(runner._infra_failure(runner.versus.Stack('stock', 'stock', False),
                                                   {'error': 'failed'}, evidence))
+
+    def test_hosted_no_run_prefix_does_not_make_permanent_failures_retryable(self):
+        for reason in ['cannot create /fixture: Permission denied (os error 13)',
+                       'cannot create /fixture: No space left on device (os error 28)',
+                       'missing credentials, run justrust login',
+                       'authentication required',
+                       'unsupported target wasm32-unknown-unknown',
+                       'failed to parse manifest at Cargo.toml',
+                       'unknown remote error',
+                       'could not reach https://unrelated.example: curl: (28) Operation timed out',
+                       'could not reach https://build.jcode.sh.evil.example: curl: (28) Operation timed out']:
+            with self.subTest(reason=reason):
+                _, history, calls, _, sleeps = self.execution([
+                    (sample(1), 'justrust: hosted build did not run: ' + reason + '\n')], 3)
+                self.assertEqual(calls, ['pre'])
+                self.assertEqual(sleeps, [])
+                self.assertFalse(history['attempts'][0]['infra_failure'])
 
     def test_cli_bounds_resume_and_forwarding(self):
         for flags in [('--synth', '1', '--retry-infra', '-1'),
