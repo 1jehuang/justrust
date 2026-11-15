@@ -722,6 +722,38 @@ fn main() {
                 source: "use std::collections::BTreeSet; #[derive(PartialEq,Eq)] struct Holder{items:BTreeSet<f64>} fn main(){}",
                 expect: Expect::Invalid("E0277"),
             },
+            Case {
+                name: "sets_and_ordered_map_from_owned_arrays",
+                source: r#"use std::collections::{BTreeMap, BTreeSet, HashSet};
+struct Cfg { names: BTreeSet<String> }
+impl Cfg {
+    const ON: bool = true;
+    fn new() -> Self { Self { names: if Self::ON { BTreeSet::from(["debug_assertions".into()]) } else { BTreeSet::new() } } }
+}
+fn main() {
+    let s = BTreeSet::from([3u32, 1, 2, 3]);
+    println!("{:?} {}", s, s.len());
+    let t: BTreeSet<String> = BTreeSet::from(["b".to_string(), "a".to_string()]);
+    println!("{:?}", t);
+    let e: BTreeSet<u8> = BTreeSet::from([]);
+    println!("{}", e.len());
+    let h = HashSet::from([7i64, 7, 9]);
+    println!("{} {} {}", h.len(), h.contains(&7), h.contains(&8));
+    let m = BTreeMap::from([(2, "two"), (1, "one"), (2, "deux")]);
+    println!("{:?}", m);
+    let c = Cfg::new();
+    println!("{:?}", c.names);
+    println!("{}", s == BTreeSet::from([1, 2, 3]));
+}"#,
+                expect: Expect::Run(
+                    "{1, 2, 3} 3\n{\"a\", \"b\"}\n0\n2 true false\n{1: \"one\", 2: \"deux\"}\n{\"debug_assertions\"}\ntrue\n",
+                ),
+            },
+            Case {
+                name: "set_from_array_needs_ordered_elements",
+                source: "use std::collections::BTreeSet; struct Opaque(u32); fn unused()->BTreeSet<Opaque>{BTreeSet::from([Opaque(1)])} fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
         ],
     );
 }

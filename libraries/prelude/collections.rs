@@ -804,6 +804,16 @@ impl<K, V> super::default::Default for BTreeMap<K, V> {
     }
 }
 
+impl<K: super::cmp::Ord, V, const N: usize> super::convert::From<[(K, V); N]> for BTreeMap<K, V> {
+    fn from(entries: [(K, V); N]) -> BTreeMap<K, V> {
+        let mut map: BTreeMap<K, V> = BTreeMap::new();
+        for (key, value) in entries {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
 impl<K: Hash + Eq, V, S: BuildHasher + super::default::Default> super::iter::FromIterator<(K, V)>
     for HashMap<K, V, S>
 {

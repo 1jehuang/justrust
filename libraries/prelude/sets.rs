@@ -475,6 +475,26 @@ impl<T: super::cmp::PartialEq> super::cmp::PartialEq for BTreeSet<T> {
 
 impl<T: super::cmp::Eq> super::cmp::Eq for BTreeSet<T> {}
 
+impl<T: Ord, const N: usize> super::convert::From<[T; N]> for BTreeSet<T> {
+    fn from(items: [T; N]) -> BTreeSet<T> {
+        let mut set = BTreeSet::new();
+        for item in items {
+            set.insert(item);
+        }
+        set
+    }
+}
+
+impl<T: Hash + Eq, const N: usize> super::convert::From<[T; N]> for HashSet<T, RandomState> {
+    fn from(items: [T; N]) -> HashSet<T, RandomState> {
+        let mut set: HashSet<T, RandomState> = HashSet::new();
+        for item in items {
+            set.insert(item);
+        }
+        set
+    }
+}
+
 impl<T: super::fmt::Debug> super::fmt::Debug for BTreeSet<T> {
     fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
         let mut list = f.debug_set();
