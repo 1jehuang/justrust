@@ -109,6 +109,21 @@ and safely fall back, or correctly reload the macro and its dependencies. The
 strict differential gate remains unchanged. No promotion is justified until a
 fresh actual automatic run passes this case and recovery.
 
+The first remediation checkpoint, engine `jr-engine-v4` (SHA-256
+`4faac0600ce11992aa23b3e98a1d64bfa8cc79cd9ab664e4b7a5feceed2f5c13`),
+passed check, release build and all **412** full binary unit tests. It correctly
+missed before commitment after same-size/same-timestamp macro and helper-dependency
+changes. However, **2 of 24** actual protocol cases still failed: explicit
+preparation followed by a newly committed request reused the old macro value.
+A readiness key alone does not invalidate all underlying compiler artifact or
+proc-macro-server state. The stricter rewarm regression remains failing and is
+not waived.
+
+Separately, this exact v4 artifact passed the real postcommit compiler-disconnect
+acceptance: an in-flight owned compiler was reaped, no request was replayed, and
+the same daemon successfully prepared and handled a later request. This is
+additional lifecycle evidence, not a resolution of the macro freshness blocker.
+
 ## Managed hosted path and remaining gates
 
 The real `justrust test --remote` benchmark uses ordinary subscription admission,
@@ -127,7 +142,8 @@ must not be substituted for this end-to-end result.
 - A valid matched canonical 40-point session-weighted comparison is still
   required, including real committed native coverage. An all-fallback run only
   establishes router compatibility, not the benefit of resident compilation.
-- Automatic-preparation interference, postcommit compiler cancellation and
-  stable managed-request timing remain separate acceptance work.
+- Automatic-preparation interference, transport-level postcommit compiler
+  cancellation on normal managed requests, and stable managed-request timing
+  remain separate acceptance work.
 
 Full decoded compiler-heap disk snapshots are not implemented or measured here.
