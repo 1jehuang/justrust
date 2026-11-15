@@ -4,8 +4,8 @@
 //! or plan fails the build, with what it is.
 
 use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
+    collections::{BTreeMap, VecDeque},
+    path::{Component, Path, PathBuf},
     process::Command,
     time::Instant,
 };
@@ -79,12 +79,91 @@ struct Program {
     dir: PathBuf,
 }
 
+/// A ready batch is admitted in its entirety before any worker is asked to compile.
+/// Once admitted, every failure is terminal, even a lost worker or malformed reply.
+enum Dispatch {
+    Ordinary,
+    Prewarm,
+    Ready { decision: fn(bool) -> anyhow::Result<()>, replies: VecDeque<Reply> },
+}
+
+impl Dispatch {
+    fn prewarm(&self) -> bool {
+        matches!(self, Self::Prewarm)
+    }
+
+    fn hybrid(&self) -> bool {
+        !matches!(self, Self::Ordinary)
+    }
+
+    fn miss(&self, reason: &str) -> anyhow::Result<i32> {
+        match self {
+            Self::Ready { decision, .. } => {
+                decision(false)?;
+                Ok(0)
+            }
+            Self::Prewarm => {
+                say::error(&format!("native prewarm cannot prepare this selection: {reason}"));
+                Ok(FAILED)
+            }
+            Self::Ordinary => Ok(FAILED),
+        }
+    }
+
+    fn prepare(&mut self, checkouts: &[Checkout]) -> anyhow::Result<bool> {
+        let Self::Ready { decision, replies } = self else { return Ok(true) };
+        let asked = checkouts.iter().map(super::asking).collect();
+        match client::ready(asked, || decision(true))? {
+            Reply::ReadyMiss { .. } => {
+                decision(false)?;
+                Ok(false)
+            }
+            Reply::ReadyBuilt { replies: built } => {
+                anyhow::ensure!(
+                    built.len() == checkouts.len(),
+                    "ready batch returned a different number of checkouts"
+                );
+                *replies = built.into();
+                Ok(true)
+            }
+            other => anyhow::bail!("unexpected committed ready reply: {other:?}"),
+        }
+    }
+}
+
+/// Engine-internal hybrid entry. The caller owns descriptor validation and non-starting
+/// daemon/toolchain preflight. `decision(true)` publishes commitment before dispatch,
+/// `decision(false)` is the sole positive authorization for shipping fallback.
+pub(super) fn hybrid(
+    asked: &Invocation,
+    prewarm: bool,
+    decision: fn(bool) -> anyhow::Result<()>,
+) -> anyhow::Result<i32> {
+    let mut dispatch = if prewarm {
+        Dispatch::Prewarm
+    } else {
+        Dispatch::Ready { decision, replies: VecDeque::new() }
+    };
+    match asked.subcommand {
+        Subcommand::Build | Subcommand::Run => build_using(asked, &mut dispatch),
+        Subcommand::Test => test_using(asked, &mut dispatch),
+        _ => dispatch.miss("only build, test and run whole-program selections are supported"),
+    }
+}
+
 /// `build` and `run`: builds the programs of `asked` whole and runs the one `run` asks for.
 /// A build of no program, of libraries alone, is the daemon's check of them: blaze writes no
 /// library for cargo, which builds nothing.
 pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
+    build_using(asked, &mut Dispatch::Ordinary)
+}
+
+fn build_using(asked: &Invocation, dispatch: &mut Dispatch) -> anyhow::Result<i32> {
     let _phase = super::Phase::new("client build");
     if let Some(why) = refused(asked) {
+        if dispatch.hybrid() {
+            return dispatch.miss(&why);
+        }
         say::error(&why);
         return Ok(FAILED);
     }
@@ -94,6 +173,10 @@ pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
         let _phase = super::Phase::new("client metadata");
         super::state::metadata(asked)
     };
+    if dispatch.hybrid() && !isolated_hybrid_artifacts(&metadata) {
+        return dispatch
+            .miss("CARGO_TARGET_DIR must explicitly isolate both target and build directories");
+    }
     let mut programs = match planned(asked, &cwd, &metadata, None) {
         Ok(programs) => programs,
         Err(why) => {
@@ -120,12 +203,18 @@ pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
         return Ok(FAILED);
     }
     if programs.is_empty() {
+        if dispatch.hybrid() {
+            return dispatch.miss("library-only builds have no whole-program worker");
+        }
         return super::check(asked);
     }
     let mut said = Vec::new();
     compiling(asked, programs.iter().filter(|it| !it.executable.exists()), &mut said);
     let checkout = checkout(asked, &cwd, &metadata, &programs, false, BTreeMap::new());
-    match whole(&cwd, &checkout, &programs) {
+    if !dispatch.prepare(std::slice::from_ref(&checkout))? {
+        return Ok(0);
+    }
+    match whole(&cwd, &checkout, &programs, dispatch) {
         Ok(rebuilt) => compiling(asked, rebuilt.into_iter().map(|at| &programs[at]), &mut said),
         Err(why) => {
             why.say();
@@ -136,7 +225,7 @@ pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
     if let Some(failed) = super::remote_failed_it() {
         return Ok(failed);
     }
-    if asked.subcommand != Subcommand::Run {
+    if dispatch.prewarm() || asked.subcommand != Subcommand::Run {
         return Ok(0);
     }
     ran(asked, &cwd, &programs)
@@ -147,8 +236,15 @@ pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
 /// workspace with `cfg(test)`, the integration tests and the programs beside them by one
 /// that loads it without. The doc tests are still made through cargo, after.
 pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
+    test_using(asked, &mut Dispatch::Ordinary)
+}
+
+fn test_using(asked: &Invocation, dispatch: &mut Dispatch) -> anyhow::Result<i32> {
     let _phase = super::Phase::new("client test");
     if let Some(why) = refused(asked) {
+        if dispatch.hybrid() {
+            return dispatch.miss(&why);
+        }
         say::error(&why);
         return Ok(FAILED);
     }
@@ -158,6 +254,10 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
         let _phase = super::Phase::new("client metadata");
         super::state::metadata(asked)
     };
+    if dispatch.hybrid() && !isolated_hybrid_artifacts(&metadata) {
+        return dispatch
+            .miss("CARGO_TARGET_DIR must explicitly isolate both target and build directories");
+    }
     let named = asked.values_of("--test").first().copied();
     let tests = blaze_metadata::Tests { lib: asked.typed("--lib"), test: named };
     let programs = match planned(asked, &cwd, &metadata, Some(tests)) {
@@ -169,6 +269,9 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
     };
     // The doc tests alone build nothing before their examples.
     if asked.flags.doc {
+        if dispatch.hybrid() {
+            return dispatch.miss("documentation is not a prewarmed whole-program checkout");
+        }
         let libraries: Vec<&Program> = programs.iter().filter(|it| it.kind == Kind::Lib).collect();
         return doc_tests(asked, &cwd, metadata.workspace_root.as_std_path(), &libraries);
     }
@@ -249,6 +352,16 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
         (&a.package, rank(&a.kind), &a.name).cmp(&(&b.package, rank(&b.kind), &b.name))
     });
     let documented = units.iter().any(|it| it.kind == Kind::Lib);
+    // Documentation has its own compiler lifecycle and is not represented by these
+    // checkouts. Do not commit a ready-only selection then cold-start that lifecycle.
+    if matches!(dispatch, Dispatch::Ready { .. })
+        && !asked.flags.no_run
+        && documented
+        && !asked.flags.selects_targets
+        && asked.positional.is_empty()
+    {
+        return dispatch.miss("this selection would start an unreserved documentation compiler");
+    }
     let root = metadata.workspace_root.as_std_path().to_owned();
     let state = super::state::State::of_whole(
         checkouts[0].key.clone(),
@@ -259,6 +372,15 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
         configured_env(&cwd),
     );
     super::affected::ask(&state);
+    let active: Vec<_> = checkouts
+        .iter()
+        .zip([&others, &units])
+        .filter(|(_, programs)| !programs.is_empty())
+        .map(|(checkout, _)| checkout.clone())
+        .collect();
+    if !dispatch.prepare(&active)? {
+        return Ok(0);
+    }
     for (checkout, programs) in checkouts.iter().zip([&others, &units]) {
         if programs.is_empty() {
             continue;
@@ -270,7 +392,7 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
                 false => _ = std::fs::remove_file(&tests),
             }
         }
-        match whole(&cwd, checkout, programs) {
+        match whole(&cwd, checkout, programs, dispatch) {
             Ok(rebuilt) => compiling(asked, rebuilt.into_iter().map(|at| &programs[at]), &mut said),
             Err(why) => {
                 why.say();
@@ -282,7 +404,7 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
     if let Some(failed) = super::remote_failed_it() {
         return Ok(failed);
     }
-    if asked.flags.no_run {
+    if dispatch.prewarm() || asked.flags.no_run {
         return Ok(0);
     }
     let code = {
@@ -297,6 +419,64 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
     }
     let libraries: Vec<&Program> = units.iter().filter(|it| it.kind == Kind::Lib).collect();
     Ok(code.max(doc_tests(asked, &cwd, metadata.workspace_root.as_std_path(), &libraries)?))
+}
+
+fn isolated_hybrid_artifacts(metadata: &Metadata) -> bool {
+    let Some(explicit) = std::env::var_os("CARGO_TARGET_DIR") else { return false };
+    let target = metadata.target_directory.as_std_path();
+    let built = metadata.build_directory.as_ref().map_or(target, |it| it.as_std_path());
+    isolated_artifact_paths(Path::new(&explicit), target, built)
+}
+
+/// The caller chooses an exclusively native target directory. A separate Cargo
+/// `build.build-dir` must not silently redirect native executables to shipping files.
+fn isolated_artifact_paths(explicit: &Path, target: &Path, built: &Path) -> bool {
+    let plain_absolute = |path: &Path| {
+        path.is_absolute()
+            && !path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    };
+    if !plain_absolute(explicit) || !plain_absolute(target) || !plain_absolute(built) {
+        return false;
+    }
+    let Ok(explicit) = resolved_directory_path(explicit) else { return false };
+    let Ok(target) = resolved_directory_path(target) else { return false };
+    let Ok(built) = resolved_directory_path(built) else { return false };
+    explicit == target && built.starts_with(explicit)
+}
+
+/// Canonicalize only what already exists, without creating target/build directories
+/// during a probe. A missing suffix is appended to its canonical existing parent.
+/// Dangling links, non-directory parents and unreadable prefixes are not safe paths.
+fn resolved_directory_path(path: &Path) -> std::io::Result<PathBuf> {
+    let mut prefix = path.to_owned();
+    let mut suffix = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(&prefix) {
+            Ok(_) => {
+                let canonical = prefix.canonicalize()?;
+                if !std::fs::metadata(&canonical)?.is_dir() {
+                    return Err(std::io::Error::other("artifact parent is not a directory"));
+                }
+                let mut resolved = canonical;
+                for part in suffix.iter().rev() {
+                    resolved.push(part);
+                }
+                return Ok(resolved);
+            }
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => {
+                let name = prefix
+                    .file_name()
+                    .ok_or_else(|| std::io::Error::other("artifact path has no existing parent"))?;
+                suffix.push(name.to_owned());
+                if !prefix.pop() {
+                    return Err(std::io::Error::other("artifact path has no existing parent"));
+                }
+            }
+            Err(why) => return Err(why),
+        }
+    }
 }
 
 /// Runs the examples in the documentation of `libraries`, as `cargo test --doc` would and with
@@ -451,15 +631,27 @@ fn turned_down(program: &Program, said: &crate::errors::Said) -> String {
 /// A worker of the daemon loads the workspace and links each program before it answers, and
 /// builds them again on what it has loaded when asked next. `Ok` names the programs, by
 /// index, the daemon built rather than found up to date; `Err` says why not.
-fn whole(cwd: &Path, checkout: &Checkout, programs: &[Program]) -> Result<Vec<usize>, Unbuilt> {
+fn whole(
+    cwd: &Path,
+    checkout: &Checkout,
+    programs: &[Program],
+    dispatch: &mut Dispatch,
+) -> Result<Vec<usize>, Unbuilt> {
     let _phase = super::Phase::new("client whole build");
-    let request = {
-        let _phase = super::Phase::new("client request");
-        Request::Build(super::asking(checkout))
-    };
-    let reply = {
-        let _phase = super::Phase::new("client↔daemon");
-        client::ask(request, Start::IfMissing).map_err(|it| format!("{it:#}"))?
+    let reply = match dispatch {
+        Dispatch::Ready { replies, .. } => Some(
+            replies
+                .pop_front()
+                .ok_or_else(|| "committed ready batch is missing a checkout reply".to_owned())?,
+        ),
+        _ => {
+            let request = {
+                let _phase = super::Phase::new("client request");
+                Request::Build(super::asking(checkout))
+            };
+            let _phase = super::Phase::new("client↔daemon");
+            client::ask(request, Start::IfMissing).map_err(|it| format!("{it:#}"))?
+        }
     };
     let built = match reply {
         Some(Reply::Synced { programs, spans }) => {
@@ -475,6 +667,21 @@ fn whole(cwd: &Path, checkout: &Checkout, programs: &[Program]) -> Result<Vec<us
         None => return Err(client::why_none().into()),
         Some(other) => return Err(format!("the daemon answered {other:?}").into()),
     };
+    install(programs, checkout, built)
+}
+
+/// Install only results returned for this exact checkout. Hybrid admission batches all
+/// workers before any compilation, then uses the same artifact validation as a normal build.
+fn install(
+    programs: &[Program],
+    checkout: &Checkout,
+    built: Vec<Result<String, NotBuilt>>,
+) -> Result<Vec<usize>, Unbuilt> {
+    if built.len() != programs.len() || checkout.programs.len() != programs.len() {
+        return Err("the daemon returned a different number of programs than requested"
+            .to_owned()
+            .into());
+    }
     let _phase = super::Phase::new("client install artifacts");
     let mut rebuilt = Vec::new();
     let pairs = std::iter::zip(programs, &checkout.programs).zip(built).enumerate();
@@ -515,6 +722,101 @@ fn whole(cwd: &Path, checkout: &Checkout, programs: &[Program]) -> Result<Vec<us
             .map_err(|it| format!("installing {}: {it}", program.executable.display()))?;
     }
     Ok(rebuilt)
+}
+
+#[cfg(test)]
+mod hybrid_dispatch_tests {
+    use super::*;
+
+    fn checkout() -> Checkout {
+        Checkout {
+            key: "hybrid-test".to_owned(),
+            generation: 0,
+            kept: false,
+            built_at: 0,
+            config: WorkerConfig {
+                repository: PathBuf::from("/unused"),
+                project: PathBuf::new(),
+                cfg_test: true,
+                selection: Selection::default(),
+                env: BTreeMap::new(),
+                command_env: BTreeMap::new(),
+                whole: true,
+            },
+            root: PathBuf::from("/unused"),
+            programs: Vec::new(),
+            sources: Vec::new(),
+            env: BTreeMap::new(),
+            scripts: None,
+        }
+    }
+
+    #[test]
+    fn a_ready_miss_requires_a_successful_positive_receipt() {
+        fn miss(committed: bool) -> anyhow::Result<()> {
+            assert!(!committed);
+            Ok(())
+        }
+        let dispatch = Dispatch::Ready { decision: miss, replies: VecDeque::new() };
+        assert_eq!(dispatch.miss("test").unwrap(), 0);
+
+        fn unavailable(_: bool) -> anyhow::Result<()> {
+            anyhow::bail!("decision channel closed")
+        }
+        let dispatch = Dispatch::Ready { decision: unavailable, replies: VecDeque::new() };
+        assert!(dispatch.miss("test").is_err());
+    }
+
+    #[test]
+    fn unsupported_prewarm_is_not_a_successful_miss() {
+        assert_eq!(Dispatch::Prewarm.miss("test").unwrap(), FAILED);
+    }
+
+    #[test]
+    fn missing_committed_reply_never_retries_or_reports_miss() {
+        fn forbidden(_: bool) -> anyhow::Result<()> {
+            panic!("a committed missing reply must not publish another decision")
+        }
+        let mut dispatch = Dispatch::Ready { decision: forbidden, replies: VecDeque::new() };
+        assert!(whole(Path::new("/unused"), &checkout(), &[], &mut dispatch).is_err());
+    }
+
+    #[test]
+    fn truncated_or_extra_program_results_are_rejected_before_installation() {
+        assert!(install(&[], &checkout(), vec![Ok("ok unchanged".to_owned())]).is_err());
+    }
+
+    #[test]
+    fn hybrid_build_directory_cannot_escape_the_explicit_native_target() {
+        let native = Path::new("/private/native");
+        assert!(isolated_artifact_paths(native, native, native));
+        assert!(isolated_artifact_paths(native, native, &native.join("build")));
+        for built in ["/private/shipping", "/private/native/../shipping", "relative"] {
+            assert!(!isolated_artifact_paths(native, native, Path::new(built)), "{built}");
+        }
+        assert!(!isolated_artifact_paths(native, Path::new("/private/shipping"), native));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hybrid_artifact_probe_resolves_symlinks_without_creating_missing_directories() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let native = root.join("native");
+        let shipping = root.join("shipping");
+        std::fs::create_dir(&native).unwrap();
+        std::fs::create_dir(&shipping).unwrap();
+        let fresh = native.join("not-created/build");
+        assert!(isolated_artifact_paths(&native, &native, &fresh));
+        assert!(!fresh.parent().unwrap().exists());
+        symlink(&shipping, native.join("escape")).unwrap();
+        assert!(!isolated_artifact_paths(&native, &native, &native.join("escape/output")));
+        symlink(root.join("absent"), native.join("dangling")).unwrap();
+        assert!(!isolated_artifact_paths(&native, &native, &native.join("dangling/output")));
+        std::fs::write(native.join("file"), "not a directory").unwrap();
+        assert!(!isolated_artifact_paths(&native, &native, &native.join("file/output")));
+    }
 }
 
 /// The daemon's checkout of a whole build of `programs`, each linked in its `dir`, by a

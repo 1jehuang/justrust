@@ -150,6 +150,9 @@ pub(crate) enum Request {
     /// Load a checkout cargo has just built what stands in for the crates of, and answer
     /// when its programs are built.
     Build(Checkout),
+    /// Atomically reserve existing ready workers. Never loads or starts a worker.
+    /// Execution requires a second, explicit commit line on the same connection.
+    ReadyBuild(Vec<Checkout>),
     /// `cargo ra-jit check` of a build the daemon has no programs of: what a checker that
     /// loaded the workspace as it would finds in its crates, with no rustc.
     Check(Ahead),
@@ -167,6 +170,11 @@ impl Request {
         if let Request::Warm(it) | Request::Build(it) = &mut self {
             it.config.command_env = super::cli::command_env();
         }
+        if let Request::ReadyBuild(checkouts) = &mut self {
+            for checkout in checkouts {
+                checkout.config.command_env = super::cli::command_env();
+            }
+        }
         if let Request::Check(it) | Request::Lint(it, _) = &mut self {
             it.config.command_env = super::cli::command_env();
         }
@@ -176,6 +184,16 @@ impl Request {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Reply {
+    /// No work was dispatched. This is the only ready-only reply permitting fallback.
+    ReadyMiss {
+        reason: String,
+    },
+    /// All workers are reserved, but nothing is dispatched until the commit acknowledgement.
+    ReadyReserved,
+    /// Replies after commitment, including failures. These must never trigger fallback.
+    ReadyBuilt {
+        replies: Vec<Reply>,
+    },
     /// The daemon is of another version. It exits when the client said it replaces it.
     Restart {
         version: String,
@@ -1182,6 +1200,14 @@ impl Daemon {
         // that waits for an answer it can read: it gets none, and the daemon stays.
         let replaced = envelope.as_ref().is_ok_and(|it| it.replaces && it.version != self.version);
         let read = Instant::now();
+        if let Ok(Envelope { version, request: Request::ReadyBuild(checkouts), .. }) = &envelope
+            && *version == self.version
+        {
+            let reply = self.ready_build(checkouts, &stream)?;
+            return Ok(
+                (&stream).write_all(format!("{}\n", serde_json::to_string(&reply)?).as_bytes())?
+            );
+        }
         let mut reply = match envelope {
             Ok(envelope) if envelope.version == self.version => self.handle(envelope.request),
             _ => Reply::Restart { version: self.version.clone() },
@@ -1241,6 +1267,9 @@ impl Daemon {
                 Ok(()) => self.built(&checkout),
                 Err(why) => Reply::Cold { reason: format!("{why:#}") },
             },
+            Request::ReadyBuild(_) => Reply::ReadyMiss {
+                reason: "ready-only requests require the reservation handshake".to_owned(),
+            },
             Request::Check(ahead) => self.check(&ahead, "check"),
             Request::Lint(ahead, ask) => {
                 self.check(&ahead, &format!("{}{ask}", crate::check::LINT))
@@ -1258,6 +1287,60 @@ impl Daemon {
             }),
             Request::Stop => Reply::Stopping,
         }
+    }
+
+    /// Reserve the complete batch before dispatching anything. Holding the map lock keeps
+    /// reaping, warming and replacement from stopping a selected worker between admission
+    /// and dispatch. A dead worker after commitment is an execution failure, never a miss.
+    fn ready_build(
+        &self,
+        checkouts: &[Checkout],
+        mut stream: &UnixStream,
+    ) -> anyhow::Result<Reply> {
+        *lock(&self.asked) = Instant::now();
+        let workers = lock(&self.workers);
+        let mut selected = Vec::with_capacity(checkouts.len());
+        for checkout in checkouts {
+            let Some(worker) = workers.get(&checkout.config.id()) else {
+                return Ok(Reply::ReadyMiss {
+                    reason: "no resident worker for this configuration".to_owned(),
+                });
+            };
+            let ready = worker.ended().is_none()
+                && lock(&worker.checkouts).get(&checkout.key).is_some_and(|loaded| {
+                    loaded.generation == checkout.generation
+                        && matches!(loaded.warmth, Warmth::Ready)
+                });
+            if !ready {
+                return Ok(Reply::ReadyMiss {
+                    reason: "resident checkout is absent, loading, stale or failed".to_owned(),
+                });
+            }
+            selected.push(worker);
+        }
+        if selected.is_empty() {
+            return Ok(Reply::ReadyMiss { reason: "no native programs to dispatch".to_owned() });
+        }
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        stream
+            .write_all(format!("{}\n", serde_json::to_string(&Reply::ReadyReserved)?).as_bytes())?;
+        // The client first publishes commitment on its private protocol FD. Only after
+        // that write succeeds does it acknowledge, so loss of that FD cannot run work.
+        // No read-ahead: a client sends its acknowledgement only after the reservation reply.
+        let mut commit = String::new();
+        BufReader::new(&*stream).read_line(&mut commit)?;
+        anyhow::ensure!(commit == "commit\n", "ready-only reservation was not committed");
+        stream.set_read_timeout(None)?;
+        let replies = selected
+            .into_iter()
+            .zip(checkouts)
+            .map(|(worker, checkout)| {
+                *lock(&worker.asked) = Instant::now();
+                worker.sync(checkout)
+            })
+            .collect();
+        drop(workers);
+        Ok(Reply::ReadyBuilt { replies })
     }
 
     fn sync(&self, checkout: &Checkout) -> Reply {
@@ -1653,6 +1736,152 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::io::BufRead as _;
+
+    #[cfg(unix)]
+    struct ReadyFixture(Daemon, Checkout);
+
+    #[cfg(unix)]
+    impl ReadyFixture {
+        fn new(warmth: Warmth) -> Self {
+            let root = PathBuf::from("/ready-protocol-test");
+            let config = WorkerConfig {
+                repository: root.clone(),
+                project: PathBuf::new(),
+                cfg_test: true,
+                selection: crate::plan::Selection::default(),
+                env: BTreeMap::new(),
+                command_env: BTreeMap::new(),
+                whole: true,
+            };
+            let checkout = Checkout {
+                key: "ready-test".to_owned(),
+                generation: 1,
+                kept: false,
+                built_at: 0,
+                config,
+                root: root.clone(),
+                programs: Vec::new(),
+                sources: Vec::new(),
+                env: BTreeMap::new(),
+                scripts: None,
+            };
+            let worker = Worker {
+                project: root.clone(),
+                socket: root.join("sock"),
+                log: root.join("log"),
+                child: Mutex::new(Command::new("sleep").arg("60").spawn().unwrap()),
+                checkouts: Mutex::new(FxHashMap::from_iter([(
+                    checkout.key.clone(),
+                    Loaded { generation: 1, root: root.clone(), warmth },
+                )])),
+                asked: Mutex::new(Instant::now() - Duration::from_secs(60)),
+                answering: AtomicUsize::new(0),
+                noted: AtomicBool::new(false),
+            };
+            Self(
+                Daemon {
+                    version: version(),
+                    home: root,
+                    idle: None,
+                    memory_max: None,
+                    workers: Mutex::new(FxHashMap::from_iter([(
+                        checkout.config.id(),
+                        Arc::new(worker),
+                    )])),
+                    spare: Mutex::default(),
+                    spare_when: Spares::Never,
+                    spares: AtomicUsize::new(0),
+                    checkers: Mutex::default(),
+                    asked: Mutex::new(Instant::now()),
+                },
+                checkout,
+            )
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadyFixture {
+        fn drop(&mut self) {
+            for worker in lock(&self.0.workers).values() {
+                let mut child = lock(&worker.child);
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ready_batch_misses_before_reserving_any_partial_selection() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let (server, mut client) = UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let mut missing = fixture.1.clone();
+        missing.config.cfg_test = false;
+        assert!(matches!(
+            fixture.0.ready_build(&[fixture.1.clone(), missing], &server).unwrap(),
+            Reply::ReadyMiss { .. }
+        ));
+        let mut receipt = String::new();
+        assert!(
+            BufReader::new(&mut client).read_line(&mut receipt).is_err(),
+            "partial admission must not send Reserved"
+        );
+        assert!(receipt.is_empty());
+        assert_eq!(lock(&fixture.0.workers).len(), 1, "no worker was started");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ready_batch_rejects_loading_failed_and_stale_generations() {
+        for warmth in [Warmth::Loading(Instant::now()), Warmth::Failed("failed".to_owned())] {
+            let fixture = ReadyFixture::new(warmth);
+            let (server, _client) = UnixStream::pair().unwrap();
+            assert!(matches!(
+                fixture.0.ready_build(std::slice::from_ref(&fixture.1), &server).unwrap(),
+                Reply::ReadyMiss { .. }
+            ));
+        }
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let (server, _client) = UnixStream::pair().unwrap();
+        let mut stale = fixture.1.clone();
+        stale.generation += 1;
+        assert!(matches!(
+            fixture.0.ready_build(&[stale], &server).unwrap(),
+            Reply::ReadyMiss { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ready_reservation_holds_workers_until_ack_and_cancels_on_disconnect() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let (server, client) = UnixStream::pair().unwrap();
+        std::thread::scope(|scope| {
+            let answer =
+                scope.spawn(|| fixture.0.ready_build(std::slice::from_ref(&fixture.1), &server));
+            let mut receipt = String::new();
+            BufReader::new(&client).read_line(&mut receipt).unwrap();
+            assert!(matches!(
+                serde_json::from_str::<Reply>(&receipt).unwrap(),
+                Reply::ReadyReserved
+            ));
+            assert!(
+                fixture.0.workers.try_lock().is_err(),
+                "replacement and reaping must wait for reservation"
+            );
+            drop(client);
+            assert!(answer.join().unwrap().is_err(), "disconnect must cancel before dispatch");
+        });
+        let workers = lock(&fixture.0.workers);
+        let worker = workers.values().next().unwrap();
+        assert!(
+            lock(&worker.asked).elapsed() > Duration::from_secs(30),
+            "cancelled reservation must not dispatch"
+        );
+    }
 
     #[test]
     fn the_workers_asked_longest_ago_are_stopped_for_the_rest_to_fit() {

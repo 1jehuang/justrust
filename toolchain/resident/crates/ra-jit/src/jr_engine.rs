@@ -33,6 +33,10 @@ pub(crate) fn reader_command() -> bool {
         None | Some("--help" | "-h" | "help") => println!(
             "jr-engine: experimental Blaze-derived native engine\n\
              usage: jr-engine build|test|check|run [cargo flags]\n\
+             jr-engine cargo hybrid-ready -- build|test|check|run [cargo flags]\n\
+             jr-engine cargo hybrid-prewarm -- build|test|run [cargo flags]\n\
+             hybrid-ready writes miss or committed to JR_HYBRID_DECISION_FD, then closes it.\n\
+             hybrid-prewarm compiles but never executes programs, tests or doctests.\n\
              Requires JR_ENGINE_HOME: an existing absolute, canonical, owner-only directory.\n\
              Internal worker commands are preserved. Not a shipping justrust default.\n\
              See docs/resident-engine-entry.md for namespace and compatibility limits."

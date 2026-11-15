@@ -2,6 +2,7 @@
 //! changed since cargo last built. `docs/cargo.md` is the design.
 
 pub(crate) mod daemon;
+mod hybrid;
 pub(crate) mod keyed;
 pub(crate) mod wrapper;
 
@@ -55,7 +56,12 @@ pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> 
         crate::trace::install();
         Instant::now()
     });
-    let result = command_code(args);
+    let args = hybrid::arguments(args.collect());
+    let result = match args {
+        Ok(args) => command_code(args.into_iter()),
+        Err(error) => Err(error),
+    };
+    let result = hybrid::finish(result);
     // `command_code` has returned, so all phase guards have recorded, including on
     // errors. Finish before either propagating an error or exiting with the child's status.
     if let Some(started) = detail_started {
@@ -68,6 +74,11 @@ pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> 
 fn command_code(args: impl Iterator<Item = String>) -> anyhow::Result<i32> {
     let _phase = Phase::new("client command");
     let args: Vec<String> = args.collect();
+    if (hybrid::ready_only() || hybrid::prewarm())
+        && !matches!(args.first().map(String::as_str), Some("build" | "test" | "check" | "run"))
+    {
+        anyhow::bail!("hybrid commands require an explicit build, test, check or run selection");
+    }
     if let [word, cargo, rest @ ..] = args.as_slice()
         && word == SETTLE
     {
@@ -75,8 +86,15 @@ fn command_code(args: impl Iterator<Item = String>) -> anyhow::Result<i32> {
             .map(|()| 0);
     }
     let asked = Asked::parse(own::subcommand_first(args));
+    if (hybrid::ready_only() || hybrid::prewarm()) && !matches!(asked, Asked::Build(_)) {
+        anyhow::bail!("ready-only and prewarm require a build, test, check or run command");
+    }
     if !matches!(asked, Asked::Build(_)) {
         crate::end_with_reader();
+    }
+    if hybrid::ready_only() && !client::has_ready_worker() {
+        hybrid::decision(false)?;
+        return Ok(0);
     }
     if let Asked::Build(_) = asked
         && let Err(why) = toolchain::settle(true)
@@ -85,6 +103,9 @@ fn command_code(args: impl Iterator<Item = String>) -> anyhow::Result<i32> {
         return Ok(FAILED);
     }
     let code = match asked {
+        Asked::Build(asked) if hybrid::ready_only() || hybrid::prewarm() => {
+            whole::hybrid(&asked, hybrid::prewarm(), hybrid::decision)?
+        }
         Asked::Build(asked) if matches!(asked.subcommand, Subcommand::Build | Subcommand::Run) => {
             whole::build(&asked)?
         }
@@ -304,6 +325,10 @@ fn remote_failed_it() -> Option<i32> {
 /// once for each target asked for. Neither runs rustc on the source. The verdict is written
 /// as `--message-format` asks: in cargo's JSON, it is what an editor shows.
 fn check(asked: &Invocation) -> anyhow::Result<i32> {
+    if hybrid::ready_only() {
+        hybrid::decision(false)?;
+        return Ok(0);
+    }
     if asked.flags.cargos_plan {
         say::error("`--build-plan` and `--unit-graph` are cargo's plans, and blaze makes its own");
         return Ok(FAILED);
@@ -462,12 +487,13 @@ fn asking(checkout: &Checkout) -> Checkout {
             || name == switch::VARIABLE
             || name == switch::CHAINED
             || telemetry_variable(name)
+            || name == "JR_HYBRID_DECISION_FD"
     };
     // Also filter explicit checkout entries and the public aliases that main
     // normalizes to RA_JIT names. Neither spelling belongs in an env! input.
     let env: BTreeMap<String, String> = std::env::vars()
         .filter(|(name, _)| !wraps(name))
-        .chain(checkout.env.clone().into_iter().filter(|(name, _)| !telemetry_variable(name)))
+        .chain(checkout.env.clone().into_iter().filter(|(name, _)| !wraps(name)))
         .collect();
     Checkout { env, ..checkout.clone() }
 }

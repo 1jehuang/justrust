@@ -146,7 +146,7 @@ fn worker_named(name: &str) -> bool {
 /// Whether the variable `name` is blaze's own: where the daemon keeps its files, the store,
 /// its traces. The daemon's are what its workers run with.
 fn blazes(name: &str) -> bool {
-    name.starts_with("RA_JIT_") || name.starts_with("BLAZE_")
+    name.starts_with("RA_JIT_") || name.starts_with("BLAZE_") || name == "JR_HYBRID_DECISION_FD"
 }
 
 /// The variables of this process that a worker of the build whose variables are `env`
@@ -595,6 +595,13 @@ mod tests {
             Asked::Build(invocation) => *invocation,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn hybrid_decision_channel_is_not_a_build_input() {
+        assert!(blazes("JR_HYBRID_DECISION_FD"));
+        assert!(!worker_named("JR_HYBRID_DECISION_FD"));
+        assert!(!is_named(BUILD_ENV, "JR_HYBRID_DECISION_FD"));
     }
 
     #[test]

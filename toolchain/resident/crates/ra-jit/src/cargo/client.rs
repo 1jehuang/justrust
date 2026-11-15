@@ -17,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use uds_windows::UnixStream;
 
 use super::{
-    daemon::{Envelope, Reply, Request, SPARE, home, socket_in, version},
+    daemon::{Checkout, Envelope, Reply, Request, SPARE, home, socket_in, version},
     switch, wrapper,
 };
 use crate::socket::{connect, private_dir, private_file};
@@ -78,6 +78,65 @@ pub(crate) fn ask(request: Request, start: Start) -> anyhow::Result<Option<Reply
         reply = exchange(&mut started(&home)?, &envelope)?;
     }
     Ok(Some(reply))
+}
+
+/// Cheap non-starting preflight before toolchain discovery or workspace planning.
+/// The connection performs a versioned read-only request and cannot replace a daemon.
+pub(crate) fn has_ready_worker() -> bool {
+    let Ok(home) = home() else { return false };
+    let Ok(mut stream) = connect(&socket_in(&home)) else { return false };
+    let deadline = Some(Duration::from_millis(250));
+    if stream.set_read_timeout(deadline).is_err() || stream.set_write_timeout(deadline).is_err() {
+        return false;
+    }
+    let envelope = Envelope { version: version(), replaces: false, request: Request::Status };
+    let Ok(envelope) = serde_json::to_string(&envelope) else { return false };
+    matches!(exchange(&mut stream, &envelope), Ok(Reply::Status(status)) if status.workers.iter().any(|worker| {
+        worker.checkouts.iter().any(|(_, warmth)| warmth == "ready")
+    }))
+}
+
+/// Reserve an entire ready-only batch without ever starting or replacing a daemon.
+/// `commit` must publish the irreversible execution decision before this connection
+/// acknowledges the reservation. Any error after that point is an execution failure.
+pub(crate) fn ready(
+    checkouts: Vec<Checkout>,
+    commit: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<Reply> {
+    let home = home()?;
+    let stream = match connect(&socket_in(&home)) {
+        Ok(stream) => stream,
+        Err(_) => {
+            return Ok(Reply::ReadyMiss { reason: "no resident daemon is running".to_owned() });
+        }
+    };
+    ready_on(stream, checkouts, commit)
+}
+
+fn ready_on(
+    mut stream: UnixStream,
+    checkouts: Vec<Checkout>,
+    commit: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<Reply> {
+    // Admission has a bounded wait. Once committed, the build owns its normal lifetime.
+    stream.set_read_timeout(Some(PATIENCE))?;
+    stream.set_write_timeout(Some(PATIENCE))?;
+    let request = Request::ReadyBuild(checkouts).of_this_command();
+    let envelope =
+        serde_json::to_string(&Envelope { version: version(), replaces: false, request })?;
+    match exchange(&mut stream, &envelope)? {
+        Reply::ReadyReserved => {
+            commit()?;
+            stream.set_read_timeout(None)?;
+            stream.write_all(b"commit\n")?;
+            read_reply(&mut stream)
+        }
+        Reply::ReadyMiss { reason } => Ok(Reply::ReadyMiss { reason }),
+        Reply::Restart { .. } => {
+            Ok(Reply::ReadyMiss { reason: "resident daemon has another build identity".to_owned() })
+        }
+        other => anyhow::bail!("unexpected ready-only admission reply: {other:?}"),
+    }
 }
 
 /// Waits for a daemon that answered it ends to have exited, with its workers stopped and its
@@ -164,6 +223,10 @@ pub(crate) fn why_none() -> String {
 
 fn exchange(stream: &mut UnixStream, envelope: &str) -> anyhow::Result<Reply> {
     stream.write_all(format!("{envelope}\n").as_bytes())?;
+    read_reply(stream)
+}
+
+fn read_reply(stream: &mut UnixStream) -> anyhow::Result<Reply> {
     let mut line = String::new();
     let read = BufReader::new(stream).read_line(&mut line);
     // A line without its end is one the daemon did not live to finish.
@@ -211,5 +274,106 @@ fn started(home: &Path, spares: bool) -> anyhow::Result<UnixStream> {
             }
             Err(_) => std::thread::sleep(POLL),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod ready_tests {
+    use super::*;
+    use std::io::{BufRead as _, Write as _};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering::SeqCst},
+    };
+
+    fn receive_request(stream: &UnixStream) {
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let envelope: Envelope = serde_json::from_str(&line).unwrap();
+        assert!(!envelope.replaces);
+        assert!(matches!(envelope.request, Request::ReadyBuild(_)));
+    }
+
+    fn send(stream: &mut UnixStream, reply: Reply) {
+        writeln!(stream, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn explicit_miss_does_not_publish_commitment() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            receive_request(&server);
+            send(&mut server, Reply::ReadyMiss { reason: "cold".to_owned() });
+        });
+        let reply = ready_on(client, Vec::new(), || panic!("miss must not commit")).unwrap();
+        assert!(matches!(reply, Reply::ReadyMiss { .. }));
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn commitment_is_published_before_daemon_acknowledgement() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let committed = Arc::new(AtomicBool::new(false));
+        let observed = committed.clone();
+        let peer = std::thread::spawn(move || {
+            receive_request(&server);
+            send(&mut server, Reply::ReadyReserved);
+            let mut ack = String::new();
+            BufReader::new(&server).read_line(&mut ack).unwrap();
+            assert_eq!(ack, "commit\n");
+            assert!(observed.load(SeqCst));
+            send(
+                &mut server,
+                Reply::ReadyBuilt {
+                    replies: vec![Reply::Cold { reason: "worker lost".to_owned() }],
+                },
+            );
+        });
+        let reply = ready_on(client, Vec::new(), || {
+            committed.store(true, SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            matches!(reply, Reply::ReadyBuilt { .. }),
+            "postcommit worker failure stays terminal"
+        );
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn failed_commit_publication_never_acknowledges_reservation() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            receive_request(&server);
+            send(&mut server, Reply::ReadyReserved);
+            let mut ack = String::new();
+            assert_eq!(BufReader::new(&server).read_line(&mut ack).unwrap(), 0);
+            assert!(ack.is_empty());
+        });
+        assert!(ready_on(client, Vec::new(), || anyhow::bail!("receipt channel closed")).is_err());
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn daemon_lost_after_acknowledgement_never_retries() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            receive_request(&server);
+            send(&mut server, Reply::ReadyReserved);
+            let mut ack = String::new();
+            BufReader::new(&server).read_line(&mut ack).unwrap();
+            assert_eq!(ack, "commit\n");
+        });
+        let mut count = 0;
+        assert!(
+            ready_on(client, Vec::new(), || {
+                count += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(count, 1);
+        peer.join().unwrap();
     }
 }

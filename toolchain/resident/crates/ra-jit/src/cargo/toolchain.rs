@@ -157,6 +157,9 @@ pub(crate) fn settle(build: bool) -> Result<Chosen, String> {
         ));
     };
     if !own::complete(&release, &dir) {
+        if super::hybrid::ready_only() {
+            return Err("ready-only cannot install a missing native toolchain".to_owned());
+        }
         own::fetch(&release, &dir)?;
     }
     use_own(&dir);
