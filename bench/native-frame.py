@@ -7,20 +7,23 @@ The coordinator must serialize this hosted job with other Rust jobs.
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import statistics
 import subprocess
 import sys
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "NATIVE_FRAME_BENCH "
-COMMAND = ["justrust", "test", "--lib", "--locked", "native_frame_tls_benchmark",
+COMMAND = ["justrust", "test", "--lib", "--locked", "--release", "native_frame_tls_benchmark",
            "--", "--ignored", "--nocapture"]
 SIZES = {64: 32768, 32768: 4096}
 
 
 def expected_order():
-    return [(round_, size, coalesced) for round_ in range(3) for size in SIZES
+    return [(round_, size, coalesced) for size in SIZES for round_ in range(3)
             for coalesced in (False, True, True, False)]
 
 
@@ -94,6 +97,36 @@ def results(samples, env, identity, timestamp):
     return pair
 
 
+def stream_command(command, timeout=900):
+    """Stream every line, killing only this new process group on timeout."""
+    lines = []
+    expired = threading.Event()
+    with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, bufsize=1,
+                          start_new_session=True) as process:
+        def expire():
+            expired.set()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        watchdog = threading.Timer(timeout, expire)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                lines.append(line)
+            code = process.wait()
+        finally:
+            watchdog.cancel()
+            watchdog.join()
+    if expired.is_set():
+        raise ValueError(f"benchmark command exceeded {timeout}s, no results published")
+    return code, lines
+
+
 def main():
     import suite
     from runtime_context import require_matching_context
@@ -102,14 +135,8 @@ def main():
     env = suite.env_info()
     env.update(execution="hosted-default", foreign_rustc_policy="unmeasured",
                noise_policy="unknown foreign contention; noisy=null")
-    lines = []
     print("Running: " + " ".join(COMMAND), flush=True)
-    with subprocess.Popen(COMMAND, cwd=ROOT, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, text=True, bufsize=1) as process:
-        for line in process.stdout:
-            print(line, end="", flush=True)
-            lines.append(line)
-        code = process.wait()
+    code, lines = stream_command(COMMAND)
     if source_hash() != identity:
         raise ValueError("src/remote_native.rs changed during benchmark, refusing mixed results")
     suite.verify_binary_identity(env)

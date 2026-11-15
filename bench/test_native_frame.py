@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -23,6 +24,32 @@ def lines(samples):
 
 
 class ParserTests(unittest.TestCase):
+    def test_independent_rust_order_and_release_command(self):
+        expected = [
+            (0, 64, False), (0, 64, True), (0, 64, True), (0, 64, False),
+            (1, 64, False), (1, 64, True), (1, 64, True), (1, 64, False),
+            (2, 64, False), (2, 64, True), (2, 64, True), (2, 64, False),
+            (0, 32768, False), (0, 32768, True), (0, 32768, True), (0, 32768, False),
+            (1, 32768, False), (1, 32768, True), (1, 32768, True), (1, 32768, False),
+            (2, 32768, False), (2, 32768, True), (2, 32768, True), (2, 32768, False),
+        ]
+        self.assertEqual(runner.expected_order(), expected)
+        samples = [{"round": r, "size": s, "frames": 32768 if s == 64 else 4096,
+                    "coalesced": c, "wall": 0.25} for r, s, c in expected]
+        self.assertEqual(runner.parse_samples(lines(samples)), samples)
+        self.assertEqual(runner.COMMAND, ["justrust", "test", "--lib", "--locked", "--release",
+                                         "native_frame_tls_benchmark", "--", "--ignored", "--nocapture"])
+
+    def test_stream_and_watchdog_without_rust(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            code, captured = runner.stream_command(
+                [sys.executable, "-c", "print('full child output')"], timeout=5)
+        self.assertEqual(code, 0)
+        self.assertEqual(captured, ["full child output\n"])
+        self.assertEqual(output.getvalue(), "full child output\n")
+        with self.assertRaisesRegex(ValueError, "exceeded"):
+            runner.stream_command([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.1)
+
     def test_complete(self):
         samples = records()
         self.assertEqual(runner.parse_samples(["ordinary output\n", *lines(samples)]), samples)
