@@ -35,7 +35,7 @@ def executable(value):
 
 
 def adapter_text(binary, engine=None, toolchain=None, fixture_xdg_home=False,
-                 fixture_latex_unicode=False):
+                 fixture_latex_unicode=False, fixture_no_tex=False):
     # Keep metadata, cache and toolchain commands on the ordinary client path.
     # Explicit engine selection lives inside the adapter, so both suite parents
     # inherit identical controls and the candidate engine is recorded separately.
@@ -60,6 +60,9 @@ if {fixture_xdg_home!r} and args and args[0] in {BUILD_COMMANDS!r}:
     os.environ.pop('JCODE_HOME', None)
     if {fixture_latex_unicode!r}:
         os.environ['JCODE_LATEX_RENDERING'] = 'unicode'
+    if {fixture_no_tex!r}:
+        for command in ('LATEX', 'DVIPNG', 'PDFLATEX', 'PDFTOCAIRO'):
+            os.environ['JCODE_' + command + '_COMMAND'] = os.path.join(home, '.benchmark-no-tex', command.lower())
 os.environ.pop('JUSTRUST_HYBRID', None)
 if engine is not None and args and args[0] in {BUILD_COMMANDS!r}:
     os.environ['JUSTRUST_NATIVE_ENGINE'] = engine
@@ -99,7 +102,7 @@ def native_toolchain(value):
 def prepare(args):
     output = args.output
     toolchain = native_toolchain(args.native_toolchain)
-    if getattr(args, 'fixture_latex_unicode', False) and not getattr(args, 'fixture_xdg_home', False):
+    if (getattr(args, 'fixture_latex_unicode', False) or getattr(args, 'fixture_no_tex', False)) and not getattr(args, 'fixture_xdg_home', False):
         raise ValueError('fixture Unicode rendering requires explicit fixture XDG private-home policy')
     for tool in (args.baseline, args.candidate, args.engine):
         executable(tool)
@@ -115,6 +118,7 @@ def prepare(args):
                   native_toolchain=str(toolchain),
                   fixture_xdg_home=bool(getattr(args, 'fixture_xdg_home', False)),
                   fixture_latex_unicode=bool(getattr(args, 'fixture_latex_unicode', False)),
+                  fixture_no_tex=bool(getattr(args, 'fixture_no_tex', False)),
                   native_identity_scope='engine, rustc and cargo executable hashes, not loaded libraries or routing proof',
                   policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
     for stack, binary in (('baseline', args.baseline), ('candidate', args.candidate)):
@@ -122,7 +126,8 @@ def prepare(args):
         adapter.write_text(adapter_text(binary, args.engine if stack == 'candidate' else None,
                                         toolchain if stack == 'candidate' else None,
                                         fixture_xdg_home=report['fixture_xdg_home'],
-                                        fixture_latex_unicode=report['fixture_latex_unicode']))
+                                        fixture_latex_unicode=report['fixture_latex_unicode'],
+                                        fixture_no_tex=report['fixture_no_tex']))
         adapter.chmod(0o700)
         report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
         report.setdefault('commands', {})[stack] = suite_command(output, stack, args.seed)
@@ -280,6 +285,8 @@ def main(argv=None):
                    help='both adapters remove forced JCODE_HOME, requires private jcode-isolated-v2 runtime context')
     p.add_argument('--fixture-latex-unicode', action='store_true',
                    help='both private-runtime adapters select supported Unicode math rendering for synchronous fixture expectations')
+    p.add_argument('--fixture-no-tex', action='store_true',
+                   help='both private-runtime adapters explicitly select unavailable TeX command paths, narrowing fixture runtime scope')
     p.add_argument('--seed', type=int, default=1)
     p.set_defaults(function=prepare)
     p = subs.add_parser('run', help='execute comprehensive suite, potentially hours')

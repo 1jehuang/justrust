@@ -62,13 +62,14 @@ class HybridSuiteGateTests(unittest.TestCase):
 
     def test_fixture_xdg_mode_preserves_private_home_for_both_adapters(self):
         from runtime_context import runtime_context
-        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME", "JCODE_LATEX_RENDERING")}}))\n')
+        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME", "JCODE_LATEX_RENDERING", "JCODE_LATEX_COMMAND", "JCODE_DVIPNG_COMMAND", "JCODE_PDFLATEX_COMMAND", "JCODE_PDFTOCAIRO_COMMAND")}}))\n')
         for native in (False, True):
             adapter = self.root / ('fixture-native' if native else 'fixture-off')
             adapter.write_text(gate.adapter_text(self.tool, self.tool if native else None,
                                                 self.toolchain if native else None,
                                                 fixture_xdg_home=True,
-                                                fixture_latex_unicode=True))
+                                                fixture_latex_unicode=True,
+                                                fixture_no_tex=True))
             adapter.chmod(0o700)
             selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v2')
             with patch.dict(os.environ, selected, clear=True):
@@ -79,6 +80,10 @@ class HybridSuiteGateTests(unittest.TestCase):
                     child = json.loads(subprocess.check_output([str(adapter), 'test'], env=env, text=True))
                     self.assertIsNone(child['JCODE_HOME'])
                     self.assertEqual(child['JCODE_LATEX_RENDERING'], 'unicode')
+                    for command in ('LATEX', 'DVIPNG', 'PDFLATEX', 'PDFTOCAIRO'):
+                        path = Path(child['JCODE_' + command + '_COMMAND'])
+                        self.assertEqual(path, Path(env['HOME']) / '.benchmark-no-tex' / command.lower())
+                        self.assertFalse(path.exists())
                     self.assertEqual(child['HOME'], env['HOME'])
                     self.assertEqual(child['XDG_CONFIG_HOME'], str(Path(env['HOME']) / '.config'))
                     self.assertNotEqual(child['HOME'], selected.get('HOME'))
