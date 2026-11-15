@@ -153,6 +153,8 @@ pub(crate) enum Request {
     /// Atomically reserve existing ready workers. Never loads or starts a worker.
     /// Execution requires a second, explicit commit line on the same connection.
     ReadyBuild(Vec<Checkout>),
+    /// Read-only, nonblocking readiness probe. Never waits behind a busy reservation.
+    ReadyProbe,
     /// `cargo ra-jit check` of a build the daemon has no programs of: what a checker that
     /// loaded the workspace as it would finds in its crates, with no rustc.
     Check(Ahead),
@@ -184,6 +186,8 @@ impl Request {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Reply {
+    /// At least one worker is ready. This is only a hint, never execution admission.
+    ReadyAvailable,
     /// No work was dispatched. This is the only ready-only reply permitting fallback.
     ReadyMiss {
         reason: String,
@@ -1269,6 +1273,7 @@ impl Daemon {
                 Ok(()) => self.built(&checkout),
                 Err(why) => Reply::Cold { reason: format!("{why:#}") },
             },
+            Request::ReadyProbe => self.ready_probe(),
             Request::ReadyBuild(_) => Reply::ReadyMiss {
                 reason: "ready-only requests require the reservation handshake".to_owned(),
             },
@@ -1291,6 +1296,22 @@ impl Daemon {
         }
     }
 
+    /// A readiness-only probe must not queue behind native work or checker status.
+    fn ready_probe(&self) -> Reply {
+        let Ok(workers) = self.workers.try_lock() else {
+            return Reply::ReadyMiss { reason: "resident workers are busy".to_owned() };
+        };
+        let ready = workers.values().any(|worker| {
+            let Ok(checkouts) = worker.checkouts.try_lock() else { return false };
+            checkouts.values().any(|loaded| matches!(loaded.warmth, Warmth::Ready))
+        });
+        if ready {
+            Reply::ReadyAvailable
+        } else {
+            Reply::ReadyMiss { reason: "no resident worker is ready".to_owned() }
+        }
+    }
+
     /// Reserve the complete batch before dispatching anything. Holding the map lock keeps
     /// reaping, warming and replacement from stopping a selected worker between admission
     /// and dispatch. A dead worker after commitment is an execution failure, never a miss.
@@ -1300,7 +1321,9 @@ impl Daemon {
         mut stream: &UnixStream,
     ) -> anyhow::Result<Reply> {
         *lock(&self.asked) = Instant::now();
-        let workers = lock(&self.workers);
+        let Ok(workers) = self.workers.try_lock() else {
+            return Ok(Reply::ReadyMiss { reason: "resident workers are busy".to_owned() });
+        };
         let mut selected = Vec::with_capacity(checkouts.len());
         for checkout in checkouts {
             let Some(worker) = workers.get(&checkout.config.id()) else {
@@ -1739,7 +1762,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use std::io::BufRead as _;
+    use std::io::{BufRead as _, Write as _};
 
     #[cfg(unix)]
     struct ReadyFixture(Daemon, Checkout);
@@ -1911,6 +1934,51 @@ mod tests {
         assert!(
             lock(&worker.asked).elapsed() > Duration::from_secs(30),
             "cancelled reservation must not dispatch"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn busy_ready_probe_and_second_admission_miss_promptly_over_real_sockets() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let (reserved_server, reserved_client) = UnixStream::pair().unwrap();
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                fixture.0.ready_build(std::slice::from_ref(&fixture.1), &reserved_server)
+            });
+            let mut reserved = String::new();
+            BufReader::new(&reserved_client).read_line(&mut reserved).unwrap();
+            assert!(matches!(
+                serde_json::from_str::<Reply>(&reserved).unwrap(),
+                Reply::ReadyReserved
+            ));
+            for request in [Request::ReadyProbe, Request::ReadyBuild(vec![fixture.1.clone()])] {
+                let (server, mut client) = UnixStream::pair().unwrap();
+                client.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+                let response = scope.spawn(|| fixture.0.answer(server));
+                let envelope =
+                    Envelope { version: fixture.0.version.clone(), replaces: false, request };
+                writeln!(client, "{}", serde_json::to_string(&envelope).unwrap()).unwrap();
+                let start = Instant::now();
+                let mut reply = String::new();
+                BufReader::new(&client).read_line(&mut reply).unwrap();
+                assert!(start.elapsed() < Duration::from_secs(1));
+                assert!(
+                    matches!(
+                        serde_json::from_str::<Reply>(&reply).unwrap(),
+                        Reply::ReadyMiss { .. }
+                    ),
+                    "busy requests must not reserve or queue: {reply}"
+                );
+                response.join().unwrap().unwrap();
+            }
+            drop(reserved_client);
+            assert!(first.join().unwrap().is_err());
+        });
+        let workers = lock(&fixture.0.workers);
+        assert!(
+            workers.values().all(|worker| lock(&worker.asked).elapsed() > Duration::from_secs(30)),
+            "neither busy request may execute"
         );
     }
 

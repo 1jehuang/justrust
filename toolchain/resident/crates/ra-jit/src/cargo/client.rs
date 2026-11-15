@@ -89,11 +89,9 @@ pub(crate) fn has_ready_worker() -> bool {
     if stream.set_read_timeout(deadline).is_err() || stream.set_write_timeout(deadline).is_err() {
         return false;
     }
-    let envelope = Envelope { version: version(), replaces: false, request: Request::Status };
+    let envelope = Envelope { version: version(), replaces: false, request: Request::ReadyProbe };
     let Ok(envelope) = serde_json::to_string(&envelope) else { return false };
-    matches!(exchange(&mut stream, &envelope), Ok(Reply::Status(status)) if status.workers.iter().any(|worker| {
-        worker.checkouts.iter().any(|(_, warmth)| warmth == "ready")
-    }))
+    matches!(exchange(&mut stream, &envelope), Ok(Reply::ReadyAvailable))
 }
 
 /// Reserve an entire ready-only batch without ever starting or replacing a daemon.
