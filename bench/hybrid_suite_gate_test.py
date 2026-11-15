@@ -72,11 +72,21 @@ class HybridSuiteGateTests(unittest.TestCase):
             selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v2')
             with patch.dict(os.environ, selected, clear=True):
                 with runtime_context(selected, self.root) as env:
+                    # Real stack_env intentionally does not forward the parent
+                    # runtime selector. Test the actual child-facing contract.
+                    env.pop('JUSTRUST_BENCH_RUNTIME_CONTEXT', None)
                     child = json.loads(subprocess.check_output([str(adapter), 'test'], env=env, text=True))
                     self.assertIsNone(child['JCODE_HOME'])
                     self.assertEqual(child['HOME'], env['HOME'])
                     self.assertEqual(child['XDG_CONFIG_HOME'], str(Path(env['HOME']) / '.config'))
                     self.assertNotEqual(child['HOME'], selected.get('HOME'))
+
+    def test_fixture_xdg_metadata_probe_needs_no_private_home(self):
+        adapter = self.root / 'fixture-metadata'
+        adapter.write_text(gate.adapter_text(self.tool, fixture_xdg_home=True))
+        adapter.chmod(0o700)
+        child = subprocess.run([str(adapter), '--version'], text=True, capture_output=True)
+        self.assertEqual(child.returncode, 0, child.stderr)
 
     def test_fixture_xdg_mode_refuses_inherited_runtime(self):
         adapter = self.root / 'unsafe-fixture'

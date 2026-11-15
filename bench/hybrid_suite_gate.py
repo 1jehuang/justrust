@@ -45,8 +45,13 @@ binary = {str(binary)!r}
 engine = {str(engine) if engine is not None else None!r}
 toolchain = {str(toolchain) if toolchain is not None else None!r}
 args = sys.argv[1:]
-if {fixture_xdg_home!r}:
-    if os.environ.get('JUSTRUST_BENCH_RUNTIME_CONTEXT') != 'jcode-isolated-v2':
+if {fixture_xdg_home!r} and args and args[0] in {BUILD_COMMANDS!r}:
+    home = os.environ.get('HOME', '')
+    private = (os.path.basename(home) == 'home'
+               and os.path.basename(os.path.dirname(home)).startswith('justrust-runtime-')
+               and os.environ.get('XDG_CONFIG_HOME') == os.path.join(home, '.config')
+               and os.environ.get('JCODE_HOME') == os.path.join(home, '.jcode'))
+    if not private:
         sys.exit('fixture XDG mode requires jcode-isolated-v2 private HOME runtime context')
     # The pinned fixtures override XDG_CONFIG_HOME themselves. A forced
     # JCODE_HOME takes precedence and defeats their own credential isolation.
