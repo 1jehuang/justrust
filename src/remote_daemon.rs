@@ -110,6 +110,28 @@ pub fn connect() -> Result<UnixStream> {
             _ => shutdown_and_wait(&s),
         }
     }
+    // Shutdown's socket read can time out while the old daemon is still
+    // saving manifests. Starting now would make the replacement lose the
+    // lock race and exit, leaving us polling a socket nobody will bind.
+    // Verify retirement through the same lock the daemon uses, not EOF or
+    // socket disappearance. Never unlink a socket while its owner holds it.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(crate::remote::dir()?.join("daemon.lock"))?;
+    if let Some(s) = wait_for_daemon_lock(
+        &lock,
+        Duration::from_secs(30),
+        || {
+            let s = UnixStream::connect(&sock).ok()?;
+            ping(&s).is_ok_and(|p| p.build == me).then_some(s)
+        },
+        || std::thread::sleep(Duration::from_millis(20)),
+    )? {
+        return Ok(s);
+    }
+    drop(lock);
     spawn()?;
     let t = Instant::now();
     loop {
@@ -180,8 +202,40 @@ fn ping(s: &UnixStream) -> Result<Pong> {
     ping_with(s, Duration::from_secs(2))
 }
 
-/// Ask a daemon to exit and wait until it has (its end of the socket
-/// closes), so a replacement never races it for the lock or the socket.
+/// Wait for exclusive ownership before spawning a replacement. A socket
+/// timeout is not proof that the old daemon has finished saving manifests.
+fn wait_for_daemon_lock(
+    lock: &std::fs::File,
+    timeout: Duration,
+    mut ready: impl FnMut() -> Option<UnixStream>,
+    mut wait: impl FnMut(),
+) -> Result<Option<UnixStream>> {
+    let start = Instant::now();
+    loop {
+        // Another client may have already started our replacement. Its
+        // healthy socket is sufficient, even though it now owns the lock.
+        if let Some(s) = ready() {
+            return Ok(Some(s));
+        }
+        match lock.try_lock() {
+            Ok(()) => return Ok(None),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if start.elapsed() >= timeout {
+                    bail!(
+                        "sync daemon shutdown still holds daemon.lock after {timeout:?} (see ~/.justrust/remote/daemon.log)"
+                    );
+                }
+                wait();
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error).context("waiting for sync daemon shutdown lock");
+            }
+        }
+    }
+}
+
+/// Ask a daemon to exit and wait for its socket to close, up to the read
+/// timeout. Callers starting a replacement must also verify lock handoff.
 fn shutdown_and_wait(s: &UnixStream) {
     let Ok(mut w) = s.try_clone() else { return };
     if write_frame(&mut w, &Msg::Shutdown, &[]).is_err() {
@@ -2091,6 +2145,87 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn daemon_startup_waits_for_shutdown_lock_after_socket_closes() {
+        let base = std::env::temp_dir().join(format!("jr-shutdown-handoff-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("daemon.lock");
+        let old = std::fs::File::create(&path).unwrap();
+        old.try_lock().unwrap();
+        let replacement = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let (client, server) = UnixStream::pair().unwrap();
+        drop(server);
+        let mut byte = [0];
+        assert_eq!((&client).read(&mut byte).unwrap(), 0);
+
+        // No sleeps or scheduler assumptions: retirement releases its lock
+        // only once startup has observed contention after socket EOF.
+        let mut waits = 0;
+        let ready = wait_for_daemon_lock(
+            &replacement,
+            Duration::from_secs(30),
+            || None,
+            || {
+                waits += 1;
+                old.unlock().unwrap();
+            },
+        )
+        .unwrap();
+        assert!(ready.is_none());
+        assert_eq!(waits, 1);
+        assert!(matches!(
+            old.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        replacement.unlock().unwrap();
+        drop((old, replacement));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_startup_lock_wait_is_bounded_and_reuses_concurrent_replacement() {
+        let base = std::env::temp_dir().join(format!("jr-startup-bounded-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("daemon.lock");
+        let owner = std::fs::File::create(&path).unwrap();
+        owner.try_lock().unwrap();
+        let contender = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let error = wait_for_daemon_lock(
+            &contender,
+            Duration::ZERO,
+            || None,
+            || panic!("must not wait beyond deadline"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("shutdown still holds daemon.lock")
+        );
+        assert!(matches!(
+            contender.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+
+        let (client, _server) = UnixStream::pair().unwrap();
+        let mut client = Some(client);
+        assert!(
+            wait_for_daemon_lock(
+                &contender,
+                Duration::ZERO,
+                || client.take(),
+                || panic!("healthy replacement must not wait"),
+            )
+            .unwrap()
+            .is_some()
+        );
+        owner.unlock().unwrap();
+        drop((owner, contender));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn daemon_transport_policy_identity_invalidates_mode_changes_not_aliases() {
         let identity = |mode: Option<&str>, only: Option<&str>| {
