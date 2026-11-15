@@ -1,6 +1,275 @@
 # Snapshot-only prerequisites for hosted TUI tests at abff94eeb.
 # Scope environment-sensitive readers and writers with the shared test-env lock.
 # Restore aggregate environment guards before unlocking. No production changes.
+diff --git a/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_02.rs b/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_02.rs
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_02.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_02.rs
+@@ -478,6 +478,7 @@
+
+ #[test]
+ fn test_local_copy_badge_shortcut_accepts_alt_uppercase_encoding() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     // Route the copy into the in-process sink so this passes on a headless
+     // runner instead of hitting the real OS clipboard.
+@@ -507,10 +508,12 @@
+         "expected inline copied feedback: {}",
+         text
+     );
++    });
+ }
+
+ #[test]
+ fn test_remote_copy_badge_shortcut_supported() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let clipboard = CapturedClipboard::new();
+     let (mut app, mut terminal) = create_copy_test_app();
+@@ -541,6 +544,7 @@
+         "expected inline copied feedback: {}",
+         text
+     );
++    });
+ }
+
+ /// Ctrl+L collapses the (entirely blank) messages viewport so the numbered
+diff --git a/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_01.rs b/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_01.rs
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_01.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_01.rs
+@@ -166,6 +166,7 @@
+
+ #[test]
+ fn test_copy_selection_mode_toggle_shows_notification() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -181,10 +182,12 @@
+         "expected selection mode notification, got: {}",
+         text
+     );
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_select_all_uses_rendered_chat_text_without_copy_badges() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -204,10 +207,12 @@
+         "selection should use chat text, not copy badge chrome: {}",
+         selected
+     );
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_metrics_match_built_selection_text() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -237,10 +242,12 @@
+         text.lines().count().max(1),
+         "metrics line count should match built selection text"
+     );
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_full_user_prompt_line_skips_prompt_chrome() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -271,10 +278,12 @@
+         .current_copy_selection_text()
+         .expect("expected user prompt selection text");
+     assert_eq!(selected, "Show me some code");
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_swarm_message_skips_rail_chrome() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+     app.display_messages = vec![DisplayMessage::swarm("Broadcast", "hello team")];
+@@ -316,6 +325,7 @@
+         !selected.contains('│'),
+         "selection should omit swarm rail chrome: {selected:?}"
+     );
++    });
+ }
+
+ #[test]
+@@ -460,6 +470,7 @@
+
+ #[test]
+ fn test_copy_selection_mouse_drag_extracts_expected_multiline_range() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -546,10 +557,12 @@
+     });
+     assert!(app.copy_selection_mode);
+     assert!(!app.copy_selection_dragging);
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_mouse_click_does_not_enter_mode() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -593,10 +606,12 @@
+     assert!(!app.copy_selection_mode);
+     assert!(app.copy_selection_anchor.is_none());
+     assert!(app.copy_selection_cursor.is_none());
++    });
+ }
+
+ #[test]
+ fn test_copy_selection_mouse_drag_auto_copies_and_keeps_highlight() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+     let copied = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+@@ -686,6 +701,7 @@
+         app.status_notice(),
+         Some("Copied selection · highlight remains visible".to_string())
+     );
++    });
+ }
+
+ #[test]
+@@ -795,6 +811,7 @@
+
+ #[test]
+ fn test_copy_selection_copy_action_uses_clipboard_hook_and_exits_mode() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+     let copied = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+@@ -816,6 +833,7 @@
+     assert!(app.copy_selection_cursor.is_none());
+     assert!(copied.lock().unwrap().contains("println!(\"hello\");"));
+     assert_eq!(app.status_notice(), Some("Copied selection".to_string()));
++    });
+ }
+
+ #[test]
+diff --git a/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs b/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs
+@@ -1,5 +1,6 @@
+ #[test]
+ fn test_copy_badge_modifier_highlights_while_held() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_copy_test_app();
+
+@@ -34,6 +35,7 @@
+         KeyEventKind::Release,
+     ));
+     assert!(!app.copy_badge_ui().alt_active);
++    });
+ }
+
+ #[test]
+@@ -67,6 +69,7 @@
+
+ #[test]
+ fn test_expand_badge_shortcut_toggles_inline_diff_and_pulses_key() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     app.diff_mode = crate::config::DiffDisplayMode::Inline;
+@@ -79,6 +82,7 @@
+
+     assert_eq!(app.diff_mode, crate::config::DiffDisplayMode::FullInline);
+     assert!(app.copy_badge_ui().key_active.is_some());
++    });
+ }
+
+ #[test]
+@@ -142,6 +146,7 @@
+
+ #[test]
+ fn text_only_transcript_updates_keep_inline_image_signature_cached() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     app.is_remote = true;
+@@ -172,6 +177,7 @@
+         crate::tui::TuiState::side_pane_images_signature(&app),
+         signature
+     );
++    });
+ }
+
+ #[test]
+@@ -211,6 +217,7 @@
+
+ #[test]
+ fn test_alt_shift_i_is_inert_without_inline_images() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     app.is_remote = true;
+@@ -227,10 +234,12 @@
+         "toggle must stay inert when no images exist"
+     );
+     assert!(app.status_notice().is_none());
++    });
+ }
+
+ #[test]
+ fn test_expand_badge_shortcut_does_not_collapse_full_inline_diff() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     crate::tui::ui::clear_test_render_state_for_tests();
+@@ -247,6 +256,7 @@
+         app.status_notice().is_none(),
+         "full-inline E shortcut should not run expand/collapse action"
+     );
++    });
+ }
+
+ fn make_edit_badge_test_app(
+@@ -528,6 +538,7 @@
+
+ #[test]
+ fn test_expand_badge_shortcut_opens_full_inline_from_non_inline_mode() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     app.display_messages.push(DisplayMessage::tool(
+@@ -555,10 +566,12 @@
+
+     assert_eq!(app.diff_mode, crate::config::DiffDisplayMode::FullInline);
+     assert!(app.copy_badge_ui().key_active.is_some());
++    });
+ }
+
+ #[test]
+ fn test_expand_badge_shortcut_uses_display_messages_when_edit_count_is_stale() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, _terminal) = create_copy_test_app();
+     app.display_messages.push(DisplayMessage::tool(
+@@ -587,6 +600,7 @@
+
+     assert_eq!(app.diff_mode, crate::config::DiffDisplayMode::FullInline);
+     assert!(app.input.is_empty(), "shortcut should not insert text");
++    });
+ }
+
+ #[test]
 diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/src/tui/app/commands_tests.rs
 --- a/crates/jcode-tui/src/tui/app/commands_tests.rs
 +++ b/crates/jcode-tui/src/tui/app/commands_tests.rs

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify hosted TUI fixture prerequisites against the exact pinned sources."""
 import io
+import itertools
 import re
 import subprocess
 import tarfile
@@ -75,7 +76,87 @@ def assert_reader_coverage(case, path, source):
     return readers
 
 
+def assert_copy_reader_coverage(case, source):
+    """The env guard spans constructor generation capture through key dispatch."""
+    readers = {name: body for name, body in fixture_bodies(source).items()
+               if "create_copy_test_app()" in body}
+    for name, body in readers.items():
+        if "crate::storage::lock_test_env()" in body:
+            case.assertNotIn("with_local_jcode_home(|| {", body, name)
+            case.assertLess(body.index("lock_test_env()"), body.index("scroll_render_test_lock()"), name)
+        else:
+            case.assertTrue(body.startswith("    with_local_jcode_home(|| {\n"), name)
+            case.assertTrue(body.endswith("    });"), name)
+            case.assertNotRegex(body, r"(?:lock_test_env|lock_shared_state)\(", name)
+    return readers
+
+
 class HostedTuiPrerequisites(unittest.TestCase):
+    def test_copy_reader_config_generation_interleavings(self):
+        """Exhaust the two fixture schedules, with no sleeps or scheduler luck.
+
+        This is a protocol model, not hosted Rust acceptance. Source anchors
+        bind its generation capture, writer invalidation, and key dispatch to
+        the pinned implementation rather than inventing an unrelated mutex.
+        """
+        repo, revision = suite.SNAPSHOTS["desktop"]["repos"]["jcode"]
+
+        def source(path):
+            return subprocess.check_output(
+                ["git", "-C", str(repo), "show", f"{revision}:crates/{path}"], text=True)
+
+        lifecycle = source("jcode-tui/src/tui/app/tui_lifecycle.rs")
+        refresh = lifecycle.split("fn refresh_keybindings_if_config_reloaded", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("keybindings_config_generation: crate::config::config_reload_generation()", lifecycle)
+        self.assertIn("if generation == self.keybindings_config_generation", refresh)
+        self.assertIn('self.set_status_notice("Config reloaded from disk")', refresh)
+        dispatch = source("jcode-tui/src/tui/app/input.rs").split("fn handle_key_press_event", 1)[1].split("\n    }", 1)[0]
+        self.assertLess(dispatch.index("refresh_keybindings_if_config_reloaded()"), dispatch.index("handle_key_core("))
+        config = source("jcode-base/src/config.rs")
+        invalidation = config.split("pub fn invalidate_config_cache()", 1)[1].split("\n}", 1)[0]
+        self.assertIn("notify_config_reloaded();", invalidation)
+        self.assertIn("CONFIG_RELOAD_GENERATION.fetch_add(1", config)
+        fixture = source("jcode-tui/src/tui/app/tests/support_failover/part_01.rs")
+        writer = fixture.split("fn with_temp_jcode_home", 1)[1].split("\n}", 1)[0]
+        self.assertLess(writer.index("lock_test_env()"), writer.index("invalidate_config_cache()"))
+        self.assertLess(writer.index("invalidate_config_cache()"), writer.index("let result = f();"))
+        render = source("jcode-tui/src/tui/app/tests/scroll_copy_01/part_01.rs")
+        render_lock = render.split("fn scroll_render_test_lock()", 1)[1].split("\n}", 1)[0]
+        self.assertIn("render_state_test_lock()", render_lock)
+        self.assertNotIn("lock_test_env()", render_lock)
+
+        def mismatches(scoped):
+            outcomes = []
+            # Reader: acquire, construct/capture, dispatch/compare, release.
+            # Writer: acquire env lock, invalidate generation, release.
+            for reader_slots in itertools.combinations(range(7), 4):
+                events = iter(("r_lock", "capture", "dispatch", "r_unlock"))
+                writes = iter(("w_lock", "invalidate", "w_unlock"))
+                schedule = [next(events) if slot in reader_slots else next(writes) for slot in range(7)]
+                held, generation, captured, mismatch = None, 0, None, False
+                for event in schedule:
+                    if event in ("r_lock", "w_lock"):
+                        if event == "r_lock" and not scoped:
+                            continue  # render lock is a different resource
+                        if held is not None:
+                            break  # this interleaving blocks on the shared lock
+                        held = event[0]
+                    elif event == "capture":
+                        captured = generation
+                    elif event == "invalidate":
+                        generation += 1
+                    elif event == "dispatch":
+                        mismatch = captured != generation
+                    elif event == "w_unlock" or scoped:
+                        held = None
+                else:
+                    outcomes.append(mismatch)
+            return outcomes
+
+        self.assertIn(True, mismatches(scoped=False))
+        self.assertTrue(mismatches(scoped=True))
+        self.assertNotIn(True, mismatches(scoped=True))
+
     def test_registration_and_provenance(self):
         spec = suite.SNAPSHOTS["desktop"]
         self.assertEqual(spec["repos"]["jcode"][1], "abff94eeb")
@@ -101,7 +182,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
         self.assertIn('Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value)', text)
         self.assertEqual(text.count("+    let git_fixture = create_real_git_repo_fixture();"), 2)
         self.assertEqual(text.count("+    with_temp_jcode_home(|| {"), 11)
-        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 36)
+        self.assertEqual(text.count("+    with_local_jcode_home(|| {"), 54)
         self.assertIn("crate::auth::antigravity::save_tokens", text)
         self.assertIn("expires_at: i64::MAX", text)
         self.assertIn('let _ssh = EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"]);', text)
@@ -116,7 +197,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         if line.startswith("+++ b/")})
         targets = [line[6:] for line in (suite.ROOT / PATCH).read_text().splitlines()
                    if line.startswith("+++ b/")]
-        self.assertEqual(len(targets), 11)
+        self.assertEqual(len(targets), 14)
         for path in targets:
             if path == "crates/jcode-tui/src/tui/ui_header.rs":
                 continue  # Authorized exception, runtime-byte proof below.
@@ -146,6 +227,31 @@ class HostedTuiPrerequisites(unittest.TestCase):
                 self.assertEqual(assertions(original[path]), assertions(updated), path)
                 self.assertEqual(original[path].count("#[ignore"), updated.count("#[ignore"), path)
                 blocks = re.split(r"(?m)^#\[test\]\n", updated)[1:]
+                if "/scroll_copy_" in path:
+                    readers = assert_copy_reader_coverage(self, updated)
+                    self.assertEqual(len(readers), 2 if "scroll_copy_01" in path else
+                                     9 if path.endswith("part_01.rs") else 8)
+                    # Only wrap previously unowned copy readers. Helpers,
+                    # clipboard hooks, original locks, every test statement,
+                    # and all non-copy tests remain byte-for-byte identical.
+                    def scope_copy(match):
+                        body = match.group(2)
+                        if "create_copy_test_app()" not in body or "crate::storage::lock_test_env()" in body:
+                            return match.group(0)
+                        return match.group(1) + "    with_local_jcode_home(|| {\n" + body + "\n    });\n}"
+                    expected = re.sub(r"(#\[test\]\nfn \w+\(\) \{\n)(.*?)(?=\n\})\n\}",
+                                      scope_copy, original[path], flags=re.S)
+                    self.assertEqual(expected, updated)
+                    for name, body in readers.items():
+                        if "with_local_jcode_home(|| {" not in body:
+                            continue
+                        anchor = f"fn {name}() {{\n    with_local_jcode_home(|| {{\n"
+                        unguarded = updated.replace(anchor, f"fn {name}() {{\n")
+                        with self.assertRaisesRegex(AssertionError, name):
+                            assert_copy_reader_coverage(self, unguarded)
+                        nested = updated.replace(anchor, anchor + "    let _nested = crate::storage::lock_test_env();\n")
+                        with self.assertRaises(AssertionError):
+                            assert_copy_reader_coverage(self, nested)
                 if path.endswith("support_failover/part_01.rs"):
                     helper = updated.split("pub(super) fn with_local_jcode_home", 1)[1].split("\n}", 1)[0]
                     self.assertEqual(helper.count("with_temp_jcode_home(|| {"), 1)
@@ -254,9 +360,21 @@ class HostedTuiPrerequisites(unittest.TestCase):
                     self.assertIn('EnvRestoreGuard::capture(["JCODE_HOME"])', helper)
             previous_targets = {path: source for path, source in original.items()
                                 if not path.endswith(("/ui_messages/tests.rs", "/helpers_tests.rs",
-                                                     "/remote_startup_input_01/part_02.rs"))}
+                                                     "/remote_startup_input_01/part_02.rs"))
+                                and "/scroll_copy_" not in path}
             self.assertEqual(sum(len(test_names(source)) for source in previous_targets.values()), 254)
             self.assertEqual(sum(len(assertions(source)) for source in previous_targets.values()), 1077)
+            app = subprocess.check_output(
+                ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/app.rs"],
+                text=True)
+            self.assertRegex(app, r"#\[cfg\(test\)\]\s*mod tests;")
+            includes = subprocess.check_output(
+                ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/app/tests.rs"],
+                text=True)
+            for path in targets:
+                if "/scroll_copy_" in path:
+                    relative = path.split("/app/", 1)[1]
+                    self.assertIn(f'include!("{relative}");', includes)
             ui_messages = subprocess.check_output(
                 ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/ui_messages.rs"],
                 text=True)
