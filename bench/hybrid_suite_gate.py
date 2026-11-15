@@ -35,7 +35,8 @@ def executable(value):
 
 
 def adapter_text(binary, engine=None, toolchain=None, fixture_xdg_home=False,
-                 fixture_latex_unicode=False, fixture_no_tex=False):
+                 fixture_latex_unicode=False, fixture_no_tex=False,
+                 prewarm_after_success=False):
     # Keep metadata, cache and toolchain commands on the ordinary client path.
     # Explicit engine selection lives inside the adapter, so both suite parents
     # inherit identical controls and the candidate engine is recorded separately.
@@ -64,6 +65,8 @@ if {fixture_xdg_home!r} and args and args[0] in {BUILD_COMMANDS!r}:
         for command in ('LATEX', 'DVIPNG', 'PDFLATEX', 'PDFTOCAIRO'):
             os.environ['JCODE_' + command + '_COMMAND'] = os.path.join(home, '.benchmark-no-tex', command.lower())
 os.environ.pop('JUSTRUST_HYBRID', None)
+if {prewarm_after_success!r} and args and args[0] in {BUILD_COMMANDS!r}:
+    os.environ['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
 if engine is not None and args and args[0] in {BUILD_COMMANDS!r}:
     os.environ['JUSTRUST_NATIVE_ENGINE'] = engine
     os.environ['JUSTRUST_HYBRID_TOOLCHAIN'] = toolchain
@@ -119,6 +122,7 @@ def prepare(args):
                   fixture_xdg_home=bool(getattr(args, 'fixture_xdg_home', False)),
                   fixture_latex_unicode=bool(getattr(args, 'fixture_latex_unicode', False)),
                   fixture_no_tex=bool(getattr(args, 'fixture_no_tex', False)),
+                  prewarm_after_success=bool(getattr(args, 'prewarm_after_success', False)),
                   native_identity_scope='engine, rustc and cargo executable hashes, not loaded libraries or routing proof',
                   policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
     for stack, binary in (('baseline', args.baseline), ('candidate', args.candidate)):
@@ -127,7 +131,8 @@ def prepare(args):
                                         toolchain if stack == 'candidate' else None,
                                         fixture_xdg_home=report['fixture_xdg_home'],
                                         fixture_latex_unicode=report['fixture_latex_unicode'],
-                                        fixture_no_tex=report['fixture_no_tex']))
+                                        fixture_no_tex=report['fixture_no_tex'],
+                                        prewarm_after_success=report['prewarm_after_success']))
         adapter.chmod(0o700)
         report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
         report.setdefault('commands', {})[stack] = suite_command(output, stack, args.seed)
@@ -287,6 +292,8 @@ def main(argv=None):
                    help='both private-runtime adapters select supported Unicode math rendering for synchronous fixture expectations')
     p.add_argument('--fixture-no-tex', action='store_true',
                    help='both private-runtime adapters explicitly select unavailable TeX command paths, narrowing fixture runtime scope')
+    p.add_argument('--prewarm-after-success', action='store_true',
+                   help='both adapters explicitly set after-success prewarm control, ordinary baseline routing remains off')
     p.add_argument('--seed', type=int, default=1)
     p.set_defaults(function=prepare)
     p = subs.add_parser('run', help='execute comprehensive suite, potentially hours')

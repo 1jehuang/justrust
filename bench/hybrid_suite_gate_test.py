@@ -60,6 +60,22 @@ class HybridSuiteGateTests(unittest.TestCase):
         child = subprocess.check_output([str(output / 'baseline-exec'), 'test', '--lib'], env=env, text=True)
         self.assertEqual(json.loads(child), [['test', '--lib'], None, None, None])
 
+    def test_prewarm_control_is_explicit_and_symmetric(self):
+        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps([os.environ.get("JUSTRUST_HYBRID_PREWARM"), os.environ.get("JUSTRUST_HYBRID")]))\n')
+        for native in (False, True):
+            adapter = self.root / ('prewarm-native' if native else 'prewarm-off')
+            adapter.write_text(gate.adapter_text(self.tool, self.tool if native else None,
+                                                self.toolchain if native else None,
+                                                prewarm_after_success=True))
+            adapter.chmod(0o700)
+            env = dict(os.environ)
+            env.pop('JUSTRUST_HYBRID_PREWARM', None)
+            for command in ('build', 'check', 'test', 'run'):
+                child = json.loads(subprocess.check_output([str(adapter), command], env=env, text=True))
+                self.assertEqual(child, ['after-success', 'ready' if native else None])
+            child = json.loads(subprocess.check_output([str(adapter), 'clippy'], env=env, text=True))
+            self.assertEqual(child, [None, None])
+
     def test_fixture_xdg_mode_preserves_private_home_for_both_adapters(self):
         from runtime_context import runtime_context
         self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME", "JCODE_LATEX_RENDERING", "JCODE_LATEX_COMMAND", "JCODE_DVIPNG_COMMAND", "JCODE_PDFLATEX_COMMAND", "JCODE_PDFTOCAIRO_COMMAND")}}))\n')
