@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "date_utc": "2026-11-15",
+  "status": "blocked",
+  "promotion_authorized": false,
+  "archive": "bench/results/hybrid-canonical-20261115.tar.gz",
+  "archive_sha256": "72c95baf1d271d5a6b7866a95c64468d7e4063f73b7b4dcb68cd17072d67d1b5",
+  "archive_verification": {
+    "original_retained_log_hashes_verified": 185,
+    "baseline_logs": 86,
+    "candidate_logs": 85,
+    "aborted_socket_prefix_logs": 14,
+    "retention_missing_create_open": [],
+    "retention_overflow": false,
+    "frozen_generator_and_both_adapter_hashes_verified": true,
+    "scope": "Original reports, frozen adapter/runner source, literal routing observations, raw logs and preparation failures. No executable binaries, source snapshots, target trees or environment dumps."
+  },
+  "canonical_controls": {
+    "seed": 1,
+    "points": 40,
+    "repetitions": 1,
+    "generator": "86207da453da",
+    "JUSTRUST_REMOTE": "off",
+    "JUSTRUST_LOCAL_REASON": "controlled hybrid baseline",
+    "JUSTRUST_BENCH_RUNTIME_CONTEXT": "jcode-isolated-v2",
+    "RUST_TEST_THREADS": "1",
+    "JUSTRUST_TEST_PARALLEL": "0",
+    "JUSTRUST_TEST_SPLIT": "0",
+    "fixture_xdg_home": true,
+    "fixture_no_tex": true,
+    "fixture_latex_unicode": false,
+    "prewarm_after_success": true,
+    "fixture_git_identity": false
+  },
+  "baseline": {
+    "report": "v5-off-fixturenotex.json",
+    "sha256": "00cdbc9a09738eef3079b790c6a0ea48414ba66b4fce79427a166818c3799899",
+    "actual_points": 40,
+    "unexpected_error_points": [28, 35, 36],
+    "noisy_points": 8,
+    "client_sha256": "0197a3e67c2e4382b82c56d9f247004e11c7518120479dec0772baee54d3785a"
+  },
+  "candidate": {
+    "report": "v6-nativev5-short-fixturenotex.json",
+    "sha256": "a77be5827af0962163b437cce2ee07ad7ab54ae58bfbc55242237833d01713ca",
+    "finished_utc": "2026-11-15T16:23:35Z",
+    "actual_points": 40,
+    "run_wall_seconds": 1995.3441358609998,
+    "unexpected_error_points": [4, 28, 35, 36],
+    "noisy_points": 31,
+    "measured_sample_logs": 36,
+    "measured_native_committed_samples": 0,
+    "measured_cargo_fallback_samples": 36,
+    "client_sha256": "df496033304ecd59e980b7ed2b3d164bca5ecc5d8522c0aadd81e590cffe7289",
+    "engine_sha256": "980535cc07d248cb2a255a69569af288e26e85383889f0bf1015279bc8b0ecb3",
+    "private_namespace_cleanup_returncode": 0,
+    "private_namespace_cleanup_output": "daemon: stopped\n"
+  },
+  "strict_comparison": {
+    "command": "python3 bench/suite.py compare --require-valid BASELINE CANDIDATE",
+    "returncode": 2,
+    "inputs_unchanged_at_finalization": true,
+    "outcome_parity_blocked_points": [4, 28, 35, 36],
+    "comparison_eligible": false,
+    "evidence": "v6-nativev5-short-fixturenotex-evidence.json",
+    "evidence_sha256": "5e3b5dd53b6d062b3c8cf83cdaa280c5d34601d0108c0f263fd31c6be7c02c3d"
+  },
+  "observed_blockers": [
+    "Pinned desktop build_version fixtures require caller Git identity. Fresh isolated HOME loses global identity, reproduced privately as git commit exit128 Author identity unknown. Existing reports are not waived or rewritten.",
+    "Candidate point4 TUI image-label test failed: expected Image size: large, observed Image size: large followed by Image copied. Native preparation was active, actual sample recorded13.3otherCPUcores. Causation is not established by this observation.",
+    "Native desktop preparation failed const-random-macro/getrandom MIR UnresolvedMethod(map_err). Other preparation failed macro_rules_attribute MIR vec/flat_map, jcode-base duplicate backend definition, and ouroboros scoped-thread panic.",
+    "One desktop-model preparation finished successfully, but no measured sample committed native execution. Preparation success is not measured native benefit.",
+    "Initial candidate prefix was aborted after real native daemon socket pathname110bytes exceeded Unix socket limit. All14logs and explicit failed-prefix receipt retained. Fresh full40 replacement used a shorter namespace.",
+    "Baseline client releasev5 differs from candidate releasev6, so differences cannot be attributed exclusively to hybrid routing.",
+    "Host noise rejected8baseline and31candidate points. No valid session-weighted speedup or correctness parity claim follows."
+  ],
+  "future_only_repair": {
+    "commit": "8bc8e59e1",
+    "option": "--fixture-git-identity",
+    "requires": "--fixture-xdg-home",
+    "scope": "Future adapters only, explicit symmetric literal benchmark Git author/committer identity. Existing failed pair unchanged.",
+    "tests": "25 scoped unit/adapter integration tests passed in3.222seconds, including actual private-HOME git init/commit through both adapters without global configuration. These tests are not benchmark evidence.",
+    "active_input_preservation": "A draft edit raced a coordinator freeze message at16:18:10. Only that worker's exact six hunks were reversed after preserving the draft. Original generator SHA8fea0f1b7e4d511636f24237fa229d3b1329c7d18b42dcfc427641bd293806f9 was verified restored before final comparison. Future option applied only after16:23:35 finalization. Active adapters and manifests were never regenerated."
+  },
+  "conclusion": "The complete real canonical pair is blocked. No broad resident speedup, measured native benefit, correctness parity, or automatic promotion is established. No hosted jobs remain owned by this benchmark worker."
+}
