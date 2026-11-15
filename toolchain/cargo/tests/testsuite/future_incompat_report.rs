@@ -674,6 +674,127 @@ The package `without_updates v1.0.0` currently triggers the following future inc
         .run();
 }
 
+#[cfg(target_os = "linux")]
+#[cargo_test(
+    nightly,
+    reason = "-Zfuture-incompat-test requires nightly (permanently)"
+)]
+fn contended_download_skips_only_optional_update_hints() {
+    use cargo::util::cache_lock::{CacheLockMode, CacheLocker};
+    use cargo_test_support::{paths, retry};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    // Publish both versions before resolution so the cached index has a real
+    // upgrade hint. Pin the dependency to keep Cargo from choosing the fix.
+    Package::new("bar", "1.0.0")
+        .file("src/lib.rs", FUTURE_EXAMPLE)
+        .publish();
+    Package::new("bar", "2.0.0").publish();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                edition = "2015"
+                [dependencies]
+                bar = "=1.0.0"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .executable(
+            "wrapper.sh",
+            r#"#!/bin/sh
+"$@" || exit $?
+case " $* " in
+  *" --crate-name foo "*)
+    touch "$BENCH_HANDSHAKE/ready"
+    n=0
+    while [ ! -f "$BENCH_HANDSHAKE/resume" ]; do
+      n=$((n + 1))
+      [ "$n" -lt 1000 ] || exit 1
+      sleep 0.01
+    done
+    ;;
+esac
+"#,
+        )
+        .build();
+    p.cargo("fetch").run();
+
+    let mut check = p.cargo("check --future-incompat-report");
+    check
+        .masquerade_as_nightly_cargo(&["future-incompat-test"])
+        .env("RUSTFLAGS", "-Zfuture-incompat-test")
+        .env("RUSTC_WRAPPER", p.root().join("wrapper.sh"))
+        .env("BENCH_HANDSHAKE", p.root());
+    let mut child = check
+        .build_command()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Cargo has finished resolution/downloads and rustc has emitted the real
+    // diagnostic, but Cargo has not received its successful exit yet. Hold a
+    // separate locker now, rather than racing the mandatory resolution lock.
+    retry(100, || p.root().join("ready").exists().then_some(()));
+    let gctx = super::config::GlobalContextBuilder::new()
+        .root(paths::root())
+        .build();
+    let locker = CacheLocker::new();
+    let lock = locker
+        .lock(&gctx, CacheLockMode::DownloadExclusive)
+        .unwrap();
+    std::fs::write(p.root().join("resume"), "resume").unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let finished_under_lock = loop {
+        if child.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            // Bound regressions without leaving a blocked child behind.
+            child.kill().unwrap();
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    drop(lock);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        finished_under_lock,
+        "optional hints blocked the report: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    check
+        .with_stderr_contains("[WARNING] the following packages contain code that will be rejected by a future version of Rust: bar v1.0.0")
+        .with_stderr_contains("[..]ensure the maintainers know of this problem[..]")
+        .with_stderr_contains("[..]use your own version of the dependency with the `[patch]` section[..]")
+        .with_stderr_does_not_contain("[..]newer versions available[..]")
+        .with_stderr_does_not_contain("[..]Blocking waiting for file lock[..]")
+        .run_output(&output);
+
+    // The core compiler diagnostic must be persisted and retrievable even
+    // though the optional version lookup was skipped.
+    p.cargo("report future-incompatibilities")
+        .with_stdout_contains("[..]The package `bar v1.0.0` currently triggers the following future incompatibility lints:[..]")
+        .with_stdout_contains(FUTURE_OUTPUT)
+        .with_stdout_does_not_contain("[..]newer versions available[..]")
+        .run();
+
+    // Once the independent download lock is gone, normal hints still appear.
+    p.cargo("check --future-incompat-report")
+        .masquerade_as_nightly_cargo(&["future-incompat-test"])
+        .env("RUSTFLAGS", "-Zfuture-incompat-test")
+        .with_stderr_contains(
+            "[..]bar v1.0.0 has the following newer versions available: 2.0.0[..]",
+        )
+        .run();
+}
+
 #[cargo_test(
     nightly,
     reason = "-Zfuture-incompat-test requires nightly (permanently)"

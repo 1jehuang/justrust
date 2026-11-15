@@ -303,11 +303,13 @@ fn render_report(per_package_reports: &[FutureIncompatReportPackage]) -> BTreeMa
 /// the packages in `package_ids` have updates available.
 /// This is best-effort - if an error occurs, `None` will be returned.
 fn get_updates(ws: &Workspace<'_>, package_ids: &BTreeSet<PackageId>) -> Option<String> {
-    // This in general ignores all errors since this is opportunistic.
+    // This in general ignores all errors since this is opportunistic. Do not
+    // delay the report waiting for another Cargo's resolution or downloads:
+    // only the optional update hints require the package-cache lock.
     let _lock = ws
         .gctx()
-        .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)
-        .ok()?;
+        .try_acquire_package_cache_lock(CacheLockMode::DownloadExclusive)
+        .ok()??;
     // Create a set of updated registry sources.
     let map = SourceConfigMap::new(ws.gctx()).ok()?;
     let package_ids: BTreeSet<_> = package_ids
