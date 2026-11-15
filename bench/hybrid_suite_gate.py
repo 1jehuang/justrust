@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Run the existing comprehensive synth gate with an explicit hybrid candidate.
+
+This adds no benchmark semantics. suite.py owns generation, pinned snapshots,
+measurement, recording, noise rejection and comparison eligibility. The adapter
+only selects `justrust hybrid` for build commands. No automatic promotion occurs.
+Prepare and run on the host that owns the supplied executable paths.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+BUILD_COMMANDS = ('build', 'check', 'test', 'run', 'clippy')
+
+
+def sha256(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def executable(value):
+    path = Path(value).expanduser().resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise argparse.ArgumentTypeError(f'expected executable file: {path}')
+    return path
+
+
+def adapter_text(binary, engine=None):
+    # Keep metadata, cache and toolchain commands on the ordinary client path.
+    # Explicit engine selection lives inside the adapter, so both suite parents
+    # inherit identical controls and the candidate engine is recorded separately.
+    return f'''#!{sys.executable}
+import os
+import sys
+binary = {str(binary)!r}
+engine = {str(engine) if engine is not None else None!r}
+args = sys.argv[1:]
+if engine is not None and args and args[0] in {BUILD_COMMANDS!r}:
+    os.environ['JUSTRUST_NATIVE_ENGINE'] = engine
+    args.insert(0, 'hybrid')
+os.execv(binary, [binary, *args])
+'''
+
+
+def identities(paths):
+    return {name: {'path': str(path), 'sha256': sha256(path)} for name, path in paths.items()}
+
+
+def save(output, report):
+    temporary = output / 'gate.json.tmp'
+    temporary.write_text(json.dumps(report, indent=2) + '\n')
+    temporary.replace(output / 'gate.json')
+
+
+def suite_command(output, stack, seed=1):
+    return [sys.executable, str(HERE / 'suite.py'), 'run', '--synth', str(seed),
+            '-n', '1', '--points', '40', '--stop-on-invalid', '-o', str(output / (stack + '.json'))]
+
+
+def prepare(args):
+    output = args.output
+    output.mkdir(parents=True, mode=0o700, exist_ok=False)
+    tools = dict(baseline=args.baseline, candidate=args.candidate, engine=args.engine,
+                 suite=HERE / 'suite.py', synth=HERE / 'synth/run.py',
+                 generator=HERE / 'synth/gen.py', versus=HERE / 'versus.py',
+                 runtime=HERE / 'runtime_context.py', weights=HERE / 'synth/weights.json',
+                 prerequisites=HERE / 'prerequisites.py', gate=Path(__file__).resolve())
+    report = dict(schema=1, status='prepared', scope=__doc__, seed=args.seed,
+                  points=40, reps=1, tools=identities(tools), runs={},
+                  policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
+    for stack, binary in (('baseline', args.baseline), ('candidate', args.candidate)):
+        adapter = output / (stack + '-exec')
+        adapter.write_text(adapter_text(binary, args.engine if stack == 'candidate' else None))
+        adapter.chmod(0o700)
+        report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
+        report.setdefault('commands', {})[stack] = suite_command(output, stack, args.seed)
+    report['commands']['compare'] = [sys.executable, str(HERE / 'suite.py'), 'compare', '--require-valid',
+                                     str(output / 'baseline.json'), str(output / 'candidate.json')]
+    save(output, report)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def load_verified(output):
+    report = json.loads((output / 'gate.json').read_text())
+    if report.get('schema') != 1:
+        raise ValueError('unsupported gate manifest schema')
+    for item in [*report['tools'].values(), *report['adapters'].values()]:
+        if sha256(item['path']) != item['sha256']:
+            raise ValueError(f"input changed since preparation: {item['path']}")
+    return report
+
+
+def invoke(command, env, log):
+    start = time.monotonic()
+    # Inherit real console output. tee is not used, and no errors are hidden.
+    with log.open('x') as stream:
+        process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                   start_new_session=True)
+        try:
+            for line in process.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                stream.write(line)
+                stream.flush()
+            status = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            raise
+        finally:
+            process.stdout.close()
+    return dict(command=command, returncode=status, wall_seconds=time.monotonic() - start,
+                log=str(log), log_sha256=sha256(log))
+
+
+def control_identity(env):
+    """Bind performance-affecting ambient controls without publishing secrets."""
+    prefixes = ('JUSTRUST_', 'JR_ENGINE_', 'RA_JIT_', 'BLAZE_', 'CARGO_', 'RUST', 'BENCH_')
+    controls = {key: value for key, value in env.items()
+                if key.startswith(prefixes) or key in ('PATH', 'HOME', 'LD_LIBRARY_PATH')}
+    for key in ('JUSTRUST_BIN', 'JUSTRUST_NATIVE_ENGINE'):
+        controls.pop(key, None)
+    return hashlib.sha256(json.dumps(controls, sort_keys=True).encode()).hexdigest()
+
+
+def run(args):
+    report = load_verified(args.output)
+    controls = control_identity(os.environ)
+    if report.get('controls_sha256', controls) != controls:
+        raise ValueError('ambient performance controls changed between stacks')
+    report['controls_sha256'] = controls
+    stacks = ('baseline', 'candidate') if args.stack == 'both' else (args.stack,)
+    for stack in stacks:
+        if stack in report['runs'] or (args.output / (stack + '.json')).exists():
+            raise ValueError(f'{stack} already attempted, prepare a fresh output rather than overwriting evidence')
+        env = dict(os.environ)
+        env.pop('JUSTRUST_BIN', None)
+        env.pop('JUSTRUST_NATIVE_ENGINE', None)
+        env['JUSTRUST'] = report['adapters'][stack]['path']
+        report['status'] = 'running-' + stack
+        save(args.output, report)
+        result = invoke(report['commands'][stack], env, args.output / (stack + '.log'))
+        report['runs'][stack] = result
+        try:
+            load_verified(args.output)
+            result['inputs_unchanged'] = True
+        except ValueError:
+            result['inputs_unchanged'] = False
+        report['status'] = 'measured' if result['returncode'] == 0 and result['inputs_unchanged'] else 'blocked'
+        save(args.output, report)
+        if report['status'] == 'blocked':
+            return result['returncode'] or 2
+    return 0
+
+
+def compare(args):
+    report = load_verified(args.output)
+    if 'comparison' in report:
+        raise ValueError('comparison already attempted, evidence will not be overwritten')
+    if any(stack not in report['runs'] or report['runs'][stack]['returncode'] != 0
+           or not report['runs'][stack].get('inputs_unchanged') for stack in ('baseline', 'candidate')):
+        raise ValueError('both complete unchanged successful suite runs are required')
+    result = invoke(report['commands']['compare'], dict(os.environ), args.output / 'compare.log')
+    try:
+        load_verified(args.output)
+        result['inputs_unchanged'] = True
+    except ValueError:
+        result['inputs_unchanged'] = False
+    report['comparison'] = result
+    report['status'] = 'comparison-eligible' if result['returncode'] == 0 and result['inputs_unchanged'] else 'blocked'
+    report['promotion_authorized'] = False
+    save(args.output, report)
+    return result['returncode'] or (0 if result['inputs_unchanged'] else 2)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    subs = parser.add_subparsers(dest='operation', required=True)
+    p = subs.add_parser('prepare', help='write adapters and provenance, no builds')
+    p.add_argument('--baseline', required=True, type=executable)
+    p.add_argument('--candidate', required=True, type=executable)
+    p.add_argument('--engine', required=True, type=executable)
+    p.add_argument('--seed', type=int, default=1)
+    p.set_defaults(function=prepare)
+    p = subs.add_parser('run', help='execute comprehensive suite, potentially hours')
+    p.add_argument('--stack', choices=('baseline', 'candidate', 'both'), default='both')
+    p.set_defaults(function=run)
+    p = subs.add_parser('compare', help='run suite.py compare --require-valid, never promote')
+    p.set_defaults(function=compare)
+    for p in subs.choices.values():
+        p.add_argument('--output', required=True, type=lambda value: Path(value).expanduser().resolve())
+    args = parser.parse_args(argv)
+    return args.function(args)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
