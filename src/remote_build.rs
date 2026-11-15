@@ -1516,13 +1516,14 @@ fn run_remote_inner(
             h.to_string(),
         ));
     }
-    let hosted_hybrid = env
-        .iter()
-        .any(|(key, value)| key == "JUSTRUST_HOSTED_HYBRID" && value == "ready");
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
     let mut full = vec![sub.to_string()];
     full.extend(args.iter().cloned());
+    // Only an actually native-eligible request may omit Cargo telemetry.
+    // Artifact-delivery fallbacks retain the ordinary missing-summary policy.
+    let hosted_hybrid =
+        crate::remote_agent::hosted_hybrid_env(&full, &env).is_ok_and(|mapped| !mapped.is_empty());
     let compile_only = crate::remote_artifacts::test_no_run(&full);
     let json_output = full
         .iter()

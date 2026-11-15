@@ -906,7 +906,7 @@ fn mirror_cargo_home(client: &Path) -> Option<PathBuf> {
 
 /// Translate the explicit experiment only inside the already admitted guest run.
 /// Paths belong to the unprivileged tenant guest, not the calling machine.
-fn hosted_hybrid_env(
+pub(crate) fn hosted_hybrid_env(
     args: &[String],
     env: &[(String, String)],
 ) -> Result<Vec<(&'static str, String)>> {
