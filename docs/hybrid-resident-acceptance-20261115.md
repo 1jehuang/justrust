@@ -1,11 +1,63 @@
 # Hybrid resident acceptance, 2026-11-15
 
 Status: experimental and opt-in. Production defaults are unchanged. **Promotion
-is blocked pending a fresh automatic-preparation matrix, real managed timing,
-a valid broad comparison, and safe handling of the remaining compile-time
-input boundary below.** The targeted macro freshness regressions now
+is blocked pending reliable managed timing, a valid broad comparison, and safe
+handling of the remaining compile-time input boundary below.** The final automatic
+matrix now passes 37/37 cases. The targeted macro freshness regressions now
 pass on v5. This is an acceptance notebook, not a launch claim or authorization
 to promote.
+
+## Latest accepted focused results: native v5, 15:28 UTC
+
+The later `p4` run supersedes the earlier p3 timing diagnostic below. It passed
+**25/25 strict correctness rows**, including phase-specific error/recovery route
+checks, five paired edits, and actual LRU eviction. The final automatic `a5`
+run with client v6 and engine v5 passed **37/37 rows**, including compile-time
+macro freshness, compile-only preparation, exactly-once execution and cleanup.
+The unsupported automatic-check path now emits an explicit skip receipt without
+starting preparation. All raw receipts and hashes are in
+`bench/results/hybrid-resident-v5-final-20261115.tar.gz`.
+
+| Operation | Published Cargo control | Ready-only hybrid |
+| --- | ---: | ---: |
+| Body-edit median, five samples | 3.9577 s | 0.1231 s, resident committed |
+| After proven eviction, one paired sample | 4.0730 s | 4.0747 s, Cargo fallback |
+
+That is an observed **32.2x** ratio of hot-edit medians on this narrow fixture,
+not an end-to-end managed speedup or an isolated measurement of RAM residency.
+The host was not demonstrated quiet, and a client build overlapped part of the
+run. Both compiler/backend and retained state differ from the control.
+Manual initial preparation cost **37.574 s**, excluded from the hot median.
+At the observed median saving, its illustrative compute break-even is about
+**10 hot edits**, not a measured amortization guarantee. Peer preparation cost
+another **13.142 s**. The namespace used approximately **4.09 GiB PSS** just
+after preparation and **3.49 GiB** before peer loading. After proven eviction,
+the retained peer namespace used **2.15 GiB PSS**. These are sampled observations,
+not peak memory or a hard memory limit. The 1 MiB setting exercises a soft LRU
+policy, not bounded heap restoration.
+
+Current frozen client v6 SHA-256:
+`df496033304ecd59e980b7ed2b3d164bca5ecc5d8522c0aadd81e590cffe7289`.
+Current frozen engine v5 SHA-256:
+`980535cc07d248cb2a255a69569af288e26e85383889f0bf1015279bc8b0ecb3`.
+Earlier artifact identifiers and runs below are retained as historical evidence.
+
+## Same-client managed follow-up: no timing acceptance
+
+The v7 follow-up used the exact same frozen client v6 for ordinary Cargo and
+hybrid requests, eliminating our deliberate published-versus-candidate daemon
+version alternation. It did not finish: authoritative guest-side-effect reads
+failed after three read-only retries with normal hosted admission reporting
+`Hosted builds are temporarily unavailable`. The original report remains failed.
+No speedup is inferred from this incomplete run. A subsequent normal admitted
+shutdown stopped only its private warm namespace; independent exact-namespace
+process probes returned `[]` for both cold and warm homes. All 48 archived
+receipt hashes were verified in
+`bench/results/hybrid-managed-hosted-same-client-failed-20261115.tar.gz`.
+
+The preceding managed v6 experiment's 149 original receipt hashes were also
+verified in `bench/results/hybrid-managed-hosted-20261115.tar.gz`. Its initial
+cleanup failure is preserved separately from the later independent empty probe.
 
 ## Frozen artifacts
 
@@ -155,6 +207,52 @@ Downstream caches containing read facts do not by themselves prove that ready
 admission will reject every such change. These remain correctness limitations
 of the opt-in experiment, even if a particular broad workload passes. General
 Rust parity and unrestricted default promotion are not established.
+
+## Actual managed hosted diagnostic, client v6 / engine v5
+
+The fresh `managed-v6` attempt completed **30/30** foreground contracts through
+ordinary `justrust test --remote`, including five rotated body edits per route,
+type errors, assertion failures, recovery, exact route receipts, four-test
+selection parity and exactly-once remote side effects. Tools were unchanged.
+Manual preparation succeeded in **39.188 s** including its management request,
+separate from foreground timings.
+
+| Managed body-edit route | Median, five samples |
+| --- | ---: |
+| Published shipping control | 6.088 s |
+| Hybrid with no resident worker, Cargo fallback | 2.242 s |
+| Hybrid with ready resident worker, committed | 1.879 s |
+
+Transport/setup latency varied substantially. The ratio of shipping and warm
+medians is 3.24x, but the **median of the five paired shipping/warm ratios is
+only 1.52x** (individual ratios 10.57x, 1.45x, 1.58x, 0.90x and 1.52x).
+The cold hybrid also sometimes beat shipping despite using Cargo. This is a
+small variable-latency diagnostic, not evidence of a universal 3.24x advantage,
+and not comparable to a quiet in-process compiler-only benchmark.
+
+Inspection of the real local sync-daemon log identified a specific confound:
+alternating the published and candidate executables repeatedly changed the
+global daemon build identity, triggering shutdown, reconnect and mirror restore.
+Other agents' client builds also caused replacement. Therefore this is **not a
+clean estimate of the resident compiler's managed speedup**. A separate fresh
+same-client hybrid-OFF versus hybrid-ON experiment is required to avoid inducing
+that version churn ourselves. The observed daemon startup failure also exposed
+a bounded shutdown-lock handoff race; its fix is separate from these frozen
+measurements.
+
+The run's **overall gate failed initial cleanup**: both stop commands returned
+zero, but one process still carried the cold namespace marker at the 30-second
+probe deadline. The warm namespace was empty. A later independent normal
+admission probe verified both exact namespaces empty, without killing any
+process or altering the original failed report. All foreground measurements
+remain raw evidence, but the lifecycle deadline failure is not waived for
+promotion. The preceding `managed-v5` attempt failed at admission with a 503
+before its first warm edit and is retained separately in the same archive.
+
+Receipt: `bench/results/hybrid-managed-hosted-20261115.tar.gz`, **149** original
+receipt hashes verified. Includes original failed overall reports and the
+independent `cleanup-followup.json`; no source, target trees or environment
+dumps are archived.
 
 ## Managed hosted path and remaining gates
 
