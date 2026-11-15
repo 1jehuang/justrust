@@ -1,8 +1,10 @@
 # Hybrid resident acceptance, 2026-11-15
 
 Status: experimental and opt-in. Production defaults are unchanged. **Promotion
-is blocked by a stale proc-macro result in the automatic-preparation matrix.**
-This is an acceptance notebook, not a launch claim or authorization to promote.
+is blocked pending a fresh automatic-preparation matrix, real managed timing,
+and a valid broad comparison.** The targeted macro freshness regressions now
+pass on v5. This is an acceptance notebook, not a launch claim or authorization
+to promote.
 
 ## Frozen artifacts
 
@@ -123,6 +125,21 @@ Separately, this exact v4 artifact passed the real postcommit compiler-disconnec
 acceptance: an in-flight owned compiler was reaped, no request was replayed, and
 the same daemon successfully prepared and handled a later request. This is
 additional lifecycle evidence, not a resolution of the macro freshness blocker.
+
+The next checkpoint `jr-engine-v5` (SHA-256
+`980535cc07d248cb2a255a69569af288e26e85383889f0bf1015279bc8b0ecb3`)
+uses separate retained workers and immutable proc-macro artifact namespaces for
+changed compile-time input generations. It passed the exact pinned check,
+**413/413** full binary unit tests, release build, **24/24** unchanged real
+protocol cases, and the real compiler-disconnect case. Both previously failing
+same-size/same-timestamp macro and local-helper edits now safely miss, published
+Cargo sees 11, and explicit rewarming is followed by a successful committed
+request that also sees 11. Ordinary application source edits with a proc macro
+still use the ready worker.
+
+Receipt: `bench/results/hybrid-resident-v5-acceptance-20261115.tar.gz`.
+This closes the targeted reproduction, not the broader automatic-preparation,
+managed-latency, or canonical comparison gates.
 
 ## Managed hosted path and remaining gates
 
