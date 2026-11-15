@@ -112,3 +112,78 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/
  }
 
  #[test]
+diff --git a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
+--- a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
++++ b/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs
+@@ -1031,3 +1031,6 @@
+ fn test_save_and_restore_reload_state_preserves_queued_messages() {
++    // Save and restore both resolve process-global JCODE_HOME. Keep one owned
++    // home and the shared env lock for each complete reload roundtrip below.
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-reload-{}", std::process::id());
+@@ -1051,3 +1054,4 @@
+
+     assert!(App::restore_input_for_reload(&session_id).is_none());
++    });
+ }
+@@ -1056,3 +1060,4 @@
+ fn test_new_for_remote_restored_queued_messages_stay_queued_until_remote_idle() {
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-remote-queued-restore-{}", std::process::id());
+@@ -1072,3 +1077,4 @@
+     assert!(!restored.is_processing);
+     assert!(matches!(restored.status, ProcessingStatus::Idle));
++    });
+ }
+@@ -1098,3 +1104,4 @@
+ fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-reload-pending-{}", std::process::id());
+@@ -1148,3 +1155,4 @@
+     assert!(pending.retry_at.is_some());
+     assert!(restored.rate_limit_reset.is_some());
++    });
+ }
+@@ -1153,3 +1161,4 @@
+ fn test_save_and_restore_reload_state_promotes_inflight_prompt_to_startup_submission() {
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-reload-inflight-prompt-{}", std::process::id());
+@@ -1179,3 +1188,4 @@
+         "promoted startup submission should not linger as a passive pending retry"
+     );
++    });
+ }
+@@ -1184,3 +1194,4 @@
+ fn test_save_and_restore_reload_state_preserves_observe_mode() {
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-reload-observe-{}", std::process::id());
+@@ -1198,3 +1209,4 @@
+     );
+     assert_eq!(restored.observe_page_updated_at_ms, 42);
++    });
+ }
+@@ -1203,3 +1215,4 @@
+ fn test_save_and_restore_reload_state_preserves_split_view_mode() {
++    with_temp_jcode_home(|| {
+     let mut app = create_test_app();
+     let session_id = format!("test-reload-splitview-{}", std::process::id());
+@@ -1209,3 +1222,4 @@
+     let restored = App::restore_input_for_reload(&session_id).expect("reload state should exist");
+     assert!(restored.split_view_enabled);
++    });
+ }
+@@ -1257,3 +1271,4 @@
+ fn test_restore_reload_state_supports_legacy_input_format() {
++    with_temp_jcode_home(|| {
+     let session_id = format!("test-reload-legacy-{}", std::process::id());
+     let jcode_dir = crate::storage::jcode_dir().unwrap();
+@@ -1266,3 +1281,4 @@
+     assert_eq!(restored.cursor, 2);
+     assert!(restored.queued_messages.is_empty());
++    });
+ }

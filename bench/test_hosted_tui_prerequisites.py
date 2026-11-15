@@ -65,7 +65,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
         self.assertIn("impl Drop for LocalEnvironment", text)
         self.assertIn('Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value)', text)
         self.assertEqual(text.count("+    let git_fixture = create_real_git_repo_fixture();"), 2)
-        self.assertEqual(text.count("+    with_temp_jcode_home(|| {"), 3)
+        self.assertEqual(text.count("+    with_temp_jcode_home(|| {"), 10)
         self.assertIn("crate::auth::antigravity::save_tokens", text)
         self.assertIn("expires_at: i64::MAX", text)
         self.assertNotRegex(text, r"(?m)^\+.*(?:#\[ignore|#\[cfg|--ignored|set_current_dir)")
@@ -77,7 +77,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         if line.startswith("+++ b/")})
         targets = [line[6:] for line in (suite.ROOT / PATCH).read_text().splitlines()
                    if line.startswith("+++ b/")]
-        self.assertEqual(len(targets), 3)
+        self.assertEqual(len(targets), 4)
         for path in targets:
             self.assertTrue(path.startswith("crates/jcode-tui/src/tui/app/"), path)
             self.assertTrue("/tests/" in path or path.endswith("/commands_tests.rs"), path)
@@ -102,6 +102,22 @@ class HostedTuiPrerequisites(unittest.TestCase):
                 self.assertEqual(test_names(original[path]), test_names(updated), path)
                 self.assertEqual(assertions(original[path]), assertions(updated), path)
                 self.assertEqual(original[path].count("#[ignore"), updated.count("#[ignore"), path)
+                if path.endswith("remote_startup_input_03/part_01.rs"):
+                    roundtrips = []
+                    for block in re.split(r"(?m)^#\[test\]\n", updated)[1:]:
+                        if "save_input_for_reload(" not in block and "restore_input_for_reload(" not in block:
+                            continue
+                        name = re.search(r"fn (\w+)\(", block).group(1)
+                        roundtrips.append(name)
+                        self.assertRegex(block, r"fn \w+\(\) \{\s*(?://[^\n]*\n\s*)*with_temp_jcode_home\(\|\| \{", name)
+                    self.assertIn("test_save_and_restore_reload_state_preserves_interleave_and_pending_retry", roundtrips)
+                    self.assertGreaterEqual(len(roundtrips), 7)
+                    helper = subprocess.check_output(
+                        ["git", "-C", str(repo), "show",
+                         f"{revision}:crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs"],
+                        text=True)
+                    self.assertRegex(helper, r"fn with_temp_jcode_home[^\n]+\n\s*let _guard = crate::storage::lock_test_env\(\)")
+                    self.assertIn('EnvRestoreGuard::capture(["JCODE_HOME"])', helper)
             commands = subprocess.check_output(
                 ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/app/commands.rs"],
                 text=True)
