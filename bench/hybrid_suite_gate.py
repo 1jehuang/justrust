@@ -36,7 +36,7 @@ def executable(value):
 
 def adapter_text(binary, engine=None, toolchain=None, fixture_xdg_home=False,
                  fixture_latex_unicode=False, fixture_no_tex=False,
-                 prewarm_after_success=False):
+                 prewarm_after_success=False, fixture_git_identity=False):
     # Keep metadata, cache and toolchain commands on the ordinary client path.
     # Explicit engine selection lives inside the adapter, so both suite parents
     # inherit identical controls and the candidate engine is recorded separately.
@@ -59,6 +59,10 @@ if {fixture_xdg_home!r} and args and args[0] in {BUILD_COMMANDS!r}:
     # JCODE_HOME takes precedence and defeats their own credential isolation.
     # HOME and XDG remain private under the suite runtime context.
     os.environ.pop('JCODE_HOME', None)
+    if {fixture_git_identity!r}:
+        for role in ('AUTHOR', 'COMMITTER'):
+            os.environ['GIT_' + role + '_NAME'] = 'Hybrid benchmark fixture'
+            os.environ['GIT_' + role + '_EMAIL'] = 'hybrid-benchmark@example.invalid'
     if {fixture_latex_unicode!r}:
         os.environ['JCODE_LATEX_RENDERING'] = 'unicode'
     if {fixture_no_tex!r}:
@@ -107,6 +111,8 @@ def prepare(args):
     toolchain = native_toolchain(args.native_toolchain)
     if (getattr(args, 'fixture_latex_unicode', False) or getattr(args, 'fixture_no_tex', False)) and not getattr(args, 'fixture_xdg_home', False):
         raise ValueError('fixture Unicode rendering requires explicit fixture XDG private-home policy')
+    if getattr(args, 'fixture_git_identity', False) and not getattr(args, 'fixture_xdg_home', False):
+        raise ValueError('fixture Git identity requires explicit fixture XDG private-home policy')
     for tool in (args.baseline, args.candidate, args.engine):
         executable(tool)
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -122,6 +128,7 @@ def prepare(args):
                   fixture_xdg_home=bool(getattr(args, 'fixture_xdg_home', False)),
                   fixture_latex_unicode=bool(getattr(args, 'fixture_latex_unicode', False)),
                   fixture_no_tex=bool(getattr(args, 'fixture_no_tex', False)),
+                  fixture_git_identity=bool(getattr(args, 'fixture_git_identity', False)),
                   prewarm_after_success=bool(getattr(args, 'prewarm_after_success', False)),
                   native_identity_scope='engine, rustc and cargo executable hashes, not loaded libraries or routing proof',
                   policy='No default promotion. Require complete valid suite comparison plus independent routing/correctness and regression gates.')
@@ -132,6 +139,7 @@ def prepare(args):
                                         fixture_xdg_home=report['fixture_xdg_home'],
                                         fixture_latex_unicode=report['fixture_latex_unicode'],
                                         fixture_no_tex=report['fixture_no_tex'],
+                                        fixture_git_identity=report['fixture_git_identity'],
                                         prewarm_after_success=report['prewarm_after_success']))
         adapter.chmod(0o700)
         report.setdefault('adapters', {})[stack] = dict(path=str(adapter), sha256=sha256(adapter))
@@ -292,6 +300,8 @@ def main(argv=None):
                    help='both private-runtime adapters select supported Unicode math rendering for synchronous fixture expectations')
     p.add_argument('--fixture-no-tex', action='store_true',
                    help='both private-runtime adapters explicitly select unavailable TeX command paths, narrowing fixture runtime scope')
+    p.add_argument('--fixture-git-identity', action='store_true',
+                   help='both private-runtime adapters set literal benchmark-only Git author/committer identity, never global configuration')
     p.add_argument('--prewarm-after-success', action='store_true',
                    help='both adapters explicitly set after-success prewarm control, ordinary baseline routing remains off')
     p.add_argument('--seed', type=int, default=1)

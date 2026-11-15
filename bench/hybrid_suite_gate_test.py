@@ -104,6 +104,68 @@ class HybridSuiteGateTests(unittest.TestCase):
                     self.assertEqual(child['XDG_CONFIG_HOME'], str(Path(env['HOME']) / '.config'))
                     self.assertNotEqual(child['HOME'], selected.get('HOME'))
 
+    def test_fixture_git_identity_requires_private_home_policy(self):
+        output = self.root / 'git-gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.tool, seed=1, native_toolchain=self.toolchain,
+                                  fixture_git_identity=True, fixture_xdg_home=False)
+        with self.assertRaisesRegex(ValueError, 'Git identity requires explicit fixture XDG'):
+            gate.prepare(args)
+        self.assertFalse(output.exists())
+
+    def test_fixture_git_identity_real_commit_is_symmetric_and_private(self):
+        from runtime_context import runtime_context
+        self.tool.write_text(f'''#!{sys.executable}
+import json,os,pathlib,subprocess
+home=pathlib.Path(os.environ['HOME'])
+assert not (home / '.gitconfig').exists()
+repo=home / 'git-fixture'
+repo.mkdir()
+def git(*args):
+    return subprocess.check_output(['git','-C',str(repo),*args],text=True,stderr=subprocess.STDOUT)
+git('init','-q','--initial-branch=main')
+git('config','commit.gpgsign','false')
+git('commit','--allow-empty','-qm','Benchmark fixture')
+print(json.dumps(dict(identity=git('log','-1','--format=%an|%ae|%cn|%ce').strip(),
+                     home=str(home),global_config=(home / '.gitconfig').exists(),
+                     env={{k:os.environ.get(k) for k in ('GIT_AUTHOR_NAME','GIT_AUTHOR_EMAIL','GIT_COMMITTER_NAME','GIT_COMMITTER_EMAIL')}})))
+''')
+        identities = []
+        for native in (False, True):
+            adapter = self.root / ('git-native' if native else 'git-off')
+            adapter.write_text(gate.adapter_text(self.tool, self.tool if native else None,
+                                                self.toolchain if native else None,
+                                                fixture_xdg_home=True, fixture_git_identity=True))
+            adapter.chmod(0o700)
+            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v2',
+                            GIT_AUTHOR_NAME='ambient wrong identity', GIT_AUTHOR_EMAIL='ambient@example.invalid')
+            with patch.dict(os.environ, selected, clear=True):
+                with runtime_context(selected, self.root) as env:
+                    env.pop('JUSTRUST_BENCH_RUNTIME_CONTEXT', None)
+                    child = json.loads(subprocess.check_output([str(adapter), 'test'], env=env, text=True))
+                    self.assertEqual(child['home'], env['HOME'])
+                    self.assertFalse(child['global_config'])
+                    identities.append(child['env'])
+                    self.assertEqual(child['identity'], 'Hybrid benchmark fixture|hybrid-benchmark@example.invalid|Hybrid benchmark fixture|hybrid-benchmark@example.invalid')
+        self.assertEqual(identities[0], identities[1])
+
+    def test_fixture_git_identity_provenance_and_hashes(self):
+        output = self.root / 'git-gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.tool, seed=1, native_toolchain=self.toolchain,
+                                  fixture_git_identity=True, fixture_xdg_home=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            gate.prepare(args)
+        report = gate.load_verified(output)
+        self.assertTrue(report['fixture_git_identity'])
+        for stack in ('baseline', 'candidate'):
+            adapter = report['adapters'][stack]
+            self.assertEqual(gate.sha256(adapter['path']), adapter['sha256'])
+            self.assertIn("'hybrid-benchmark@example.invalid'", Path(adapter['path']).read_text())
+        default = json.loads((self.prepare() / 'gate.json').read_text())
+        self.assertFalse(default['fixture_git_identity'])
+        self.assertNotEqual(default['adapters']['baseline']['sha256'], report['adapters']['baseline']['sha256'])
+
     def test_fixture_unicode_requires_private_home_policy(self):
         output = self.root / 'gate'
         args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
