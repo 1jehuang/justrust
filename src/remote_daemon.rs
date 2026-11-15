@@ -3023,6 +3023,70 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn hosted_mirror_namespaces_real_transfer_isolates_late_full_sync_and_preserves_reconnect() {
+        let base = std::env::temp_dir().join(format!(
+            "jr-hosted-source-isolation-{}",
+            remote_checkpoint::new_token()
+        ));
+        let home = base.join("remote-home");
+        let source = base.join("client/project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(source.join("src")).unwrap();
+        let resolve = |namespace: &str| {
+            let out = Command::new("sh")
+                .args(["-c", &hosted_mirror_script(namespace)])
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        let old_namespace = remote_checkpoint::new_token();
+        let current_namespace = remote_checkpoint::new_token();
+        let old = Mirror {
+            target: None,
+            prefix: resolve(&old_namespace),
+        };
+        let current = Mirror {
+            target: None,
+            prefix: resolve(&current_namespace),
+        };
+        assert_ne!(old.prefix, current.prefix);
+        assert_eq!(current.prefix, resolve(&current_namespace));
+        assert_eq!(hosted_mirror_namespace(), hosted_mirror_namespace());
+
+        // The live daemon mirrors a new lib target and manifest.
+        let manifest = "[package]\nname='project'\nversion='0.1.0'\n[lib]\npath='src/lib.rs'\n";
+        std::fs::write(source.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(source.join("src/lib.rs"), "pub fn current() {}\n").unwrap();
+        current.prepare(&source).unwrap();
+        current.rsync(&source).unwrap();
+
+        // A retired daemon now sends an older complete checkout, including
+        // --delete. It must not remove the live lib or replace its manifest.
+        std::fs::write(source.join("Cargo.toml"), "[package]\nname='old'\n").unwrap();
+        std::fs::remove_file(source.join("src/lib.rs")).unwrap();
+        old.prepare(&source).unwrap();
+        old.rsync(&source).unwrap();
+        let live = PathBuf::from(current.remote(&source));
+        assert_eq!(
+            std::fs::read_to_string(live.join("Cargo.toml")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read_to_string(live.join("src/lib.rs")).unwrap(),
+            "pub fn current() {}\n"
+        );
+        assert!(
+            !PathBuf::from(old.remote(&source))
+                .join("src/lib.rs")
+                .exists()
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn resolve_remote_prefix_uses_non_overlapping_mirror_dir_in_script() {
         // The fallback remote mirror path must not live inside ~/.justrust,
