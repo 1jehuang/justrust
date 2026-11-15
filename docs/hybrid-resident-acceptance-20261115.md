@@ -2,7 +2,8 @@
 
 Status: experimental and opt-in. Production defaults are unchanged. **Promotion
 is blocked pending a fresh automatic-preparation matrix, real managed timing,
-and a valid broad comparison.** The targeted macro freshness regressions now
+a valid broad comparison, and safe handling of the remaining compile-time
+input boundary below.** The targeted macro freshness regressions now
 pass on v5. This is an acceptance notebook, not a launch claim or authorization
 to promote.
 
@@ -139,7 +140,21 @@ still use the ready worker.
 
 Receipt: `bench/results/hybrid-resident-v5-acceptance-20261115.tar.gz`.
 This closes the targeted reproduction, not the broader automatic-preparation,
-managed-latency, or canonical comparison gates.
+managed-latency, or canonical comparison gates. Separately, the current hybrid
+Python harness suite passed **64** tests and the integrated state-restore,
+resident-tier, runtime-context and comparison-gate suite passed **82** tests.
+These are harness regression results, not additional native performance samples.
+
+### Remaining compile-time input boundary
+
+The targeted fix is not a complete compile-time dependency tracker. The current
+precommit key does not cover macro include data or build-script reads outside
+the tracked local package roots. Nested `target`/`.git` trees and mutable
+registry/git source contents are also outside that package-content key.
+Downstream caches containing read facts do not by themselves prove that ready
+admission will reject every such change. These remain correctness limitations
+of the opt-in experiment, even if a particular broad workload passes. General
+Rust parity and unrestricted default promotion are not established.
 
 ## Managed hosted path and remaining gates
 

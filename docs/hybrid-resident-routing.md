@@ -36,6 +36,10 @@ errors instead of being silently repurposed.
 
 `JUSTRUST_HYBRID_PREWARM=after-success` additionally requests
 background preparation **after** a successful Cargo fallback has completed.
+`check` stays on ordinary Cargo: the whole-program resident engine does not
+support it, so automatic preparation is explicitly skipped without launching a
+background process. Build/test/run selections may request preparation; their
+native feature support is still experimental.
 Without it, preparation is manual. Failed fallback commands do not trigger it.
 Only one preparation runs at a time in a hybrid namespace, protected by an
 OS-held lock rather than a persistent PID or lockfile-existence guess. Its
@@ -78,7 +82,9 @@ and account isolation still apply. Local native paths are never automatically
 forwarded. The remote agent maps the hosted settings only into its unprivileged
 build child and removes the hosted markers there, preventing fallback recursion.
 
-The initial hosted experiment admits executing `test` and `check`. Commands
+The hosted wrapper allows executing `test` and `check` requests into the
+ready-only protocol. Native whole-program `check` is currently unsupported and
+therefore safely misses back to Cargo. Commands
 that need local artifact delivery, including `build`, `run`, `test --no-run`,
 `--doc`, or explicit artifact-fetch/output options, retain Cargo routing and
 report why native routing was not selected. A successful native build in a
