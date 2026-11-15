@@ -477,6 +477,9 @@ struct Worker {
     log: PathBuf,
     child: Mutex<Child>,
     checkouts: Mutex<FxHashMap<String, Loaded>>,
+    /// Serializes whole request batches, including ordinary prewarm and editor work.
+    /// Ready-only admission must reserve this without waiting before commitment.
+    dispatch: Mutex<()>,
     asked: Mutex<Instant>,
     /// The requests it is answering now.
     answering: AtomicUsize,
@@ -604,6 +607,7 @@ impl Worker {
             socket,
             log,
             child: Mutex::new(child),
+            dispatch: Mutex::new(()),
             checkouts: Mutex::new(FxHashMap::from_iter([(checkout.key.clone(), loading)])),
             asked: Mutex::new(Instant::now()),
             answering: AtomicUsize::new(0),
@@ -713,6 +717,7 @@ impl Worker {
 
     /// The errors in the source, when the worker found any.
     fn warmed(&self, checkout: &Checkout) -> anyhow::Result<Option<crate::errors::Said>> {
+        let _dispatch = lock(&self.dispatch);
         self.connected()?;
         // A source written since cargo built is the daemon's like any edit: it compiles
         // every function and static of the workspace from what it reads. The program the
@@ -789,6 +794,12 @@ impl Worker {
     /// Brings the programs of `checkout` up to date, all at once: the worker builds the
     /// requests that wait for it together.
     fn sync(&self, checkout: &Checkout) -> Reply {
+        let _dispatch = lock(&self.dispatch);
+        self.sync_reserved(checkout)
+    }
+
+    /// The caller owns this worker's dispatch reservation for the whole batch.
+    fn sync_reserved(&self, checkout: &Checkout) -> Reply {
         let spans = Mutex::new(Vec::new());
         let asked: Vec<anyhow::Result<Result<String, NotBuilt>>> = std::thread::scope(|scope| {
             let asking: Vec<_> = checkout
@@ -1253,6 +1264,7 @@ impl Daemon {
             format!("the daemon has no workspace loaded that has {}", path.display())
         })?;
         *lock(&worker.asked) = Instant::now();
+        let _dispatch = lock(&worker.dispatch);
         let mut stream = socket::connect(&worker.socket)?;
         // The worker builds it for the process its last build was for.
         stream.write_all(format!("{line}\n\n").as_bytes())?;
@@ -1304,6 +1316,7 @@ impl Daemon {
             return Reply::ReadyMiss { reason: "resident workers are busy".to_owned() };
         };
         let ready = workers.values().any(|worker| {
+            let Ok(_dispatch) = worker.dispatch.try_lock() else { return false };
             let Ok(checkouts) = worker.checkouts.try_lock() else { return false };
             checkouts.values().any(|loaded| matches!(loaded.warmth, Warmth::Ready))
         });
@@ -1327,10 +1340,16 @@ impl Daemon {
             return Ok(Reply::ReadyMiss { reason: "resident workers are busy".to_owned() });
         };
         let mut selected = Vec::with_capacity(checkouts.len());
+        let mut reservations = Vec::with_capacity(checkouts.len());
         for checkout in checkouts {
             let Some(worker) = workers.get(&checkout.config.id()) else {
                 return Ok(Reply::ReadyMiss {
                     reason: "no resident worker for this configuration".to_owned(),
+                });
+            };
+            let Ok(reservation) = worker.dispatch.try_lock() else {
+                return Ok(Reply::ReadyMiss {
+                    reason: "resident worker is answering another request".to_owned(),
                 });
             };
             let ready = worker.ended().is_none()
@@ -1344,6 +1363,7 @@ impl Daemon {
                 });
             }
             selected.push(worker);
+            reservations.push(reservation);
         }
         if selected.is_empty() {
             return Ok(Reply::ReadyMiss { reason: "no native programs to dispatch".to_owned() });
@@ -1363,9 +1383,10 @@ impl Daemon {
             .zip(checkouts)
             .map(|(worker, checkout)| {
                 *lock(&worker.asked) = Instant::now();
-                worker.sync(checkout)
+                worker.sync_reserved(checkout)
             })
             .collect();
+        drop(reservations);
         drop(workers);
         Ok(Reply::ReadyBuilt { replies })
     }
@@ -1811,6 +1832,7 @@ mod tests {
                 socket: root.join("sock"),
                 log: root.join("log"),
                 child: Mutex::new(Command::new("sleep").arg("60").spawn().unwrap()),
+                dispatch: Mutex::new(()),
                 checkouts: Mutex::new(FxHashMap::from_iter([(
                     checkout.key.clone(),
                     Loaded { generation: 1, root: root.clone(), warmth },
@@ -2008,6 +2030,36 @@ mod tests {
             workers.values().all(|worker| lock(&worker.asked).elapsed() > Duration::from_secs(30)),
             "neither busy request may execute"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_worker_request_makes_ready_probe_and_admission_miss_without_queueing() {
+        let fixture = ReadyFixture::new(Warmth::Ready);
+        let worker = lock(&fixture.0.workers).values().next().unwrap().clone();
+        let _ordinary_request = lock(&worker.dispatch);
+        assert!(fixture.0.workers.try_lock().is_ok(), "only worker dispatch is busy");
+        std::thread::scope(|scope| {
+            for request in [Request::ReadyProbe, Request::ReadyBuild(vec![fixture.1.clone()])] {
+                let (server, mut client) = UnixStream::pair().unwrap();
+                client.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+                let response = scope.spawn(|| fixture.0.answer(server));
+                let envelope =
+                    Envelope { version: fixture.0.version.clone(), replaces: false, request };
+                writeln!(client, "{}", serde_json::to_string(&envelope).unwrap()).unwrap();
+                let mut reply = String::new();
+                BufReader::new(&client).read_line(&mut reply).unwrap();
+                assert!(
+                    matches!(
+                        serde_json::from_str::<Reply>(&reply).unwrap(),
+                        Reply::ReadyMiss { .. }
+                    ),
+                    "must miss before commitment: {reply}"
+                );
+                response.join().unwrap().unwrap();
+            }
+        });
+        assert!(lock(&worker.asked).elapsed() > Duration::from_secs(30));
     }
 
     #[test]
