@@ -1277,6 +1277,215 @@ mod serve_tests {
 #[cfg(test)]
 mod relay_tests {
     use super::*;
+    #[cfg(unix)]
+    mod transport_contention {
+        //! Focused policy diagnostic, not a build benchmark. Uses production Relay,
+        //! cache verification and length-prefixed frames over a real Unix socket pair.
+        //! Fixed per-data-frame pacing represents an occupied shared transport. The
+        //! control uses the pre-7660d2bc7 unconditional callback, not an old binary.
+        use super::*;
+        use std::sync::atomic::AtomicBool;
+
+        const ENTRIES: usize = 4;
+        const PACE: Duration = Duration::from_millis(30);
+
+        struct Cache(PathBuf);
+        impl Cache {
+            fn new() -> Self {
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                let path = std::env::temp_dir().join(format!(
+                    "jr-warmup-transport-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+                std::fs::create_dir(&path).unwrap();
+                note_toolchain(&path, "warmup-diagnostic");
+                Self(path)
+            }
+
+            fn populate(&self) -> u64 {
+                for index in 0..ENTRIES {
+                    let out = format!("{:032x}", index + 1);
+                    let dir = self.0.join("o").join(&out);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    // Incompressible deterministic bytes ensure multiple real CHUNKs.
+                    let mut state = 0x12345678_u32 + index as u32;
+                    let bytes: Vec<u8> = (0..(CHUNK * 2 + 8192))
+                        .map(|_| {
+                            state ^= state << 13;
+                            state ^= state >> 17;
+                            state ^= state << 5;
+                            state as u8
+                        })
+                        .collect();
+                    std::fs::write(dir.join("artifact"), &bytes).unwrap();
+                    let meta = serde_json::json!({
+                        "files": [{"name":"artifact", "text":false,
+                            "hash":depcache::hash_file_content(&dir.join("artifact")).unwrap()}],
+                        "stderr":[], "wall":4.0
+                    });
+                    std::fs::write(dir.join("meta.json"), meta.to_string()).unwrap();
+                    let item = OfferItem {
+                        base: "c".repeat(32),
+                        line: format!(r#"{{"inputs":[],"env":[],"out":"{out}"}}"#),
+                        out,
+                        bytes: bytes.len() as u64,
+                        wall: 4.0,
+                        tc: "warmup-diagnostic".into(),
+                    };
+                    paths::append_line(&journal(&self.0), &serde_json::to_string(&item).unwrap())
+                        .unwrap();
+                }
+                std::fs::metadata(journal(&self.0)).unwrap().len()
+            }
+        }
+        impl Drop for Cache {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[derive(Default)]
+        struct Timing {
+            arrival: Option<Instant>,
+            first_bundle_end: Option<Instant>,
+            bundles: usize,
+            frames: usize,
+        }
+
+        fn endpoint(
+            root: &Path,
+            stream: UnixStream,
+            idle: Arc<AtomicBool>,
+            timing: Arc<Mutex<Timing>>,
+        ) -> (Arc<Relay>, std::thread::JoinHandle<()>, UnixStream) {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let shutdown = stream.try_clone().unwrap();
+            let mut reader = stream.try_clone().unwrap();
+            let writer = Mutex::new(stream);
+            let mut relay = Relay::new(true, move |msg, bytes| {
+                let mut writer = writer.lock().unwrap();
+                if let Msg::CacheData { ok: true, last, .. } = msg {
+                    {
+                        let mut t = timing.lock().unwrap();
+                        if t.arrival.is_none() {
+                            t.arrival = Some(Instant::now());
+                            idle.store(false, Ordering::SeqCst);
+                        }
+                        t.frames += 1;
+                    }
+                    std::thread::sleep(PACE);
+                    // Hold the timing lock across the final write so a fast
+                    // receiver cannot inspect counts before sender bookkeeping.
+                    let mut final_timing = last.then(|| timing.lock().unwrap());
+                    if write_frame(&mut *writer, msg, bytes).is_err() {
+                        return false;
+                    }
+                    if let Some(t) = final_timing.as_mut() {
+                        t.bundles += 1;
+                        t.first_bundle_end.get_or_insert_with(Instant::now);
+                    }
+                    true
+                } else {
+                    write_frame(&mut *writer, msg, bytes).is_ok()
+                }
+            });
+            let inner = Arc::get_mut(&mut relay).unwrap();
+            inner.root = Some(root.to_owned());
+            inner.capable = true;
+            let receiver = relay.clone();
+            let thread = std::thread::spawn(move || {
+                while let Ok(Some((msg, payload))) = read_frame(&mut reader) {
+                    assert!(receiver.on_frame(&msg, &payload));
+                }
+                receiver.close();
+            });
+            (relay, thread, shutdown)
+        }
+
+        #[test]
+        fn foreground_yield_transport_acceptance() {
+            let source = Cache::new();
+            let next = source.populate();
+            let mut measured = Vec::new();
+            for legacy in [true, false] {
+                let local = Cache::new();
+                let idle = Arc::new(AtomicBool::new(true));
+                let timing = Arc::new(Mutex::new(Timing::default()));
+                let (a, b) = UnixStream::pair().unwrap();
+                let (client, client_reader, a) =
+                    endpoint(&local.0, a, idle.clone(), Arc::default());
+                let (_server, server_reader, b) =
+                    endpoint(&source.0, b, idle.clone(), timing.clone());
+                let first = client.pull_new_while(0, || legacy || idle.load(Ordering::SeqCst));
+                let done = Instant::now();
+                let (wait, residual, frames) = {
+                    let t = timing.lock().unwrap();
+                    assert_eq!(t.bundles, if legacy { ENTRIES } else { 1 });
+                    assert!(
+                        t.frames >= t.bundles * 3,
+                        "fixture must span multiple chunks"
+                    );
+                    (
+                        done.duration_since(t.arrival.unwrap()),
+                        t.first_bundle_end
+                            .unwrap()
+                            .duration_since(t.arrival.unwrap()),
+                        t.frames,
+                    )
+                };
+                assert_eq!(first.0, if legacy { ENTRIES } else { 1 });
+                assert_eq!(first.1, first.0 as u64 * (CHUNK * 2 + 8192) as u64);
+                assert_eq!(first.2, if legacy { next } else { 0 });
+                let missing = wanted(&local.0, &journal_since(&source.0, 0).0);
+                assert_eq!(missing.len(), if legacy { 0 } else { ENTRIES - 1 });
+                if !legacy {
+                    // Scheduler/decompression overhead is allowed, but no extra bundle
+                    // latency may be charged after the in-flight bundle completes.
+                    assert!(
+                        wait <= residual + Duration::from_millis(100),
+                        "wait={wait:?}, in-flight residual={residual:?}"
+                    );
+                    let resumed = client.pull_new_while(first.2, || true);
+                    assert_eq!((resumed.0, resumed.2), (ENTRIES - 1, next));
+                    assert_eq!(timing.lock().unwrap().bundles, ENTRIES);
+                }
+                assert!(wanted(&local.0, &journal_since(&source.0, 0).0).is_empty());
+                for item in journal_since(&source.0, 0).0 {
+                    assert_eq!(
+                        std::fs::read(local.0.join("o").join(&item.out).join("artifact")).unwrap(),
+                        std::fs::read(source.0.join("o").join(&item.out).join("artifact")).unwrap()
+                    );
+                }
+                println!(
+                    "warmup_transport: policy={} foreground_to_warmup_return_ms={:.3} current_bundle_residual_ms={:.3} data_frames_before_return={} completed_before_return={}",
+                    if legacy {
+                        "unconditional-control"
+                    } else {
+                        "foreground-predicate"
+                    },
+                    wait.as_secs_f64() * 1000.0,
+                    residual.as_secs_f64() * 1000.0,
+                    frames,
+                    first.0
+                );
+                measured.push(wait);
+                a.shutdown(std::net::Shutdown::Both).unwrap();
+                b.shutdown(std::net::Shutdown::Both).unwrap();
+                client_reader.join().unwrap();
+                server_reader.join().unwrap();
+            }
+            assert!(
+                measured[0] > measured[1] + PACE * 3,
+                "control must pay for subsequent bundles: {measured:?}"
+            );
+        }
+    }
 
     struct CacheFixture(PathBuf);
 
