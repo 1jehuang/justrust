@@ -211,7 +211,9 @@ def measured_other_cpu(before, after, wall: float, tree_cpu: float, hz: float) -
 
 def sample_noisy(sample: dict, foreign_rustc: int) -> bool:
     other = sample.get("avg_other_cores")
-    return (foreign_rustc > 0 or sample.get("cpu_noise_valid") is not True
+    return (foreign_rustc > 0 or sample.get("remote_foreign_rustc", 0) > 0
+            or ("client_cpu_noise" in sample and sample_noisy(sample["client_cpu_noise"], 0))
+            or sample.get("cpu_noise_valid") is not True
             or not isinstance(other, (int, float)) or not math.isfinite(other)
             or other < 0 or other > suite.NOISY_CORES)
 
@@ -334,6 +336,7 @@ def run_one(st: Stack, s: suite.Scenario, root: Path, cold_tag: str | None, extr
     if st.justrust and summ.exists():  # quiet mode prints no libtest lines
         passed = json.loads(summ.read_text()).get("tests", {}).get("passed", 0)
     log.unlink()  # keep only failures; justrust runs stay in `justrust log <id>`
+    r["id"] = rid if st.justrust else None
     _mark_remote(st, r, out)
     return {**r, "id": rid if st.justrust else None, "tests_passed": passed, "noisy": sample_noisy(r, rustc),
             "load_before": load, "foreign_rustc_before": rustc}
@@ -343,14 +346,83 @@ def _mark_remote(st: Stack, r: dict, out: str) -> None:
     """For the remote stack: did the build really run there? A local fallback
     would silently measure the laptop. Instructions counted here are only
     the client's (ssh, sync), so they are dropped."""
-    if st.env.get("JUSTRUST_REMOTE") != "force":
+    record = suite.JR_HOME / "runs" / str(r.get("id", ""))
+    summary = None
+    try:
+        if st.justrust and r.get("id"):
+            summary = json.loads((record / "summary.json").read_text())
+    except (OSError, ValueError):
+        pass
+    if st.env.get("JUSTRUST_REMOTE") != "force" and not (isinstance(summary, dict) and
+            (summary.get("remote") or summary.get("place") in ("hosted", "remote"))):
         return
     m = re.search(r"justrust remote: (?:ok|failed) on (.+?) in ([\d.]+)s \(sync (\d+) ms", out)
     r["remote"] = {"machine": m.group(1), "sync_ms": int(m.group(3))} if m else None
     r["instructions"] = None
+    r["client_cpu_noise"] = {k: v for k, v in r.items()
+                             if k.startswith("cpu_noise_") or k in ("avg_other_cores", "system_busy_cores", "tree_cores", "steal_cores")}
     r["cpu_noise_scope"] = "client-host-only"
     r["cpu_noise_valid"] = False
     r["cpu_noise_error"] = "remote build host CPU not measured by client wait4"
+    try:
+        evidence = _remote_cpu_noise(record, r.get("id"), summary)
+        r.update(evidence)
+        r.pop("cpu_noise_error", None)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        r["cpu_noise_error"] = f"unverified remote CPU samples: {exc}"
+
+
+def _remote_cpu_noise(record: Path, rid: str, summary: dict) -> dict:
+    """Accept only matching server records with near-full interval coverage.
+
+    The recorder's first row is a baseline, not a CPU interval. Recompute
+    its summary aggregation rather than trusting a summary without samples.
+    """
+    def number(value):
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError("invalid numeric measurement")
+        return value
+
+    meta = json.loads((record / "meta.json").read_text())
+    rows = [json.loads(line) for line in (record / "samples.jsonl").read_text().splitlines()]
+    if not rid or summary["id"] != rid or meta["id"] != rid:
+        raise ValueError("record identity mismatch")
+    remote = summary["remote"]
+    if (meta["place"] not in ("hosted", "remote") or summary["place"] != meta["place"]
+            or not remote["machine"] or meta["ncpu"] != summary["ncpu"]):
+        raise ValueError("missing or inconsistent server provenance")
+    ncpu = number(meta["ncpu"])
+    wall, start = number(summary["wall"]), number(summary["start"])
+    if len(rows) < 3 or wall <= 0 or ncpu <= 0:
+        raise ValueError("short sample series")
+    times = [number(row["t"]) for row in rows]
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    span = times[-1] - times[0]
+    coverage = summary["measurement_coverage"]
+    if (min(gaps) <= 0 or max(gaps) > 0.5 or span < wall * 0.8
+            or times[0] < start - 0.05 or times[0] > start + wall * 0.2
+            or times[-1] > start + wall + 0.05
+            or coverage["samples"] != len(rows)
+            or not math.isclose(number(coverage["sample_span_secs"]), span, abs_tol=1e-6)
+            or not math.isclose(number(coverage["max_sample_gap_secs"]), max(gaps), abs_tol=1e-6)):
+        raise ValueError("incomplete or inconsistent sample coverage")
+    for row in rows:
+        if number(row["sys_cores"]) > ncpu or number(row["build_cores"]) > ncpu:
+            raise ValueError("CPU sample exceeds server capacity")
+        if type(row["foreign_rustc_procs"]) is not int or row["foreign_rustc_procs"] < 0:
+            raise ValueError("invalid foreign process count")
+    other = statistics.mean(max(0, row["sys_cores"] - row["build_cores"]) for row in rows[1:])
+    foreign = max(row["foreign_rustc_procs"] for row in rows[1:])
+    resources = summary["resources"]
+    if (not math.isclose(number(resources["avg_other_cores"]), other, rel_tol=1e-6, abs_tol=1e-6)
+            or type(resources["max_foreign_rustc"]) is not int
+            or resources["max_foreign_rustc"] != foreign):
+        raise ValueError("sample/resource mismatch")
+    return {"remote": remote, "cpu_noise_scope": "remote-host-recorded",
+            "cpu_noise_valid": True, "avg_other_cores": other,
+            "remote_foreign_rustc": max(row["foreign_rustc_procs"] for row in rows),
+            "cpu_noise_remote_run_id": rid, "cpu_noise_wall_seconds": wall,
+            "cpu_noise_sample_count": len(rows), "cpu_noise_sample_span_seconds": span}
 
 
 def run_workload(w: Workload, stacks: list[Stack], n: int, warmup: int, quiet_wait: float) -> dict:
