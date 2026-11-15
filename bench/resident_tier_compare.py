@@ -284,7 +284,7 @@ def budget_eviction_receipt(before, home, source, prefix):
     receipt = Path(str(prefix) + '.eviction.log')
     matrix.durable(receipt, chunk, exclusive=True)
     if not re.search(r'worker \S+ of ' + re.escape(str(source)) +
-                     r' stopped:.*BLAZE_MEMORY_MAX.*asked longest ago', chunk.decode(errors='replace')):
+                     r'/? stopped:.*BLAZE_MEMORY_MAX.*asked longest ago', chunk.decode(errors='replace')):
         raise ValueError('no fresh native budget eviction event for project A')
     return dict(path=str(receipt), bytes=len(chunk), sha256=digest_bytes(chunk),
                 source=str(path), offset=old['size'])
@@ -503,10 +503,17 @@ def execute_budget(args):
     args.output.mkdir(parents=True, mode=0o700)
     rows, receipts, sessions, copies = [], [], {}, []
     complete = False
+    progress = {'time': 0.0, 'rows': -1}
 
     def save():
         for name, data in (('metadata.json', metadata), ('records.json', rows), ('receipts.json', receipts)):
             (args.output / name).write_text(json.dumps(data, indent=2) + '\n')
+        now = time.monotonic()
+        if now - progress['time'] >= 15 or progress['rows'] != len(rows):
+            print('JCODE_PROGRESS ' + json.dumps(dict(rows=len(rows),
+                accepted=sum(bool(r.get('accepted')) for r in rows),
+                latest=receipts[-1]['label'] if receipts else 'setup')), flush=True)
+            progress.update(time=now, rows=len(rows))
 
     def invoke(mode, source, label, operation='test', nonce=None):
         env = sessions[mode]['env']

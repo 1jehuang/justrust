@@ -299,6 +299,22 @@ class HarnessTests(unittest.TestCase):
         self.assertIn('synthetic interruption', files['metadata.json']['error'])
         self.assertEqual(files['summary.json']['status'], 'failed/incomplete')
 
+    def test_native_eviction_log_accepts_checkout_trailing_separator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            log = home / 'resident-v1/runtime/daemon.log'
+            log.parent.mkdir(parents=True)
+            log.write_text('started\n')
+            before = tier.worker_log_snapshot(dict(worker_details=[dict(pid=1,
+                project='/project/a', log=str(log))]), home)
+            with log.open('a') as stream:
+                stream.write('worker abc of /project/a/ stopped: the workers hold 4000 MB, '
+                    'over the 1 MB of BLAZE_MEMORY_MAX, and it was asked longest ago\n')
+            evidence = tier.budget_eviction_receipt(before, home, Path('/project/a'), home / 'probe')
+            self.assertGreater(evidence['bytes'], 0)
+            with self.assertRaises(ValueError):
+                tier.budget_eviction_receipt(before, home, Path('/project/other'), home / 'wrong')
+
     def test_readiness_latency_is_separate_from_result_latency(self):
         rows = [dict(mode=mode, phase='hot-edit', replicate=rep, accepted=True,
                      elapsed_seconds=0.1, total_seconds=0.1,
