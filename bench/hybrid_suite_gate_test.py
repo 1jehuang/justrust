@@ -136,6 +136,25 @@ class HybridSuiteGateTests(unittest.TestCase):
         self.assertEqual(gate.control_identity(base), gate.control_identity(dict(base, SECRET='b')))
         self.assertNotEqual(gate.control_identity(base), gate.control_identity(dict(base, JUSTRUST_LOCAL='0')))
 
+    def test_outcome_parity_accepts_equal_counts_and_exit(self):
+        row = dict(exit=0, compile_failed=False, tests_failed=0, tests_passed=12)
+        def report(name, sample):
+            return {'synth': {'stack_names': [name], 'results': [{'i': 0, 'samples': {name: [sample]}}]}}
+        baseline = report('before', row)
+        self.assertEqual(gate.outcome_parity(baseline, report('after', dict(row))), [])
+        candidate = report('after', dict(row, tests_passed=0))
+        self.assertIn('tests_passed', gate.outcome_parity(baseline, candidate)[0])
+        candidate = report('after', dict(row, exit=101))
+        self.assertIn('exit', gate.outcome_parity(baseline, candidate)[0])
+        missing = dict(row)
+        del missing['tests_passed']
+        self.assertIn('tests_passed', gate.outcome_parity(baseline, report('after', missing))[0])
+
+    def test_outcome_parity_rejects_missing_replicates(self):
+        baseline = {'synth': {'stack_names': ['suite'], 'results': [{'i': 0, 'samples': {'suite': []}}]}}
+        self.assertIn('replicate', gate.outcome_parity(baseline, baseline)[0])
+        self.assertIn('exactly one', gate.outcome_parity({}, {})[0])
+
     def test_real_process_log_retains_failure_output(self):
         log = self.root / 'failure.log'
         command = [sys.executable, '-c', 'import sys; print("actual child failure", flush=True); sys.exit(7)']

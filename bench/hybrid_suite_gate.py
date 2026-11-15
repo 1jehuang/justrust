@@ -192,6 +192,31 @@ def run(args):
     return 0
 
 
+def outcome_parity(baseline, candidate):
+    """Do not credit a fast candidate that silently ran fewer tests."""
+    issues = []
+    left, right = baseline.get('synth', {}), candidate.get('synth', {})
+    if len(left.get('stack_names', [])) != 1 or len(right.get('stack_names', [])) != 1:
+        return ['expected exactly one stack in each comprehensive suite result']
+    names = (left['stack_names'][0], right['stack_names'][0])
+    a = {point.get('i'): point for point in left.get('results', [])}
+    b = {point.get('i'): point for point in right.get('results', [])}
+    if set(a) != set(b):
+        return ['baseline/candidate point identities differ']
+    fields = ('exit', 'compile_failed', 'tests_failed', 'tests_passed')
+    for index in sorted(a):
+        samples = (a[index].get('samples', {}).get(names[0], []),
+                   b[index].get('samples', {}).get(names[1], []))
+        if not samples[0] or len(samples[0]) != len(samples[1]):
+            issues.append(f'point {index}: baseline/candidate replicate coverage differs')
+            continue
+        for rep, (before, after) in enumerate(zip(*samples)):
+            for field in fields:
+                if field not in before or field not in after or before[field] != after[field]:
+                    issues.append(f'point {index} rep {rep}: {field} differs or is missing')
+    return issues
+
+
 def compare(args):
     report = load_verified(args.output)
     if 'comparison' in report:
@@ -206,10 +231,19 @@ def compare(args):
     except ValueError:
         result['inputs_unchanged'] = False
     report['comparison'] = result
-    report['status'] = 'comparison-eligible' if result['returncode'] == 0 and result['inputs_unchanged'] else 'blocked'
+    if result['returncode'] == 0:
+        baseline = json.loads((args.output / 'baseline.json').read_text())
+        candidate = json.loads((args.output / 'candidate.json').read_text())
+        result['outcome_parity_issues'] = outcome_parity(baseline, candidate)
+        for issue in result['outcome_parity_issues']:
+            print('Hybrid outcome comparison blocked: ' + issue)
+    else:
+        result['outcome_parity_issues'] = ['suite comparison ineligible, outcome parity not evaluated']
+    accepted = result['returncode'] == 0 and result['inputs_unchanged'] and not result['outcome_parity_issues']
+    report['status'] = 'comparison-eligible' if accepted else 'blocked'
     report['promotion_authorized'] = False
     save(args.output, report)
-    return result['returncode'] or (0 if result['inputs_unchanged'] else 2)
+    return result['returncode'] or (0 if accepted else 2)
 
 
 def main(argv=None):
