@@ -23,7 +23,10 @@ See docs/stable-native-engine.md for architecture, compatibility and measurement
 Use plain justrust test/build/check/run for the existing Cargo/hosted path.
 ";
 
-fn engine_path(override_path: Option<OsString>, executable: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn engine_path(
+    override_path: Option<OsString>,
+    executable: &Path,
+) -> anyhow::Result<PathBuf> {
     let path = match override_path {
         Some(value) => {
             let path = PathBuf::from(value);

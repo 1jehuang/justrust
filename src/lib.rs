@@ -46,6 +46,7 @@ mod hints;
 mod history;
 #[cfg(unix)]
 mod hotpatch;
+mod hybrid;
 mod msvc_tools;
 mod native;
 mod nolocal;
@@ -211,6 +212,9 @@ enum Command {
     /// Experimental local Blaze-derived compiler. Cargo remains the default.
     #[command(disable_help_flag = true)]
     Native(Passthrough),
+    /// Experimental ready-resident execution with an explicit Cargo fallback.
+    #[command(disable_help_flag = true)]
+    Hybrid(Passthrough),
     /// Pack or execute portable, trusted test executable bundles.
     TestBundle {
         #[command(subcommand)]
@@ -975,6 +979,23 @@ pub fn main() -> anyhow::Result<()> {
     {
         return native::main(std::env::args_os().skip(2).collect());
     }
+    if name != "cargo"
+        && std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("hybrid"))
+    {
+        return hybrid::main(std::env::args_os().skip(2).collect());
+    }
+    if name != "cargo"
+        && std::env::var_os("JUSTRUST_HYBRID").as_deref() == Some(std::ffi::OsStr::new("ready"))
+        && matches!(
+            std::env::args_os()
+                .nth(1)
+                .as_deref()
+                .and_then(|a| a.to_str()),
+            Some("build" | "test" | "check" | "run")
+        )
+    {
+        return hybrid::main(std::env::args_os().skip(1).collect());
+    }
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new("setup")) {
         platform_config::apply_defaults()?;
     }
@@ -1044,6 +1065,7 @@ pub fn main() -> anyhow::Result<()> {
 fn command_name(c: &Command) -> Option<&'static str> {
     Some(match c {
         Command::Native(_)
+        | Command::Hybrid(_)
         | Command::Check(_)
         | Command::Test(_)
         | Command::Build(_)
@@ -1103,6 +1125,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             command: InteractiveCommand::Dashboard,
         } => dashboard::run()?,
         Command::Native(p) => native::main(p.args)?,
+        Command::Hybrid(p) => hybrid::main(p.args)?,
         Command::TestBundle { cmd } => test_bundle::main(cmd),
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
