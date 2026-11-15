@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Real-process hybrid correctness matrix. No timing or promotion claims from mocks.
+
+Use fresh --output on the machine owning the supplied absolute executable paths.
+The generated fixture has a local dependency, proc macro, build script, and an
+append-only test side effect. Setup and edits happen outside timed subprocesses.
+"""
+import argparse
+import hashlib
+import json
+import os
+import math
+import re
+from pathlib import Path
+import signal
+import subprocess
+import time
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def absolute(value):
+    path = Path(value).expanduser()
+    if not path.is_absolute() or '..' in path.parts:
+        raise argparse.ArgumentTypeError('expected absolute path without ..')
+    return path
+
+
+def put(root, name, text):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def fixture(root, value=7):
+    root.mkdir(parents=True, exist_ok=True)
+    put(root, 'Cargo.toml', '[package]\nname="hybrid-probe"\nversion="0.1.0"\nedition="2021"\nbuild="build.rs"\n[dependencies]\nprobe-dep={path="dep"}\nprobe-macro={path="macro"}\n[workspace]\n')
+    put(root, 'dep/Cargo.toml', '[package]\nname="probe-dep"\nversion="0.1.0"\nedition="2021"\n')
+    put(root, 'dep/src/lib.rs', f'pub fn value() -> u32 {{ {value} }}\n')
+    put(root, 'macro/Cargo.toml', '[package]\nname="probe-macro"\nversion="0.1.0"\nedition="2021"\n[lib]\nproc-macro=true\n')
+    put(root, 'macro/src/lib.rs', 'extern crate proc_macro;\n#[proc_macro]\npub fn expected(_: proc_macro::TokenStream) -> proc_macro::TokenStream { "7u32".parse().unwrap() }\n')
+    put(root, 'build.rs', 'fn main() { println!("cargo:rustc-env=PROBE_BUILD=ready"); println!("cargo:rerun-if-changed=build.rs"); }\n')
+    put(root, '.cargo/config.toml', '[env]\nPROBE_CONFIG={value="one",force=true}\n')
+    source(root, value)
+
+
+def source(root, expected=7, nonce=0, broken=False, config='one'):
+    put(root, 'src/lib.rs', ('this is intentionally invalid Rust\n' if broken else f'''pub fn value() -> u32 {{ probe_dep::value() }}
+#[test]
+fn hybrid_side_effect() {{
+    use std::io::Write;
+    let path = std::env::var("HYBRID_SIDE_EFFECT").unwrap();
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    writeln!(file, "nonce={nonce}").unwrap();
+    assert_eq!(env!("PROBE_BUILD"), "ready");
+    assert_eq!(env!("PROBE_CONFIG"), "{config}");
+    println!("HYBRID_OBSERVED nonce={nonce} dependency={{}} config={{}}", value(), env!("PROBE_CONFIG"));
+    assert_eq!(probe_macro::expected!(), 7);
+    assert_eq!(value(), {expected});
+}}
+'''))
+
+
+def side_lines(path):
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def pss_kib(pid):
+    """Best effort Linux process-tree PSS, sampled not a claimed exact peak."""
+    parents = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / 'status').read_text()
+            parents[int(entry.name)] = int(next(x.split()[1] for x in status.splitlines() if x.startswith('PPid:')))
+        except (OSError, ValueError, StopIteration):
+            continue
+    owned = {pid}
+    while True:
+        new = {child for child, parent in parents.items() if parent in owned}
+        if new <= owned:
+            break
+        owned |= new
+    total = 0
+    for child in owned:
+        try:
+            total += sum(int(x.split()[1]) for x in Path(f'/proc/{child}/smaps_rollup').read_text().splitlines() if x.startswith('Pss:'))
+        except (OSError, ValueError):
+            pass
+    return total
+
+
+def run(command, cwd, env, log, timeout):
+    started = time.monotonic()
+    peak = 0
+    timed_out = False
+    with log.open('xb') as stream:
+        proc = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+        while proc.poll() is None:
+            peak = max(peak, pss_kib(proc.pid))
+            if time.monotonic() - started > timeout:
+                timed_out = True
+                os.killpg(proc.pid, signal.SIGKILL)
+                break
+            time.sleep(0.02)
+        status = proc.wait()
+    return {'command': command, 'cwd': str(cwd), 'returncode': status,
+            'timeout': timed_out, 'wall_seconds': time.monotonic() - started,
+            'sampled_process_tree_peak_pss_kib': peak,
+            'log': str(log), 'log_sha256': digest(log)}
+
+
+TEST_ARGS = ['test', '--lib', '--', 'hybrid_side_effect', '--exact', '--nocapture']
+
+
+def contract(row, text, effects, nonce, dependency, config, failure=None):
+    summaries = re.findall(r'test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', text)
+    observations = re.findall(r'HYBRID_OBSERVED nonce=(\d+) dependency=(\d+) config=(\S+)', text)
+    healthy = not row['timeout'] and row.get('error') is None
+    if failure == 'compile':
+        ok = healthy and row['returncode'] == 101 and not effects and not summaries and not observations and 'error' in text.lower()
+    else:
+        failed = failure == 'test'
+        ok = (healthy and row['returncode'] == (101 if failed else 0)
+              and effects == [f'nonce={nonce}']
+              and summaries == [('FAILED' if failed else 'ok', '0' if failed else '1', '1' if failed else '0', '0')]
+              and observations == [(str(nonce), str(dependency), config)])
+    return {'ok': bool(ok), 'summaries': summaries, 'observations': observations,
+            'side_effect_delta': effects}
+
+
+def input_hashes(root):
+    return {str(p.relative_to(root)): digest(p) for p in sorted(root.rglob('*'))
+            if p.is_file() and 'target' not in p.relative_to(root).parts
+            and p.name not in ('Cargo.lock', 'side-effects.txt')}
+
+
+def execute(args):
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError('timeout must be finite and positive')
+    if args.output.exists():
+        raise ValueError('output must not exist, never reuse worker state')
+    for tool in (args.justrust, args.engine):
+        if not tool.is_file() or not os.access(tool, os.X_OK):
+            raise ValueError(f'not an executable: {tool}')
+    args.output.mkdir(parents=True, mode=0o700)
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith(('JUSTRUST_', 'JR_ENGINE_', 'RA_JIT_', 'BLAZE_')):
+            del env[key]
+    for item in args.env:
+        key, sep, value = item.partition('=')
+        if not sep or not key:
+            raise ValueError('--env requires NAME=VALUE')
+        env[key] = value
+    rows = []
+    if args.toolchain:
+        env['JUSTRUST_HYBRID_TOOLCHAIN'] = str(args.toolchain)
+    report = {'schema': 1, 'scope': 'generated differential correctness matrix, not promotion evidence',
+              'tools': {str(p): digest(p) for p in (args.justrust, args.engine)},
+              'environment_overrides': {k: env[k] for k in sorted(env) if k.startswith(('JUSTRUST_', 'JR_ENGINE_'))},
+              'rows': rows}
+    def save():
+        (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+    states = {}
+    for stack in ('shipping', 'hybrid'):
+        state = args.output / stack
+        state.mkdir(mode=0o700)
+        project = state / 'project'
+        fixture(project)
+        local = dict(env, JR_ENGINE_HOME=str(state / 'engine-home'),
+                     JUSTRUST_NATIVE_ENGINE=str(args.engine))
+        Path(local['JR_ENGINE_HOME']).mkdir(mode=0o700)
+        states[stack] = (state, project, local)
+
+    def step(name, stack, root, nonce=0, dependency=7, config='one', failure=None):
+        side = root / 'side-effects.txt'
+        before = side_lines(side)
+        local_env = dict(states[stack][2], HYBRID_SIDE_EFFECT=str(side), CARGO_TARGET_DIR=str(root / 'target'))
+        command = [str(args.justrust)] + (['hybrid'] if stack == 'hybrid' else []) + TEST_ARGS
+        inputs = input_hashes(root)
+        row = run(command, root, local_env, args.output / (name + '-' + stack + '.log'), args.timeout)
+        text = Path(row['log']).read_text(errors='replace')
+        after = side_lines(side)
+        row.update(contract(row, text, after[len(before):], nonce, dependency, config, failure))
+        row.update(name=name, stack=stack, input_sha256=inputs,
+                   inputs_unchanged=inputs == input_hashes(root), side_prefix_preserved=after[:len(before)] == before)
+        row['ok'] = row['ok'] and row['inputs_unchanged'] and row['side_prefix_preserved']
+        route = args.cold_route_regex if name == 'cold-test' else args.warm_route_regex if name in ('warm-success', 'warm-edit') else None
+        row['route_verified'] = bool(re.search(route, text)) if route and stack == 'hybrid' else None
+        if route and stack == 'hybrid':
+            row['ok'] = row['ok'] and row['route_verified']
+        rows.append(row)
+        save()
+        return row
+
+    phases = [('cold-test', 0, 7, 'one', None), ('warm-success', 0, 7, 'one', None),
+              ('warm-edit', 1, 7, 'one', None), ('test-failure', 2, 7, 'one', 'test'),
+              ('compile-error', 3, 7, 'one', 'compile'), ('recovery', 4, 7, 'one', None),
+              ('dependency-edit', 5, 9, 'one', None), ('config-switch', 6, 9, 'two', None),
+              ('project-switch', 7, 7, 'one', None), ('project-return', 8, 9, 'two', None)]
+    for index, (name, nonce, dependency, config, failure) in enumerate(phases):
+        pair = []
+        for stack in (('shipping', 'hybrid') if index % 2 == 0 else ('hybrid', 'shipping')):
+            state, project, local = states[stack]
+            if name == 'project-switch':
+                project = state / 'second'
+                fixture(project)
+            if name not in ('cold-test', 'warm-success'):
+                put(project, 'dep/src/lib.rs', f'pub fn value() -> u32 {{ {dependency} }}\n')
+                put(project, '.cargo/config.toml', f'[env]\nPROBE_CONFIG={{value="{config}",force=true}}\n')
+                source(project, expected=99 if failure == 'test' else dependency,
+                       nonce=nonce, broken=failure == 'compile', config=config)
+            if name == 'warm-success' and stack == 'hybrid' and args.prewarm:
+                side = project / 'side-effects.txt'
+                before = side_lines(side)
+                row = run([str(args.justrust), 'hybrid', 'prewarm', *TEST_ARGS], project,
+                          dict(local, HYBRID_SIDE_EFFECT=str(side), CARGO_TARGET_DIR=str(project / 'target')),
+                          args.output / 'prewarm.log', args.timeout)
+                row.update(name='prewarm', stack='hybrid', ok=row['returncode'] == 0 and not row['timeout'] and side_lines(side) == before)
+                rows.append(row)
+                save()
+            pair.append(step(name, stack, project, nonce, dependency, config, failure))
+        equal = all(pair[0][key] == pair[1][key] for key in ('returncode', 'summaries', 'observations', 'side_effect_delta'))
+        for row in pair:
+            row['differential_equal'] = equal
+            row['ok'] = row['ok'] and equal
+        save()
+    report['correctness_passed'] = all(row['ok'] for row in rows)
+    report['routing_evidence_complete'] = bool(args.cold_route_regex and args.warm_route_regex and args.prewarm)
+    save()
+    return 0 if report['correctness_passed'] else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--justrust', required=True, type=absolute)
+    parser.add_argument('--engine', required=True, type=absolute)
+    parser.add_argument('--toolchain', type=absolute, help='native-only JUSTRUST_HYBRID_TOOLCHAIN')
+    parser.add_argument('--output', required=True, type=absolute)
+    parser.add_argument('--timeout', type=float, default=600)
+    parser.add_argument('--env', action='append', default=[])
+    parser.add_argument('--prewarm', action='store_true', help='run hybrid prewarm test ARGS before warm measurements')
+    parser.add_argument('--cold-route-regex', help='telemetry pattern required to prove cold fallback')
+    parser.add_argument('--warm-route-regex', help='telemetry pattern required to prove resident warm route')
+    args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error('timeout must be positive')
+    raise SystemExit(execute(args))
+
+
+if __name__ == '__main__':
+    main()
