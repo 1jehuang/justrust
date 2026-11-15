@@ -1,0 +1,114 @@
+# Snapshot-only prerequisites for hosted TUI tests at abff94eeb.
+# Serialize local /colors fixtures with SSH env writers, create owned Git
+# repositories instead of depending on mirrored .git, and give the authenticated
+# Antigravity render fixture its own credentials. No production code changes.
+diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/src/tui/app/commands_tests.rs
+--- a/crates/jcode-tui/src/tui/app/commands_tests.rs
++++ b/crates/jcode-tui/src/tui/app/commands_tests.rs
+@@ -207,6 +207,30 @@ mod colors {
+             .unwrap_or_default()
+     }
+
++    // SSH fixtures mutate this process-global setting under lock_test_env.
++    // Hold that same lock through dispatch, restoring even after a panic.
++    struct LocalEnvironment {
++        previous: Option<std::ffi::OsString>,
++        _lock: std::sync::MutexGuard<'static, ()>,
++    }
++
++    impl Drop for LocalEnvironment {
++        fn drop(&mut self) {
++            match self.previous.take() {
++                Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value),
++                None => crate::env::remove_var("JCODE_SSH_REMOTE"),
++            }
++        }
++    }
++
++    fn local_environment() -> LocalEnvironment {
++        let lock = lock_shared_state();
++        let previous = std::env::var_os("JCODE_SSH_REMOTE");
++        crate::env::remove_var("JCODE_SSH_REMOTE");
++        LocalEnvironment { previous, _lock: lock }
++    }
++
+     #[test]
+     fn colors_lists_every_role_with_its_hex_value() {
++        let _local = local_environment();
+         let mut app = create_test_app();
+@@ -347,6 +370,7 @@ mod colors {
+     fn unrelated_commands_are_not_swallowed() {
+         // `/colors` shares a prefix with nothing today, but a future `/color*`
+         // command must not be silently captured by this handler.
++        let _local = local_environment();
+         let mut app = create_test_app();
+         assert!(
+             !dispatch_local_command(&mut app, "/colorscheme dracula"),
+diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
+--- a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
++++ b/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs
+@@ -1582,6 +1582,10 @@ fn recent_project_review_prompt_is_bounded_read_only_and_requires_approval() {
+
+ #[test]
+ fn preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn() {
++    with_temp_jcode_home(|| {
++    // Hosted source mirrors intentionally omit private Git metadata.
++    let git_fixture = create_real_git_repo_fixture();
+     let mut app = onboarding_test_app();
++    app.session.working_dir = Some(git_fixture.path().to_string_lossy().into_owned());
+     let repository = app
+         .onboarding_recent_project_path()
+@@ -1593,10 +1597,15 @@ fn preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn() {
+     assert!(!app.onboarding_flow_active());
+     assert_eq!(app.input, expected);
+     assert_eq!(app.cursor_pos, app.input.len());
++    });
+ }
+
+ #[test]
+ fn starting_recent_project_review_runs_as_a_visible_local_turn() {
++    with_temp_jcode_home(|| {
++    // Own the repository and session history instead of inheriting the checkout.
++    let git_fixture = create_real_git_repo_fixture();
+     let mut app = onboarding_test_app();
++    app.session.working_dir = Some(git_fixture.path().to_string_lossy().into_owned());
+     let repository = app
+         .onboarding_recent_project_path()
+@@ -1618,6 +1629,7 @@ fn starting_recent_project_review_runs_as_a_visible_local_turn() {
+         }),
+         Some(expected.as_str())
+     );
++    });
+ }
+
+ #[test]
+diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+--- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
++++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+@@ -1911,6 +1911,18 @@ fn test_local_model_picker_openrouter_bare_openai_route_uses_openai_catalog_prefix()
+
+ #[test]
+ fn test_local_model_picker_render_shows_antigravity_models_exactly_as_user_sees_them() {
++    with_temp_jcode_home(|| {
++    // This is a logged-in Antigravity picker, not the unavailable-route screen.
++    // Only the isolated home receives fake tokens, never the developer account.
++    crate::auth::antigravity::save_tokens(&crate::auth::antigravity::AntigravityTokens {
++        access_token: "antigravity-render-fixture".to_string(),
++        refresh_token: "antigravity-render-fixture-refresh".to_string(),
++        expires_at: i64::MAX,
++        email: None,
++        project_id: None,
++    })
++    .expect("save Antigravity render fixture credentials");
++    crate::auth::AuthStatus::invalidate_cache();
+     let mut app = create_antigravity_picker_test_app();
+     app.display_messages = vec![DisplayMessage::system("seed render state")];
+     app.bump_display_messages_version();
+@@ -1970,6 +1984,7 @@ GPT:
+         claude_text,
+         gpt_text
+     );
++    });
+ }
+
+ #[test]
