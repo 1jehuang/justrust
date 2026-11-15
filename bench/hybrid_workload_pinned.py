@@ -91,9 +91,86 @@ def accepted(row, text, effects, nonce, kind, expected=None):
     return bool(good), parsed
 
 
+def worker_identity(pid):
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        return {'pid': pid, 'start_ticks': int(fields[19]), 'state': fields[0]}
+    except FileNotFoundError:
+        return None
+
+
+def await_budget_eviction(args, project, local):
+    """Compile a peer, then require fresh budget log AND old worker disappearance."""
+    home = Path(local['JR_ENGINE_HOME'])
+    receipts = []
+    def invoke(command, cwd, label):
+        row = core.run([str(args.justrust), 'hybrid'] + command, cwd, local,
+                       args.output / (label + '.log'), args.timeout)
+        receipts.append(row)
+        if row['returncode'] != 0 or row['timeout'] or row['error']:
+            raise ValueError('budget setup command failed: ' + label)
+        return Path(row['log']).read_text(errors='replace')
+    before = invoke(['status'], project, 'budget-status-before')
+    workers = re.findall(r'^  worker: pid (\d+), (.*?), (?:holds \d+ MB, )?log .+$', before, re.M)
+    identities = [worker_identity(int(pid)) for pid, source in workers if Path(source) == project]
+    if not identities or any(identity is None for identity in identities):
+        raise ValueError('budget eviction requires recorded live project worker PID/startticks')
+    daemon = re.search(r'^daemon: pid (\d+),', before, re.M)
+    if not daemon:
+        raise ValueError('budget eviction requires daemon identity')
+    daemon_identity = worker_identity(int(daemon[1]))
+    log = home / 'resident-v1/runtime/daemon.log'
+    old = log.read_bytes()
+    stat = log.stat()
+    peer = project.parent / 'budget-peer'
+    shutil.copytree(args.source, peer, ignore=shutil.ignore_patterns('.git'))
+    peer_source = peer / 'src/summary.rs'
+    peer_source.write_bytes(edited(peer_source.read_bytes(), 999999))
+    side = Path(local['HYBRID_SIDE_EFFECT'])
+    effects = core.side_lines(side)
+    memory_before = core.namespace_pss(home)
+    invoke(['prewarm', 'test'] + resident.FILTER, peer, 'budget-peer-prewarm')
+    start = time.monotonic()
+    attempt = 0
+    while True:
+        current = invoke(['status'], project, f'budget-status-after-{attempt}')
+        data = log.read_bytes()
+        now_stat = log.stat()
+        if (now_stat.st_ino, now_stat.st_dev) != (stat.st_ino, stat.st_dev) or not data.startswith(old):
+            raise ValueError('budget daemon log rotated or rewritten')
+        fresh = data[len(old):]
+        event = re.search(rb'worker \S+ of ' + re.escape(os.fsencode(project)) +
+                          rb'/? stopped:.*BLAZE_MEMORY_MAX.*asked longest ago', fresh)
+        observed = [worker_identity(identity['pid']) for identity in identities]
+        gone = all(now is None or now['start_ticks'] != identity['start_ticks'] or now['state'] == 'Z'
+                   for identity, now in zip(identities, observed))
+        # State may change between status probes, identity is PID/starttick only.
+        live_daemon = worker_identity(int(daemon[1]))
+        same_daemon = bool(live_daemon and daemon_identity and live_daemon['start_ticks'] == daemon_identity['start_ticks'])
+        retained = any(Path(source) == project for _, source in re.findall(
+            r'^  worker: pid (\d+), (.*?), (?:holds \d+ MB, )?log .+$', current, re.M))
+        if event and gone and same_daemon and not retained:
+            raw = args.output / 'budget-eviction.log'
+            raw.write_bytes(fresh)
+            return {'ok': core.side_lines(side) == effects, 'old_worker_identities': identities,
+                    'daemon_identity': daemon_identity, 'old_workers_exited': gone,
+                    'old_workers_after': observed,
+                    'daemon_retained': same_daemon, 'wait_seconds': time.monotonic() - start,
+                    'log_offset': len(old), 'log': str(raw), 'sha256': core.digest(raw),
+                    'memory_before_peer': memory_before, 'memory_after_eviction': core.namespace_pss(home),
+                    'setup_receipts': receipts, 'scope': 'native soft LRU worker budget, not heap restoration or total RSS limit'}
+        if time.monotonic() - start >= args.timeout:
+            raise ValueError('real budget eviction not observed before timeout')
+        time.sleep(.2)
+        attempt += 1
+
+
 @core.cleanup_after_execute
 def execute(args):
     automatic = getattr(args, 'automatic', False)
+    budget = getattr(args, 'await_budget_eviction', False)
+    if budget and (not args.prewarm or automatic):
+        raise ValueError('--await-budget-eviction requires manual --prewarm')
     automatic_pattern = getattr(args, 'automatic_ready_regex', None)
     if automatic and (args.prewarm or not automatic_pattern):
         raise ValueError('--automatic requires --automatic-ready-regex and cannot combine with --prewarm')
@@ -138,6 +215,8 @@ def execute(args):
                      CARGO_TARGET_DIR=str(state / 'target'), HYBRID_SIDE_EFFECT=str(state / 'side-effect'))
         if automatic and stack == 'hybrid':
             local['JUSTRUST_HYBRID_PREWARM'] = 'after-success'
+        if budget and stack == 'hybrid':
+            local.update(RA_JIT_MEMORY_MAX='1M', RA_JIT_SPARE='0', RA_JIT_IDLE_SECS='3600')
         states[stack] = (project, local)
         args._cleanup_states.append({'client': args.justrust, 'cwd': project, 'env': local,
                                      'log': args.output / ('cleanup-' + stack + '.log'), 'stack': stack})
@@ -146,9 +225,15 @@ def execute(args):
               ('type-error', 1, 'type-error'), ('type-recovery', 2, 'edit'),
               ('assert-error', 3, 'test-failure'), ('assert-recovery', 4, 'edit')]
     phases += [('edit', rep + 5, 'edit') for rep in range(args.samples)]
+    if budget:
+        phases += [('budget-evicted', args.samples + 5, 'edit')]
     save()
     try:
         for index, (phase, nonce, kind) in enumerate(phases):
+            if phase == 'budget-evicted':
+                project, local = states['hybrid']
+                report['budget_eviction'] = await_budget_eviction(args, project, local)
+                save()
             pair = []
             for stack in (('shipping', 'hybrid') if index % 2 == 0 else ('hybrid', 'shipping')):
                 if kind == 'prewarm' and (stack == 'shipping' or not args.prewarm):
@@ -193,7 +278,7 @@ def execute(args):
                     good, parsed = accepted(row, semantic_text, effects, nonce, kind, expected)
                     if expected is None and stack == 'shipping' and good:
                         expected = parsed
-                route = args.cold_route_regex if phase == 'cold' else args.warm_route_regex if phase in ('warm', 'edit') else None
+                route = args.cold_route_regex if phase in ('cold', 'budget-evicted') else args.warm_route_regex if phase in ('warm', 'edit') else None
                 route_verified = bool(route and re.search(route, text)) if stack == 'hybrid' and kind != 'prewarm' else None
                 if stack == 'hybrid' and route:
                     good = good and route_verified
@@ -250,8 +335,8 @@ def execute(args):
                 'paired_foregrounds_validated': equal and all(row['ok'] for row in loading),
                 'actual_loading_overlap_observed': any(row['preparation_overlap_observed'] for row in loading if row['stack'] == 'hybrid'),
                 'scope': 'sampled prewarm namespace lock while immediate foreground was running; blocking-wait edit timings unchanged; no readiness waits folded into latency'}
-        report['status'] = 'passed' if all(row['ok'] for row in rows) else 'failed'
-        report['routing_evidence_complete'] = bool((args.prewarm or automatic) and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit')))
+        report['status'] = 'passed' if all(row['ok'] for row in rows) and report.get('budget_eviction', {'ok': True})['ok'] else 'failed'
+        report['routing_evidence_complete'] = bool((args.prewarm or automatic) and args.cold_route_regex and args.warm_route_regex and all(row['route_verified'] for row in rows if row['stack'] == 'hybrid' and row['phase'] in ('cold', 'warm', 'edit', 'budget-evicted')))
         report['focused_edit_medians_seconds'] = {stack: statistics.median(row['elapsed_seconds'] for row in rows if row['stack'] == stack and row['phase'] == 'edit') for stack in ('shipping', 'hybrid')} if report['status'] == 'passed' else {}
         report['source_unchanged'] = resident.source_hashes(args.source) == report['source_sha256']
         report['tools_after'] = {str(p): core.digest(p) for p in tools}
@@ -277,6 +362,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--env', action='append', default=[])
     parser.add_argument('--prewarm', action='store_true')
+    parser.add_argument('--await-budget-eviction', action='store_true', help='manual prewarm, compile peer under native 1M soft budget, require log and PID eviction before paired cold request')
     parser.add_argument('--automatic', action='store_true', help='after-success preparation with untimed readiness wait')
     parser.add_argument('--automatic-ready-regex', help='required NEW successful preparation receipt in prewarm.log')
     parser.add_argument('--cold-route-regex')

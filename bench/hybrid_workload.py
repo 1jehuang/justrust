@@ -34,7 +34,7 @@ def environment_receipt(env):
                'RUSTUP_TOOLCHAIN', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_HOME', 'RUSTUP_HOME',
                'CARGO_TARGET_DIR', 'JUSTRUST_REMOTE', 'JUSTRUST_NATIVE_ENGINE',
                'JUSTRUST_HYBRID_TOOLCHAIN', 'JR_ENGINE_HOME', 'HYBRID_SIDE_EFFECT',
-               'JUSTRUST_HYBRID_PREWARM',
+               'JUSTRUST_HYBRID_PREWARM', 'RA_JIT_MEMORY_MAX', 'RA_JIT_SPARE', 'RA_JIT_IDLE_SECS',
                'HYBRID_PROGRAM_SIDE_EFFECT'}
     return {key: value for key, value in sorted(env.items())
             if key in allowed or key.startswith('CARGO_PROFILE_')}

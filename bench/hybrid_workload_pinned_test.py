@@ -47,6 +47,51 @@ sys.exit(101 if failed else 0)
 
 
 class PinnedContracts(unittest.TestCase):
+    def budget_case(self, fresh=True, live=False, restart=False):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'source'
+            (source / 'src').mkdir(parents=True)
+            (source / 'src/summary.rs').write_text('fn shares_overlapping_time() {}')
+            project = root / 'project'
+            project.mkdir()
+            home = root / 'home'
+            log = home / 'resident-v1/runtime/daemon.log'
+            log.parent.mkdir(parents=True)
+            event = f'worker x of {project} stopped: BLAZE_MEMORY_MAX asked longest ago\n'
+            log.write_text('old\n' + (event if not fresh else ''))
+            args = argparse.Namespace(justrust=Path('/fake'), output=root, source=source, timeout=.01)
+            local = {'JR_ENGINE_HOME': str(home), 'HYBRID_SIDE_EFFECT': str(root / 'side')}
+            prepared = False
+            def invoke(command, cwd, env, path, timeout):
+                nonlocal prepared
+                if 'prewarm' in command:
+                    prepared = True
+                    if fresh:
+                        with log.open('a') as handle:
+                            handle.write(event)
+                    text = ''
+                else:
+                    text = 'daemon: pid 10, active\n'
+                    if not prepared or live:
+                        text += f'  worker: pid 20, {project}, log /fake\n'
+                path.write_text(text)
+                return {'returncode': 0, 'timeout': False, 'error': None, 'log': str(path)}
+            def identity(pid):
+                if pid == 20 and prepared and not live:
+                    return None
+                return {'pid': pid, 'start_ticks': 99 if restart and prepared and pid == 10 else pid, 'state': 'S'}
+            with patch.object(pinned.core, 'run', side_effect=invoke), patch.object(pinned, 'worker_identity', side_effect=identity), patch.object(pinned.core, 'namespace_pss', return_value={}):
+                return pinned.await_budget_eviction(args, project, local)
+
+    def test_budget_requires_fresh_event_and_dead_worker_same_daemon(self):
+        receipt = self.budget_case()
+        self.assertTrue(receipt['ok'])
+        self.assertTrue(receipt['old_workers_exited'])
+        for options in ({'fresh': False}, {'live': True}, {'restart': True}):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, 'not observed'):
+                self.budget_case(**options)
+
     def test_nonce_is_runtime_observed(self):
         result, _ = pinned.accepted({'status': 0, 'timed_out': False, 'error': None}, transcript(), ['nonce=1'], 1, 'edit')
         self.assertTrue(result)
