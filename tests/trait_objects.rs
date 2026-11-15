@@ -18,8 +18,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const STOCK: &str = include_str!("fixtures/trait_objects/stock.tsv");
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-#[path = "support/iterator_oracle.rs"]
-mod any_oracle;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -81,19 +79,47 @@ fn native(source: &Path, output: Option<&Path>, workers: usize) -> Output {
     command.output().expect("spawn jr-rust")
 }
 
-fn any_type_identity_case(source: &'static str, expected: Option<&'static str>) {
-    if let Some(expected) = expected {
-        use any_oracle::closure_oracle::{Case, Expect};
-        any_oracle::closure_oracle::check(
-            "canonical-any-type-identity",
-            &[Case {
-                name: "source",
-                source,
-                expect: Expect::Run(expected),
-            }],
-        );
-    } else {
-        any_oracle::stock_and_native_reject(source);
+fn any_type_identity_case(source: &str, expected: Option<&str>) {
+    for workers in [1, 8] {
+        let scratch = Scratch::new();
+        let input = scratch.0.join("case.rs");
+        let exe = scratch.0.join("program");
+        fs::write(&input, source).unwrap();
+        let check = native(&input, None, workers);
+        let build = native(&input, Some(&exe), workers);
+        if let Some(expected) = expected {
+            assert!(
+                check.status.success(),
+                "{}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            assert!(
+                build.status.success(),
+                "{}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+            let run = Command::new(&exe).output().unwrap();
+            assert!(
+                run.status.success(),
+                "{}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            assert_eq!(run.stdout, expected.as_bytes());
+        } else {
+            assert_eq!(
+                check.status.code(),
+                Some(1),
+                "{}",
+                String::from_utf8_lossy(&check.stderr)
+            );
+            assert_eq!(
+                build.status.code(),
+                Some(1),
+                "{}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+            assert!(!exe.exists());
+        }
     }
 }
 

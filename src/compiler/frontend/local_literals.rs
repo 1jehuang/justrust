@@ -3714,6 +3714,9 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 self.fixed(ir::Ty::Unit)
             }
+            // Literal-only output macros evaluate to `()` exactly like the
+            // formatted forms above (`||println!("done")` has result `()`).
+            Expr::Output(_) | Expr::Println(_) => self.fixed(ir::Ty::Unit),
             Expr::Try(operand) => {
                 // `e?` on the prelude Option/Result yields the success
                 // payload: tie the result term to the carrier's `T` so later

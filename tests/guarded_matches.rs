@@ -676,7 +676,11 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     // Public CHECK/BUILD already checked every body through canonical source
     // capabilities. The legacy frontend-only checker cannot authorize embedded
     // prelude receiver inference. The graph counts below verify all-body demand.
-    let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+    let plan = frontend::PlanCtx::from_shared_program(
+        std::sync::Arc::new(program),
+        &ir::PlanBudget::default(),
+    )
+    .unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
     assert_eq!(compiled.source_files, 1);
     assert_eq!(compiled.executable.is_none(), check);

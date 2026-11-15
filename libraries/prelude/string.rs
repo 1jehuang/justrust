@@ -578,6 +578,13 @@ impl<'a, U> super::iter::DoubleEndedIterator for CharIndices<'a, U> {
     }
 }
 
+impl<'a, U> super::iter::IntoIterator for CharIndices<'a, U> {
+    type Item = (usize, char);
+    type IntoIter = Self;
+    fn into_iter(self) -> Self {
+        self
+    }
+}
 
 /// `front..back` is the undecoded byte range of valid UTF-8 at `ptr`.
 pub struct Chars<'a, U> {
@@ -627,7 +634,6 @@ impl<'a, U> super::iter::DoubleEndedIterator for Chars<'a, U> {
         Option::Some(decode_utf8_at(self.ptr, at))
     }
 }
-
 
 /// `str` methods that return borrowed iterators. A separate prelude trait,
 /// like `StrToString`, until inherent `impl str` blocks are supported.
@@ -1016,7 +1022,6 @@ impl<S: StrCarrier, P: StrPattern> super::iter::Iterator for Split<S, P> {
     }
 }
 
-
 /// Lines of a `str`: split at `\n`, with one trailing `\r` removed from each
 /// line and no final empty line after a trailing newline.
 pub struct Lines<S> {
@@ -1044,7 +1049,6 @@ impl<S: StrCarrier> super::iter::Iterator for Lines<S> {
         Option::Some(S::from_parts(self.ptr + start, end - start))
     }
 }
-
 
 fn is_space(b: u8) -> bool {
     b == 32u8 || (b >= 9u8 && b <= 13u8)
@@ -1077,7 +1081,6 @@ impl<S: StrCarrier> super::iter::Iterator for SplitWhitespace<S> {
         Option::Some(S::from_parts(self.ptr + start, self.at - start))
     }
 }
-
 
 /// Element views accepted by `join` (stock `Borrow<str>` for `String`/`&str`).
 pub trait JoinElement {
@@ -1298,4 +1301,42 @@ pub fn str_from_utf8(v: &[u8]) -> Result<&str, Utf8Error> {
     }
     let ptr = &v[0] as *const u8 as usize;
     Result::Ok(str_from_raw_parts(ptr, n))
+}
+
+impl String {
+    /// Preserve a borrowed valid input, replacing each maximal invalid UTF-8
+    /// subsequence with one U+FFFD when an owned result is necessary.
+    pub fn from_utf8_lossy(bytes: &[u8]) -> super::borrow::Cow<'_, str> {
+        match str_from_utf8(bytes) {
+            Result::Ok(text) => super::borrow::Cow::Borrowed(text),
+            Result::Err(_) => {
+                let mut output = String::with_capacity(bytes.len());
+                let mut position = 0usize;
+                while position < bytes.len() {
+                    let remaining = &bytes[position..];
+                    match str_from_utf8(remaining) {
+                        Result::Ok(text) => {
+                            output.push_str(text);
+                            break;
+                        }
+                        Result::Err(error) => {
+                            let valid = error.valid_up_to();
+                            if valid != 0usize {
+                                // The validator proved this exact byte prefix.
+                                let pointer = &remaining[0] as *const u8 as usize;
+                                output.push_str(str_from_raw_parts(pointer, valid));
+                            }
+                            output.push('�');
+                            position += valid;
+                            match error.error_len() {
+                                Option::Some(length) => position += length,
+                                Option::None => break,
+                            }
+                        }
+                    }
+                }
+                super::borrow::Cow::Owned(output)
+            }
+        }
+    }
 }

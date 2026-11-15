@@ -168,10 +168,11 @@ impl ValidatedTraitWorld {
             .result_receipt()
             .is_some_and(|receipt| receipt.capture_witness().is_some());
         if !captured
-            && !adapter
-                .closure
-                .result_receipt()
-                .is_some_and(|receipt| receipt.is_projected_input() || receipt.is_static_str())
+            && !adapter.closure.result_receipt().is_some_and(|receipt| {
+                receipt.is_projected_input()
+                    || receipt.is_static_str()
+                    || receipt.input_value_origin().is_some()
+            })
         {
             return Ok(());
         }
@@ -233,6 +234,7 @@ impl ValidatedTraitWorld {
             return Ok(None);
         };
         if receipt.argument_origin().is_none()
+            && receipt.input_value_origin().is_none()
             && receipt.capture_witness().is_none()
             && !receipt.is_static_str()
         {
@@ -323,7 +325,10 @@ impl ValidatedTraitWorld {
                 facts,
             )?;
         }
-        if receipt.is_projected_input() || receipt.is_static_str() {
+        if receipt.is_projected_input()
+            || receipt.is_static_str()
+            || receipt.input_value_origin().is_some()
+        {
             canonicalize_empty_projected_result(&mut provider.signature, &self.budget)?;
         }
         Ok(Some(provider.signature))

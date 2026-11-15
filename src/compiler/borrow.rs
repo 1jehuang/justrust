@@ -589,32 +589,12 @@ fn read_cell_cover(
     channel: &CellChannel,
     budget: &mut Budget,
 ) -> Result<Option<Vec<usize>>, Exhausted> {
-    let ledger = budget.plan_budget().cloned();
-    read_cell_cover_with_ledger(
-        original_locals,
-        cell_index,
-        target,
-        channel,
-        ledger.as_ref(),
-        budget,
-    )
-}
-
-fn read_cell_cover_with_ledger(
-    original_locals: &[Ty],
-    cell_index: &HashMap<CellKey, usize>,
-    target: &Target,
-    channel: &CellChannel,
-    ledger: Option<&ir::PlanBudget>,
-    budget: &mut Budget,
-) -> Result<Option<Vec<usize>>, Exhausted> {
     fn walk(
         ty: &Ty,
         storage: &mut CanonicalPlace,
         cell_index: &HashMap<CellKey, usize>,
         output: &mut Vec<usize>,
         depth: usize,
-        ledger: Option<&ir::PlanBudget>,
         budget: &mut Budget,
     ) -> Result<bool, Exhausted> {
         if depth > ir::MAX_PATTERN_PROJECTION_DEPTH {
@@ -654,9 +634,7 @@ fn read_cell_cover_with_ledger(
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
                 }
-                // Materialization uses the original proof ledger, independently
-                // of whether the ownership scratch counter carries a ledger.
-                let field_budget = ledger;
+                let field_budget = budget.plan_budget().cloned();
                 let mut child = |steps: &[Projection], ty: &Ty| -> Result<bool, Exhausted> {
                     let saved = storage.projection.len();
                     let length = add(saved, steps.len())?;
@@ -670,7 +648,7 @@ fn read_cell_cover_with_ledger(
                         .try_reserve_exact(steps.len())
                         .map_err(|_| Exhausted)?;
                     storage.projection.extend_from_slice(steps);
-                    let result = walk(ty, storage, cell_index, output, depth + 1, ledger, budget);
+                    let result = walk(ty, storage, cell_index, output, depth + 1, budget);
                     storage.projection.truncate(saved);
                     result
                 };
@@ -717,7 +695,7 @@ fn read_cell_cover_with_ledger(
                         for (index, field) in value
                             .def()
                             .fields
-                            .read_optional(field_budget)
+                            .read_optional(field_budget.as_ref())
                             .map_err(|_| Exhausted)?
                             .iter()
                             .enumerate()
@@ -731,7 +709,7 @@ fn read_cell_cover_with_ledger(
                         for (variant, definition) in value.def().variants.iter().enumerate() {
                             for (field, ty) in definition
                                 .fields
-                                .read_optional(field_budget)
+                                .read_optional(field_budget.as_ref())
                                 .map_err(|_| Exhausted)?
                                 .iter()
                                 .enumerate()
@@ -793,7 +771,7 @@ fn read_cell_cover_with_ledger(
         budget.spend(add(length, 1)?)?;
         let path = value_projection(location);
         let Ty::Ref { referent, .. } =
-            ir::projected_ty_optional(&ty, &path, ledger).map_err(|_| Exhausted)?
+            ir::projected_ty_optional(&ty, &path, budget.plan_budget()).map_err(|_| Exhausted)?
         else {
             return Ok(None);
         };
@@ -803,8 +781,8 @@ fn read_cell_cover_with_ledger(
     if target.place.projection.contains(&Projection::Deref) {
         return Ok(None);
     }
-    let ty =
-        ir::projected_ty_optional(&ty, &target.place.projection, ledger).map_err(|_| Exhausted)?;
+    let ty = ir::projected_ty_optional(&ty, &target.place.projection, budget.plan_budget())
+        .map_err(|_| Exhausted)?;
     // A slice root can conservatively designate any of its elements. Only
     // its issued summary cell supplies a cover, never a matching layout or
     // a fabricated element origin. Other exact targets remain exact.
@@ -814,15 +792,8 @@ fn read_cell_cover_with_ledger(
     budget.reserve_bytes(mul(target.place.projection.len(), size_of::<Projection>())?)?;
     let mut storage = target.place.clone();
     let mut output = Vec::new();
-    if !walk(
-        &ty,
-        &mut storage,
-        cell_index,
-        &mut output,
-        0,
-        ledger,
-        budget,
-    )? || (target.precision == TargetPrecision::Exact && output.is_empty())
+    if !walk(&ty, &mut storage, cell_index, &mut output, 0, budget)?
+        || (target.precision == TargetPrecision::Exact && output.is_empty())
     {
         return Ok(None);
     }
@@ -835,6 +806,15 @@ enum ResolutionFailure {
     IncompleteCover,
 }
 impl ResolutionFailure {
+    fn problem_at(self, unsupported: &str, context: impl std::fmt::Debug) -> Problem {
+        match self.problem(unsupported) {
+            Problem::Conflict(message) => Problem::Conflict(format!("{message}: {context:?}")),
+            Problem::Invalid(message) => Problem::Invalid(format!("{message}: {context:?}")),
+            Problem::Unsupported(message) => {
+                Problem::Unsupported(format!("{message}: {context:?}"))
+            }
+        }
+    }
     fn problem(self, unsupported: &str) -> Problem {
         match self {
             Self::EmptyOrigins => {
@@ -3904,14 +3884,13 @@ impl CarrierBuilder<'_, '_> {
             let mut origins = CarrierOrigins::new(self.targets.len(), self.family_inputs.len());
             let mut matched_cell = false;
             for target in targets {
-                if let Some(cover) = read_cell_cover_with_ledger(
+                if let Some(cover) = read_cell_cover(
                     self.family_cover_locals
                         .as_deref()
                         .unwrap_or(&self.original_locals),
                     &self.cell_index,
                     &target,
                     &channel,
-                    Some(&self.ledger),
                     self.budget,
                 )? {
                     for cell in cover {
@@ -3935,8 +3914,9 @@ impl CarrierBuilder<'_, '_> {
                 self.problem(
                     self.f.entry,
                     None,
-                    failure.problem(
+                    failure.problem_at(
                         "carrier read lacks a complete original typed cell correspondence",
+                        ("read", place, &component, location, &channel),
                     ),
                 )?;
             }
@@ -3961,8 +3941,9 @@ impl CarrierBuilder<'_, '_> {
                         self.problem(
                             self.f.entry,
                             None,
-                            failure.problem(
+                            failure.problem_at(
                                 "affine carrier move lacks a complete original typed cell cover",
+                                ("move", place, &component, &location),
                             ),
                         )?;
                     }
@@ -4606,14 +4587,13 @@ impl CarrierBuilder<'_, '_> {
         let mut value = self.empty_origins()?;
         let mut matched_cell = false;
         for target in targets {
-            if let Some(cover) = read_cell_cover_with_ledger(
+            if let Some(cover) = read_cell_cover(
                 self.family_cover_locals
                     .as_deref()
                     .unwrap_or(&self.original_locals),
                 &self.cell_index,
                 &target,
                 &channel,
-                Some(&self.ledger),
                 self.budget,
             )? {
                 for cell in cover {
@@ -4640,7 +4620,10 @@ impl CarrierBuilder<'_, '_> {
             self.problem(
                 self.f.entry,
                 None,
-                failure.problem("carrier input requires a complete original typed cell cover"),
+                failure.problem_at(
+                    "carrier input requires a complete original typed cell cover",
+                    ("input", input, &component, &channel),
+                ),
             )?;
         }
         Ok(value)
@@ -4855,14 +4838,13 @@ impl CarrierBuilder<'_, '_> {
                 let mut covered = Vec::new();
                 let mut complete = true;
                 for target in &targets {
-                    match read_cell_cover_with_ledger(
+                    match read_cell_cover(
                         self.family_cover_locals
                             .as_deref()
                             .unwrap_or(&self.original_locals),
                         &self.cell_index,
                         target,
                         &channel,
-                        Some(&self.ledger),
                         self.budget,
                     )? {
                         Some(cover) if !cover.is_empty() => {
@@ -6163,14 +6145,13 @@ impl CarrierBuilder<'_, '_> {
                     let mut covered = Vec::new();
                     let mut complete = true;
                     for target in &targets {
-                        match read_cell_cover_with_ledger(
+                        match read_cell_cover(
                             self.family_cover_locals
                                 .as_deref()
                                 .unwrap_or(&self.original_locals),
                             &self.cell_index,
                             target,
                             &channel,
-                            Some(&self.ledger),
                             self.budget,
                         )? {
                             Some(cover) if !cover.is_empty() => {
@@ -6320,14 +6301,13 @@ impl CarrierBuilder<'_, '_> {
                         continue;
                     }
                     for target in targets {
-                        let Some(cover) = read_cell_cover_with_ledger(
+                        let Some(cover) = read_cell_cover(
                             self.family_cover_locals
                                 .as_deref()
                                 .unwrap_or(&self.original_locals),
                             &self.cell_index,
                             &target,
                             &channel,
-                            Some(&self.ledger),
                             self.budget,
                         )?
                         else {

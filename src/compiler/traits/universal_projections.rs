@@ -210,7 +210,11 @@ impl ValidatedTraitWorld {
                             source_metadata: None,
                             predicates: &caller,
                             executable_storage: true,
-                            phase: FactsPhase::Schema,
+                            // This proves membership in the retained declaration
+                            // domain. Nested caller families remain rigid, not
+                            // closed implementation-selection requests. No body
+                            // facts or source-only receipt authority is minted.
+                            phase: FactsPhase::Universal,
                         },
                         active,
                     )?,

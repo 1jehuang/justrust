@@ -3821,6 +3821,16 @@ pub trait SubstitutionCx {
         caller: FactsCtx<'_>,
         budget: &PlanBudget,
     ) -> Result<Signature, String>;
+    /// Normalize source-closing argument descriptors before reconstructing a
+    /// nominal's fields. This does not authorize an executable realization.
+    fn normalize_substituted_nominal_argument(
+        &mut self,
+        argument: Ty,
+        _caller: FactsCtx<'_>,
+        _budget: &PlanBudget,
+    ) -> Result<Ty, String> {
+        Ok(argument)
+    }
     /// A structural request minted by the common typed substitution walk.
     /// The returned type is unsealed until its body/subject proof is checked.
     fn intern_substituted_nominal(
@@ -4466,7 +4476,11 @@ fn substitute_ty_walk(
             let arguments = app
                 .type_args
                 .iter()
-                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .map(|ty| {
+                    let argument =
+                        substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)?;
+                    cx.normalize_substituted_nominal_argument(argument, caller, budget)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             // A substitution that changes no ordered actual must retain the
             // authenticated source allocation, not construct an equivalent
@@ -4534,7 +4548,11 @@ fn substitute_ty_walk(
             let arguments = app
                 .type_args
                 .iter()
-                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .map(|ty| {
+                    let argument =
+                        substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)?;
+                    cx.normalize_substituted_nominal_argument(argument, caller, budget)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             // A substitution that changes no ordered actual must retain the
             // authenticated source allocation, not construct an equivalent
@@ -8540,14 +8558,6 @@ impl Ty {
         let [element] = def.type_args.as_ref() else {
             return None;
         };
-        if let Some(read) = value.realization()
-            && read.is_component()
-        {
-            // The exact rooted read was checked above. Its immutable sequence
-            // witness authenticates the original binding and all three
-            // instantiated field equations without unfolding symbolic storage.
-            return read.component_sequence_shape().then_some(element);
-        }
         let [pointer, length, capacity] = def.fields.concrete_ownership_fields()? else {
             return None;
         };
@@ -17690,6 +17700,89 @@ mod tests {
         assert!(!identical_type(&generic, &mapped, &budget).unwrap());
         assert_eq!(mapped, compounds(Ty::Int(IntTy::U64)));
 
+        let mixed_scope = ParamEnv::new(
+            BinderId {
+                declaration: test_decl(),
+            },
+            3,
+        )
+        .unwrap()
+        .with_slot_kinds(
+            &[
+                GenericParamKind::Type,
+                GenericParamKind::Const(ConstType::Int(IntTy::Usize)),
+                GenericParamKind::Const(ConstType::Int(IntTy::Usize)),
+            ],
+            &budget,
+        )
+        .unwrap();
+        let mixed_env = GenericEnv::new(&[Arc::new(mixed_scope)], &budget).unwrap();
+        let mixed_params = mixed_env.ordered_params().collect::<Vec<_>>();
+        let array = Ty::DependentArray {
+            element: Arc::new(Ty::Param(mixed_params[0])),
+            length: ConstParamId {
+                owner: mixed_params[1].owner,
+                index: mixed_params[1].index,
+            },
+        };
+        for len in [0, 3] {
+            let extent = Ty::Const(ConstArgument::Integer {
+                ty: IntTy::Usize,
+                bits: len as u128,
+            });
+            let closed = substitute_ty(
+                &array,
+                &mixed_env,
+                &[Ty::Int(IntTy::U8), extent.clone(), extent],
+                FactsCtx::Concrete,
+                &mut NoNominals,
+                &budget,
+            )
+            .unwrap();
+            assert_eq!(
+                closed,
+                Ty::Array {
+                    element: Arc::new(Ty::Int(IntTy::U8)),
+                    len,
+                }
+            );
+        }
+        let forwarded = substitute_ty(
+            &array,
+            &mixed_env,
+            &[
+                Ty::Bool,
+                Ty::Param(mixed_params[2]),
+                Ty::Param(mixed_params[1]),
+            ],
+            FactsCtx::Universal(&mixed_env),
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            forwarded,
+            Ty::DependentArray {
+                element: Arc::new(Ty::Bool),
+                length: ConstParamId {
+                    owner: mixed_params[2].owner,
+                    index: mixed_params[2].index,
+                },
+            }
+        );
+        assert!(
+            substitute_ty(
+                &array,
+                &mixed_env,
+                &[Ty::Int(IntTy::U8), Ty::Int(IntTy::Usize), Ty::Bool],
+                FactsCtx::Concrete,
+                &mut NoNominals,
+                &budget,
+            )
+            .unwrap_err()
+            .contains("E0747")
+        );
+
         let projection = AssociatedTypeProjection {
             trait_ref: TraitRef {
                 declaration: test_decl(),
@@ -18068,6 +18161,176 @@ mod tests {
         validate_root_reference_actual(&hidden, &PlanBudget::default()).unwrap();
         // Shape-only admission; the Sized proof owns the E0277 rejection.
         assert!(validate_root_reference_actual(&Ty::Str, &PlanBudget::default()).is_ok());
+        // Mixed binders retain source order and declaration identity, and
+        // distinguish a scalar constant from a type even when its bits agree.
+        let slot_budget = PlanBudget::default();
+        let base = ParamEnv::new(binder, 2).unwrap();
+        let mixed = base
+            .with_slot_kinds(
+                &[
+                    GenericParamKind::Type,
+                    GenericParamKind::Const(ConstType::Int(IntTy::Usize)),
+                ],
+                &slot_budget,
+            )
+            .unwrap();
+        assert_eq!(mixed.binder(), binder);
+        assert!(!mixed.same_slot_kinds(&base));
+        let mixed_env = GenericEnv::new(&[Arc::new(mixed.clone())], &slot_budget).unwrap();
+        let length = ConstParamId {
+            owner: binder,
+            index: 1,
+        };
+        assert_eq!(
+            mixed_env.const_parameter_type(length),
+            Some(ConstType::Int(IntTy::Usize))
+        );
+        let length_value = Ty::Const(ConstArgument::Integer {
+            ty: IntTy::Usize,
+            bits: 3,
+        });
+        assert!(
+            FactsCtx::Concrete
+                .validate_ty(&length_value)
+                .unwrap_err()
+                .contains("const generic argument used as a type")
+        );
+        let actuals = [Ty::Int(IntTy::U8), length_value.clone()];
+        mixed
+            .validate_argument_kinds(&actuals, Some(&env), &slot_budget)
+            .unwrap();
+        let operand =
+            ConstOperand::new(length, FactsCtx::Universal(&mixed_env), &slot_budget).unwrap();
+        assert_eq!(operand.value_type(), Ty::Int(IntTy::Usize));
+        assert!(
+            operand
+                .validate(FactsCtx::Universal(&env), &slot_budget)
+                .is_err()
+        );
+        let value = operand
+            .substitute(&mixed_env, &actuals, FactsCtx::Concrete, &slot_budget)
+            .unwrap()
+            .closed_expression()
+            .unwrap();
+        assert_eq!(value.ty, Ty::Int(IntTy::Usize));
+        assert!(matches!(
+            value.kind,
+            ExprKind::Int(IntValue {
+                ty: IntTy::Usize,
+                bits: 3
+            })
+        ));
+        let repeat =
+            RepeatLength::parameter(operand, FactsCtx::Universal(&mixed_env), &slot_budget)
+                .unwrap();
+        assert!(repeat.requires_copy());
+        assert_eq!(
+            repeat
+                .substitute(&mixed_env, &actuals, FactsCtx::Concrete, &slot_budget)
+                .unwrap(),
+            RepeatLength::Known(3)
+        );
+        assert_eq!(
+            repeat
+                .array_type(
+                    Ty::Int(IntTy::U8),
+                    FactsCtx::Universal(&mixed_env),
+                    &slot_budget
+                )
+                .unwrap(),
+            Ty::DependentArray {
+                element: Arc::new(Ty::Int(IntTy::U8)),
+                length,
+            }
+        );
+        let generic_element = Ty::Param(ParamId {
+            owner: binder,
+            index: 0,
+        });
+        assert!(
+            RepeatLength::Known(0)
+                .array_type(
+                    generic_element.clone(),
+                    FactsCtx::Universal(&mixed_env),
+                    &slot_budget,
+                )
+                .is_ok()
+        );
+        assert!(
+            RepeatLength::Known(2)
+                .array_type(
+                    generic_element,
+                    FactsCtx::Universal(&mixed_env),
+                    &slot_budget
+                )
+                .is_err()
+        );
+        assert_eq!(
+            ConstValue::Closed(ConstArgument::Bool(true))
+                .closed_expression()
+                .unwrap()
+                .ty,
+            Ty::Bool
+        );
+        assert_eq!(
+            ConstValue::Closed(ConstArgument::Char('λ'))
+                .closed_expression()
+                .unwrap()
+                .ty,
+            Ty::Char
+        );
+        let symbolic = [
+            actuals[0].clone(),
+            Ty::Param(ParamId {
+                owner: binder,
+                index: 1,
+            }),
+        ];
+        mixed
+            .validate_argument_kinds(&symbolic, Some(&mixed_env), &slot_budget)
+            .unwrap();
+        assert!(
+            FactsCtx::Universal(&mixed_env)
+                .validate_ty(&symbolic[1])
+                .unwrap_err()
+                .contains("const generic parameter used as a type")
+        );
+        assert!(
+            mixed
+                .validate_argument_kinds(&actuals[..1], Some(&env), &slot_budget)
+                .unwrap_err()
+                .contains("E0107")
+        );
+        assert!(
+            mixed
+                .validate_argument_kinds(
+                    &[length_value.clone(), actuals[0].clone()],
+                    Some(&env),
+                    &slot_budget,
+                )
+                .unwrap_err()
+                .contains("E0747")
+        );
+        assert!(
+            mixed
+                .validate_argument_kinds(&[actuals[0].clone(), Ty::Bool], Some(&env), &slot_budget)
+                .unwrap_err()
+                .contains("E0747")
+        );
+        let wrong_scalar = Ty::Const(ConstArgument::Integer {
+            ty: IntTy::U8,
+            bits: 3,
+        });
+        assert!(
+            mixed
+                .validate_argument_kinds(
+                    &[actuals[0].clone(), wrong_scalar],
+                    Some(&env),
+                    &slot_budget
+                )
+                .unwrap_err()
+                .contains("E0308")
+        );
         let budget = PlanBudget::new(PlanLimits {
             applications: 4,
             bytes: 16,

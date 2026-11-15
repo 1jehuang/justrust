@@ -195,6 +195,38 @@ fn main() {
 }
 
 #[test]
+fn static_trait_constructors_infer_self_from_result_context() {
+    coherence_oracle::stock_native(
+        r#"
+struct NotDefault { n: i32 }
+trait Factory: Sized { fn make() -> Option<Self>; }
+trait Build<T>: Sized { fn build(value: T) -> Option<Self>; }
+struct Product { n: i32 }
+impl Factory for Product { fn make() -> Option<Product> { Some(Product { n: 7 }) } }
+impl Build<i32> for Product { fn build(value: i32) -> Option<Product> { Some(Product { n: value }) } }
+fn empty<T>() -> Vec<T> { Default::default() }
+fn made() -> Option<Product> { Factory::make() }
+fn main() {
+    let a: Vec<NotDefault> = Vec::default();
+    let b: Vec<NotDefault> = Default::default();
+    let c: Vec<NotDefault> = std::default::Default::default();
+    let d: Vec<NotDefault> = empty();
+    let p: Option<Product> = Factory::make();
+    let q: Option<Product> = Build::<i32>::build(8);
+    println!("{} {} {} {} {} {} {}", a.len(), b.len(), c.len(), d.len(), p.unwrap().n, made().unwrap().n, q.unwrap().n);
+}
+"#,
+    );
+    for source in [
+        "struct Missing{n:i32} fn main(){let value:Missing=Default::default();}",
+        "fn unused<T>()->T{Default::default()} fn main(){}",
+        "trait Factory:Sized{fn make()->Option<Self>;} struct Product{n:i32} impl Factory for Product{fn make()->Option<Product>{None}} fn main(){let value:Option<i32>=Factory::make();}",
+    ] {
+        coherence_oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn generic_parameter_projection_membership_can_follow_a_blanket_impl() {
     let protocol = r#"
 trait MyInto {

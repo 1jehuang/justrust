@@ -552,6 +552,27 @@ impl NameStoreBuilder {
         ordinal: usize,
     ) -> Result<AstIdent, NameError> {
         self.check_origin(origin)?;
+        self.append_anonymous_closure(origin, ordinal)
+    }
+
+    /// Only the driver-issued proof for this exact expansion may anchor a
+    /// compiler-private identity at an expanded occurrence. Written identifiers
+    /// still use token admission and retain their own hygienic contexts.
+    pub(crate) fn anonymous_closure_in_expansion(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+        admission: &super::semantic_scope::ExpansionTokenAdmission,
+    ) -> Result<AstIdent, NameError> {
+        let origin = self.anonymous_expansion_origin(origin, admission)?;
+        self.append_anonymous_closure(origin, ordinal)
+    }
+
+    fn append_anonymous_closure(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+    ) -> Result<AstIdent, NameError> {
         let spelling = self
             .store
             .session
@@ -574,6 +595,58 @@ impl NameStoreBuilder {
         field: usize,
     ) -> Result<AstIdent, NameError> {
         self.check_origin(origin)?;
+        self.append_anonymous_closure_environment(origin, ordinal, field)
+    }
+
+    pub(crate) fn anonymous_closure_environment_in_expansion(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+        field: usize,
+        admission: &super::semantic_scope::ExpansionTokenAdmission,
+    ) -> Result<AstIdent, NameError> {
+        let origin = self.anonymous_expansion_origin(origin, admission)?;
+        self.append_anonymous_closure_environment(origin, ordinal, field)
+    }
+
+    fn anonymous_expansion_origin(
+        &mut self,
+        origin: SpanId,
+        admission: &super::semantic_scope::ExpansionTokenAdmission,
+    ) -> Result<SpanId, NameError> {
+        admission
+            .validate_span(self.session(), origin)
+            .map_err(|error| match error {
+                super::semantic_scope::ScopeError::Token(error) => NameError::Token(error),
+                super::semantic_scope::ScopeError::Name(error)
+                | super::semantic_scope::ScopeError::Module(
+                    super::module_identity::ModuleError::Name(error),
+                ) => error,
+                super::semantic_scope::ScopeError::Module(
+                    super::module_identity::ModuleError::Token(error),
+                ) => NameError::Token(error),
+                _ => NameError::Token(TokenError::InvalidInput(
+                    "invalid anonymous expansion origin",
+                )),
+            })?;
+        // This is an unspellable compiler declaration, not a written local or
+        // module occurrence. Preserve the exact admitted expansion as a backward
+        // provenance edge, without assigning the adapter's private ABI names to
+        // the invoking function's written-identifier scope.
+        let span = self.store.session.synthetic_span(
+            origin,
+            super::expansion_span::SyntheticReason::CompilerIdentity,
+        )?;
+        let context = self.session().root_context();
+        Ok(self.store.session.with_context(span, context, None)?)
+    }
+
+    fn append_anonymous_closure_environment(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+        field: usize,
+    ) -> Result<AstIdent, NameError> {
         let spelling = self
             .store
             .session

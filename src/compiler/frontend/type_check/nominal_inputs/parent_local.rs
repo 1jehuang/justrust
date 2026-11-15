@@ -23,6 +23,7 @@ use super::*;
 mod closure_mode;
 mod replay;
 mod source_remint;
+mod source_substitution;
 pub(in crate::compiler::frontend) use replay::ParentLocalReplayMemo;
 
 /// Whether any ordered actual structurally holds a closure type.
@@ -183,9 +184,11 @@ impl ParentLocalReceipt {
         let ir::NominalIndex::ParentLocal { .. } = self.id.index else {
             return Err("source closing substitution requires a parent-local application".into());
         };
+        // Source-stage function and closure actuals may retain authenticated
+        // binders. Structural closedness is not their admission authority:
+        // require unchanged ordered actuals, current metadata validation and
+        // the exact source receipt/context replay below instead.
         if self.actuals.len() != mapped_actuals.len()
-            || !self.actuals.iter().all(ir::Ty::is_closed_shallow)
-            || !mapped_actuals.iter().all(ir::Ty::is_closed_shallow)
             || !same_actuals(&self.actuals, mapped_actuals, budget)?
         {
             return Err(
@@ -1928,6 +1931,172 @@ mod tests {
 
     #[test]
     fn projected_parent_local_receipt_replays_source_fields_and_exact_context() {
+        {
+            let program = parse(
+                "struct Slot<T>{value:T}fn main(){}fn identity<T>(value:Slot<T>)->Slot<T>{value}",
+            )
+            .unwrap();
+            let budget = ir::PlanBudget::default();
+            let mut plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let owner = plan.function_decl(0).unwrap();
+            let signatures = plan.environment(Some(owner)).unwrap();
+            let function = plan.callable_body(&plan.program, owner).unwrap();
+            let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+            checker.declaration = Some(owner);
+            let actual = ir::Ty::Int(ir::IntTy::I32);
+            let nominal = checker
+                .mint_parent_local_nominal(plan.nominal_declaration(0).unwrap(), &[actual.clone()])
+                .unwrap();
+            let facts = checker.facts().validated().unwrap();
+            let target = ir::CallTarget {
+                declaration: plan.function_decl(1).unwrap(),
+                type_args: Arc::from([actual]),
+            };
+            let mut scratch = tr::TraitScratch::default();
+            let proof = facts
+                .service()
+                .discharge_direct_with_nominals(&target, facts, &[nominal.clone()], &mut scratch)
+                .unwrap();
+            assert_eq!(proof.signature().params.as_ref(), &[nominal.clone()]);
+            assert_eq!(proof.signature().result, nominal);
+        }
+        {
+            let program = parse("struct Slot<T>{value:T}fn generic<U>(){}fn other<U>(){}").unwrap();
+            let budget = ir::PlanBudget::default();
+            let mut plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let owner = plan.function_decl(0).unwrap();
+            let signatures = plan.environment(Some(owner)).unwrap();
+            let function = plan.callable_body(&plan.program, owner).unwrap();
+            let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+            checker.declaration = Some(owner);
+            let source = checker.facts().validated().unwrap();
+            let parameter = ir::Ty::Param(source.env().ordered_params().next().unwrap());
+            let original = checker
+                .mint_parent_local_nominal(plan.nominal_declaration(0).unwrap(), &[parameter])
+                .unwrap();
+            let ir::Ty::Struct(value) = &original else {
+                panic!("generic source changed nominal kind")
+            };
+            let receipt = value.parent_local_receipt().unwrap().clone();
+            let target = ir::CallTarget {
+                declaration: owner,
+                type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+            };
+            let current = source.world().instance_facts(&target).unwrap();
+            // Direct retention still cannot authorize changed source actuals.
+            assert!(
+                receipt
+                    .remint_for_source_substitution(
+                        &original,
+                        source,
+                        &current,
+                        source.env(),
+                        &target.type_args,
+                        &target.type_args,
+                        &budget,
+                    )
+                    .is_err()
+            );
+            let closed = receipt
+                .remint_for_generic_source_substitution(
+                    &original,
+                    source,
+                    &current,
+                    source.env(),
+                    &target.type_args,
+                    &target.type_args,
+                    &mut plan,
+                    &budget,
+                )
+                .unwrap();
+            current.validate_ty_metadata(&closed).unwrap();
+            assert!(source.validate_ty_metadata(&closed).is_err());
+            let ir::Ty::Struct(closed_value) = &closed else {
+                panic!("generic closing changed nominal kind")
+            };
+            assert_eq!(
+                closed_value.def().type_args.as_ref(),
+                target.type_args.as_ref()
+            );
+            assert_eq!(
+                closed_value.def().fields.read(&budget).unwrap()[0].ty,
+                ir::Ty::Int(ir::IntTy::I32)
+            );
+            assert!(
+                receipt
+                    .remint_for_generic_source_substitution(
+                        &original,
+                        source,
+                        &current,
+                        source.env(),
+                        &target.type_args,
+                        &[ir::Ty::Bool],
+                        &mut plan,
+                        &budget,
+                    )
+                    .is_err()
+            );
+            let copied = ir::GenericEnv::new(source.env().scopes(), &budget).unwrap();
+            assert!(
+                receipt
+                    .remint_for_generic_source_substitution(
+                        &original,
+                        source,
+                        &current,
+                        &copied,
+                        &target.type_args,
+                        &target.type_args,
+                        &mut plan,
+                        &budget,
+                    )
+                    .is_err()
+            );
+            assert!(
+                receipt
+                    .remint_for_generic_source_substitution(
+                        &original,
+                        source,
+                        &current,
+                        source.env(),
+                        &[ir::Ty::Bool],
+                        &target.type_args,
+                        &mut plan,
+                        &budget,
+                    )
+                    .is_err()
+            );
+            let other = plan.function_decl(1).unwrap();
+            let foreign_source = source.world().callable_facts(other).unwrap();
+            let foreign_current = source
+                .world()
+                .instance_facts(&ir::CallTarget {
+                    declaration: other,
+                    type_args: target.type_args.clone(),
+                })
+                .unwrap();
+            for (source_facts, current_facts) in [
+                (&foreign_source, &current),
+                (
+                    &source.world().callable_facts(owner).unwrap(),
+                    &foreign_current,
+                ),
+            ] {
+                assert!(
+                    receipt
+                        .remint_for_generic_source_substitution(
+                            &original,
+                            source_facts,
+                            current_facts,
+                            source.env(),
+                            &target.type_args,
+                            &target.type_args,
+                            &mut plan,
+                            &budget,
+                        )
+                        .is_err()
+                );
+            }
+        }
         let text = "trait Has{type Out;}impl Has for i32{type Out=u8;}struct Storage<T:Has>{inner:StorageSlot<T::Out>}struct Other<T:Has>{inner:StorageSlot<T::Out>}enum StorageSlot<T>{Empty,Full(T)}fn main(){}fn other(){}";
         let program = parse(text).unwrap();
         let budget = ir::PlanBudget::default();
@@ -2239,10 +2408,56 @@ mod tests {
                 )
                 .is_err()
         );
+        // Removing shallow closedness must not authorize a copied source
+        // environment, foreign caller facts or changed symbolic actuals.
+        let (_, unbound_actual) = function_marker(&budget);
+        assert!(
+            receipt
+                .remint_for_source_substitution(
+                    &original,
+                    facts,
+                    &closed_facts,
+                    facts.env(),
+                    &[],
+                    &[unbound_actual],
+                    &budget,
+                )
+                .is_err()
+        );
+        assert!(
+            receipt
+                .remint_for_source_substitution(
+                    &original,
+                    facts,
+                    &closed_facts,
+                    &copied_env,
+                    &[],
+                    &[ir::Ty::Int(ir::IntTy::I32)],
+                    &budget,
+                )
+                .is_err()
+        );
         let foreign_target = ir::CallTarget {
             declaration: plan.function_decl(1).unwrap(),
             type_args: Arc::from([]),
         };
+        let foreign_source = facts
+            .world()
+            .callable_facts(foreign_target.declaration)
+            .unwrap();
+        assert!(
+            receipt
+                .remint_for_source_substitution(
+                    &original,
+                    &foreign_source,
+                    &closed_facts,
+                    facts.env(),
+                    &[],
+                    &[ir::Ty::Int(ir::IntTy::I32)],
+                    &budget,
+                )
+                .is_err()
+        );
         let foreign_closed = facts.world().instance_facts(&foreign_target).unwrap();
         assert!(
             receipt

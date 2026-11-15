@@ -357,6 +357,9 @@ impl ValidatedTraitWorld {
                 }
             }
         }
+        for env in &self.environments {
+            self.validate_declaration_nominal_membership(env)?;
+        }
         Ok(())
     }
     pub(super) fn has_declared_callable_equalities(&self, declaration: DeclId) -> Result<bool> {
@@ -1912,7 +1915,7 @@ impl ValidatedTraitWorld {
         }
         schema.signature.result =
             self.normalize_declared_type(&schema.signature.result, context, &mut reductions, 0)?;
-        self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
+        self.validate_logical_schema_signature(declaration, &schema.signature, &schema.env, None)?;
         Ok(DeclaredCallableNormalization {
             schema,
             world: self.id,
@@ -1998,7 +2001,7 @@ impl ValidatedTraitWorld {
         self.map_equality_type_for_use(ty, env, depth, true, reduce)
     }
 
-    fn map_equality_type_for_use(
+    pub(super) fn map_equality_type_for_use(
         &self,
         ty: &Ty,
         env: &GenericEnv,
@@ -2105,13 +2108,16 @@ impl ValidatedTraitWorld {
                 None => self.projection_type(projection),
             };
             let application = predicate.trait_ref();
-            let self_ty = self.map_equality_type(&application.self_ty, env, 0, &mut reduce)?;
+            // These are declaration obligations, not storage operands. Preserve
+            // authenticated source fields while reducing exact owner projections.
+            let self_ty =
+                self.map_equality_type_for_use(&application.self_ty, env, 0, false, &mut reduce)?;
             let mut args = Vec::new();
             for argument in application.args.iter() {
                 push(
                     &self.budget,
                     &mut args,
-                    self.map_equality_type(argument, env, 0, &mut reduce)?,
+                    self.map_equality_type_for_use(argument, env, 0, false, &mut reduce)?,
                 )?;
             }
             let application = TraitRef {
@@ -2128,7 +2134,7 @@ impl ValidatedTraitWorld {
                         trait_ref: application,
                         item: projection.item,
                     },
-                    ty: self.map_equality_type(ty, env, 0, &mut reduce)?,
+                    ty: self.map_equality_type_for_use(ty, env, 0, false, &mut reduce)?,
                 },
             };
             push(&self.budget, &mut rows, row)?;

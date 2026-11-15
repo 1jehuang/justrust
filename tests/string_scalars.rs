@@ -739,3 +739,35 @@ fn str_bytes_unused_invalids() {
         ],
     );
 }
+
+#[test]
+fn string_from_utf8_lossy_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "string-from-utf8-lossy",
+        &[
+            Case {
+                name: "utf8_valid_and_malformed_sequences",
+                source: "use std::borrow::Cow;\nfn show(bytes:&[u8]) { let value=String::from_utf8_lossy(bytes); let borrowed=matches!(&value,Cow::Borrowed(_)); println!(\"{} {:?}\",borrowed,&*value); println!(\"{:?}\",value.into_owned()); }\nfn main(){show(&[]);show(&[72,105]);show(\"é日🦀\".as_bytes());show(&[0x66,0x80,0x6f]);show(&[0xe2,0x82]);show(&[0xe2,0x82,0x41]);show(&[0xe0,0x80,0x80]);show(&[0xed,0xa0,0x80]);show(&[0xf4,0x90,0x80,0x80]);show(&[0xf0,0x9f,0xa6,0x80,0xff,0x61]);}",
+                expect: Expect::Run(
+                    "true \"\"\n\"\"\ntrue \"Hi\"\n\"Hi\"\ntrue \"é日🦀\"\n\"é日🦀\"\nfalse \"f�o\"\n\"f�o\"\nfalse \"�\"\n\"�\"\nfalse \"�A\"\n\"�A\"\nfalse \"���\"\n\"���\"\nfalse \"���\"\n\"���\"\nfalse \"����\"\n\"����\"\nfalse \"🦀�a\"\n\"🦀�a\"\n",
+                ),
+            },
+            Case {
+                name: "cow_mutation_cloning_and_generic_slice",
+                source: "use std::borrow::Cow;\nfn main(){let mut text:Cow<'_,str>=Cow::Borrowed(\"hi\");let original=text.clone();text.to_mut().push('!');println!(\"{} {} {:?}\",original,text,text.clone().into_owned());let bytes=[1u8,2,3];let mut data:Cow<'_,[u8]>=Cow::Borrowed(&bytes);data.to_mut().push(4);println!(\"{:?}\",data);println!(\"{:?}\",data.into_owned());}",
+                expect: Expect::Run("hi hi! \"hi!\"\n[1, 2, 3, 4]\n[1, 2, 3, 4]\n"),
+            },
+            Case {
+                name: "unused_lossy_borrow_escape",
+                source: "use std::borrow::Cow;fn bad()->Cow<'static,str>{let bytes=vec![72u8,105];String::from_utf8_lossy(&bytes)}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_lossy_wrong_result",
+                source: "fn bad(bytes:&[u8])->String{String::from_utf8_lossy(bytes)}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}

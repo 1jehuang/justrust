@@ -3678,15 +3678,18 @@ impl Emitter<'_> {
                     ir::FactsCtx::Validated(self.concrete.facts()),
                 )?;
                 if let (ir::Ty::FnItem(item), ir::Ty::FnPointer(_)) = (&source, to) {
+                    // LEA and CALL use the same signed RIP-relative relocation
+                    // field. This materializes the exact demanded instance,
+                    // never the address of the item's zero-sized carrier.
                     let at = self.jump(&[0x48, 0x8d, 0x05]);
                     self.object.calls.push((at, (self.resolve)(item)?));
                 } else {
                     self.operand(value)?;
-                    if ir::object_data_pointer_cast(&source, to) {
-                        // A fat pointer value is carried by address. Extract only
-                        // its data word, never the address of that descriptor.
-                        self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
-                    }
+                }
+                if ir::object_data_pointer_cast(&source, to) {
+                    // A fat pointer value is carried by address. Extract only
+                    // its data word, never the address of that descriptor.
+                    self.bytes(&[0x48, 0x8b, 0x00]); // mov rax, [rax]
                 }
             }
             cfg::Rvalue::IntCast { value, to } => {

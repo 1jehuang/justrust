@@ -10,6 +10,7 @@ pub enum SyntheticReason {
     DocumentationAttribute,
     ExpansionToken,
     DerivedMember,
+    CompilerIdentity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

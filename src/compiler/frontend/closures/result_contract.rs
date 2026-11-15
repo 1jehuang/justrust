@@ -100,6 +100,25 @@ impl Checker<'_> {
                 &plan.budget,
             )?)));
         }
+        if body.statements.is_empty()
+            && let Some(tail) = body.tail
+            && let Some(origin) = input_value_result::origin(
+                &self.exprs,
+                &self.locals,
+                prefix,
+                tuple,
+                tail,
+                &plan.budget,
+            )?
+        {
+            return Ok(Some(Arc::new(ir::ClosureResultReceipt::input_value(
+                owner,
+                provider,
+                site,
+                origin,
+                &plan.budget,
+            )?)));
+        }
         if let Some(tail) = body.tail
             && matches!(
                 self.exprs.get(tail.0).map(|e| &e.kind),
@@ -335,6 +354,35 @@ pub(in crate::compiler) fn validate_source(
     }
     if receipt.capture_witness().is_some() {
         return captured_result::validate_source(receipt, source, facts);
+    }
+    if let Some(origin) = receipt.input_value_origin() {
+        let (closure, _) = facts
+            .closure_lowering_identity()
+            .ok_or("closure input value result lacks actual body authority")?;
+        if closure.owner() != receipt.owner()
+            || closure.provider() != receipt.provider()
+            || closure.site() != receipt.site()
+            || closure
+                .result_receipt()
+                .is_none_or(|original| !original.same_source_shape(receipt))
+            || source.params[1] != origin.tuple
+        {
+            return Err("closure input value result changed its original source authority".into());
+        }
+        let replayed = input_value_result::origin(
+            &source.exprs,
+            &source.locals,
+            &source.body.statements,
+            source.params[1],
+            receipt.tail(),
+            budget,
+        )?;
+        if replayed.as_ref() != Some(origin)
+            || origin.result(closure.params(), budget)? != source.result
+        {
+            return Err("closure input value result changed its exact parameter read".into());
+        }
+        return Ok(());
     }
     if let Some(origin) = receipt.argument_origin() {
         let (closure, _) = facts

@@ -1,6 +1,29 @@
 //! Parameter-origin reference values. Captures and body-owned locals never seed a result.
 use super::*;
 
+pub(super) fn origin(
+    exprs: &[ir::TypedExpr],
+    locals: &[ir::LocalDecl],
+    prefix: &[ir::TypedStmt],
+    tuple: ir::LocalId,
+    tail: ir::ExprId,
+    budget: &ir::PlanBudget,
+) -> Result<Option<ir::ClosureInputValueOrigin>, String> {
+    let expression = exprs
+        .get(tail.0)
+        .ok_or("invalid closure input result expression")?;
+    if !matches!(
+        expression.ty,
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            ..
+        }
+    ) {
+        return Ok(None);
+    }
+    value_origin(exprs, locals, prefix, tuple, tail, budget)
+}
+
 pub(super) fn parameter_origin(
     exprs: &[ir::TypedExpr],
     locals: &[ir::LocalDecl],

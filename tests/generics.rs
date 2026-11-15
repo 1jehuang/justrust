@@ -1163,6 +1163,86 @@ fn runs(source: &str, expected: &str) {
     runs_with_exit(source, expected, 0);
 }
 
+#[test]
+fn runs_const_generic_values_and_array_extents() {
+    runs(
+        r#"
+fn extent<const N: usize>(a: [i32; N]) -> usize { N }
+fn identity<const N: usize>(a: [i32; N]) -> [i32; N] { a }
+fn flag<const B: bool>() -> bool { B }
+fn letter<const C: char>() -> char { C }
+fn byte<const V: u8>() -> u8 { V }
+fn signed<const V: i8>() -> i8 { V }
+fn forwarded<const M: usize>(a: [i32; M]) -> usize { extent::<M>(a) }
+fn mixed<T: Copy, const N: usize, U: Copy>(a: [T; N], u: U) -> ([T; N], U, usize) { (a, u, N) }
+fn main() {
+    let a = identity::<3>([2, 4, 6]);
+    println!("{} {} {}", extent::<3>(a), extent::<0x3>(a), extent::<{ 3 }>(a));
+    println!("{} {} {} {}", byte::<255>(), signed::<{ -128 }>(), flag::<true>(), letter::<'λ'>());
+    let (_, value, length) = mixed::<i32, 3, bool>(a, true);
+    println!("{} {} {}", forwarded::<3>(a), value, length);
+}
+"#,
+        "3 3 3\n255 -128 true λ\n3 true 3\n",
+    );
+}
+
+#[test]
+fn rejects_invalid_const_argument_kinds_and_extents() {
+    for (code, source) in [
+        (
+            "E0107",
+            "fn f<const N:usize>(){}fn unused(){f::<3,4>()}fn main(){}",
+        ),
+        (
+            "E0107",
+            "fn f<T,const N:usize>(){}fn unused(){f::<i32>()}fn main(){}",
+        ),
+        (
+            "E0747",
+            "fn f<const N:usize>(){}fn unused(){f::<i32>()}fn main(){}",
+        ),
+        ("E0747", "fn f<T>(){}fn unused(){f::<3>()}fn main(){}"),
+        (
+            "E0308",
+            "fn f<const N:usize>(a:[i32;N]){}fn unused(){f::<3>([1,2])}fn main(){}",
+        ),
+        (
+            "E0308",
+            "fn f<const N:usize>(){}fn unused(){f::<true>()}fn main(){}",
+        ),
+        ("E0158", "fn f<const N:usize>(){let N=3;}fn main(){}"),
+    ] {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let result = capture(
+            Command::new(defaults_stock::stock_rustc())
+                .arg(&input)
+                .args(["--edition=2024", "-C", "panic=abort", "--emit=metadata"])
+                .arg("-o")
+                .arg(scratch.path("invalid.rmeta")),
+            &scratch,
+            20,
+        );
+        assert!(!result.status.success(), "stock accepted {source}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(code),
+            "{result:?}"
+        );
+        for workers in [1, 8] {
+            let output = scratch.path("must-not-exist");
+            for check in [true, false] {
+                let native = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                assert_eq!(native.status.code(), Some(1), "{source}: {native:?}");
+                let diagnostic = String::from_utf8_lossy(&native.stderr);
+                assert!(diagnostic.contains(code), "{source}: {diagnostic}");
+                assert!(!diagnostic.contains("panicked at"), "{diagnostic}");
+                assert!(!output.exists());
+            }
+        }
+    }
+}
+
 fn rejects_resource_build(source: &str) {
     rejects_resource_modes(source, &[false]);
 }

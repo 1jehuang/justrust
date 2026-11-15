@@ -3,6 +3,8 @@
 //! never allocation-order-dependent application IDs or diagnostic names.
 use super::*;
 
+#[path = "graph_key/dynamic.rs"]
+mod dynamic;
 #[path = "graph_key/rich_object.rs"]
 mod rich_object;
 
@@ -992,6 +994,106 @@ mod tests {
         deep.extend([3, 0]);
         assert!(decode(&deep, &context, &budget).is_err());
     }
+    #[test]
+    fn rich_dyn_keys_replay_all_principal_actuals_and_associated_identities() {
+        let program = frontend::parse(
+            "trait Parent{type A;}trait Get<T>:Parent{type B;fn get(&self,t:T)->Self::B;}
+             trait Other<T>{type A;type B;}struct Wrap<T>{value:T}
+             fn item<T>(x:T)->T{x}
+             fn first(x:&dyn Get<u8,A=bool,B=u16>){}
+             fn same(x:&dyn Get<u8,B=u16,A=bool>){}
+             fn argument(x:&dyn Get<u16,A=bool,B=u16>){}
+             fn binding(x:&dyn Get<u8,A=u8,B=u16>){}
+             fn principal(x:&dyn Other<u8,A=bool,B=u16>){}
+             fn nested(x:&dyn Get<Wrap<u8>,A=bool,B=(u8,u16)>){}
+             fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let named = |name| {
+            (0..context.callable_count())
+                .map(|i| context.callable_decl(i).unwrap())
+                .find(|id| {
+                    matches!(context.persistent_decl_path(*id).unwrap().item(),
+                    frontend::PersistentDeclItem::Name(found) if found == name)
+                })
+                .unwrap()
+        };
+        let target = |value| ir::CallTarget {
+            declaration: named("item"),
+            type_args: Arc::from([value]),
+        };
+        let parameter = |name| context.signature(named(name)).unwrap().signature.params[0].clone();
+        let first = target(parameter("first"));
+        let words = encode(&first, &budget).unwrap();
+        assert_eq!(words, encode(&target(parameter("same")), &budget).unwrap());
+        for name in ["first", "argument", "binding", "principal", "nested"] {
+            let value = target(parameter(name));
+            let encoded = encode(&value, &budget).unwrap();
+            assert_eq!(decode(&encoded, &context, &budget).unwrap(), value);
+            if name != "first" {
+                assert_ne!(encoded, words, "aliased distinct dyn coordinate {name}");
+            }
+        }
+        for end in 0..words.len() {
+            assert!(decode(&words[..end], &context, &budget).is_err());
+        }
+        let mut trailing = words.clone();
+        trailing.push(0);
+        assert!(decode(&trailing, &context, &budget).is_err());
+        // The root actual is a shared reference to one complete dyn frame.
+        let dyn_at = 7;
+        assert_eq!(words[dyn_at], 15);
+        let dyn_end = dyn_at + 2 + words[dyn_at + 1] as usize;
+        for marker in [dyn_end - 2, dyn_end - 1] {
+            let mut unsupported = words.clone();
+            unsupported[marker] = 1;
+            assert!(decode(&unsupported, &context, &budget).is_err());
+        }
+        let mut foreign = words.clone();
+        foreign[dyn_at + 2] = ir::SnapshotId::standalone().unwrap().graph_word();
+        assert!(decode(&foreign, &context, &budget).is_err());
+        let mut wrong_principal = words.clone();
+        wrong_principal[dyn_at + 3] = named("item").index;
+        assert!(decode(&wrong_principal, &context, &budget).is_err());
+        let ir::Ty::Ref { referent, .. } = &first.type_args[0] else {
+            unreachable!()
+        };
+        let ir::Ty::Dyn(object) = referent.as_ref() else {
+            unreachable!()
+        };
+        let check_forgery = |object| {
+            let value = target(ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Dyn(Arc::new(object))),
+            });
+            assert!(decode(&encode(&value, &budget).unwrap(), &context, &budget).is_err());
+        };
+        let mut missing = object.as_ref().clone();
+        missing.associated_types = Arc::from(&missing.associated_types[1..]);
+        check_forgery(missing);
+        let mut reordered = object.as_ref().clone();
+        reordered.associated_types = object.associated_types.iter().cloned().rev().collect();
+        check_forgery(reordered);
+        let mut duplicated = object.as_ref().clone();
+        duplicated.associated_types = vec![object.associated_types[0].clone(); 2].into();
+        check_forgery(duplicated);
+        let mut foreign_binding = object.as_ref().clone();
+        let mut bindings = foreign_binding.associated_types.to_vec();
+        bindings[0].0.snapshot = ir::SnapshotId::standalone().unwrap();
+        foreign_binding.associated_types = bindings.into();
+        check_forgery(foreign_binding);
+        let mut wrong_owner = object.as_ref().clone();
+        let mut bindings = wrong_owner.associated_types.to_vec();
+        bindings[0].0 = object.principal;
+        wrong_owner.associated_types = bindings.into();
+        check_forgery(wrong_owner);
+        let mut wrong_arity = object.as_ref().clone();
+        wrong_arity.args = Arc::from([]);
+        check_forgery(wrong_arity);
+    }
+
     #[test]
     fn nominal_alias_coordinates_share_and_nested_frames_remain_bounded() {
         let program = frontend::parse("struct Pair<T>{value:T} type Alias=Pair<i32>; fn first(x:Pair<i32>){} fn second(x:Alias){} fn item<T>(x:T)->T{x} fn main(){}").unwrap();

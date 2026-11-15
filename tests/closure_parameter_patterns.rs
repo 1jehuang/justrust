@@ -77,6 +77,69 @@ fn stored_closure_constant_inputs_reject_invalid_sources() {
 }
 
 #[test]
+fn generic_iterator_rigid_associated_argument_projection() {
+    oracle::check(
+        "generic_iterator_rigid_associated_argument_projection",
+        &[
+            Case {
+                name: "borrowed_associated_item_map",
+                source: "trait Has{type Item;}struct Source;impl Has for Source{type Item=i32;}fn count<C:Has>(xs:&[C::Item])->i32{xs.iter().map(|_|1).sum()}fn main(){println!(\"{}\",count::<Source>(&[2,3]));}",
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "chained_associated_call_map",
+                source: "trait Container{type Item;fn get(&self,i:usize)->Option<&Self::Item>;fn len(&self)->usize;}struct Stack<T>{items:Vec<T>}impl<T>Container for Stack<T>{type Item=T;fn get(&self,i:usize)->Option<&T>{self.items.get(i)}fn len(&self)->usize{self.items.len()}}fn count<C:Container>(c:&C)->usize{(0..c.len()).filter_map(|i|c.get(i)).map(|_|0).count()}fn main(){let s=Stack{items:vec![1i32,2]};println!(\"{}\",count(&s));}",
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "copied_associated_item_map",
+                source: "trait Has{type Item:Copy;}struct Source;impl Has for Source{type Item=i32;}fn count<C:Has>(xs:&[C::Item])->i32{xs.iter().copied().map(|_|1).sum()}fn main(){println!(\"{}\",count::<Source>(&[2,3]));}",
+                expect: Expect::Run("2\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn generic_iterator_rigid_associated_argument_rejects_invalid_sources() {
+    oracle::check(
+        "generic_iterator_rigid_associated_argument_invalid",
+        &[
+            Case {
+                name: "unused_wrong_rigid_argument",
+                source: "trait Has{type Item;}fn unused<C:Has>(xs:&[C::Item])->i32{xs.iter().map(|_:&i32|1).sum()}fn main(){}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "unused_chained_wrong_closure_argument",
+                source: "trait Container{type Item;fn get(&self,i:usize)->Option<&Self::Item>;fn len(&self)->usize;}fn unused<C:Container>(c:&C)->usize{(0..c.len()).filter_map(|i|c.get(i)).map(|_:&i32|0).count()}fn main(){}",
+                expect: Expect::Invalid("E0631"),
+            },
+            Case {
+                name: "unused_chained_missing_copy_bound",
+                source: "trait Container{type Item;fn get(&self,i:usize)->Option<&Self::Item>;fn len(&self)->usize;}fn unused<C:Container>(c:&C)->usize{(0..c.len()).filter_map(|i|c.get(i)).copied().map(|_|0).count()}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_missing_associated_copy_bound",
+                source: "trait Has{type Item;}fn unused<C:Has>(xs:&[C::Item])->i32{xs.iter().copied().map(|_|1).sum()}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_associated_iterator_local_escape",
+                source: "trait Has{type Item:Copy;}fn unused<'a,C:Has>(value:C::Item)->std::slice::Iter<'a,C::Item>{let values=[value];values.iter()}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_associated_iterator_mutable_duplicate",
+                source: "trait Has{type Item;}fn unused<C:Has>(xs:&mut[C::Item]){let mut first=xs.iter_mut();let mut second=xs.iter_mut();let _=first.next();let _=second.next();}fn main(){}",
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn closure_argument_call_aggregate_results() {
     oracle::check(
         "closure_argument_call_aggregate_results",

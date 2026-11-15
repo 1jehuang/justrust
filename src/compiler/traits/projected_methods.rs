@@ -102,7 +102,7 @@ impl ValidatedTraitWorld {
         schema: &GenericSchema,
         owner: Option<&OwnerNormalizationContext<'_>>,
     ) -> Result<()> {
-        self.projected_marker_predicates(schema)?;
+        self.projected_bound_predicates(schema)?;
         // Required declarations can still contain a deferred NoReference row
         // for `&Self::Target`. Authenticate the exact raw schema here, not an
         // executable stored contract before its projection is normalized.
@@ -153,10 +153,10 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    /// Admit only source-authenticated marker obligations on one exact projection.
-    /// This is a capability check, not evidence that its RHS is Copy or Sized.
-    /// Substituted applications must normalize and prove these predicates below.
-    fn projected_marker_predicates(&self, schema: &GenericSchema) -> Result<bool> {
+    /// Retain every source-authenticated projection obligation, including user
+    /// traits and projections in trait arguments. Admission is not a proof:
+    /// applications substitute, normalize, and require every predicate below.
+    fn projected_bound_predicates(&self, schema: &GenericSchema) -> Result<bool> {
         // Inspect all canonical metadata before any capability rejection.
         // Callers authenticate this schema against the original declaration.
         for predicate in schema.predicates.iter() {
@@ -164,31 +164,14 @@ impl ValidatedTraitWorld {
         }
         let mut projected = false;
         for predicate in schema.predicates.iter() {
-            let Predicate::Implements(goal) = predicate else {
-                continue;
-            };
+            let goal = predicate.trait_ref();
+            if matches!(predicate, Predicate::ProjectionEq { .. }) {
+                projected = true;
+            }
+            projected |= self.type_contains_projection(&goal.self_ty, 0)?;
             for argument in goal.args.iter() {
-                if self.type_contains_projection(argument, 0)? {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: projected method associated bounds",
-                    ));
-                }
+                projected |= self.type_contains_projection(argument, 0)?;
             }
-            if !self.type_contains_projection(&goal.self_ty, 0)? {
-                continue;
-            }
-            if !goal.args.is_empty()
-                || !matches!(&goal.self_ty, Ty::AssociatedType(_))
-                || (goal.declaration != self.catalog.id(CatalogItem::Copy)
-                    && goal.declaration != self.catalog.id(CatalogItem::Sized))
-            {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projected method associated bounds",
-                ));
-            }
-            projected = true;
         }
         Ok(projected)
     }
@@ -315,17 +298,15 @@ impl ValidatedTraitWorld {
         {
             return Ok(());
         }
-        for ty in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            if charged(
-                &self.budget,
-                ir::contains_associated_types(ty, &self.budget),
-            )? {
-                return Ok(());
-            }
+        // Opaque input projection families do not erase the declaration's
+        // lifetime-qualified root input envelopes. The rigid IR walker keeps
+        // those families opaque rather than inventing field/storage paths.
+        // Only an unresolved output still needs deferred origin completion.
+        if charged(
+            &self.budget,
+            ir::contains_associated_types(&signature.result, &self.budget),
+        )? {
+            return Ok(());
         }
         let results = charged(
             &self.budget,
@@ -1032,7 +1013,7 @@ impl ValidatedTraitWorld {
                 if implementation.associated_types.is_empty()
                     && let Some(normalized) = self.normalize_universal_callable_schema(schema)?
                 {
-                    self.validate_schema_signature(
+                    self.validate_logical_schema_signature(
                         declaration,
                         &normalized.signature,
                         &normalized.env,
@@ -1059,7 +1040,7 @@ impl ValidatedTraitWorld {
                 false,
             )?;
             self.complete_projected_contract(&mut normalized.signature)?;
-            self.validate_schema_signature(
+            self.validate_logical_schema_signature(
                 declaration,
                 &normalized.signature,
                 &normalized.env,
@@ -1090,9 +1071,10 @@ impl ValidatedTraitWorld {
             }
         };
         for parameter in &mut signature.params {
-            *parameter = self.map_equality_type(parameter, env, 0, &mut reduce)?;
+            *parameter = self.map_equality_type_for_use(parameter, env, 0, false, &mut reduce)?;
         }
-        signature.result = self.map_equality_type(&signature.result, env, 0, &mut reduce)?;
+        signature.result =
+            self.map_equality_type_for_use(&signature.result, env, 0, false, &mut reduce)?;
         self.complete_projected_contract(signature)
     }
 
@@ -1432,11 +1414,14 @@ impl ValidatedTraitWorld {
         self.complete_projected_contract(&mut value.signature)?;
         // Independently establish the required declaration's contract in the real
         // implementation environment. Never copy the provided target's topology.
-        self.validate_schema_signature(
+        self.validate_schema_signature_for_use(
             item.declaration,
             &value.signature,
             &implementation.schema_env,
             None,
+            context.metadata_facts(),
+            None,
+            context.executable_storage,
         )?;
         let source = self.owner_applied_source_regions(item, implementation, &value.signature)?;
         charged(
@@ -1611,11 +1596,11 @@ impl ValidatedTraitWorld {
         let provided_bounds = item.default.is_some() && !item.schema.predicates.is_empty();
         if !method_args.is_empty()
             || provided_bounds
-            || self.projected_marker_predicates(&item.schema)?
+            || self.projected_bound_predicates(&item.schema)?
         {
-            // Even a nongeneric required method may carry an original
-            // `Self::Out: Copy`/`Sized` obligation. Normalize it only after exact
-            // substitution and prove its actual RHS in this caller context.
+            // A nongeneric required method may carry an original projection
+            // obligation such as `Self::Owned: Borrow<Self>`. Normalize only
+            // after exact substitution and prove its actual RHS in this context.
             // Carrier replay re-instantiates the same original predicates.
             instantiated.predicates = self.normalize_instantiated_projection_predicates(
                 &instantiated.predicates,
@@ -1638,6 +1623,21 @@ impl ValidatedTraitWorld {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "closure argument result has method type arguments",
+                ));
+            }
+            instantiated.signature.ref_contract = adapter.ref_contract;
+        }
+        if let Some(adapter) = self.closed_fn_item_result_signature(
+            item,
+            goal,
+            &instantiated.signature,
+            &selection,
+            context,
+        )? {
+            if !method_args.is_empty() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "function item callable result has method type arguments",
                 ));
             }
             instantiated.signature.ref_contract = adapter.ref_contract;
@@ -2452,6 +2452,39 @@ impl ValidatedTraitWorld {
                 });
             }
         }
+        if matches!(&evidence.selection.0.origin, ProofOrigin::FnItem { .. })
+            && !charged(
+                &self.budget,
+                ir::carrier_locations(&evidence.signature.result, &self.budget),
+            )?
+            .is_empty()
+        {
+            let schema = GenericSchema {
+                env: self.empty.env.clone(),
+                signature: evidence.signature.clone(),
+                predicates: Arc::from([]),
+            };
+            let source_regions = self.validate_source_regions(evidence.item, &schema.signature)?;
+            let (_, regions) =
+                self.derive_carriers(&schema.signature, &source_regions, &schema.env)?;
+            let contract = self.fn_item_tuple_contract(&evidence.goal, &schema.signature, facts)?;
+            let origin = charged(
+                &self.budget,
+                ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+            )?;
+            return Ok(ProjectedCarrierBase {
+                schema,
+                arguments: Arc::from([]),
+                origin,
+                retained: DeclarationCarriers {
+                    direct_return: None,
+                    declaration: evidence.item,
+                    contract,
+                    regions,
+                    source_regions,
+                },
+            });
+        }
         if matches!(
             &evidence.selection.0.origin,
             ProofOrigin::Closure { .. }
@@ -2804,7 +2837,7 @@ mod tests {
                 .unwrap();
             assert!(
                 world
-                    .projected_marker_predicates(&world.item_header(call.item).unwrap().schema,)
+                    .projected_bound_predicates(&world.item_header(call.item).unwrap().schema,)
                     .unwrap()
             );
             for predicate in application.instantiated.predicates.iter() {
@@ -2923,16 +2956,139 @@ mod tests {
     }
 
     #[test]
-    fn projected_marker_bounds_preserve_user_trait_capability_boundary() {
-        let source = frontend::parse(
+    fn projected_owner_signatures_keep_source_fields_logical() {
+        let world = world(
+            "trait Family{type Item;}struct Source;impl Family for Source{type Item=i32;}struct Holder<T:Family>{item:T::Item}trait Read{fn read(&self)->&i32;}impl Read for Holder<Source>{fn read(&self)->&i32{&self.item}}fn main(){}",
+        );
+        let callable = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                matches!(header.schema.signature.params.first(), Some(Ty::Ref { referent, .. })
+                if matches!(referent.as_ref(), Ty::Struct(_)))
+            })
+            .unwrap();
+        let raw = world
+            .schema
+            .declaration_schema(callable.declaration)
+            .unwrap();
+        let normal = world
+            .normalize_owner_callable_schema(callable.declaration, &raw)
+            .unwrap()
+            .unwrap();
+        world
+            .validate_logical_schema_signature(
+                callable.declaration,
+                &normal.signature,
+                &normal.env,
+                None,
+            )
+            .unwrap();
+        // Header success is not physical storage authority. Its immutable
+        // source field still contains the unnormalized closed projection.
+        assert!(
+            world
+                .validate_schema_signature(
+                    callable.declaration,
+                    &normal.signature,
+                    &normal.env,
+                    None
+                )
+                .is_err()
+        );
+        let mut forged = normal.signature.clone();
+        Arc::make_mut(&mut forged.ref_contract).results = Arc::from([]);
+        assert!(
+            world
+                .validate_logical_schema_signature(callable.declaration, &forged, &normal.env, None)
+                .is_err()
+        );
+        let Ty::Ref { referent, .. } = &normal.signature.params[0] else {
+            unreachable!()
+        };
+        let Ty::Struct(holder) = referent.as_ref() else {
+            unreachable!()
+        };
+        let mut direct = normal.signature.clone();
+        direct.result = nominal_fields(&holder.def().fields, &world.budget).unwrap()[0]
+            .ty
+            .clone();
+        assert!(
+            world
+                .validate_logical_schema_signature(callable.declaration, &direct, &normal.env, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn projected_contract_keeps_rigid_input_root_lifetime_authority() {
+        let world = world(
+            "trait Family{type Item;}struct Holder<T:Family>{item:T::Item,value:i32}trait RefValue{fn read(&self)->&i32;}impl<T:Family> RefValue for Holder<T>{fn read(&self)->&i32{&self.value}}fn main(){}",
+        );
+        let callable = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                matches!(header.schema.signature.params.first(), Some(Ty::Ref { referent, .. })
+                if matches!(referent.as_ref(), Ty::Struct(_)))
+            })
+            .unwrap();
+        let raw = world
+            .schema
+            .declaration_schema(callable.declaration)
+            .unwrap();
+        let mut normal = world
+            .normalize_owner_callable_schema(callable.declaration, &raw)
+            .unwrap()
+            .unwrap();
+        assert!(
+            world
+                .type_contains_projection(&normal.signature.params[0], 0)
+                .unwrap()
+        );
+        assert!(
+            !world
+                .type_contains_projection(&normal.signature.result, 0)
+                .unwrap()
+        );
+        assert!(matches!(&normal.signature.ref_contract.results[0].returns,
+            ir::ReturnContract::SharedInputEnvelopes(inputs)
+                if inputs.len() == 1 && inputs[0].input.param == 0
+                    && inputs[0].input.position.depth == 0));
+        let contract = Arc::make_mut(&mut normal.signature.ref_contract);
+        Arc::make_mut(&mut contract.results)[0].returns = ir::ReturnContract::NoReference;
+        assert!(
+            matches!(world.validate_schema_signature(callable.declaration,
+            &normal.signature, &normal.env, None),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn projected_bounds_admit_user_traits_and_preserve_unused_obligations() {
+        for source in [
             "trait Copy{}trait Has where Self::Out:Copy{type Out;fn get(self)->Self::Out;}fn main(){}",
-        ).unwrap();
-        let result = PlanCtx::from_program(&source, &PlanBudget::default())
-            .and_then(|plan| plan.trait_world());
-        assert!(matches!(
-            result,
-            Err(error) if error.contains("unsupported: projected method associated bounds")
-        ));
+            "trait View<T:?Sized>{}trait Has{type Out:View<Self>;fn get(self)->Self::Out;}fn main(){}",
+            "trait View<T>{}trait Has where Self:View<Self::Out>{type Out;fn get(self)->Self::Out;}fn main(){}",
+        ] {
+            let source = frontend::parse(source).unwrap();
+            PlanCtx::from_program(&source, &PlanBudget::default())
+                .and_then(|plan| plan.trait_world())
+                .unwrap();
+        }
+        for source in [
+            "trait User{}struct S;struct Out;trait Has{type Out:User;fn get(self)->Self::Out;}impl Has for S{type Out=Out;fn get(self)->Out{Out}}fn main(){}",
+            "trait View<T:?Sized>{}struct S;struct Out;impl View<i32> for Out{}trait Has{type Out:View<Self>;fn get(self)->Self::Out;}impl Has for S{type Out=Out;fn get(self)->Out{Out}}fn main(){}",
+        ] {
+            let source = frontend::parse(source).unwrap();
+            assert!(matches!(
+                PlanCtx::from_program(&source, &PlanBudget::default())
+                    .and_then(|plan| plan.trait_world()),
+                Err(error) if error.contains("trait obligation is not proven by caller bounds or a conditional implementation")
+            ));
+        }
     }
 
     #[test]

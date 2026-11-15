@@ -1194,7 +1194,7 @@ impl PlanState {
             }
             Type::Dyn(_) => {
                 return Err(
-                    "E0277: a trait object value does not have a statically known size; use a reference or pointer"
+                    "unsupported: trait object types are only admitted directly behind a reference"
                         .into(),
                 );
             }

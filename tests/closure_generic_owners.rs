@@ -153,6 +153,40 @@ fn trait_object_casts_and_borrowed_callable_object_calls() {
 }
 
 #[test]
+fn parent_local_boxed_closures_retain_source_identity() {
+    oracle::check(
+        "parent_local_boxed_closure_identity",
+        &[
+            Case {
+                name: "noncapturing_box_cleanup",
+                source: "fn main(){let f=||->u32{7};let b=Box::new(f);drop(b);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "owning_capture_box_cleanup",
+                source: "fn main(){let s=String::from(\"owned\");let f=move||s;let b=Box::new(f);drop(b);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "boxed_callable_wrong_output",
+                source: "fn unused(){let b=Box::new(||7u32) as Box<dyn Fn()->bool>;}fn main(){}",
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "boxed_callable_wrong_capability",
+                source: "struct Token{n:i32}fn unused(){let token=Token{n:7};let f=move||->i32{let owned=token;owned.n};let b:Box<dyn Fn()->i32>=Box::new(f);}fn main(){}",
+                expect: Expect::Invalid("E0525"),
+            },
+            Case {
+                name: "boxed_callable_object_cleanup",
+                source: "fn main(){let s=String::from(\"owned\");let f=move||s;let b:Box<dyn FnOnce()->String>=Box::new(f);drop(b);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn opaque_callable_preserves_existing_cleanup() {
     oracle::check(
         "opaque_existing_cleanup",
@@ -166,6 +200,40 @@ fn opaque_callable_preserves_existing_cleanup() {
                 name: "vec_with_opaque_callable",
                 source: "fn add(n:i32)->impl Fn(i32)->i32{move|x|x+n}fn main(){let values=vec![1i32,2i32];let f=add(5);println!(\"{} {}\",values.len(),f(10));}",
                 expect: Expect::Run("2 15\n"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn nested_callable_parent_locals_follow_final_receiver_mode() {
+    oracle::check(
+        "nested_callable_parent_local_mode",
+        &[
+            Case {
+                name: "shared_callback_returns_boxed_callable",
+                source: "fn call<F:Fn(i32)->Box<dyn Fn(i32)->i32>>(f:F)->Box<dyn Fn(i32)->i32>{f(1)}fn main(){let f=call(|n|Box::new(move|x|x+n) as Box<dyn Fn(i32)->i32>);drop(f);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "mutable_callback_returns_boxed_callable",
+                source: "fn call<F:FnMut(i32)->Box<dyn Fn(i32)->i32>>(mut f:F)->Box<dyn Fn(i32)->i32>{f(1)}fn main(){let mut total=0i32;let f=call(|n|{total+=n;Box::new(move|x|x+n) as Box<dyn Fn(i32)->i32>});drop(f);println!(\"{}\",total);}",
+                expect: Expect::Run("1\n"),
+            },
+            Case {
+                name: "consuming_callback_returns_owning_callable",
+                source: "struct Token{n:i32}impl Drop for Token{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn call<F:FnOnce()->Box<dyn FnOnce()->i32>>(f:F)->Box<dyn FnOnce()->i32>{f()}fn main(){let token=Token{n:7};let f=call(move||Box::new(move||->i32{let owned=token;owned.n}) as Box<dyn FnOnce()->i32>);drop(f);println!(\"ok\");}",
+                expect: Expect::Run("drop 7\nok\n"),
+            },
+            Case {
+                name: "unused_nested_callable_wrong_output",
+                source: "fn bad(){let f=||Box::new(||7u32) as Box<dyn Fn()->bool>;}fn main(){}",
+                expect: Expect::Invalid("E0271"),
+            },
+            Case {
+                name: "unused_nested_callable_wrong_receiver_mode",
+                source: "struct Token{n:i32}fn bad(){let token=Token{n:7};let f=move||Box::new(move||->i32{let owned=token;owned.n}) as Box<dyn Fn()->i32>;}fn main(){}",
+                expect: Expect::Invalid("E0525"),
             },
         ],
     );

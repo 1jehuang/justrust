@@ -6,6 +6,12 @@
 //! Every step uses an original parameter identity. Concrete type equality is
 //! never used to discover an input occurrence.
 use super::*;
+#[path = "callable_input_regions.rs"]
+mod argument_regions;
+#[path = "fn_item_input_regions.rs"]
+mod fn_item_values;
+#[path = "closure_input_regions.rs"]
+mod input_values;
 
 struct ItemRegionContext<'a> {
     env: &'a Arc<GenericEnv>,
@@ -2192,7 +2198,36 @@ impl ValidatedTraitWorld {
         )?;
         // A callable result can leave its receiver storage entirely. Its exact
         // parent-sealed receipt instead selects a tuple argument component.
+        if matches!(&actual.trait_ref.self_ty, Ty::FnItem(_)) {
+            return self.fn_item_projection_regions(
+                projection,
+                &actual,
+                reduction.ty(),
+                wanted,
+                context,
+                prefix,
+                facts,
+                depth,
+                scratch,
+            );
+        }
         if let Ty::Closure(closure) = &actual.trait_ref.self_ty {
+            if closure
+                .result_receipt()
+                .is_some_and(|receipt| receipt.input_value_origin().is_some())
+            {
+                return self.input_value_projection_regions(
+                    projection,
+                    &actual,
+                    reduction.ty(),
+                    wanted,
+                    context,
+                    prefix,
+                    facts,
+                    depth,
+                    scratch,
+                );
+            }
             if !self.closed_item_callable_context(projection, context, facts, scratch)?
                 || !self.checked_closure_projection(&actual, facts.env())?
                 || !wanted.path.0.is_empty()

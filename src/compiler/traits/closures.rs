@@ -199,6 +199,8 @@ impl ValidatedTraitWorld {
                 // Canonical call and capture carrier authority is replayed by
                 // the result contract in the actual current facts context.
                 closure.result().clone()
+            } else if let Some(input) = receipt.input_value_origin() {
+                charged(&self.budget, input.result(closure.params(), &self.budget))?
             } else if receipt.is_projected_input() {
                 charged(
                     &self.budget,
@@ -237,6 +239,7 @@ impl ValidatedTraitWorld {
             if !result_channels.is_empty()
                 && !matches!(closure.result(), Ty::Param(_))
                 && receipt.argument_origin().is_none()
+                && receipt.input_value_origin().is_none()
                 && receipt.capture_witness().is_none()
                 && !receipt.is_static_str()
             {
