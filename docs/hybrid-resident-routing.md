@@ -30,7 +30,11 @@ and `run` into the same experiment. Other commands and the `cargo` proxy are
 unchanged. Remove that variable to disable it. A missing default engine or
 missing native toolchain setting selects the normal path without native work.
 Explicit invalid executable/toolchain paths or unsafe state directories produce
-errors instead of being silently repurposed.
+errors instead of being silently repurposed. On Unix, the complete
+`JR_ENGINE_HOME/daemon.sock` pathname must fit the platform's socket byte limit
+(including space for a terminating NUL). The client checks raw bytes, including
+non-UTF-8 names, before launching the engine and recommends a shorter existing
+private directory when needed. It never silently hashes or changes your namespace.
 
 ## Deferred preparation, separately opt-in
 
@@ -45,6 +49,17 @@ Only one preparation runs at a time in a hybrid namespace, protected by an
 OS-held lock rather than a persistent PID or lockfile-existence guess. Its
 output goes to the private home's `prewarm.log`. A preparation-launch failure
 does not change the already-completed foreground result.
+
+A failed automatic engine preparation now records a **60-second per-namespace
+cooldown**. Subsequent automatic supervisors log an explicit cooldown receipt
+and do not invoke the engine until it expires. The existing preparation lock
+serializes the check and update. The marker is an owner-only regular single-link
+file opened without following symlinks or blocking on a FIFO. Successful
+automatic preparation clears it, and a future timestamp cannot create an
+indefinite cooldown. Manual `hybrid prewarm` bypasses this policy. It is a
+bounded scheduling backoff, not a source/engine compatibility cache: another
+project or newly fixed engine in the same namespace may also wait up to a minute.
+It does not alter foreground route selection, exit status or test execution.
 
 The internal supervisor has its own session and preserves process priority.
 Lowering its nice priority would also permanently lower newly started resident

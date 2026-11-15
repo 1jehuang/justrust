@@ -25,6 +25,9 @@ starting preparation. All raw receipts and hashes are in
 
 That is an observed **32.2x** ratio of hot-edit medians on this narrow fixture,
 not an end-to-end managed speedup or an isolated measurement of RAM residency.
+The median of the five paired speed ratios is also **32.15x**, with individual
+pairs ranging from **28.01x to 33.04x**. This is only four selected tests from one
+pinned package, not the full project or the 40-point broad workload suite.
 The host was not demonstrated quiet, and a client build overlapped part of the
 run. Both compiler/backend and retained state differ from the control.
 Manual initial preparation cost **37.574 s**, excluded from the hot median.
@@ -58,6 +61,58 @@ receipt hashes were verified in
 The preceding managed v6 experiment's 149 original receipt hashes were also
 verified in `bench/results/hybrid-managed-hosted-20261115.tar.gz`. Its initial
 cleanup failure is preserved separately from the later independent empty probe.
+
+## Follow-through hardening after the frozen performance candidate
+
+These changes are separately tested and are **not** part of the frozen v6
+performance candidate. No new speedup is attributed to them:
+
+- `8e0be946d`: sync-daemon replacement waits for the retiring daemon's lock,
+  rather than treating socket EOF/read timeout as proof that manifest saving
+  finished. A real startup failure showed the old daemon saving for 10.27 s
+  after shutdown while the replacement exited on its held lock. The new bounded
+  handoff and concurrent replacement reuse passed two deterministic regressions,
+  seven hybrid library tests, hosted check and clippy.
+- `6270e1e57`: reject impossible Unix daemon socket path lengths by raw platform
+  byte capacity, before engine launch. Boundary, multibyte/non-UTF-8 and
+  no-engine-spawn subprocess checks passed. The correct library unit filter
+  passed three tests; CLI routing passed 14 and deferred preparation passed 12.
+- `3e7a68ebd`: automatic preparation failure cooldown. Under the existing namespace lock,
+  record a failed engine invocation and suppress additional automatic engine
+  attempts for 60 seconds. Manual preparation and foreground routes are
+  unchanged. Hosted check, three library tests, **15 deferred-preparation
+  subprocess tests**, 14 routing tests and clippy passed. The synthetic engine
+  validates suppression, expiration, recovery and unsafe marker rejection, not
+  native compatibility or performance. The running canonical benchmark still
+  uses the old frozen client without this cooldown.
+- The final hybrid Python harness/receipt regression discovery passed **69 tests**.
+
+All changes remain opt-in or unrelated startup correctness fixes, with the
+installed production CLI unchanged. Passing these focused gates does not waive
+the broad comparison or compile-time input requirements.
+
+## Next promotion gates, ordered by observed leverage
+
+1. Make ready admission safe for **all compile-time read inputs**, or reject
+   unsupported input classes before commitment. The current tracked local macro
+   source closure does not cover arbitrary external include/build-script data.
+2. Establish native coverage on the real broad workloads. The frozen canonical
+   candidate currently fails native preparation for `const-random-macro 0.1.16`
+   through `getrandom::imp::getrandom_inner` with `UnresolvedMethod("map_err")`.
+   Cargo fallback is not evidence that native compilation supports that workload.
+   Repeated automatic preparation failures are a separate scheduling cost.
+3. Repair the **symmetric benchmark fixture environment** and rerun unchanged
+   broad gates. The isolated baseline lacks Git author identity for desktop
+   fixtures, and the candidate also recorded a TUI assertion mismatch while on
+   Cargo fallback. Keep those failures and the noise gates, rather than treating
+   an invalid comparison as a promotion result.
+4. Rerun same-client ordinary managed Cargo versus resident routing without
+   sync-daemon version churn or admission outages, retaining preparation,
+   exactly-once effects, cleanup, and paired timings. The narrower guest-shell
+   benefit does not establish this end-to-end result.
+5. Measure background-preparation interference, useful-edit amortization and
+   aggregate multi-user memory pressure before enabling automatic preparation
+   or retention defaults. A soft LRU setting is not a tenant RAM limit.
 
 ## Frozen artifacts
 
