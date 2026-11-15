@@ -32,6 +32,12 @@ def preparation_environment(args, state):
             'CARGO_HOME': args.cargo_home}
 
 
+def managed_preparation_command(command):
+    # Match remote_agent::start_run's guest-side PATH prefix. PATH is also part
+    # of native checkout identity, even when the pinned compiler is explicit.
+    return 'PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH" ' + command
+
+
 def parse_side_effects(row, path):
     if row['returncode'] != 0 or row['timeout'] or row['error']:
         raise ValueError('could not read authoritative guest side effects')
@@ -167,7 +173,7 @@ def execute(args):
             if phase == 'prepare':
                 state = states['hybrid-warm']
                 values = preparation_environment(args, state)
-                command = 'cd ' + shlex.quote(str(state['project'])) + ' && ' + shell_env(values) + ' ' + shlex.quote(str(args.guest_client)) + ' hybrid prewarm test ' + ' '.join(map(shlex.quote, resident.FILTER))
+                command = 'cd ' + shlex.quote(str(state['project'])) + ' && ' + managed_preparation_command(shell_env(values) + ' ' + shlex.quote(str(args.guest_client)) + ' hybrid prewarm test ' + ' '.join(map(shlex.quote, resident.FILTER)))
                 before = effects(state, 'prewarm-before')
                 row, _ = guest(command, 'prewarm', state['project'])
                 after = effects(state, 'prewarm-after')

@@ -48,6 +48,15 @@ class HostedHarnessTests(unittest.TestCase):
         self.assertEqual({k for k in values if k.startswith('CARGO_')},
                          {'CARGO_HOME', 'CARGO_BUILD_JOBS'})
 
+    def test_managed_preparation_path_matches_agent_prefix(self):
+        command = subject.managed_preparation_command(
+            "/usr/bin/env /usr/bin/python3 -c 'import os; print(os.environ[\"PATH\"])'")
+        result = subprocess.run(['/bin/bash', '-c', command],
+                                env={'HOME': '/guest/home', 'PATH': '/original/bin'},
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(),
+                         '/guest/home/.cargo/bin:/opt/homebrew/bin:/guest/home/.homebrew/bin:/usr/local/bin:/original/bin')
+
     def test_namespace_probe_is_valid_read_only_python_for_quoted_path(self):
         with tempfile.TemporaryDirectory() as directory:
             command = shlex.split(subject.namespace_probe(Path(directory) / "no worker's home"))
