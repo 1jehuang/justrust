@@ -85,6 +85,56 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs b/crates/jcod
 diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 --- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
 +++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+@@ -1444,3 +1444,4 @@
+ fn test_login_completed_spawns_auth_refresh_when_runtime_is_available() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+@@ -1483,3 +1484,4 @@
+         std::thread::sleep(Duration::from_millis(10));
+     }
++    });
+ }
+@@ -1488,3 +1490,4 @@
+ fn test_model_picker_waits_for_async_post_login_catalog_activation() {
++    with_local_jcode_home(|| {
+     ensure_test_jcode_home_if_unset();
+     clear_persisted_test_ui_state();
+@@ -1568,3 +1571,4 @@
+             .any(|entry| entry.name == "grok-code-fast-1")
+     );
++    });
+ }
+@@ -1573,3 +1577,4 @@
+ fn test_login_completed_surfaces_new_provider_models_in_local_model_picker() {
++    with_local_jcode_home(|| {
+     let mut app = create_auth_refresh_test_app();
+
+@@ -1611,3 +1616,4 @@
+         "recently authenticated provider should be prioritized and marked in /model"
+     );
++    });
+ }
+@@ -1815,3 +1821,4 @@
+ fn test_local_antigravity_model_picker_selection_preserves_antigravity_provider() {
++    with_local_jcode_home(|| {
+     let mut app = create_antigravity_picker_test_app();
+     app.open_model_picker();
+@@ -1840,3 +1847,4 @@
+     assert_eq!(app.provider.model(), "claude-sonnet-4-6");
+     assert!(app.inline_interactive_state.is_none());
++    });
+ }
+@@ -1879,3 +1887,4 @@
+ fn test_agent_model_picker_openrouter_bare_openai_route_saves_openai_catalog_prefix() {
++    with_local_jcode_home(|| {
+     let (mut app, _set_model_calls) = create_openrouter_spec_capture_test_app();
+
+@@ -1907,3 +1916,4 @@
+         last.content
+     );
++    });
+ }
 @@ -1911,6 +1911,18 @@ fn test_local_model_picker_openrouter_bare_openai_route_uses_openai_catalog_prefix()
 
  #[test]
@@ -185,5 +235,114 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.
 @@ -1266,3 +1281,4 @@
      assert_eq!(restored.cursor, 2);
      assert!(restored.queued_messages.is_empty());
++    });
+ }
+diff --git a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs b/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
+--- a/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
++++ b/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs
+@@ -353,8 +353,8 @@
+ /// The lock is acquired with `try_lock`, never blocking: tests like
+ /// `with_temp_jcode_home` hold this same non-reentrant mutex for their whole
+ /// body and may call `create_*_test_app` inside it, so a blocking lock here
+-/// self-deadlocks (this hung CI's TUI test step at the job timeout). When
+-/// `try_lock` fails because this thread holds the lock, the caller's own
+-/// exclusion already covers the transition; a cross-thread `try_lock` miss
+-/// falls back to the pre-serialization benign race for that one call.
++/// self-deadlocks (this hung CI's TUI test step at the job timeout).
++/// On contention, leave the process environment untouched. The lock may belong
++/// to this caller's scoped fixture or another thread, never assume ownership.
++/// A successful guard covers the complete check/set transition.
+ /// The shared per-process test home that `create_test_app` installs when no
+@@ -382,7 +382,11 @@ fn ensure_test_jcode_home_if_unset() {
+     // to the caller's own exclusion when this thread already holds it: if
+     // try_lock fails because *we* hold the lock, no other thread can race
+     // this read-modify-write anyway.
+-    let _env_lock = crate::storage::test_env_lock().try_lock();
++    // A miss may instead belong to ANOTHER fixture. Never mutate its home.
++    // A caller already holding the lock has pinned its own environment.
++    let Ok(_env_lock) = crate::storage::test_env_lock().try_lock() else {
++        return;
++    };
+
+     if std::env::var_os("JCODE_HOME").is_some() {
+         return;
+@@ -471,4 +475,14 @@ fn with_temp_jcode_home<T>(f: impl FnOnce() -> T) -> T {
+     result
+ }
+
++// Local command and provider fixtures must not inherit a concurrent SSH test.
++// Keep the shared lock, owned home and SSH restore guard for their whole body.
++fn with_local_jcode_home<T>(f: impl FnOnce() -> T) -> T {
++    with_temp_jcode_home(|| {
++        let _ssh = EnvRestoreGuard::capture(["JCODE_SSH_REMOTE"]);
++        crate::env::remove_var("JCODE_SSH_REMOTE");
++        f()
++    })
++}
++
+ /// Run `f` in a hermetic `JCODE_HOME` with reasoning display pinned to
+diff --git a/crates/jcode-tui/src/tui/app/remote_tests.rs b/crates/jcode-tui/src/tui/app/remote_tests.rs
+--- a/crates/jcode-tui/src/tui/app/remote_tests.rs
++++ b/crates/jcode-tui/src/tui/app/remote_tests.rs
+@@ -64,3 +64,8 @@ fn ensure_test_jcode_home_if_unset() {
+     static TEST_HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
+
++    // Do not repoint another fixture's home between its save and read.
++    let Ok(_env_lock) = crate::storage::test_env_lock().try_lock() else {
++        return;
++    };
++
+     if std::env::var_os("JCODE_HOME").is_some() {
+diff --git a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs b/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
+--- a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
++++ b/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
+@@ -160,3 +160,4 @@
+ fn decoded_shift_enter_inserts_a_newline_instead_of_submitting() {
++    with_local_jcode_home(|| {
+     use crossterm::event::{KeyCode, KeyModifiers};
+
+@@ -177,3 +178,4 @@
+         app.display_messages()
+     );
++    });
+ }
+@@ -188,3 +190,4 @@
+ fn terminal_setup_command_is_dispatched_and_reports_something_actionable() {
++    with_local_jcode_home(|| {
+     let mut app = create_test_app();
+     app.set_input_for_test("/terminal-setup");
+@@ -207,3 +210,4 @@
+         last.content
+     );
++    });
+ }
+@@ -226,3 +230,4 @@
+ fn unrelated_commands_are_not_swallowed_by_the_terminal_setup_handler() {
++    with_local_jcode_home(|| {
+     // A too-eager prefix match here would shadow other commands.
+     let mut app = create_test_app();
+@@ -241,3 +246,4 @@
+         );
+     }
++    });
+ }
+@@ -246,3 +252,4 @@
+ fn falling_back_to_a_backslash_newline_points_at_terminal_setup_once() {
++    with_local_jcode_home(|| {
+     // Using the fallback means Shift+Enter did not work for this user, which is
+     // fixable. Surface that once, then stay quiet.
+@@ -273,3 +280,4 @@
+         "the tip must only appear once per session"
+     );
++    });
+ }
+@@ -278,3 +286,4 @@
+ fn working_shift_enter_never_triggers_the_terminal_setup_tip() {
++    with_local_jcode_home(|| {
+     // Users whose terminal already reports the chord should never see the tip.
+     let mut app = create_test_app();
+@@ -289,3 +298,4 @@
+         "Shift+Enter worked, so there is nothing to fix"
+     );
 +    });
  }
