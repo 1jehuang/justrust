@@ -180,6 +180,41 @@ pub fn value() -> u32 { 9 }
             "assert!(true);", "assert_eq!(external_dependency::value(), 7);"))
         return dependency
 
+    def test_invalid_syntax_is_committed_101_without_execution_and_recovers(self):
+        self.prewarm("test", "--lib")
+        self.source.write_text("this is intentionally invalid Rust\n")
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                result = self.ready("test", "--lib")
+                self.assertEqual(result[0], 101, result)
+                self.assertEqual(result[1], b"committed\n", result)
+                self.assertIn("error", result[2] + result[3], result)
+                self.assertIn("src/lib.rs", result[2] + result[3], result)
+                self.assertEqual(self.executions(), [])
+        self.write_test()
+        recovered = self.ready("test", "--lib")
+        self.assertEqual(recovered[0:2], (0, b"committed\n"), recovered)
+        self.assertEqual(self.executions(), ["fresh"])
+
+    def test_expression_only_crate_root_is_not_an_expression_include(self):
+        self.prewarm("test", "--lib")
+        self.source.write_text("42\n")
+        result = self.ready("test", "--lib")
+        self.assertEqual(result[0:2], (101, b"committed\n"), result)
+        self.assertIn("error", result[2] + result[3], result)
+        self.assertIn("src/lib.rs", result[2] + result[3], result)
+        self.assertEqual(self.executions(), [])
+
+    def test_valid_zero_test_selection_remains_successful(self):
+        self.prewarm("test", "--lib")
+        result = self.ready("test", "--lib", "this_filter_matches_no_tests")
+        self.assertEqual(result[0:2], (0, b"committed\n"), result)
+        self.assertIn("0 tests", result[2] + result[3], result)
+        self.assertEqual(self.executions(), [])
+        unfiltered = self.ready("test", "--lib")
+        self.assertEqual(unfiltered[0:2], (0, b"committed\n"), unfiltered)
+        self.assertEqual(self.executions(), ["fresh"])
+
     def test_cold_miss_does_not_start_daemon_or_execute(self):
         before = set(self.home.rglob("*.sock"))
         result = self.ready("test", "--lib")

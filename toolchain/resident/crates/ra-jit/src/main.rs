@@ -6639,8 +6639,18 @@ fn unparsed(
         let parse = ide_db::base_db::EditionedFileId::new(db, file, edition).parse(db);
         if let Some(error) = parse.errors().first() {
             let text = db.file_text(file).text(db);
-            // A file that is included where an expression goes is not one of items.
-            if syntax::ast::Expr::parse(text, edition).errors().is_empty() {
+            // Expression includes are not item files. An ERROR root can have no
+            // recorded parser errors (for example an expression followed by stray
+            // tokens), so errors().is_empty() alone is not proof of an expression.
+            // A crate root or declared module must parse as items even when its
+            // entire text happens to be a valid expression.
+            let module = ide_db::base_db::relevant_crates(db, file).iter().any(|&krate| {
+                hir_def::nameres::crate_def_map(db, krate)
+                    .modules_for_file(db, file)
+                    .next()
+                    .is_some()
+            });
+            if !module && complete_expression(text, edition) {
                 continue;
             }
             let range = syntax::TextRange::empty(error.range().start());
@@ -6654,6 +6664,37 @@ fn unparsed(
         }
     }
     None
+}
+
+fn complete_expression(text: &str, edition: syntax::Edition) -> bool {
+    use syntax::AstNode as _;
+    let expression = syntax::ast::Expr::parse(text, edition);
+    syntax::ast::Expr::can_cast(expression.syntax_node().kind()) && expression.errors().is_empty()
+}
+
+#[cfg(test)]
+mod parse_gate_tests {
+    use super::complete_expression;
+    use syntax::Edition;
+
+    #[test]
+    fn error_root_without_parser_errors_is_not_an_expression_include() {
+        let text = "this is intentionally invalid Rust\n";
+        let expression = syntax::ast::Expr::parse(text, Edition::CURRENT);
+        assert!(expression.errors().is_empty());
+        assert_eq!(expression.syntax_node().kind(), syntax::SyntaxKind::ERROR);
+        assert!(!complete_expression(text, Edition::CURRENT));
+    }
+
+    #[test]
+    fn complete_expression_includes_remain_supported() {
+        for text in ["42", "{ let answer = 40; answer + 2 }", "some::value()"] {
+            assert!(complete_expression(text, Edition::CURRENT), "{text}");
+        }
+        for text in ["", "fn valid() {}", "value extra", "{ let missing = ; }"] {
+            assert!(!complete_expression(text, Edition::CURRENT), "{text}");
+        }
+    }
 }
 
 /// The errors rust-analyzer is as sure of as rustc is: a wrong one fails a build that is
