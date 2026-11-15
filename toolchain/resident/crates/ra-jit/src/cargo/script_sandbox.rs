@@ -713,12 +713,14 @@ pub(crate) fn reads_unchanged(out_dir: &Path) -> bool {
     }
     lines.all(|line| {
         let mut parts = line.splitn(3, '\t');
-        let (Some(stat), Some(digest), Some(path)) = (parts.next(), parts.next(), parts.next())
+        let (Some(_stat), Some(digest), Some(path)) = (parts.next(), parts.next(), parts.next())
         else {
             return false;
         };
         let path = Path::new(path);
-        sandboxed::stat(path) == stat || sandboxed::digest(path) == digest
+        // Metadata equality is not evidence of content equality. Editors can
+        // preserve mtimes, and shared filesystems may have coarse timestamps.
+        sandboxed::digest(path) == digest
     })
 }
 
@@ -750,6 +752,28 @@ mod tests {
         assert!(!reads_unchanged(&out_dir));
         keep_reads(&out_dir, None);
         assert!(!reads_unchanged(&out_dir));
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn same_size_same_timestamp_reads_are_still_content_checked() {
+        let dir =
+            std::env::temp_dir().join(format!("ra-jit-script-preserved-{}", std::process::id()));
+        let out_dir = dir.join("out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let read = dir.join("read.txt");
+        std::fs::write(&read, "one").unwrap();
+        let modified = std::fs::metadata(&read).unwrap().modified().unwrap();
+        let before = sandboxed::stat(&read);
+        keep_reads(&out_dir, Some(&[read.to_str().unwrap().to_owned()]));
+        assert!(reads_unchanged(&out_dir));
+        std::fs::write(&read, "two").unwrap();
+        std::fs::File::open(&read)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(sandboxed::stat(&read), before, "fixture must preserve the metadata fast key");
+        assert!(!reads_unchanged(&out_dir), "changed content must rerun the build script");
         _ = std::fs::remove_dir_all(&dir);
     }
 
