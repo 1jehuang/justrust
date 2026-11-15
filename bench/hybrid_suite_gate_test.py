@@ -62,12 +62,13 @@ class HybridSuiteGateTests(unittest.TestCase):
 
     def test_fixture_xdg_mode_preserves_private_home_for_both_adapters(self):
         from runtime_context import runtime_context
-        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME")}}))\n')
+        self.tool.write_text(f'#!{sys.executable}\nimport os,json\nprint(json.dumps({{k: os.environ.get(k) for k in ("HOME", "JCODE_HOME", "XDG_CONFIG_HOME", "JCODE_LATEX_RENDERING")}}))\n')
         for native in (False, True):
             adapter = self.root / ('fixture-native' if native else 'fixture-off')
             adapter.write_text(gate.adapter_text(self.tool, self.tool if native else None,
                                                 self.toolchain if native else None,
-                                                fixture_xdg_home=True))
+                                                fixture_xdg_home=True,
+                                                fixture_latex_unicode=True))
             adapter.chmod(0o700)
             selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v2')
             with patch.dict(os.environ, selected, clear=True):
@@ -77,9 +78,19 @@ class HybridSuiteGateTests(unittest.TestCase):
                     env.pop('JUSTRUST_BENCH_RUNTIME_CONTEXT', None)
                     child = json.loads(subprocess.check_output([str(adapter), 'test'], env=env, text=True))
                     self.assertIsNone(child['JCODE_HOME'])
+                    self.assertEqual(child['JCODE_LATEX_RENDERING'], 'unicode')
                     self.assertEqual(child['HOME'], env['HOME'])
                     self.assertEqual(child['XDG_CONFIG_HOME'], str(Path(env['HOME']) / '.config'))
                     self.assertNotEqual(child['HOME'], selected.get('HOME'))
+
+    def test_fixture_unicode_requires_private_home_policy(self):
+        output = self.root / 'gate'
+        args = argparse.Namespace(output=output, baseline=self.tool, candidate=self.tool,
+                                  engine=self.tool, seed=1, native_toolchain=self.toolchain,
+                                  fixture_latex_unicode=True, fixture_xdg_home=False)
+        with self.assertRaisesRegex(ValueError, 'requires explicit fixture XDG'):
+            gate.prepare(args)
+        self.assertFalse(output.exists())
 
     def test_fixture_xdg_metadata_probe_needs_no_private_home(self):
         adapter = self.root / 'fixture-metadata'
