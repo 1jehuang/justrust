@@ -270,6 +270,7 @@ pub(crate) fn background(args: Vec<OsString>) -> anyhow::Result<()> {
         if !status.success() {
             bail!("background native preparation ended with {status}");
         }
+        eprintln!("justrust hybrid: background prewarm finished status=0");
         drop(lock);
         Ok(())
     }
@@ -401,7 +402,10 @@ pub(crate) fn main(mut args: Vec<OsString>) -> anyhow::Result<()> {
         let (decided, status) = attempt(command, &args)?;
         match decided {
             Decision::Miss => fallback(&args, Some((&engine, &home, &tc))),
-            Decision::Committed => finish(status),
+            Decision::Committed => {
+                eprintln!("justrust hybrid: resident committed");
+                finish(status)
+            }
         }
     }
     #[cfg(not(unix))]
