@@ -2958,65 +2958,69 @@ mod tests {
 
     #[test]
     fn hosted_mirror_namespaces_isolate_late_full_sync_and_preserve_reconnect() {
-        let base = std::env::temp_dir().join(format!(
-            "jr-hosted-source-isolation-{}",
-            remote_checkpoint::new_token()
-        ));
-        let home = base.join("remote-home");
-        let source = base.join("client/project");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(source.join("src")).unwrap();
-        let resolve = |namespace: &str| {
-            let out = Command::new("sh")
-                .args(["-c", &hosted_mirror_script(namespace)])
-                .env("HOME", &home)
-                .output()
-                .unwrap();
-            assert!(out.status.success());
-            String::from_utf8(out.stdout).unwrap().trim().to_string()
-        };
+        // Hosted mirrors live in a POSIX filesystem, even when the client runs
+        // on Windows. Mixing `pwd -P` with a native C:\\... source path in the
+        // local Mirror mock produces an invalid .../C:\\... filename. Keep the
+        // simulated remote operations in the same shell/path domain as hosting.
         let old_namespace = remote_checkpoint::new_token();
         let current_namespace = remote_checkpoint::new_token();
-        let old = Mirror {
-            target: None,
-            prefix: resolve(&old_namespace),
-        };
-        let current = Mirror {
-            target: None,
-            prefix: resolve(&current_namespace),
-        };
-        assert_ne!(old.prefix, current.prefix);
-        assert_eq!(current.prefix, resolve(&current_namespace));
+        assert_ne!(old_namespace, current_namespace);
         assert_eq!(hosted_mirror_namespace(), hosted_mirror_namespace());
+        let script = format!(
+            r#"
+set -eu
+base=$(mktemp -d)
+trap 'rm -rf "$base"' EXIT
+HOME="$base/remote home"
+export HOME
+mkdir -p "$HOME" "$base/client/project/src"
+old=$({old_script})
+current=$({current_script})
+test "$old" != "$current"
+test "$current" = "$({current_script})"
+source="$base/client/project"
+live="$current$source"
+retired="$old$source"
+mkdir -p "$live" "$retired"
+# Model a complete sync with deletion using tools also available in Git Bash.
+# rsync itself is not installed on the Windows CI image. Replacing the whole
+# destination is deliberately destructive, so namespace overlap cannot pass.
+full_sync() {{
+    rm -rf "$1"
+    mkdir -p "$1"
+    cp -R "$source/." "$1/"
+}}
 
-        // The live daemon mirrors a new lib target and manifest.
-        let manifest = "[package]\nname='project'\nversion='0.1.0'\n[lib]\npath='src/lib.rs'\n";
-        std::fs::write(source.join("Cargo.toml"), manifest).unwrap();
-        std::fs::write(source.join("src/lib.rs"), "pub fn current() {}\n").unwrap();
-        current.prepare(&source).unwrap();
-        current.rsync(&source).unwrap();
+# The live daemon mirrors a new lib target and manifest.
+printf "[package]\nname='project'\nversion='0.1.0'\n[lib]\npath='src/lib.rs'\n" > "$source/Cargo.toml"
+printf 'pub fn current() {{}}\n' > "$source/src/lib.rs"
+cp "$source/Cargo.toml" "$base/expected-manifest"
+cp "$source/src/lib.rs" "$base/expected-lib"
+full_sync "$live"
 
-        // A retired daemon now sends an older complete checkout, including
-        // --delete. It must not remove the live lib or replace its manifest.
-        std::fs::write(source.join("Cargo.toml"), "[package]\nname='old'\n").unwrap();
-        std::fs::remove_file(source.join("src/lib.rs")).unwrap();
-        old.prepare(&source).unwrap();
-        old.rsync(&source).unwrap();
-        let live = PathBuf::from(current.remote(&source));
-        assert_eq!(
-            std::fs::read_to_string(live.join("Cargo.toml")).unwrap(),
-            manifest
+# A retired daemon sends an older full checkout, including --delete.
+# Seed an obsolete file so the test proves that deletion really occurred.
+printf 'obsolete\n' > "$retired/stale"
+printf "[package]\nname='old'\n" > "$source/Cargo.toml"
+rm "$source/src/lib.rs"
+full_sync "$retired"
+test ! -e "$retired/stale"
+test ! -e "$retired/src/lib.rs"
+cmp "$source/Cargo.toml" "$retired/Cargo.toml"
+cmp "$base/expected-manifest" "$live/Cargo.toml"
+cmp "$base/expected-lib" "$live/src/lib.rs"
+"#,
+            old_script = hosted_mirror_script(&old_namespace),
+            current_script = hosted_mirror_script(&current_namespace),
         );
-        assert_eq!(
-            std::fs::read_to_string(live.join("src/lib.rs")).unwrap(),
-            "pub fn current() {}\n"
-        );
+        let out = Command::new("sh").args(["-c", &script]).output().unwrap();
         assert!(
-            !PathBuf::from(old.remote(&source))
-                .join("src/lib.rs")
-                .exists()
+            out.status.success(),
+            "hosted mirror simulation failed: {}\nstdout: {}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
         );
-        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
