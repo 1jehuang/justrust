@@ -52,12 +52,15 @@ pub(crate) fn ask(request: Request, start: Start) -> anyhow::Result<Option<Reply
         (Err(_), Start::Never) => return Ok(None),
         (Err(_), Start::IfMissing) => started(&home)?,
     };
-    let mut reply = match exchange(&mut stream, &envelope) {
-        // A daemon that was on its way out when it was asked is as good as none.
-        Err(_) if start == Start::IfMissing => {
+    let mut reply = match exchange_retrying(
+        &mut stream,
+        &envelope,
+        may_retry(start, super::hybrid::prewarm()),
+        || {
             gone(&socket);
-            exchange(&mut started(&home)?, &envelope)?
-        }
+            started(&home)
+        },
+    ) {
         // One that took its socket with it shut down; one that was killed left it.
         Err(_) if left(&socket) => return Ok(None),
         reply => {
@@ -78,6 +81,27 @@ pub(crate) fn ask(request: Request, start: Start) -> anyhow::Result<Option<Reply
         reply = exchange(&mut started(&home)?, &envelope)?;
     }
     Ok(Some(reply))
+}
+
+/// Prewarm cancellation is terminal: replaying its interrupted Build could start a
+/// new daemon after an explicit stop. Ordinary cargo clients retain their retry.
+fn may_retry(start: Start, prewarm: bool) -> bool {
+    start == Start::IfMissing && !prewarm
+}
+
+fn exchange_retrying(
+    stream: &mut UnixStream,
+    envelope: &str,
+    retry_allowed: bool,
+    restart: impl FnOnce() -> anyhow::Result<UnixStream>,
+) -> anyhow::Result<Reply> {
+    match exchange(stream, envelope) {
+        Err(_) if retry_allowed => {
+            *stream = restart()?;
+            exchange(stream, envelope)
+        }
+        reply => reply,
+    }
 }
 
 /// Cheap non-starting preflight before toolchain discovery or workspace planning.
@@ -295,6 +319,35 @@ mod ready_tests {
 
     fn send(stream: &mut UnixStream, reply: Reply) {
         writeln!(stream, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn interrupted_prewarm_is_not_replayed_over_a_new_socket() {
+        assert!(!may_retry(Start::IfMissing, true));
+        assert!(may_retry(Start::IfMissing, false));
+        assert!(!may_retry(Start::Never, false));
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(&server).read_line(&mut request).unwrap();
+            assert_eq!(request, "cancelled-prewarm\n");
+            // Explicit daemon stop closes its transport without an execution reply.
+        });
+        let mut restarts = 0;
+        assert!(
+            exchange_retrying(
+                &mut client,
+                "cancelled-prewarm",
+                may_retry(Start::IfMissing, true),
+                || {
+                    restarts += 1;
+                    anyhow::bail!("must not restart a stopped prewarm")
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(restarts, 0);
+        peer.join().unwrap();
     }
 
     #[test]

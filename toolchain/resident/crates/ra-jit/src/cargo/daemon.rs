@@ -1227,7 +1227,9 @@ impl Daemon {
         text.push('\n');
         let sent = (&stream).write_all(text.as_bytes());
         if replaced || matches!(reply, Reply::Stopping) {
-            self.end();
+            // Native explicit stop cancels in-flight prewarm instead of waiting for
+            // its potentially minute-long cache flush. Idle/replacement stay graceful.
+            self.end(matches!(reply, Reply::Stopping) && crate::jr_engine::is_engine());
         }
         Ok(sent?)
     }
@@ -1525,7 +1527,7 @@ impl Daemon {
             }
             if lock(&self.asked).elapsed() >= idle {
                 eprintln!("idle for {idle:.0?}");
-                self.end();
+                self.end(false);
             }
             lock(&self.workers).retain(|_, worker| {
                 // Loading can take longer than the idle time, and is what was asked for.
@@ -1649,7 +1651,7 @@ impl Daemon {
 
     /// Stops the workers and the daemon. A client told it ends waits for its connection to
     /// close, which it does when this process exits.
-    fn end(&self) -> ! {
+    fn end(&self, immediately: bool) -> ! {
         // Held until the process exits, so that no other thread starts a worker or a spare once
         // these are stopped: one started then would write in the home and outlive the daemon.
         // In the order a worker that loads a workspace takes them.
@@ -1661,15 +1663,27 @@ impl Daemon {
         for checker in lock(&self.checkers).iter_mut() {
             checker.stop();
         }
+        finish_workers(&workers, immediately);
+        let _ = std::fs::remove_file(socket_in(&self.home));
+        eprintln!("daemon of pid {} ends at {:?}", std::process::id(), SystemTime::now());
+        std::process::exit(0)
+    }
+}
+
+/// Native explicit stop is cancellation, not a request to finish an in-flight
+/// load first. Other shutdown paths still let every worker flush concurrently.
+fn finish_workers(workers: &FxHashMap<String, Arc<Worker>>, immediately: bool) {
+    if immediately {
+        for worker in workers.values() {
+            worker.stop();
+        }
+    } else {
         for worker in workers.values() {
             worker.let_go();
         }
         for worker in workers.values() {
             worker.finish();
         }
-        let _ = std::fs::remove_file(socket_in(&self.home));
-        eprintln!("daemon of pid {} ends at {:?}", std::process::id(), SystemTime::now());
-        std::process::exit(0)
     }
 }
 
@@ -1835,6 +1849,20 @@ mod tests {
                 let _ = child.wait();
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_native_stop_terminates_loading_worker_without_cache_flush_wait() {
+        let fixture = ReadyFixture::new(Warmth::Loading(Instant::now()));
+        let workers = lock(&fixture.0.workers);
+        let worker = workers.values().next().unwrap();
+        assert!(worker.loading());
+        assert!(lock(&worker.child).try_wait().unwrap().is_none());
+        let began = Instant::now();
+        finish_workers(&workers, true);
+        assert!(began.elapsed() < Duration::from_secs(2));
+        assert!(lock(&worker.child).try_wait().unwrap().is_some());
     }
 
     #[cfg(unix)]
