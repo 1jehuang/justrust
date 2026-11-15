@@ -105,6 +105,13 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_UNIFY_FEATURES",
     "JUSTRUST_EARLY",
     "JUSTRUST_EARLY_EXPERIMENTAL",
+    // Explicit guest-side experiment. Never forward local native paths.
+    "JUSTRUST_HOSTED_HYBRID",
+    "JUSTRUST_HOSTED_HYBRID_ENGINE",
+    "JUSTRUST_HOSTED_HYBRID_TOOLCHAIN",
+    "JUSTRUST_HOSTED_HYBRID_HOME",
+    // Forward only so the agent can reject unsupported detached preparation.
+    "JUSTRUST_HOSTED_HYBRID_PREWARM",
 ];
 
 /// Keep the allowlist explicit. In particular, a wrapper executable on the
@@ -143,6 +150,35 @@ pub(crate) fn forwarded_env(
 #[cfg(test)]
 mod platform_env_tests {
     use super::forwarded_env;
+
+    #[test]
+    fn hosted_hybrid_controls_are_separate_from_local_native_paths() {
+        let controls = [
+            "JUSTRUST_HOSTED_HYBRID",
+            "JUSTRUST_HOSTED_HYBRID_ENGINE",
+            "JUSTRUST_HOSTED_HYBRID_TOOLCHAIN",
+            "JUSTRUST_HOSTED_HYBRID_HOME",
+            "JUSTRUST_HOSTED_HYBRID_PREWARM",
+        ];
+        let forwarded = forwarded_env(|key| {
+            (controls.contains(&key)
+                || matches!(
+                    key,
+                    "JUSTRUST_HYBRID"
+                        | "JUSTRUST_NATIVE_ENGINE"
+                        | "JUSTRUST_HYBRID_TOOLCHAIN"
+                        | "JR_ENGINE_HOME"
+                        | "JUSTRUST_HYBRID_PREWARM"
+                ))
+            .then(|| "explicit-value".into())
+        });
+        assert_eq!(forwarded.len(), controls.len());
+        assert!(
+            forwarded
+                .iter()
+                .all(|(key, value)| controls.contains(&key.as_str()) && value == "explicit-value")
+        );
+    }
     #[test]
     fn llvm_provisioning_opt_in_is_not_sdk_license_consent() {
         for value in ["yes", "true", "0", "1; unsafe", ""] {
@@ -1480,6 +1516,9 @@ fn run_remote_inner(
             h.to_string(),
         ));
     }
+    let hosted_hybrid = env
+        .iter()
+        .any(|(key, value)| key == "JUSTRUST_HOSTED_HYBRID" && value == "ready");
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
     let mut full = vec![sub.to_string()];
@@ -1697,7 +1736,13 @@ fn run_remote_inner(
                     timing,
                     total.elapsed().as_secs_f64(),
                 ) {
-                    report_remote_failure(sub, diagnostic, total.elapsed().as_secs_f64());
+                    if hosted_hybrid && summary.is_empty() {
+                        eprintln!(
+                            "justrust remote: hosted hybrid returned no Cargo telemetry; native status is authoritative"
+                        );
+                    } else {
+                        report_remote_failure(sub, diagnostic, total.elapsed().as_secs_f64());
+                    }
                 }
                 eprintln!(
                     "justrust remote: {} on {machine} in {:.1}s (sync {:.0} ms, {files} file{} at build time)",
