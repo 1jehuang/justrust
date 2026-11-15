@@ -10197,3 +10197,19 @@ Correctness gates: 21 native unit tests (`20261115-054849098-1912922`),
 clippy (`20261115-055345560-2030124`). The benchmark runner has eight offline
 tests, including an independent literal sample order and malformed/incomplete
 result rejection. The installed published alpha.27 client is not replaced.
+
+Actual hosted acceptance also passed with an explicit, unpublished source
+candidate (package version alpha.28, SHA256
+`e25f21c68c92560e42fe6d82eff4750953ff196ed11ca9c862e6e8bdcb247e88`), built
+on hosted in `20261115-055711765-2116614`. The isolated harness exercised
+check/build/test, artifact download, source changes/deletion/protection, a real
+socket drop with exactly-once durable-session resume, 65-second fresh-key
+expiry with resume authentication, wrong-pin no-execution, UID 1000 and denial
+of both root secrets. It also preserved the intentionally failing test's
+diagnostics and exit status. Recorded workload IDs:
+`20261115-055925788-2148466`, `20261115-055942060-2150883`,
+`20261115-055945087-2151997`, `20261115-055948367-2153940`,
+`20261115-055951585-2155176`, `20261115-060012341-2163534`.
+This is correctness/interoperability evidence against the deployed supervisor,
+not an end-to-end timing comparison. No published client or cloud deployment
+was replaced for this optimization.
