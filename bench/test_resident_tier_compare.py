@@ -202,6 +202,29 @@ class HarnessTests(unittest.TestCase):
             error = tier.worker_log_evidence(before, status, home, home / 'type-error', phase='type-error')
             self.assertEqual(error['failures'], [])
 
+    def test_cold_reload_requires_complete_success_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            log = home / 'log'
+            text = ('cold: compiled 3990 of 3990 fns in 3.5s\n'
+                    'stats: 10631 of 44576 functions compiled, 33945 reused\n'
+                    'link: 227ms (exit status: 0)\nwatching 49 files\n')
+            status = dict(worker_details=[dict(pid=43, project='/source', log=str(log))])
+            log.write_text(text)
+            result = tier.worker_log_evidence({}, status, home, home / 'cold', restart=True)
+            self.assertEqual(result['classification'], 'native-worker-cold-reload')
+            self.assertEqual(result['failures'], [])
+            before = tier.worker_log_snapshot(status, home)
+            with log.open('a') as stream:
+                stream.write(text)
+            self.assertTrue(tier.worker_log_evidence(before, status, home, home / 'hot')['failures'])
+            for index, invalid in enumerate((text.replace('exit status: 0', 'exit status: 1'),
+                                             text.replace('watching 49 files\n', ''),
+                                             text + 'refused: unsupported\n')):
+                log.write_text(invalid)
+                self.assertTrue(tier.worker_log_evidence({}, status, home,
+                    home / str(index), restart=True)['failures'])
+
     def test_memory_present_and_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -117,6 +117,12 @@ def worker_log_evidence(before, after, home, prefix, restart=False, phase='edit'
     refused = bool(re.search(r'^refused:|not built:|^Error:', text, re.M))
     if edited and (phase == 'type-error' or not refused):
         evidence['classification'] = 'native-worker-edit'
+    elif (restart and not refused
+          and re.search(r'^cold: compiled \d+ of \d+ fns', text, re.M)
+          and re.search(r'^stats: \d+ of \d+ functions compiled, \d+ reused$', text, re.M)
+          and re.search(r'^link: .*exit status: 0', text, re.M)
+          and re.search(r'^watching \d+ files$', text, re.M)):
+        evidence['classification'] = 'native-worker-cold-reload'
     else:
         evidence['failures'].append('no fresh accepted native worker edit evidence')
     return evidence
@@ -634,7 +640,7 @@ def execute_budget(args):
                         row['reload_wait'] = reload_wait
                         evidence = worker_log_evidence(previous_logs, focus(after, a), Path(env['JR_ENGINE_HOME']),
                             args.output / (label + '-' + phase), restart=True, phase=kind)
-                        if evidence['classification'] != 'native-worker-edit':
+                        if evidence['classification'] not in ('native-worker-edit', 'native-worker-cold-reload'):
                             reload_said = bool(re.search(r"blaze:.*(?:cargo|loading|loaded|worker)", text))
                             if reload_said and project_workers(after, a):
                                 evidence['failures'] = [e for e in evidence['failures']
