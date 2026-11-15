@@ -36,7 +36,12 @@ diff --git a/crates/jcode-tui/src/tui/app/commands_tests.rs b/crates/jcode-tui/s
      fn colors_lists_every_role_with_its_hex_value() {
 +        let _local = local_environment();
          let mut app = create_test_app();
-@@ -347,6 +370,7 @@ mod colors {
+@@ -233,3 +257,4 @@ mod colors {
+     fn colors_harmony_reports_a_score_and_named_criteria() {
++        let _local = local_environment();
+         let mut app = create_test_app();
+         assert!(dispatch_local_command(&mut app, "/colors harmony"));
+@@ -347,6 +372,7 @@ mod colors {
      fn unrelated_commands_are_not_swallowed() {
          // `/colors` shares a prefix with nothing today, but a future `/color*`
          // command must not be silently captured by this handler.
@@ -368,6 +373,19 @@ diff --git a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs b/crat
      );
 +    });
  }
+diff --git a/crates/jcode-tui/src/tui/ui_messages/tests.rs b/crates/jcode-tui/src/tui/ui_messages/tests.rs
+--- a/crates/jcode-tui/src/tui/ui_messages/tests.rs
++++ b/crates/jcode-tui/src/tui/ui_messages/tests.rs
+@@ -1543,3 +1543,4 @@
+ fn render_system_message_uses_scheduled_task_card() {
++    let _glyph_env = system_glyph_env_lock();
+     let msg = DisplayMessage::system(
+         "[Scheduled task]\nA scheduled task for this session is now due.\n\nTask: Follow up on the scheduler test\nWorking directory: /home/jeremy/jcode\nRelevant files: src/tui/ui_messages.rs\nBranch: master\n\nBackground: Verify the scheduled task card styling\nSuccess criteria: The due task renders clearly\nScheduled by session: session_test",
+@@ -1567,3 +1568,4 @@
+ fn render_tool_message_uses_scheduled_card() {
++    let _glyph_env = system_glyph_env_lock();
+     let msg = DisplayMessage {
+         role: "tool".to_string(),
 diff --git a/crates/jcode-tui/src/tui/ui_header.rs b/crates/jcode-tui/src/tui/ui_header.rs
 --- a/crates/jcode-tui/src/tui/ui_header.rs
 +++ b/crates/jcode-tui/src/tui/ui_header.rs

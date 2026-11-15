@@ -60,7 +60,7 @@ class HostedTuiPrerequisites(unittest.TestCase):
 
     def test_fixture_contracts(self):
         text = (suite.ROOT / PATCH).read_text()
-        self.assertEqual(text.count("+        let _local = local_environment();"), 2)
+        self.assertEqual(text.count("+        let _local = local_environment();"), 3)
         self.assertIn("let lock = lock_shared_state();", text)
         self.assertIn("impl Drop for LocalEnvironment", text)
         self.assertIn('Some(value) => crate::env::set_var("JCODE_SSH_REMOTE", value)', text)
@@ -81,10 +81,12 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         if line.startswith("+++ b/")})
         targets = [line[6:] for line in (suite.ROOT / PATCH).read_text().splitlines()
                    if line.startswith("+++ b/")]
-        self.assertEqual(len(targets), 8)
+        self.assertEqual(len(targets), 9)
         for path in targets:
             if path == "crates/jcode-tui/src/tui/ui_header.rs":
                 continue  # Authorized exception, runtime-byte proof below.
+            if path == "crates/jcode-tui/src/tui/ui_messages/tests.rs":
+                continue  # Entire file is the existing cfg(test) module.
             self.assertTrue(path.startswith("crates/jcode-tui/src/tui/app/"), path)
             self.assertTrue("/tests/" in path or path.endswith(("/commands_tests.rs", "/remote_tests.rs")), path)
         repo, revision = spec["repos"]["jcode"]
@@ -109,6 +111,17 @@ class HostedTuiPrerequisites(unittest.TestCase):
                 self.assertEqual(assertions(original[path]), assertions(updated), path)
                 self.assertEqual(original[path].count("#[ignore"), updated.count("#[ignore"), path)
                 blocks = re.split(r"(?m)^#\[test\]\n", updated)[1:]
+                if path.endswith("/commands_tests.rs"):
+                    self.assertRegex(updated, r"fn colors_harmony_reports_a_score_and_named_criteria\(\) \{\s*let _local = local_environment\(\);")
+                if path.endswith("/ui_messages/tests.rs"):
+                    expected = original[path]
+                    for name in ("render_system_message_uses_scheduled_task_card",
+                                 "render_tool_message_uses_scheduled_card"):
+                        anchor = f"fn {name}() {{\n"
+                        self.assertEqual(expected.count(anchor), 1)
+                        expected = expected.replace(anchor, anchor + "    let _glyph_env = system_glyph_env_lock();\n")
+                    self.assertEqual(expected, updated)
+                    self.assertRegex(updated, r"fn render_system_message_uses_width_stable_titles_on_kitty\(\) \{\s*let _guard = system_glyph_env_lock\(\);")
                 if path.endswith("terminal_setup_command.rs"):
                     for block in blocks:
                         if "create_test_app()" in block:
@@ -165,8 +178,14 @@ class HostedTuiPrerequisites(unittest.TestCase):
                         text=True)
                     self.assertRegex(helper, r"fn with_temp_jcode_home[^\n]+\n\s*let _guard = crate::storage::lock_test_env\(\)")
                     self.assertIn('EnvRestoreGuard::capture(["JCODE_HOME"])', helper)
-            self.assertEqual(sum(len(test_names(source)) for source in original.values()), 254)
-            self.assertEqual(sum(len(assertions(source)) for source in original.values()), 1077)
+            previous_targets = {path: source for path, source in original.items()
+                                if not path.endswith("/ui_messages/tests.rs")}
+            self.assertEqual(sum(len(test_names(source)) for source in previous_targets.values()), 254)
+            self.assertEqual(sum(len(assertions(source)) for source in previous_targets.values()), 1077)
+            ui_messages = subprocess.check_output(
+                ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/ui_messages.rs"],
+                text=True)
+            self.assertRegex(ui_messages, r'#\[cfg\(test\)\]\s*#\[path = "ui_messages/tests.rs"\]\s*mod tests;')
             commands = subprocess.check_output(
                 ["git", "-C", str(repo), "show", f"{revision}:crates/jcode-tui/src/tui/app/commands.rs"],
                 text=True)
