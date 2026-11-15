@@ -608,6 +608,10 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
+    if args.synth is None and (args.stop_on_invalid or args.retry_noisy):
+        sys.exit("versus: --stop-on-invalid and --retry-noisy require --synth")
+    if args.retry_noisy < 0:
+        sys.exit("versus: --retry-noisy must be nonnegative")
     stacks = [s for s in STACKS if not args.only or s.name in args.only.split(",")]
     if args.remote:
         if os.environ.get("JUSTRUST_BENCH_SRC"):
@@ -663,12 +667,19 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     res = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info, "stacks": [s.name for s in stacks],
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
     only = {int(x) for x in args.only_points.split(",")} if args.only_points else None
+    options = {}
+    if args.stop_on_invalid:
+        options["stop_on_invalid"] = True
+    if args.retry_noisy:
+        options["retry_noisy"] = args.retry_noisy
     res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
                                  partial=suite.synthetic_partial_path(args), only=only,
-                                 resume=args.resume)
+                                 resume=args.resume, **options)
     suite.verify_binary_identity(info)
     if only:  # a subset is for debugging, never a result to compare
         print(synth_run.table(res["synth"]))
+        if args.stop_on_invalid and (issues := synth_run._blocked(res["synth"])):
+            sys.exit("versus: synthetic gate invalid: " + "; ".join(issues))
         return
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = suite.RESULTS / (f"versus-synth{args.synth}-{time.strftime('%Y%m%d-%H%M%S')}-{info['justrust_rev']}"
@@ -680,6 +691,8 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     suite.upload_result(out)
     if not args.no_report:
         write_report(out)
+    if args.stop_on_invalid and (issues := synth_run._blocked(res["synth"])):
+        sys.exit("versus: synthetic gate invalid: " + "; ".join(issues))
 
 
 def newest() -> Path:
@@ -757,6 +770,12 @@ def main() -> None:
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
     r.add_argument("--resume", action="store_true",
                    help="synthetic: keep the points of an interrupted run of the same seed and stacks")
+    r.add_argument("--stop-on-invalid", action="store_true",
+                   help="synthetic only: save and upload evidence, then exit nonzero after the first "
+                        "failed or noisy point; incompatible with --resume")
+    r.add_argument("--retry-noisy", type=int, default=0, metavar="N",
+                   help="synthetic only: remeasure a noisy sample up to N times after waiting for quiet "
+                        "(default 0; discarded attempts retained)")
     r.add_argument("--only-points", metavar="I,J",
                    help="synthetic: run only these point indices (debugging, nothing saved)")
     r.set_defaults(fn=cmd_run)
