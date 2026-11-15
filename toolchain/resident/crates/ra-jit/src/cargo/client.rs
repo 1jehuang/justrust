@@ -251,6 +251,7 @@ fn started(home: &Path, spares: bool) -> anyhow::Result<UnixStream> {
         .env_remove(wrapper::DRIVEN)
         .env_remove(switch::VARIABLE)
         .env_remove(switch::CHAINED);
+    super::hybrid::sanitize_command(&mut daemon);
     if !spares && std::env::var_os(SPARE).is_none() {
         daemon.env(SPARE, "0");
     }

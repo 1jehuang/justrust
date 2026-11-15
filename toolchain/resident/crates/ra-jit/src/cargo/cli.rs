@@ -146,7 +146,7 @@ fn worker_named(name: &str) -> bool {
 /// Whether the variable `name` is blaze's own: where the daemon keeps its files, the store,
 /// its traces. The daemon's are what its workers run with.
 fn blazes(name: &str) -> bool {
-    name.starts_with("RA_JIT_") || name.starts_with("BLAZE_") || name == "JR_HYBRID_DECISION_FD"
+    name.starts_with("RA_JIT_") || name.starts_with("BLAZE_")
 }
 
 /// The variables of this process that a worker of the build whose variables are `env`
@@ -577,7 +577,9 @@ pub(crate) fn worker_env() -> BTreeMap<String, String> {
 pub(crate) fn command_env() -> BTreeMap<String, String> {
     std::env::vars_os()
         .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .filter(|(name, _)| !worker_named(name) && !blazes(name))
+        .filter(|(name, _)| {
+            !worker_named(name) && !blazes(name) && !super::hybrid::private_variable(name)
+        })
         .collect()
 }
 
@@ -599,7 +601,11 @@ mod tests {
 
     #[test]
     fn hybrid_decision_channel_is_not_a_build_input() {
-        assert!(blazes("JR_HYBRID_DECISION_FD"));
+        assert!(!blazes("JR_HYBRID_DECISION_FD"));
+        assert_eq!(
+            taken_away(std::iter::once("JR_HYBRID_DECISION_FD".to_owned()), &BTreeMap::new()),
+            ["JR_HYBRID_DECISION_FD"]
+        );
         assert!(!worker_named("JR_HYBRID_DECISION_FD"));
         assert!(!is_named(BUILD_ENV, "JR_HYBRID_DECISION_FD"));
     }

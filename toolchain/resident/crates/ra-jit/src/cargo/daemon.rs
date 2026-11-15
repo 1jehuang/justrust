@@ -313,6 +313,7 @@ impl WorkerConfig {
     pub(crate) fn builds_env(&self) -> BTreeMap<String, String> {
         let mut env = self.command_env.clone();
         env.extend(self.env.clone());
+        env.retain(|name, _| !super::hybrid::private_variable(name));
         env
     }
 }
@@ -861,6 +862,7 @@ fn exact_env(command: &mut Command, env: &BTreeMap<String, String>) {
     for name in super::cli::not_the_builds(env) {
         command.env_remove(name);
     }
+    super::hybrid::sanitize_command(command);
 }
 
 /// The variables a request of the build `config` says, under its checkout's: those a worker
@@ -871,7 +873,7 @@ fn requests_env(config: &WorkerConfig) -> ide_db::base_db::Env {
     let not_ours = super::cli::not_the_builds(&builds);
     let mut env: ide_db::base_db::Env = Vec::from(crate::process::own())
         .into_iter()
-        .filter(|(name, _)| !not_ours.contains(name))
+        .filter(|(name, _)| !not_ours.contains(name) && !super::hybrid::private_variable(name))
         .collect();
     for (name, value) in &builds {
         env.set(name, value);
@@ -1810,6 +1812,35 @@ mod tests {
                 let _ = child.wait();
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decision_descriptor_never_enters_worker_configuration_or_commands() {
+        let mut fixture = ReadyFixture::new(Warmth::Ready);
+        let name = super::super::hybrid::DECISION_FD;
+        fixture.1.config.command_env.insert(name.to_owned(), "123".to_owned());
+        fixture.1.config.env.insert(name.to_owned(), "456".to_owned());
+        fixture
+            .1
+            .config
+            .command_env
+            .insert("PUBLIC_BUILD_VALUE".to_owned(), "preserved".to_owned());
+        let env = fixture.1.config.builds_env();
+        assert!(!env.contains_key(name));
+        assert_eq!(env.get("PUBLIC_BUILD_VALUE").map(String::as_str), Some("preserved"));
+        let mut command = Command::new("env");
+        command.env(name, "789");
+        exact_env(&mut command, &env);
+        assert!(command.get_envs().any(|(key, value)| key == name && value.is_none()));
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert!(
+            !String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .any(|line| line.starts_with("JR_HYBRID_DECISION_FD="))
+        );
     }
 
     #[cfg(unix)]

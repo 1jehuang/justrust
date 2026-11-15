@@ -9,6 +9,18 @@ use std::{
 
 use anyhow::Context as _;
 
+pub(super) const DECISION_FD: &str = "JR_HYBRID_DECISION_FD";
+
+pub(super) fn private_variable(name: &str) -> bool {
+    name == DECISION_FD
+}
+
+/// Descriptor ownership is private to the engine client, including its name.
+/// Apply at command construction rather than mutating this process's environment.
+pub(super) fn sanitize_command(command: &mut std::process::Command) {
+    command.env_remove(DECISION_FD);
+}
+
 #[derive(Default)]
 struct State {
     ready: bool,
@@ -32,7 +44,7 @@ pub(super) fn arguments(args: Vec<String>) -> anyhow::Result<Vec<String>> {
     }
     match args.first().map(String::as_str) {
         Some("hybrid-ready") => {
-            let fd = std::env::var("JR_HYBRID_DECISION_FD")
+            let fd = std::env::var(DECISION_FD)
                 .context("hybrid-ready requires JR_HYBRID_DECISION_FD")?
                 .parse::<i32>()?;
             let protocol = protocol_file(fd)?;
@@ -171,6 +183,18 @@ mod tests {
         assert!(decide(&mut state, true).is_err());
         assert!(state.committed);
         assert!(decide(&mut state, false).is_err());
+    }
+
+    #[test]
+    fn private_channel_name_is_removed_from_real_child_environment() {
+        let mut command = std::process::Command::new("env");
+        command.env(DECISION_FD, "123").env("JR_HYBRID_PUBLIC_TEST_VALUE", "preserved");
+        sanitize_command(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let env = String::from_utf8(output.stdout).unwrap();
+        assert!(!env.lines().any(|line| line.starts_with("JR_HYBRID_DECISION_FD=")));
+        assert!(env.lines().any(|line| line == "JR_HYBRID_PUBLIC_TEST_VALUE=preserved"));
     }
 
     #[test]

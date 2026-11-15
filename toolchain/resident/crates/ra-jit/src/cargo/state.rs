@@ -1019,6 +1019,7 @@ pub(crate) fn place_copy(from: &Path, to: &Path) -> std::io::Result<()> {
 /// without it builds each program again and puts its own where this build's is, under a
 /// program that is running.
 pub(crate) fn as_built(command: &mut Command) -> std::io::Result<()> {
+    super::hybrid::sanitize_command(command);
     command.env(switch::VARIABLE, switch::wrapper_path()?).env(wrapper::DRIVEN, "1");
     // The project's own wrapper still runs rustc, from inside ra-jit's, as cargo finds it from
     // the directory it runs in.
