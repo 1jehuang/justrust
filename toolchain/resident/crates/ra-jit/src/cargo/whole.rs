@@ -4,7 +4,7 @@
 //! or plan fails the build, with what it is.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Component, Path, PathBuf},
     process::Command,
     time::Instant,
@@ -210,7 +210,8 @@ fn build_using(asked: &Invocation, dispatch: &mut Dispatch) -> anyhow::Result<i3
     }
     let mut said = Vec::new();
     compiling(asked, programs.iter().filter(|it| !it.executable.exists()), &mut said);
-    let checkout = checkout(asked, &cwd, &metadata, &programs, false, BTreeMap::new());
+    let checkout =
+        checkout(asked, &cwd, &metadata, &programs, false, BTreeMap::new(), dispatch.hybrid())?;
     if !dispatch.prepare(std::slice::from_ref(&checkout))? {
         return Ok(0);
     }
@@ -297,8 +298,8 @@ fn test_using(asked: &Invocation, dispatch: &mut Dispatch) -> anyhow::Result<i32
     places.insert("CARGO_TARGET_TMPDIR".to_owned(), scratch.display().to_string());
     let (units, others): (Vec<Program>, Vec<Program>) = programs.into_iter().partition(unit);
     let checkouts = [
-        checkout(asked, &cwd, &metadata, &others, false, places),
-        checkout(asked, &cwd, &metadata, &units, true, BTreeMap::new()),
+        checkout(asked, &cwd, &metadata, &others, false, places, dispatch.hybrid())?,
+        checkout(asked, &cwd, &metadata, &units, true, BTreeMap::new(), dispatch.hybrid())?,
     ];
     let profile = match asked.profile() {
         "dev" => "test",
@@ -829,7 +830,8 @@ fn checkout(
     programs: &[Program],
     unit_tests: bool,
     env: BTreeMap<String, String>,
-) -> Checkout {
+    strict: bool,
+) -> anyhow::Result<Checkout> {
     let _phase = super::Phase::new("client checkout");
     let root = metadata.workspace_root.as_std_path();
     let asked_in = asked.flags.manifest_path.as_ref().map_or(cwd.to_owned(), |it| cwd.join(it));
@@ -876,22 +878,28 @@ fn checkout(
             shared,
         }
     });
-    for dir in &dirs {
-        _ = std::fs::create_dir_all(dir);
-    }
     let members = metadata.workspace_packages();
     let manifests = members.iter().map(|it| it.manifest_path.as_std_path().to_owned());
     let lock = root.join("Cargo.lock");
     // A worker that loaded other manifests loads them again; one with the same is asked to
     // build again what was edited since.
-    let generation = checkout_generation(root, manifests.clone(), lock);
+    let generation = if strict {
+        let native_config =
+            blaze_manifest::Config::load(cwd, std::env::vars(), &asked.flags.config)?;
+        hybrid_generation(root, manifests.clone(), &lock, &native_config, std::env::vars())?
+    } else {
+        checkout_generation(root, manifests.clone(), lock)
+    };
+    for dir in &dirs {
+        _ = std::fs::create_dir_all(dir);
+    }
     let sources = members.iter().flat_map(|it| sources_in(&super::state::package_dir(it)));
     let key = match (asked.subcommand, unit_tests) {
         (Subcommand::Test, false) => "whole-test",
         (_, true) => "whole-unit",
         _ => "whole",
     };
-    Checkout {
+    Ok(Checkout {
         key: format!("{}-{key}", asked.key(cwd)),
         generation,
         kept: false,
@@ -902,6 +910,357 @@ fn checkout(
         sources: manifests.chain(sources).collect(),
         env,
         scripts: None,
+    })
+}
+
+/// Hybrid admission must not turn a configuration/dependency reload into a supposedly
+/// warm attempt. Use the owned Cargo reader for ancestor/home/CLI/includes semantics,
+/// and read local path manifests even when they are outside the workspace membership.
+/// Unknown or observed racing inputs fail before commitment, never fall back to mtimes.
+fn hybrid_generation(
+    root: &Path,
+    manifests: impl Iterator<Item = PathBuf>,
+    lock: &Path,
+    config: &blaze_manifest::Config,
+    env: impl IntoIterator<Item = (String, String)>,
+) -> anyhow::Result<u128> {
+    use sha2::{Digest as _, Sha256};
+    let mut hash = Sha256::new();
+    hybrid_frame(&mut hash, b"jr-engine/hybrid-input-generation/v1");
+    hybrid_frame(&mut hash, root.canonicalize()?.as_os_str().as_encoded_bytes());
+    let mut pending: Vec<_> = manifests.chain([root.join("Cargo.toml")]).collect();
+    let mut visited = BTreeSet::new();
+    let mut inputs = BTreeMap::new();
+    while let Some(path) = pending.pop() {
+        anyhow::ensure!(inputs.len() < 10_000, "hybrid path dependency graph is too large");
+        let canonical = path.canonicalize()?;
+        let parent = path.parent().context("manifest without a directory")?.canonicalize()?;
+        let bytes = std::fs::read(&path)?;
+        anyhow::ensure!(
+            canonical == path.canonicalize()? && bytes == std::fs::read(&path)?,
+            "hybrid manifest input changed while reading: {}",
+            path.display()
+        );
+        inputs.insert(path.clone(), (canonical.clone(), bytes.clone()));
+        if !visited.insert((canonical, parent.clone())) {
+            continue;
+        }
+        let manifest: toml::Value = toml::from_str(std::str::from_utf8(&bytes)?)?;
+        hybrid_path_dependencies(&manifest, &parent, &mut pending);
+        // A path dependency can inherit package/dependency fields from another
+        // workspace outside this checkout. Its ancestor manifest is an input too.
+        for ancestor in parent.ancestors().skip(1) {
+            let manifest = ancestor.join("Cargo.toml");
+            if manifest.is_file() {
+                pending.push(manifest);
+            }
+        }
+        if let Some(workspace) =
+            manifest.get("package").and_then(|it| it.get("workspace")).and_then(toml::Value::as_str)
+        {
+            pending.push(parent.join(workspace).join("Cargo.toml"));
+        }
+    }
+    for (path, (canonical, bytes)) in inputs {
+        hybrid_frame(&mut hash, path.as_os_str().as_encoded_bytes());
+        hybrid_frame(&mut hash, canonical.as_os_str().as_encoded_bytes());
+        hybrid_frame(&mut hash, &bytes);
+    }
+    hybrid_frame(&mut hash, lock.as_os_str().as_encoded_bytes());
+    match std::fs::symlink_metadata(lock) {
+        Ok(_) => {
+            let canonical = lock.canonicalize()?;
+            let bytes = std::fs::read(lock)?;
+            anyhow::ensure!(
+                canonical == lock.canonicalize()? && bytes == std::fs::read(lock)?,
+                "hybrid lock file changed while reading"
+            );
+            hybrid_frame(&mut hash, b"present-lock");
+            hybrid_frame(&mut hash, canonical.as_os_str().as_encoded_bytes());
+            hybrid_frame(&mut hash, &bytes);
+        }
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => {
+            hybrid_frame(&mut hash, b"missing-lock")
+        }
+        Err(why) => return Err(why.into()),
+    }
+    let first = hybrid_configuration(config)?;
+    anyhow::ensure!(
+        first == hybrid_configuration(config)?,
+        "hybrid configuration changed while reading"
+    );
+    hybrid_frame(&mut hash, &first);
+    // Environment configuration is layered over file values by Cargo. Hash Cargo's
+    // complete env namespace rather than guessing which target/profile knobs matter.
+    // Private engine controls and the decision descriptor are deliberately excluded.
+    let env: BTreeMap<_, _> =
+        env.into_iter().filter(|(name, _)| name.starts_with("CARGO_")).collect();
+    for (name, value) in env {
+        hybrid_frame(&mut hash, name.as_bytes());
+        hybrid_frame(&mut hash, value.as_bytes());
+    }
+    let digest = hash.finalize();
+    let mut tag = [0; 16];
+    tag.copy_from_slice(&digest[..16]);
+    Ok(u128::from_le_bytes(tag) | (1 << 127))
+}
+
+fn hybrid_frame(hash: &mut sha2::Sha256, bytes: &[u8]) {
+    use sha2::Digest as _;
+    hash.update((bytes.len() as u128).to_le_bytes());
+    hash.update(bytes);
+}
+
+fn hybrid_path_dependencies(value: &toml::Value, parent: &Path, pending: &mut Vec<PathBuf>) {
+    fn paths(value: &toml::Value, parent: &Path, pending: &mut Vec<PathBuf>) {
+        if let Some(table) = value.as_table() {
+            if let Some(path) = table.get("path").and_then(toml::Value::as_str) {
+                pending.push(parent.join(path).join("Cargo.toml"));
+            }
+            for value in table.values() {
+                paths(value, parent, pending);
+            }
+        }
+    }
+    if let Some(table) = value.as_table() {
+        for (key, value) in table {
+            if matches!(
+                key.as_str(),
+                "dependencies" | "dev-dependencies" | "build-dependencies" | "patch" | "replace"
+            ) {
+                paths(value, parent, pending);
+            } else {
+                hybrid_path_dependencies(value, parent, pending);
+            }
+        }
+    }
+}
+
+fn hybrid_configuration(config: &blaze_manifest::Config) -> anyhow::Result<Vec<u8>> {
+    use blaze_manifest::config::{ConfigValue, Definition};
+    use sha2::{Digest as _, Sha256};
+    fn value(hash: &mut Sha256, cv: &ConfigValue) -> anyhow::Result<()> {
+        match cv.definition() {
+            Definition::BuiltIn => hybrid_frame(hash, b"built-in"),
+            Definition::Environment(name) => {
+                hybrid_frame(hash, b"env");
+                hybrid_frame(hash, name.as_bytes());
+            }
+            Definition::Path(path) | Definition::Cli(Some(path)) => {
+                hybrid_frame(hash, b"file");
+                hybrid_frame(hash, path.as_os_str().as_encoded_bytes());
+                hybrid_frame(hash, path.canonicalize()?.as_os_str().as_encoded_bytes());
+            }
+            Definition::Cli(None) => hybrid_frame(hash, b"cli"),
+        }
+        match cv {
+            ConfigValue::Integer(n, _) => {
+                hybrid_frame(hash, b"integer");
+                hybrid_frame(hash, &n.to_le_bytes());
+            }
+            ConfigValue::String(s, _) => {
+                hybrid_frame(hash, b"string");
+                hybrid_frame(hash, s.as_bytes());
+            }
+            ConfigValue::Boolean(b, _) => {
+                hybrid_frame(hash, b"boolean");
+                hybrid_frame(hash, &[u8::from(*b)]);
+            }
+            ConfigValue::List(list, _) => {
+                hybrid_frame(hash, b"list");
+                hybrid_frame(hash, &(list.len() as u128).to_le_bytes());
+                for cv in list {
+                    value(hash, cv)?;
+                }
+            }
+            ConfigValue::Table(table, _) => {
+                hybrid_frame(hash, b"table");
+                let sorted: BTreeMap<_, _> = table.iter().collect();
+                hybrid_frame(hash, &(sorted.len() as u128).to_le_bytes());
+                for (key, cv) in sorted {
+                    hybrid_frame(hash, key.as_bytes());
+                    value(hash, cv)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut hash = Sha256::new();
+    hybrid_frame(&mut hash, b"jr-engine/native-config/v1");
+    hybrid_frame(&mut hash, config.home().as_os_str().as_encoded_bytes());
+    let mut values = config.load_values_unmerged()?;
+    values.push(config.cli_args_as_table()?);
+    for cv in values {
+        // Source replacements/path overrides add mutable manifests outside the
+        // declared dependency graph. Fail closed until their identities are owned.
+        if let ConfigValue::Table(table, _) = &cv {
+            anyhow::ensure!(
+                !table.contains_key("source") && !table.contains_key("paths"),
+                "hybrid admission does not yet support Cargo source replacements or path overrides"
+            );
+        }
+        value(&mut hash, &cv)?;
+    }
+    Ok(hash.finalize().to_vec())
+}
+
+#[cfg(test)]
+mod hybrid_generation_tests {
+    use super::*;
+
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        home: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("project");
+            std::fs::create_dir(&root).unwrap();
+            let root = root.canonicalize().unwrap();
+            let home = temp.path().join("cargo-home");
+            std::fs::create_dir(&home).unwrap();
+            std::fs::write(root.join("Cargo.toml"), "[package]\nname='a'\nversion='0.1.0'\n")
+                .unwrap();
+            Self { _temp: temp, root, home }
+        }
+
+        fn config(&self, cli: &[String]) -> blaze_manifest::Config {
+            blaze_manifest::Config::load(
+                &self.root,
+                [
+                    ("CARGO_HOME".to_owned(), self.home.display().to_string()),
+                    ("__CARGO_TEST_ROOT".to_owned(), self.root.display().to_string()),
+                ],
+                cli,
+            )
+            .unwrap()
+        }
+
+        fn tag(&self, cli: &[String]) -> anyhow::Result<u128> {
+            hybrid_generation(
+                &self.root,
+                [self.root.join("Cargo.toml")].into_iter(),
+                &self.root.join("Cargo.lock"),
+                &self.config(cli),
+                Vec::new(),
+            )
+        }
+
+        fn configuration(&self, text: &str) -> PathBuf {
+            let dir = self.root.join(".cargo");
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join("config.toml");
+            std::fs::write(&file, text).unwrap();
+            file
+        }
+    }
+
+    #[test]
+    fn project_configuration_creation_and_same_timestamp_change_invalidate_admission() {
+        let f = Fixture::new();
+        let absent = f.tag(&[]).unwrap();
+        let config = f.configuration("[build]\nrustflags=['--cfg', 'first']\n");
+        let first = f.tag(&[]).unwrap();
+        assert_ne!(absent, first);
+        let modified = std::fs::metadata(&config).unwrap().modified().unwrap();
+        std::fs::write(&config, "[build]\nrustflags=['--cfg', 'other']\n").unwrap();
+        std::fs::File::options().write(true).open(&config).unwrap().set_modified(modified).unwrap();
+        assert_ne!(first, f.tag(&[]).unwrap());
+    }
+
+    #[test]
+    fn home_and_cli_file_configuration_contents_are_not_just_path_keys() {
+        let f = Fixture::new();
+        let absent = f.tag(&[]).unwrap();
+        let home = f.home.join("config.toml");
+        std::fs::write(&home, "[build]\nrustflags=['--cfg', 'home']\n").unwrap();
+        let from_home = f.tag(&[]).unwrap();
+        assert_ne!(absent, from_home);
+        let cli = f.root.join("settings.toml");
+        std::fs::write(&cli, "[build]\nrustflags=['--cfg', 'first']\n").unwrap();
+        let args = [cli.display().to_string()];
+        let first = f.tag(&args).unwrap();
+        std::fs::write(&cli, "[build]\nrustflags=['--cfg', 'other']\n").unwrap();
+        assert_ne!(first, f.tag(&args).unwrap());
+    }
+
+    #[test]
+    fn optional_config_include_creation_is_a_new_input() {
+        let f = Fixture::new();
+        f.configuration("include=[{path='optional.toml', optional=true}]\n");
+        let absent = f.tag(&[]).unwrap();
+        std::fs::write(
+            f.root.join(".cargo/optional.toml"),
+            "[build]\nrustflags=['--cfg', 'added']\n",
+        )
+        .unwrap();
+        assert_ne!(absent, f.tag(&[]).unwrap());
+    }
+
+    #[test]
+    fn external_path_manifest_and_dependency_cycles_are_content_keyed() {
+        let f = Fixture::new();
+        let external = f.root.parent().unwrap().join("external");
+        std::fs::create_dir(&external).unwrap();
+        std::fs::write(
+            f.root.join("Cargo.toml"),
+            "[package]\nname='a'\nversion='0.1.0'\n[dependencies]\nb={path='../external'}\n",
+        )
+        .unwrap();
+        let manifest = external.join("Cargo.toml");
+        std::fs::write(&manifest, "[package]\nname='b'\nversion='0.1.0'\n[features]\ndefault=['one']\none=[]\ntwo=[]\n[dependencies]\na={path='../project'}\n").unwrap();
+        let first = f.tag(&[]).unwrap();
+        assert_eq!(first, f.tag(&[]).unwrap());
+        let modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
+        let bytes = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("default=['one']", "default=['two']");
+        std::fs::write(&manifest, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&manifest)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_ne!(first, f.tag(&[]).unwrap());
+    }
+
+    #[test]
+    fn missing_dependency_and_mutable_source_overrides_fail_closed() {
+        let f = Fixture::new();
+        f.configuration(
+            "[source.crates-io]\nreplace-with='vendored'\n[source.vendored]\ndirectory='vendor'\n",
+        );
+        assert!(f.tag(&[]).is_err());
+        std::fs::remove_file(f.root.join(".cargo/config.toml")).unwrap();
+        std::fs::write(
+            f.root.join("Cargo.toml"),
+            "[package]\nname='a'\nversion='0.1.0'\n[dependencies]\nb={path='../missing'}\n",
+        )
+        .unwrap();
+        assert!(f.tag(&[]).is_err());
+    }
+
+    #[test]
+    fn source_edits_and_protocol_controls_do_not_change_generation() {
+        let f = Fixture::new();
+        let first = f.tag(&[]).unwrap();
+        std::fs::write(f.root.join("unrelated.rs"), "pub fn changed() {}\n").unwrap();
+        let second = hybrid_generation(
+            &f.root,
+            [f.root.join("Cargo.toml")].into_iter(),
+            &f.root.join("Cargo.lock"),
+            &f.config(&[]),
+            [
+                ("JR_HYBRID_DECISION_FD".to_owned(), "99".to_owned()),
+                ("RA_JIT_STATS".to_owned(), "1".to_owned()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(first, second);
     }
 }
 

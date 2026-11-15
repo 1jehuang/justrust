@@ -145,6 +145,41 @@ fn once() {
     def executions(self):
         return self.marker.read_text().splitlines() if self.marker.exists() else []
 
+    def write_configuration(self, path, name):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'[build]\nrustflags=["--cfg", "{name}"]\n')
+
+    def change_preserving_timestamp(self, path, old, new):
+        previous = path.stat()
+        original = path.read_text()
+        self.assertIn(old, original)
+        path.write_text(original.replace(old, new))
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+
+    def add_external_path_dependency(self):
+        dependency = self.root / "external-dependency"
+        (dependency / "src").mkdir(parents=True)
+        manifest = dependency / "Cargo.toml"
+        manifest.write_text('''[package]
+name="external_dependency"
+version="0.1.0"
+edition="2021"
+[features]
+default=["one"]
+one=[]
+two=[]
+''')
+        (dependency / "src/lib.rs").write_text('''#[cfg(feature="one")]
+pub fn value() -> u32 { 7 }
+#[cfg(feature="two")]
+pub fn value() -> u32 { 9 }
+''')
+        self.manifest.write_text(self.manifest.read_text() +
+                                 '\n[dependencies]\nexternal_dependency={path="../external-dependency"}\n')
+        self.source.write_text(self.source.read_text().replace(
+            "assert!(true);", "assert_eq!(external_dependency::value(), 7);"))
+        return dependency
+
     def test_cold_miss_does_not_start_daemon_or_execute(self):
         before = set(self.home.rglob("*.sock"))
         result = self.ready("test", "--lib")
@@ -200,6 +235,67 @@ fn once() {
         result = self.ready("test", "--lib")
         self.assertEqual((result[0], decision(result[1])), (0, "miss"), result)
         self.assertEqual(self.executions(), [])
+
+    def test_same_timestamp_project_configuration_change_is_miss(self):
+        config = self.project / ".cargo/config.toml"
+        self.write_configuration(config, "hybrid_first")
+        self.prewarm("test", "--lib")
+        self.change_preserving_timestamp(config, "hybrid_first", "hybrid_other")
+        result = self.ready("test", "--lib")
+        self.assertEqual((result[0], decision(result[1])), (0, "miss"), result)
+        self.assertEqual(self.executions(), [])
+
+    def test_same_timestamp_cargo_home_configuration_change_is_miss(self):
+        cargo_home = self.root / "cargo-home"
+        config = cargo_home / "config.toml"
+        self.write_configuration(config, "hybrid_first")
+        self.env["CARGO_HOME"] = str(cargo_home)
+        self.prewarm("test", "--lib")
+        self.change_preserving_timestamp(config, "hybrid_first", "hybrid_other")
+        result = self.ready("test", "--lib")
+        self.assertEqual((result[0], decision(result[1])), (0, "miss"), result)
+        self.assertEqual(self.executions(), [])
+
+    def test_same_timestamp_cli_configuration_file_change_is_miss(self):
+        config = self.project / "settings.toml"
+        self.write_configuration(config, "hybrid_first")
+        self.prewarm("test", "--lib", "--config", str(config))
+        self.change_preserving_timestamp(config, "hybrid_first", "hybrid_other")
+        result = self.ready("test", "--lib", "--config", str(config))
+        self.assertEqual((result[0], decision(result[1])), (0, "miss"), result)
+        self.assertEqual(self.executions(), [])
+
+    def test_external_path_dependency_manifest_change_is_miss(self):
+        dependency = self.add_external_path_dependency()
+        self.prewarm("test", "--lib")
+        lock = self.project / "Cargo.lock"
+        lock_before = lock.read_bytes() if lock.exists() else None
+        # Changing only default features must not rely on a lock-file byte change
+        # to invalidate the worker. This dependency is outside the workspace root.
+        self.change_preserving_timestamp(dependency / "Cargo.toml", 'default=["one"]', 'default=["two"]')
+        result = self.ready("test", "--lib")
+        self.assertEqual((result[0], decision(result[1])), (0, "miss"), result)
+        self.assertEqual(lock.read_bytes() if lock.exists() else None, lock_before)
+        self.assertEqual(self.executions(), [])
+
+    def test_external_path_dependency_source_edit_is_fresh_and_committed(self):
+        dependency = self.add_external_path_dependency()
+        self.prewarm("test", "--lib")
+        source = dependency / "src/lib.rs"
+        source.write_text(source.read_text().replace("{ 7 }", "{ 8 }"))
+        result = self.ready("test", "--lib")
+        self.assertNotEqual(result[0], 0, result)
+        self.assertEqual(decision(result[1]), "committed", result)
+        self.assertEqual(self.executions(), ["fresh"])
+        self.assertIn("FAILED", result[2] + result[3], result)
+
+    def test_private_decision_environment_never_reaches_user_test(self):
+        self.source.write_text(self.source.read_text().replace(
+            "assert!(true);", 'assert!(std::env::var_os("JR_HYBRID_DECISION_FD").is_none());'))
+        self.prewarm("test", "--lib")
+        result = self.ready("test", "--lib")
+        self.assertEqual((result[0], decision(result[1])), (0, "committed"), result)
+        self.assertEqual(self.executions(), ["fresh"])
 
     def test_custom_build_directory_never_writes_shipping_outputs(self):
         self.prewarm("test", "--lib")
