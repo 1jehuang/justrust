@@ -183,6 +183,7 @@ def wait_background(home, offset, side, expected, timeout, pattern, evidence, ex
     started = time.monotonic()
     raw = b''
     ready = False
+    failed = False
     protected = ((side, expected), *extra_effects)
     def unchanged():
         return all(side_lines(path) == lines for path, lines in protected)
@@ -195,7 +196,11 @@ def wait_background(home, offset, side, expected, timeout, pattern, evidence, ex
             pass
         if not unchanged():
             break
-        if re.search(pattern, raw.decode(errors='replace')):
+        text = raw.decode(errors='replace')
+        failed = bool(re.search(r'background native preparation ended with|background prewarm finished status=(?!0(?:\s|$))\S+', text))
+        if failed:
+            break
+        if re.search(pattern, text):
             ready = True
             break
         if time.monotonic() - started >= timeout:
@@ -206,7 +211,8 @@ def wait_background(home, offset, side, expected, timeout, pattern, evidence, ex
     return {'ok': ready and unchanged(),
             'wait_seconds_outside_foreground_timing': finished - started,
             'ready_observed_monotonic': finished if ready else None,
-            'timed_out': not ready and unchanged() and finished - started >= timeout,
+            'timed_out': not ready and not failed and unchanged() and finished - started >= timeout,
+            'explicit_preparation_failure': failed,
             'readiness_pattern': pattern, 'readiness_verified': ready,
             'side_effects_unchanged': unchanged(),
             'log': str(evidence), 'log_sha256': digest(evidence), 'source_log_offset': offset}

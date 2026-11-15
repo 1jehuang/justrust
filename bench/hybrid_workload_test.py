@@ -132,6 +132,17 @@ class Contracts(unittest.TestCase):
             if stack == 'hybrid':
                 self.assertGreaterEqual(cold['automatic_preparation']['ready_observed_monotonic'], loading['finished_monotonic'])
 
+    def test_automatic_wait_fails_promptly_on_negative_receipt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'prewarm.log').write_text('Error: background native preparation ended with exit status: 101\n')
+            row = workload.wait_background(root, 0, root / 'side', [], 5,
+                                           'background prewarm finished status=0', root / 'evidence.log')
+            self.assertFalse(row['ok'])
+            self.assertTrue(row['explicit_preparation_failure'])
+            self.assertFalse(row['timed_out'])
+            self.assertLess(row['wait_seconds_outside_foreground_timing'], 1)
+
     def test_automatic_wait_rejects_stale_success_receipt(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
