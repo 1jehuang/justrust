@@ -155,7 +155,7 @@ def control_identity(env):
     """Bind performance-affecting ambient controls without publishing secrets."""
     prefixes = ('JUSTRUST_', 'JR_ENGINE_', 'RA_JIT_', 'BLAZE_', 'CARGO_', 'RUST', 'BENCH_')
     controls = {key: value for key, value in env.items()
-                if key.startswith(prefixes) or key in ('PATH', 'HOME', 'LD_LIBRARY_PATH')}
+                if key.startswith(prefixes) or key in ('PATH', 'HOME', 'JCODE_HOME', 'LD_LIBRARY_PATH')}
     for key in ('JUSTRUST_BIN', 'JUSTRUST_NATIVE_ENGINE'):
         controls.pop(key, None)
     return hashlib.sha256(json.dumps(controls, sort_keys=True).encode()).hexdigest()

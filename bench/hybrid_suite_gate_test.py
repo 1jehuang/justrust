@@ -135,6 +135,7 @@ class HybridSuiteGateTests(unittest.TestCase):
         base = {'PATH': '/bin', 'JUSTRUST_LOCAL': '1', 'SECRET': 'a'}
         self.assertEqual(gate.control_identity(base), gate.control_identity(dict(base, SECRET='b')))
         self.assertNotEqual(gate.control_identity(base), gate.control_identity(dict(base, JUSTRUST_LOCAL='0')))
+        self.assertNotEqual(gate.control_identity(base), gate.control_identity(dict(base, JCODE_HOME='/private/runtime')))
 
     def test_outcome_parity_accepts_equal_counts_and_exit(self):
         row = dict(exit=0, compile_failed=False, tests_failed=0, tests_passed=12)
