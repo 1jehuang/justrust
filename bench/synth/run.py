@@ -76,7 +76,10 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=No
     # Remote marking can invalidate client-only CPU coverage.
     r["noisy"] = versus.sample_noisy(r, rustc)
     if "remote" in r and r["remote"] is None and cmd[0] in ("check", "clippy", "test"):
-        r["fell_back_local"] = True
+        # Missing hosted evidence is not proof that a local build ran. Hosted
+        # admission failures also leave no remote summary. Reject both without
+        # falsely reporting a fallback that the client explicitly prohibited.
+        r["remote_unverified"] = True
     return r
 
 
@@ -115,8 +118,8 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
             gen._recover_journal()
         else:
             gen.restore(plan, created)
-    if r.get("fell_back_local"):
-        return {"error": f"forced remote fell back to a local build, log {r['log']}", "wall": r["wall"]}
+    if r.get("remote_unverified"):
+        return {"error": f"forced remote execution was not verified, log {r['log']}", "wall": r["wall"]}
     if r["tests_failed"] or r["compile_failed"] != plan.expect_fail or (r["exit"] != 0 and not r["compile_failed"]):
         return {"error": f"exit {r['exit']}, expected {'a compile error' if plan.expect_fail else 'success'}, "
                          f"log {r['log']}", "wall": r["wall"]}
