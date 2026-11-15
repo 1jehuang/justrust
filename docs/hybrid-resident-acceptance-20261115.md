@@ -73,6 +73,12 @@ worst-case latency or prove zero routing overhead.
 Manual native preparation took **70.847 s**, excluded from the hot-edit median.
 Preparing a peer to force eviction took another **38.017 s**, also separately
 recorded. Preparation is not free and must be amortized over subsequent edits.
+At this run's approximately 5.224-second median saving per hot edit, the
+70.847-second initial preparation corresponds to roughly **14 subsequent hot
+edits** before its compute-time cost is recovered. This is illustrative
+arithmetic, not a measured break-even workload: background preparation may
+interfere with foreground work, eviction can erase the investment, and the
+host was contended. Off the critical path does not mean free.
 
 The budget test proves a fresh LRU eviction log, the original worker's exact
 PID/start-tick disappearance and retention of the original daemon. Namespace
