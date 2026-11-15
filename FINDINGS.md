@@ -10157,3 +10157,43 @@ auto probe on a network that is blocking at that moment (the wifi was passing
 Limit: a tunnel choice lasts as long as the ssh master (ControlPersist), so
 moving to an open network keeps the relay until the master exits. A wrong
 "unreachable" verdict only costs the extra hop.
+
+## 2026-11-15: coalesce native frame headers and payloads before TLS
+
+The native writer submitted each frame as three writes: one byte of kind,
+four bytes of length, then the payload. It now submits one contiguous,
+bounded buffer and still flushes every frame. Wire format, TLS policy,
+authentication, timeout and retry behavior are unchanged. The extra allocation
+and payload copy are intentional costs to compare against the removed writes.
+The deterministic regression proves one write when the sink accepts the frame,
+exact round trips under three-byte partial writes, empty and maximum-size
+frames, and rejection before writing an oversized frame.
+
+`python3 bench/native-frame.py` runs an optimized, real TLS 1.3 loopback
+experiment on hosted, comparing the retained historical writer against the
+production writer in one test binary. Both paths warm up, then run three ABBA
+rounds for each payload size, verifying every received byte. This excludes
+compilation, connection setup and agent/build wait. Six observations per writer:
+
+| Workload | Historical median | Coalesced median |
+| --- | ---: | ---: |
+| 32,768 frames of 64 bytes | 179.864 ms | 64.599 ms |
+| 4,096 frames of 32 KiB | 83.288 ms | 75.388 ms |
+
+Automatically recorded before/after IDs:
+`bench/native-frame-20261115T135525.065987Z-before` and
+`bench/native-frame-20261115T135525.065987Z-after`.
+The enclosing hosted test is `20261115-055435781-2050230`.
+`bench/suite.py compare` reports observed deltas of -64% and -9%, **both
+uncontrolled (noisy or unknown samples)** because per-sample foreign contention
+was not measured. These are focused diagnostic observations, not accepted
+general speedups, end-to-end network throughput estimates or a comprehensive
+session-weighted promotion gate. The confirmed operational reduction is three
+TLS write submissions to one for a nonempty frame accepted in full by its sink.
+
+Correctness gates: 21 native unit tests (`20261115-054849098-1912922`),
+27 real native bulk/CLI tests (`20261115-055005441-1932107`), full hosted
+1,270-test suite (`20261115-055300784-2013521`), and warning-free all-target
+clippy (`20261115-055345560-2030124`). The benchmark runner has eight offline
+tests, including an independent literal sample order and malformed/incomplete
+result rejection. The installed published alpha.27 client is not replaced.

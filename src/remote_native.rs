@@ -164,9 +164,13 @@ fn server_config(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<rustls::ServerConfig
 async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, kind: u8, body: &[u8]) -> Result<()> {
     ensure!(body.len() <= MAX_FRAME, "native frame too large");
     tokio::time::timeout(IO_TIMEOUT, async {
-        w.write_u8(kind).await?;
-        w.write_u32(body.len() as u32).await?;
-        w.write_all(body).await?;
+        // Submit the header and payload together instead of three TLS writes.
+        // Still flush every frame so control messages cannot wait on a batch.
+        let mut frame = Vec::with_capacity(5 + body.len());
+        frame.push(kind);
+        frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        frame.extend_from_slice(body);
+        w.write_all(&frame).await?;
         w.flush().await
     })
     .await
@@ -1463,6 +1467,143 @@ fn write_private_new(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct FrameSink {
+        bytes: Vec<u8>,
+        writes: usize,
+        flushes: usize,
+        chunk: usize,
+    }
+    impl AsyncWrite for FrameSink {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let count = bytes.len().min(self.chunk);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            self.writes += 1;
+            std::task::Poll::Ready(Ok(count))
+        }
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            self.flushes += 1;
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn native_frame_coalesces_writes_and_preserves_partial_io() {
+        for size in [0, 1, 32768, MAX_FRAME] {
+            let body = vec![0xa5; size];
+            for chunk in [usize::MAX, 3] {
+                let mut sink = FrameSink {
+                    chunk,
+                    ..Default::default()
+                };
+                write_frame(&mut sink, STDOUT, &body).await.unwrap();
+                assert_eq!(sink.flushes, 1);
+                assert_eq!(sink.writes, (size + 5).div_ceil(chunk));
+                let mut bytes = sink.bytes.as_slice();
+                assert_eq!(
+                    read_frame(&mut bytes).await.unwrap(),
+                    (STDOUT, body.clone())
+                );
+                assert!(bytes.is_empty());
+            }
+        }
+        let mut sink = FrameSink {
+            chunk: usize::MAX,
+            ..Default::default()
+        };
+        assert!(
+            write_frame(&mut sink, STDOUT, &vec![0; MAX_FRAME + 1])
+                .await
+                .is_err()
+        );
+        assert_eq!(sink.writes, 0);
+        assert_eq!(sink.flushes, 0);
+    }
+
+    // Paired control retains the pre-coalescing wire writer, not a second protocol.
+    #[tokio::test]
+    #[ignore = "focused paired TLS benchmark; run via bench/native-frame.py"]
+    async fn native_frame_tls_benchmark() {
+        async fn sample(coalesced: bool, size: usize, frames: usize) -> f64 {
+            let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let pin = certificate_pin(cert.cert.der());
+            let config =
+                server_config(cert.cert.der().to_vec(), cert.signing_key.serialize_der()).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let receiver = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                socket.set_nodelay(true).unwrap();
+                let mut tls = TlsAcceptor::from(config).accept(socket).await.unwrap();
+                for _ in 0..frames {
+                    let (kind, body) = read_frame(&mut tls).await.unwrap();
+                    assert_eq!(kind, STDOUT);
+                    assert_eq!(body.len(), size);
+                    assert!(body.iter().all(|byte| *byte == 0xa5));
+                }
+                tls.write_all(&[1]).await.unwrap();
+                tls.flush().await.unwrap();
+            });
+            let socket = TcpStream::connect(address).await.unwrap();
+            socket.set_nodelay(true).unwrap();
+            let mut tls = TlsConnector::from(client_config(&pin).unwrap())
+                .connect(ServerName::try_from("localhost").unwrap(), socket)
+                .await
+                .unwrap();
+            let body = vec![0xa5; size];
+            let start = std::time::Instant::now();
+            for _ in 0..frames {
+                if coalesced {
+                    write_frame(&mut tls, STDOUT, &body).await.unwrap();
+                } else {
+                    tokio::time::timeout(IO_TIMEOUT, async {
+                        tls.write_u8(STDOUT).await?;
+                        tls.write_u32(body.len() as u32).await?;
+                        tls.write_all(&body).await?;
+                        tls.flush().await
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                }
+            }
+            assert_eq!(tls.read_u8().await.unwrap(), 1);
+            let elapsed = start.elapsed().as_secs_f64();
+            receiver.await.unwrap();
+            elapsed
+        }
+        for (size, frames) in [(64, 32768), (32768, 4096)] {
+            // Warm both implementations before paired ABBA repetitions.
+            sample(false, size, 16).await;
+            sample(true, size, 16).await;
+            for round in 0..3 {
+                for coalesced in [false, true, true, false] {
+                    let wall = sample(coalesced, size, frames).await;
+                    println!(
+                        "NATIVE_FRAME_BENCH {}",
+                        serde_json::json!({
+                            "coalesced": coalesced, "size": size, "frames": frames,
+                            "round": round, "wall": wall
+                        })
+                    );
+                }
+            }
+        }
+    }
 
     fn key() -> ssh_key::PrivateKey {
         ssh_key::PrivateKey::random(&mut ssh_key::rand_core::OsRng, ssh_key::Algorithm::Ed25519)
