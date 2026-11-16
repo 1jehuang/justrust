@@ -98,7 +98,14 @@ def check_tag(args):
 
 
 def release(args):
-    data = api(f"repos/{args.repo}/releases/tags/{quote(args.tag, safe='')}")
+    # GitHub's by-tag REST endpoint omits drafts, even with write access.
+    # gh release view resolves authenticated drafts as well as public releases.
+    identity = json.loads(gh("release", "view", args.tag, "--repo", args.repo,
+                             "--json", "databaseId"))
+    release_id = identity.get("databaseId")
+    if type(release_id) is not int or release_id <= 0:
+        raise PublishError("invalid release database id")
+    data = api(f"repos/{args.repo}/releases/{release_id}")
     if data.get("immutable") is True:
         raise PublishError("GitHub release is immutable; cannot append platform assets. No settings were changed.")
     if data.get("tag_name") != args.tag or not isinstance(data.get("draft"), bool):

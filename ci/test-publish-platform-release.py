@@ -45,7 +45,7 @@ class FakeGH:
             endpoint = args[1]
             if "/commits/" in endpoint:
                 output = json.dumps({"sha": self.sha}).encode()
-            elif "/releases/tags/" in endpoint:
+            elif endpoint.endswith("/releases/42"):
                 if self.release_missing:
                     return subprocess.CompletedProcess(command, 1, b"", b"release not found")
                 assets = []
@@ -61,6 +61,10 @@ class FakeGH:
                 output = list(self.assets.values())[int(endpoint.rsplit("/", 1)[1]) - 1]
             else:
                 raise AssertionError(command)
+        elif args[:2] == ["release", "view"]:
+            if self.release_missing:
+                return subprocess.CompletedProcess(command, 1, b"", b"release not found")
+            output = json.dumps({"databaseId": 42}).encode()
         elif args[:2] == ["release", "upload"]:
             path = Path(args[3])
             name = path.name
@@ -151,6 +155,11 @@ class PublisherTests(unittest.TestCase):
                 self.assertEqual(len(edits), 1)
                 self.assertIn("--latest=false", edits[0])
 
+    def test_draft_lookup_uses_authenticated_identity_not_public_tag_endpoint(self):
+        self.publish()
+        self.assertTrue(any(c[1:3] == ["release", "view"] for c in self.fake.calls))
+        self.assertFalse(any("/releases/tags/" in part for c in self.fake.calls for part in c))
+
     def test_public_release_append_preserves_other_platform(self):
         self.fake.draft = False
         self.fake.assets["another-platform.tar.gz"] = b"other"
@@ -178,7 +187,7 @@ class PublisherTests(unittest.TestCase):
         self.fake.immutable = True
         self.assert_rejected("immutable")
         self.assertEqual(self.fake.uploads, [])
-        self.assertTrue(all(c[1] == "api" for c in self.fake.calls))
+        self.assertFalse(any(c[1:3] in (["release", "upload"], ["release", "edit"]) for c in self.fake.calls))
 
     def test_tag_moved_before_upload(self):
         self.fake.sha = "b" * 40
@@ -215,7 +224,7 @@ class PublisherTests(unittest.TestCase):
         self.fake.release_missing = True
         self.assert_rejected("release not found")
         self.assertEqual(self.fake.uploads, [])
-        self.assertTrue(all(c[1] == "api" for c in self.fake.calls))
+        self.assertFalse(any(c[1:3] in (["release", "upload"], ["release", "edit"]) for c in self.fake.calls))
 
     def test_tag_moved_after_checksum_does_not_publish_draft(self):
         self.fake.move_after = self.checksum
