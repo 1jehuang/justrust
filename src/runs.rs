@@ -459,10 +459,56 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
                 );
             }
         } else {
-            let _ = writeln!(
-                o,
-                "  no compiler phase split: needs a jr toolchain with the phase ledger, or JUSTRUST_PASSES=on"
-            );
+            let units = crate::summary::load_units(dir);
+            let _ = writeln!(o, "  no compiler phase split");
+            let mut reasons = std::collections::BTreeMap::new();
+            for unit in &units {
+                if matches!(
+                    unit.depcache.as_str(),
+                    "hit" | "remote" | "peer" | "prebuilt" | "local"
+                ) {
+                    continue;
+                }
+                *reasons
+                    .entry(unit.phase_coverage.as_str())
+                    .or_insert(0usize) += 1;
+            }
+            if reasons.is_empty() {
+                let _ = writeln!(
+                    o,
+                    "    phase coverage not recorded (older or unavailable unit records)"
+                );
+            }
+            for (coverage, count) in reasons {
+                let explanation = match coverage {
+                    "native-ledger-unavailable" => {
+                        "native phase ledger unavailable: compiler capability was not detected or the recording directory could not be created; JUSTRUST_PASSES=on enables time-passes fallback"
+                    }
+                    "disabled" => {
+                        "phase timing explicitly disabled by JUSTRUST_PASSES; remove the override to enable native telemetry"
+                    }
+                    "native-ledger-missing" => {
+                        "native phase ledger requested but the compiler did not produce a readable ledger"
+                    }
+                    "native-ledger-empty" => {
+                        "native phase ledger read but contained no usable timings"
+                    }
+                    "time-passes" => {
+                        "time-passes requested but no usable compiler phase timings recorded"
+                    }
+                    "native-ledger" => {
+                        "native phase ledger recorded but no aggregate phase split available"
+                    }
+                    "" => "phase coverage not recorded (older client or reconstructed unit)",
+                    _ => "unrecognized recorded phase coverage",
+                };
+                let label = if coverage.is_empty() {
+                    "unknown"
+                } else {
+                    coverage
+                };
+                let _ = writeln!(o, "    {count} units [{label}]: {explanation}");
+            }
         }
         let _ = writeln!(
             o,
@@ -634,6 +680,59 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tail_tests {
     use super::*;
+
+    #[test]
+    fn show_phase_coverage_explains_recorded_reasons() {
+        let dir = std::env::temp_dir().join(format!("jr-phase-report-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut summary = Summary::default();
+        summary.units.compiled = 1;
+        for (coverage, expected) in [
+            (
+                "native-ledger-unavailable",
+                "compiler capability was not detected",
+            ),
+            ("disabled", "phase timing explicitly disabled"),
+            ("native-ledger-missing", "did not produce a readable ledger"),
+            ("native-ledger-empty", "contained no usable timings"),
+            ("time-passes", "time-passes requested but no usable"),
+            ("native-ledger", "no aggregate phase split available"),
+            ("", "older client or reconstructed unit"),
+            ("future-coverage", "unrecognized recorded phase coverage"),
+        ] {
+            let unit = crate::shim::Unit {
+                phase_coverage: coverage.into(),
+                ..Default::default()
+            };
+            let hit = crate::shim::Unit {
+                depcache: "hit".into(),
+                ..Default::default()
+            };
+            std::fs::write(
+                dir.join("units.jsonl"),
+                format!(
+                    "{}\n{}\n",
+                    serde_json::to_string(&unit).unwrap(),
+                    serde_json::to_string(&hit).unwrap()
+                ),
+            )
+            .unwrap();
+            let report = render(&summary, &dir);
+            assert!(report.contains(expected), "{report}");
+            assert!(!report.contains("needs a jr toolchain"), "{report}");
+            assert_eq!(report.matches("1 units [").count(), 1, "{report}");
+            if coverage != "native-ledger-unavailable" {
+                assert!(!report.contains("JUSTRUST_PASSES=on"), "{report}");
+            }
+        }
+        std::fs::remove_file(dir.join("units.jsonl")).unwrap();
+        let report = render(&summary, &dir);
+        assert!(
+            report.contains("older or unavailable unit records"),
+            "{report}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn show_lock_wait_uses_observed_labels_without_inventing_target_contention() {
