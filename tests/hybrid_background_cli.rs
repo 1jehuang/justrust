@@ -3,7 +3,12 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::{ffi::OsStringExt as _, fs::PermissionsExt as _, process::ExitStatusExt as _};
+use std::os::unix::{
+    ffi::OsStringExt as _,
+    fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
+    net::UnixListener,
+    process::ExitStatusExt as _,
+};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,16 +89,25 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "jr-hybrid-background-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
+        // macOS's per-user temp directory canonicalizes to a long /private/var
+        // prefix. Use the short system temp root, but atomically create our own
+        // owner-only directory. Never reuse or chmod a pre-existing entry.
+        let base = PathBuf::from("/tmp").canonicalize().unwrap();
+        let root = loop {
+            let root = base.join(format!(
+                "jr-hb-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::DirBuilder::new().mode(0o700).create(&root) {
+                Ok(()) => break root,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create private fixture {}: {error}", root.display()),
+            }
+        };
         let root = root.canonicalize().unwrap();
         let home = root.join("private home");
-        fs::create_dir(&home).unwrap();
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
         fs::create_dir_all(root.join("toolchain/bin")).unwrap();
         for name in ["rustc", "cargo"] {
             fs::write(root.join("toolchain/bin").join(name), "unused").unwrap();
@@ -218,6 +232,30 @@ impl Drop for Fixture {
             thread::sleep(Duration::from_millis(10));
         }
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn fixture_paths_are_private_canonical_distinct_and_socket_safe() {
+    let first = Fixture::new();
+    let second = Fixture::new();
+    assert_ne!(first.root, second.root);
+    for fixture in [&first, &second] {
+        for path in [&fixture.root, &fixture.home] {
+            assert_eq!(*path, path.canonicalize().unwrap());
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+            // SAFETY: geteuid has no memory preconditions.
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        }
+        assert!(fixture.home.to_str().unwrap().contains(' '));
+        let socket = fixture.home.join("daemon.sock");
+        // Use the stricter macOS budget even when validating on Linux.
+        assert!(socket.as_os_str().len() <= 103, "{}", socket.display());
+        let listener = UnixListener::bind(&socket).unwrap();
+        drop(listener);
+        fs::remove_file(socket).unwrap();
     }
 }
 
