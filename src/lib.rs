@@ -791,20 +791,21 @@ fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>
 }
 
 /// Whether a build reached through the `cargo` shim goes through local vs
-/// hosted routing. Agent sessions (`JCODE_SESSION_ID`) route by default,
+/// hosted routing. Agent sessions (`JCODE_SESSION_ID`) and Jcode's explicit
+/// dev wrapper (`JCODE_IN_DEV_CARGO`) route by default, while
 /// interactive shells keep plain recorded cargo: an editor's background
 /// `cargo check` on every save must not spend the account's hosted builds
 /// under the hosted-first default. `justrust local off` routes those too. `JUSTRUST_CARGO_ROUTE=0`
 /// opts out, `=1` opts a non-agent shell in. A cargo nested inside a
 /// recorded run (build scripts, tests) never routes again.
-fn cargo_shim_routes(agent: bool, nested: bool, setting: Option<&str>) -> bool {
+fn cargo_shim_routes(agent: bool, dev_wrapper: bool, nested: bool, setting: Option<&str>) -> bool {
     if nested {
         return false;
     }
     match setting {
         Some("0" | "off" | "false" | "no") => false,
         Some("1" | "on" | "true" | "yes") => true,
-        _ => agent,
+        _ => agent || dev_wrapper,
     }
 }
 
@@ -1011,6 +1012,7 @@ pub fn main() -> anyhow::Result<()> {
         // machines do the heavy compiles instead of the laptop battery.
         if cargo_shim_routes(
             std::env::var_os("JCODE_SESSION_ID").is_some() || nolocal::disabled(),
+            std::env::var_os("JCODE_IN_DEV_CARGO").is_some(),
             std::env::var_os("JUSTRUST_RUN_DIR").is_some(),
             std::env::var("JUSTRUST_CARGO_ROUTE").ok().as_deref(),
         ) {
@@ -1693,16 +1695,19 @@ mod passthrough_tests {
     }
 
     #[test]
-    fn cargo_shim_routes_agent_builds_only() {
-        // Agent wrappers (jcode dev_cargo.sh) route by default.
-        assert!(cargo_shim_routes(true, false, None));
-        // Interactive shells keep plain recorded cargo unless opted in.
-        assert!(!cargo_shim_routes(false, false, None));
-        assert!(cargo_shim_routes(false, false, Some("1")));
-        assert!(!cargo_shim_routes(true, false, Some("off")));
-        // Cargo nested in a recorded run never routes again.
-        assert!(!cargo_shim_routes(true, true, None));
-        assert!(!cargo_shim_routes(true, true, Some("1")));
+    fn cargo_shim_routes_agent_and_selfdev_builds() {
+        assert!(cargo_shim_routes(true, false, false, None));
+        // Self-dev builds launched by the daemon do not have a session ID.
+        assert!(cargo_shim_routes(false, true, false, None));
+        // Unrelated editor and interactive Cargo commands retain their behavior.
+        assert!(!cargo_shim_routes(false, false, false, None));
+        assert!(cargo_shim_routes(false, false, false, Some("1")));
+        assert!(!cargo_shim_routes(true, false, false, Some("off")));
+        assert!(!cargo_shim_routes(false, true, false, Some("off")));
+        // Nested Cargo must never recursively submit another hosted build.
+        assert!(!cargo_shim_routes(true, false, true, None));
+        assert!(!cargo_shim_routes(false, true, true, None));
+        assert!(!cargo_shim_routes(true, true, true, Some("1")));
     }
 
     #[test]
