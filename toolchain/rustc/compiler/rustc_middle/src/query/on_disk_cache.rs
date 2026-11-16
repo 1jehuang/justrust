@@ -74,6 +74,10 @@ pub struct OnDiskCache {
     // The complete cache data in serialized form.
     serialized_data: RwLock<Option<SerializedData>>,
 
+    // True only when new() reused an archive from an earlier session, never
+    // merely because a cold disk load was admitted into owned storage.
+    resident_archive_hit: bool,
+
     file_index_to_stable_id: Arc<FxHashMap<SourceFileIndex, EncodedSourceFileId>>,
 
     // Caches that are populated lazily during decoding.
@@ -176,7 +180,7 @@ impl OnDiskCache {
         let key = resident::key(sess);
         if let Some(archive) = key.as_ref().and_then(|key| resident::lookup(key, &data, start_pos))
         {
-            return Ok(Self::from_archive(archive));
+            return Ok(Self::from_archive(archive, true));
         }
 
         let mut decoder = MemDecoder::new(&data, start_pos)?;
@@ -193,19 +197,23 @@ impl OnDiskCache {
 
         if let Some(key) = key {
             if let Some(archive) = resident::admit(key, &data, start_pos, footer.clone()) {
-                return Ok(Self::from_archive(archive));
+                return Ok(Self::from_archive(archive, false));
             }
         }
         Ok(Self::from_parts(SerializedData::Mapped(data), resident::Indexes::new(footer)))
     }
 
-    fn from_archive(archive: Arc<resident::Archive>) -> Self {
-        Self::from_parts(SerializedData::Owned(archive.bytes.clone()), archive.indexes.clone())
+    fn from_archive(archive: Arc<resident::Archive>, resident_hit: bool) -> Self {
+        let mut cache =
+            Self::from_parts(SerializedData::Owned(archive.bytes.clone()), archive.indexes.clone());
+        cache.resident_archive_hit = resident_hit;
+        cache
     }
 
     fn from_parts(data: SerializedData, footer: resident::Indexes) -> Self {
         Self {
             serialized_data: RwLock::new(Some(data)),
+            resident_archive_hit: false,
             file_index_to_stable_id: footer.file_index_to_stable_id,
             file_index_to_file: Default::default(),
             query_values_index: footer.query_values_index,
@@ -225,9 +233,22 @@ impl OnDiskCache {
         resident::stats()
     }
 
+    /// Called by the query engine only after a green, cacheable query value was
+    /// successfully decoded. Counting here retains the query name without
+    /// changing green validation or counting speculative/failed loads twice.
+    pub fn record_resident_query_load(&self, name: &str) {
+        if rustc_session::resident::frontend_enabled()
+            && self.resident_archive_hit
+            && matches!(*self.serialized_data.read(), Some(SerializedData::Owned(_)))
+        {
+            resident::value_loaded(name);
+        }
+    }
+
     pub fn new_empty() -> Self {
         Self {
             serialized_data: RwLock::new(None),
+            resident_archive_hit: false,
             file_index_to_stable_id: Default::default(),
             file_index_to_file: Default::default(),
             query_values_index: Default::default(),
@@ -399,12 +420,7 @@ impl OnDiskCache {
     where
         T: for<'a> Decodable<CacheDecoder<'a, 'tcx>>,
     {
-        let value = self.load_indexed(tcx, dep_node_index, &self.query_values_index);
-        if value.is_some() && matches!(*self.serialized_data.read(), Some(SerializedData::Owned(_)))
-        {
-            resident::value_loaded();
-        }
-        value
+        self.load_indexed(tcx, dep_node_index, &self.query_values_index)
     }
 
     fn load_indexed<'tcx, T>(

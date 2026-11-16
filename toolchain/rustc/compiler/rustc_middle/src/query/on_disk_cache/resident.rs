@@ -82,6 +82,20 @@ pub struct ResidentStats {
     pub misses: u64,
     pub current_bytes: u64,
     pub value_loads: u64,
+    pub typeck_loads: u64,
+    pub mir_loads: u64,
+}
+
+impl ResidentStats {
+    fn record_query_load(&mut self, name: &str) {
+        self.value_loads += 1;
+        if name == "typeck" {
+            self.typeck_loads += 1;
+        }
+        if name.contains("mir") {
+            self.mir_loads += 1;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -189,9 +203,9 @@ pub(super) fn publish(key: Key, path: &Path, expected_len: usize, footer: Footer
     }
 }
 
-pub(super) fn value_loaded() {
+pub(super) fn value_loaded(name: &str) {
     if let Ok(mut cache) = cache().lock() {
-        cache.stats.value_loads += 1;
+        cache.stats.record_query_load(name);
     }
 }
 
@@ -281,8 +295,10 @@ mod tests {
         assert_eq!(&*archive.bytes, b"abcdefgh");
         let mut cache = Cache::default();
         cache.insert(key(0), archive.clone());
-        let first = OnDiskCache::from_archive(archive.clone());
-        let second = OnDiskCache::from_archive(archive.clone());
+        let first = OnDiskCache::from_archive(archive.clone(), false);
+        let second = OnDiskCache::from_archive(archive.clone(), true);
+        assert!(!first.resident_archive_hit);
+        assert!(second.resident_archive_hit);
         assert!(Arc::ptr_eq(&first.query_values_index, &second.query_values_index));
         assert!(first.file_index_to_file.borrow().is_empty());
         assert!(second.file_index_to_file.borrow().is_empty());
@@ -302,6 +318,19 @@ mod tests {
                 (stats.hits, stats.misses, stats.current_bytes, stats.value_loads),
                 (0, 0, 0, 0)
             );
+            assert_eq!((stats.typeck_loads, stats.mir_loads), (0, 0));
         }
+    }
+
+    #[test]
+    fn query_names_count_each_success_once() {
+        let mut stats = ResidentStats::default();
+        stats.record_query_load("typeck");
+        stats.record_query_load("optimized_mir");
+        stats.record_query_load("mir_built");
+        stats.record_query_load("generics_of");
+        assert_eq!(stats.value_loads, 4);
+        assert_eq!(stats.typeck_loads, 1);
+        assert_eq!(stats.mir_loads, 2);
     }
 }
