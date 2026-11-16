@@ -34,6 +34,24 @@ use crate::ty::{self, Ty, TyCtxt};
 
 const TAG_FILE_FOOTER: u128 = 0xC0FFEE_C0FFEE_C0FFEE_C0FFEE_C0FFEE;
 
+mod resident;
+pub use resident::ResidentStats;
+
+enum SerializedData {
+    Mapped(Mmap),
+    Owned(Arc<[u8]>),
+}
+
+impl std::ops::Deref for SerializedData {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Mapped(data) => data,
+            Self::Owned(data) => data,
+        }
+    }
+}
+
 // A normal span encoded with both location information and a `SyntaxContext`
 const TAG_FULL_SPAN: u8 = 0;
 // A partial span with no location information, encoded only with a `SyntaxContext`
@@ -54,20 +72,20 @@ const SYMBOL_PREDEFINED: u8 = 2;
 /// any side effects that have been emitted during a query.
 pub struct OnDiskCache {
     // The complete cache data in serialized form.
-    serialized_data: RwLock<Option<Mmap>>,
+    serialized_data: RwLock<Option<SerializedData>>,
 
-    file_index_to_stable_id: FxHashMap<SourceFileIndex, EncodedSourceFileId>,
+    file_index_to_stable_id: Arc<FxHashMap<SourceFileIndex, EncodedSourceFileId>>,
 
     // Caches that are populated lazily during decoding.
     file_index_to_file: Lock<FxHashMap<SourceFileIndex, Arc<SourceFile>>>,
 
     /// For query dep nodes that have a disk-cached return value, maps the node
     /// index to the position of its serialized value in `serialized_data`.
-    query_values_index: FxHashMap<SerializedDepNodeIndex, AbsoluteBytePos>,
+    query_values_index: Arc<FxHashMap<SerializedDepNodeIndex, AbsoluteBytePos>>,
 
     /// For `DepKind::SideEffect` dep nodes, maps the node index to the position
     /// of its serialized [`QuerySideEffect`] in `serialized_data`.
-    side_effects_index: FxHashMap<SerializedDepNodeIndex, AbsoluteBytePos>,
+    side_effects_index: Arc<FxHashMap<SerializedDepNodeIndex, AbsoluteBytePos>>,
 
     alloc_decoding_state: AllocDecodingState,
 
@@ -76,7 +94,7 @@ pub struct OnDiskCache {
     // to represent the fact that we are storing *encoded* ids. When we decode
     // a `SyntaxContext`, a new id will be allocated from the global `HygieneData`,
     // which will almost certainly be different than the serialized id.
-    syntax_contexts: FxHashMap<u32, AbsoluteBytePos>,
+    syntax_contexts: Arc<FxHashMap<u32, AbsoluteBytePos>>,
     // A map from the `DefPathHash` of an `ExpnId` to the position
     // of their associated `ExpnData`. Ideally, we would store a `DefId`,
     // but we need to decode this before we've constructed a `TyCtxt` (which
@@ -86,18 +104,18 @@ pub struct OnDiskCache {
     // `ExpnData` (e.g `ExpnData.krate` may not be `LOCAL_CRATE`). Alternatively,
     // we could look up the `ExpnData` from the metadata of foreign crates,
     // but it seemed easier to have `OnDiskCache` be independent of the `CStore`.
-    expn_data: UnhashMap<ExpnHash, AbsoluteBytePos>,
+    expn_data: Arc<UnhashMap<ExpnHash, AbsoluteBytePos>>,
     // Additional information used when decoding hygiene data.
     hygiene_context: HygieneDecodeContext,
     // Maps `ExpnHash`es to their raw value from the *previous*
     // compilation session. This is used as an initial 'guess' when
     // we try to map an `ExpnHash` to its value in the current
     // compilation session.
-    foreign_expn_data: UnhashMap<ExpnHash, u32>,
+    foreign_expn_data: Arc<UnhashMap<ExpnHash, u32>>,
 }
 
 // This type is used only for serialization and deserialization.
-#[derive(Encodable, Decodable)]
+#[derive(Clone, Encodable, Decodable)]
 struct Footer {
     file_index_to_stable_id: FxHashMap<SourceFileIndex, EncodedSourceFileId>,
     query_values_index: Vec<(SerializedDepNodeIndex, AbsoluteBytePos)>,
@@ -155,6 +173,12 @@ impl OnDiskCache {
     pub fn new(sess: &Session, data: Mmap, start_pos: usize) -> Result<Self, ()> {
         assert!(sess.opts.incremental.is_some());
 
+        let key = resident::key(sess);
+        if let Some(archive) = key.as_ref().and_then(|key| resident::lookup(key, &data, start_pos))
+        {
+            return Ok(Self::from_archive(archive));
+        }
+
         let mut decoder = MemDecoder::new(&data, start_pos)?;
 
         // Decode the *position* of the footer, which can be found in the
@@ -167,18 +191,38 @@ impl OnDiskCache {
         let footer: Footer =
             decoder.with_position(footer_pos, |decoder| decode_tagged(decoder, TAG_FILE_FOOTER));
 
-        Ok(Self {
+        if let Some(key) = key {
+            if let Some(archive) = resident::admit(key, &data, start_pos, footer.clone()) {
+                return Ok(Self::from_archive(archive));
+            }
+        }
+        Ok(Self::from_parts(SerializedData::Mapped(data), resident::Indexes::new(footer)))
+    }
+
+    fn from_archive(archive: Arc<resident::Archive>) -> Self {
+        Self::from_parts(SerializedData::Owned(archive.bytes.clone()), archive.indexes.clone())
+    }
+
+    fn from_parts(data: SerializedData, footer: resident::Indexes) -> Self {
+        Self {
             serialized_data: RwLock::new(Some(data)),
             file_index_to_stable_id: footer.file_index_to_stable_id,
             file_index_to_file: Default::default(),
-            query_values_index: footer.query_values_index.into_iter().collect(),
-            side_effects_index: footer.side_effects_index.into_iter().collect(),
+            query_values_index: footer.query_values_index,
+            side_effects_index: footer.side_effects_index,
             alloc_decoding_state: AllocDecodingState::new(footer.interpret_alloc_index),
             syntax_contexts: footer.syntax_contexts,
             expn_data: footer.expn_data,
             foreign_expn_data: footer.foreign_expn_data,
             hygiene_context: Default::default(),
-        })
+        }
+    }
+
+    /// Process-cumulative archive telemetry. Value loads count successful query
+    /// result decoding from owned RAM bytes, not green checks or footer lookups.
+    /// All counters report zero outside the explicitly enabled resident process.
+    pub fn resident_stats() -> ResidentStats {
+        resident::stats()
     }
 
     pub fn new_empty() -> Self {
@@ -189,14 +233,16 @@ impl OnDiskCache {
             query_values_index: Default::default(),
             side_effects_index: Default::default(),
             alloc_decoding_state: AllocDecodingState::new(Vec::new()),
-            syntax_contexts: FxHashMap::default(),
-            expn_data: UnhashMap::default(),
-            foreign_expn_data: UnhashMap::default(),
+            syntax_contexts: Default::default(),
+            expn_data: Default::default(),
+            foreign_expn_data: Default::default(),
             hygiene_context: Default::default(),
         }
     }
 
-    /// Release the serialized backing `Mmap`.
+    /// Release this session's serialized backing, whether mapped or owned.
+    /// A process-resident encoded archive remains independently owned by the
+    /// bounded cache. No session decoding state is retained there.
     pub fn close_serialized_data_mmap(&self) {
         // Obtain a write lock, and replace the mmap with None to drop it.
         *self.serialized_data.write() = None;
@@ -303,18 +349,16 @@ impl OnDiskCache {
             let footer_pos = encoder.position() as u64;
             let query_values_index = mem::take(&mut encoder.query_values_index);
             let side_effects_index = mem::take(&mut encoder.side_effects_index);
-            encoder.encode_tagged(
-                TAG_FILE_FOOTER,
-                &Footer {
-                    file_index_to_stable_id,
-                    query_values_index,
-                    side_effects_index,
-                    interpret_alloc_index,
-                    syntax_contexts,
-                    expn_data,
-                    foreign_expn_data,
-                },
-            );
+            let footer = Footer {
+                file_index_to_stable_id,
+                query_values_index,
+                side_effects_index,
+                interpret_alloc_index,
+                syntax_contexts,
+                expn_data,
+                foreign_expn_data,
+            };
+            encoder.encode_tagged(TAG_FILE_FOOTER, &footer);
 
             // Encode the position of the footer as the last 8 bytes of the
             // file so we know where to look for it.
@@ -323,7 +367,15 @@ impl OnDiskCache {
             // DO NOT WRITE ANYTHING TO THE ENCODER AFTER THIS POINT! The address
             // of the footer must be the last thing in the data stream.
 
-            encoder.finish()
+            let key = resident::key(tcx.sess);
+            let path = key.as_ref().map(|_| encoder.encoder.path().to_owned());
+            let result = encoder.finish();
+            if let Ok(expected_len) = &result {
+                if let (Some(key), Some(path)) = (key, path) {
+                    resident::publish(key, &path, *expected_len, footer);
+                }
+            }
+            result
         })
     }
 
@@ -347,7 +399,12 @@ impl OnDiskCache {
     where
         T: for<'a> Decodable<CacheDecoder<'a, 'tcx>>,
     {
-        self.load_indexed(tcx, dep_node_index, &self.query_values_index)
+        let value = self.load_indexed(tcx, dep_node_index, &self.query_values_index);
+        if value.is_some() && matches!(*self.serialized_data.read(), Some(SerializedData::Owned(_)))
+        {
+            resident::value_loaded();
+        }
+        value
     }
 
     fn load_indexed<'tcx, T>(
