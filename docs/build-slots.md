@@ -74,3 +74,31 @@ This is a contention-specific acceptance test, not a general compile-speed
 claim. Default promotion and broad speed claims still require the comprehensive
 session-weighted synthetic gate described in `bench/README.md`, plus relevant
 real-workload checks. Report a blocked broad gate as blocked.
+
+## Source-sync queues are a separate bottleneck
+
+Target-directory isolation does not remove the local daemon's mirror queue.
+The daemon still protects each source synchronization operation while updating
+the shared mirror, and a large first transfer can delay another workspace.
+Do not attribute this delay to Cargo's build-directory lock.
+
+Background source pushes yield between complete roots to queued builds.
+Optional connection warmups use nonblocking admission: if the mirror is busy
+or a build is queued, they skip that attempt rather than adding another waiter.
+Demand-driven builds still establish their required connection normally.
+
+Watcher work is bounded at two different stages:
+
+- Each kernel-read batch emits a directory notification at most once. All
+  watch additions, removals, and overflow recovery still execute, and a later
+  batch can invalidate the same directory again.
+- The daemon collects an editor burst until a 15 ms quiet interval, a 60 ms
+  collection deadline, or 4,096 unique paths, whichever occurs first. Events
+  not consumed remain queued for the next batch. The deadline bounds collection,
+  not source scanning, transfer time, scheduling delay, or total queue memory.
+
+`justrust test --lib remote_daemon -- --nocapture` covers queue priority,
+nonblocking optional admission, and bounded collection. `justrust test --lib
+remote_watch -- --nocapture` covers notification coalescing and watch mutations.
+These correctness and controlled-work tests do not establish an end-to-end
+compile speedup or remove the need to measure large first-sync contention.
