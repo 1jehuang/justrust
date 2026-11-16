@@ -57,14 +57,17 @@ enum TypedValue<'domain> {
     Mir(&'domain mir::Body<'domain>),
 }
 
-/// Cache ownership and all retained references are bounded by the caller's domain.
+/// Cache-held typed references are bounded by the caller's actual arena domain.
+/// The namespace marker has a separate lifetime: it is not an arena owner and
+/// requiring it to have the arena lifetime would incorrectly demand a static
+/// marker inside a higher-ranked ownership callback.
 /// Only one published generation and one unpublished generation are retained. A failed
 /// revision must be aborted, never published. Publication is an explicit success signal.
 /// No entry, including one staged in the current revision, bypasses authorization.
 /// Budget pressure may discard the entire previous published generation even if the
 /// staging revision later fails. This is a cache miss, not publication of failed data.
-pub struct ResidentValues<'domain> {
-    domain: &'domain ResidentDomain,
+pub struct ResidentValues<'domain, 'identity> {
+    domain: &'identity ResidentDomain,
     generations: Generations<RevisionIdentity, (ResidentKey, ValueKind), TypedValue<'domain>>,
 }
 
@@ -74,8 +77,8 @@ enum ValueKind {
     Mir,
 }
 
-impl<'domain> ResidentValues<'domain> {
-    pub fn new(domain: &'domain ResidentDomain, budget: RetentionBudget) -> Self {
+impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
+    pub fn new(domain: &'identity ResidentDomain, budget: RetentionBudget) -> Self {
         Self { domain, generations: Generations::new(budget) }
     }
 
@@ -266,7 +269,7 @@ mod tests {
     fn actual_typeck_pointer_survives_successful_revision_publication() {
         use std::num::NonZero;
 
-        use rustc_data_structures::sync::Registry;
+        use rustc_data_structures::sync::{Registry, set_dyn_thread_safe_mode};
         use rustc_hir::CRATE_OWNER_ID;
 
         use super::{ResidentDomain, ResidentKey, ResidentValues, TypeckResults};
@@ -274,8 +277,10 @@ mod tests {
         use crate::ty::resident_identity::{CrateIdentity, DefinitionIdentity};
         use crate::ty::with_resident_type_domain;
 
-        // Do not replace another test's worker registry or session globals, and do
-        // not toggle the process-wide dynamic synchronization mode.
+        // Initialize the parallel unit-test process's native interner mode.
+        // The setter is one-way and cannot toggle an existing compiler mode.
+        set_dyn_thread_safe_mode(true);
+        // Do not replace another test's worker registry or session globals.
         std::thread::scope(|scope| {
             scope
                 .spawn(|| {
@@ -314,12 +319,16 @@ mod tests {
                             );
                             let key = ResidentKey {
                                 dep_node: DepNode {
-                                    kind: DepKind::typeck,
+                                    kind: DepKind::typeck_root,
                                     key_fingerprint: super::Fingerprint::new(1u64, 2u64).into(),
                                 },
                                 value_fingerprint: super::Fingerprint::new(3u64, 4u64),
                             };
-                            let actual = domain.alloc_typeck(TypeckResults::new(CRATE_OWNER_ID));
+                            let mut typeck = TypeckResults::new(CRATE_OWNER_ID);
+                            typeck
+                                .node_types_mut()
+                                .insert(rustc_hir::CRATE_HIR_ID, domain.bool_type());
+                            let actual = domain.alloc_typeck(typeck);
                             cache.begin_revision(1, identity.clone(), identity_budget).unwrap();
                             cache
                                 .retain_typeck(key, actual, std::mem::size_of_val(actual))
@@ -333,6 +342,10 @@ mod tests {
                                 let hit = cache.typeck(key, &authorization).unwrap();
                                 assert!(std::ptr::eq(hit, actual));
                                 assert_eq!(hit.hir_owner, CRATE_OWNER_ID);
+                                assert_eq!(
+                                    hit.node_types().get(rustc_hir::CRATE_HIR_ID),
+                                    Some(&domain.bool_type())
+                                );
                                 let mut changed = next.clone();
                                 changed.source.push(b' ');
                                 assert!(old.authorize_reuse(&changed, identity_budget).is_err());

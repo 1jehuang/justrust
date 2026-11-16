@@ -36,7 +36,7 @@ borrowed MIR or type-checking pointers would be unsound.
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller
   still has to construct complete identity material from real compiler state.
-- `ty::resident_values::ResidentValues<'domain>` retains actual borrowed
+- `ty::resident_values::ResidentValues<'domain, 'identity>` retains actual borrowed
   type-checking and MIR objects, not encoded bytes. It stages a revision,
   publishes only on explicit success, and requires authorization before reading
   a previous published generation. It does not extend lifetimes. Entry and
