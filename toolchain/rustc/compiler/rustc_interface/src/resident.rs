@@ -249,6 +249,84 @@ mod tests {
     }
 
     #[test]
+    fn resident_batch_derives_exact_file_revision_identity() {
+        use rustc_middle::ty::resident_compiler_identity::{
+            FrozenSemanticInvocation, build_revision_identity,
+        };
+        use rustc_middle::ty::resident_identity::{Compatibility, IdentityBudget, RevisionGate};
+        use std::io::Write;
+
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "resident_identity_{}_{}.rs",
+            std::process::id(),
+            rand::random::<u128>()
+        ));
+        let mut file =
+            std::fs::OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
+        let fixture = Fixture(path);
+        let source = |revision| match config(revision).input {
+            Input::Str { input, .. } => input,
+            _ => unreachable!(),
+        };
+        file.write_all(source(0).as_bytes()).unwrap();
+        drop(file);
+        let make_config = || {
+            let mut config = config(0);
+            config.input = Input::File(fixture.0.clone());
+            config
+        };
+        let first = make_config();
+        with_resident_compiler_batch(first, |batch, first| {
+            let budget = IdentityBudget {
+                max_crates: 1,
+                max_definitions: 128,
+                max_identity_bytes: 1024 * 1024,
+            };
+            let mut identities = Vec::new();
+            for (revision, config) in [first, make_config(), make_config()].into_iter().enumerate()
+            {
+                if revision == 2 {
+                    std::fs::write(&fixture.0, source(1)).unwrap();
+                }
+                let identity = batch.run(config, |compiler, domain| {
+                    let krate = crate::passes::parse(&compiler.sess);
+                    let (identity, locks) =
+                        crate::passes::create_and_enter_global_ctxt_in_domain(
+                            compiler,
+                            domain,
+                            krate,
+                            |tcx| {
+                                tcx.ensure_ok().analysis(());
+                                build_revision_identity(tcx, FrozenSemanticInvocation {
+                                namespace: b"native-fixed-no-core-test-v1",
+                                options: b"fixed-config(0),same-target,rlib,allow-internal-no-core",
+                                body_revision: b"no-additional-semantic-inputs",
+                            }, budget).expect("complete exact local file identity")
+                            },
+                        )
+                        .expect("available context storage");
+                    assert!(locks.is_none());
+                    identity
+                });
+                identities.push(identity);
+            }
+            assert_eq!(identities[0], identities[1]);
+            assert!(identities[0].authorize_reuse(&identities[1], budget).is_ok());
+            assert_eq!(
+                identities[1].compatibility(&identities[2], budget),
+                Compatibility::IdentityOnly(RevisionGate::SourceChanged)
+            );
+            assert!(identities[1].authorize_reuse(&identities[2], budget).is_err());
+        });
+    }
+
+    #[test]
     fn resident_batch_keeps_project_typeck_alive_across_fresh_contexts() {
         let first = config(0);
         let second = config(1);

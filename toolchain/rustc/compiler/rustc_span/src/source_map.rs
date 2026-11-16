@@ -221,6 +221,15 @@ struct SourceRevisionState {
     revision: usize,
 }
 
+/// Exact pre-normalization text observed by the active native revision loader.
+/// Generated/imported files not loaded through that loader are not represented.
+/// Consumers must independently require complete coverage of their active inputs.
+pub struct ResidentRawSourceFile {
+    pub path: PathBuf,
+    pub file: Arc<SourceFile>,
+    pub raw: String,
+}
+
 struct RevisionSourceFile {
     // Keep the exact, pre-normalization contents. Hashes or normalized text are
     // insufficient: BOM and CRLF changes must allocate a new source version too.
@@ -384,6 +393,46 @@ mod revision_loader_tests {
             .unwrap()
             .contents
             .insert(std::env::current_dir().unwrap().join(name), text.to_string());
+    }
+
+    #[test]
+    fn native_raw_snapshot_is_exact_frozen_bounded_and_revision_local() {
+        let (sm, disk) = setup();
+        assert!(sm.resident_raw_source_files(0).unwrap().is_none());
+        write(&disk, "raw.rs", "\u{feff}old\r\n");
+        write(&disk, "other.rs", "other");
+        let first = {
+            let _revision = sm.begin_resident_source_revision(2, 64, 2).unwrap();
+            let file = sm.load_file(Path::new("raw.rs")).unwrap();
+            sm.load_file(Path::new("other.rs")).unwrap();
+            write(&disk, "raw.rs", "changed on disk");
+            let reads = disk.lock().unwrap().reads;
+            let snapshot = sm.resident_raw_source_files(4096).unwrap().unwrap();
+            assert_eq!(disk.lock().unwrap().reads, reads);
+            let raw = snapshot.iter().find(|entry| entry.path.ends_with("raw.rs")).unwrap();
+            assert_eq!(raw.raw, "\u{feff}old\r\n");
+            assert!(Arc::ptr_eq(&raw.file, &file));
+            assert!(sm.resident_raw_source_files(0).is_err());
+            snapshot
+        };
+        assert!(sm.resident_raw_source_files(4096).is_err());
+        let _revision = sm.begin_resident_source_revision(2, 64, 2).unwrap();
+        assert!(sm.resident_raw_source_files(0).unwrap().unwrap().is_empty());
+        let file = sm.load_file(Path::new("raw.rs")).unwrap();
+        let needed =
+            std::env::current_dir().unwrap().join("raw.rs").as_os_str().as_encoded_bytes().len()
+                + "changed on disk".len();
+        assert!(sm.resident_raw_source_files(needed - 1).is_err());
+        let snapshot = sm.resident_raw_source_files(needed).unwrap().unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].raw, "changed on disk");
+        assert!(Arc::ptr_eq(&snapshot[0].file, &file));
+        assert_eq!(
+            first.iter().find(|entry| entry.path.ends_with("raw.rs")).unwrap().raw,
+            "\u{feff}old\r\n"
+        );
+        assert!(sm.load_file(Path::new("missing.rs")).is_err());
+        assert!(sm.resident_raw_source_files(4096).is_err());
     }
 
     #[test]
@@ -1026,6 +1075,50 @@ impl SourceMap {
         })?;
         Ok(Some(
             active.iter().map(|&index| (index, Arc::clone(&files.source_files[index]))).collect(),
+        ))
+    }
+
+    /// Copy exact frozen raw inputs, without rereading the filesystem. The byte
+    /// budget covers lexical path bytes and raw text before any copies are made.
+    /// This is only a point-in-time loader snapshot, not query authorization or
+    /// proof that generated/imported/otherwise registered inputs are covered.
+    pub fn resident_raw_source_files(
+        &self,
+        max_bytes: usize,
+    ) -> io::Result<Option<Vec<ResidentRawSourceFile>>> {
+        let resident = self.resident_source.lock();
+        if !resident.enabled {
+            return Ok(None);
+        }
+        if !resident.active || resident.failed {
+            return Err(io::Error::other("resident raw inputs are inactive or poisoned"));
+        }
+        let state = resident
+            .state
+            .as_ref()
+            .ok_or_else(|| io::Error::other("resident raw inputs are currently loading"))?;
+        let mut remaining = max_bytes;
+        for (path, entry) in &state.entries {
+            if entry.loaded_revision == state.revision {
+                remaining = remaining
+                    .checked_sub(path.as_os_str().as_encoded_bytes().len())
+                    .and_then(|bytes| bytes.checked_sub(entry.raw.len()))
+                    .ok_or_else(|| {
+                        io::Error::other("resident raw input snapshot budget exceeded")
+                    })?;
+            }
+        }
+        Ok(Some(
+            state
+                .entries
+                .iter()
+                .filter(|(_, entry)| entry.loaded_revision == state.revision)
+                .map(|(path, entry)| ResidentRawSourceFile {
+                    path: path.clone(),
+                    file: Arc::clone(&entry.file),
+                    raw: entry.raw.clone(),
+                })
+                .collect(),
         ))
     }
 

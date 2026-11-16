@@ -1,7 +1,7 @@
 //! Scoped ownership for native live type state.
 //!
-//! This is the lifetime boundary needed by a future multi-revision compiler
-//! executor, not a process-global cache and not an active driver mode. In
+//! This is the lifetime boundary used by the explicit experimental owned
+//! multi-revision executor, not a process-global cache or a production default. In
 //! particular, creating this domain does not make an old `GlobalCtxt` reusable.
 //! Sessions, source/hygiene identities and dependency validation must be brought
 //! under the same executor before queries may reuse these values. The allocation
