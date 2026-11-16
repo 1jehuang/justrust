@@ -3,9 +3,7 @@ use rustc_data_structures::flock::LockedDir;
 
 #[test]
 fn retained_paths_do_not_retain_session_locks() {
-    let dir = rustc_fs_util::TempDirBuilder::new()
-        .tempdir_in(std::env::temp_dir())
-        .unwrap();
+    let dir = rustc_fs_util::TempDirBuilder::new().tempdir_in(std::env::temp_dir()).unwrap();
     let old_path = dir.path().join("old");
     let new_path = dir.path().join("working");
     let old_lock = dir.path().join("old.lock");
@@ -30,15 +28,9 @@ fn retained_paths_do_not_retain_session_locks() {
 
     let _old = LockedDir::try_lock(old_path.clone(), &old_lock, false, true).unwrap();
     let _new = LockedDir::try_lock(new_path.clone(), &new_lock, false, true).unwrap();
-    assert_eq!(
-        old_dep_graph_path(&retained),
-        Some(old_path.join(DEP_GRAPH_FILENAME))
-    );
+    assert_eq!(old_dep_graph_path(&retained), Some(old_path.join(DEP_GRAPH_FILENAME)));
     assert_eq!(dep_graph_path(&retained), new_path.join(DEP_GRAPH_FILENAME));
-    assert_eq!(
-        staging_dep_graph_path(&retained),
-        new_path.join(STAGING_DEP_GRAPH_FILENAME)
-    );
+    assert_eq!(staging_dep_graph_path(&retained), new_path.join(STAGING_DEP_GRAPH_FILENAME));
 }
 
 #[test]
@@ -50,14 +42,8 @@ fn paths_without_previous_session_have_no_old_artifacts() {
     assert_eq!(old_dep_graph_path(&paths), None);
     assert_eq!(old_work_products_path(&paths), None);
     assert_eq!(old_query_cache_path(&paths), None);
-    assert_eq!(
-        work_products_path(&paths),
-        PathBuf::from("working").join(WORK_PRODUCTS_FILENAME)
-    );
-    assert_eq!(
-        query_cache_path(&paths),
-        PathBuf::from("working").join(QUERY_CACHE_FILENAME)
-    );
+    assert_eq!(work_products_path(&paths), PathBuf::from("working").join(WORK_PRODUCTS_FILENAME));
+    assert_eq!(query_cache_path(&paths), PathBuf::from("working").join(QUERY_CACHE_FILENAME));
 }
 
 #[test]
@@ -116,9 +102,7 @@ fn test_find_source_directory_in_iter() {
 
 #[test]
 fn test_replace_hard_link_with_copy_unshares_hard_link() {
-    let dir = rustc_fs_util::TempDirBuilder::new()
-        .tempdir_in(std::env::temp_dir())
-        .unwrap();
+    let dir = rustc_fs_util::TempDirBuilder::new().tempdir_in(std::env::temp_dir()).unwrap();
     let file = dir.path().join("file");
     let link = dir.path().join("link");
     std_fs::write(&file, b"original").unwrap();
