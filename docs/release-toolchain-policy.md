@@ -41,11 +41,15 @@ The owned toolchain publication path currently verifies
 on the hosted Linux x86_64 machine using that selected compiler. Owned host-only
 bundles provide their matching Rust library sources, so release builds use
 `-Zbuild-std` to compile musl target libraries with that compiler rather than
-mixing in upstream prebuilt Rust libraries. Those builds use the existing
-pinned Zig linker/C-runtime path with `-Clink-self-contained=no`, so Zig supplies
-musl libc/startup objects absent from the host-only compiler bundle. This does
-not replace the selected Rust compiler or its sources. Official exact compiler
-IDs retain the native musl build path with their own target std. Missing sources
+mixing in upstream prebuilt Rust libraries. Those builds use the owned native
+`rust-lld` linker. A separately pinned stock bootstrap sysroot supplies only the
+11 allowlisted musl C ABI startup objects, libc and unwind archives. The helper
+checks their architecture, format and hashes, stages them into the build inputs,
+and binds the staged manifest to the frozen policy. No stock Rust `.rlib` files
+are accepted. ARM retains the Cortex-A53 erratum workaround supported by the
+native linker. The selected compiler builds all Rust libraries from its own
+sources. Official exact compiler IDs retain the native musl build path with their
+own target std. Missing sources
 or an unusable compiler fail the build. This does not
 establish owned compiler support on Darwin or Windows. Those three release
 artifacts explicitly use the cloud's `RELEASE_COMPAT_TOOLCHAIN` exact stock
@@ -56,11 +60,12 @@ and correctness audit, not changing a label here.
 
 ## Bootstrap is not the release compiler
 
-`ci/install-hosted-client.sh` builds the immutable reviewed hosted transport
-client using stock `1.99.0`. That compiler is frozen as `bootstrap` independently
-of the service selection. It does not compile the Linux release binary. The
-bootstrap has `JUSTRUST_RELEASE_BUILD=0`, while the candidate release has
-`JUSTRUST_RELEASE_BUILD=1`. Release jobs explicitly override ambient/project
+The hosted transport client is downloaded from its explicitly pinned published
+release and verified before use. Stock `1.99.0` remains frozen as `bootstrap`
+independently of the service selection and supplies the C-only musl ABI inputs.
+The helper checks the actual bootstrap compiler version before locating those
+inputs. That compiler does not compile the Linux release binary. The candidate
+release has `JUSTRUST_RELEASE_BUILD=1`. Release jobs explicitly override ambient/project
 compiler selections with the frozen compiler and require toolchain installation
 success plus hosted routing. They never modify service policy to make a build
 pass.
@@ -71,7 +76,9 @@ Linux jobs check their successful build's recorder metadata, requiring hosted
 execution, the selected toolchain ID, and the actual recorded compiler path in
 that toolchain prefix. `compiler-<target>.json` includes the recorded run ID,
 compiler path, source revision, binary SHA-256 and complete frozen selection
-with its SHA-256. This records the
+with its SHA-256. Owned compiler receipts also include the C-only input manifest
+and require the recorded build command to reference that exact staged path.
+This records the
 compiler actually used, rather than merely echoing the requested environment.
 It is recorder provenance, not a hardware-backed or signed supply-chain
 attestation. A missing/mismatching recording refuses release packaging.

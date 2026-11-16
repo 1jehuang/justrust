@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 import re
@@ -85,6 +86,62 @@ def environment(snapshot, target):
             "JUSTRUST_REMOTE_REQUIRED": "1", "RUSTUP_TOOLCHAIN": snapshot["bootstrap"] if target.endswith("linux-musl") else selected(snapshot, target)}
 
 
+C_FILES = frozenset(("Scrt1.o", "crt1.o", "crtbegin.o", "crtbeginS.o", "crtend.o", "crtendS.o", "crti.o", "crtn.o", "libc.a", "libunwind.a", "rcrt1.o"))
+
+
+def c_files(directory, target):
+    if target not in TARGETS[:2]:
+        raise ValueError("C runtime is only supported for musl release targets")
+    files = {path.name for path in directory.iterdir()}
+    if files not in (C_FILES, C_FILES | {"manifest.json"}):
+        raise ValueError("C runtime must contain exactly the approved C-only files, never Rust rlibs")
+    machine = 62 if target.startswith("x86_64-") else 183
+    hashes = {}
+    for name in sorted(C_FILES):
+        path = directory / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("C runtime files must be regular, non-symlink files")
+        data = path.read_bytes()
+        if name.endswith(".o"):
+            if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or int.from_bytes(data[18:20], "little") != machine:
+                raise ValueError("C startup object architecture does not match release target")
+        elif not data.startswith(b"!<arch>\n"):
+            raise ValueError("C runtime library is not an archive")
+        hashes[name] = hashlib.sha256(data).hexdigest()
+    return hashes
+
+
+def installed_c_runtime(snapshot, target):
+    version = subprocess.run(["rustup", "run", snapshot["bootstrap"], "rustc", "-vV"], check=True, stdout=subprocess.PIPE, text=True).stdout
+    if f"release: {snapshot['bootstrap']}" not in version.splitlines():
+        raise ValueError("C runtime source compiler is not the frozen exact bootstrap")
+    sysroot = subprocess.run(["rustup", "run", snapshot["bootstrap"], "rustc", "--print", "sysroot"], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+    return Path(sysroot) / "lib/rustlib" / target / "lib/self-contained"
+
+
+def stage_c_runtime(snapshot, target, source, destination):
+    hashes = c_files(source, target)
+    if destination.exists():
+        raise ValueError("C runtime destination already exists")
+    destination.mkdir(parents=True)
+    for name in sorted(C_FILES):
+        shutil.copyfile(source / name, destination / name)
+    manifest = {"schema": 1, "kind": "c-abi-only", "toolchain": snapshot["bootstrap"],
+                "target": target, "policy_sha256": digest(snapshot), "files": hashes}
+    (destination / "manifest.json").write_text(canonical(manifest) + "\n")
+    check_c_runtime(snapshot, target, destination)
+    return manifest
+
+
+def check_c_runtime(snapshot, target, directory):
+    manifest = json.loads((directory / "manifest.json").read_text(), object_pairs_hook=pairs)
+    expected = {"schema": 1, "kind": "c-abi-only", "toolchain": snapshot["bootstrap"],
+                "target": target, "policy_sha256": digest(snapshot), "files": c_files(directory, target)}
+    if manifest != expected or type(manifest.get("schema")) is not int:
+        raise ValueError("C runtime identity or file hash drift")
+    return manifest
+
+
 def attest(snapshot, target, since, cwd, runs, binary=None):
     want = selected(snapshot, target)
     matches = []
@@ -113,7 +170,7 @@ def attest(snapshot, target, since, cwd, runs, binary=None):
             raise ValueError("recorded actual compiler path does not match policy")
         matches.append({"run_id": m["id"], "compiler": compiler, "toolchain": want,
                         "target": target, "policy_sha256": digest(snapshot), "place": "hosted",
-                        "selection": snapshot})
+                        "selection": snapshot, "command": args})
     if len(matches) != 1:
         raise ValueError("expected exactly one matching successful hosted release build")
     if binary is not None:
@@ -128,7 +185,7 @@ def main():
     f.add_argument("--url", default="https://build.jcode.sh/v1/toolchain/current?release=1")
     f.add_argument("--output", required=True)
     f.add_argument("--protocol-source", type=Path, required=True)
-    for name in ("env", "attest"):
+    for name in ("env", "attest", "stage-c-runtime"):
         a = sub.add_parser(name)
         a.add_argument("--snapshot", required=True)
         a.add_argument("--sha256", required=True)
@@ -136,6 +193,7 @@ def main():
         a.add_argument("--output", required=True)
         a.add_argument("--protocol-source", type=Path, required=True)
         if name == "attest":
+            a.add_argument("--c-runtime", type=Path)
             a.add_argument("--since", type=float, required=True)
             a.add_argument("--binary", type=Path, required=True)
             a.add_argument("--source-sha", required=True)
@@ -156,11 +214,20 @@ def main():
         check_protocol_source(snapshot["policy"], args.protocol_source)
         if args.command == "env":
             Path(args.output).write_text("".join(f"{k}={v}\n" for k, v in environment(snapshot, args.target).items()))
+        elif args.command == "stage-c-runtime":
+            stage_c_runtime(snapshot, args.target, installed_c_runtime(snapshot, args.target), Path(args.output))
         else:
             if not re.fullmatch(r"[0-9a-f]{40}", args.source_sha):
                 raise ValueError("release source must be an exact commit SHA")
             result = attest(snapshot, args.target, args.since, Path.cwd(), args.runs, args.binary)
             result["source_revision"] = args.source_sha
+            if selected(snapshot, args.target).startswith("jr-") and args.c_runtime is None:
+                raise ValueError("owned release requires pinned C-only runtime provenance")
+            if args.c_runtime is not None:
+                result["c_runtime"] = check_c_runtime(snapshot, args.target, args.c_runtime)
+                native = "-Lnative=" + str(args.c_runtime)
+                if not any(native in arg for arg in result["command"]):
+                    raise ValueError("recorded release did not use staged C runtime")
             Path(args.output).write_text(canonical(result) + "\n")
 
 

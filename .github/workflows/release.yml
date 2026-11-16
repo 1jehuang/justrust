@@ -172,6 +172,8 @@ jobs:
             exit 0
           fi
           binary="target/${{ matrix.target }}/release/justrust"
+          # Matrix values expand to literals during shellcheck.
+          # shellcheck disable=SC2193
           if [[ "${{ matrix.target }}" == *windows* ]]; then binary="$binary.exe"; fi
           version=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           [[ $("$binary" --version) == "justrust $version" ]]
@@ -186,8 +188,9 @@ jobs:
       - name: Install hosted Linux prerequisites
         if: ${{ matrix.zig }}
         run: |
-          # Bootstrap compiler only. The release compiler is the frozen policy.
-          rustup toolchain install 1.99.0 --profile minimal
+          # Stock bootstrap also supplies pinned C-only musl ABI objects.
+          # It never supplies Rust rlibs to the service-selected compiler.
+          rustup toolchain install 1.99.0 --profile minimal --target "${{ matrix.target }}"
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
           git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
@@ -204,22 +207,38 @@ jobs:
           set -euo pipefail
           since=$(date +%s)
           justrust remote use hosted
-          # Owned bundles contain matching Rust sources, not foreign target std
-          # or target C startup objects. Build Rust libraries with the selected
-          # compiler and let pinned Zig own musl libc/startup, not upstream std.
+          # Native selected-compiler linking preserves ARM erratum mitigations.
+          # Only C ABI objects are staged from the exact stock bootstrap. Rust
+          # target libraries are rebuilt from the selected owned compiler source.
           build_std=()
-          build_command=build
+          rustflags=()
+          c_runtime_attest=()
           if [[ "$JUSTRUST_TOOLCHAIN" == jr-* ]]; then
-            build_command=zigbuild
-            build_std=(-Zbuild-std --config 'target.${{ matrix.target }}.rustflags=["-Clink-self-contained=no"]')
+            c_runtime="$PWD/.release-c-runtime/${{ matrix.target }}"
+            python3 "$RUNNER_TEMP/release-policy/release-policy.py" stage-c-runtime \
+              --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
+              --sha256 "$POLICY_SHA256" --protocol-source src/toolchain_policy.rs \
+              --target "${{ matrix.target }}" --output "$c_runtime"
+            build_std=(-Zbuild-std)
+            rustflags+=("-Lnative=$c_runtime")
+            c_runtime_attest=(--c-runtime "$c_runtime")
+          fi
+          # Matrix values expand to literals during shellcheck.
+          # shellcheck disable=SC2193
+          if [[ "${{ matrix.target }}" == aarch64-* ]]; then
+            rustflags+=("-Clink-arg=--fix-cortex-a53-843419")
+          fi
+          if (( ${#rustflags[@]} )); then
+            flags_json=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${rustflags[@]}")
+            build_std+=(--config "target.${{ matrix.target }}.rustflags=$flags_json")
           fi
           # shellcheck disable=SC2086
-          justrust "$build_command" --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
+          justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
           mkdir -p dist
           python3 "$RUNNER_TEMP/release-policy/release-policy.py" attest \
             --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
             --sha256 "$POLICY_SHA256" --protocol-source src/toolchain_policy.rs --target "${{ matrix.target }}" \
-            --source-sha '${{ needs.preflight.outputs.sha }}' \
+            --source-sha '${{ needs.preflight.outputs.sha }}' "${c_runtime_attest[@]}" \
             --since "$since" --binary "target/${{ matrix.target }}/release/justrust" --output "dist/compiler-${{ matrix.target }}.json"
           version=$(cargo +1.99.0 metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "justrust") | .version')
           bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"

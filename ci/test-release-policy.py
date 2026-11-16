@@ -118,17 +118,17 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("JUSTRUST_TOOLCHAIN: 1.99.0", workflow)
         self.assertIn('--bin justrust "${build_std[@]}" $DIST_FLAGS', workflow)
         self.assertIn('if [[ "$JUSTRUST_TOOLCHAIN" == jr-* ]]; then', workflow)
-        self.assertIn('build_command=zigbuild', workflow)
-        self.assertIn('-Clink-self-contained=no', workflow)
-        self.assertIn('build_std=(-Zbuild-std --config', workflow)
+        self.assertIn('stage-c-runtime', workflow)
+        self.assertIn('-Clink-arg=--fix-cortex-a53-843419', workflow)
+        self.assertIn('build_std=(-Zbuild-std)', workflow)
+        self.assertNotIn('build_command=zigbuild', workflow)
         self.assertIn('!/toolchain/', workflow)
         self.assertIn("check-linux-release.sh", workflow)
         self.assertIn('lto="thin"', workflow)
         self.assertIn('ref: ${{ needs.preflight.outputs.sha }}', workflow)
         self.assertIn('[[ "$current" == "$SHA" ]]', workflow)
-        bootstrap = Path(__file__).with_name("install-hosted-client.sh").read_text()
-        self.assertIn("JUSTRUST_RELEASE_BUILD=0", bootstrap)
-        self.assertIn("cargo +1.99.0 install", bootstrap)
+        self.assertIn('rustup toolchain install 1.99.0 --profile minimal --target', workflow)
+        self.assertIn('It never supplies Rust rlibs to the service-selected compiler', workflow)
 
     @unittest.skipUnless(shutil.which("bash"), "bash required for workflow command test")
     def test_workflow_uses_frozen_compiler_for_both_linux_targets(self):
@@ -136,16 +136,67 @@ class ReleasePolicyTests(unittest.TestCase):
         command = workflow.split("          build_std=()", 1)[1].split("          mkdir -p dist", 1)[0]
         command = "build_std=()\n" + textwrap.dedent(command)
         for target in p.TARGETS[:2]:
-            for compiler, subcommand in (("jr-ac20de5e7921", "zigbuild"), ("1.99.0", "build")):
-                env = dict(os.environ, JUSTRUST_TOOLCHAIN=compiler, DIST_FLAGS="")
-                script = 'set -euo pipefail\njustrust() { printf "%s\\n" "$@"; }\n' + command.replace("${{ matrix.target }}", target)
+            for compiler in ("jr-ac20de5e7921", "1.99.0"):
+                env = dict(os.environ, JUSTRUST_TOOLCHAIN=compiler, DIST_FLAGS="", RUNNER_TEMP="/unused", POLICY_SHA256=self.sha)
+                script = 'set -euo pipefail\njustrust() { printf "%s\\n" "$@"; }\npython3() { if [[ $1 == -c ]]; then command python3 "$@"; fi; }\n' + command.replace("${{ matrix.target }}", target)
                 result = p.subprocess.run(["bash", "-c", script], env=env, text=True, stdout=p.subprocess.PIPE, check=True)
                 args = result.stdout.splitlines()
-                self.assertEqual(args[0], subcommand)
+                self.assertEqual(args[0], "build")
                 self.assertEqual(args[args.index("--target") + 1], target)
                 self.assertEqual("-Zbuild-std" in args, compiler.startswith("jr-"))
-                if compiler.startswith("jr-"):
-                    self.assertIn(f'target.{target}.rustflags=["-Clink-self-contained=no"]', args)
+                flags = []
+                if "--config" in args:
+                    config = args[args.index("--config") + 1]
+                    key, value = config.split("=", 1)
+                    self.assertEqual(key, f"target.{target}.rustflags")
+                    flags = json.loads(value)
+                self.assertEqual("-Clink-arg=--fix-cortex-a53-843419" in flags, target.startswith("aarch64-"))
+                self.assertEqual(any(flag.startswith("-Lnative=") for flag in flags), compiler.startswith("jr-"))
+
+    def c_source(self, directory, target):
+        directory.mkdir()
+        header = bytearray(64)
+        header[:6] = b"\x7fELF\x02\x01"
+        header[18:20] = (62 if target.startswith("x86_64-") else 183).to_bytes(2, "little")
+        for name in p.C_FILES:
+            (directory / name).write_bytes(header if name.endswith(".o") else b"!<arch>\n")
+        return directory
+
+    def test_c_runtime_is_c_only_target_matched_and_hash_bound(self):
+        for target in p.TARGETS[:2]:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = self.c_source(root / "source", target)
+                destination = root / "staged"
+                manifest = p.stage_c_runtime(self.snapshot, target, source, destination)
+                self.assertEqual(manifest["kind"], "c-abi-only")
+                self.assertEqual(manifest["toolchain"], self.snapshot["bootstrap"])
+                self.assertEqual(p.check_c_runtime(self.snapshot, target, destination), manifest)
+                self.assertFalse(any(path.suffix == ".rlib" for path in destination.iterdir()))
+                with self.assertRaises(ValueError):
+                    p.stage_c_runtime(self.snapshot, target, source, destination)
+                (destination / "libc.a").write_bytes(b"!<arch>\nmodified")
+                with self.assertRaisesRegex(ValueError, "drift"):
+                    p.check_c_runtime(self.snapshot, target, destination)
+                (source / "libstd.rlib").write_bytes(b"not allowed")
+                with self.assertRaisesRegex(ValueError, "C-only"):
+                    p.stage_c_runtime(self.snapshot, target, source, root / "bad")
+
+    def test_c_runtime_refuses_wrong_architecture_symlinks_and_unpinned_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.c_source(root / "source", p.TARGETS[0])
+            with self.assertRaisesRegex(ValueError, "architecture"):
+                p.c_files(source, p.TARGETS[1])
+            (source / "crt1.o").unlink()
+            (source / "crt1.o").symlink_to(source / "crti.o")
+            with self.assertRaisesRegex(ValueError, "non-symlink"):
+                p.c_files(source, p.TARGETS[0])
+        response = p.subprocess.CompletedProcess([], 0, stdout="release: 1.100.0\n")
+        with patch.object(p.subprocess, "run", return_value=response) as run:
+            with self.assertRaisesRegex(ValueError, "frozen exact"):
+                p.installed_c_runtime(self.snapshot, p.TARGETS[0])
+            self.assertEqual(run.call_args.args[0][2], self.snapshot["bootstrap"])
 
     def test_attests_actual_recorded_compiler_and_refuses_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
