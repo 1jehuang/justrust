@@ -128,10 +128,12 @@ class TypedValidationTests(unittest.TestCase):
         argv = typed.arguments(Path('/private'))
         self.assertTrue(any(a.startswith('-Cincremental=') for a in argv))
         self.assertNotIn('--extern', argv)
+        self.assertIn('--emit=llvm-ir=/private/fixture.ll,mir=/private/fixture.mir', argv)
+        self.assertNotIn('-o', argv)
 
 
 class CaptureTests(unittest.TestCase):
-    def setup_mock(self, root, bad_hits=False, close_error=False):
+    def setup_mock(self, root, bad_hits=False, close_error=False, mir_data=b'mock MIR\n'):
         class Worker:
             def __init__(self, compiler, cwd, mode, timeout):
                 self.process = type('Process', (), {'pid': 123})()
@@ -162,6 +164,7 @@ class CaptureTests(unittest.TestCase):
             (cwd / 'incremental').mkdir(exist_ok=True)
             if expected is not None:
                 (cwd / 'fixture.ll').write_bytes(ir(*expected))
+                (cwd / 'fixture.mir').write_bytes(mir_data)
             return dict(status=0 if expected is not None else 1,
                         stdout_b64='', stderr_b64='' if expected is not None else 'ZXJyb3IK')
 
@@ -191,6 +194,7 @@ class CaptureTests(unittest.TestCase):
                 receipt = json.loads((root / name / 'receipt.json').read_text())
                 self.assertEqual(len(receipt['observations']), len(typed.cases()))
                 self.assertTrue((root / name / '00-resident.ll').exists())
+                self.assertTrue((root / name / '00-resident.mir').exists())
                 self.assertTrue((root / name / 'fresh-incremental').exists())
                 self.assertTrue((root / name / 'resident-incremental').exists())
 
@@ -208,6 +212,18 @@ class CaptureTests(unittest.TestCase):
             failed = json.loads((root / 'typed' / 'receipt.json').read_text())
             self.assertEqual(failed['observations'][-1]['name'], 'unchanged')
             self.assertIn('resident', failed['observations'][-1])
+
+    def test_explicit_mir_demand_requires_nonempty_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worker, fresh = self.setup_mock(root, mir_data=b'')
+            with patch.object(typed, 'TypedResident', worker), \
+                    patch.object(typed.shared, 'run', fresh):
+                with self.assertRaisesRegex(AssertionError, 'empty artifact'):
+                    typed.capture_mode(root / 'compiler', root / 'mode', 'control', 1)
+            report = json.loads((root / 'mode' / 'receipt.json').read_text())
+            self.assertEqual(report['verdict'], 'failed')
+            self.assertEqual((root / 'mode' / '00-fresh.mir').read_bytes(), b'')
 
     def test_shutdown_failure_is_failed_receipt(self):
         with tempfile.TemporaryDirectory() as directory:

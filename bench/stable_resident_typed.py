@@ -103,8 +103,8 @@ def arguments(root):
     return [str(root / 'fixture.rs'), '--crate-name=stable_resident_typed_fixture',
             '--crate-type=lib', '--edition=2024', '-Zcodegen-backend=llvm',
             '-Copt-level=0', '-Cdebuginfo=0', '-Cpanic=abort',
-            '-Cincremental=' + str(root / 'incremental'), '--emit=llvm-ir',
-            '-o', str(root / 'fixture.ll')]
+            '-Cincremental=' + str(root / 'incremental'),
+            '--emit=llvm-ir=' + str(root / 'fixture.ll') + ',mir=' + str(root / 'fixture.mir')]
 
 
 def validate_live(response, previous, mode, reusable):
@@ -188,7 +188,9 @@ def capture_mode(compiler, root, mode, timeout):
                 if bank.exists():
                     bank.rename(active)
                 artifact = root / 'fixture.ll'
+                mir_artifact = root / 'fixture.mir'
                 artifact.unlink(missing_ok=True)
+                mir_artifact.unlink(missing_ok=True)
                 try:
                     record = (shared.run([compiler, *result['argv']], timeout,
                         cwd=root, env=environment(mode)) if kind == 'fresh'
@@ -201,6 +203,13 @@ def capture_mode(compiler, root, mode, timeout):
                         record['artifact'] = dict(path=str(saved),
                             sha256=hashlib.sha256(data).hexdigest())
                         record['artifact']['oracle'] = artifact_oracle(data, expected)
+                        mir_data = mir_artifact.read_bytes()
+                        saved_mir = root / ('%02d-%s.mir' % (index, kind))
+                        saved_mir.write_bytes(mir_data)
+                        if not mir_data:
+                            raise AssertionError('Explicit MIR demand produced an empty artifact')
+                        record['mir_artifact'] = dict(path=str(saved_mir),
+                            sha256=hashlib.sha256(mir_data).hexdigest())
                 finally:
                     if active.exists():
                         active.rename(bank)
