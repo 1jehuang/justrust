@@ -25,32 +25,68 @@ pub fn last_index_entry() -> Option<IndexEntry> {
 }
 
 fn last_entry_in(path: &std::path::Path) -> Option<IndexEntry> {
-    use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
-    let mut window: u64 = 64 * 1024;
-    loop {
-        let start = len.saturating_sub(window);
-        f.seek(SeekFrom::Start(start)).ok()?;
-        let mut buf = Vec::new();
-        f.by_ref().take(len - start).read_to_end(&mut buf).ok()?;
-        let text = String::from_utf8_lossy(&buf);
-        // The first line of a partial window may be cut; skip it unless the
-        // window starts at the beginning of the file.
-        let skip = usize::from(start > 0);
-        let lines: Vec<&str> = text.lines().skip(skip).collect();
-        if let Some(e) = lines
-            .iter()
-            .rev()
-            .find_map(|l| serde_json::from_str(l).ok())
-        {
-            return Some(e);
-        }
-        if start == 0 {
-            return None;
-        }
-        window *= 4;
+    read_recent_entries(&mut f, 1, |_| true).ok()?.pop()
+}
+
+/// Visit complete records newest first, stopping once enough match. The index
+/// is append-only and may be tens of MB: dashboard polling must not reparse its
+/// entire history to display a bounded tail. Keep one block and, when a record
+/// crosses blocks, its reversed suffix. Every byte is read at most once, even
+/// for unusually long records or filters that must search the whole history.
+fn read_recent_entries(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+    limit: usize,
+    mut keep: impl FnMut(&mut IndexEntry) -> bool,
+) -> std::io::Result<Vec<IndexEntry>> {
+    use std::io::SeekFrom;
+
+    let mut entries = Vec::new();
+    if limit == 0 {
+        return Ok(entries);
     }
+    let mut end = reader.seek(SeekFrom::End(0))?;
+    let mut suffix = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(64 * 1024);
+        let mut block = vec![0; (end - start) as usize];
+        reader.seek(SeekFrom::Start(start))?;
+        reader.read_exact(&mut block)?;
+        let mut lines = block.rsplit(|b| *b == b'\n').peekable();
+        while let Some(part) = lines.next() {
+            if start > 0 && lines.peek().is_none() {
+                // The first bytes of a noninitial block may be a partial
+                // record. Save them until the previous block supplies its
+                // beginning. Reversed accumulation avoids repeatedly copying
+                // a large line when it spans many blocks.
+                suffix.extend(part.iter().rev().copied());
+                break;
+            }
+            let joined;
+            let line = if suffix.is_empty() {
+                part
+            } else {
+                joined = part
+                    .iter()
+                    .copied()
+                    .chain(suffix.drain(..).rev())
+                    .collect::<Vec<_>>();
+                &joined
+            };
+            if let Ok(mut entry) = serde_json::from_slice(line)
+                && keep(&mut entry)
+            {
+                entries.push(entry);
+                if entries.len() == limit {
+                    entries.reverse();
+                    return Ok(entries);
+                }
+            }
+        }
+        end = start;
+    }
+    entries.reverse();
+    Ok(entries)
 }
 
 pub(crate) fn ago(t: f64) -> String {
@@ -126,33 +162,30 @@ pub fn classify_saved(id: &str) -> Option<crate::failure::Failure> {
 
 pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<()> {
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
-    let mut runs: Vec<IndexEntry> = load_index()
-        .into_iter()
-        .filter(|r| !here || r.cwd.starts_with(&cwd))
-        .collect();
-    if filter != FailFilter::All {
-        // Classify newest first and stop once `limit` matches are found:
-        // old runs may need their saved output read.
-        let mut kept = Vec::new();
-        for mut r in runs.into_iter().rev() {
-            if kept.len() >= limit {
-                break;
-            }
-            r.failure = failure_class(&r);
-            let keep = match (filter, r.failure) {
-                (FailFilter::Failed, _) => r.exit != 0,
-                (FailFilter::Ours, Some(c)) => c.is_ours(),
-                _ => false,
-            };
-            if keep {
-                kept.push(r);
-            }
-        }
-        kept.reverse();
-        runs = kept;
-    }
-    let skip = runs.len().saturating_sub(limit);
-    runs.drain(..skip);
+    let runs = paths::index_file()
+        .ok()
+        .and_then(|p| std::fs::File::open(p).ok())
+        .and_then(|mut f| {
+            read_recent_entries(&mut f, limit, |r| {
+                if here && !r.cwd.starts_with(&cwd) {
+                    return false;
+                }
+                if filter == FailFilter::All {
+                    return true;
+                }
+                // Classify only matching workspaces, newest first. Legacy
+                // failures can need saved output, so never inspect runs older
+                // than the requested number of matches.
+                r.failure = failure_class(r);
+                match (filter, r.failure) {
+                    (FailFilter::Failed, _) => r.exit != 0,
+                    (FailFilter::Ours, Some(c)) => c.is_ours(),
+                    _ => false,
+                }
+            })
+            .ok()
+        })
+        .unwrap_or_default();
     if json {
         for r in &runs {
             println!("{}", serde_json::to_string(r)?);
@@ -802,6 +835,167 @@ mod tail_tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn recent_entries_match_full_scan_with_filters_and_block_boundaries() {
+        let mut text = String::new();
+        for i in 0..450 {
+            let entry = IndexEntry {
+                id: format!("run-{i}"),
+                cwd: if i % 7 == 0 { "/wanted" } else { "/other" }.into(),
+                // Include multi-block records and non-ASCII bytes at block
+                // boundaries, not just the usual short ASCII index lines.
+                args: vec![if i % 97 == 0 {
+                    "界🦀".repeat(25_000)
+                } else {
+                    format!("test-{i}")
+                }],
+                ..Default::default()
+            };
+            text.push_str(&serde_json::to_string(&entry).unwrap());
+            text.push_str(if i % 3 == 0 { "\r\n" } else { "\n" });
+            if i % 43 == 0 {
+                text.push_str("not json\n\n");
+            }
+        }
+        text.push_str("{\"id\":\"torn");
+        let full: Vec<IndexEntry> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        for only_here in [false, true] {
+            for limit in [0, 1, 2, 63, 200, 1000] {
+                let mut expected: Vec<_> = full
+                    .iter()
+                    .rev()
+                    .filter(|e| !only_here || e.cwd == "/wanted")
+                    .take(limit)
+                    .cloned()
+                    .collect();
+                expected.reverse();
+                let actual =
+                    read_recent_entries(&mut std::io::Cursor::new(text.as_bytes()), limit, |e| {
+                        !only_here || e.cwd == "/wanted"
+                    })
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(&actual).unwrap(),
+                    serde_json::to_value(&expected).unwrap(),
+                    "here={only_here}, limit={limit}"
+                );
+            }
+        }
+        // No newline at EOF, exact block boundaries, blank lines, and a
+        // single record spanning several blocks must all retain valid rows.
+        for padding in [0, 1, 65_535, 65_536, 65_537] {
+            let text = "\n".repeat(padding) + &line("only");
+            let result =
+                read_recent_entries(&mut std::io::Cursor::new(text.as_bytes()), 1, |_| true)
+                    .unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].id, "only");
+        }
+        let empty = read_recent_entries(&mut std::io::Cursor::new([]), 10, |_| true).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn recent_entries_read_only_needed_blocks_and_classify_newest_first() {
+        struct Counted {
+            cursor: std::io::Cursor<Vec<u8>>,
+            bytes: usize,
+        }
+        impl std::io::Read for Counted {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.cursor.read(out)?;
+                self.bytes += n;
+                Ok(n)
+            }
+        }
+        impl std::io::Seek for Counted {
+            fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+                self.cursor.seek(to)
+            }
+        }
+        let text: String = (0..3000)
+            .map(|i| line(&format!("run-{i}")) + "\n")
+            .collect();
+        assert!(text.len() > 64 * 1024);
+        let mut reader = Counted {
+            cursor: std::io::Cursor::new(text.into_bytes()),
+            bytes: 0,
+        };
+        let zero =
+            read_recent_entries(&mut reader, 0, |_| panic!("zero limit parsed a row")).unwrap();
+        assert!(zero.is_empty());
+        assert_eq!(reader.bytes, 0);
+        let mut visited = Vec::new();
+        let result = read_recent_entries(&mut reader, 2, |e| {
+            visited.push(e.id.clone());
+            // An expensive filter can annotate selected rows, as the failure
+            // classifier does, without revisiting them as blocks are read.
+            e.failure = Some(crate::failure::Class::Infra);
+            e.id.ends_with('8') || e.id.ends_with('6')
+        })
+        .unwrap();
+        assert_eq!(visited, ["run-2999", "run-2998", "run-2997", "run-2996"]);
+        assert_eq!(result[0].id, "run-2996");
+        assert_eq!(result[1].id, "run-2998");
+        assert!(
+            result
+                .iter()
+                .all(|e| e.failure == Some(crate::failure::Class::Infra))
+        );
+        assert_eq!(reader.bytes, 64 * 1024);
+
+        reader.bytes = 0;
+        let mut visited = 0;
+        let none = read_recent_entries(&mut reader, 1, |_| {
+            visited += 1;
+            false
+        })
+        .unwrap();
+        assert!(none.is_empty());
+        assert_eq!(visited, 3000);
+        assert_eq!(reader.bytes, reader.cursor.get_ref().len());
+    }
+
+    /// Focused retained-history diagnostic, not a compiler speed benchmark.
+    #[test]
+    #[ignore = "read-only full-versus-bounded history CPU diagnostic"]
+    fn recent_entries_history_diagnostic() {
+        let path = std::env::var_os("JUSTRUST_HISTORY_BENCH_INDEX")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| paths::index_file().unwrap());
+        let mut full_samples = Vec::new();
+        let mut tail_samples = Vec::new();
+        for _ in 0..7 {
+            let start = std::time::Instant::now();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let mut full: Vec<IndexEntry> = text
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            full.drain(..full.len().saturating_sub(200));
+            full_samples.push(start.elapsed().as_nanos());
+            let mut file = std::fs::File::open(&path).unwrap();
+            let start = std::time::Instant::now();
+            let recent = read_recent_entries(&mut file, 200, |_| true).unwrap();
+            tail_samples.push(start.elapsed().as_nanos());
+            assert_eq!(
+                serde_json::to_value(&recent).unwrap(),
+                serde_json::to_value(&full).unwrap()
+            );
+        }
+        full_samples.sort_unstable();
+        tail_samples.sort_unstable();
+        println!(
+            "history bytes={} limit=200 full_median_ns={} bounded_median_ns={} samples=7",
+            std::fs::metadata(path).unwrap().len(),
+            full_samples[3],
+            tail_samples[3]
+        );
     }
 
     #[test]
