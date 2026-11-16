@@ -1,6 +1,7 @@
 //! Explicit scoped compiler storage for a serial resident request batch.
 //!
-//! This is not selected by the ordinary compiler or the resident transport.
+//! Selected only by the explicit experimental owned resident transport.
+//! The ordinary compiler and legacy resident path do not select this storage.
 //! Retaining native owners does not authorize a query hit across revisions.
 
 use std::cell::{Cell, RefCell};
@@ -38,6 +39,11 @@ pub struct ResidentCompilerBatch<'domain> {
 }
 
 impl<'domain> ResidentCompilerBatch<'domain> {
+    /// Allocated invocation and context counts, not live query-cache hit counts.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.invocations.get(), self.domain.allocated_context_count())
+    }
+
     /// Execute one fresh revision using batch-owned native storage. The caller
     /// must validate source and identity universes before reusing typed results.
     /// A failed invocation still consumes its storage until the batch retires.
@@ -76,6 +82,13 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         }
         self.invocations.set(count + 1);
         self.owners.globals.borrow_mut().enter_resident_revision(|| {
+            let source_map = rustc_span::source_map::get_source_map()
+                .expect("resident batch owns a native source map");
+            let _source_revision = source_map
+                .begin_resident_source_revision(8192, 8 * 1024 * 1024, 64)
+                .unwrap_or_else(|error| {
+                    early_dcx.early_fatal(format!("resident source revision refused: {error}"))
+                });
             with_owned_compiler(
                 config,
                 target,
@@ -93,7 +106,13 @@ impl<'domain> ResidentCompilerBatch<'domain> {
 
 // Explicitly exclude observer/callback configurations whose ordinary lifecycle
 // requires a per-invocation pool seal, a custom source owner, or admission scope.
+#[allow(rustc::bad_opt_access)]
 fn reject_unsupported(early_dcx: &EarlyDiagCtxt, config: &Config) {
+    if config.opts.incremental.is_some() {
+        early_dcx.early_fatal(
+            "resident owned batch incremental persistence requires an active-revision source-file view",
+        );
+    }
     if config.query_admission.is_some()
         || config.make_frontend_admission.is_some()
         || config.file_loader.is_some()
@@ -133,6 +152,9 @@ pub fn with_resident_compiler_batch<R: Send>(
         });
     }
     crate::callbacks::setup_callbacks();
+    // Proc-macro dylibs are not revision-isolated in this experimental owner.
+    // Use the same irreversible native guard as the resident transport.
+    rustc_session::resident::enable_process();
     let target = config::build_target_config(
         &early_dcx,
         &config.opts.target_triple,
@@ -174,4 +196,93 @@ pub fn with_resident_compiler_batch<R: Send>(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use rustc_session::config::{Input, Options};
+    use rustc_span::FileName;
+    use rustc_structures::CrateType;
+
+    use super::*;
+
+    // A self-contained no_core fixture exercises actual native analysis without
+    // accepting metadata from a different prebuilt standard-library version.
+    #[allow(rustc::bad_opt_access)]
+    fn config(revision: usize) -> Config {
+        static INTERNAL: AtomicBool = AtomicBool::new(false);
+        let mut opts = Options::default();
+        opts.unstable_features = rustc_feature::UnstableFeatures::Allow;
+        opts.crate_types = vec![CrateType::Rlib];
+        Config {
+            query_admission: None,
+            opts,
+            crate_cfg: Vec::new(),
+            crate_check_cfg: Vec::new(),
+            input: Input::Str {
+                name: FileName::Custom(format!("resident-revision-{revision}.rs")),
+                input: format!(
+                    "#![feature(no_core, lang_items)]\n#![no_core]\n#![allow(internal_features)]\n\
+                     #[lang = \"pointee_sized\"] pub trait PointeeSized {{}}\n\
+                     #[lang = \"meta_sized\"] pub trait MetaSized: PointeeSized {{}}\n\
+                     #[lang = \"sized\"] pub trait Sized: MetaSized {{}}\n\
+                     pub fn value() -> bool {{ {} }}",
+                    revision == 0
+                ),
+            },
+            output_dir: None,
+            output_file: None,
+            ice_file: None,
+            file_loader: None,
+            lint_caps: Default::default(),
+            psess_created: None,
+            track_state: None,
+            register_lints: None,
+            override_queries: None,
+            extra_symbols: Vec::new(),
+            make_codegen_backend: None,
+            make_frontend_admission: None,
+            using_internal_features: &INTERNAL,
+        }
+    }
+
+    #[test]
+    fn resident_batch_keeps_project_typeck_alive_across_fresh_contexts() {
+        let first = config(0);
+        let second = config(1);
+        with_resident_compiler_batch(first, |batch, first| {
+            let mut retained = Vec::new();
+            for config in [first, second] {
+                let value = batch.run(config, |compiler, domain| {
+                    let krate = crate::passes::parse(&compiler.sess);
+                    let (value, locks) = crate::passes::create_and_enter_global_ctxt_in_domain(
+                        compiler,
+                        domain,
+                        krate,
+                        |tcx| {
+                            tcx.ensure_ok().analysis(());
+                            let owner = tcx.hir_body_owners().next().expect("fixture function");
+                            let body = tcx.hir_body_owned_by(owner);
+                            let results = tcx.typeck(owner);
+                            let ty = results.expr_ty(body.value);
+                            assert_eq!(ty, tcx.types.bool);
+                            (results, ty)
+                        },
+                    )
+                    .expect("available context storage");
+                    assert!(locks.is_none(), "test must not retain filesystem locks");
+                    value
+                });
+                retained.push(value);
+                for (results, ty) in &retained {
+                    assert!(!results.node_types().items_in_stable_order().is_empty());
+                    assert!(ty.is_bool());
+                }
+            }
+            assert!(!std::ptr::eq(retained[0].0, retained[1].0));
+            assert_eq!(retained[0].1, retained[1].1);
+        });
+    }
 }

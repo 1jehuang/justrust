@@ -1,8 +1,8 @@
 //! Opt-in, single-owner resident compiler experiment.
 //!
 //! The process environment, working directory and compiler arguments are frozen.
-//! Each request creates a fresh session. Only explicitly safe, dependency-validated
-//! query values survive in rustc_query_impl, never arena references or diagnostics.
+//! Legacy requests create fresh owners. The separate owned mode scopes native
+//! arenas and compiler sessions across requests, but does not reuse typed queries.
 
 use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
@@ -53,8 +53,8 @@ fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
 /// # Safety
 /// Called only by native process main. The launcher transfers exclusive ownership
 /// of a writable response pipe through JUSTRUST_RUSTC_RESIDENT_FD.
-pub(super) unsafe fn run() -> ExitCode {
-    match unsafe { serve() } {
+pub(super) unsafe fn run(owned: bool) -> ExitCode {
+    match unsafe { serve(owned) } {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("jr-rustc resident: {error}");
@@ -63,7 +63,7 @@ pub(super) unsafe fn run() -> ExitCode {
     }
 }
 
-unsafe fn serve() -> Result<(), String> {
+unsafe fn serve(owned: bool) -> Result<(), String> {
     // Existing recorders assume one compiler session per process. Do not emit
     // misleading phase totals or acknowledge an early reply in this experiment.
     for name in ["JUSTRUST_RUSTC_PHASES_FILE", "JUSTRUST_RUSTC_EARLY_REPLY"] {
@@ -96,6 +96,9 @@ unsafe fn serve() -> Result<(), String> {
     // SAFETY: the native launch protocol transfers this validated pipe to us.
     let mut response = unsafe { File::from_raw_fd(fd) };
     rustc_session::resident::enable_process();
+    if owned {
+        return serve_owned(response);
+    }
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut frozen_args: Option<Vec<String>> = None;
@@ -171,6 +174,136 @@ unsafe fn serve() -> Result<(), String> {
         response.write_all(b"\n").map_err(|e| e.to_string())?;
         response.flush().map_err(|e| e.to_string())?;
     }
+}
+
+struct OwnedRequests {
+    input: io::Stdin,
+    args: Option<Vec<String>>,
+    last_id: Option<u64>,
+}
+
+impl OwnedRequests {
+    fn next(&mut self) -> Result<Option<(u64, Vec<String>)>, String> {
+        let mut line = Vec::new();
+        let count = self
+            .input
+            .lock()
+            .take(MAX_REQUEST_BYTES + 1)
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Ok(None);
+        }
+        if count as u64 > MAX_REQUEST_BYTES || !line.ends_with(b"\n") {
+            return Err("oversized or unterminated resident request".into());
+        }
+        let (id, args) = request(&line)?;
+        if self.last_id.is_some_and(|last| id <= last) {
+            return Err("request ids must increase strictly".into());
+        }
+        if self.args.as_ref().is_some_and(|frozen| frozen != &args) {
+            return Err("compiler arguments cannot change within a resident worker".into());
+        }
+        self.last_id = Some(id);
+        self.args.get_or_insert_with(|| args.clone());
+        Ok(Some((id, args)))
+    }
+}
+
+/// Actual common native owners, still without cross-revision query lookups.
+/// This mode intentionally excludes incremental persistence until its source-file
+/// encoder view is revision-aware. It is not a production compiler selection.
+fn serve_owned(mut response: File) -> Result<(), String> {
+    for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
+        if std::env::var_os(name).is_some_and(|value| value == "1") {
+            return Err(format!("{name} cannot be combined with the native owned batch"));
+        }
+    }
+    let mut requests = OwnedRequests { input: io::stdin(), args: None, last_id: None };
+    let Some((first_id, first_args)) = requests.next()? else {
+        return Ok(());
+    };
+    let mut first_argv = vec!["jr-rustc-resident-owned".to_owned()];
+    first_argv.extend(first_args);
+    let mut first_callbacks = crate::TimePassesCallbacks::default();
+    let first = crate::catch_fatal_errors(|| {
+        crate::prepare_compiler(&first_argv, &mut first_callbacks, None)
+    })
+    .map_err(|_| "could not prepare native owned batch")?
+    .ok_or("owned batch requires a compilation, not a help-only request")?;
+    let crate::PreparedCompiler { config, has_input, help_only, registered_lints } = first;
+    if !has_input || help_only {
+        return Err("owned batch requires a source input".into());
+    }
+    crate::catch_fatal_errors(|| {
+        rustc_interface::resident::with_resident_compiler_batch(config, move |batch, config| {
+            let mut first = Some((config, first_callbacks, registered_lints));
+            let mut id = first_id;
+            let mut argv = first_argv;
+            loop {
+                let start = Instant::now();
+                let mut callbacks = crate::TimePassesCallbacks::default();
+                let status = if crate::catch_fatal_errors(|| {
+                    let prepared =
+                        if let Some((config, initial_callbacks, registered_lints)) = first.take() {
+                            callbacks = initial_callbacks;
+                            crate::PreparedCompiler {
+                                config,
+                                has_input: true,
+                                help_only: false,
+                                registered_lints,
+                            }
+                        } else {
+                            crate::prepare_compiler(&argv, &mut callbacks, None)
+                                .expect("frozen compilation arguments cannot become help-only")
+                        };
+                    batch.run(prepared.config, |compiler, domain| {
+                        crate::run_compiler_pipeline(
+                            compiler,
+                            Some(domain),
+                            &mut callbacks,
+                            prepared.has_input,
+                            prepared.help_only,
+                            prepared.registered_lints,
+                        );
+                    });
+                })
+                .is_ok()
+                {
+                    0
+                } else {
+                    1
+                };
+                if let Some(format) = callbacks.time_passes {
+                    rustc_data_structures::profiling::print_time_passes_entry(
+                        "total",
+                        start.elapsed(),
+                        None,
+                        None,
+                        format,
+                    );
+                }
+                io::stdout().flush().map_err(|e| e.to_string())?;
+                io::stderr().flush().map_err(|e| e.to_string())?;
+                let (revisions, contexts) = batch.counts();
+                let reply = json!({
+                    "id": id, "status": status, "pid": std::process::id(),
+                    "elapsed_seconds": start.elapsed().as_secs_f64(),
+                    "owned": {"revisions": revisions, "contexts": contexts},
+                });
+                serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
+                response.write_all(b"\n").map_err(|e| e.to_string())?;
+                response.flush().map_err(|e| e.to_string())?;
+                let Some((next_id, args)) = requests.next()? else {
+                    return Ok(());
+                };
+                id = next_id;
+                argv = vec!["jr-rustc-resident-owned".to_owned()];
+                argv.extend(args);
+            }
+        })
+    })
+    .map_err(|_| "native owned batch construction failed".to_owned())?
 }
 
 #[cfg(test)]

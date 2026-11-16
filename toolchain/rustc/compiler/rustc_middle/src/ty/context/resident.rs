@@ -119,6 +119,11 @@ impl<'domain> ResidentTypeDomain<'domain> {
         Some(cell)
     }
 
+    /// Number of context cells consumed, including failed context constructions.
+    pub fn allocated_context_count(&self) -> usize {
+        self.allocated_contexts.get()
+    }
+
     /// One actual interned compiler type, not a type name or encoded type record.
     pub fn bool_type(&self) -> Ty<'domain> {
         self.common_types.bool

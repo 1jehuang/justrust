@@ -1819,7 +1819,7 @@ pub unsafe fn main() -> ExitCode {
     install_ctrlc_handler();
 
     let raw_args = args::raw_args(&early_dcx);
-    if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident") {
+    if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident" || arg == "--jr-resident-owned") {
         if raw_args.len() != 2 || query_admission.is_some() {
             eprintln!(
                 "jr-rustc resident: requires a dedicated unbound worker with no extra arguments"
@@ -1828,7 +1828,7 @@ pub unsafe fn main() -> ExitCode {
         }
         #[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
         // SAFETY: native main exclusively owns the launcher's response pipe.
-        return unsafe { resident::run() };
+        return unsafe { resident::run(raw_args[1] == "--jr-resident-owned") };
         #[cfg(not(all(unix, any(target_env = "gnu", target_os = "macos"))))]
         {
             eprintln!("jr-rustc resident: unsupported platform");

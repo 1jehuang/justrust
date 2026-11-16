@@ -3,9 +3,17 @@
 ## Status
 
 The owned `stable` compiler now has experimental ownership and revision-safety
-building blocks for live typed frontend retention. They are **not connected to
-the resident request driver or query execution**. No live cross-edit engine,
-production integration, speedup, or default promotion follows from these APIs.
+building blocks for live typed frontend retention. The explicit
+`--jr-resident-owned` development mode connects common native owners to serial
+requests, fresh contexts and revision-aware source reads. It **does not connect
+cross-revision typed query lookups**, incremental persistence or managed hosted
+routing. Native compiler checks, scoped ownership tests and a runnable build pass.
+The first std-based executable compiles and runs, but the initial end-to-end
+owned test fails on its second request: historical macro hygiene reaches a fresh
+crate store with an old numeric crate ID. The failed original receipt is stored
+as `bench/stable-resident-owned-20261116-1334-native`. This mode is not yet
+accepted for ordinary repeated std builds. No full live engine, speedup, or
+default promotion follows from this mode.
 The previously measured `JUSTRUST_RUSTC_RESIDENT_FRONTEND` mode still retains
 encoded snapshots and starts a fresh `GlobalCtxt` per request. Its results do
 not measure the live design described here.
@@ -42,13 +50,16 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   pipeline and refuses exhausted storage before incremental preparation. The
   additional-owner factory can scope a component-owned compiler arena under the
   same lifetime without introducing a dependency from `rustc_middle` back to
-  `rustc_interface`. Neither entry is wired into resident requests. The cell
+  `rustc_interface`. The experimental owned request mode uses this entry, but
+  no live query lookup is connected. The cell
   count is a structural bound, not an owning-arena byte or RSS budget.
 - `rustc_interface::resident::with_resident_compiler_batch` constructs one serial
   worker, one registry, and scoped native compiler/session storage under the type
   domain. Its explicit per-revision entry finalizes diagnostics and rejects custom
-  capture/admission/loading and incompatible global settings. It is not selected
-  by the transport, has no owning-byte budget, and does not authorize query reuse.
+  capture/admission/loading and incompatible global settings. The owned transport
+  selects it explicitly. Incremental persistence is refused until source encoders
+  have an active-revision file view. It has no owning-byte budget and does not
+  authorize query reuse.
 - `ty::resident_identity` checks bounded, exact, ordered crate and definition
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller
@@ -64,13 +75,17 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   scoped owner, preserving symbol/span/hygiene identities while replacing the
   per-revision metavariable map that cache encoding can freeze. It requires all
   prior workers to have returned. It neither refreshes source files nor validates
-  the meaning of foreign crate or expansion identities, and the driver does not
-  yet call it.
+  the meaning of foreign crate or expansion identities. The experimental owned
+  batch calls this entry, but does not reuse old typed query results.
 - `SourceMap::new_source_file_version` explicitly appends a native source version.
   Historical byte positions still resolve to their original source and diagnostic
-  coordinates, while stable-ID lookup selects the latest version. The ordinary
-  loader is unchanged. This is not an active-revision file view or a span-remapping
-  policy, and does not enable the live driver or authorize reusing old results.
+  coordinates, while stable-ID lookup selects the latest version. The explicit
+  RAII `begin_resident_source_revision` dispatches ordinary parser `load_file`
+  calls through fresh first reads, exact raw-content reuse and bounded tracking.
+  Repeated reads freeze within the scope, loading errors poison that revision,
+  and reads outside an enabled scope fail closed. Default one-shot loading is
+  unchanged. This is not an active-revision file view or a span-remapping policy,
+  and does not authorize reusing old results.
 - `IncrCompSessionPaths` separates the immutable directory view used by contexts
   and codegen from `IncrCompSession`, which still owns the real filesystem locks.
   `GlobalCtxt` owns a cloned path snapshot, so keeping a context does not borrow
@@ -83,8 +98,11 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   inside the normal worker/global and frontend-admission scope. This extraction
   does not repeat an invocation or connect the resident driver to such an owner.
 
-These are native compiler types and native ownership tests, not successful
-multi-revision project compiles. The initial identity gate rejects changed
+These use native compiler types. An actual self-contained two-revision compiler
+analysis test retains project-produced `TypeckResults` under the domain, reads
+both results after the second context, and checks common primitive interning.
+It does not transplant either result into the second query cache or validate
+standard-library metadata compatibility. The initial identity gate rejects changed
 source or body revisions. It must not be loosened to accept edits merely to
 produce a hit counter. A later selective reuse path needs the normal green
 validation plus complete owner/source identity validation.
