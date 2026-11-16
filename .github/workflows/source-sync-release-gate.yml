@@ -60,11 +60,20 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dri mesa-vulkan-drivers openbox wayland-utils weston x11-utils xvfb
+          # Ubuntu 26 defaults to multicall uutils. Pinned tests copy /bin/sleep
+          # to another basename and observe head's blocking stdin reads. Use the
+          # official GNU provider, not snapshot rewrites or skipped tests.
+          if apt-cache show coreutils-from-gnu >/dev/null 2>&1; then
+            sudo apt-get install -y --allow-remove-essential \
+              coreutils-from-gnu coreutils-from-uutils-
+          fi
+          command -v cc c++ make
+          python3 ci/check-test-utilities.py
           # Pinned Desktop's rustc wrapper is #!/bin/sh. dash discards Cargo's
           # hyphenated CARGO_BIN_EXE_jcode-desktop variable before exec rustc.
           # Match the benchmark host's bash-backed sh, without touching snapshot
           # source bytes, compiler flags, or Cargo's binary prerequisite graph.
-          python3 -m unittest bench.test_source_sync_gate
+          python3 -m unittest bench.test_source_sync_gate bench.test_test_utilities
           sudo ln -sf /bin/bash /bin/sh
           python3 ci/check-shell-environment.py
           # Ephemeral runner only: reserve disk for the full Desktop target/cache.

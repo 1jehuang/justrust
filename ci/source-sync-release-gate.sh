@@ -98,6 +98,7 @@ main() {
   git -C "$root" ls-tree -r HEAD bench > "$evidence/harness-tree.txt"
   rustc -Vv | tee "$evidence/rustc.log"
   python3 "$root/ci/check-shell-environment.py" | tee "$evidence/shell.log"
+  python3 "$root/ci/check-test-utilities.py" | tee "$evidence/test-utilities.log"
   df -h "$HOME"
 
   # Public jcode history lacks this pin, even when fetching its full SHA.
