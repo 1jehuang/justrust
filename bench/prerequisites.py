@@ -4,17 +4,18 @@ Never install packages or alter the user's shell/global configuration. Callers
 can supply a private sqlite3 on PATH. Only measured child processes receive the
 pinned umask, preserving the security checks in the project being exercised.
 """
+import pty_fixture
 import hashlib
 from pathlib import Path
 import shutil
 import subprocess
 
 CHILD_UMASK = 0o022
-POLICY = "pinned-test-runtime-v1"
+POLICY = "pinned-test-runtime-v2-pty-self-exec"
 
 
 def provenance(sqlite=None):
-    return {"policy": POLICY, "child_umask": "0022", "sqlite3": sqlite}
+    return {"policy": POLICY, "fixture_overlays": [pty_fixture.identity()], "child_umask": "0022", "sqlite3": sqlite}
 
 
 def validate(require_sqlite=False):

@@ -23,6 +23,7 @@ the build. Medians are over all samples, `quiet` medians over the rest. Use --qu
 from __future__ import annotations
 
 import argparse
+import pty_fixture
 import hashlib
 import json
 import os
@@ -147,6 +148,7 @@ SNAPSHOTS = {
             "jcode-desktop": (HOME / "jcode-desktop", "7d38fb7"),
             "jcode": (HOME / "jcode", "abff94eeb"),
         },
+        "fixture_overlays": [pty_fixture.identity()],
         "cwd": "jcode-desktop",
         # 7d38fb7's lib tests miss a field its harness already uses (fixed
         # later upstream). Exact replacements, applied once at extraction.
@@ -479,7 +481,9 @@ def sh(cmd: list[str], cwd: Path | None = None) -> str:
 
 def snapshot_fingerprint(name: str) -> str:
     spec = SNAPSHOTS[name]
-    identity = {"format": SNAPSHOT_FORMAT, "fixups": spec.get("fixups", []),
+    if spec.get("fixture_overlays") and spec["fixture_overlays"] != [pty_fixture.identity()]:
+        raise ValueError("bench: unsupported PTY fixture overlay identity")
+    identity = {"format": SNAPSHOT_FORMAT, "fixture_overlays": spec.get("fixture_overlays", []), "fixups": spec.get("fixups", []),
                 "patches": [(repo, path, hashlib.sha256((ROOT / path).read_bytes()).hexdigest())
                             for repo, path in spec.get("patches", [])]}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -602,6 +606,8 @@ def prepare(name: str) -> Path:
             if archive.wait() != 0:
                 sys.exit(f"bench: git archive {src}@{rev} failed")
         prepare_snapshot_git(dst, src, rev, src_dir)
+        if repo == "jcode" and SNAPSHOTS[name].get("fixture_overlays"):
+            pty_fixture.apply(dst)
         for rel, old, new, count in SNAPSHOTS[name].get("fixups", []):
             if not rel.startswith(repo + "/"):
                 continue
@@ -1467,6 +1473,7 @@ def env_info() -> dict:
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
         "snapshots": {k: {r: rev for r, (_, rev) in v["repos"].items()} for k, v in SNAPSHOTS.items()},
         "snapshot_format": SNAPSHOT_FORMAT,
+        "fixture_overlays": {name: spec.get("fixture_overlays", []) for name, spec in SNAPSHOTS.items()},
         "snapshot_fingerprints": {name: snapshot_fingerprint(name) for name in SNAPSHOTS},
         "runtime_prerequisites": RUNTIME_PREREQUISITES,
     }

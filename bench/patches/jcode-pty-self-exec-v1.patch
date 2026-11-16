@@ -1,0 +1,195 @@
+--- a/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
++++ b/crates/jcode-tui/src/tui/app/tests/terminal_setup_command.rs
+@@ -15,104 +15,100 @@
+ // Together they mean: if terminal setup makes the terminal emit this sequence,
+ // Shift+Enter genuinely works.
+ 
+-/// Decode raw terminal bytes into key events using crossterm's own parser.
+-///
+-/// crossterm reads from `/dev/tty`, so hand it a PTY whose controller side we
+-/// have pre-loaded with the bytes under test. `libc::login_tty` makes the PTY the
+-/// process's controlling terminal for the duration of the child, which is what
+-/// lets `crossterm::event::read` see our bytes.
+-///
+-/// Runs in a forked child because installing a controlling terminal is
+-/// process-global and must not leak into the rest of the test binary.
++/// Versioned benchmark fixture: fresh exec, raw-mode handshake, bounded cleanup.
+ #[cfg(unix)]
+ fn decode_key_event_via_pty(bytes: &[u8]) -> Option<(crossterm::event::KeyCode, u8)> {
+     use std::io::{Read, Write};
+-    use std::os::fd::FromRawFd;
+-
+-    let mut controller: libc::c_int = -1;
+-    let mut device: libc::c_int = -1;
+-    // Safety: openpty writes two valid fds on success; name/termios are unused.
+-    let rc = unsafe {
+-        libc::openpty(
+-            &mut controller,
+-            &mut device,
+-            std::ptr::null_mut(),
+-            std::ptr::null_mut(),
+-            std::ptr::null_mut(),
+-        )
+-    };
+-    assert_eq!(rc, 0, "failed to allocate a pty");
+-
+-    // A pipe carries the decoded result back from the child.
+-    let mut result_pipe: [libc::c_int; 2] = [-1, -1];
+-    // Safety: pipe writes two valid fds on success.
+-    assert_eq!(unsafe { libc::pipe(result_pipe.as_mut_ptr()) }, 0);
+-
+-    // Safety: fork in a test binary; the child only writes to the pipe and execs
+-    // no code that assumes a single-threaded parent beyond crossterm's read.
+-    let pid = unsafe { libc::fork() };
+-    assert!(pid >= 0, "fork failed");
+-
+-    if pid == 0 {
+-        // Child: adopt the PTY as the controlling terminal, then let crossterm
+-        // read and decode. Report `code_tag,modifier_bits` over the pipe.
+-        // Safety: single-threaded child; fds are valid.
+-        unsafe {
+-            libc::close(controller);
+-            libc::close(result_pipe[0]);
+-            if libc::login_tty(device) != 0 {
+-                libc::_exit(2);
++    use std::os::fd::{AsRawFd, FromRawFd};
++    use std::os::unix::process::CommandExt;
++    use std::process::{Command, Stdio};
++    use std::time::{Duration, Instant};
++    const CHILD: &str = "JUSTRUST_BENCH_PTY_REENTRY_V1";
++    if std::env::var_os(CHILD).is_some() {
++        // This runs after exec in the same existing test, never after fork.
++        crossterm::terminal::enable_raw_mode().expect("child raw mode");
++        let mut out = std::io::stderr().lock();
++        out.write_all(&[b'R']).expect("raw-mode readiness");
++        out.flush().unwrap();
++        assert!(crossterm::event::poll(Duration::from_secs(5)).expect("child event deadline"));
++        let key = match crossterm::event::read().expect("child event") {
++            crossterm::event::Event::Key(key) => key,
++            other => panic!("expected key, got {other:?}"),
++        };
++        let tag = u8::from(key.code == crossterm::event::KeyCode::Enter);
++        out.write_all(&[tag, key.modifiers.bits()]).expect("child result");
++        out.flush().unwrap();
++        std::process::exit(0);
++    }
++    let mut controller = -1;
++    let mut device = -1;
++    assert_eq!(unsafe { libc::openpty(&mut controller, &mut device,
++        std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0,
++        "failed to allocate a real PTY");
++    let mut controller = unsafe { std::fs::File::from_raw_fd(controller) };
++    let device = unsafe { std::fs::File::from_raw_fd(device) };
++    // Neither parent-owned PTY descriptor may leak through exec.
++    for fd in [controller.as_raw_fd(), device.as_raw_fd()] {
++        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) }, 0);
++    }
++    let name = std::thread::current().name().expect("named test thread").to_owned();
++    let mut command = Command::new(std::env::current_exe().expect("test executable"));
++    command.args(["--exact", &name, "--nocapture"])
++        .env(CHILD, "1").stdin(Stdio::from(device))
++        .stdout(Stdio::null()).stderr(Stdio::piped());
++    // Only async-signal-safe syscalls execute between fork and exec.
++    unsafe {
++        command.pre_exec(|| {
++            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
++                return Err(std::io::Error::last_os_error());
++            }
++            Ok(())
++        });
++    }
++    struct Reap(std::process::Child);
++    impl Drop for Reap {
++        fn drop(&mut self) {
++            let _ = self.0.kill();
++            let _ = self.0.wait();
++        }
++    }
++    let mut child = Reap(command.spawn().expect("exec PTY test child"));
++    let mut result = child.0.stderr.take().unwrap();
++    let deadline = Instant::now() + Duration::from_secs(10);
++    let mut receive = |buffer: &mut [u8]| {
++        for byte in buffer {
++            loop {
++                let remaining = deadline.saturating_duration_since(Instant::now());
++                assert!(!remaining.is_zero(), "PTY child protocol deadline exceeded");
++                let mut poll = libc::pollfd { fd: result.as_raw_fd(), events: libc::POLLIN, revents: 0 };
++                let rc = unsafe { libc::poll(&mut poll, 1, remaining.as_millis().min(100) as i32) };
++                if rc < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
++                    continue;
++                }
++                assert!(rc >= 0, "PTY protocol poll failed");
++                if rc > 0 {
++                    result.read_exact(std::slice::from_mut(byte)).expect("PTY child protocol truncated");
++                    break;
++                }
+             }
+         }
+-        let payload = match crossterm::terminal::enable_raw_mode() {
+-            Ok(()) => match crossterm::event::read() {
+-                Ok(crossterm::event::Event::Key(key)) => {
+-                    let tag = match key.code {
+-                        crossterm::event::KeyCode::Enter => 1u8,
+-                        _ => 0u8,
+-                    };
+-                    format!("{tag},{}", key.modifiers.bits())
+-                }
+-                _ => "0,0".to_string(),
+-            },
+-            Err(_) => "0,0".to_string(),
+-        };
+-        // Safety: writing to a valid pipe fd, then exiting immediately.
+-        unsafe {
+-            let mut out = std::fs::File::from_raw_fd(result_pipe[1]);
+-            let _ = out.write_all(payload.as_bytes());
+-            let _ = out.flush();
+-            libc::_exit(0);
++    };
++    let mut ready = [0];
++    receive(&mut ready);
++    assert_eq!(ready, [b'R'], "child must enable raw mode before input");
++    controller.write_all(bytes).expect("write PTY input after readiness");
++    let mut payload = [0; 2];
++    receive(&mut payload);
++    loop {
++        if let Some(status) = child.0.try_wait().expect("reap PTY child") {
++            assert!(status.success(), "PTY child failed: {status}");
++            break;
+         }
+-    }
+-
+-    // Parent: feed the bytes, then collect the child's verdict.
+-    // Safety: fds are valid and owned here.
+-    unsafe {
+-        libc::close(device);
+-        libc::close(result_pipe[1]);
+-    }
+-    // Safety: controller is a valid fd owned by this scope.
+-    let mut write_end = unsafe { std::fs::File::from_raw_fd(controller) };
+-    write_end.write_all(bytes).expect("write pty bytes");
+-    write_end.flush().expect("flush pty bytes");
+-
+-    // Safety: read end is a valid fd owned by this scope.
+-    let mut read_end = unsafe { std::fs::File::from_raw_fd(result_pipe[0]) };
+-    let mut payload = String::new();
+-    let _ = read_end.read_to_string(&mut payload);
+-    // Safety: reaping the child we just forked.
+-    unsafe {
+-        let mut status: libc::c_int = 0;
+-        libc::waitpid(pid, &mut status, 0);
+-    }
+-
+-    let (tag, bits) = payload.split_once(',')?;
+-    let code = match tag.trim() {
+-        "1" => crossterm::event::KeyCode::Enter,
+-        _ => return None,
+-    };
+-    Some((code, bits.trim().parse().ok()?))
++        assert!(Instant::now() < deadline, "PTY child exit deadline exceeded");
++        std::thread::sleep(Duration::from_millis(5));
++    }
++    assert_eq!(payload[0], 1, "crossterm must decode Enter");
++    Some((crossterm::event::KeyCode::Enter, payload[1]))
+ }
+ 
+ #[test]

@@ -185,6 +185,48 @@ fixups remain visible as worktree changes against the real pinned commit.
 Each work directory and result also carries a fingerprint of the exact fixups
 and patch bytes. Editing a repair creates a new directory rather than changing
 an already prepared snapshot. Comparisons reject different repair fingerprints.
+
+### Explicit pinned PTY fixture contract revision
+
+`pinned-test-runtime-v2-pty-self-exec` deliberately revises the old pristine-test
+runtime contract without repinning Jcode `abff94eeb`. Its test-only overlay
+`pinned-jcode-pty-self-exec-v1` replaces the unsound fork-in-a-multithreaded-test
+helper in `terminal_setup_command.rs`. A fresh self-exec reenters the same actual
+named test, installs a controlling PTY using only async-signal-safe pre-exec
+syscalls, and acknowledges raw mode before the parent sends input. Real
+crossterm decoding, every original test and assertion, and default test
+parallelism remain intact. PTY/protocol errors fail loudly, not as skips.
+Protocol reads and child exit have a shared 10-second deadline. An unwind guard
+kills and reaps the child on failure.
+
+The exact pristine input SHA256 is
+`2240d4d344f58e965c75d5f4d98072cd2dddc69bd5ca5bb45bbb50bb522aa1f9`.
+The exact patch SHA256 is
+`5ced18aa42a5c37331dc9196d5a89fbc33c7cdd5bf0985440d3c267b55ea39d5`.
+`bench/pty_fixture.py` fails closed on unexpected input or patch bytes before
+applying anything. The overlay runs before the existing environment-state
+patches. Version, input path/hash, and patch path/hash are explicit in snapshot
+fingerprints, snapshot/cache directory names, report `fixture_overlays`, and
+runtime prerequisite provenance. Old-runtime and corrected-runtime results
+are not comparable. Apply this identical overlay to both frozen baseline and
+candidate, without changing seed, point count, or weights.
+
+Portable integrity guards and concurrent real-PTY acceptance:
+
+```sh
+python3 -m unittest discover -s bench -p test_pty_fixture.py -v
+python3 bench/test_pty_fixture.py --accept "$JCODE_SCRATCH_DIR/pinned-pty-v1"
+```
+
+Acceptance compiles the exact corrected helper plus the two exact pinned decoder
+tests using crossterm 0.29.0, then runs 160 default-parallel test processes with
+8 concurrent processes (320 real decodes). A separate acceptance-only
+instrumented build checks timeout, malformed-readiness, and nonzero-child-exit
+failures five times each, including `ECHILD` assertions proving cleanup reaped
+the child. Instrumentation never enters measured snapshots. Local compilation
+is intentional for access to repeated test executables. This is targeted
+fixture acceptance, not a full workload performance comparison.
+
 The credited patches currently restore Desktop's visible reload camera position
 (`764e429`, retaining the original viewport assertion) and import Jcode's existing
 description-consent/schema repair (`2474a4f81`, without removing consent text or
