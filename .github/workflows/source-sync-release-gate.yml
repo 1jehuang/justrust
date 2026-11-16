@@ -1,6 +1,11 @@
 name: Source sync release benchmark gate
 
 on:
+  # Register this stable-only workflow without changing the clean-room main.
+  # Push runs skip the benchmark job. Only explicit dispatch may consume secrets.
+  push:
+    branches: [stable]
+    paths: [.github/workflows/source-sync-release-gate.yml]
   workflow_dispatch:
     inputs:
       baseline_ref:
@@ -26,7 +31,7 @@ env:
 
 jobs:
   benchmark:
-    if: github.ref == 'refs/heads/stable'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/stable'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
