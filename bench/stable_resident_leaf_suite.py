@@ -102,10 +102,19 @@ def host_identity():
                 kernel=platform.release(), execution='local-native-owned', python=platform.python_version())
 
 
-def check_identity(identity):
+def attestation(expected_driver_sha256=DRIVER_SHA, expected_compiler_sha256=BINARY_SHA):
+    for value in (expected_driver_sha256, expected_compiler_sha256):
+        require(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) is not None,
+                'expected SHA256 must be 64 lowercase hex characters')
+    return dict(compiler_sha256=expected_compiler_sha256, driver_sha256=expected_driver_sha256)
+
+
+def check_identity(identity, expected=None):
+    expected = attestation() if expected is None else attestation(
+        expected['driver_sha256'], expected['compiler_sha256'])
     require(Path(identity.get('path', '')).is_absolute(), 'requires absolute frozen compiler path')
-    require(identity.get('sha256') == BINARY_SHA, 'requires exact frozen1527 compiler bytes')
-    require([d.get('sha256') for d in identity.get('drivers', [])] == [DRIVER_SHA], 'requires exact frozen1527 driver SHA')
+    require(identity.get('sha256') == expected['compiler_sha256'], 'requires exact attested compiler bytes')
+    require([d.get('sha256') for d in identity.get('drivers', [])] == [expected['driver_sha256']], 'requires exact attested driver SHA')
 
 
 def execution_identity():
@@ -140,10 +149,17 @@ def aggregate(rows):
     return result
 
 
-def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
+def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180,
+            expected_driver_sha256=DRIVER_SHA, expected_compiler_sha256=BINARY_SHA):
+    expected = attestation(expected_driver_sha256, expected_compiler_sha256)
     compiler = Path(compiler).resolve()
-    require(compiler.is_file() and sha(compiler.read_bytes()) == BINARY_SHA,
-            'requires exact frozen1527 compiler bytes')
+    require(compiler.is_file() and sha(compiler.read_bytes()) == expected['compiler_sha256'],
+            'requires exact attested compiler bytes')
+    # Hash the explicit sysroot's driver before even running rustc -vV. Identity
+    # queries below additionally prove that this is the actual selected sysroot.
+    drivers = [p for p in sorted((compiler.parent.parent / 'lib').glob('*rustc_driver*')) if p.is_file()]
+    require([sha(p.read_bytes()) for p in drivers] == [expected['driver_sha256']],
+            'requires exact attested driver SHA before execution')
     require(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0, 'invalid timeout')
     spec = workload(items, edits, repetitions)
     output = Path(output).resolve()
@@ -152,14 +168,14 @@ def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
     workspace.mkdir(mode=0o700)
     report = dict(schema=SCHEMA, claim=CLAIM, verdict='incomplete', workload=spec,
                   workload_sha256=sha(canonical(spec)), host=host_identity(), rows=[], source_blobs={},
-                  load_before=list(os.getloadavg()))
+                  load_before=list(os.getloadavg()), expected_identity=expected)
     argv = leaf.arguments(Path('.'))
     report['workspace'] = str(workspace)
     report['actual_execution'] = dict(argv=argv, cwd=str(workspace))
     report['execution'] = execution_identity()
     try:
         report['identity_before'] = shared.identity(Path(compiler).resolve())
-        check_identity(report['identity_before'])
+        check_identity(report['identity_before'], expected)
         for repetition in range(repetitions):
             for arm in order(repetition):
                 evidence = output / f'rep-{repetition:03d}-{arm}'
@@ -243,9 +259,14 @@ def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
         (output / 'receipt.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
-def validate(report):
+def validate(report, allow_compiler_change=False):
+    require(type(allow_compiler_change) is bool, 'compiler validation opt-in must be boolean')
     require(report.get('schema') == SCHEMA and report.get('verdict') == 'passed' and not report.get('error'), 'not a successful versioned leaf suite receipt')
-    check_identity(report['identity_before'])
+    expected = report.get('expected_identity', attestation())
+    require(set(expected) == set(attestation()), 'unexpected compiler attestation fields')
+    if not allow_compiler_change:
+        require(expected == attestation(), 'non-baseline compiler requires explicit comparison opt-in')
+    check_identity(report['identity_before'], expected)
     require(report['identity_before'] == report['identity_after'], 'changed compiler identity')
     validate_execution(report)
     spec = report['workload']
@@ -293,10 +314,17 @@ def validate(report):
     return values
 
 
-def compare(a, b, floor=10.0):
+def compare(a, b, floor=10.0, allow_compiler_change=False):
     require(type(floor) in (int, float) and math.isfinite(floor) and floor >= 0, 'invalid floor')
-    sa, sb = validate(a), validate(b)
-    for key in ('identity_before', 'workload', 'workload_sha256', 'host', 'execution'):
+    require(type(allow_compiler_change) is bool, 'compiler comparison opt-in must be boolean')
+    sa, sb = (validate(report, allow_compiler_change=allow_compiler_change) for report in (a, b))
+    if allow_compiler_change:
+        require(a['identity_before']['drivers'][0]['sha256'] != b['identity_before']['drivers'][0]['sha256'],
+                'compiler optimization comparison requires distinct driver SHA')
+    invariant_keys = ('workload', 'workload_sha256', 'host', 'execution')
+    if not allow_compiler_change:
+        invariant_keys = ('identity_before',) + invariant_keys
+    for key in invariant_keys:
         require(a[key] == b[key], 'comparison refuses different ' + key)
     print(CLAIM)
     for arm in ARMS:
@@ -326,7 +354,8 @@ def upload_result(output):
 def run(args):
     output_existed = Path(args.output).exists()
     try:
-        report = capture(args.compiler, args.output, args.items, args.edits, args.repetitions, args.timeout)
+        report = capture(args.compiler, args.output, args.items, args.edits, args.repetitions, args.timeout,
+                         args.expected_driver_sha256, args.expected_compiler_sha256)
         print(json.dumps(dict(receipt=str(args.output / 'receipt.json'), aggregates=report['aggregates'], claim=CLAIM), indent=2))
     finally:
         if not output_existed:
@@ -341,6 +370,10 @@ def add_parser(sub):
     parser.add_argument('--edits', type=int, default=8)
     parser.add_argument('-n', '--repetitions', type=int, default=6)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--expected-driver-sha256', default=DRIVER_SHA,
+                        help='exact driver SHA256, required explicitly for a non-baseline driver')
+    parser.add_argument('--expected-compiler-sha256', default=BINARY_SHA,
+                        help='exact launcher SHA256, baseline bytes required unless explicitly overridden')
     parser.set_defaults(fn=run)
     return parser
 
