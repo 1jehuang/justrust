@@ -50,7 +50,13 @@ Standard input carries newline-delimited JSON requests, at most 1 MiB each:
 
 Arguments exclude argv[0] and must match the first request exactly. IDs must
 increase strictly. Response files and stdin source input are rejected. Flags
-cannot silently change process-global backend state. A request cannot change
+cannot silently change process-global backend state. Only the implicit host target
+and owned LLVM backend are supported in this first protocol. Proc-macro crates
+are explicitly refused before dynamic-library loading or macro execution:
+rustc's normal loader intentionally keeps their libraries alive, which does not
+provide fresh macro static state in a persistent process. Such compilations must
+still use a fresh compiler until per-session library isolation is implemented.
+A request cannot change
 cwd or environment. EOF ends the worker normally. Invalid protocol terminates
 the worker rather than guessing or retrying a compilation.
 
@@ -67,6 +73,31 @@ early-reply settings are rejected in resident mode rather than emitting invalid
 per-request telemetry. An inherited native query-admission binding is also
 rejected: this experimental driver does not pretend one job ticket authorizes
 an unlimited resident worker.
+
+## Acceptance harnesses
+
+Use an explicit, frozen candidate path rather than replacing the installed CLI.
+Each output directory must be new. The native fixture tests compiler diagnostics,
+executable output, edits, error recovery, process identity, and live cache counters:
+
+```sh
+python3 bench/stable_resident.py --compiler /absolute/candidate/bin/rustc \
+  --output "$JCODE_SCRATCH_DIR/resident-native" -n 5 --items 256
+python3 bench/stable_resident_guard.py --compiler /absolute/candidate/bin/rustc \
+  --output "$JCODE_SCRATCH_DIR/resident-guard"
+python3 bench/stable_resident_dogfood.py --compiler /absolute/candidate/bin/rustc \
+  --source "$PWD/src/remote_sync_queue.rs" \
+  --output "$JCODE_SCRATCH_DIR/resident-module-dogfood" -n 3
+```
+
+The guard harness requires a fresh-process positive control to execute a macro,
+then verifies resident refusal before execution and recovery in the same PID.
+The dogfood harness copies a real standard-library-only shipping module, compiles
+and executes its tests with fresh runtime nonces, and checks intentional failures
+and recovery. It does not compile the whole client or change the supplied source.
+A developer bootstrap artifact is not the published optimized compiler merely
+because its version string matches. Freeze compiler and driver identities and
+keep this distinction in every result.
 
 ## Measurement and production gates
 

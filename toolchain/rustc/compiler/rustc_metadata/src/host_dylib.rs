@@ -127,6 +127,19 @@ pub(crate) fn dlsym_proc_macros(
     path: &Path,
     stable_crate_id: StableCrateId,
 ) -> Result<&'static [ProcMacroClient], DylibError> {
+    // Refuse before dlopen/dlsym: library initialization and macro statics must
+    // never execute in a worker that can run subsequent compiler sessions.
+    // load_symbol_from_dylib intentionally leaks the library, so fresh TyCtxts
+    // alone do not provide per-session isolation or reload changed dylib files.
+    if rustc_session::resident::is_process() {
+        return Err(DylibError::DlOpen(
+            path.display().to_string(),
+            "native resident rustc does not support proc-macro crates: per-session \
+             dynamic-library isolation is not implemented; run this compilation \
+             with a fresh rustc process"
+                .to_owned(),
+        ));
+    }
     let sym_name = rustc_session::generate_proc_macro_decls_symbol(stable_crate_id);
     debug!("trying to dlsym proc_macros {} for symbol `{}`", path.display(), sym_name);
 

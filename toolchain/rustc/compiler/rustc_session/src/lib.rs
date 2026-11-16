@@ -24,6 +24,7 @@ pub mod query_admission;
 pub mod query_binding;
 pub mod query_reads;
 pub mod query_task_bindings;
+pub mod resident;
 pub mod utils;
 #[macro_use]
 pub mod config;

@@ -352,6 +352,14 @@ pub(crate) struct StableCrateIdCollision {
 }
 
 #[derive(Diagnostic)]
+#[diag(
+    "native resident rustc does not support proc-macro crates (`{$crate_name}`); per-session dynamic-library isolation is not implemented; run this compilation with a fresh rustc process"
+)]
+pub(crate) struct ResidentProcMacro {
+    pub crate_name: Symbol,
+}
+
+#[derive(Diagnostic)]
 #[diag("{$path}{$err}")]
 pub(crate) struct DlError {
     #[primary_span]

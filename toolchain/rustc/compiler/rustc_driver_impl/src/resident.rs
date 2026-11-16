@@ -34,6 +34,16 @@ fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
             if arg == "-" || arg.starts_with('@') || arg.contains('\0') {
                 return Err("stdin, response files and NUL arguments are unsupported");
             }
+            // LLVM initialization is process-global. This first protocol supports
+            // only the host target and owned LLVM backend, not mutable custom
+            // target specifications or dynamically loaded codegen backends.
+            if arg == "--target" || arg.starts_with("--target=") {
+                return Err("resident experiment currently supports only the host target");
+            }
+            let backend = arg.strip_prefix("-Z").unwrap_or(arg);
+            if backend.starts_with("codegen-backend") && backend != "codegen-backend=llvm" {
+                return Err("resident experiment currently supports only the owned LLVM backend");
+            }
             Ok(arg.to_owned())
         })
         .collect::<Result<_, _>>()?;
@@ -85,6 +95,7 @@ unsafe fn serve() -> Result<(), String> {
     }
     // SAFETY: the native launch protocol transfers this validated pipe to us.
     let mut response = unsafe { File::from_raw_fd(fd) };
+    rustc_session::resident::enable_process();
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut frozen_args: Option<Vec<String>> = None;
@@ -168,6 +179,8 @@ mod tests {
             r#"{"id":-1,"args":["a.rs"]}"#,
             r#"{"id":1,"args":[1]}"#,
             r#"{"id":1,"args":["a.rs"],"cwd":"/"}"#,
+            r#"{"id":1,"args":["a.rs","--target=custom.json"]}"#,
+            r#"{"id":1,"args":["a.rs","-Zcodegen-backend=cranelift"]}"#,
         ] {
             assert!(request(input.as_bytes()).is_err(), "{input}");
         }

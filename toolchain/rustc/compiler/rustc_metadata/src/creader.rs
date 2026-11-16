@@ -619,6 +619,13 @@ impl CStore {
 
         let Library { source, metadata } = lib;
         let crate_root = metadata.get_root();
+        if crate_root.is_proc_macro_crate() && rustc_session::resident::is_process() {
+            // A returned loader error can be suppressed during speculative name
+            // resolution and degrade into "can't find crate". This is an explicit
+            // worker capability refusal, so report it before registering/loading
+            // the crate and let the driver catch the ordinary fatal diagnostic.
+            tcx.dcx().emit_fatal(diagnostics::ResidentProcMacro { crate_name: name });
+        }
         let unhashed = metadata.get_root_unhashed();
         let host_hash = host_lib.as_ref().map(|lib| lib.metadata.get_crate_hash());
         let private_dep = self.is_private_dep(&tcx.sess.opts.externs, name, private_dep);
@@ -676,7 +683,8 @@ impl CStore {
         let incr_hash = if crate_root.is_proc_macro_crate() {
             None
         } else {
-            let recorded: Vec<Svh> = crate_root.decode_crate_deps(&metadata).map(|d| d.hash).collect();
+            let recorded: Vec<Svh> =
+                crate_root.decode_crate_deps(&metadata).map(|d| d.hash).collect();
             let actual: Vec<Svh> = cnum_map
                 .iter()
                 .skip(1)
