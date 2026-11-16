@@ -105,7 +105,9 @@ pub struct ResidentStats {
 impl ResidentStats {
     fn record_query_load(&mut self, name: &str) {
         self.value_loads += 1;
-        if name == "typeck" {
+        // QueryVTable::name is the declared query name. `typeck` is a
+        // convenience method, while the actual cached query is `typeck_root`.
+        if name == "typeck_root" {
             self.typeck_loads += 1;
         }
         if name.contains("mir") {
@@ -345,11 +347,12 @@ mod tests {
     #[test]
     fn query_names_count_each_success_once() {
         let mut stats = ResidentStats::default();
-        stats.record_query_load("typeck");
+        stats.record_query_load("typeck_root");
+        stats.record_query_load("type_of_opaque_hir_typeck");
         stats.record_query_load("optimized_mir");
         stats.record_query_load("mir_built");
         stats.record_query_load("generics_of");
-        assert_eq!(stats.value_loads, 4);
+        assert_eq!(stats.value_loads, 5);
         assert_eq!(stats.typeck_loads, 1);
         assert_eq!(stats.mir_loads, 2);
     }

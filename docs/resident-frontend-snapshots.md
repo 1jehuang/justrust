@@ -97,6 +97,12 @@ These are commands to run, not claims that acceptance has passed. The frontend
 harness requires actual graph/archive hits and successful type-checking or MIR
 result loads, with all bulk counters zero in the off control.
 
+The type-checking load counter follows the native `typeck_root` query, not the
+`tcx.typeck` convenience method. Earlier candidates matched the nonexistent query
+name `typeck`, so their zero `typeck_loads` values are not evidence that no
+type-checking results were loaded. Preserve those original receipts unchanged.
+The correction does not turn archive decoding into live typed-context reuse.
+
 ## Production boundary
 
 The existing proc-macro, target/backend, recording and job-admission restrictions
