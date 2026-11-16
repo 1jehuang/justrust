@@ -13,6 +13,9 @@ from pathlib import Path
 import platform
 import re
 import statistics
+import shutil
+import subprocess
+import sys
 
 import stable_resident as shared
 import stable_resident_typed as typed
@@ -21,6 +24,7 @@ import stable_resident_mir_leaf as leaf
 SCHEMA = 'stable_native_leaf/v1'
 FIXTURE = 'three-file-no-core-primitive-literal-v1'
 COMPILER = Path.home() / '.jcode/scratch/stable-resident-leaf-20261116-1527-sysroot/bin/rustc'
+BINARY_SHA = '8cb4b7089e2e70cbd4832fdf53a24ef2e27db676dcc3632c2501134e6f3dd567'
 DRIVER_SHA = 'c1bf09a1bd1e88188dbfb238303c213a7e52aad727a344e526c3a15807887f3f'
 ARMS = ('fresh', 'control', 'leaf')
 CLAIM = 'Primitive literal leaf workload only, NOT broadgate or realproject. Descriptive timings, no significance claim.'
@@ -99,7 +103,8 @@ def host_identity():
 
 
 def check_identity(identity):
-    require(identity.get('path') == str(COMPILER.resolve()), 'requires exact frozen1527 compiler path')
+    require(Path(identity.get('path', '')).is_absolute(), 'requires absolute frozen compiler path')
+    require(identity.get('sha256') == BINARY_SHA, 'requires exact frozen1527 compiler bytes')
     require([d.get('sha256') for d in identity.get('drivers', [])] == [DRIVER_SHA], 'requires exact frozen1527 driver SHA')
 
 
@@ -137,7 +142,8 @@ def aggregate(rows):
 
 def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
     compiler = Path(compiler).resolve()
-    require(compiler == COMPILER.resolve(), 'requires exact frozen1527 compiler path')
+    require(compiler.is_file() and sha(compiler.read_bytes()) == BINARY_SHA,
+            'requires exact frozen1527 compiler bytes')
     require(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0, 'invalid timeout')
     spec = workload(items, edits, repetitions)
     output = Path(output).resolve()
@@ -145,7 +151,8 @@ def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
     workspace = output / 'workspace'
     workspace.mkdir(mode=0o700)
     report = dict(schema=SCHEMA, claim=CLAIM, verdict='incomplete', workload=spec,
-                  workload_sha256=sha(canonical(spec)), host=host_identity(), rows=[], source_blobs={})
+                  workload_sha256=sha(canonical(spec)), host=host_identity(), rows=[], source_blobs={},
+                  load_before=list(os.getloadavg()))
     argv = leaf.arguments(Path('.'))
     report['workspace'] = str(workspace)
     report['actual_execution'] = dict(argv=argv, cwd=str(workspace))
@@ -232,6 +239,7 @@ def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
         report.update(verdict='failed', error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
+        report['load_after'] = list(os.getloadavg())
         (output / 'receipt.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
@@ -299,9 +307,30 @@ def compare(a, b, floor=10.0):
         print(f'{label} leaf/control={values["leaf"]["median_seconds"] / values["control"]["median_seconds"]:.6f}, leaf/fresh={values["leaf"]["median_seconds"] / values["fresh"]["median_seconds"]:.6f}')
 
 
+def upload_result(output):
+    if os.environ.get('JUSTRUST_RECORDS', '').lower() in ('off', '0', 'false'):
+        return
+    path = Path(output) / 'receipt.json'
+    if not path.is_file():
+        return
+    record_id = re.sub(r'[^A-Za-z0-9._-]', '-', Path(output).name)[:128].lstrip('.-_') or 'stable-leaf'
+    try:
+        result = subprocess.run([shutil.which('justrust') or 'justrust', 'records', 'put',
+                                 'bench', record_id, str(path)],
+                                capture_output=True, text=True, timeout=60)
+        print((result.stderr or result.stdout).strip(), file=sys.stderr)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f'bench: original receipt retained, upload unavailable: {error}', file=sys.stderr)
+
+
 def run(args):
-    report = capture(args.compiler, args.output, args.items, args.edits, args.repetitions, args.timeout)
-    print(json.dumps(dict(receipt=str(args.output / 'receipt.json'), aggregates=report['aggregates'], claim=CLAIM), indent=2))
+    output_existed = Path(args.output).exists()
+    try:
+        report = capture(args.compiler, args.output, args.items, args.edits, args.repetitions, args.timeout)
+        print(json.dumps(dict(receipt=str(args.output / 'receipt.json'), aggregates=report['aggregates'], claim=CLAIM), indent=2))
+    finally:
+        if not output_existed:
+            upload_result(args.output)
 
 
 def add_parser(sub):
@@ -312,7 +341,7 @@ def add_parser(sub):
     parser.add_argument('--edits', type=int, default=8)
     parser.add_argument('-n', '--repetitions', type=int, default=6)
     parser.add_argument('--timeout', type=float, default=180)
-    parser.set_defaults(func=run)
+    parser.set_defaults(fn=run)
     return parser
 
 
@@ -321,7 +350,7 @@ def main():
     add_parser(parser.add_subparsers(dest='command', required=True))
     args = parser.parse_args()
     require(math.isfinite(args.timeout) and args.timeout > 0, 'invalid timeout')
-    args.func(args)
+    args.fn(args)
 
 
 if __name__ == '__main__':

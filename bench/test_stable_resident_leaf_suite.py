@@ -54,8 +54,15 @@ class FixtureTests(unittest.TestCase):
     def test_exact_identity_refusal_without_execution(self):
         with self.assertRaisesRegex(ValueError, 'exact frozen1527 compiler'):
             suite.capture(Path('/usr/bin/rustc'), Path('/never-created'))
-        identity = dict(path=str(suite.COMPILER.resolve()), drivers=[dict(sha256=suite.DRIVER_SHA)])
+        identity = dict(path=str(suite.COMPILER.resolve()), sha256=suite.BINARY_SHA,
+                        drivers=[dict(sha256=suite.DRIVER_SHA)])
         suite.check_identity(identity)
+        guest = copy.deepcopy(identity)
+        guest['path'] = '/home/ubuntu/private-experiment/bin/rustc'
+        suite.check_identity(guest)
+        guest['sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'compiler bytes'):
+            suite.check_identity(guest)
         identity['drivers'][0]['sha256'] = '0' * 64
         with self.assertRaisesRegex(ValueError, 'driver SHA'):
             suite.check_identity(identity)
@@ -87,7 +94,7 @@ class FixtureTests(unittest.TestCase):
         suite.add_parser(parser.add_subparsers())
         args = parser.parse_args(['stable-native-leaf', '--compiler', str(suite.COMPILER), '--output', '/unused'])
         self.assertEqual(args.items, 128)
-        self.assertIs(args.func, suite.run)
+        self.assertIs(args.fn, suite.run)
 
 
 class AggregateTests(unittest.TestCase):

@@ -1758,6 +1758,12 @@ def named_test_failure_issues(result: dict) -> list[str]:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if any(str(result.get("schema", "")).startswith("stable_native_leaf/") for result in (a, b)):
+        if getattr(args, "require_valid", False):
+            sys.exit("bench: --require-valid supports only synthetic comparisons")
+        from stable_resident_leaf_suite import compare
+        compare(a, b, args.floor)
+        return
     if any(result.get("schema") == "contention_suite_v1" for result in (a, b)):
         from contention import comparison_issues
         issues = comparison_issues(a, b)
@@ -1887,6 +1893,8 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     from resident_suite import add_parser as add_resident_parser
     add_resident_parser(sub)
+    from stable_resident_leaf_suite import add_parser as add_stable_leaf_parser
+    add_stable_leaf_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     sub.add_parser("preflight", help="check pinned test runtime prerequisites without building").set_defaults(fn=cmd_preflight)
     r = sub.add_parser("run")
