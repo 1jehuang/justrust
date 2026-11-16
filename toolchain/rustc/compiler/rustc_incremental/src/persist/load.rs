@@ -141,6 +141,7 @@ pub fn load_query_result_cache(
     let _prof_timer = sess.prof.generic_activity("incr_comp_load_query_result_cache");
 
     let Some(path) = old_query_cache_path(incr_comp_session) else {
+        OnDiskCache::resident_unavailable(sess);
         return Some(OnDiskCache::new_empty());
     };
     match file_format::open_incremental_file(sess, &path) {
@@ -152,6 +153,7 @@ pub fn load_query_result_cache(
             Some(cache)
         }
         Err(OpenFileError::NotFoundOrHeaderMismatch | OpenFileError::IoError { .. }) => {
+            OnDiskCache::resident_unavailable(sess);
             Some(OnDiskCache::new_empty())
         }
     }
@@ -201,6 +203,11 @@ pub fn setup_dep_graph(
     let mut incr_comp_session = prepare_session_directory(sess, crate_name, stable_crate_id);
     // Try to load the previous session's dep graph and work products.
     let load_result = load_dep_graph(sess, &incr_comp_session);
+    if !matches!(&load_result, LoadResult::Ok { .. }) {
+        // No validated backing graph reached the resident lookup. Record this
+        // reuse opportunity as a miss without bypassing the ordinary fallback.
+        rustc_middle::dep_graph::resident_graph_unavailable(sess);
+    }
 
     sess.time("incr_comp_garbage_collect_session_directories", || {
         if let Err(e) = garbage_collect_session_directories(sess, &incr_comp_session) {

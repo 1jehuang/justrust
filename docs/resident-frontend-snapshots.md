@@ -67,7 +67,9 @@ object:
 {"graph_hits":0,"graph_misses":0,"graph_bytes":0,"archive_hits":0,"archive_misses":0,"archive_bytes":0,"value_loads":0,"typeck_loads":0,"mir_loads":0}
 ```
 
-Hit/miss and successful query-load counters are cumulative. Byte counters are
+Hit/miss and successful query-load counters are cumulative. Misses also count
+reuse opportunities rejected before lookup because the ordinary loader found
+missing or incompatible incremental artifacts. Byte counters are
 live retained storage and may decrease on replacement or eviction. Query loads
 count successful green-result rehydration from a cross-session resident archive,
 not same-session query hits or merely the existence of cached bytes. Off-mode
