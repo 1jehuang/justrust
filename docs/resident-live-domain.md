@@ -82,6 +82,32 @@ dogfood, a performance result, managed resident routing or default activation.
 External crates and broad changed-source typed reuse remain unfinished. A general
 speedup still requires representative, controlled suite measurements.
 
+### First focused performance measurements
+
+The frozen 1527 compiler was measured with `bench/suite.py stable-native-leaf`
+using 128 primitive functions per module, eight alternating file edits and six
+repetitions. Fresh-process, persistent-process control and live-leaf arms rotate
+execution order. Warmup is excluded, leaving 48 measured compiles per arm.
+Every accepted observation requires the exact diagnostic and exported literal
+LLVM oracle, while enabled edit observations require actual retained leaf hits.
+
+The two original local runs are stored and authenticated exact-JSON readback
+verified as `bench/stable-resident-leaf-suite-20261116-1544-a` and
+`bench/stable-resident-leaf-suite-20261116-1544-b`:
+
+| Run | Fresh median | Process-only control | Live leaf | Leaf/control |
+| --- | ---: | ---: | ---: | ---: |
+| A | 40.281 ms | 20.402 ms | 92.676 ms | 4.543x |
+| B | 42.498 ms | 17.580 ms | 108.390 ms | 6.166x |
+
+`bench/suite.py compare` validates these identical-compiler replicate receipts.
+They are not a before/after implementation change. The within-run on/off
+contrasts show a large regression on this narrow workload despite real reuse.
+Other machine activity is not excluded, and no statistical significance,
+general-project conclusion or default promotion is claimed. Repeated complete
+identity validation at each query lookup is the next optimization hypothesis,
+not an established attribution. The original slow baselines remain unchanged.
+
 ## Why a second cache is insufficient
 
 A `Ty<'tcx>`, `TypeckResults<'tcx>` or MIR `Body<'tcx>` can refer to an interner,
