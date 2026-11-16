@@ -53,6 +53,7 @@ pub struct LeafProof<'body, 'tcx> {
     source_map: &'body SourceMap,
     files: Vec<(usize, Arc<SourceFile>)>,
     spans: Vec<Span>,
+    limits: LeafLimits,
 }
 
 impl<'body, 'tcx> LeafProof<'body, 'tcx> {
@@ -67,6 +68,30 @@ impl<'body, 'tcx> LeafProof<'body, 'tcx> {
     }
     pub fn spans(&self) -> &[Span] {
         &self.spans
+    }
+
+    /// Pointer identity of the actual immutably borrowed MIR, not its hash.
+    pub fn is_for(&self, body: &mir::Body<'tcx>) -> bool {
+        std::ptr::eq(self.body, body)
+    }
+
+    /// Revalidate this point-in-time source closure against the same native
+    /// SourceMap's current active snapshot. This is NOT query authorization.
+    /// The inspection's source-loading quiescence contract also applies here.
+    pub fn is_current_for(&self, source_map: &SourceMap) -> bool {
+        if !std::ptr::eq(self.source_map, source_map)
+            || source_map.files().len() > self.limits.historical_files
+        {
+            return false;
+        }
+        let Ok(Some(current)) = source_map.active_source_files() else {
+            return false;
+        };
+        current.len() <= self.limits.active_files
+            && current.len() == self.files.len()
+            && current.iter().zip(&self.files).all(|((index, file), (expected_index, expected))| {
+                index == expected_index && Arc::ptr_eq(file, expected)
+            })
     }
 }
 
@@ -94,7 +119,25 @@ pub fn inspect<'body, 'tcx>(
     {
         return Err(LeafError::Item);
     }
+    check_lint_root(body, tcx.local_def_id_to_hir_id(def.expect_local()))?;
     inspect_body_closure(body, source_map, limits)
+}
+
+// The MIR visitor deliberately skips scope local_data. Review this retained HIR
+// identifier separately rather than silently treating it as transitively closed.
+fn check_lint_root(body: &mir::Body<'_>, expected: rustc_hir::HirId) -> Result<(), LeafError> {
+    let Some(scope) = body.source_scopes.get(mir::OUTERMOST_SOURCE_SCOPE) else {
+        return Err(LeafError::Scope);
+    };
+    match &scope.local_data {
+        mir::ClearCrossCrate::Clear => Ok(()),
+        mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root })
+            if *lint_root == expected =>
+        {
+            Ok(())
+        }
+        mir::ClearCrossCrate::Set(_) => Err(LeafError::Scope),
+    }
 }
 
 // Only `inspect` can expose this evidence outside this module. Separating the
@@ -128,7 +171,7 @@ fn inspect_body_closure<'body, 'tcx>(
         return Err(error);
     }
     let spans = visitor.spans;
-    Ok(LeafProof { body, source_map, files, spans })
+    Ok(LeafProof { body, source_map, files, spans, limits })
 }
 
 fn primitive(ty: ty::Ty<'_>) -> bool {
@@ -478,6 +521,60 @@ mod tests {
                 error: None,
             };
             assert_eq!(wrong_view.check(span(&file)), Err(LeafError::InactiveSpan));
+        });
+    }
+
+    #[test]
+    fn proof_currentness_rechecks_body_map_and_active_revision_pointers() {
+        native_test(|| {
+            let (sm, text) = setup();
+            let revision = sm.begin_resident_source_revision(2, 1024, 3).unwrap();
+            let file = sm.load_file(Path::new("leaf.rs")).unwrap();
+            let bool_cached = cached(ty::Bool);
+            let ty = ty::Ty(Interned::new_unchecked(&bool_cached));
+            let body = leaf(ty, span(&file));
+            let other_body = leaf(ty, span(&file));
+            let proof = inspect_body_closure(&body, &sm, LeafLimits::default()).unwrap();
+            assert!(proof.is_for(&body));
+            assert!(!proof.is_for(&other_body));
+            assert!(proof.is_current_for(&sm));
+            let (other_map, _) = setup();
+            assert!(!proof.is_current_for(&other_map));
+            drop(revision);
+            assert!(!proof.is_current_for(&sm));
+            let revision = sm.begin_resident_source_revision(2, 1024, 3).unwrap();
+            assert!(!proof.is_current_for(&sm));
+            let unchanged = sm.load_file(Path::new("leaf.rs")).unwrap();
+            assert!(Arc::ptr_eq(&file, &unchanged));
+            assert!(proof.is_current_for(&sm));
+            drop(revision);
+            *text.lock().unwrap() = "fn leaf() -> bool { false }".into();
+            let _revision = sm.begin_resident_source_revision(2, 1024, 3).unwrap();
+            let changed = sm.load_file(Path::new("leaf.rs")).unwrap();
+            assert!(!Arc::ptr_eq(&file, &changed));
+            assert!(!proof.is_current_for(&sm));
+        });
+    }
+
+    #[test]
+    fn scope_lint_root_must_be_absent_or_exactly_the_current_item_root() {
+        native_test(|| {
+            let (sm, _) = setup();
+            let _revision = sm.begin_resident_source_revision(2, 1024, 2).unwrap();
+            let file = sm.load_file(Path::new("leaf.rs")).unwrap();
+            let bool_cached = cached(ty::Bool);
+            let ty = ty::Ty(Interned::new_unchecked(&bool_cached));
+            let mut body = leaf(ty, span(&file));
+            let expected = rustc_hir::CRATE_HIR_ID;
+            assert_eq!(check_lint_root(&body, expected), Ok(()));
+            body.source_scopes[mir::OUTERMOST_SOURCE_SCOPE].local_data =
+                mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root: expected });
+            assert_eq!(check_lint_root(&body, expected), Ok(()));
+            let other_node = rustc_hir::HirId {
+                owner: expected.owner,
+                local_id: rustc_hir::ItemLocalId::from_u32(1),
+            };
+            assert_eq!(check_lint_root(&body, other_node), Err(LeafError::Scope));
         });
     }
 
