@@ -16,8 +16,14 @@ contexts. The corrected frozen compiler passes eight same-PID source-edit,
 error/recovery and nonce-checked executable transitions with exact fresh-compiler
 diagnostics. That original is stored and verified as
 `bench/stable-resident-owned-20261116-1346-native`. This is correctness evidence
-for the scoped request loop, not typed-cache reuse or a speedup. No full live
-engine or default promotion follows from this mode.
+for the scoped request loop, not typed-cache reuse or a speedup. The same frozen
+compiler also passed the owned request-loop and guard harnesses on an authenticated
+production build guest. Shipping-module dogfood passed there with three repetitions;
+its untouched original is stored as
+`bench/stable-resident-owned-host-20261116-1346-dogfood` and authenticated readback
+matches the original JSON exactly, including timing floats. This is a private
+candidate experiment, not selection of a new default production toolchain.
+No full live engine or default promotion follows from this mode.
 The previously measured `JUSTRUST_RUSTC_RESIDENT_FRONTEND` mode still retains
 encoded snapshots and starts a fresh `GlobalCtxt` per request. Its results do
 not measure the live design described here.
@@ -92,9 +98,18 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   and reads outside an enabled scope fail closed. Default one-shot loading is
   unchanged. A fallible active-revision view preserves original all-history
   indices and excludes unloaded historical files from dep-info and local source
-  identity hashing. Metadata and query-cache span encoding still use historical
-  indices, so incremental persistence remains refused. This is not a
-  span-remapping policy and does not authorize reusing old results.
+  identity hashing. Metadata and query-cache encoders now check active files while
+  preserving historical indices and ordinary formats. Incremental persistence
+  remains refused until the complete encoding and reuse contracts are validated.
+  This is not a span-remapping policy and does not authorize reusing old results.
+- `SourceMap::resident_raw_source_files` exposes bounded, frozen, pre-normalization
+  loader bytes without rereading disk. The compiler identity builder requires
+  complete one-to-one coverage of active source objects, captures actual local
+  definition paths and numeric IDs, and rejects external crates or unfrozen inputs.
+  A real three-context native test proves identical file revisions can authorize
+  identity reuse and a changed file cannot. This completed-analysis snapshot must
+  not be called from a type-checking lookup: doing so would force analysis and
+  create a query cycle rather than establish pre-query authorization.
 - `IncrCompSessionPaths` separates the immutable directory view used by contexts
   and codegen from `IncrCompSession`, which still owns the real filesystem locks.
   `GlobalCtxt` owns a cloned path snapshot, so keeping a context does not borrow
@@ -118,9 +133,9 @@ validation plus complete owner/source identity validation.
 
 ## Required integration before measuring the requested engine
 
-1. Move the request batch under one correctly scoped compiler executor. The
-   same worker registry and shared type-interner universe must outlive all
-   retained typed objects. Hoisting an arena alone is insufficient.
+1. The explicit owned request batch now runs under one scoped serial compiler
+   executor with a common worker registry and type-interner universe. Keep that
+   ownership invariant while connecting retained typed objects to query lookups.
 2. Give revision-local sessions, diagnostics, query states, definitions and
    HIR inputs explicit ownership under that executor. Release incremental
    directory locks and finish diagnostics normally even while type owners are
