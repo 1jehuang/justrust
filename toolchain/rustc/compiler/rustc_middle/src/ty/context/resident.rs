@@ -103,6 +103,7 @@ impl<'domain> ResidentTypeDomain<'domain> {
 mod tests {
     use std::num::NonZero;
 
+    use rustc_data_structures::intern::Interned;
     use rustc_data_structures::sync::{Registry, set_dyn_thread_safe_mode};
     use rustc_hir::CRATE_OWNER_ID;
 
@@ -208,6 +209,63 @@ mod tests {
             let first_ty = first.interners.intern_ty(crate::ty::TyKind::Bool);
             let second_ty = second.interners.intern_ty(crate::ty::TyKind::Bool);
             assert!(!std::ptr::eq(first_ty.kind(), second_ty.kind()));
+        });
+    }
+
+    #[test]
+    fn resident_resources_preserve_native_memory_and_alloc_ids_between_views() {
+        on_worker(|| {
+            with_resident_type_domain(|domain| {
+                let first = domain.context_resources();
+                let allocation = interpret::Allocation::from_bytes_byte_aligned_immutable(
+                    &b"resident allocation"[..],
+                    (),
+                );
+                let allocation = first
+                    .interners
+                    .const_allocation
+                    .intern(allocation, |allocation| {
+                        super::super::InternedInSet(first.arena.alloc(allocation))
+                    })
+                    .0;
+                let memory = interpret::ConstAllocation(Interned::new_unchecked(allocation));
+                let id = first.alloc_map.insert_for_test(interpret::GlobalAlloc::Memory(memory));
+                drop(first);
+                let next = domain.context_resources();
+                drop(domain);
+                let recovered = next.alloc_map.get_for_test(id).unwrap().unwrap_memory();
+                assert!(std::ptr::eq(memory.inner(), recovered.inner()));
+                let next_id =
+                    next.alloc_map.insert_for_test(interpret::GlobalAlloc::Memory(memory));
+                assert_ne!(id, next_id);
+                assert_eq!(next.alloc_map.get_for_test(id), next.alloc_map.get_for_test(next_id));
+            });
+        });
+    }
+
+    #[test]
+    fn fresh_resources_do_not_share_alloc_id_meanings() {
+        on_worker(|| {
+            let arena = WorkerLocal::new(|_| Arena::default());
+            let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
+            let first = GlobalCtxtResources::fresh(&arena, &hir_arena);
+            let second = GlobalCtxtResources::fresh(&arena, &hir_arena);
+            let first_ty = first.interners.intern_ty(crate::ty::TyKind::Bool);
+            let id =
+                first.alloc_map.insert_for_test(interpret::GlobalAlloc::TypeId { ty: first_ty });
+            assert!(second.alloc_map.get_for_test(id).is_none());
+            let second_ty = second.interners.intern_ty(crate::ty::TyKind::Char);
+            let second_id =
+                second.alloc_map.insert_for_test(interpret::GlobalAlloc::TypeId { ty: second_ty });
+            assert_eq!(id, second_id);
+            assert_eq!(
+                first.alloc_map.get_for_test(id),
+                Some(interpret::GlobalAlloc::TypeId { ty: first_ty })
+            );
+            assert_eq!(
+                second.alloc_map.get_for_test(id),
+                Some(interpret::GlobalAlloc::TypeId { ty: second_ty })
+            );
         });
     }
 

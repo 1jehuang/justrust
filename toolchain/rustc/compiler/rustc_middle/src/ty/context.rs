@@ -745,9 +745,8 @@ pub struct GlobalCtxtResources<'tcx> {
     alloc_map: OwnedOrBorrowed<'tcx, interpret::AllocMap<'tcx>>,
 }
 
-// Crate visibility is needed for the GlobalCtxt allocation-map field's users.
 // The public resource adapter deliberately exposes neither storage variant.
-pub(crate) enum OwnedOrBorrowed<'a, T> {
+enum OwnedOrBorrowed<'a, T> {
     Owned(T),
     Borrowed(&'a T),
 }
@@ -783,7 +782,7 @@ pub struct GlobalCtxt<'tcx> {
     pub arena: &'tcx WorkerLocal<Arena<'tcx>>,
     pub hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
 
-    interners: OwnedOrBorrowed<'tcx, CtxtInterners<'tcx>>,
+    interners: &'tcx CtxtInterners<'tcx>,
 
     pub sess: &'tcx Session,
     crate_types: Vec<CrateType>,
@@ -826,7 +825,7 @@ pub struct GlobalCtxt<'tcx> {
     pub data_layout: TargetDataLayout,
 
     /// Stores memory for globals (statics/consts).
-    pub(crate) alloc_map: OwnedOrBorrowed<'tcx, interpret::AllocMap<'tcx>>,
+    pub(crate) alloc_map: &'tcx interpret::AllocMap<'tcx>,
 
     current_gcx: CurrentGcx,
 
@@ -996,7 +995,7 @@ impl<'tcx> TyCtxt<'tcx> {
         sess: &'tcx Session,
         crate_types: Vec<CrateType>,
         stable_crate_id: StableCrateId,
-        resources: GlobalCtxtResources<'tcx>,
+        resources: &'tcx GlobalCtxtResources<'tcx>,
         untracked: Untracked,
         incr_comp_session: Option<IncrCompSessionPaths>,
         dep_graph: DepGraph,
@@ -1008,10 +1007,13 @@ impl<'tcx> TyCtxt<'tcx> {
         let data_layout = sess.target.parse_data_layout().unwrap_or_else(|err| {
             sess.dcx().emit_fatal(err);
         });
-        let GlobalCtxtResources { arena, hir_arena, interners, alloc_map } = resources;
-        let common_types = CommonTypes::new(&interners);
-        let common_lifetimes = CommonLifetimes::new(&interners);
-        let common_consts = CommonConsts::new(&interners, &common_types);
+        let arena = resources.arena;
+        let hir_arena = resources.hir_arena;
+        let interners = &*resources.interners;
+        let alloc_map = &*resources.alloc_map;
+        let common_types = CommonTypes::new(interners);
+        let common_lifetimes = CommonLifetimes::new(interners);
+        let common_consts = CommonConsts::new(interners, &common_types);
 
         let gcx = gcx_cell.get_or_init(|| GlobalCtxt {
             sess,

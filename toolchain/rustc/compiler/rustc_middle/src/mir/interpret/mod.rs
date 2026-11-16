@@ -446,6 +446,18 @@ impl<'tcx> AllocMap<'tcx> {
         let next_id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         AllocId(NonZero::new(next_id).unwrap())
     }
+
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(&self, alloc: GlobalAlloc<'tcx>) -> AllocId {
+        let id = self.reserve();
+        self.to_alloc.insert_unique(id, alloc);
+        id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_for_test(&self, id: AllocId) -> Option<GlobalAlloc<'tcx>> {
+        self.to_alloc.get(&id)
+    }
 }
 
 impl<'tcx> TyCtxt<'tcx> {

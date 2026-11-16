@@ -1005,16 +1005,17 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
     // Similarly, by creating `arena` here and passing in `&arena`, that reference has the type
     // `&'tcx WorkerLocal<Arena<'tcx>>`, also with one lifetime. And likewise for `hir_arena`.
 
-    let gcx_cell = OnceLock::new();
     let arena = WorkerLocal::new(|_| Arena::default());
     let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
+    let resources = ty::GlobalCtxtResources::fresh(&arena, &hir_arena);
+    let gcx_cell = OnceLock::new();
 
     let res = TyCtxt::create_global_ctxt(
         &gcx_cell,
         &compiler.sess,
         crate_types,
         stable_crate_id,
-        ty::GlobalCtxtResources::fresh(&arena, &hir_arena),
+        &resources,
         untracked,
         incr_comp_session.as_ref().map(|session| session.paths.clone()),
         dep_graph,
