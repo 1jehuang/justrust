@@ -47,7 +47,7 @@ use rustc_lint::unerased_lint_store;
 use rustc_lint_defs::{Lint, LintId};
 use rustc_metadata::creader::MetadataLoader;
 use rustc_metadata::locator;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{ResidentTypeDomain, TyCtxt};
 use rustc_parse::lexer::StripTokens;
 use rustc_parse::{new_parser_from_file, new_parser_from_source_str, unwrap_or_emit_fatal};
 use rustc_session::config::{
@@ -183,6 +183,29 @@ fn compiler_entrypoint_with_binding(
     callbacks: &mut (dyn Callbacks + Send),
     query_admission: Option<rustc_session::query_admission::QueryAdmissionObserver>,
 ) {
+    let Some(prepared) = prepare_compiler(at_args, callbacks, query_admission) else {
+        return;
+    };
+    let PreparedCompiler { config, has_input, help_only, registered_lints } = prepared;
+    interface::run_compiler(config, |compiler| {
+        run_compiler_pipeline(compiler, None, callbacks, has_input, help_only, registered_lints);
+    });
+}
+
+/// Argument processing and callback configuration, before session creation.
+/// `None` means a help or explanation request has already completed.
+pub(crate) struct PreparedCompiler {
+    pub(crate) config: interface::Config,
+    pub(crate) has_input: bool,
+    pub(crate) help_only: bool,
+    pub(crate) registered_lints: bool,
+}
+
+pub(crate) fn prepare_compiler(
+    at_args: &[String],
+    callbacks: &mut (dyn Callbacks + Send),
+    query_admission: Option<rustc_session::query_admission::QueryAdmissionObserver>,
+) -> Option<PreparedCompiler> {
     let mut default_early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
 
     // Throw away the first argument, the name of the binary.
@@ -208,7 +231,7 @@ fn compiler_entrypoint_with_binding(
         _ => false,
     };
     let (matches, help_only) = match handle_options(&default_early_dcx, &args) {
-        HandledOptions::None => return,
+        HandledOptions::None => return None,
         HandledOptions::Normal(matches) => (matches, false),
         HandledOptions::HelpOnly(matches) => (matches, true),
     };
@@ -219,7 +242,7 @@ fn compiler_entrypoint_with_binding(
 
     if let Some(ref code) = matches.opt_str("explain") {
         handle_explain(&default_early_dcx, code, sopts.color);
-        return;
+        return None;
     }
 
     let input = make_input(&default_early_dcx, &matches.free);
@@ -253,138 +276,188 @@ fn compiler_entrypoint_with_binding(
 
     let registered_lints = config.register_lints.is_some();
 
-    interface::run_compiler(config, |compiler| {
-        let sess = &compiler.sess;
-        let codegen_backend = &*compiler.codegen_backend;
+    Some(PreparedCompiler { config, has_input, help_only, registered_lints })
+}
 
-        // This implements `-Whelp`. It should be handled very early, like
-        // `--help`/`-Zhelp`/`-Chelp`. This is the earliest it can run, because
-        // it must happen after lints are registered, during session creation.
-        if sess.opts.describe_lints {
-            describe_lints(sess, registered_lints);
-            return;
-        }
+/// Run one revision with fresh context ownership or an explicitly scoped domain.
+/// A resident context is never silently replaced with a fresh context.
+pub(crate) fn run_compiler_pipeline<'tcx>(
+    compiler: &'tcx interface::Compiler,
+    domain: Option<&ResidentTypeDomain<'tcx>>,
+    callbacks: &mut (dyn Callbacks + Send),
+    has_input: bool,
+    help_only: bool,
+    registered_lints: bool,
+) {
+    let sess = &compiler.sess;
+    let codegen_backend = &*compiler.codegen_backend;
 
-        // We have now handled all help options, exit
-        if help_only {
-            return;
-        }
+    // This implements `-Whelp`. It should be handled very early, like
+    // `--help`/`-Zhelp`/`-Chelp`. This is the earliest it can run, because
+    // it must happen after lints are registered, during session creation.
+    if sess.opts.describe_lints {
+        describe_lints(sess, registered_lints);
+        return;
+    }
 
-        if print_crate_info(codegen_backend, sess, has_input) == Compilation::Stop {
-            return;
-        }
+    // We have now handled all help options, exit
+    if help_only {
+        return;
+    }
 
-        if !has_input {
-            sess.dcx().fatal("no input filename given"); // this is fatal
-        }
+    if print_crate_info(codegen_backend, sess, has_input) == Compilation::Stop {
+        return;
+    }
 
-        if !sess.opts.unstable_opts.ls.is_empty() {
-            list_metadata(sess, &*codegen_backend.metadata_loader());
-            return;
-        }
+    if !has_input {
+        sess.dcx().fatal("no input filename given"); // this is fatal
+    }
 
-        if sess.opts.unstable_opts.link_only {
-            process_rlink(sess, compiler);
-            return;
-        }
+    if !sess.opts.unstable_opts.ls.is_empty() {
+        list_metadata(sess, &*codegen_backend.metadata_loader());
+        return;
+    }
 
-        // Parse the crate root source code (doesn't parse submodules yet)
-        // Everything else is parsed during macro expansion.
-        let mut krate = passes::parse(sess);
+    if sess.opts.unstable_opts.link_only {
+        process_rlink(sess, compiler);
+        return;
+    }
 
-        // If pretty printing is requested: Figure out the representation, print it and exit
-        if let Some(pp_mode) = sess.opts.pretty {
-            if pp_mode.needs_ast_map() {
-                create_and_enter_global_ctxt(compiler, krate, |tcx| {
-                    tcx.ensure_ok().early_lint_checks(());
-                    pretty::print(sess, pp_mode, pretty::PrintExtra::NeedsAstMap { tcx });
-                    passes::write_dep_info(tcx);
-                });
-            } else {
-                pretty::print(sess, pp_mode, pretty::PrintExtra::AfterParsing { krate: &krate });
-            }
-            trace!("finished pretty-printing");
-            return;
-        }
+    // Parse the crate root source code (doesn't parse submodules yet)
+    // Everything else is parsed during macro expansion.
+    let mut krate = passes::parse(sess);
 
-        if callbacks.after_crate_root_parsing(compiler, &mut krate) == Compilation::Stop {
-            return;
-        }
-
-        if sess.opts.unstable_opts.parse_crate_root_only {
-            return;
-        }
-
-        let linker = create_and_enter_global_ctxt(compiler, krate, |tcx| {
-            // Make sure name resolution and macro expansion is run.
-            let _ = tcx.resolver_for_lowering();
-
-            if callbacks.after_expansion(compiler, tcx) == Compilation::Stop {
-                return None;
-            }
-
-            passes::write_dep_info(tcx);
-
-            passes::write_interface(tcx);
-
-            if sess.opts.output_types.contains_key(&OutputType::DepInfo)
-                && sess.opts.output_types.len() == 1
-            {
-                return None;
-            }
-
-            if sess.opts.unstable_opts.no_analysis {
-                return None;
-            }
-
-            tcx.ensure_ok().analysis(());
-
-            if callbacks.after_analysis(compiler, tcx) == Compilation::Stop {
-                return None;
-            }
-
-            if sess.opts.output_types.contains_key(&OutputType::Mir) {
-                if let Err(error) = pretty::emit_mir(tcx) {
-                    tcx.dcx().emit_fatal(CantEmitMIR { error });
+    // If pretty printing is requested: Figure out the representation, print it and exit
+    if let Some(pp_mode) = sess.opts.pretty {
+        if pp_mode.needs_ast_map() {
+            match domain {
+                Some(domain) => {
+                    passes::create_and_enter_global_ctxt_in_domain(
+                        compiler,
+                        domain,
+                        krate,
+                        |tcx| {
+                            print_with_ast_map(tcx, pp_mode);
+                        },
+                    )
+                    .unwrap_or_else(|| {
+                        sess.dcx().fatal("resident type domain context capacity exhausted")
+                    });
+                }
+                None => {
+                    create_and_enter_global_ctxt(compiler, krate, |tcx| {
+                        print_with_ast_map(tcx, pp_mode);
+                    });
                 }
             }
-
-            let linker = Linker::codegen_and_build_linker(tcx, codegen_backend);
-
-            if let Some(metrics_dir) = &sess.opts.unstable_opts.metrics_dir {
-                dump_feature_usage_metrics(tcx, metrics_dir);
-            }
-
-            tcx.report_unused_features();
-
-            // justrust: persist the incremental state (dep graph, query
-            // cache) on one thread while the other joins codegen and links,
-            // instead of persisting first and linking after the `GlobalCtxt`
-            // is gone. Both only read finished state; the session directory
-            // is finalized after both are done, exactly as before.
-            if rustc_interface::overlap_persist_enabled(sess) {
-                return Some(Done::Linked(rustc_interface::overlap_persist_and_link(
-                    tcx,
-                    linker,
-                    codegen_backend,
-                )));
-            }
-
-            Some(Done::Pending(linker))
-        });
-
-        // Linking is done outside the `compiler.enter()` so that the
-        // `GlobalCtxt` within `Queries` can be freed as early as possible.
-        match linker {
-            (Some(Done::Pending(linker)), incr_comp_session) => {
-                linker.link(sess, incr_comp_session, codegen_backend);
-            }
-            (Some(Done::Linked(crate_hash)), incr_comp_session) => {
-                rustc_interface::finalize_after_overlap(sess, incr_comp_session, crate_hash);
-            }
-            (None, _) => {}
+        } else {
+            pretty::print(sess, pp_mode, pretty::PrintExtra::AfterParsing { krate: &krate });
         }
-    })
+        trace!("finished pretty-printing");
+        return;
+    }
+
+    if callbacks.after_crate_root_parsing(compiler, &mut krate) == Compilation::Stop {
+        return;
+    }
+
+    if sess.opts.unstable_opts.parse_crate_root_only {
+        return;
+    }
+
+    let linker = match domain {
+        Some(domain) => {
+            passes::create_and_enter_global_ctxt_in_domain(compiler, domain, krate, |tcx| {
+                analyze_and_codegen(compiler, tcx, callbacks)
+            })
+            .unwrap_or_else(|| sess.dcx().fatal("resident type domain context capacity exhausted"))
+        }
+        None => create_and_enter_global_ctxt(compiler, krate, |tcx| {
+            analyze_and_codegen(compiler, tcx, callbacks)
+        }),
+    };
+
+    // Linking is done after leaving the context in both ownership modes.
+    // Resident context storage remains owned by the enclosing batch.
+    match linker {
+        (Some(Done::Pending(linker)), incr_comp_session) => {
+            linker.link(sess, incr_comp_session, codegen_backend);
+        }
+        (Some(Done::Linked(crate_hash)), incr_comp_session) => {
+            rustc_interface::finalize_after_overlap(sess, incr_comp_session, crate_hash);
+        }
+        (None, _) => {}
+    }
+}
+
+fn print_with_ast_map(tcx: TyCtxt<'_>, pp_mode: rustc_session::config::PpMode) {
+    tcx.ensure_ok().early_lint_checks(());
+    pretty::print(tcx.sess, pp_mode, pretty::PrintExtra::NeedsAstMap { tcx });
+    passes::write_dep_info(tcx);
+}
+
+fn analyze_and_codegen<'tcx>(
+    compiler: &interface::Compiler,
+    tcx: TyCtxt<'tcx>,
+    callbacks: &mut (dyn Callbacks + Send),
+) -> Option<Done> {
+    let sess = &compiler.sess;
+    let codegen_backend = &*compiler.codegen_backend;
+    // Make sure name resolution and macro expansion is run.
+    let _ = tcx.resolver_for_lowering();
+
+    if callbacks.after_expansion(compiler, tcx) == Compilation::Stop {
+        return None;
+    }
+
+    passes::write_dep_info(tcx);
+
+    passes::write_interface(tcx);
+
+    if sess.opts.output_types.contains_key(&OutputType::DepInfo)
+        && sess.opts.output_types.len() == 1
+    {
+        return None;
+    }
+
+    if sess.opts.unstable_opts.no_analysis {
+        return None;
+    }
+
+    tcx.ensure_ok().analysis(());
+
+    if callbacks.after_analysis(compiler, tcx) == Compilation::Stop {
+        return None;
+    }
+
+    if sess.opts.output_types.contains_key(&OutputType::Mir) {
+        if let Err(error) = pretty::emit_mir(tcx) {
+            tcx.dcx().emit_fatal(CantEmitMIR { error });
+        }
+    }
+
+    let linker = Linker::codegen_and_build_linker(tcx, codegen_backend);
+
+    if let Some(metrics_dir) = &sess.opts.unstable_opts.metrics_dir {
+        dump_feature_usage_metrics(tcx, metrics_dir);
+    }
+
+    tcx.report_unused_features();
+
+    // justrust: persist the incremental state (dep graph, query
+    // cache) on one thread while the other joins codegen and links,
+    // instead of persisting first and linking after the `GlobalCtxt`
+    // is gone. Both only read finished state; the session directory
+    // is finalized after both are done, exactly as before.
+    if rustc_interface::overlap_persist_enabled(sess) {
+        return Some(Done::Linked(rustc_interface::overlap_persist_and_link(
+            tcx,
+            linker,
+            codegen_backend,
+        )));
+    }
+
+    Some(Done::Pending(linker))
 }
 
 /// justrust: what the global-context closure of `run_compiler` hands back.
@@ -1748,7 +1821,9 @@ pub unsafe fn main() -> ExitCode {
     let raw_args = args::raw_args(&early_dcx);
     if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident") {
         if raw_args.len() != 2 || query_admission.is_some() {
-            eprintln!("jr-rustc resident: requires a dedicated unbound worker with no extra arguments");
+            eprintln!(
+                "jr-rustc resident: requires a dedicated unbound worker with no extra arguments"
+            );
             return ExitCode::FAILURE;
         }
         #[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
