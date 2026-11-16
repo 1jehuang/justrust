@@ -1616,11 +1616,16 @@ fn run_remote_inner(
         match frame {
             (
                 Msg::RunState {
-                    may_have_started, ..
+                    may_have_started,
+                    phase,
+                    ..
                 },
                 _,
             ) => {
                 submitted = may_have_started;
+                if let Some(phase) = phase {
+                    live.phase(&phase, "");
+                }
                 if may_have_started {
                     lifecycle.running();
                     hosted_run.running();
@@ -1691,6 +1696,7 @@ fn run_remote_inner(
                         compile_stdout.push(&data, &mut so, &mut se, json_output)?;
                     }
                 } else {
+                    live.stderr(&data);
                     se.write_all(&data)?;
                     se.flush()?;
                 }
@@ -1931,7 +1937,7 @@ pub fn place_name() -> &'static str {
 /// a fallback to a local build does not leave a phantom active run.
 struct LiveRun {
     dir: Option<PathBuf>,
-    state: crate::live::LiveState,
+    sniffer: crate::live::Sniffer,
 }
 
 impl LiveRun {
@@ -1939,7 +1945,7 @@ impl LiveRun {
         let Ok(dir) = crate::paths::runs_dir().map(|d| d.join(run_id)) else {
             return LiveRun {
                 dir: None,
-                state: Default::default(),
+                sniffer: crate::live::Sniffer::new(None, true),
             };
         };
         let meta = crate::record::Meta {
@@ -1956,25 +1962,35 @@ impl LiveRun {
         let ok = std::fs::create_dir_all(&dir).is_ok()
             && serde_json::to_vec(&meta)
                 .is_ok_and(|b| std::fs::write(dir.join("meta.json"), b).is_ok());
-        let mut r = LiveRun {
-            dir: ok.then_some(dir),
-            state: Default::default(),
-        };
+        let dir = ok.then_some(dir);
+        let sniffer = crate::live::Sniffer::new(dir.as_deref(), true);
+        let mut r = LiveRun { dir, sniffer };
         r.phase("syncing", "");
         r
     }
 
     fn phase(&mut self, phase: &str, machine: &str) {
         let Some(dir) = &self.dir else { return };
-        self.state.phase = phase.into();
+        let state = &mut self.sniffer.state;
+        state.phase = phase.into();
         if !machine.is_empty() {
-            self.state.active = vec![machine.to_string()];
-            self.state.active_since = vec![crate::paths::now()];
+            state.active = vec![machine.to_string()];
+            state.active_since = vec![crate::paths::now()];
         }
-        self.state.updated = crate::paths::now();
-        if let Ok(b) = serde_json::to_vec(&self.state) {
-            let _ = std::fs::write(dir.join(crate::live::FILE), b);
+        state.updated = crate::paths::now();
+        if let Ok(b) = serde_json::to_vec(state) {
+            let path = dir.join(crate::live::FILE);
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, b).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
+    }
+
+    fn stderr(&mut self, data: &[u8]) {
+        // Observe only. Forward the original bytes unchanged to preserve
+        // diagnostics and the remote command's output contract.
+        self.sniffer.feed(data, &mut Vec::new());
     }
 }
 
@@ -2106,6 +2122,22 @@ mod admission_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_live_progress_tracks_split_stderr_without_consuming_output() {
+        let mut live = super::LiveRun {
+            dir: None,
+            sniffer: crate::live::Sniffer::new(None, true),
+        };
+        live.stderr(b"    Blocking waiting for file ");
+        live.stderr(b"lock on build directory\n");
+        assert_eq!(live.sniffer.state.phase, "waiting for lock");
+        live.stderr(b"    Compiling fixture v0.1.0\n");
+        assert_eq!(live.sniffer.state.phase, "compiling");
+        live.stderr(b"    Finished `test` profile\n     Running unittests src/lib.rs (fixture)\n");
+        assert_eq!(live.sniffer.state.phase, "testing");
+        assert!(live.sniffer.state.finished_at.is_some());
+    }
+
     /// A sandbox with source but no Rust toolchain still finds what to
     /// mirror: the repository, plus a path dependency outside it.
     #[test]

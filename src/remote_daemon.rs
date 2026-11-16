@@ -1917,14 +1917,31 @@ fn run(
     let id = d.id();
     let (tx, rx) = channel();
     let (link, files, note, timing) = {
+        let setup_phase = |w: &mut BufWriter<UnixStream>, phase: &str| -> Result<()> {
+            if pipeline {
+                write_frame(
+                    w,
+                    &Msg::RunState {
+                        id,
+                        may_have_started: false,
+                        phase: Some(phase.into()),
+                    },
+                    &[],
+                )?;
+            }
+            Ok(())
+        };
+        setup_phase(w, "waiting for sync lock")?;
         let mut st = d.sync.foreground_lock().unwrap();
         let locked = t.elapsed();
         if d.draining.load(Ordering::SeqCst) {
             bail!("sync daemon transport policy changed; reconnect before starting a build");
         }
         let res = (|| -> Result<_> {
+            setup_phase(w, "connecting")?;
             let link = ensure_link(d, &mut st, start)?;
             let linked = t.elapsed();
+            setup_phase(w, "syncing")?;
             let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
                 let result = if st.needs_mirror(root) {
@@ -1942,6 +1959,7 @@ fn run(
             }
             let pushed = t.elapsed();
             let note = oversized_note(&st, &roots)?;
+            setup_phase(w, "applying sources")?;
             if !pipeline {
                 barrier(d, &mut st, &link)?;
             }
@@ -1973,6 +1991,7 @@ fn run(
                     &Msg::RunState {
                         id,
                         may_have_started: true,
+                        phase: None,
                     },
                     &[],
                 )?;
@@ -2020,6 +2039,7 @@ fn run(
                         &Msg::RunState {
                             id,
                             may_have_started: false,
+                            phase: None,
                         },
                         &[],
                     )?;

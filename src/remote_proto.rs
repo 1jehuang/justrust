@@ -268,6 +268,9 @@ pub enum Msg {
     RunState {
         id: u64,
         may_have_started: bool,
+        /// Observational daemon setup stage. Older peers omit or ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
     },
     /// Output of a run: payload bytes, stream 1 = stdout, 2 = stderr.
     /// Stream 3 is LiveCpu JSON, only after CLIENT_LIVE_CPU=1 opt-in.
@@ -567,6 +570,30 @@ mod tests {
     }
 
     #[test]
+    fn submission_phase_is_optional_and_does_not_imply_launch() {
+        let legacy: Msg = serde_json::from_value(serde_json::json!({
+            "t": "RunState", "id": 10, "may_have_started": false
+        }))
+        .unwrap();
+        assert_eq!(
+            legacy,
+            Msg::RunState {
+                id: 10,
+                may_have_started: false,
+                phase: None
+            }
+        );
+        let progress = Msg::RunState {
+            id: 10,
+            may_have_started: false,
+            phase: Some("waiting for sync lock".into()),
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &progress, &[]).unwrap();
+        assert_eq!(read_frame(&mut &buf[..]).unwrap().unwrap().0, progress);
+    }
+
+    #[test]
     fn guarded_run_and_submission_state_roundtrip_without_changing_legacy_run() {
         let legacy: Msg = serde_json::from_value(serde_json::json!({
             "t":"Run", "id":9, "cwd":"/proj", "args":["check"], "env":[]
@@ -585,6 +612,7 @@ mod tests {
                 &Msg::RunState {
                     id: 10,
                     may_have_started: state,
+                    phase: None,
                 },
                 &[],
             )
@@ -597,7 +625,8 @@ mod tests {
                 read_frame(&mut input).unwrap().unwrap().0,
                 Msg::RunState {
                     id: 10,
-                    may_have_started: state
+                    may_have_started: state,
+                    phase: None,
                 }
             );
         }

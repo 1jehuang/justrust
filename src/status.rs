@@ -309,6 +309,22 @@ fn estimate(
     index: &[IndexEntry],
     runs: &Path,
 ) -> Option<Estimate> {
+    // A previous build's duration cannot predict provisioning, source sync,
+    // or lock contention. Do not turn elapsed setup time into a countdown.
+    if !matches!(
+        live.phase.as_str(),
+        "compiling" | "testing" | "running" | "finishing"
+    ) {
+        return None;
+    }
+    // Remote unit records arrive at completion. Until we have an anchor,
+    // subtracting client elapsed time would count sync/lock waits as work.
+    if meta.place.as_deref().is_some_and(|p| p != "local")
+        && done_units.is_empty()
+        && live.finished_at.is_none()
+    {
+        return None;
+    }
     let to_compile = (live.total > 0).then(|| live.total - live.first_done.unwrap_or(0));
     let r = pick_reference(index, meta, to_compile)?;
     let rdir = runs.join(&r.id);
@@ -598,6 +614,7 @@ fn phase_word(a: &Active) -> String {
         "waiting for lock" => "waiting for lock".into(),
         "finishing" => "linking".into(),
         "syncing" => "syncing".into(),
+        "waiting for sync lock" | "connecting" | "applying sources" => l.phase.clone(),
         "building" if l.total == 0 => "building".into(),
         _ if l.total > 0 => format!("{}/{}", l.done, l.total),
         _ => "starting".into(),
@@ -1083,6 +1100,69 @@ mod tests {
             units_compiled: units,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn setup_and_lock_waits_have_no_countdown_even_with_a_reference() {
+        let dir = std::env::temp_dir().join(format!(
+            "jr-status-eta-{}-{}",
+            std::process::id(),
+            paths::now()
+        ));
+        std::fs::create_dir_all(dir.join("reference")).unwrap();
+        let summary = Summary {
+            wall: 63.0,
+            ..Default::default()
+        };
+        std::fs::write(
+            dir.join("reference/summary.json"),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+        let meta = Meta {
+            id: "current".into(),
+            cwd: "/w".into(),
+            args: s(&["check"]),
+            subcommand: "check".into(),
+            start: 100.0,
+            ..Default::default()
+        };
+        let index = [entry("reference", &["check"], 1)];
+        let mut live = LiveState {
+            phase: "compiling".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            estimate(159.0, &meta, &live, &[], &index, &dir)
+                .unwrap()
+                .remaining,
+            4.0
+        );
+        for phase in [
+            "starting",
+            "syncing",
+            "connecting",
+            "applying sources",
+            "waiting for sync lock",
+            "waiting for lock",
+            "building",
+        ] {
+            live.phase = phase.into();
+            assert!(
+                estimate(159.0, &meta, &live, &[], &index, &dir).is_none(),
+                "{phase}"
+            );
+        }
+        live.phase = "compiling".into();
+        let remote = Meta {
+            place: Some("hosted".into()),
+            ..meta
+        };
+        assert!(estimate(159.0, &remote, &live, &[], &index, &dir).is_none());
+        live.phase = "testing".into();
+        live.finished_at = Some(158.0);
+        assert!(estimate(159.0, &remote, &live, &[], &index, &dir).is_some());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
