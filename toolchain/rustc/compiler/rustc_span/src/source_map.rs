@@ -9,6 +9,7 @@
 //! within the `SourceMap`, which upon request can be converted to line and column
 //! information, source code snippets, etc.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, BorrowedBuf, Read};
 use std::{fs, path};
@@ -194,6 +195,280 @@ pub struct SourceMapInputs {
     pub checksum_hash_kind: Option<SourceFileHashAlgorithm>,
 }
 
+/// An explicitly opted-in sequence of source-loading revisions for one source map.
+///
+/// This is only a loader, not a compiler revision or permission to reuse queries.
+/// It neither supplies an active-file view nor changes `SourceMap::files()`: old
+/// source versions and their byte positions remain in the map forever. The owner
+/// must separately bound the lifetime of the source map and all compiler state.
+/// Ordinary source-map loading is unaffected, including when interleaved with this
+/// loader. Such loads are not part of this loader's frozen view.
+pub struct SourceRevisionLoader<'sm> {
+    source_map: &'sm SourceMap,
+    working_directory: PathBuf,
+    entries: BTreeMap<PathBuf, RevisionSourceFile>,
+    raw_bytes: usize,
+    max_files: usize,
+    max_raw_bytes: usize,
+    max_revisions: usize,
+    revision: usize,
+}
+
+struct RevisionSourceFile {
+    // Keep the exact, pre-normalization contents. Hashes or normalized text are
+    // insufficient: BOM and CRLF changes must allocate a new source version too.
+    raw: String,
+    file: Arc<SourceFile>,
+    loaded_revision: usize,
+}
+
+/// A serial loading scope. The first successful load of each path is frozen
+/// until this scope is dropped. Any load error poisons the scope, so callers
+/// cannot silently continue with a partially loaded revision.
+pub struct SourceRevision<'loader, 'sm> {
+    loader: &'loader mut SourceRevisionLoader<'sm>,
+    failed: bool,
+}
+
+impl<'sm> SourceRevisionLoader<'sm> {
+    /// Start a fresh loading scope. Files are read again on their first load in
+    /// this scope, even when filesystem metadata has not changed. Bounds apply
+    /// across this loader's entire lifetime, not just the currently loaded set.
+    /// Exhausting the revision budget fails closed without wrapping the counter.
+    pub fn begin_revision(&mut self) -> io::Result<SourceRevision<'_, 'sm>> {
+        if self.revision == self.max_revisions {
+            return Err(io::Error::other("source revision budget exhausted"));
+        }
+        self.revision += 1;
+        Ok(SourceRevision { loader: self, failed: false })
+    }
+}
+
+impl SourceRevision<'_, '_> {
+    /// Load an exact lexical path, resolved against the working directory
+    /// captured when the loader was created. No canonicalization or remapping
+    /// is used as the cache key. Different aliases can therefore load separately.
+    /// The injected `FileLoader` must itself provide fresh reads between scopes.
+    pub fn load_file(&mut self, path: &Path) -> io::Result<Arc<SourceFile>> {
+        if self.failed {
+            return Err(io::Error::other("source revision is poisoned by a previous load error"));
+        }
+        let result = self.try_load_file(path);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn try_load_file(&mut self, path: &Path) -> io::Result<Arc<SourceFile>> {
+        let loader = &mut self.loader;
+        let path = loader.working_directory.join(path);
+        if let Some(entry) = loader.entries.get(&path) {
+            if entry.loaded_revision == loader.revision {
+                return Ok(Arc::clone(&entry.file));
+            }
+        } else if loader.entries.len() == loader.max_files {
+            return Err(io::Error::other("source revision file budget exhausted"));
+        }
+
+        let raw = loader.source_map.file_loader.read_file(&path)?;
+        let previous = loader.entries.get(&path);
+        let previous_len = previous.map_or(0, |entry| entry.raw.len());
+        let raw_bytes = loader
+            .raw_bytes
+            .checked_sub(previous_len)
+            .and_then(|bytes| bytes.checked_add(raw.len()))
+            .filter(|&bytes| bytes <= loader.max_raw_bytes)
+            .ok_or_else(|| io::Error::other("source revision raw-byte budget exhausted"))?;
+        let file = if let Some(entry) = previous.filter(|entry| entry.raw == raw) {
+            Arc::clone(&entry.file)
+        } else {
+            let sm = loader.source_map;
+            let filename = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, &path));
+            sm.new_source_file_version(filename, raw.clone()).map_err(|_| {
+                io::Error::other("source revision source-map address space exhausted")
+            })?
+        };
+        loader.entries.insert(
+            path,
+            RevisionSourceFile { raw, file: Arc::clone(&file), loaded_revision: loader.revision },
+        );
+        loader.raw_bytes = raw_bytes;
+        Ok(file)
+    }
+}
+
+#[cfg(test)]
+mod revision_loader_tests {
+    use std::sync::{Arc as Shared, Mutex};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Disk {
+        contents: BTreeMap<PathBuf, String>,
+        reads: usize,
+    }
+
+    struct Loader(Shared<Mutex<Disk>>);
+
+    impl FileLoader for Loader {
+        fn file_exists(&self, path: &Path) -> bool {
+            self.0.lock().unwrap().contents.contains_key(path)
+        }
+
+        fn read_file(&self, path: &Path) -> io::Result<String> {
+            let mut disk = self.0.lock().unwrap();
+            disk.reads += 1;
+            disk.contents.get(path).cloned().ok_or_else(|| io::ErrorKind::NotFound.into())
+        }
+
+        fn read_binary_file(&self, path: &Path) -> io::Result<Arc<[u8]>> {
+            self.read_file(path).map(|text| text.into_bytes().into())
+        }
+
+        fn current_directory(&self) -> io::Result<PathBuf> {
+            std::env::current_dir()
+        }
+    }
+
+    fn setup() -> (SourceMap, Shared<Mutex<Disk>>) {
+        let disk = Shared::new(Mutex::new(Disk::default()));
+        let sm = SourceMap::with_inputs(SourceMapInputs {
+            file_loader: Box::new(Loader(Shared::clone(&disk))),
+            path_mapping: FilePathMapping::empty(),
+            hash_kind: SourceFileHashAlgorithm::Md5,
+            checksum_hash_kind: None,
+        });
+        (sm, disk)
+    }
+
+    fn write(disk: &Mutex<Disk>, name: &str, text: &str) {
+        disk.lock()
+            .unwrap()
+            .contents
+            .insert(std::env::current_dir().unwrap().join(name), text.to_string());
+    }
+
+    #[test]
+    fn fresh_revisions_freeze_first_load_and_preserve_history() {
+        let (sm, disk) = setup();
+        write(&disk, "input.rs", "old");
+        let mut loader = sm.source_revision_loader(1, 64, 3).unwrap();
+        let old = {
+            let mut revision = loader.begin_revision().unwrap();
+            let old = revision.load_file(Path::new("input.rs")).unwrap();
+            write(&disk, "input.rs", "new");
+            assert!(Arc::ptr_eq(&old, &revision.load_file(Path::new("input.rs")).unwrap()));
+            assert_eq!(disk.lock().unwrap().reads, 1);
+            old
+        };
+        let new = loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert_eq!(old.stable_id, new.stable_id);
+        assert!(new.start_pos > old.end_position());
+        assert_eq!(old.src.as_deref().unwrap(), "old");
+        assert_eq!(new.src.as_deref().unwrap(), "new");
+        assert!(Arc::ptr_eq(&sm.lookup_source_file(old.start_pos), &old));
+        let unchanged = loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        assert!(Arc::ptr_eq(&new, &unchanged));
+        assert_eq!(disk.lock().unwrap().reads, 3);
+        assert_eq!(sm.files().len(), 2);
+        assert!(loader.begin_revision().is_err());
+        assert!(loader.begin_revision().is_err());
+    }
+
+    #[test]
+    fn raw_normalization_changes_are_new_versions() {
+        let (sm, disk) = setup();
+        let mut loader = sm.source_revision_loader(1, 64, 3).unwrap();
+        write(&disk, "input.rs", "x\r\n");
+        let crlf = loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        write(&disk, "input.rs", "x\n");
+        let lf = loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        write(&disk, "input.rs", "\u{feff}x\n");
+        let bom = loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        assert_eq!(crlf.src, lf.src);
+        assert_eq!(lf.src, bom.src);
+        assert!(!Arc::ptr_eq(&crlf, &lf));
+        assert!(!Arc::ptr_eq(&lf, &bom));
+        assert_eq!(sm.files().len(), 3);
+    }
+
+    #[test]
+    fn ordinary_loading_still_deduplicates_and_opt_in_does_not_reuse_stale_files() {
+        let (sm, disk) = setup();
+        let path = std::env::current_dir().unwrap().join("input.rs");
+        write(&disk, "input.rs", "old");
+        let old = sm.load_file(&path).unwrap();
+        write(&disk, "input.rs", "new");
+        assert!(Arc::ptr_eq(&old, &sm.load_file(&path).unwrap()));
+        let mut loader = sm.source_revision_loader(1, 64, 1).unwrap();
+        let new = loader.begin_revision().unwrap().load_file(&path).unwrap();
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert_eq!(new.src.as_deref().unwrap(), "new");
+        assert!(Arc::ptr_eq(&new, &sm.load_file(&path).unwrap()));
+        assert_eq!(sm.files().len(), 2);
+    }
+
+    #[test]
+    fn file_and_byte_exhaustion_poison_scope_without_appending() {
+        let (sm, disk) = setup();
+        write(&disk, "a.rs", "a");
+        write(&disk, "b.rs", "b");
+        let mut loader = sm.source_revision_loader(1, 1, 3).unwrap();
+        {
+            let mut revision = loader.begin_revision().unwrap();
+            revision.load_file(Path::new("a.rs")).unwrap();
+            assert!(revision.load_file(Path::new("b.rs")).is_err());
+            assert!(revision.load_file(Path::new("a.rs")).is_err());
+        }
+        assert_eq!(disk.lock().unwrap().reads, 1);
+        write(&disk, "a.rs", "too large");
+        {
+            let mut revision = loader.begin_revision().unwrap();
+            assert!(revision.load_file(Path::new("a.rs")).is_err());
+            write(&disk, "a.rs", "a");
+            assert!(revision.load_file(Path::new("a.rs")).is_err());
+        }
+        assert_eq!(sm.files().len(), 1);
+        assert_eq!(loader.raw_bytes, 1);
+        loader.begin_revision().unwrap().load_file(Path::new("a.rs")).unwrap();
+        assert_eq!(sm.files().len(), 1);
+    }
+
+    #[test]
+    fn read_failure_never_returns_stale_source_or_retries_in_scope() {
+        let (sm, disk) = setup();
+        write(&disk, "input.rs", "old");
+        let mut loader = sm.source_revision_loader(1, 64, 2).unwrap();
+        loader.begin_revision().unwrap().load_file(Path::new("input.rs")).unwrap();
+        disk.lock().unwrap().contents.clear();
+        let mut revision = loader.begin_revision().unwrap();
+        assert_eq!(
+            revision.load_file(Path::new("input.rs")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        write(&disk, "input.rs", "new");
+        assert!(revision.load_file(Path::new("input.rs")).is_err());
+        assert_eq!(disk.lock().unwrap().reads, 2);
+        assert_eq!(sm.files().len(), 1);
+    }
+
+    #[test]
+    fn zero_budgets_fail_closed() {
+        let (sm, disk) = setup();
+        write(&disk, "empty.rs", "");
+        assert!(sm.source_revision_loader(1, 1, 0).unwrap().begin_revision().is_err());
+        let mut loader = sm.source_revision_loader(0, 0, 1).unwrap();
+        assert!(loader.begin_revision().unwrap().load_file(Path::new("empty.rs")).is_err());
+        assert_eq!(disk.lock().unwrap().reads, 0);
+        // A byte budget of zero still allows empty files.
+        let mut loader = sm.source_revision_loader(1, 0, 1).unwrap();
+        loader.begin_revision().unwrap().load_file(Path::new("empty.rs")).unwrap();
+    }
+}
+
 pub struct SourceMap {
     files: RwLock<SourceMapFiles>,
     file_loader: IntoDynSyncSend<Box<dyn FileLoader + Sync + Send>>,
@@ -281,6 +556,37 @@ impl SourceMap {
         let src = self.file_loader.read_file(path)?;
         let filename = FileName::Real(self.path_mapping.to_real_filename(&self.working_dir, path));
         Ok(self.new_source_file(filename, src))
+    }
+
+    /// Opt in to bounded revision-aware loading. No existing loading entry point
+    /// changes behavior. The first load of a path always appends a source version;
+    /// later revisions reuse it only after comparing freshly read exact raw text.
+    /// `max_files` bounds retained lexical paths and `max_raw_bytes` bounds their
+    /// retained raw text. `max_revisions` bounds the number of loading scopes.
+    /// Zero budgets are valid and fail closed when the corresponding resource is
+    /// requested. Historical files in this map are not reclaimed by this loader.
+    pub fn source_revision_loader(
+        &self,
+        max_files: usize,
+        max_raw_bytes: usize,
+        max_revisions: usize,
+    ) -> io::Result<SourceRevisionLoader<'_>> {
+        let working_directory = self.file_loader.current_directory()?;
+        if !working_directory.is_absolute() {
+            return Err(io::Error::other(
+                "source revision loader requires an absolute working directory",
+            ));
+        }
+        Ok(SourceRevisionLoader {
+            source_map: self,
+            working_directory,
+            entries: BTreeMap::new(),
+            raw_bytes: 0,
+            max_files,
+            max_raw_bytes,
+            max_revisions,
+            revision: 0,
+        })
     }
 
     /// Loads source file as a binary blob.
