@@ -6,6 +6,83 @@ use rustc_macros::{Decodable_NoContext, Encodable_NoContext};
 use crate::opaque::{FileEncoder, MAGIC_END_BYTES, MemDecoder};
 use crate::{Decodable, Encodable};
 
+#[test]
+fn memory_snapshot_matches_complete_buffered_and_direct_native_output() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    encoder.write_all(b"already buffered header");
+    assert!(encoder.enable_memory_snapshot(1024 * 1024));
+    assert!(encoder.take_memory_snapshot().is_none());
+    encoder.write_array([1u8, 2, 3, 4]);
+    encoder.write_with::<8>(|dest| {
+        dest[..3].copy_from_slice(b"abc");
+        3
+    });
+    encoder.flush();
+    encoder.write_all(&vec![17; super::BUF_SIZE * 3 + 1]);
+    encoder.write_all(b"tail");
+    let len = encoder.finish().unwrap();
+    let snapshot = encoder.take_memory_snapshot().unwrap();
+    assert_eq!(snapshot.len(), len);
+    assert_eq!(snapshot, fs::read(tmpfile.path()).unwrap());
+    assert!(snapshot.ends_with(MAGIC_END_BYTES));
+    assert!(encoder.take_memory_snapshot().is_none());
+}
+
+#[test]
+fn memory_snapshot_is_independent_of_later_artifact_replacement() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    assert!(encoder.enable_memory_snapshot(1024));
+    encoder.write_all(b"native graph and footer");
+    encoder.finish().unwrap();
+    let original = fs::read(tmpfile.path()).unwrap();
+    fs::write(tmpfile.path(), vec![0; original.len()]).unwrap();
+    assert_eq!(encoder.take_memory_snapshot().unwrap(), original);
+}
+
+#[test]
+fn memory_snapshot_overflow_does_not_change_real_output() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    assert!(encoder.enable_memory_snapshot(4));
+    encoder.write_all(b"ordinary bytes beyond the optional budget");
+    let len = encoder.finish().unwrap();
+    assert!(encoder.take_memory_snapshot().is_none());
+    assert_eq!(fs::read(tmpfile.path()).unwrap().len(), len);
+}
+
+#[test]
+fn memory_snapshot_cannot_start_after_missing_flushed_bytes() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    encoder.write_all(b"header");
+    encoder.flush();
+    assert!(!encoder.enable_memory_snapshot(1024));
+    encoder.finish().unwrap();
+    assert!(encoder.take_memory_snapshot().is_none());
+}
+
+#[test]
+fn memory_snapshot_never_publishes_a_failed_file_encoding() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    assert!(encoder.enable_memory_snapshot(1024));
+    encoder.write_all(b"pending bytes");
+    encoder.res = Err(std::io::Error::other("injected writer failure"));
+    assert!(encoder.finish().is_err());
+    assert!(encoder.take_memory_snapshot().is_none());
+}
+
+#[test]
+fn memory_snapshot_is_disabled_by_default() {
+    let tmpfile = tempfile::NamedTempFile::new().unwrap();
+    let mut encoder = FileEncoder::new(tmpfile.path()).unwrap();
+    encoder.write_all(b"normal one-shot compiler output");
+    encoder.finish().unwrap();
+    assert!(encoder.take_memory_snapshot().is_none());
+}
+
 #[derive(PartialEq, Clone, Debug, Encodable_NoContext, Decodable_NoContext)]
 struct Struct {
     a: (),

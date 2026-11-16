@@ -112,7 +112,12 @@ fn load_dep_graph(sess: &Session, incr_comp_session: &IncrCompSession) -> LoadRe
                 return LoadResult::DataOutOfDate;
             }
 
-            let prev_graph = SerializedDepGraph::decode(&mut decoder, &sess.prof);
+            // The owned resident graph is paired with the exact complete output
+            // artifact. Header/toolchain and command-line checks above still run,
+            // and work-product files were reconciled independently. A changed,
+            // replaced, truncated or corrupt artifact cannot select that graph.
+            let prev_graph = rustc_middle::dep_graph::resident_graph_lookup(sess, &mmap)
+                .unwrap_or_else(|| SerializedDepGraph::decode(&mut decoder, &sess.prof));
 
             LoadResult::Ok { prev_graph, prev_work_products }
         }

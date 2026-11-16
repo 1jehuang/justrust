@@ -46,6 +46,7 @@ pub struct FileEncoder<'a> {
     // comment on `trait Encoder`.
     res: Result<(), io::Error>,
     path: PathBuf,
+    memory_snapshot: Option<MemorySnapshot>,
     flush_strategy: Option<&'a mut (dyn FnMut(&[u8]) + Send)>,
     /// justrust: a second sink that sees every byte except those written while
     /// `iface_skip > 0` (span positions, the source map). Used for the
@@ -67,6 +68,33 @@ pub struct FileEncoder<'a> {
     finished: bool,
 }
 
+/// An optional, bounded mirror of the native byte stream, never a second
+/// serialization. A failed or oversized capture is discarded without changing
+/// the real file encoder's result.
+struct MemorySnapshot {
+    bytes: Vec<u8>,
+    limit: usize,
+    ready: bool,
+}
+
+impl MemorySnapshot {
+    fn append(&mut self, bytes: &[u8]) -> bool {
+        self.ready = false;
+        let Some(len) = self.bytes.len().checked_add(bytes.len()) else { return false };
+        if len > self.limit {
+            return false;
+        }
+        if len > self.bytes.capacity() {
+            let capacity = self.bytes.capacity().saturating_mul(2).max(len).min(self.limit);
+            if self.bytes.try_reserve_exact(capacity - self.bytes.len()).is_err() {
+                return false;
+            }
+        }
+        self.bytes.extend_from_slice(bytes);
+        true
+    }
+}
+
 impl<'a> FileEncoder<'a> {
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         // File::create opens the file for writing only. When -Zmeta-stats is enabled, the metadata
@@ -82,6 +110,7 @@ impl<'a> FileEncoder<'a> {
             flushed: 0,
             file,
             res: Ok(()),
+            memory_snapshot: None,
             flush_strategy: None,
             iface_strategy: None,
             iface_fed: 0,
@@ -92,6 +121,26 @@ impl<'a> FileEncoder<'a> {
             #[cfg(debug_assertions)]
             finished: false,
         })
+    }
+
+    /// Mirror the complete native output for an owned resident snapshot.
+    /// Must be requested before the first flush; already buffered headers are
+    /// included. Disabled by default and independent of interface-hash sinks.
+    pub fn enable_memory_snapshot(&mut self, limit: usize) -> bool {
+        if self.flushed != 0 || self.memory_snapshot.is_some() || self.buffered > limit {
+            return false;
+        }
+        self.memory_snapshot = Some(MemorySnapshot { bytes: Vec::new(), limit, ready: false });
+        true
+    }
+
+    /// Take an exact completed stream, including serializer end bytes, only
+    /// after successful `finish`. Oversize/allocation failure returns `None`.
+    pub fn take_memory_snapshot(&mut self) -> Option<Vec<u8>> {
+        if self.buffered != 0 || !self.memory_snapshot.as_ref().is_some_and(|s| s.ready) {
+            return None;
+        }
+        self.memory_snapshot.take().map(|s| s.bytes)
     }
 
     /// justrust: also feed written bytes to `strategy`, except bytes written
@@ -242,6 +291,11 @@ impl<'a> FileEncoder<'a> {
         if self.res.is_ok() {
             self.res = self.file.write_all(&self.buf[..self.buffered]);
         }
+        if let Some(snapshot) = &mut self.memory_snapshot
+            && !snapshot.append(&self.buf[..self.buffered])
+        {
+            self.memory_snapshot = None;
+        }
         if self.iface_skip == 0 {
             self.iface_feed_pending();
         }
@@ -280,6 +334,11 @@ impl<'a> FileEncoder<'a> {
             dest.copy_from_slice(buf);
             self.buffered += buf.len();
         } else {
+            if let Some(snapshot) = &mut self.memory_snapshot
+                && !snapshot.append(buf)
+            {
+                self.memory_snapshot = None;
+            }
             if self.res.is_ok() {
                 self.res = self.file.write_all(buf);
                 if let Some(f) = &mut self.flush_strategy {
@@ -369,10 +428,14 @@ impl<'a> FileEncoder<'a> {
         {
             self.finished = true;
         }
-        match std::mem::replace(&mut self.res, Ok(())) {
+        let result = match std::mem::replace(&mut self.res, Ok(())) {
             Ok(()) => Ok(self.position()),
             Err(e) => Err((self.path.clone(), e)),
+        };
+        if let Some(snapshot) = &mut self.memory_snapshot {
+            snapshot.ready = result.is_ok();
         }
+        result
     }
 }
 

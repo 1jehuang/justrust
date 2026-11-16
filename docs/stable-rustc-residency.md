@@ -5,7 +5,14 @@ It does not invoke Blaze, `jr-engine`, rust-analyzer, or the clean-room compiler
 The LLVM backend and compiler source are the same in all comparison modes.
 Nothing here enables a new default or replaces the published client.
 
-## Current implementation boundary
+## Scalar prototype boundary
+
+This document describes the first scalar-cache experiment. The newer bulk
+frontend variant is documented in `resident-frontend-snapshots.md`: it retains
+an owned native dependency graph and encoded query archives, including cacheable
+type-checking and MIR results, while still rebuilding session-owned objects.
+Use the harnesses' `--frontend` flag to isolate that variant from scalar caching.
+Neither variant is a permanently live typed `GlobalCtxt`.
 
 This is the first native resident-state slice, **not a resident GlobalCtxt**.
 A dedicated process accepts sequential compilations with fixed arguments,

@@ -859,6 +859,12 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     };
     let (value, verify) = match try_value {
         Some(value) => {
+            // This hook counts actual successful query rehydration, not merely
+            // the presence of a resident archive or an in-session query hit.
+            // Dependencies and diagnostics were validated before this loader.
+            if let Some(cache) = &tcx.query_system.on_disk_cache {
+                cache.record_resident_query_load(query.name);
+            }
             if std::intrinsics::unlikely(tcx.sess.opts.unstable_opts.query_dep_graph) {
                 dep_graph_data.mark_debug_loaded_from_disk(*dep_node)
             }

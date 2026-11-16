@@ -150,9 +150,23 @@ unsafe fn serve() -> Result<(), String> {
         io::stdout().flush().map_err(|e| e.to_string())?;
         io::stderr().flush().map_err(|e| e.to_string())?;
         let (hits, misses, entries) = rustc_query_impl::resident_stats();
+        let graph = rustc_middle::dep_graph::resident_graph_stats();
+        let archive = rustc_middle::query::on_disk_cache::OnDiskCache::resident_stats();
+        let frontend = json!({
+            "graph_hits": graph.hits,
+            "graph_misses": graph.misses,
+            "graph_bytes": graph.retained_bytes,
+            "archive_hits": archive.hits,
+            "archive_misses": archive.misses,
+            "archive_bytes": archive.current_bytes,
+            "value_loads": archive.value_loads,
+            "typeck_loads": archive.typeck_loads,
+            "mir_loads": archive.mir_loads,
+        });
         let reply = json!({"id": id, "status": status, "pid": std::process::id(),
             "elapsed_seconds": start.elapsed().as_secs_f64(),
-            "resident_hits": hits, "resident_misses": misses, "resident_entries": entries});
+            "resident_hits": hits, "resident_misses": misses, "resident_entries": entries,
+            "frontend": frontend});
         serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
         response.write_all(b"\n").map_err(|e| e.to_string())?;
         response.flush().map_err(|e| e.to_string())?;

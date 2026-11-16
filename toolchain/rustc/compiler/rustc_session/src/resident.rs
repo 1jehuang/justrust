@@ -4,6 +4,7 @@
 //! entering any compiler session. The flag cannot be disabled: process-owned
 //! resources may already have survived an earlier session.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 struct ProcessFlag(AtomicBool);
@@ -23,6 +24,19 @@ impl ProcessFlag {
 }
 
 static PROCESS: ProcessFlag = ProcessFlag::new();
+static FRONTEND_REQUESTED: OnceLock<bool> = OnceLock::new();
+
+/// Whether the explicit native resident driver may retain owned frontend snapshots.
+///
+/// This is process configuration, never a tracked compiler option or cache-format
+/// change. One-shot rustc cannot enable it by inheriting the environment variable.
+/// The driver freezes its environment before the first session.
+pub fn frontend_enabled() -> bool {
+    is_process()
+        && *FRONTEND_REQUESTED.get_or_init(|| {
+            std::env::var_os("JUSTRUST_RUSTC_RESIDENT_FRONTEND").is_some_and(|value| value == "1")
+        })
+}
 
 /// Mark this process as a native resident worker before its first compiler session.
 ///
