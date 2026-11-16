@@ -67,7 +67,7 @@ def test_owned_counters_not_typed_hits():
         with pytest.raises(AssertionError):
             owned.validate_owned(stats)
     with pytest.raises(AssertionError, match='decreased'):
-        owned.validate_owned(dict(revisions=0, contexts=1), dict(revisions=1, contexts=1))
+        owned.validate_owned(dict(revisions=1, contexts=1), dict(revisions=2, contexts=1))
 
 
 def test_workload_contract(tmp_path, monkeypatch):
@@ -149,7 +149,8 @@ def test_runtime_nonce_per_execution(monkeypatch, tmp_path):
     assert calls[1][1] == second['nonce']
 
 
-@pytest.mark.parametrize('mutation', [None, 'pid', 'id', 'status', 'elapsed', 'owned'])
+@pytest.mark.parametrize('mutation', [None, 'pid', 'id', 'status', 'elapsed', 'owned',
+                                      'missing-owned', 'revision', 'empty-contexts', 'extra-contexts'])
 def test_mock_dedicated_fd_protocol(tmp_path, monkeypatch, mutation):
     """Mock Popen writes a real pipe, never invokes a compiler or fake native build."""
     import io
@@ -171,6 +172,14 @@ def test_mock_dedicated_fd_protocol(tmp_path, monkeypatch, mutation):
                 frame['elapsed_seconds'] = float('nan')
             elif mutation == 'owned':
                 frame['owned']['contexts'] = -1
+            elif mutation == 'missing-owned':
+                frame.pop('owned')
+            elif mutation == 'revision':
+                frame['owned']['revisions'] += 1
+            elif mutation == 'empty-contexts':
+                frame['owned']['contexts'] = 0
+            elif mutation == 'extra-contexts':
+                frame['owned']['contexts'] = request['id'] + 1
             self.stdout.write(b'raw stdout\n')
             self.stderr.write(b'raw stderr\n')
             os.write(self.fd, json.dumps(frame).encode() + b'\n')

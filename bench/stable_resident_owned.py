@@ -66,6 +66,8 @@ def validate_owned(stats, previous=None):
             raise AssertionError('Invalid owned counter: ' + key)
         if previous is not None and value < previous[key]:
             raise AssertionError('Owned counter decreased: ' + key)
+    if stats['contexts'] > stats['revisions']:
+        raise AssertionError('More contexts than owned revisions')
     return dict(stats)
 
 
@@ -138,10 +140,11 @@ class OwnedResident:
         elapsed = response.get('elapsed_seconds')
         if type(elapsed) not in (float, int) or not 0 <= elapsed < float('inf'):
             raise AssertionError('Invalid worker elapsed_seconds')
-        if 'owned' in response:
-            self.owned = validate_owned(response['owned'], self.owned)
-        elif self.owned is not None:
-            raise AssertionError('Owned telemetry disappeared')
+        self.owned = validate_owned(response.get('owned'), self.owned)
+        if self.owned['revisions'] != self.sequence:
+            raise AssertionError('Owned revision count must match requests')
+        if response['status'] == 0 and self.owned['contexts'] == 0:
+            raise AssertionError('Successful owned compile must allocate a native context')
         for index, stream in enumerate((self.stdout, self.stderr)):
             size = os.fstat(stream.fileno()).st_size
             response[('stdout_b64', 'stderr_b64')[index]] = shared.encoded(
