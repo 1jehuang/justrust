@@ -289,6 +289,26 @@ pub(crate) fn run_compiler_pipeline<'tcx>(
     help_only: bool,
     registered_lints: bool,
 ) {
+    run_compiler_pipeline_with_live_identity(
+        compiler,
+        domain,
+        callbacks,
+        has_input,
+        help_only,
+        registered_lints,
+        None,
+    )
+}
+
+pub(crate) fn run_compiler_pipeline_with_live_identity<'tcx>(
+    compiler: &'tcx interface::Compiler,
+    domain: Option<&ResidentTypeDomain<'tcx>>,
+    callbacks: &mut (dyn Callbacks + Send),
+    has_input: bool,
+    help_only: bool,
+    registered_lints: bool,
+    invocation: Option<&[u8]>,
+) {
     let sess = &compiler.sess;
     let codegen_backend = &*compiler.codegen_backend;
 
@@ -368,7 +388,30 @@ pub(crate) fn run_compiler_pipeline<'tcx>(
     let linker = match domain {
         Some(domain) => {
             passes::create_and_enter_global_ctxt_in_domain(compiler, domain, krate, |tcx| {
-                analyze_and_codegen(compiler, tcx, callbacks)
+                if let Some(state) = tcx.resident_live_queries {
+                    // Identity capture must not run from a query loader. Resolve
+                    // and materialize HIR first, outside analysis and its jobs.
+                    let _ = tcx.resolver_for_lowering();
+                    let identity = if tcx.crates(()).is_empty() {
+                        let _ = tcx.hir_crate_items(());
+                        invocation.and_then(|options| {
+                            rustc_middle::ty::resident_compiler_identity::build_preanalysis_identity(
+                                tcx, live_invocation(options), live_identity_budget(),
+                            ).ok()
+                        })
+                    } else { None };
+                    state.begin(domain.allocated_context_count() as u64, identity, live_identity_budget());
+                }
+                let result = analyze_and_codegen(compiler, tcx, callbacks);
+                if let Some(state) = tcx.resident_live_queries {
+                    let identity = invocation.filter(|_| result.is_some()).and_then(|options| {
+                        rustc_middle::ty::resident_compiler_identity::build_revision_identity(
+                            tcx, live_invocation(options), live_identity_budget(),
+                        ).ok()
+                    });
+                    state.complete(identity, live_identity_budget());
+                }
+                result
             })
             .unwrap_or_else(|| sess.dcx().fatal("resident type domain context capacity exhausted"))
         }
@@ -387,6 +430,24 @@ pub(crate) fn run_compiler_pipeline<'tcx>(
             rustc_interface::finalize_after_overlap(sess, incr_comp_session, crate_hash);
         }
         (None, _) => {}
+    }
+}
+
+fn live_identity_budget() -> rustc_middle::ty::resident_identity::IdentityBudget {
+    rustc_middle::ty::resident_identity::IdentityBudget {
+        max_crates: 1,
+        max_definitions: 65536,
+        max_identity_bytes: 8 * 1024 * 1024,
+    }
+}
+
+fn live_invocation(
+    options: &[u8],
+) -> rustc_middle::ty::resident_compiler_identity::FrozenSemanticInvocation<'_> {
+    rustc_middle::ty::resident_compiler_identity::FrozenSemanticInvocation {
+        namespace: b"justrust-local-same-source-v1",
+        options,
+        body_revision: b"native-green-dependency-inputs-v1",
     }
 }
 

@@ -7,6 +7,34 @@ use rustc_span::Span;
 // Deliberate name whitelist, not type-driven specialization. Adding a query
 // requires reviewing its result for session-owned identity and side effects.
 macro_rules! resident_hooks {
+    // Only immutable native results are admitted. Steal<MIR> and other consumed
+    // or session-mutating results must never enter this lifetime-scoped cache.
+    (typeck_root, get) => {
+        Some(|tcx, node, fingerprint| {
+            tcx.resident_live_queries?.get_typeck(node, fingerprint).map(erase::erase_val)
+        })
+    };
+    (typeck_root, insert) => {
+        Some(|tcx, node, fingerprint, value| {
+            if let Some(state) = tcx.resident_live_queries {
+                let value: &rustc_middle::ty::TypeckResults<'_> = erase::restore_val(value);
+                state.insert_typeck(node, fingerprint, value, std::mem::size_of_val(value));
+            }
+        })
+    };
+    (optimized_mir, get) => {
+        Some(|tcx, node, fingerprint| {
+            tcx.resident_live_queries?.get_mir(node, fingerprint).map(erase::erase_val)
+        })
+    };
+    (optimized_mir, insert) => {
+        Some(|tcx, node, fingerprint, value| {
+            if let Some(state) = tcx.resident_live_queries {
+                let value: &rustc_middle::mir::Body<'_> = erase::restore_val(value);
+                state.insert_mir(node, fingerprint, value, std::mem::size_of_val(value));
+            }
+        })
+    };
     (type_alias_is_checked, $op:ident) => { resident_hooks!(@bool $op) };
     (is_promotable_const_fn, $op:ident) => { resident_hooks!(@bool $op) };
     (should_inherit_track_caller, $op:ident) => { resident_hooks!(@bool $op) };

@@ -249,6 +249,13 @@ impl OwnedRequests {
 /// This mode intentionally excludes incremental persistence until its source-file
 /// encoder view is revision-aware. It is not a production compiler selection.
 fn serve_owned(mut response: File) -> Result<(), String> {
+    let mode = std::env::var("JUSTRUST_RUSTC_RESIDENT_TYPED").ok();
+    let live_queries = match mode.as_deref() {
+        None | Some("0") | Some("control") => false,
+        Some("1") => true,
+        Some(_) => return Err("invalid native typed experiment selection".into()),
+    };
+    let incremental_control = mode.as_deref() == Some("control");
     for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
         if std::env::var_os(name).is_some_and(|value| value == "1") {
             return Err(format!("{name} cannot be combined with the native owned batch"));
@@ -260,6 +267,11 @@ fn serve_owned(mut response: File) -> Result<(), String> {
     };
     let mut first_argv = vec!["jr-rustc-resident-owned".to_owned()];
     first_argv.extend(first_args);
+    let invocation = if live_queries || incremental_control {
+        Some(frozen_semantic_invocation(&first_argv)?)
+    } else {
+        None
+    };
     let mut first_callbacks = crate::TimePassesCallbacks::default();
     let first = crate::catch_fatal_errors(|| {
         crate::prepare_compiler(&first_argv, &mut first_callbacks, None)
@@ -271,30 +283,39 @@ fn serve_owned(mut response: File) -> Result<(), String> {
         return Err("owned batch requires a source input".into());
     }
     crate::catch_fatal_errors(|| {
-        rustc_interface::resident::with_resident_compiler_batch(config, move |batch, config| {
-            let mut first = Some((config, first_callbacks, registered_lints));
-            let mut id = first_id;
-            let mut argv = first_argv;
-            loop {
-                let start = Instant::now();
-                let (revisions, contexts) = batch.counts();
-                let rss = rustc_data_structures::profiling::get_resident_set_size();
-                if owned_retirement(rss, revisions, contexts).is_some() {
-                    let mut reply = owned_completion(None, rss, revisions, contexts);
-                    reply["id"] = json!(id);
-                    reply["pid"] = json!(std::process::id());
-                    reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
-                    io::stdout().flush().map_err(|e| e.to_string())?;
-                    io::stderr().flush().map_err(|e| e.to_string())?;
-                    serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
-                    response.write_all(b"\n").map_err(|e| e.to_string())?;
-                    response.flush().map_err(|e| e.to_string())?;
-                    return Ok(());
-                }
-                let mut callbacks = crate::TimePassesCallbacks::default();
-                let status = if crate::catch_fatal_errors(|| {
-                    let prepared =
-                        if let Some((config, initial_callbacks, registered_lints)) = first.take() {
+        rustc_interface::resident::with_resident_compiler_batch_options(
+            config,
+            rustc_interface::resident::ResidentBatchOptions { live_queries, incremental_control },
+            move |batch, config| {
+                let mut first = Some((config, first_callbacks, registered_lints));
+                let mut id = first_id;
+                let mut argv = first_argv;
+                loop {
+                    if let Some(expected) = &invocation {
+                        if frozen_semantic_invocation(&argv)? != *expected {
+                            return Err("native typed worker semantic invocation changed".into());
+                        }
+                    }
+                    let start = Instant::now();
+                    let (revisions, contexts) = batch.counts();
+                    let rss = rustc_data_structures::profiling::get_resident_set_size();
+                    if owned_retirement(rss, revisions, contexts).is_some() {
+                        let mut reply = owned_completion(None, rss, revisions, contexts);
+                        reply["id"] = json!(id);
+                        reply["pid"] = json!(std::process::id());
+                        reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
+                        io::stdout().flush().map_err(|e| e.to_string())?;
+                        io::stderr().flush().map_err(|e| e.to_string())?;
+                        serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
+                        response.write_all(b"\n").map_err(|e| e.to_string())?;
+                        response.flush().map_err(|e| e.to_string())?;
+                        return Ok(());
+                    }
+                    let mut callbacks = crate::TimePassesCallbacks::default();
+                    let status = if crate::catch_fatal_errors(|| {
+                        let prepared = if let Some((config, initial_callbacks, registered_lints)) =
+                            first.take()
+                        {
                             callbacks = initial_callbacks;
                             crate::PreparedCompiler {
                                 config,
@@ -306,59 +327,87 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                             crate::prepare_compiler(&argv, &mut callbacks, None)
                                 .expect("frozen compilation arguments cannot become help-only")
                         };
-                    batch.run(prepared.config, |compiler, domain| {
-                        crate::run_compiler_pipeline(
-                            compiler,
-                            Some(domain),
-                            &mut callbacks,
-                            prepared.has_input,
-                            prepared.help_only,
-                            prepared.registered_lints,
+                        batch.run(prepared.config, |compiler, domain| {
+                            crate::run_compiler_pipeline_with_live_identity(
+                                compiler,
+                                Some(domain),
+                                &mut callbacks,
+                                prepared.has_input,
+                                prepared.help_only,
+                                prepared.registered_lints,
+                                invocation.as_deref(),
+                            );
+                        });
+                    })
+                    .is_ok()
+                    {
+                        0
+                    } else {
+                        1
+                    };
+                    // The batch has now finished native execution, linker work and
+                    // diagnostics. No failed or unfinished revision can publish.
+                    batch.finish_live_revision(status == 0);
+                    if let Some(format) = callbacks.time_passes {
+                        rustc_data_structures::profiling::print_time_passes_entry(
+                            "total",
+                            start.elapsed(),
+                            None,
+                            None,
+                            format,
                         );
+                    }
+                    io::stdout().flush().map_err(|e| e.to_string())?;
+                    io::stderr().flush().map_err(|e| e.to_string())?;
+                    let (revisions, contexts) = batch.counts();
+                    // batch.run has returned through normal revision finalization.
+                    let rss = rustc_data_structures::profiling::get_resident_set_size();
+                    let mut reply = owned_completion(Some(status), rss, revisions, contexts);
+                    let live = batch.live_stats();
+                    reply["live"] = json!({
+                        "typeck_hits": live.typeck_hits,
+                        "typeck_misses": live.typeck_misses,
+                        "mir_hits": live.mir_hits,
+                        "mir_misses": live.mir_misses,
+                        "retained_entries": live.retained_entries,
+                        "retained_estimated_bytes": live.retained_estimated_bytes,
                     });
-                })
-                .is_ok()
-                {
-                    0
-                } else {
-                    1
-                };
-                if let Some(format) = callbacks.time_passes {
-                    rustc_data_structures::profiling::print_time_passes_entry(
-                        "total",
-                        start.elapsed(),
-                        None,
-                        None,
-                        format,
-                    );
+                    reply["id"] = json!(id);
+                    reply["pid"] = json!(std::process::id());
+                    reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
+                    serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
+                    response.write_all(b"\n").map_err(|e| e.to_string())?;
+                    response.flush().map_err(|e| e.to_string())?;
+                    if owned_retirement(rss, revisions, contexts).is_some() {
+                        // Do not read another request. Returning from this callback
+                        // drops the actual batch owners before process termination.
+                        return Ok(());
+                    }
+                    let Some((next_id, args)) = requests.next()? else {
+                        return Ok(());
+                    };
+                    id = next_id;
+                    argv = vec!["jr-rustc-resident-owned".to_owned()];
+                    argv.extend(args);
                 }
-                io::stdout().flush().map_err(|e| e.to_string())?;
-                io::stderr().flush().map_err(|e| e.to_string())?;
-                let (revisions, contexts) = batch.counts();
-                // batch.run has returned through normal revision finalization.
-                let rss = rustc_data_structures::profiling::get_resident_set_size();
-                let mut reply = owned_completion(Some(status), rss, revisions, contexts);
-                reply["id"] = json!(id);
-                reply["pid"] = json!(std::process::id());
-                reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
-                serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
-                response.write_all(b"\n").map_err(|e| e.to_string())?;
-                response.flush().map_err(|e| e.to_string())?;
-                if owned_retirement(rss, revisions, contexts).is_some() {
-                    // Do not read another request. Returning from this callback
-                    // drops the actual batch owners before process termination.
-                    return Ok(());
-                }
-                let Some((next_id, args)) = requests.next()? else {
-                    return Ok(());
-                };
-                id = next_id;
-                argv = vec!["jr-rustc-resident-owned".to_owned()];
-                argv.extend(args);
-            }
-        })
+            },
+        )
     })
     .map_err(|_| "native owned batch construction failed".to_owned())?
+}
+
+/// Exact process-local inputs, never a hash or Debug representation. The cache
+/// cannot outlive this executable/LLVM owner, and requests already freeze argv.
+/// Recheck cwd and the complete OS environment before every controlled request.
+/// These bytes remain private RAM state, never protocol diagnostics or records.
+fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut environment: Vec<_> = std::env::vars_os()
+        .map(|(key, value)| (key.as_encoded_bytes().to_vec(), value.as_encoded_bytes().to_vec()))
+        .collect();
+    environment.sort();
+    serde_json::to_vec(&(args, cwd.as_os_str().as_encoded_bytes(), environment))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

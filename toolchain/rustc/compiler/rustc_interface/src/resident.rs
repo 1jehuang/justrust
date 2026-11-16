@@ -36,12 +36,31 @@ pub struct ResidentCompilerBatch<'domain> {
     target: Target,
     extra_symbols: Vec<&'static str>,
     invocations: Cell<usize>,
+    options: ResidentBatchOptions,
+}
+
+/// Development-only selection. Ordinary owned batches retain their existing
+/// nonincremental behavior. The control enables persistence without typed reuse.
+#[derive(Clone, Copy, Default)]
+pub struct ResidentBatchOptions {
+    pub incremental_control: bool,
+    pub live_queries: bool,
 }
 
 impl<'domain> ResidentCompilerBatch<'domain> {
     /// Allocated invocation and context counts, not live query-cache hit counts.
     pub fn counts(&self) -> (usize, usize) {
         (self.invocations.get(), self.domain.allocated_context_count())
+    }
+
+    pub fn finish_live_revision(&self, success: bool) {
+        if let Some(state) = self.domain.live_query_state() {
+            state.finish(success);
+        }
+    }
+
+    pub fn live_stats(&self) -> rustc_middle::ty::resident_live::LiveQueryStats {
+        self.domain.live_query_state().map(|state| state.stats()).unwrap_or_default()
     }
 
     /// Execute one fresh revision using batch-owned native storage. The caller
@@ -55,7 +74,7 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         f: impl FnOnce(&'domain Compiler, &ResidentTypeDomain<'domain>) -> R,
     ) -> R {
         let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
-        reject_unsupported(&early_dcx, &config);
+        reject_unsupported(&early_dcx, &config, self.options);
         let target = config::build_target_config(
             &early_dcx,
             &config.opts.target_triple,
@@ -107,11 +126,14 @@ impl<'domain> ResidentCompilerBatch<'domain> {
 // Explicitly exclude observer/callback configurations whose ordinary lifecycle
 // requires a per-invocation pool seal, a custom source owner, or admission scope.
 #[allow(rustc::bad_opt_access)]
-fn reject_unsupported(early_dcx: &EarlyDiagCtxt, config: &Config) {
-    if config.opts.incremental.is_some() {
+fn reject_unsupported(early_dcx: &EarlyDiagCtxt, config: &Config, options: ResidentBatchOptions) {
+    if config.opts.incremental.is_some() && !(options.incremental_control || options.live_queries) {
         early_dcx.early_fatal(
             "resident owned batch incremental persistence requires an active-revision source-file view",
         );
+    }
+    if options.live_queries && config.opts.incremental.is_none() {
+        early_dcx.early_fatal("resident typed reuse requires an explicit incremental directory");
     }
     if config.query_admission.is_some()
         || config.make_frontend_admission.is_some()
@@ -136,8 +158,17 @@ pub fn with_resident_compiler_batch<R: Send>(
     config: Config,
     f: impl for<'domain> FnOnce(ResidentCompilerBatch<'domain>, Config) -> R + Send,
 ) -> R {
+    with_resident_compiler_batch_options(config, ResidentBatchOptions::default(), f)
+}
+
+#[allow(rustc::bad_opt_access)]
+pub fn with_resident_compiler_batch_options<R: Send>(
+    config: Config,
+    options: ResidentBatchOptions,
+    f: impl for<'domain> FnOnce(ResidentCompilerBatch<'domain>, Config) -> R + Send,
+) -> R {
     let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
-    reject_unsupported(&early_dcx, &config);
+    reject_unsupported(&early_dcx, &config, options);
     if config.opts.jobs.frontend.is_some() {
         early_dcx.early_fatal("resident batch requires serial frontend mode");
     }
@@ -182,6 +213,7 @@ pub fn with_resident_compiler_batch<R: Send>(
                 current_gcx: CurrentGcx::new(),
             };
             with_resident_type_domain_and_owner(owners, |domain, owners| {
+                domain.enable_live_queries(options.live_queries);
                 f(
                     ResidentCompilerBatch {
                         domain,
@@ -190,6 +222,7 @@ pub fn with_resident_compiler_batch<R: Send>(
                         target,
                         extra_symbols: extra_symbols.clone(),
                         invocations: Cell::new(0),
+                        options,
                     },
                     config,
                 )
