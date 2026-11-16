@@ -95,8 +95,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        # Hosted mirrors preserve absolute checkout paths. Keep release inputs
-        # out of the root checkout used by concurrent post-publication tests.
+        # Hosted mirrors preserve absolute paths. Linux needs a non-overlapping
+        # root, not a child which a root-checkout test sync could delete.
         working-directory: release-client/${{ matrix.target }}
     concurrency:
       group: ${{ matrix.zig && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
@@ -132,6 +132,15 @@ jobs:
             /*
             !/toolchain/
             !/.wrangler/
+
+      - name: Isolate hosted release source from test mirror roots
+        if: ${{ matrix.zig }}
+        shell: bash
+        working-directory: release-client/${{ matrix.target }}
+        run: |
+          destination="$RUNNER_TEMP/client-release/${{ matrix.target }}"
+          mkdir -p "$destination"
+          cp -a . "$destination/"
 
       - uses: actions/setup-python@v5
         with:
@@ -208,6 +217,7 @@ jobs:
 
       - name: Install hosted Linux prerequisites
         if: ${{ matrix.zig }}
+        working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}
         run: |
           # Stock bootstrap also supplies pinned C-only musl ABI objects.
           # It never supplies Rust rlibs to the service-selected compiler.
@@ -220,6 +230,7 @@ jobs:
 
       - name: Build and verify hosted Linux release
         if: ${{ matrix.zig }}
+        working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
           JUSTRUST_REMOTE_REQUIRED: "1"
@@ -265,6 +276,7 @@ jobs:
           bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
 
       - name: Package
+        working-directory: ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
         shell: bash
         run: |
           name="justrust-${{ matrix.target }}"
@@ -286,14 +298,15 @@ jobs:
         with:
           name: justrust-${{ matrix.target }}
           path: |
-            dist/*.tar.gz
-            dist/*.sha256
-            dist/compiler-*
+            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.tar.gz
+            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.sha256
+            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/compiler-*
 
       # Publication belongs to this platform, not the matrix completion barrier.
       # The checksum is uploaded last, making the platform selectable only after
       # its archive and compiler provenance are available.
       - name: Publish checked platform independently
+        working-directory: ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

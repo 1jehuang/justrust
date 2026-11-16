@@ -148,12 +148,41 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_platform_build_inputs_do_not_share_test_mirror_paths(self):
         build = self.job("build")
-        self.assertIn("working-directory: release-client/${{ matrix.target }}", build)
+        workspace = "${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}"
+        self.assertIn("working-directory: " + workspace, build)
+        self.assertEqual(build.count("working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}"), 2)
+        self.assertIn(workspace + "/dist/*.tar.gz", build)
+        self.assertIn(workspace + "/dist/*.sha256", build)
         self.assertIn("path: release-client/${{ matrix.target }}", build)
         self.assertIn("workspaces: release-client/${{ matrix.target }} -> target", build)
         # Preserve hosted Linux account fencing while separating mirrored paths.
         self.assertIn("justrust-hosted-linux", build)
         self.assertIn("cancel-in-progress: false", build)
+
+    def test_hosted_source_copy_uses_non_overlapping_mirror_root(self):
+        import os
+        import subprocess
+        import tempfile
+        import textwrap
+        build = self.job("build")
+        step = build.split("- name: Isolate hosted release source from test mirror roots", 1)[1].split("      - uses:", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1]).replace("${{ matrix.target }}", "x86_64-unknown-linux-musl")
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            mirror = base / "checkout"
+            source = mirror / "release-client/x86_64-unknown-linux-musl"
+            source.mkdir(parents=True)
+            (source / ".git").mkdir()
+            (source / ".git/config").write_text("copied repository metadata")
+            (source / "Cargo.toml").write_text("committed client")
+            runner_temp = base / "runner-temp"
+            runner_temp.mkdir()
+            subprocess.run(["bash", "-e", "-c", script], cwd=source,
+                           env=dict(os.environ, RUNNER_TEMP=str(runner_temp)), check=True)
+            isolated = runner_temp / "client-release/x86_64-unknown-linux-musl"
+            self.assertFalse(isolated.is_relative_to(mirror))
+            self.assertEqual((isolated / "Cargo.toml").read_text(), "committed client")
+            self.assertEqual((isolated / ".git/config").read_text(), "copied repository metadata")
 
     def test_documented_shared_production_first_order(self):
         flattened = " ".join(self.docs.split())
