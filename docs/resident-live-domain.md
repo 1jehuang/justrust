@@ -5,9 +5,15 @@
 The owned `stable` compiler now has experimental ownership and revision-safety
 building blocks for live typed frontend retention. The explicit
 `--jr-resident-owned` development mode connects common native owners to serial
-requests, fresh contexts and revision-aware source reads. It **does not connect
-cross-revision typed query lookups**, incremental persistence or managed hosted
-routing. Native compiler checks, scoped ownership tests and a runnable build pass.
+requests, fresh contexts and revision-aware source reads. Its default behavior
+still refuses incremental persistence and does not reuse typed query values.
+The separate private `JUSTRUST_RUSTC_RESIDENT_TYPED=1` option now connects
+post-green native `typeck_root` and `optimized_mir` lookups, with exact same-source
+identity authorization and publication only after complete transport success.
+`JUSTRUST_RUSTC_RESIDENT_TYPED=control` permits incremental persistence under the
+same owners without enabling those lookups. Neither option selects managed hosted
+routing. Native compiler checks and ownership/publication tests pass, but runtime
+typed hits remain an acceptance requirement, not an established result.
 The initial std-based test exposed historical macro hygiene reaching a fresh
 crate store with an old numeric crate ID. Its failed original receipt remains
 stored as `bench/stable-resident-owned-20261116-1334-native`. A revision-local
@@ -60,16 +66,19 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   pipeline and refuses exhausted storage before incremental preparation. The
   additional-owner factory can scope a component-owned compiler arena under the
   same lifetime without introducing a dependency from `rustc_middle` back to
-  `rustc_interface`. The experimental owned request mode uses this entry, but
-  no live query lookup is connected. The cell
+  `rustc_interface`. The experimental owned request mode uses this entry. Typed
+  lookup state is present only under the separate explicit typed option. The cell
   count is a structural bound, not an owning-arena byte or RSS budget.
 - `rustc_interface::resident::with_resident_compiler_batch` constructs one serial
   worker, one registry, and scoped native compiler/session storage under the type
   domain. Its explicit per-revision entry finalizes diagnostics and rejects custom
   capture/admission/loading and incompatible global settings. The owned transport
-  selects it explicitly. Incremental persistence is refused until source encoders
-  have an active-revision file view. It has no owning-byte budget and does not
-  authorize query reuse.
+  selects it explicitly. Incremental persistence remains refused by default.
+  The private typed/control options permit persistence after active-source encoding
+  checks. Whole-batch retirement occurs at 64 contexts or a 2 GiB boundary RSS
+  check, including refusal when RSS cannot be obtained. This is not a hard peak
+  allocation limit within a single compile. Retirement flushes the final response
+  and leaves the owner scope, rather than merely clearing retained references.
 - `ty::resident_identity` checks bounded, exact, ordered crate and definition
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller
@@ -78,8 +87,9 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   type-checking and MIR objects, not encoded bytes. It stages a revision,
   publishes only on explicit success, and requires authorization before reading
   a previous published generation. It does not extend lifetimes. Entry and
-  estimated reachable-byte budgets bound the cache's references, not the arena
-  or the compiler's total RSS.
+  estimated-byte budgets bound the cache's references, not the arena
+  or the compiler's total RSS. Current query hooks charge the immediate native
+  result size, not a traversal of all reachable allocations.
 
 - `SessionGlobals::enter_resident_revision` exclusively borrows the existing
   scoped owner, preserving symbol/span/hygiene identities while replacing the
@@ -88,7 +98,8 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   resolver does not traverse historical contexts through a fresh crate store.
   It requires all prior workers to have returned. It neither refreshes source
   files nor validates foreign crate or expansion identities for typed reuse. The
-  experimental owned batch calls this entry, but does not reuse old typed query results.
+  experimental owned batch calls this entry. Typed reuse is separately gated by
+  the explicit same-source identity and green dependency checks.
 - `SourceMap::new_source_file_version` explicitly appends a native source version.
   Historical byte positions still resolve to their original source and diagnostic
   coordinates, while stable-ID lookup selects the latest version. The explicit
@@ -100,8 +111,9 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   indices and excludes unloaded historical files from dep-info and local source
   identity hashing. Metadata and query-cache encoders now check active files while
   preserving historical indices and ordinary formats. Incremental persistence
-  remains refused until the complete encoding and reuse contracts are validated.
-  This is not a span-remapping policy and does not authorize reusing old results.
+  remains refused in default owned mode and is permitted only by the explicit
+  private typed/control options. This is not a span-remapping policy and does not
+  authorize changed-source reuse.
 - `SourceMap::resident_raw_source_files` exposes bounded, frozen, pre-normalization
   loader bytes without rereading disk. The compiler identity builder requires
   complete one-to-one coverage of active source objects, captures actual local
