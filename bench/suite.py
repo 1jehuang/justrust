@@ -149,6 +149,14 @@ SNAPSHOTS = {
             "jcode": (HOME / "jcode", "abff94eeb"),
         },
         "fixture_overlays": [pty_fixture.identity()],
+        "fixture_patch_sha256": {
+            "bench/patches/jcode-scroll-render-fixture-state.patch":
+                "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
+        },
+        "fixture_input_sha256": {
+            "jcode/crates/jcode-tui/src/tui/app/tests/scroll_copy_03.rs":
+                "a50c9fb4c0675bf1b39d41a191c3834064d93991d21e6b455097d6c1ea207a66",
+        },
         "cwd": "jcode-desktop",
         # 7d38fb7's lib tests miss a field its harness already uses (fixed
         # later upstream). Exact replacements, applied once at extraction.
@@ -173,6 +181,7 @@ SNAPSHOTS = {
             # Whole-fixture env exclusion for remote/model readers and their
             # writers, including aggregate HOME restore-before-unlock ordering.
             ("jcode", "bench/patches/jcode-hosted-tui-prerequisites.patch"),
+            ("jcode", "bench/patches/jcode-scroll-render-fixture-state.patch"),
         ],
     },
     "justrust": {
@@ -483,7 +492,10 @@ def snapshot_fingerprint(name: str) -> str:
     spec = SNAPSHOTS[name]
     if spec.get("fixture_overlays") and spec["fixture_overlays"] != [pty_fixture.identity()]:
         raise ValueError("bench: unsupported PTY fixture overlay identity")
-    identity = {"format": SNAPSHOT_FORMAT, "fixture_overlays": spec.get("fixture_overlays", []), "fixups": spec.get("fixups", []),
+    for path, expected in spec.get("fixture_patch_sha256", {}).items():
+        verify_fixture_patch(ROOT / path, expected)
+    identity = {"format": SNAPSHOT_FORMAT, "fixture_overlays": spec.get("fixture_overlays", []),
+                "fixture_input_sha256": spec.get("fixture_input_sha256", {}), "fixups": spec.get("fixups", []),
                 "patches": [(repo, path, hashlib.sha256((ROOT / path).read_bytes()).hexdigest())
                             for repo, path in spec.get("patches", [])]}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -580,6 +592,16 @@ def prepare_snapshot_git(dst: Path, src: Path, rev: str, src_dir: str | None) ->
     subprocess.run(["git", "-C", str(dst), "read-tree", "HEAD"], check=True)
 
 
+def verify_fixture_patch(path: Path, expected_sha256: str) -> None:
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("bench: corrupt or unversioned fixture patch SHA256")
+
+
+def verify_fixture_input(path: Path, expected_sha256: str) -> None:
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError(f"bench: unexpected pinned fixture input SHA256: {path.name}")
+
+
 def prepare(name: str) -> Path:
     """Extract the pinned snapshot once. Source files are restored per run."""
     bench_lock()
@@ -606,6 +628,9 @@ def prepare(name: str) -> Path:
             if archive.wait() != 0:
                 sys.exit(f"bench: git archive {src}@{rev} failed")
         prepare_snapshot_git(dst, src, rev, src_dir)
+        for rel, expected in SNAPSHOTS[name].get("fixture_input_sha256", {}).items():
+            if rel.startswith(repo + "/"):
+                verify_fixture_input(root / rel, expected)
         if repo == "jcode" and SNAPSHOTS[name].get("fixture_overlays"):
             pty_fixture.apply(dst)
         for rel, old, new, count in SNAPSHOTS[name].get("fixups", []):
@@ -1473,6 +1498,8 @@ def env_info() -> dict:
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
         "snapshots": {k: {r: rev for r, (_, rev) in v["repos"].items()} for k, v in SNAPSHOTS.items()},
         "snapshot_format": SNAPSHOT_FORMAT,
+        "fixture_patch_sha256": {name: spec.get("fixture_patch_sha256", {}) for name, spec in SNAPSHOTS.items()},
+        "fixture_input_sha256": {name: spec.get("fixture_input_sha256", {}) for name, spec in SNAPSHOTS.items()},
         "fixture_overlays": {name: spec.get("fixture_overlays", []) for name, spec in SNAPSHOTS.items()},
         "snapshot_fingerprints": {name: snapshot_fingerprint(name) for name in SNAPSHOTS},
         "runtime_prerequisites": RUNTIME_PREREQUISITES,

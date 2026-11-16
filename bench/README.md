@@ -227,6 +227,22 @@ the child. Instrumentation never enters measured snapshots. Local compilation
 is intentional for access to repeated test executables. This is targeted
 fixture acceptance, not a full workload performance comparison.
 
+Complete TUI acceptance additionally exposed a provider/auth environment race:
+`command_palette_open_does_not_move_existing_rows` could read different provider
+headers in its before/after frames while another test changed credentials. The
+separate `jcode-scroll-render-fixture-state.patch` scopes all 30 constructor-
+derived environment readers in `scroll_copy_03.rs` with the existing
+`with_local_jcode_home` helper, before acquiring render-state ownership. Every
+original test body, helper, assertion, and inherited ignore remains unchanged
+inside those scopes. The pristine input SHA256 is
+`a50c9fb4c0675bf1b39d41a191c3834064d93991d21e6b455097d6c1ea207a66`,
+and the patch SHA256 is
+`3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788`.
+Unexpected input fails before patching. Both input identity and patch bytes
+participate in snapshot/cache/report fingerprints. `test_scroll_render_fixture.py`
+proves the exact scope-only transform, preserves every assertion, and detects
+removal of any reader guard, not only the observed failing test.
+
 The credited patches currently restore Desktop's visible reload camera position
 (`764e429`, retaining the original viewport assertion) and import Jcode's existing
 description-consent/schema repair (`2474a4f81`, without removing consent text or

@@ -1,0 +1,430 @@
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_03.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_03.rs
+@@ -1,5 +1,6 @@
+ #[test]
+ fn test_scroll_ctrl_k_j_offset() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 1, 20);
+ 
+@@ -44,10 +45,12 @@
+     // Stays at 0 when already at bottom
+     app.handle_key(down_code.clone(), down_mods).unwrap();
+     assert_eq!(app.scroll_offset, 0);
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_offset_capped() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 1, 4);
+ 
+@@ -64,10 +67,12 @@
+     // Should be at 0 (absolute top) after scrolling up enough
+     assert_eq!(app.scroll_offset, 0);
+     assert!(app.auto_scroll_paused);
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_render_bottom() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (app, mut terminal) = create_scroll_test_app(80, 15, 1, 20);
+     let text = render_and_snap(&app, &mut terminal);
+@@ -83,10 +88,12 @@
+         text.contains('↑') || text.contains('›'),
+         "expected ↑ indicator or prompt preview when content extends above viewport"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_render_scrolled_up() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 8);
+     // The ↓ overflow counter is only rendered when the native scrollbar is off;
+@@ -108,10 +115,12 @@
+         text_scrolled.contains('↓'),
+         "expected ↓ indicator when paused above bottom"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_prompt_preview_reserves_rows_without_overwriting_visible_history() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let mut app = create_test_app();
+     app.display_messages = vec![
+@@ -162,10 +171,12 @@
+         "latest visible content should remain visible below preview, got:\n{}",
+         text
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_top_does_not_snap_to_bottom() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 24);
+ 
+@@ -187,10 +198,12 @@
+         text_top.contains("Intro line 01"),
+         "top viewport should include earliest content"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_content_shifts() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 12);
+ 
+@@ -208,10 +221,12 @@
+         text_bottom, text_scrolled,
+         "content should change when scrolled"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_render_with_mermaid() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 2, 10);
+ 
+@@ -223,10 +238,12 @@
+             .draw(|f| crate::tui::ui::draw(f, &app))
+             .unwrap_or_else(|e| panic!("draw failed at scroll_offset={}: {}", offset, e));
+     }
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_visual_debug_frame() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(100, 30, 1, 10);
+ 
+@@ -257,10 +274,12 @@
+     );
+ 
+     crate::tui::visual_debug::disable();
++    });
+ }
+ 
+ #[test]
+ fn test_full_redraw_clears_out_of_band_backend_artifacts_after_native_scroll_like_mutation() {
++    with_local_jcode_home(|| {
+     let _lock = scroll_render_test_lock();
+ 
+     let (mut app, mut terminal) = create_scroll_test_app(60, 12, 0, 24);
+@@ -309,10 +328,12 @@
+         repaired, clean,
+         "forced full redraw should restore the expected frame and remove stale backend artifacts"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_key_then_render() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 40);
+ 
+@@ -334,6 +355,7 @@
+     // and that scroll state is correct - not that the rendered text differs,
+     // since the global can clamp scroll_offset to 0 during render.
+     let _text_after = render_and_snap(&app, &mut terminal);
++    });
+ }
+ 
+ /// Regression for the wide-emoji "ghost" artifact (ratatui issue #2357): when
+@@ -349,6 +371,7 @@
+ /// scroll tick in terminals that repaint image cells non-atomically.
+ #[test]
+ fn scroll_arms_force_full_repaint_to_clear_wide_grapheme_ghosts() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 60);
+ 
+@@ -402,6 +425,7 @@
+         !hard_cleared_on_down,
+         "downward scroll must not arm the hard-clear path (issue #404)"
+     );
++    });
+ }
+ 
+ /// Routing for `draw_full` (issue #404): scrolling requests the soft
+@@ -500,6 +524,7 @@
+ 
+ #[test]
+ fn test_scroll_round_trip() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 1, 12);
+ 
+@@ -534,10 +559,12 @@
+ 
+     // Verify we're back at the bottom and rendering still succeeds.
+     let _text_restored = render_and_snap(&app, &mut terminal);
++    });
+ }
+ 
+ #[test]
+ fn test_scroll_down_past_bottom_does_not_accumulate_phantom_offset() {
++    with_local_jcode_home(|| {
+     // Repro for the "scroll past the end" bug. While streaming, scroll_max_estimate
+     // can exceed the renderer's actual max (rendered_max). The old code capped the
+     // paused scroll_offset to that inflated estimate, so scrolling down "past" the
+@@ -578,6 +605,7 @@
+         app.scroll_offset,
+         rendered_max
+     );
++    });
+ }
+ 
+ #[test]
+@@ -608,6 +636,7 @@
+ 
+ #[test]
+ fn test_momentum_drain_decelerates_to_one_line() {
++    with_local_jcode_home(|| {
+     // The drain rate eases out: a large queue glides several lines per frame,
+     // decelerating to a single line as it empties (natural momentum decay).
+     let mut app = create_test_app();
+@@ -623,10 +652,12 @@
+     assert!(big > small, "large momentum should drain faster ({big} > {small})");
+     assert_eq!(tail, 1, "the last line should drain one at a time");
+     let _ = empty;
++    });
+ }
+ 
+ #[test]
+ fn test_queued_wheel_down_at_bottom_does_not_accumulate_phantom_scroll() {
++    with_local_jcode_home(|| {
+     // Touchpad/mouse momentum can queue many downward wheel steps. If they keep
+     // "succeeding" against the already-pinned bottom, the queue (or offset) would
+     // accumulate phantom scroll that a later wheel-up has to drain first. The
+@@ -656,10 +687,12 @@
+         !app.auto_scroll_paused,
+         "still following the bottom after blocked downward momentum"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_copy_selection_from_bottom_rebases_scroll_instead_of_jumping_to_top() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = create_scroll_test_app(80, 25, 0, 40);
+ 
+@@ -694,10 +727,12 @@
+         !selected_text.contains("Intro line 01"),
+         "starting selection from bottom should not teleport to the top"
+     );
++    });
+ }
+ 
+ #[test]
+ fn repro_ctrl_shift_jk_scroll_with_text_in_input() {
++    with_local_jcode_home(|| {
+     // Kitty keyboard protocol reports Ctrl+Shift+J / Ctrl+Shift+K as
+     // Char('j'/'k') + CONTROL|SHIFT (captured raw bytes: ESC[106;6u / ESC[107;6u).
+     let _render_lock = scroll_render_test_lock();
+@@ -751,6 +786,7 @@
+         app.input, "",
+         "plain Ctrl+K should still kill to end of line"
+     );
++    });
+ }
+ 
+ /// Build a long single-message app and seed the render statics so the
+@@ -762,6 +798,7 @@
+ 
+ #[test]
+ fn test_history_anchor_keeps_distance_from_bottom_after_prepend() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = anchor_test_app();
+ 
+@@ -820,10 +857,12 @@
+         resolved, 0,
+         "anchored viewport must not snap to the new absolute top"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_history_anchor_reconciles_into_scroll_offset_after_render() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let (mut app, mut terminal) = anchor_test_app();
+ 
+@@ -867,6 +906,7 @@
+         "scroll_offset should adopt the resolved on-screen position"
+     );
+     assert!(app.auto_scroll_paused, "anchored view stays paused");
++    });
+ }
+ 
+ /// Build a session whose compacted prefix is large enough to actually truncate
+@@ -925,6 +965,7 @@
+ 
+ #[test]
+ fn test_local_compacted_history_scroll_up_is_anchored_not_snapped() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let mut app = compacted_history_app_with_remaining(50);
+@@ -952,10 +993,12 @@
+         app.pending_history_anchor.is_some(),
+         "scroll-up that loads history should capture a viewport anchor"
+     );
++    });
+ }
+ 
+ #[test]
+ fn test_prompt_jump_loads_older_history_when_at_top() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let mut app = compacted_history_app_with_remaining(50);
+@@ -976,6 +1019,7 @@
+         app.display_messages().len() > messages_before,
+         "prompt-up at the top should load older history"
+     );
++    });
+ }
+ 
+ /// Return the first non-empty rendered line of the chat viewport, used as a
+@@ -998,6 +1042,7 @@
+ /// report is size/timing dependent ("only sometimes").
+ #[test]
+ fn repro_wheel_up_from_bottom_always_moves_viewport() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let mut failures: Vec<String> = Vec::new();
+@@ -1049,12 +1094,14 @@
+         "wheel-up dead zones found:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ /// A burst of wheel notches followed by a single wheel-down notch must move the
+ /// view back down. Repro for momentum/queue state leaving the view stuck.
+ #[test]
+ fn repro_wheel_down_after_up_burst_moves_viewport() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let mut failures: Vec<String> = Vec::new();
+@@ -1114,12 +1161,14 @@
+         "wheel-down dead zones found:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ /// Keyboard scroll-up via the real key path must move the viewport on the very
+ /// first notch from the bottom, across sizes and streaming state.
+ #[test]
+ fn repro_key_scroll_up_first_notch_moves_viewport() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let mut failures: Vec<String> = Vec::new();
+@@ -1163,6 +1212,7 @@
+         "key scroll-up dead zones found:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ /// Reproduction for the reasoning-streaming scroll report: while reasoning is
+@@ -1172,6 +1222,7 @@
+ /// bottom). This is the "I can't scroll while it's thinking" scenario.
+ #[test]
+ fn repro_scroll_up_holds_while_reasoning_streams() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let rt = tokio::runtime::Runtime::new().unwrap();
+@@ -1257,6 +1308,7 @@
+         "reasoning-streaming scroll dead zones found:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ /// Closer reproduction of the real loop: mouse-wheel scroll (the momentum-queue
+@@ -1266,6 +1318,7 @@
+ /// reasoning deltas.
+ #[test]
+ fn repro_mouse_wheel_during_token_by_token_reasoning() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let rt = tokio::runtime::Runtime::new().unwrap();
+@@ -1354,6 +1407,7 @@
+         "mouse-wheel reasoning scroll dead zones:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ /// The reasoning region closing (anchoring) restructures the transcript: the
+@@ -1363,6 +1417,7 @@
+ /// likely "I scrolled up while it was thinking and then it jumped / froze" path.
+ #[test]
+ fn repro_scroll_held_across_reasoning_close_and_answer() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     let rt = tokio::runtime::Runtime::new().unwrap();
+@@ -1468,6 +1523,7 @@
+         "scroll-across-reasoning-close dead zones:\n{}",
+         failures.join("\n")
+     );
++    });
+ }
+ 
+ 
+@@ -1479,6 +1535,7 @@
+ /// `toggle_swarm_message_expand`.
+ #[test]
+ fn test_click_on_swarm_expand_badge_toggles_tldr_collapse() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+     let mut app = create_test_app();
+ 
+@@ -1593,6 +1650,7 @@
+             .is_some_and(|parsed| !parsed.expanded),
+         "collapse badge click must fold the card back down"
+     );
++    });
+ }
+ 
+ #[cfg(test)]
+@@ -1605,6 +1663,7 @@
+ /// Regression for the "/ makes the whole screen jump 8 rows" report.
+ #[test]
+ fn command_palette_open_does_not_move_existing_rows() {
++    with_local_jcode_home(|| {
+     let _render_lock = scroll_render_test_lock();
+ 
+     // Case 1: mostly-empty session (packed layout, free space below input).
+@@ -1669,4 +1728,5 @@
+         checked += 1;
+     }
+     assert!(checked >= 3, "expected transcript rows to sample:\n{before}");
+-}
++    });
++}
