@@ -44,6 +44,11 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   same lifetime without introducing a dependency from `rustc_middle` back to
   `rustc_interface`. Neither entry is wired into resident requests. The cell
   count is a structural bound, not an owning-arena byte or RSS budget.
+- `rustc_interface::resident::with_resident_compiler_batch` constructs one serial
+  worker, one registry, and scoped native compiler/session storage under the type
+  domain. Its explicit per-revision entry finalizes diagnostics and rejects custom
+  capture/admission/loading and incompatible global settings. It is not selected
+  by the transport, has no owning-byte budget, and does not authorize query reuse.
 - `ty::resident_identity` checks bounded, exact, ordered crate and definition
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller

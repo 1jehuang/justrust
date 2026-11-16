@@ -4270,6 +4270,7 @@ version = "0.0.0"
 dependencies = [
  "rand 0.9.3",
  "rustc_abi",
+ "rustc_arena",
  "rustc_ast",
  "rustc_ast_lowering",
  "rustc_ast_passes",

@@ -226,7 +226,7 @@ fn run_in_thread_with_globals<F: FnOnce(CurrentGcx) -> R + Send, R: Send>(
 /// proxy or acquire additional frontend permits. Parallel frontend mode is not
 /// supported, even when configured with only one worker.
 pub(crate) fn run_in_serial_worker_with_owned_globals<
-    F: FnOnce(&mut SessionGlobals) -> R + Send,
+    F: FnOnce(SessionGlobals) -> R + Send,
     R: Send,
 >(
     thread_builder_diag: &EarlyDiagCtxt,
@@ -252,9 +252,8 @@ pub(crate) fn run_in_serial_worker_with_owned_globals<
         let r = builder
             .spawn_scoped(s, move || {
                 registry.register();
-                let mut session_globals =
-                    SessionGlobals::new(edition, extra_symbols, Some(sm_inputs));
-                f(&mut session_globals)
+                let session_globals = SessionGlobals::new(edition, extra_symbols, Some(sm_inputs));
+                f(session_globals)
             })
             .unwrap()
             .join();
