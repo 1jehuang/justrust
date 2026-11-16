@@ -500,13 +500,20 @@ impl CacheLocker {
     }
 
     /// Acquires a lock with the given mode, returning `None` if another cargo
-    /// is holding the lock.
+    /// is holding the lock or another thread is accessing this locker's state.
     pub fn try_lock(
         &self,
         gctx: &GlobalContext,
         mode: CacheLockMode,
     ) -> CargoResult<Option<CacheLock<'_>>> {
-        let mut state = self.state.lock().unwrap();
+        // This path is used for optional work, such as automatic cache cleanup.
+        // A blocking acquisition can hold the state mutex while waiting for
+        // another process, so even taking that mutex must be nonblocking here.
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+            Err(err) => panic!("{err}"),
+        };
         if state.lock(gctx, mode, NonBlocking)? == LockAcquired {
             Ok(Some(CacheLock { mode, locker: self }))
         } else {
@@ -553,4 +560,86 @@ fn maybe_readonly(err: &anyhow::Error) -> bool {
 
         false
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const MODES: [CacheLockMode; 3] = [
+        CacheLockMode::DownloadExclusive,
+        CacheLockMode::Shared,
+        CacheLockMode::MutateExclusive,
+    ];
+
+    fn context(home: &std::path::Path) -> GlobalContext {
+        GlobalContext::new(
+            cargo_util_terminal::Shell::new(),
+            home.to_path_buf(),
+            home.to_path_buf(),
+        )
+    }
+
+    #[test]
+    fn try_lock_skips_contended_state_for_every_mode() {
+        let home = tempfile::tempdir().unwrap();
+        let gctx = context(home.path());
+        let locker = CacheLocker::new();
+        std::thread::scope(|scope| {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let locker = &locker;
+            let holder = scope.spawn(move || {
+                let _state = locker.state.lock().unwrap();
+                ready_tx.send(()).unwrap();
+                // Bound the wait so a regression to Mutex::lock fails rather
+                // than deadlocking this test indefinitely.
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            });
+            ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let skipped = MODES.map(|mode| locker.try_lock(&gctx, mode).unwrap().is_none());
+            let _ = release_tx.send(());
+            holder.join().unwrap();
+            assert_eq!(skipped, [true; 3]);
+        });
+        assert!(!home.path().join(CACHE_LOCK_NAME).exists());
+        assert!(!home.path().join(MUTATE_NAME).exists());
+        for mode in MODES {
+            assert!(!locker.is_locked(mode));
+            let lock = locker.try_lock(&gctx, mode).unwrap().unwrap();
+            assert!(locker.is_locked(mode));
+            drop(lock);
+            assert!(!locker.is_locked(mode));
+        }
+    }
+
+    #[test]
+    fn try_lock_preserves_recursive_acquisitions_for_every_mode() {
+        let home = tempfile::tempdir().unwrap();
+        let gctx = context(home.path());
+        let locker = CacheLocker::new();
+        for mode in MODES {
+            let outer = locker.lock(&gctx, mode).unwrap();
+            let inner = locker.try_lock(&gctx, mode).unwrap().unwrap();
+            drop(inner);
+            assert!(locker.is_locked(mode));
+            drop(outer);
+            assert!(!locker.is_locked(mode));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "poisoned")]
+    fn try_lock_does_not_hide_poisoned_state() {
+        let home = tempfile::tempdir().unwrap();
+        let gctx = context(home.path());
+        let locker = CacheLocker::new();
+        let _ = std::panic::catch_unwind(|| {
+            let _state = locker.state.lock().unwrap();
+            panic!("poison state for test");
+        });
+        let _ = locker.try_lock(&gctx, CacheLockMode::Shared);
+    }
 }
