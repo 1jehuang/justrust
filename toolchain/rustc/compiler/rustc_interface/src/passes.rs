@@ -979,8 +979,10 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
     // incr. comp. yet.
     dep_graph.assert_ignored();
 
-    let query_result_on_disk_cache =
-        rustc_incremental::load_query_result_cache(sess, incr_comp_session.as_ref());
+    let query_result_on_disk_cache = rustc_incremental::load_query_result_cache(
+        sess,
+        incr_comp_session.as_ref().map(|session| &session.paths),
+    );
 
     let codegen_backend = &compiler.codegen_backend;
     let mut providers = *DEFAULT_QUERY_PROVIDERS;
@@ -1015,7 +1017,7 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
         &arena,
         &hir_arena,
         untracked,
-        incr_comp_session.as_ref(),
+        incr_comp_session.as_ref().map(|session| session.paths.clone()),
         dep_graph,
         rustc_query_impl::query_system(
             &arena,

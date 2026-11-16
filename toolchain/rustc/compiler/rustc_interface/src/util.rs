@@ -28,7 +28,7 @@ pub use rustc_session::config::DEFAULT_STACK_SIZE;
 use rustc_session::config::{
     Cfg, Jobs, OutFileName, OutputFilenames, OutputTypes, Sysroot, host_tuple,
 };
-use rustc_session::{EarlyDiagCtxt, EarlySession, IncrCompSession, Session, filesearch};
+use rustc_session::{EarlyDiagCtxt, EarlySession, IncrCompSessionPaths, Session, filesearch};
 use rustc_span::edition::Edition;
 use rustc_span::source_map::SourceMapInputs;
 use rustc_span::{SessionGlobals, Symbol, sym};
@@ -533,7 +533,7 @@ impl CodegenBackend for DummyCodegenBackend {
         &self,
         ongoing_codegen: Box<dyn Any>,
         _sess: &Session,
-        _incr_comp_session: Option<&IncrCompSession>,
+        _incr_comp_session: Option<&IncrCompSessionPaths>,
         _outputs: &OutputFilenames,
         _crate_info: &CrateInfo,
     ) -> (CompiledModules, WorkProductMap) {

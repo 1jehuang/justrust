@@ -10,7 +10,7 @@ use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::{DepGraph, WorkProduct, WorkProductMap};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{self, OutputFilenames, OutputType};
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{IncrCompSession, IncrCompSessionPaths, Session};
 
 use crate::diagnostics::FailedWritingFile;
 use crate::passes;
@@ -79,8 +79,11 @@ impl Linker {
     ) {
         let output_filenames = Arc::clone(&self.output_filenames);
         let crate_hash = self.crate_hash;
-        let (compiled_modules, crate_info, metadata) =
-            self.join_inner(sess, incr_comp_session.as_ref(), codegen_backend);
+        let (compiled_modules, crate_info, metadata) = self.join_inner(
+            sess,
+            incr_comp_session.as_ref().map(|session| &session.paths),
+            codegen_backend,
+        );
 
         // Now that we won't touch anything in the incremental compilation directory
         // any more, we can finalize it (which involves renaming it)
@@ -95,7 +98,7 @@ impl Linker {
     pub fn join(
         self,
         sess: &Session,
-        incr_comp_session: Option<&IncrCompSession>,
+        incr_comp_session: Option<&IncrCompSessionPaths>,
         codegen_backend: &dyn CodegenBackend,
     ) -> JoinedLinker {
         let output_filenames = Arc::clone(&self.output_filenames);
@@ -108,7 +111,7 @@ impl Linker {
     fn join_inner(
         self,
         sess: &Session,
-        incr_comp_session: Option<&IncrCompSession>,
+        incr_comp_session: Option<&IncrCompSessionPaths>,
         codegen_backend: &dyn CodegenBackend,
     ) -> (CompiledModules, CrateInfo, EncodedMetadata) {
         let (compiled_modules, mut work_products) = sess.time("finish_ongoing_codegen", || {
@@ -258,11 +261,11 @@ pub fn overlap_persist_and_link(
             // capture the non-`DynSend` fields one by one).
             let work = work;
             let (linker, backend) = work.0.0;
-            let joined = linker.join(sess, tcx.incr_comp_session, backend);
+            let joined = linker.join(sess, tcx.incr_comp_session.as_ref(), backend);
             joined.link(sess, backend);
             // justrust: the outputs are complete; reply now and let the
             // persist finish in the background (`JUSTRUST_RUSTC_EARLY_REPLY_FD`).
-            if let Some(incr) = tcx.incr_comp_session
+            if let Some(incr) = tcx.incr_comp_session.as_ref()
                 && std::env::var_os("JUSTRUST_RUSTC_EARLY_REPLY_FD").is_some()
                 && sess.dcx().has_errors_or_delayed_bugs().is_none()
             {
