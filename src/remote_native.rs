@@ -42,6 +42,43 @@ const AUTH_REJECTION_BODY: &[u8] = b"native identity rejected before execution";
 #[cfg(unix)]
 const ADMISSION_DIR: &str = "/run/justrust-native-admission";
 
+// flock locks belong to the open file description, not the descriptor. Closing
+// our File alone can leave a lock alive in a concurrent fork's pre-exec child.
+// Only this process's scoped owner may unlock: a child dropping an inherited
+// guard must not release its still-live parent's lock.
+#[cfg(unix)]
+#[derive(Debug)]
+struct AdmissionLock {
+    file: std::fs::File,
+    owner: libc::pid_t,
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for AdmissionLock {
+    type Target = std::fs::File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.file
+    }
+}
+
+#[cfg(unix)]
+impl Drop for AdmissionLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        if self.owner != unsafe { libc::getpid() } {
+            return;
+        }
+        // Unlocking an unlocked description is harmless. Each guard owns an
+        // independently opened description, never a duplicate of another guard.
+        while unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 #[derive(Debug)]
 struct AdmissionGate {
@@ -112,7 +149,7 @@ impl AdmissionGate {
         Ok(())
     }
 
-    fn file(&self, name: &str) -> Result<std::fs::File> {
+    fn file(&self, name: &str) -> Result<AdmissionLock> {
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
         self.validate()?;
         let path = self.path.join(name);
@@ -147,7 +184,10 @@ impl AdmissionGate {
                 "native admission lock replaced"
             );
         }
-        Ok(file)
+        Ok(AdmissionLock {
+            file,
+            owner: unsafe { libc::getpid() },
+        })
     }
 
     fn try_lock(file: &std::fs::File, exclusive: bool) -> Result<bool> {
@@ -168,7 +208,7 @@ impl AdmissionGate {
         }
     }
 
-    fn admit(&self) -> Result<Option<std::fs::File>> {
+    fn admit(&self) -> Result<Option<AdmissionLock>> {
         let intent = self.file("intent")?;
         if !Self::try_lock(&intent, false)? {
             return Ok(None);
@@ -255,9 +295,7 @@ impl AdmissionGate {
         &self,
         timeout: Duration,
         generation: &str,
-    ) -> Result<(std::fs::File, std::fs::File, std::fs::File)> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+    ) -> Result<(AdmissionLock, AdmissionLock, AdmissionLock)> {
         Self::generation(generation)?;
         let deadline = std::time::Instant::now() + timeout;
         let controller = self.file("controller")?;
@@ -265,6 +303,17 @@ impl AdmissionGate {
             Self::try_lock(&controller, true)?,
             "native drain controller already active"
         );
+        self.finish_drain(controller, deadline, generation)
+    }
+
+    fn finish_drain(
+        &self,
+        controller: AdmissionLock,
+        deadline: std::time::Instant,
+        generation: &str,
+    ) -> Result<(AdmissionLock, AdmissionLock, AdmissionLock)> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
         if let Some((_, current)) = self.marker()? {
             ensure!(current == generation, "native drain generation mismatch");
         } else {
@@ -1818,6 +1867,91 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn native_admission_duplicate_description_requires_explicit_unlock() {
+        let (_directory, gate) = admission_fixture();
+        // try_clone duplicates the same open file description exactly as fork
+        // does, without forking a multithreaded test process or racing exec.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(gate.path.join("controller"))
+            .unwrap();
+        assert!(AdmissionGate::try_lock(&file, true).unwrap());
+        let duplicate = file.try_clone().unwrap();
+        let contender = gate.file("controller").unwrap();
+        assert!(!AdmissionGate::try_lock(&contender, true).unwrap());
+        // Model the old close-only implementation and prove its failure mode.
+        drop(file);
+        assert!(!AdmissionGate::try_lock(&contender, true).unwrap());
+        // End the demonstration with explicit unlock, not another close-only
+        // drop: parallel process-spawning tests may inherit this duplicate too.
+        drop(AdmissionLock {
+            file: duplicate,
+            owner: unsafe { libc::getpid() },
+        });
+        assert!(AdmissionGate::try_lock(&contender, true).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_scoped_unlock_preserves_live_owner() {
+        let (_directory, gate) = admission_fixture();
+        for name in ["controller", "intent", "active"] {
+            let owner = gate.file(name).unwrap();
+            assert!(AdmissionGate::try_lock(&owner, true).unwrap());
+            let duplicate = owner.try_clone().unwrap();
+            // A guard inherited by another process must only close its fd,
+            // never unlock a description still owned by the original process.
+            drop(AdmissionLock {
+                file: owner.try_clone().unwrap(),
+                owner: -1,
+            });
+            let contender = gate.file(name).unwrap();
+            assert!(!AdmissionGate::try_lock(&contender, true).unwrap());
+            drop(owner);
+            assert!(AdmissionGate::try_lock(&contender, true).unwrap());
+            // The inherited descriptor is deliberately still open here.
+            drop(duplicate);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_admission_timeout_unlocks_inherited_controller() {
+        let (_directory, gate) = admission_fixture();
+        let active = gate.admit().unwrap().unwrap();
+        let inherited_active = active.try_clone().unwrap();
+        let controller = gate.file("controller").unwrap();
+        assert!(AdmissionGate::try_lock(&controller, true).unwrap());
+        let inherited_controller = controller.try_clone().unwrap();
+        let error = gate
+            .finish_drain(controller, std::time::Instant::now(), DRAIN_GENERATION)
+            .unwrap_err();
+        assert!(error.to_string().contains("native drain timed out"));
+        assert!(gate.admit().unwrap().is_none());
+        // A live command still fences a second controller, not a stale
+        // controller lock. No retry, sleep, or scheduler-dependent timing.
+        let error = gate.drain(Duration::ZERO, DRAIN_GENERATION).unwrap_err();
+        assert!(error.to_string().contains("native drain timed out"));
+        drop(active);
+        let held = gate.drain(Duration::ZERO, DRAIN_GENERATION).unwrap();
+        let inherited = [
+            held.0.try_clone().unwrap(),
+            held.1.try_clone().unwrap(),
+            held.2.try_clone().unwrap(),
+        ];
+        assert!(gate.drain(Duration::ZERO, DRAIN_GENERATION).is_err());
+        assert!(gate.resume(DRAIN_GENERATION).is_err());
+        drop(held);
+        assert!(gate.admit().unwrap().is_none());
+        assert!(gate.resume(&"b".repeat(64)).is_err());
+        gate.resume(DRAIN_GENERATION).unwrap();
+        assert!(gate.admit().unwrap().is_some());
+        drop((inherited, inherited_controller, inherited_active));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn native_admission_concurrent_and_bounded_timeout() {
         let (_directory, gate) = admission_fixture();
         let gate = Arc::new(gate);
@@ -1909,17 +2043,10 @@ mod tests {
             assert!(gate.resume(&"b".repeat(64)).is_err());
             gate.resume(DRAIN_GENERATION).unwrap();
             assert!(gate.marker().unwrap().is_none());
-            // Parallel process-spawning tests can briefly inherit another
-            // thread's flock descriptor between fork and CLOEXEC. Denial during
-            // that interval is safe, but explicit resume must eventually admit.
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while gate.admit().unwrap().is_none() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "resume did not restore admission"
-                );
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            assert!(
+                gate.admit().unwrap().is_some(),
+                "resume must restore admission even with inherited descriptors"
+            );
         }
     }
 
