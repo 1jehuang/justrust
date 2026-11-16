@@ -27,6 +27,29 @@ feature toggles as stack comparisons. See
 identity, cache, correctness, repetition and coverage contract. These focused
 results do not replace the comprehensive synthetic gate below.
 
+## Same-compiler reuse attribution
+
+Do not use the Blaze-derived resident engine as evidence of retaining the
+shipping rustc compiler's state. For an offline comparison of two recorded
+shipping `summary.json` files, use:
+
+```sh
+python3 bench/stable_reuse_attribution.py BEFORE/summary.json AFTER/summary.json \
+  --baseline-toolchain jr-EXACT_ID --candidate-toolchain jr-EXACT_ID \
+  --baseline-backend llvm --candidate-backend llvm
+```
+
+The identities are explicit caller attestations checked against recorded
+provenance where available. Keep the executable, driver, sysroot, flags,
+workload, execution mode and cache preparation matched independently. A shared
+toolchain name alone is not a binary hash verification. The tool rejects known
+identity conflicts, reports missing telemetry as unknown, and keeps nested
+client/sync/host observations and parallel compiler-phase sums separate.
+Incremental cache I/O is not a measurement of all query-cache work. One pair
+is descriptive attribution, not a causal speedup or a comprehensive gate.
+A live compiler-state RAM tier must actually exist and pass invalidation and
+memory-budget checks before it can be included in a three-tier comparison.
+
 ## Find the expensive lock queues first
 
 Read existing run summaries without starting builds or changing caches:
