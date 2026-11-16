@@ -29,6 +29,16 @@ const RECORDED: &[&str] = &[
 ];
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
+const INITIAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
+const INITIAL_SAMPLE_WINDOW: Duration = Duration::from_millis(400);
+
+fn sample_interval(elapsed: Duration) -> Duration {
+    if elapsed < INITIAL_SAMPLE_WINDOW {
+        INITIAL_SAMPLE_INTERVAL
+    } else {
+        SAMPLE_INTERVAL
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Meta {
@@ -1482,7 +1492,8 @@ fn sample_loop(
     lines: &Mutex<OutputCapture>,
     log_availability: &std::sync::atomic::AtomicBool,
 ) -> (Vec<Sample>, Vec<ProcRecord>) {
-    let mut last_log_flush = std::time::Instant::now();
+    let sample_start = std::time::Instant::now();
+    let mut last_log_flush = sample_start;
     let mut daemon: Option<i32> = None;
     let hz = procfs::clk_tck();
     let page_mb = procfs::page_size() as f64 / 1_048_576.0;
@@ -1613,11 +1624,16 @@ fn sample_loop(
         if stop {
             break;
         }
-        // Sleep until the next sample, but wake as soon as the build ends.
+        // Resolve short warm builds with real observations, then return to the
+        // normal cadence. Use monotonic elapsed time only for scheduling, never
+        // for sample timestamps. Waiting after collection avoids catch-up scans
+        // if collecting a sample itself is slow. Completion still wakes us
+        // immediately, without waiting for a minimum number of samples.
+        let interval = sample_interval(sample_start.elapsed());
         let guard = done.0.lock().unwrap();
         let _ = done
             .1
-            .wait_timeout_while(guard, SAMPLE_INTERVAL, |finished| !*finished);
+            .wait_timeout_while(guard, interval, |finished| !*finished);
     }
     let mut procs: Vec<ProcRecord> = tracked
         .into_values()
@@ -1777,6 +1793,45 @@ fn unify_features(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sampling_cadence_switches_at_initial_window_boundary() {
+        use std::time::Duration;
+
+        for elapsed in [Duration::ZERO, Duration::from_micros(399_999)] {
+            assert_eq!(super::sample_interval(elapsed), Duration::from_millis(50));
+        }
+        for elapsed in [
+            Duration::from_millis(400),
+            Duration::from_millis(401),
+            Duration::from_secs(60),
+            Duration::MAX,
+        ] {
+            assert_eq!(super::sample_interval(elapsed), Duration::from_millis(200));
+        }
+    }
+
+    #[test]
+    fn sampling_cadence_has_bounded_fast_start_without_catch_up() {
+        use std::time::Duration;
+
+        // Model waits with zero collection cost, not synthetic sample rows.
+        let mut elapsed = Duration::ZERO;
+        let mut deadlines = Vec::new();
+        for _ in 0..10 {
+            elapsed += super::sample_interval(elapsed);
+            deadlines.push(elapsed.as_millis());
+        }
+        assert_eq!(deadlines, [50, 100, 150, 200, 250, 300, 350, 400, 600, 800]);
+
+        // A slow collection or scheduler stall consumes the fast-start window.
+        // The next wait is still a full interval, never a catch-up burst.
+        let after_slow_collection = Duration::from_millis(475);
+        assert_eq!(
+            after_slow_collection + super::sample_interval(after_slow_collection),
+            Duration::from_millis(675)
+        );
+    }
+
     #[test]
     fn native_musl_uses_pinned_lld_and_requires_it() {
         let dir =
