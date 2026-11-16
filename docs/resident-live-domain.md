@@ -43,6 +43,45 @@ The previously measured `JUSTRUST_RUSTC_RESIDENT_FRONTEND` mode still retains
 encoded snapshots and starts a fresh `GlobalCtxt` per request. Its results do
 not measure the live design described here.
 
+## Selective primitive MIR cross-edit experiment
+
+The separate private `JUSTRUST_RUSTC_RESIDENT_TYPED=leaf` mode adds a deliberately
+narrow cross-source path without changing `RevisionIdentity::authorize_reuse`.
+Only an ordinary local, nongeneric, argument-free function whose optimized MIR
+assigns a primitive scalar literal to the return place and returns is eligible.
+The full local definition mapping, semantic invocation and body-owner mapping
+must still agree. Normal dependency-green validation, diagnostic replay and
+incremental hash verification remain in force. Typeck values never use this path.
+
+An opaque proof binds the actual retained body allocation to currently active
+native source-file allocations. It checks the complete reviewed MIR shape,
+primitive types and pointer-free scalar constants, retained lint roots, and all
+visited spans, including their endpoints, hygiene and exact same-item parents.
+It rejects historical files, foreign parents, expansions, references, complex
+constants, calls, generic items, inlining and unreviewed metadata. Inspection runs
+outside the live-state lock, followed by snapshot/body/currentness revalidation.
+Cleared borrow-checking metadata and primitive literal retag flags are accepted
+because they retain no additional referenced allocation or definition universe.
+
+The frozen 1527 candidate passed the real three-file acceptance workload locally
+and on an authenticated production guest. Editing B produced one actual retained
+MIR hit for unchanged A, and editing A produced one for unchanged B. Error recovery
+produced one additional leaf hit. Each enabled worker finished with three distinct
+`mir_leaf_hits` and six ordinary same-source MIR hits. The control remained zero.
+Fresh-compiler diagnostics and both exported constant-return LLVM oracles matched
+through edits, deliberate signature failures and same-PID recovery. The originals
+are `bench/stable-resident-leaf-20261116-1527-native` and
+`bench/stable-resident-leaf-host-20261116-1527-native`.
+
+Earlier failed cross-edit originals, including the strict span-parent rejection,
+remain archived as `bench/stable-resident-leaf-20261116-{1516,1522}-native`.
+Same-source typed acceptance, owned guards and three-repetition shipping-module
+correctness dogfood also passed on the final candidate. These are bounded native
+correctness experiments, not general MIR/Typeck reuse, full-client typed-cache
+dogfood, a performance result, managed resident routing or default activation.
+External crates and broad changed-source typed reuse remain unfinished. A general
+speedup still requires representative, controlled suite measurements.
+
 ## Why a second cache is insufficient
 
 A `Ty<'tcx>`, `TypeckResults<'tcx>` or MIR `Body<'tcx>` can refer to an interner,
