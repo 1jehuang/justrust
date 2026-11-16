@@ -206,13 +206,15 @@ def capture(compiler, output, items=128, edits=8, repetitions=6, timeout=180):
                             if active.exists():
                                 active.rename(bank)
                 finally:
-                    if worker is not None:
-                        worker.close()
-                    for stream in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
-                        path = workspace / stream
-                        if path.exists():
-                            (evidence / stream).write_bytes(path.read_bytes())
-                            path.unlink()
+                    try:
+                        if worker is not None:
+                            worker.close()
+                    finally:
+                        for stream in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
+                            path = workspace / stream
+                            if path.exists():
+                                (evidence / stream).write_bytes(path.read_bytes())
+                                path.unlink()
         # Exact fresh oracle and observable diagnostics for every paired invocation.
         for repetition in range(repetitions):
             for revision in range(edits + 1):
