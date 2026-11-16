@@ -28,6 +28,26 @@ live cross-session hits from same-session query-cache hits. These cheap scalar
 queries do not establish the benefit of retaining most frontend work. A neutral
 or negative result here must not be described as a ceiling on full residency.
 
+## Remaining work for full compiler-state residency
+
+The current slice does **not** implement the requested retention of most project
+compiler work. Growing the boolean whitelist is not a substitute. The next native
+engine needs revision-aware frontend/query state whose storage actually survives
+edits: source and owner identity, query dependency edges, interned types, and
+expensive type-checking/MIR results. A fresh-session arena pointer cannot simply be
+put into the existing process map. A long-lived context needs explicit revision
+invalidation and owned or generation-checked storage, with diagnostics and source
+locations resolved against the current revision.
+
+Before production use, implement and test per-compilation proc-macro isolation,
+build-script/environment invalidation, cancellation and worker eviction, and the
+ordinary hosted admission/accounting lifecycle. Unchanged process arguments are
+not authorization to reuse a job ticket. Keep unsupported builds on the existing
+fresh-process path. Then measure cold preparation, hot edits, errors/recovery,
+memory growth and session-weighted end-to-end builds using the same published
+optimization settings. None of those larger capabilities is established by the
+scalar-query experiment or its direct-protocol timings.
+
 ## Native request protocol
 
 On supported Unix targets, explicitly launch the candidate compiler as:
