@@ -42,6 +42,11 @@ unsupported platforms before creating or pushing a tag.
 Before publication: committed-source/tag/version checks, frozen compiler-policy
 selection and provenance, platform builds, package/checksum and executable sanity.
 After publication: full published-client hosted regression and broader CI.
+Linux runners download a reviewed, SHA256-pinned published bootstrap instead of
+compiling a bootstrap client on every release. Compatibility builds cache their
+dependencies and smoke-test native executable versions and release markers.
+Artifacts are uploaded to a draft first, then published after a final tag check.
+Retries may replace draft assets, never bytes in an already published release.
 Compiler performance experiments are not prerequisites for an unrelated client
 reporting fix. Changing the default compiler still needs its own acceptance.
 

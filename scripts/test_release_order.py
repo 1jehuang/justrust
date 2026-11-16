@@ -110,6 +110,76 @@ class ReleaseOrderTests(unittest.TestCase):
             dogfood.verified_binary.assert_called_once_with(selected, "x86_64-unknown-linux-musl")
             dogfood.validate_release.assert_called_once_with(binary, "1.2.3")
 
+    def test_published_bootstrap_replaces_cold_source_install(self):
+        build = self.job("build")
+        self.assertIn("HOSTED_CLIENT_TAG: v0.1.0-alpha.28", self.workflow)
+        self.assertIn("c08dcefdb2bfcfbc69676a1d077526501e07907ca43152f9193916d5c4989581", self.workflow)
+        self.assertIn('ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path', build)
+        self.assertNotIn("install-hosted-client.sh", build)
+        self.assertIn("Cache compatibility release dependencies", build)
+        self.assertIn("key: client-release-${{ matrix.target }}", build)
+        self.assertLess(build.index("Verify native release executable"), build.index("- name: Package"))
+        self.assertIn('"$binary" update status', build)
+        self.assertIn("Freeze service-selected release compiler once", self.job("preflight"))
+
+    def test_publication_never_overwrites_public_assets(self):
+        import json
+        import os
+        import subprocess
+        import tempfile
+        import textwrap
+
+        release = self.job("release")
+        script = textwrap.dedent(release.split("        run: |\n", 1)[1])
+        fake_gh = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+log = pathlib.Path(os.environ["MOCK_LOG"])
+with log.open("a") as out:
+    out.write(json.dumps(args) + "\\n")
+mode = os.environ["MOCK_MODE"]
+if args[0] == "api":
+    calls = [line for line in log.read_text().splitlines() if json.loads(line)[0] == "api"]
+    print("moved" if mode == "moved" and len(calls) > 1 else "source-sha")
+elif args[:2] == ["release", "view"]:
+    if mode in ("new", "moved"):
+        sys.exit(1)
+    if "--json" in args:
+        print("false" if mode == "public" else "true")
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dist").mkdir()
+            (root / "dist/client.tar.gz").write_bytes(b"artifact")
+            gh = root / "gh"
+            gh.write_text(fake_gh)
+            gh.chmod(0o755)
+            for mode in ("new", "draft", "public", "moved"):
+                with self.subTest(mode=mode):
+                    log = root / f"{mode}.jsonl"
+                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                               MOCK_LOG=str(log), MOCK_MODE=mode, TAG="v1.2.3",
+                               SHA="source-sha", GITHUB_REPOSITORY="owner/repo")
+                    result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                            text=True, capture_output=True)
+                    calls = [json.loads(line) for line in log.read_text().splitlines()]
+                    mutations = [args for args in calls if args[0] == "release" and args[1] != "view"]
+                    if mode in ("new", "draft"):
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(mutations[-1][:2], ["release", "edit"])
+                        self.assertIn("--draft=false", mutations[-1])
+                        self.assertEqual(mutations[0][1], "create" if mode == "new" else "upload")
+                        if mode == "new":
+                            self.assertIn("--draft", mutations[0])
+                    elif mode == "public":
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(mutations, [])
+                        self.assertIn("immutable", result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertFalse(any(args[1] == "edit" for args in mutations))
+                        self.assertIn("moved during upload", result.stderr)
+
     def test_documented_shared_production_first_order(self):
         flattened = " ".join(self.docs.split())
         self.assertIn("bump -> commit -> build/package sanity -> tag/publish -> shared production -> test/measure -> fix forward", flattened)

@@ -20,6 +20,9 @@ env:
   JUSTRUST_RELEASE_BUILD: "1"
   # Immutable bootstrap client with fail-closed hosted routing support.
   HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
+  # Download the reviewed published bootstrap instead of compiling it per job.
+  HOSTED_CLIENT_TAG: v0.1.0-alpha.28
+  HOSTED_CLIENT_SHA256: c08dcefdb2bfcfbc69676a1d077526501e07907ca43152f9193916d5c4989581
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
@@ -138,6 +141,12 @@ jobs:
         shell: bash
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "${{ matrix.target }}"
 
+      - name: Cache compatibility release dependencies
+        if: ${{ !matrix.zig }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: client-release-${{ matrix.target }}
+
       - name: Build
         if: ${{ !matrix.zig }}
         shell: bash
@@ -151,6 +160,22 @@ jobs:
           cargo +"$RUSTUP_TOOLCHAIN" --version > "dist/compiler-${{ matrix.target }}.txt"
           "$RUSTC" -vV >> "dist/compiler-${{ matrix.target }}.txt"
           printf 'compiler_path=%s\nmode=stock-compatibility\npolicy_sha256=%s\nsource_revision=%s\n' "$RUSTC" '${{ needs.preflight.outputs.policy_sha256 }}' '${{ needs.preflight.outputs.sha }}' >> "dist/compiler-${{ matrix.target }}.txt"
+
+      - name: Verify native release executable
+        if: ${{ !matrix.zig }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=$(rustc +"$RUSTUP_TOOLCHAIN" -vV | awk '/^host:/ {print $2}')
+          if [[ "$host" != "${{ matrix.target }}" ]]; then
+            echo "Cross-target binary: native execution requires its target platform"
+            exit 0
+          fi
+          binary="target/${{ matrix.target }}/release/justrust"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then binary="$binary.exe"; fi
+          version=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          [[ $("$binary" --version) == "justrust $version" ]]
+          "$binary" update status | grep -F '(release build)'
 
       - name: Require hosted Linux credentials
         if: ${{ matrix.zig }}
@@ -166,9 +191,8 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
           git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
-          git show "$HOSTED_CLIENT_REV:ci/install-hosted-client.sh" > "$RUNNER_TEMP/install-hosted-client.sh"
           git show "$HOSTED_CLIENT_REV:ci/check-linux-release.sh" > "$RUNNER_TEMP/check-linux-release.sh"
-          bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
+          python3 ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path
 
       - name: Build and verify hosted Linux release
         if: ${{ matrix.zig }}
@@ -249,10 +273,15 @@ jobs:
           [[ "$current" == "$SHA" ]] || { echo "Release tag moved after preflight" >&2; exit 1; }
           ls -l dist
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            [[ "$draft" == "true" ]] || { echo "Published release assets are immutable. Choose a new version." >&2; exit 1; }
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" dist/* --generate-notes --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" dist/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
           fi
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+          [[ "$current" == "$SHA" ]] || { echo "Release tag moved during upload" >&2; exit 1; }
+          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
 
   production-tests:
     needs: [preflight, release]
