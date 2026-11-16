@@ -357,6 +357,24 @@ impl SourceMap {
         })
     }
 
+    /// Append an explicit source version without reusing the previous file with
+    /// the same stable ID. Historical byte positions continue to resolve to
+    /// their original source, while stable-ID lookup selects this new version.
+    ///
+    /// This primitive does not advance a compiler revision or remap old spans.
+    /// `files()` still includes all historical versions. A scoped executor must
+    /// supply active-revision file views and bound or retire the owning source
+    /// universe before enabling multi-revision compilation. Ordinary `load_file`
+    /// and `new_source_file` retain their existing deduplication behavior.
+    pub fn new_source_file_version(
+        &self,
+        filename: FileName,
+        src: String,
+    ) -> Result<Arc<SourceFile>, OffsetOverflowError> {
+        let file = SourceFile::new(filename, src, self.hash_kind, self.checksum_hash_kind)?;
+        self.register_source_file(file.stable_id, file)
+    }
+
     fn try_new_source_file(
         &self,
         filename: FileName,

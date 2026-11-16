@@ -43,6 +43,11 @@ borrowed MIR or type-checking pointers would be unsound.
   estimated reachable-byte budgets bound the cache's references, not the arena
   or the compiler's total RSS.
 
+- `SourceMap::new_source_file_version` explicitly appends a native source version.
+  Historical byte positions still resolve to their original source and diagnostic
+  coordinates, while stable-ID lookup selects the latest version. The ordinary
+  loader is unchanged. This is not an active-revision file view or a span-remapping
+  policy, and does not enable the live driver or authorize reusing old results.
 - `IncrCompSessionPaths` separates the immutable directory view used by contexts
   and codegen from `IncrCompSession`, which still owns the real filesystem locks.
   `GlobalCtxt` owns a cloned path snapshot, so keeping a context does not borrow

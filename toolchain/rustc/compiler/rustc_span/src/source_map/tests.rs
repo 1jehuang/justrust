@@ -4,6 +4,63 @@ fn filename(sm: &SourceMap, path: &str) -> FileName {
     FileName::Real(sm.path_mapping().to_real_filename(sm.working_dir(), PathBuf::from(path)))
 }
 
+#[test]
+fn resident_source_versions_preserve_original_spans() {
+    let sm = SourceMap::new(FilePathMapping::empty());
+    let name = filename(&sm, "versioned.rs");
+    let old_source = "α\nvalue\n";
+    let new_source = "new heading\nα\nvalue\n";
+    let old = sm.new_source_file(name.clone(), old_source.to_string());
+    let old_offset = old_source.find("value").unwrap() as u32;
+    let old_start = BytePos(old.start_pos.0 + old_offset);
+    let old_span = Span::with_root_ctxt(old_start, BytePos(old_start.0 + 5));
+
+    let next = sm.new_source_file_version(name, new_source.to_string()).unwrap();
+    let next_offset = new_source.find("value").unwrap() as u32;
+    let next_start = BytePos(next.start_pos.0 + next_offset);
+    let next_span = Span::with_root_ctxt(next_start, BytePos(next_start.0 + 5));
+
+    assert_eq!(old.stable_id, next.stable_id);
+    assert!(next.start_pos > old.end_position());
+    assert!(!Arc::ptr_eq(&old, &next));
+    assert!(Arc::ptr_eq(&sm.source_file_by_stable_id(old.stable_id).unwrap(), &next));
+    assert_eq!(sm.span_to_snippet(old_span).unwrap(), "value");
+    assert_eq!(sm.span_to_snippet(next_span).unwrap(), "value");
+    let old_location = sm.lookup_char_pos(old_start);
+    let next_location = sm.lookup_char_pos(next_start);
+    assert_eq!((old_location.line, old_location.col), (2, CharPos(0)));
+    assert_eq!((next_location.line, next_location.col), (3, CharPos(0)));
+    assert!(Arc::ptr_eq(&old_location.file, &old));
+    assert!(Arc::ptr_eq(&next_location.file, &next));
+    assert_eq!(sm.files().len(), 2);
+}
+
+#[test]
+fn resident_source_versions_leave_ordinary_creation_deduplicated() {
+    let sm = SourceMap::new(FilePathMapping::empty());
+    let name = filename(&sm, "versioned.rs");
+    let first = sm.new_source_file(name.clone(), "first".to_string());
+    let ordinary = sm.new_source_file(name.clone(), "ignored".to_string());
+    assert!(Arc::ptr_eq(&first, &ordinary));
+    assert_eq!(sm.files().len(), 1);
+
+    let next = sm.new_source_file_version(name.clone(), "next".to_string()).unwrap();
+    let ordinary = sm.new_source_file(name, "also ignored".to_string());
+    assert!(Arc::ptr_eq(&next, &ordinary));
+    assert_eq!(sm.files().len(), 2);
+}
+
+#[test]
+fn resident_empty_source_versions_have_distinct_positions() {
+    let sm = SourceMap::new(FilePathMapping::empty());
+    let name = filename(&sm, "versioned.rs");
+    let first = sm.new_source_file_version(name.clone(), String::new()).unwrap();
+    let next = sm.new_source_file_version(name, String::new()).unwrap();
+    assert!(next.start_pos > first.end_position());
+    assert!(Arc::ptr_eq(&sm.lookup_source_file(first.start_pos), &first));
+    assert!(Arc::ptr_eq(&sm.lookup_source_file(next.start_pos), &next));
+}
+
 fn init_source_map() -> SourceMap {
     let sm = SourceMap::new(FilePathMapping::empty());
     sm.new_source_file(filename(&sm, "blork.rs"), "first line.\nsecond line".to_string());
