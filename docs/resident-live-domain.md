@@ -12,8 +12,17 @@ post-green native `typeck_root` and `optimized_mir` lookups, with exact same-sou
 identity authorization and publication only after complete transport success.
 `JUSTRUST_RUSTC_RESIDENT_TYPED=control` permits incremental persistence under the
 same owners without enabling those lookups. Neither option selects managed hosted
-routing. Native compiler checks and ownership/publication tests pass, but runtime
-typed hits remain an acceptance requirement, not an established result.
+routing. Native compiler checks and ownership/publication tests pass. The frozen
+1446 compiler also passed an explicit MIR-demand acceptance workload locally and
+on an authenticated production guest: each enabled worker recorded ten retained
+native MIR hits across unchanged revisions, while the control stayed at zero.
+Body edits, signature edits and failures produced no new hits. Type-checking hits
+were zero. The original receipts are stored with exact authenticated JSON readback:
+`bench/stable-resident-typed-20261116-1450-mir-native` and
+`bench/stable-resident-typed-host-20261116-1451-native`. This validates only local
+`no_core`, same-source reuse with exact diagnostics and a narrow constant-return
+LLVM artifact oracle. It is not general changed-source reuse, real-project
+Typeck reuse, a speedup, managed routing or default production activation.
 The initial std-based test exposed historical macro hygiene reaching a fresh
 crate store with an old numeric crate ID. Its failed original receipt remains
 stored as `bench/stable-resident-owned-20261116-1334-native`. A revision-local
