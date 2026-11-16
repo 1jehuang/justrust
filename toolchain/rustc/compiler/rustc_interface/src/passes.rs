@@ -938,6 +938,39 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
     krate: rustc_ast::Crate,
     f: F,
 ) -> (T, Option<IncrCompSession>) {
+    // These local owners define the fresh context's lifetime. Keep the cell last so
+    // the context is dropped before the resources and their backing arenas.
+    let arena = WorkerLocal::new(|_| Arena::default());
+    let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
+    let resources = ty::GlobalCtxtResources::fresh(&arena, &hir_arena);
+    let gcx_cell = OnceLock::new();
+
+    create_and_enter_global_ctxt_inner(compiler, &gcx_cell, &resources, krate, f)
+}
+
+/// Enters a new context backed by an explicitly scoped resident type domain.
+///
+/// Returns `None` only when the domain cannot allocate another context cell,
+/// before running any of the compiler preparation or incremental-session setup.
+/// This does not reuse a previous context's queries or enter a resident driver.
+pub fn create_and_enter_global_ctxt_in_domain<'tcx, T>(
+    compiler: &'tcx Compiler,
+    domain: &ty::ResidentTypeDomain<'tcx>,
+    krate: rustc_ast::Crate,
+    f: impl FnOnce(TyCtxt<'tcx>) -> T,
+) -> Option<(T, Option<IncrCompSession>)> {
+    let gcx_cell = domain.alloc_global_ctxt_cell()?;
+    let resources = domain.context_resources();
+    Some(create_and_enter_global_ctxt_inner(compiler, gcx_cell, resources, krate, f))
+}
+
+fn create_and_enter_global_ctxt_inner<'tcx, T>(
+    compiler: &'tcx Compiler,
+    gcx_cell: &'tcx OnceLock<ty::GlobalCtxt<'tcx>>,
+    resources: &'tcx ty::GlobalCtxtResources<'tcx>,
+    krate: rustc_ast::Crate,
+    f: impl FnOnce(TyCtxt<'tcx>) -> T,
+) -> (T, Option<IncrCompSession>) {
     let sess = &compiler.sess;
 
     let pre_configured_attrs = rustc_expand::config::pre_configure_attrs(sess, &krate.attrs);
@@ -994,33 +1027,17 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
 
     let incremental = dep_graph.is_fully_enabled();
 
-    // Note: this function body is the origin point of the widely-used 'tcx lifetime.
-    //
-    // `gcx_cell` is defined here and `&gcx_cell` is passed to `create_global_ctxt`, which then
-    // actually creates the `GlobalCtxt` with a `gcx_cell.get_or_init(...)` call. This is done so
-    // that the resulting reference has the type `&'tcx GlobalCtxt<'tcx>`, which is what `TyCtxt`
-    // needs. If we defined and created the `GlobalCtxt` within `create_global_ctxt` then its type
-    // would be `&'a GlobalCtxt<'tcx>`, with two lifetimes.
-    //
-    // Similarly, by creating `arena` here and passing in `&arena`, that reference has the type
-    // `&'tcx WorkerLocal<Arena<'tcx>>`, also with one lifetime. And likewise for `hir_arena`.
-
-    let arena = WorkerLocal::new(|_| Arena::default());
-    let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
-    let resources = ty::GlobalCtxtResources::fresh(&arena, &hir_arena);
-    let gcx_cell = OnceLock::new();
-
     let res = TyCtxt::create_global_ctxt(
-        &gcx_cell,
+        gcx_cell,
         &compiler.sess,
         crate_types,
         stable_crate_id,
-        &resources,
+        resources,
         untracked,
         incr_comp_session.as_ref().map(|session| session.paths.clone()),
         dep_graph,
         rustc_query_impl::query_system(
-            &arena,
+            resources.arena(),
             providers.queries,
             providers.extern_queries,
             query_result_on_disk_cache,
