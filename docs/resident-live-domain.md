@@ -36,6 +36,14 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   the callback, including by returning an object that contains it. Reset means
   leaving and dropping the whole scope, not just clearing a map. Ordinary contexts
   still construct fresh resources, and their query states remain revision-local.
+- The domain owns up to 64 native `OnceLock<GlobalCtxt>` cells, with context
+  storage destroyed before its borrowed resources. The explicit
+  `create_and_enter_global_ctxt_in_domain` entry shares the existing compilation
+  pipeline and refuses exhausted storage before incremental preparation. The
+  additional-owner factory can scope a component-owned compiler arena under the
+  same lifetime without introducing a dependency from `rustc_middle` back to
+  `rustc_interface`. Neither entry is wired into resident requests. The cell
+  count is a structural bound, not an owning-arena byte or RSS budget.
 - `ty::resident_identity` checks bounded, exact, ordered crate and definition
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller

@@ -11,9 +11,13 @@
 //! its owner. No lifetime extension, permanent allocation, or serialized proxy
 //! is involved. The caller must already be on a registered compiler worker.
 
+use std::cell::Cell;
+use std::sync::OnceLock;
+
+use rustc_arena::TypedArena;
 use rustc_data_structures::sync::WorkerLocal;
 
-use super::{CommonTypes, CtxtInterners, GlobalCtxtResources, OwnedOrBorrowed};
+use super::{CommonTypes, CtxtInterners, GlobalCtxt, GlobalCtxtResources, OwnedOrBorrowed};
 use crate::arena::Arena;
 use crate::mir::interpret;
 use crate::ty::{Ty, TypeckResults};
@@ -25,11 +29,16 @@ use crate::ty::{Ty, TypeckResults};
 /// must not be transplanted into ordinary one-shot contexts.
 pub struct ResidentTypeDomain<'domain> {
     arena: &'domain WorkerLocal<Arena<'domain>>,
-    hir_arena: &'domain WorkerLocal<rustc_hir::Arena<'domain>>,
     interners: &'domain CtxtInterners<'domain>,
-    alloc_map: &'domain interpret::AllocMap<'domain>,
     common_types: CommonTypes<'domain>,
+    resources: &'domain GlobalCtxtResources<'domain>,
+    context_cells: &'domain TypedArena<OnceLock<GlobalCtxt<'domain>>>,
+    allocated_contexts: Cell<usize>,
 }
+
+// A revision-count bound is not a bound on arena bytes. The executor must also
+// retire a batch under its measured memory budget before accepting another request.
+const MAX_CONTEXTS_PER_DOMAIN: usize = 64;
 
 /// Enter one live type ownership domain. The entire batch must finish before
 /// this call returns. Resetting a domain means leaving this callback and dropping
@@ -45,31 +54,69 @@ pub struct ResidentTypeDomain<'domain> {
 pub fn with_resident_type_domain<R>(
     f: impl for<'domain> FnOnce(ResidentTypeDomain<'domain>) -> R,
 ) -> R {
+    with_resident_type_domain_and_owner((), |domain, _| f(domain))
+}
+
+/// Scope an external component's owned storage under the same lifetime as the
+/// native type universe. The compiler interface can supply its own compiler
+/// arena without introducing a dependency from `rustc_middle` back to it.
+/// Context cells retire before this additional owner is destroyed.
+///
+/// ```compile_fail,E0521
+/// use rustc_middle::ty::with_resident_type_domain_and_owner;
+/// let mut escaped = None;
+/// with_resident_type_domain_and_owner(String::new(), |_, owner| escaped = Some(owner));
+/// ```
+pub fn with_resident_type_domain_and_owner<Owner, R>(
+    owner: Owner,
+    f: impl for<'domain> FnOnce(ResidentTypeDomain<'domain>, &'domain Owner) -> R,
+) -> R {
     let arena = WorkerLocal::new(|_| Arena::default());
     let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
     let interners = CtxtInterners::new(&arena);
     let alloc_map = interpret::AllocMap::new();
     let common_types = CommonTypes::new(&interners);
-    f(ResidentTypeDomain {
+    let resources = GlobalCtxtResources {
         arena: &arena,
         hir_arena: &hir_arena,
-        interners: &interners,
-        alloc_map: &alloc_map,
-        common_types,
-    })
+        interners: OwnedOrBorrowed::Borrowed(&interners),
+        alloc_map: OwnedOrBorrowed::Borrowed(&alloc_map),
+    };
+    // Context cells drop before the resources and all native identity owners.
+    let context_cells = TypedArena::default();
+    f(
+        ResidentTypeDomain {
+            arena: &arena,
+            interners: &interners,
+            common_types,
+            resources: &resources,
+            context_cells: &context_cells,
+            allocated_contexts: Cell::new(0),
+        },
+        &owner,
+    )
 }
 
 impl<'domain> ResidentTypeDomain<'domain> {
     /// Borrow the batch's actual native arenas, interners and allocation map.
     /// Contexts may be dropped independently without discarding this universe.
     /// This alone does not validate source/DefId identity or query reuse.
-    pub fn context_resources(&self) -> GlobalCtxtResources<'domain> {
-        GlobalCtxtResources {
-            arena: self.arena,
-            hir_arena: self.hir_arena,
-            interners: OwnedOrBorrowed::Borrowed(self.interners),
-            alloc_map: OwnedOrBorrowed::Borrowed(self.alloc_map),
+    pub fn context_resources(&self) -> &'domain GlobalCtxtResources<'domain> {
+        self.resources
+    }
+
+    /// Reserve one actual context cell under the factory's batch lifetime.
+    /// Refuse before creating a session or acquiring incremental locks when the
+    /// context-count bound is reached. The executor must retire this whole scope
+    /// rather than clearing cells that can still be referenced by typed results.
+    pub fn alloc_global_ctxt_cell(&self) -> Option<&'domain OnceLock<GlobalCtxt<'domain>>> {
+        let count = self.allocated_contexts.get();
+        if count >= MAX_CONTEXTS_PER_DOMAIN {
+            return None;
         }
+        let cell = self.context_cells.alloc(OnceLock::new());
+        self.allocated_contexts.set(count + 1);
+        Some(cell)
     }
 
     /// One actual interned compiler type, not a type name or encoded type record.
@@ -185,7 +232,8 @@ mod tests {
                 // The factory, not this movable domain view or a context's
                 // resource adapter, owns the interner and allocation map.
                 drop(domain);
-                drop(old);
+                // These adapters are now borrowed directly from the factory.
+                // Dropping the movable domain view cannot retire their owners.
                 let next_ty = new.interners.intern_ty(crate::ty::TyKind::Bool);
                 assert!(std::ptr::eq(old_ty.kind(), next_ty.kind()));
                 assert_eq!(old_typeck.hir_owner, *old_hir_owner);
@@ -230,7 +278,6 @@ mod tests {
                     .0;
                 let memory = interpret::ConstAllocation(Interned::new_unchecked(allocation));
                 let id = first.alloc_map.insert_for_test(interpret::GlobalAlloc::Memory(memory));
-                drop(first);
                 let next = domain.context_resources();
                 drop(domain);
                 let recovered = next.alloc_map.get_for_test(id).unwrap().unwrap_memory();
@@ -265,6 +312,49 @@ mod tests {
             assert_eq!(
                 second.alloc_map.get_for_test(id),
                 Some(interpret::GlobalAlloc::TypeId { ty: second_ty })
+            );
+        });
+    }
+
+    #[test]
+    fn resident_context_cells_are_bounded_and_live_until_factory_retirement() {
+        on_worker(|| {
+            with_resident_type_domain(|domain| {
+                let cells: Vec<_> = (0..MAX_CONTEXTS_PER_DOMAIN)
+                    .map(|_| domain.alloc_global_ctxt_cell().unwrap())
+                    .collect();
+                assert!(domain.alloc_global_ctxt_cell().is_none());
+                for pair in cells.windows(2) {
+                    assert!(!std::ptr::eq(pair[0], pair[1]));
+                }
+                let resources = domain.context_resources();
+                assert!(std::ptr::eq(resources.arena(), domain.arena));
+                drop(domain);
+                assert!(cells.iter().all(|cell| cell.get().is_none()));
+                assert!(resources.interners.intern_ty(crate::ty::TyKind::Bool).is_bool());
+            });
+            with_resident_type_domain(|domain| {
+                assert!(domain.alloc_global_ctxt_cell().is_some());
+            });
+        });
+    }
+
+    #[test]
+    fn resident_additional_owner_shares_context_and_type_lifetime() {
+        on_worker(|| {
+            with_resident_type_domain_and_owner(
+                TypedArena::<String>::default(),
+                |domain, owner| {
+                    let session_data = owner.alloc(String::from("owned session data"));
+                    let context = domain.alloc_global_ctxt_cell().unwrap();
+                    let resources = domain.context_resources();
+                    let value = domain.alloc_typeck(TypeckResults::new(CRATE_OWNER_ID));
+                    drop(domain);
+                    assert_eq!(session_data, "owned session data");
+                    assert!(context.get().is_none());
+                    assert_eq!(value.hir_owner, CRATE_OWNER_ID);
+                    assert!(resources.interners.intern_ty(crate::ty::TyKind::Bool).is_bool());
+                },
             );
         });
     }

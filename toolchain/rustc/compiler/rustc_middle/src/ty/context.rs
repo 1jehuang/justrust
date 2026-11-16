@@ -763,6 +763,11 @@ impl<T> std::ops::Deref for OwnedOrBorrowed<'_, T> {
 }
 
 impl<'tcx> GlobalCtxtResources<'tcx> {
+    /// Native query storage uses the same arena as this context's interners.
+    pub fn arena(&self) -> &'tcx WorkerLocal<Arena<'tcx>> {
+        self.arena
+    }
+
     /// A normal one-shot context owns fresh interners and a fresh AllocId map.
     pub fn fresh(
         arena: &'tcx WorkerLocal<Arena<'tcx>>,
