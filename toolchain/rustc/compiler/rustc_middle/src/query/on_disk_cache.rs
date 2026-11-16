@@ -940,6 +940,13 @@ impl<'tcx> CacheEncoder<'tcx> {
     }
 }
 
+/// Span ends are exclusive, so the source's end position itself is valid,
+/// including for empty files. Do not resolve `hi - 1`: that would miss stale
+/// zero-length endpoints and would underflow at byte position zero.
+fn span_end_in_source_file(hi: BytePos, start: BytePos, end: BytePos) -> bool {
+    start <= hi && hi <= end
+}
+
 impl<'tcx> SpanEncoder for CacheEncoder<'tcx> {
     fn encode_syntax_context(&mut self, syntax_context: SyntaxContext) {
         let idx = self.hygiene_context.borrow_mut().get_syntax_ctxt_encoding_index(syntax_context);
@@ -966,6 +973,15 @@ impl<'tcx> SpanEncoder for CacheEncoder<'tcx> {
         // entry in this revision's source-file table.
         if self.active_sources_only {
             let file = self.tcx.sess.source_map().lookup_source_file(span_data.lo);
+            // Validate hi independently of lo's membership, before any shortcut
+            // can encode an unchecked relative offset or discard the location.
+            // Even another active file is not a valid end for a span starting
+            // here. Use inclusive bounds to retain legitimate EOF positions.
+            if !span_end_in_source_file(span_data.hi, file.start_pos, file.end_position()) {
+                self.tcx
+                    .dcx()
+                    .fatal("resident cache encoding refused a span ending outside its source file");
+            }
             if !file.is_imported() {
                 self.source_file_index(file);
             }
@@ -1091,5 +1107,35 @@ impl<'tcx> Encoder for CacheEncoder<'tcx> {
 impl<'tcx> Encodable<CacheEncoder<'tcx>> for [u8] {
     fn encode(&self, e: &mut CacheEncoder<'tcx>) {
         self.encode(&mut e.encoder);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::span_end_in_source_file;
+    use rustc_span::BytePos;
+
+    #[test]
+    fn resident_span_end_accepts_interior_and_eof() {
+        for hi in [100, 101, 119, 120] {
+            assert!(span_end_in_source_file(BytePos(hi), BytePos(100), BytePos(120)));
+        }
+    }
+
+    #[test]
+    fn resident_span_end_accepts_empty_file_and_zero_position() {
+        assert!(span_end_in_source_file(BytePos(100), BytePos(100), BytePos(100)));
+        assert!(span_end_in_source_file(BytePos(0), BytePos(0), BytePos(0)));
+    }
+
+    #[test]
+    fn resident_span_end_rejects_cross_file_and_historical_positions() {
+        // Source-map gaps, another active file, and a later historical revision
+        // are all outside this file, regardless of lo's active membership.
+        for hi in [0, 99, 121, 122, 200, u32::MAX] {
+            assert!(!span_end_in_source_file(BytePos(hi), BytePos(100), BytePos(120)));
+        }
+        // An empty source still must not accept an endpoint in its successor.
+        assert!(!span_end_in_source_file(BytePos(101), BytePos(100), BytePos(100)));
     }
 }
