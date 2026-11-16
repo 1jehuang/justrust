@@ -335,18 +335,19 @@ fn curl_with_timing(
     if method == "POST" && path == "build/runs" {
         cmd.args(["-H", "X-Justrust-Admission: maintenance-v1"]);
     }
+    let mut config = c.curl_auth_config();
     if let Some(b) = body {
-        cmd.args(["-H", "Content-Type: application/json", "--data-binary"])
-            .arg(b.to_string());
+        cmd.args(["-H", "Content-Type: application/json"]);
+        // A single argv entry is limited to 128 KiB on Linux, even when the
+        // overall argv limit is larger. Records routinely exceed that size.
+        // curl already reads its authenticated config on stdin, so put the
+        // body there too. Escape for curl's quoted config syntax, not JSON:
+        // JSON serialization has already escaped all embedded control bytes.
+        let data = b.to_string().replace('\\', "\\\\").replace('"', "\\\"");
+        config.push_str(&format!("data-binary = \"{data}\"\n"));
     }
     cmd.arg(c.url(path));
-    // Creds::new rejects quotes' neighbours (control chars, spaces); escape
-    // the rest of curl's quoted-string syntax anyway.
-    if c.key.is_empty() {
-        return (cmd, String::new());
-    }
-    let k = c.key.replace('\\', "\\\\").replace('"', "\\\"");
-    (cmd, format!("header = \"Authorization: Bearer {k}\"\n"))
+    (cmd, config)
 }
 
 /// Parse only bounded numeric fleet metrics. Never echo arbitrary response
@@ -3307,8 +3308,85 @@ mod tests {
         assert!(args.iter().all(|a| !a.contains("sk-secret")), "{args:?}");
         assert!(args.contains(&"https://api.jcode.sh/v1/build/host/connect".to_string()));
         assert!(args.windows(2).any(|w| w == ["--config", "-"]));
-        assert_eq!(cfg, "header = \"Authorization: Bearer sk-secret-123\"\n");
+        assert_eq!(
+            cfg,
+            "header = \"Authorization: Bearer sk-secret-123\"\ndata-binary = \"{\\\"public_key\\\":\\\"x\\\"}\"\n"
+        );
         assert!(!format!("{c:?}").contains("sk-secret"));
+    }
+
+    #[test]
+    fn large_record_body_uses_stdin_and_round_trips_exact_json() {
+        let (c, seen) = mock(vec![(201, r#"{"stored":true}"#)]);
+        let body = json!({
+            "kind": "bench",
+            "id": "large-record-regression",
+            "data": {
+                "payload": "private-query-evidence-".repeat(32_768),
+                "escaped": "quote\" backslash\\ newline\n carriage\r tab\t nul\0 unicode λ",
+                "injection": "\nurl = \"http://127.0.0.1:1/not-a-request\"\nheader = \"Injected: yes\"",
+            },
+        });
+        let serialized = body.to_string();
+        assert!(serialized.len() > 512 * 1024);
+        let (cmd, config) = curl(&c, "POST", "build/records", Some(&body));
+        let args: Vec<_> = cmd.get_args().map(|arg| arg.to_string_lossy()).collect();
+        assert!(args.iter().all(|arg| arg.len() < 1024));
+        assert!(
+            args.iter()
+                .all(|arg| !arg.contains("private-query-evidence"))
+        );
+        assert!(args.iter().all(|arg| !arg.contains("sk-secret")));
+        // Embedded JSON newlines cannot introduce curl options or headers.
+        assert_eq!(config.lines().count(), 2);
+        let response = request(&c, "POST", "build/records", Some(&body)).unwrap();
+        assert_eq!(response.code, 201);
+        assert_eq!(response.body, json!({"stored": true}));
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/build/records");
+        assert_eq!(requests[0].auth.as_deref(), Some("Bearer sk-secret-123"));
+        assert_eq!(requests[0].body, serialized);
+    }
+
+    #[test]
+    fn record_timing_floats_round_trip_without_precision_loss() {
+        // Actual elapsed times from resident benchmark receipts. Both `put`
+        // and `show` parse JSON, so neither may shift their last significant bit.
+        for literal in [
+            "0.10350372800894547",
+            "0.11611845799779985",
+            "0.12762361799832433",
+            "0.09434499399503693",
+        ] {
+            let parsed: Value = serde_json::from_str(literal).unwrap();
+            assert_eq!(
+                parsed.as_f64().unwrap().to_bits(),
+                literal.parse::<f64>().unwrap().to_bits()
+            );
+            assert_eq!(parsed.to_string(), literal);
+        }
+    }
+
+    #[test]
+    fn anonymous_curl_keeps_json_body_without_auth_header() {
+        let (authenticated, seen) = mock(vec![(200, "{}")]);
+        let c = Creds::anonymous(authenticated.base).unwrap();
+        let body = json!({"message": "anonymous \\\n\"body\""});
+        let (cmd, config) = curl(&c, "POST", "device", Some(&body));
+        assert!(!config.contains("Authorization"));
+        assert_eq!(config.lines().count(), 1);
+        assert!(
+            cmd.get_args()
+                .all(|arg| !arg.to_string_lossy().contains("anonymous"))
+        );
+        assert_eq!(
+            request(&c, "POST", "device", Some(&body)).unwrap().code,
+            200
+        );
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests[0].auth, None);
+        assert_eq!(requests[0].body, body.to_string());
     }
 
     #[test]
@@ -3430,11 +3508,10 @@ mod tests {
             "X-Justrust-Admission: maintenance-v1",
             "-H",
             "Content-Type: application/json",
-            "--data-binary",
         ]
         .into_iter()
         .map(String::from)
-        .chain([body.to_string(), c.url("build/runs")])
+        .chain([c.url("build/runs")])
         .collect();
         assert_eq!(args, expected);
         let (trace, trace_config) = curl_with_timing(&c, "POST", "build/runs", Some(&body), true);
@@ -3449,11 +3526,8 @@ mod tests {
                 .windows(2)
                 .any(|w| w == ["-H", "X-Justrust-Timing: 1"])
         );
-        assert!(
-            trace_args
-                .windows(2)
-                .any(|w| w == ["--data-binary", &body.to_string()])
-        );
+        assert!(trace_args.iter().all(|arg| !arg.contains("r1")));
+        assert!(config.contains("data-binary = \"{\\\"run_id\\\":\\\"r1\\\"}\"\n"));
         assert!(trace_args.windows(2).any(|w| w == ["--config", "-"]));
         assert_eq!(trace_args.last(), args.last());
     }
