@@ -14,7 +14,7 @@ import suite
 
 
 class StableNativeDispatchTests(unittest.TestCase):
-    def invoke(self, a, b, require_valid=False):
+    def invoke(self, a, b, require_valid=False, allow_compiler_change=False):
         module = types.ModuleType('stable_resident_leaf_suite')
         module.compare = Mock()
         with tempfile.TemporaryDirectory() as temporary:
@@ -22,7 +22,8 @@ class StableNativeDispatchTests(unittest.TestCase):
             for path, result in zip(paths, (a, b)):
                 path.write_text(json.dumps(result))
             args = argparse.Namespace(a=str(paths[0]), b=str(paths[1]), floor=10,
-                                      require_valid=require_valid)
+                                      require_valid=require_valid,
+                                      allow_compiler_change=allow_compiler_change)
             with patch.dict(sys.modules, {'stable_resident_leaf_suite': module}):
                 suite.cmd_compare(args)
         return module.compare
@@ -40,6 +41,17 @@ class StableNativeDispatchTests(unittest.TestCase):
             a, b = (stable, unrelated) if stable_first else (unrelated, stable)
             compare = self.invoke(a, b)
             compare.assert_called_once_with(a, b, 10)
+
+    def test_compiler_optimization_requires_explicit_dispatch(self):
+        a = {'schema': 'stable_native_leaf/v1'}
+        b = {'schema': 'stable_native_leaf/v1'}
+        compare = self.invoke(a, b, allow_compiler_change=True)
+        compare.assert_called_once_with(a, b, 10, allow_compiler_change=True)
+
+    def test_compiler_change_opt_in_cannot_relax_other_benchmarks(self):
+        with self.assertRaisesRegex(SystemExit, 'only stable native leaf'):
+            self.invoke({'schema': 'other'}, {'schema': 'other'},
+                        allow_compiler_change=True)
 
     def test_root_cli_uses_shared_fn_callback_contract(self):
         import stable_resident_leaf_suite as adapter

@@ -1762,8 +1762,13 @@ def cmd_compare(args) -> None:
         if getattr(args, "require_valid", False):
             sys.exit("bench: --require-valid supports only synthetic comparisons")
         from stable_resident_leaf_suite import compare
-        compare(a, b, args.floor)
+        if getattr(args, "allow_compiler_change", False):
+            compare(a, b, args.floor, allow_compiler_change=True)
+        else:
+            compare(a, b, args.floor)
         return
+    if getattr(args, "allow_compiler_change", False):
+        sys.exit("bench: --allow-compiler-change supports only stable native leaf comparisons")
     if any(result.get("schema") == "contention_suite_v1" for result in (a, b)):
         from contention import comparison_issues
         issues = comparison_issues(a, b)
@@ -1944,6 +1949,8 @@ def main() -> None:
     c.add_argument("b")
     c.add_argument("--require-valid", action="store_true",
                    help="exit nonzero for an ineligible synthetic comparison (automation gate)")
+    c.add_argument("--allow-compiler-change", action="store_true",
+                   help="explicitly compare hash-attested compiler optimizations in the stable native leaf diagnostic only")
     c.add_argument("--floor", type=float, default=10.0, metavar="PCT",
                    help="minimum median change to call a difference (default 10%%)")
     c.set_defaults(fn=cmd_compare)
