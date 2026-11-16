@@ -143,6 +143,7 @@ pub mod resident_compiler_identity;
 pub mod resident_definition_prefix;
 pub mod resident_identity;
 pub mod resident_live;
+pub mod resident_mir_leaf;
 pub mod resident_values;
 pub mod significant_drop_order;
 pub mod sty;
