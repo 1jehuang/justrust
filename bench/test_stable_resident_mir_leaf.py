@@ -62,7 +62,7 @@ class ValidationTests(unittest.TestCase):
             row['live'][key] = 1
             with self.subTest(key=key), self.assertRaises(AssertionError):
                 leaf.validate_live(row, None, 'control', 'cold')
-        for kind in ('cold', 'error', 'recovery'):
+        for kind in ('cold', 'error'):
             row = response()
             row['live'].update(mir_leaf_hits=1, retained_entries=1)
             with self.subTest(kind=kind), self.assertRaises(AssertionError):
@@ -77,6 +77,25 @@ class ValidationTests(unittest.TestCase):
             typed.validate_live(row, None, 'leaf', True)
         with self.assertRaises(AssertionError):
             typed.validate_live(dict(row, live=dict(row['live'], mir_hits=1)), None, '1', False)
+
+    def test_recovery_allows_only_leaf_hits_from_prior_success(self):
+        previous = response()['live']
+        previous.update(mir_hits=2, typeck_hits=1, mir_leaf_hits=2)
+        # Neither success alone nor a prior failed staging revision requires a
+        # leaf hit. A valid prior-success leaf is allowed but not required.
+        leaf.validate_live(response(live=dict(previous)), previous, 'leaf', 'recovery')
+        row = response(live=dict(previous, mir_leaf_hits=3, retained_entries=1))
+        leaf.validate_live(row, previous, 'leaf', 'recovery')
+        for key in typed.HITS:
+            bad = dict(row['live'])
+            bad[key] += 1
+            with self.subTest(key=key), self.assertRaisesRegex(AssertionError, 'whole-revision'):
+                leaf.validate_live(response(live=bad), previous, 'leaf', 'recovery')
+        with self.assertRaisesRegex(AssertionError, 'retained entries'):
+            leaf.validate_live(response(live=dict(row['live'], retained_entries=0)),
+                               previous, 'leaf', 'recovery')
+        with self.assertRaisesRegex(AssertionError, 'Recovery compilation failed'):
+            leaf.validate_live(response(status=1, live=dict(previous)), previous, 'leaf', 'recovery')
 
     def test_telemetry_fail_closed(self):
         for value in (None, {}, dict.fromkeys(leaf.COUNTERS, True)):
@@ -149,7 +168,7 @@ class CaptureTests(unittest.TestCase):
                     self.live['retained_entries'] = 2
                     if kind == 'same':
                         self.live['mir_hits'] += 1
-                    if kind == 'cross' and bad != 'no-leaf-hits':
+                    if kind in ('cross', 'recovery') and bad != 'no-leaf-hits':
                         self.live['mir_leaf_hits'] += 1
                 row['live'] = dict(self.live)
                 self.index += 1
@@ -191,6 +210,10 @@ class CaptureTests(unittest.TestCase):
                 mode_calls = [call for call in calls if call[0] == mode]
                 self.assertTrue(all(call[1:] == mode_calls[0][1:] for call in mode_calls))
             leaf_rows = result['modes'][1]['observations']
+            self.assertGreater(leaf_rows[7]['resident']['live']['mir_leaf_hits'],
+                               leaf_rows[6]['resident']['live']['mir_leaf_hits'])
+            self.assertEqual(leaf_rows[7]['resident']['live']['mir_hits'],
+                             leaf_rows[6]['resident']['live']['mir_hits'])
             self.assertGreater(leaf_rows[2]['resident']['live']['mir_leaf_hits'],
                                leaf_rows[1]['resident']['live']['mir_leaf_hits'])
 

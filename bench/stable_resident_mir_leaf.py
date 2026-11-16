@@ -114,11 +114,19 @@ def validate_live(response, previous, mode, kind):
             raise AssertionError('Unchanged success requires actual live hits')
         if stats['retained_entries'] == 0:
             raise AssertionError('Hits without retained entries')
-    elif kind in ('cold', 'error', 'recovery'):
-        # Recovery is not accepted as cross-edit proof: a failed source must not
-        # become an authority for reuse. Only the explicit two body edits qualify.
+    elif kind == 'recovery':
+        # Failed staging never publishes a revision. Previously successful,
+        # unchanged leaves can still be valid, so recovery may reuse those
+        # leaves without authorizing general whole-revision typed reuse.
+        if response['status'] != 0:
+            raise AssertionError('Recovery compilation failed')
+        if any(delta[key] for key in typed.HITS):
+            raise AssertionError('Recovery unexpectedly authorized whole-revision typed reuse')
+        if delta['mir_leaf_hits'] and stats['retained_entries'] == 0:
+            raise AssertionError('Recovery leaf hits without retained entries')
+    elif kind in ('cold', 'error'):
         if any(delta.values()):
-            raise AssertionError('Cold/error/recovery unexpectedly authorized reuse')
+            raise AssertionError('Cold/error unexpectedly authorized reuse')
     else:
         raise ValueError('Unknown revision kind')
     return dict(stats)
