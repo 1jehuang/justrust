@@ -603,6 +603,11 @@ enum InteractiveCommand {
 
 #[derive(Subcommand)]
 enum ToolchainCmd {
+    /// Manage an opt-in active and last-good compiler pair.
+    Slots {
+        #[command(subcommand)]
+        cmd: toolchain::slots::Command,
+    },
     /// Import a lawfully supplied macOS SDK into this build host's managed store.
     ImportDarwinSdk {
         source: PathBuf,
@@ -664,6 +669,11 @@ enum ToolchainCmd {
 
 #[derive(Subcommand)]
 enum RemoteCmd {
+    /// Manage compiler slots on hosted using this exact immutable client.
+    ToolchainSlots {
+        #[command(subcommand)]
+        cmd: toolchain::slots::Command,
+    },
     /// Create the machine, or start it if it is stopped.
     Up {
         /// Hosted worker OS (linux or windows), independent of Cargo --target.
@@ -1247,6 +1257,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 );
                 println!("{}", darwin_tools::provision(&source)?);
             }
+            ToolchainCmd::Slots { cmd } => toolchain::slots::run(cmd)?,
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,
             ToolchainCmd::Pin { spec, no_install } => toolchain::pin_command(&spec, no_install)?,
@@ -1327,6 +1338,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             #[cfg(unix)]
             RemoteCmd::Gc { apply, prefix } => remote_evict::command(apply, &prefix)?,
             RemoteCmd::Ssh { cmd } => remote::ssh(cmd)?,
+            RemoteCmd::ToolchainSlots { cmd } => toolchain::slots::remote(cmd)?,
             RemoteCmd::Check(a) => remote_build::run("check", a.args)?,
             RemoteCmd::Test(a) => remote_build::run("test", a.args)?,
             RemoteCmd::Build(a) => remote_build::run("build", a.args)?,

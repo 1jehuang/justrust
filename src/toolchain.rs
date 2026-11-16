@@ -43,6 +43,7 @@ use std::process::Command;
 
 mod bundle;
 mod shared;
+pub mod slots;
 
 /// The host triple pinned toolchains are downloaded for.
 pub const TARGET: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
@@ -408,9 +409,8 @@ fn installed_in(spec: &Spec, root: &Path) -> Result<Option<Toolchain>> {
 /// is available even when downloading or automatic installation is disabled.
 /// Mutation commands continue to use `installed`, never this lookup.
 pub(crate) fn available_for_build(spec: &Spec) -> Option<Toolchain> {
-    installed(spec)
-        .ok()
-        .flatten()
+    slots::for_build(spec)
+        .or_else(|| installed(spec).ok().flatten())
         .or_else(|| shared::for_build(spec))
 }
 
@@ -701,6 +701,16 @@ fn install_at(
     }
     std::fs::create_dir_all(root)?;
     let _lock = lock_exclusive(&root.join(".install.lock"))?;
+    install_locked(spec, components, log, root, base)
+}
+
+fn install_locked(
+    spec: &Spec,
+    components: &[&str],
+    log: &mut dyn std::io::Write,
+    root: &Path,
+    base: Option<&str>,
+) -> Result<Toolchain> {
     if let Some(tc) = installed_in(spec, root)? {
         if let Some(info) = tc.info()
             && info.components.iter().any(|c| c == "rustc")
@@ -939,7 +949,7 @@ fn unpinned_default() -> Option<Toolchain> {
     crate::toolchain_policy::known()
         .filter(|p| p.check().is_ok())
         .and_then(|p| Spec::parse(&p.toolchain).ok())
-        .and_then(|spec| installed(&spec).ok().flatten())
+        .and_then(|spec| available_for_build(&spec))
         .or_else(default_jr)
 }
 

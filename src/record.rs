@@ -223,10 +223,17 @@ pub fn should_record(args: &[OsString]) -> bool {
 pub fn exec_cargo(args: &[OsString]) -> ! {
     // Unrecorded commands (fmt, metadata, tree) use a pinned toolchain only
     // when it is already installed: they never trigger a download.
+    let selection = match crate::toolchain::slots::selection() {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("justrust: compiler admission: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let pinned = std::env::current_dir()
         .ok()
         .and_then(|d| crate::toolchain::resolve(&d).ok().flatten())
-        .and_then(|p| crate::toolchain::installed(&p.spec).ok().flatten());
+        .and_then(|p| crate::toolchain::available_for_build(&p.spec));
     let pinned = match compatible_toolchain(pinned, args) {
         Ok(tc) => tc,
         Err(e) => {
@@ -246,6 +253,13 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         report_build_failure(args, "toolchain_required", false, Some(1));
         std::process::exit(1);
     }
+    let _compiler_lease = match crate::toolchain::slots::lease(pinned.as_ref()) {
+        Ok(lease) => lease,
+        Err(e) => {
+            eprintln!("justrust: compiler admission: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let mut cmd;
     match &pinned {
         Some(tc) => {
@@ -283,7 +297,11 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         report_build_failure(args, "toolchain_required", false, Some(1));
         std::process::exit(1);
     }
+    if let Some(lease) = &_compiler_lease {
+        lease.inherit(&mut cmd);
+    }
     let cargo = PathBuf::from(cmd.get_program());
+    drop(selection);
     let err = crate::sys::exec(cmd.args(&platform_args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
     report_build_failure(args, "cargo_exec", false, Some(127));
@@ -724,7 +742,9 @@ fn record(
     } else {
         None
     };
+    let selection = crate::toolchain::slots::selection()?;
     let pinned = compatible_toolchain(crate::toolchain::for_build(), args)?;
+    let _compiler_lease = crate::toolchain::slots::lease(pinned.as_ref())?;
     require_selected_toolchain(
         requested.as_deref(),
         pinned.as_ref().map(|tc| tc.id.as_str()),
@@ -930,6 +950,10 @@ fn record(
     };
     install_signal_forwarding();
     trace.mark("prepare");
+    if let Some(lease) = &_compiler_lease {
+        lease.inherit(&mut cmd);
+    }
+    drop(selection);
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
