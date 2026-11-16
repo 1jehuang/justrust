@@ -13,6 +13,21 @@ validate_ref() {
   git -C "$root" merge-base --is-ancestor "$revision" refs/remotes/origin/stable
 }
 
+import_snapshot_pack() {
+  local destination=$1 revision=$2 pack=$3 checksum=$4
+  [[ "$revision" =~ ^[0-9a-f]{40}$ && "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ ! -e "$destination" ]] || return 1
+  printf '%s  %s\n' "$checksum" "$pack" | sha256sum --check
+  git init --quiet --template= --initial-branch=bench-snapshot "$destination"
+  git -C "$destination" config core.hooksPath /dev/null
+  git -C "$destination" index-pack --stdin < "$pack"
+  git -C "$destination" cat-file -e "$revision^{commit}"
+  # Exact commit/tree only, no parent history, config, remotes or credentials.
+  printf '%s\n' "$revision" > "$destination/.git/shallow"
+  git -C "$destination" update-ref HEAD "$revision"
+  git -C "$destination" fsck --full --no-reflogs
+}
+
 export_source() {
   local revision=$1 destination=$2
   mkdir -p "$destination"
@@ -81,19 +96,20 @@ main() {
   rustc -Vv | tee "$evidence/rustc.log"
   df -h "$HOME"
 
-  # Complete public histories resolve the exact suite pins, without materializing
-  # their current trees. No shallow-tip assumption about 7d38fb7 or abff94eeb.
-  local repository
-  for repository in jcode jcode-desktop; do
-    [[ ! -e "$HOME/$repository" ]] || {
-      echo "Refusing to overwrite existing $HOME/$repository" >&2
-      return 1
-    }
-    git clone --filter=blob:none --no-checkout \
-      "https://github.com/1jehuang/$repository.git" "$HOME/$repository"
-  done
-  git -C "$HOME/jcode-desktop" cat-file -e '7d38fb7^{commit}'
-  git -C "$HOME/jcode" cat-file -e 'abff94eeb^{commit}'
+  # Public jcode history lacks this pin, even when fetching its full SHA.
+  # Use a private expiring download, never a repin or unrelated local history.
+  : "${SOURCE_SYNC_JCODE_PACK_URL:?Private pinned jcode pack URL required}"
+  local pack="$work/jcode-pin.pack"
+  curl --fail --silent --show-error --location --proto '=https' \
+    "$SOURCE_SYNC_JCODE_PACK_URL" -o "$pack"
+  import_snapshot_pack "$HOME/jcode" \
+    abff94eeb2b432c3f263dd35f200aa6345a6eafd "$pack" \
+    6f5d83a8897ec43fe5fa591556a0e9a326bf8b9c4c46bf259b22253a11ff502c
+  [[ ! -e "$HOME/jcode-desktop" ]] || return 1
+  git clone --filter=blob:none --no-checkout \
+    https://github.com/1jehuang/jcode-desktop.git "$HOME/jcode-desktop"
+  git -C "$HOME/jcode-desktop" cat-file -e '7d38fb72a0beadbca366da1104c915689cc0fd8e^{commit}'
+  git -C "$root" cat-file -e 'f97fcc2^{commit}'
   python3 "$root/bench/suite.py" preflight
   "$hosted" remote use hosted
   build_binary before "$BASELINE_REF"

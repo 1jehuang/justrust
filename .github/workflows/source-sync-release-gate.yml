@@ -72,6 +72,7 @@ jobs:
       - name: Build hosted binaries and run serial full synthetic gate
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+          SOURCE_SYNC_JCODE_PACK_URL: ${{ secrets.SOURCE_SYNC_JCODE_PACK_URL }}
           BASELINE_REF: ${{ inputs.baseline_ref }}
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
         run: bash ci/source-sync-release-gate.sh

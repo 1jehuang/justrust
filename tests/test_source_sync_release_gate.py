@@ -1,5 +1,6 @@
 """No-build regression checks for the clean release benchmark gate."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shlex
@@ -66,6 +67,48 @@ class SourceSyncReleaseGateTests(unittest.TestCase):
             result = self.shell(f"root=/nonexistent\nvalidate_ref {revision}")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("40-character", result.stderr)
+
+    def test_snapshot_pack_preserves_exact_commit_without_private_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "source"
+            source.mkdir()
+            def git(*args, **kwargs):
+                return subprocess.check_output(["git", "-C", str(source), *args], **kwargs)
+            git("init", "--quiet", "--template=")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            (source / "private").write_text("unrelated private ancestor")
+            git("add", ".")
+            git("commit", "-qm", "private ancestor")
+            parent = git("rev-parse", "HEAD").decode().strip()
+            git("rm", "private")
+            (source / "public").write_text("pinned source")
+            git("add", ".")
+            git("commit", "-qm", "pin")
+            revision = git("rev-parse", "HEAD").decode().strip()
+            (source / "untracked-secret").write_text("never exported")
+            objects = git("rev-list", "--objects", "--no-walk", revision)
+            payload = git("pack-objects", "--stdout", input=objects)
+            pack = base / "pin.pack"
+            pack.write_bytes(payload)
+            checksum = hashlib.sha256(payload).hexdigest()
+            target = base / "target"
+            def import_pack(destination, sha=checksum, commit=revision):
+                return self.shell("import_snapshot_pack " + " ".join(map(shlex.quote, [
+                    str(destination), commit, str(pack), sha])))
+            result = import_pack(target)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(subprocess.check_output([
+                "git", "-C", str(target), "show", "HEAD:public"]), b"pinned source")
+            self.assertNotEqual(subprocess.run([
+                "git", "-C", str(target), "cat-file", "-e", parent],
+                capture_output=True).returncode, 0)
+            self.assertFalse((target / "untracked-secret").exists())
+            self.assertNotEqual(import_pack(target).returncode, 0)
+            self.assertNotEqual(import_pack(base / "bad", "0" * 64).returncode, 0)
+            self.assertFalse((base / "bad").exists())
+            self.assertNotEqual(import_pack(base / "wrong", commit=parent).returncode, 0)
 
     def test_minimal_archive_has_compile_inputs_not_toolchain_or_git(self):
         with tempfile.TemporaryDirectory() as temporary:
