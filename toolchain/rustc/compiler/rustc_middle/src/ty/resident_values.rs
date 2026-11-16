@@ -263,6 +263,96 @@ mod tests {
     }
 
     #[test]
+    fn actual_typeck_pointer_survives_successful_revision_publication() {
+        use std::num::NonZero;
+
+        use rustc_data_structures::sync::Registry;
+        use rustc_hir::CRATE_OWNER_ID;
+
+        use super::{ResidentDomain, ResidentKey, ResidentValues, TypeckResults};
+        use crate::dep_graph::{DepKind, DepNode};
+        use crate::ty::resident_identity::{CrateIdentity, DefinitionIdentity};
+        use crate::ty::with_resident_type_domain;
+
+        // Do not replace another test's worker registry or session globals, and do
+        // not toggle the process-wide dynamic synchronization mode.
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    Registry::new(NonZero::new(1).unwrap()).register();
+                    rustc_span::create_default_session_globals_then(|| {
+                        // This marker must outlive the arena callback, not the reverse.
+                        let owner = ResidentDomain::new(b"actual-typeck-domain".to_vec());
+                        with_resident_type_domain(|domain| {
+                            let identity = RevisionIdentity {
+                                namespace: b"actual-typeck-domain".to_vec(),
+                                options: b"test options".to_vec(),
+                                crates: vec![CrateIdentity {
+                                    stable: b"test crate".to_vec(),
+                                    crate_index: 0,
+                                }],
+                                definitions: vec![DefinitionIdentity {
+                                    stable: b"test crate root".to_vec(),
+                                    crate_index: 0,
+                                    def_index: 0,
+                                    owner_index: Some(0),
+                                }],
+                                source: b"fn main() {}".to_vec(),
+                                body_revision: b"unchanged body".to_vec(),
+                            };
+                            let identity_budget = IdentityBudget {
+                                max_crates: 1,
+                                max_definitions: 1,
+                                max_identity_bytes: 1024,
+                            };
+                            let mut cache = ResidentValues::new(
+                                &owner,
+                                RetentionBudget {
+                                    max_entries: 2,
+                                    max_estimated_bytes: 1024 * 1024,
+                                },
+                            );
+                            let key = ResidentKey {
+                                dep_node: DepNode {
+                                    kind: DepKind::typeck,
+                                    key_fingerprint: super::Fingerprint::new(1u64, 2u64).into(),
+                                },
+                                value_fingerprint: super::Fingerprint::new(3u64, 4u64),
+                            };
+                            let actual = domain.alloc_typeck(TypeckResults::new(CRATE_OWNER_ID));
+                            cache.begin_revision(1, identity.clone(), identity_budget).unwrap();
+                            cache
+                                .retain_typeck(key, actual, std::mem::size_of_val(actual))
+                                .unwrap();
+                            cache.publish_success().unwrap();
+                            cache.begin_revision(2, identity, identity_budget).unwrap();
+                            {
+                                let (old, next) = cache.revision_identities().unwrap();
+                                let authorization =
+                                    old.authorize_reuse(next, identity_budget).unwrap();
+                                let hit = cache.typeck(key, &authorization).unwrap();
+                                assert!(std::ptr::eq(hit, actual));
+                                assert_eq!(hit.hir_owner, CRATE_OWNER_ID);
+                                let mut changed = next.clone();
+                                changed.source.push(b' ');
+                                assert!(old.authorize_reuse(&changed, identity_budget).is_err());
+                            }
+                            cache.abort_revision();
+                            let mut changed =
+                                cache.generations.published.as_ref().unwrap().identity.clone();
+                            changed.source.push(b' ');
+                            cache.begin_revision(3, changed, identity_budget).unwrap();
+                            let (old, next) = cache.revision_identities().unwrap();
+                            assert!(old.authorize_reuse(next, identity_budget).is_err());
+                        });
+                    });
+                })
+                .join()
+                .unwrap();
+        });
+    }
+
+    #[test]
     fn actual_identity_token_is_bound_to_stored_snapshots() {
         let identity = RevisionIdentity {
             namespace: b"domain".to_vec(),
