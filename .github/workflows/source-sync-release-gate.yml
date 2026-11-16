@@ -1,0 +1,85 @@
+name: Source sync release benchmark gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: "Pre-identity/queue stable commit (full immutable SHA)"
+        required: true
+        default: f273df4428faf905ec97c735a4ef1b60d59bbb21
+      candidate_ref:
+        description: "Validated alpha29 stable commit (full immutable SHA)"
+        required: true
+        default: 9411dc0c8df5456a1ec6fa4791bd26f6328fcde1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: justrust-source-sync-release-gate
+  cancel-in-progress: false
+
+env:
+  HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
+  RUSTUP_TOOLCHAIN: 1.99.0
+  JUSTRUST_NO_UPDATE: "1"
+
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/stable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            .github
+            bench
+            ci
+            src
+            docs
+            scripts
+          persist-credentials: false
+
+      - name: Install controlled runner prerequisites
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component clippy
+          sudo apt-get update -q
+          # Match desktop Linux CI development libraries, plus pinned test tools.
+          sudo apt-get install -y --no-install-recommends \
+            rsync zstd binutils qemu-user build-essential pkg-config clang cmake \
+            sqlite3 libssl-dev libasound2-dev libfontconfig-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dri mesa-vulkan-drivers openbox wayland-utils weston x11-utils xvfb
+          # Ephemeral runner only: reserve disk for the full Desktop target/cache.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h "$HOME"
+
+      - name: Install reviewed hosted bootstrap in private prefix
+        run: |
+          git show "$HOSTED_CLIENT_REV:ci/install-hosted-client.sh" > "$RUNNER_TEMP/install-hosted-client.sh"
+          bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
+
+      - name: Build hosted binaries and run serial full synthetic gate
+        env:
+          JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: bash ci/source-sync-release-gate.sh
+
+      - name: Preserve evidence even on invalid samples or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-sync-release-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/source-sync-release-gate/evidence/
+            ~/.justrust/bench/versus/logs/
+            ~/.justrust/runs/**/summary.json
+            ~/.justrust/runs/**/output.jsonl
