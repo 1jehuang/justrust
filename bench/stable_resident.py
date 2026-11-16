@@ -5,7 +5,8 @@ Uses an explicitly supplied compiler, never builds or installs one. Receipts ret
 real commands, outputs, timings and Linux RSS observations, including failures.
 The resident wire protocol uses a dedicated inherited pipe and must not be
 emulated by spawning rustc per request. Unit-test fake servers are protocol tests,
-not results. This measures initial scalar-safe query values, not retained GlobalCtxt.
+not results. The default measures initial scalar-safe query values. --frontend
+isolates owned graph and encoded frontend archive residency, not retained GlobalCtxt.
 """
 import argparse
 import base64
@@ -48,15 +49,68 @@ def memory(pid):
 
 MODES = ('fresh', 'resident-values-off', 'resident-values-on')
 COUNTERS = ('resident_hits', 'resident_misses', 'resident_entries')
+FRONTEND_COUNTERS = ('graph_hits', 'graph_misses', 'graph_bytes', 'archive_hits',
+                     'archive_misses', 'archive_bytes', 'value_loads')
+FRONTEND_OPTIONAL = ('typeck_loads', 'mir_loads')
 
 
-def compiler_env(values=None):
+def compiler_env(values=None, frontend=None):
     env = {key: value for key, value in os.environ.items()
            if key not in ('JUSTRUST_RUSTC_RESIDENT_FD', 'JUSTRUST_RUSTC_RESIDENT_VALUES',
-                          'JUSTRUST_RUSTC_PHASES_FILE', 'JUSTRUST_RUSTC_EARLY_REPLY')}
+                          'JUSTRUST_RUSTC_PHASES_FILE', 'JUSTRUST_RUSTC_EARLY_REPLY',
+                          'JUSTRUST_RUSTC_RESIDENT_FRONTEND')}
+    if frontend is not None:
+        values = False
+        env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] = str(int(frontend))
     if values is not None:
         env['JUSTRUST_RUSTC_RESIDENT_VALUES'] = str(int(values))
     return env
+
+
+def validate_frontend(stats, previous=None):
+    if not isinstance(stats, dict):
+        raise AssertionError('Missing frontend counters')
+    for key in FRONTEND_COUNTERS + FRONTEND_OPTIONAL:
+        if key in FRONTEND_OPTIONAL and key not in stats:
+            continue
+        value = stats.get(key)
+        if type(value) is not int or value < 0:
+            raise AssertionError('Invalid or missing frontend counter: ' + key)
+        if previous and not key.endswith('_bytes') and value < previous.get(key, 0):
+            raise AssertionError('Frontend cumulative counter decreased: ' + key)
+    return dict(stats)
+
+
+def validate_frontend_acceptance(off, on):
+    off, on = validate_frontend(off), validate_frontend(on)
+    if any(off.values()):
+        raise AssertionError('Frontend-off counters must all be zero')
+    for key in ('graph_hits', 'archive_hits', 'value_loads'):
+        if on[key] <= 0:
+            raise AssertionError('Frontend reports no actual ' + key)
+
+
+def validate_frontend_fallback(previous, current):
+    validate_frontend(current, previous)
+    if not any(current[key] > previous.get(key, 0)
+               for key in ('graph_misses', 'archive_misses')):
+        raise AssertionError('Damaged artifacts produced no frontend miss/fallback')
+
+
+def perturb_incremental(cache, action):
+    """Damage only this experiment's private incremental artifacts, not transcripts."""
+    files = sorted(path for path in cache.rglob('*') if path.is_file()
+                   and path.name not in ('resident.stdout', 'resident.stderr', 'resident.jsonl'))
+    if not files:
+        raise AssertionError('No incremental artifacts available for ' + action)
+    for path in files:
+        if action == 'delete':
+            path.unlink()
+        elif action == 'corrupt':
+            path.write_bytes(b'justrust acceptance intentionally invalid incremental artifact\n')
+        else:
+            raise ValueError('Unknown incremental perturbation')
+    return [str(path.relative_to(cache)) for path in files]
 
 
 def run(command, timeout=180, cwd=None, env=None):
@@ -128,6 +182,37 @@ const BIAS: u64 = bias();
             ('recovery', source, expected)]
 
 
+def frontend_cases(items):
+    rows = cases(items)
+    helper = '''
+#[inline(never)]
+fn archive_work(input: Vec<String>) -> Result<usize, String> {
+    let mut total = 0;
+    for text in input { total += text.parse::<usize>().map_err(|e| e.to_string())?; }
+    Ok(total)
+}
+'''
+    rows = [(name, source.replace('dynamic(&Zero) + BIAS',
+            'dynamic(&Zero) + BIAS + archive_work(vec![String::from("0")]).unwrap() as u64') + helper, expected)
+            for name, source, expected in rows]
+    source, expected = rows[0][1:]
+    extra = '\nfn added_item(input: &str) -> usize { input.len() }\n'
+    rows[3:3] = [
+        ('significant-body-edit', source.replace('u64 { 7 }',
+          'u64 { let values = vec![3u64, 4]; values.into_iter().sum() }'), expected),
+        ('significant-signature-edit', source.replace('fn value() -> u64 { 7 }',
+          'fn value(seed: u32) -> Result<u64, String> { Ok(u64::from(seed)) }')
+          .replace('value() as u64', 'value(7).unwrap() as u64'), expected),
+        ('add-item', source + extra, expected),
+        ('reorder-items', source.replace('trait Number', extra + 'trait Number'), expected),
+        ('remove-item', source, expected),
+        ('span-edit', '\n\n// shifted source spans\n' + source, expected),
+    ]
+    rows += [(name, source, expected) for name in
+             ('delete-incremental', 'after-delete', 'corrupt-incremental', 'after-corrupt')]
+    return rows
+
+
 def arguments(root, cache):
     # All modes share source/output paths, avoiding diagnostic path normalization.
     return [str(root / 'fixture.rs'), '--crate-name=stable_resident_fixture', '--edition=2024',
@@ -160,14 +245,16 @@ def validate_pair(pair, expected):
 
 class Resident:
     """One process for an entire edit/recovery sequence, no restart or fallback."""
-    def __init__(self, compiler, root, cwd, values, timeout=180):
+    def __init__(self, compiler, root, cwd, values, timeout=180, frontend=None):
         self.command = [str(compiler), '--jr-resident']
         self.timeout = timeout
         self.stdout = (root / 'resident.stdout').open('w+b', buffering=0)
         self.stderr = (root / 'resident.stderr').open('w+b', buffering=0)
         self.transcript = (root / 'resident.jsonl').open('wb')
         read_fd, write_fd = os.pipe()
-        env = compiler_env(values)
+        env = compiler_env(values, frontend)
+        self.frontend = frontend
+        self.frontend_counters = None
         env['JUSTRUST_RUSTC_RESIDENT_FD'] = str(write_fd)
         try:
             self.process = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=self.stdout,
@@ -232,6 +319,10 @@ class Resident:
                     (key != 'resident_entries' and value < self.counters[key])):
                 raise AssertionError('Resident counters missing or decreased')
             self.counters[key] = value
+        if self.frontend is not None:
+            self.frontend_counters = validate_frontend(response.get('frontend'), self.frontend_counters)
+            if not self.frontend and any(self.frontend_counters.values()):
+                raise AssertionError('Frontend-off counters must all be zero')
         worker_elapsed = response.pop('elapsed_seconds')
         if not isinstance(worker_elapsed, (float, int)) or worker_elapsed < 0:
             raise AssertionError('Invalid worker elapsed_seconds')
@@ -280,7 +371,7 @@ def summarize(observations):
     return result
 
 
-def capture(compiler, root, repetitions=3, items=32, timeout=180):
+def capture(compiler, root, repetitions=3, items=32, timeout=180, frontend=False, order='rotate'):
     if repetitions < 1 or items < 1:
         raise ValueError('Repetitions and fixture items must be positive')
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
@@ -291,6 +382,17 @@ def capture(compiler, root, repetitions=3, items=32, timeout=180):
                   memory_note='Linux KiB. Resident VmHWM is lifetime cumulative, not per-request peak. '
                               'Sampled RSS polls at 10ms and can miss brief peaks.',
                   observations=[])
+    if order not in ('fixed', 'rotate'):
+        raise ValueError('Unknown mode order')
+    workload = frontend_cases(items) if frontend else cases(items)
+    report.update(variant='frontend' if frontend else 'scalar', mode_order=order,
+                  workload_sha256=hashlib.sha256(json.dumps(workload).encode()).hexdigest(),
+                  inputs=dict(items=items, repetitions=repetitions, timeout=timeout, order=order))
+    if frontend:
+        report['retention_scope'] = ('Owned dependency graph + encoded frontend result archive bytes. '
+            'Types and MIR are rehydrated per session. Not retained typed GlobalCtxt.')
+        report['frontend_counter_note'] = ('Hits, misses and loads are cumulative per process. '
+            'graph_bytes and archive_bytes are current retained byte gauges, not cumulative loads.')
     try:
         report['identity_before'] = identity(compiler)
         for rep in range(repetitions):
@@ -304,14 +406,19 @@ def capture(compiler, root, repetitions=3, items=32, timeout=180):
             try:
                 for mode in MODES[1:]:
                     start = time.monotonic()
+                    options = {'frontend': mode == 'resident-values-on'} if frontend else {}
                     workers[mode] = Resident(compiler, caches[mode], root,
-                                             mode == 'resident-values-on', timeout)
+                                             mode == 'resident-values-on', timeout, **options)
                     sessions[mode] = dict(repetition=rep, mode=mode, pid=workers[mode].process.pid,
                                           command=workers[mode].command,
                                           spawn_seconds=time.monotonic() - start)
+                    if frontend:
+                        sessions[mode]['retention_gates'] = dict(
+                            JUSTRUST_RUSTC_RESIDENT_VALUES='0',
+                            JUSTRUST_RUSTC_RESIDENT_FRONTEND=str(int(mode == 'resident-values-on')))
                     report.setdefault('sessions', []).append(sessions[mode])
-                for index, (name, source, expected) in enumerate(cases(items)):
-                    rotation = (rep + index) % len(MODES)
+                for index, (name, source, expected) in enumerate(workload):
+                    rotation = (rep + index) % len(MODES) if order == 'rotate' else 0
                     row = dict(repetition=rep, name=name, source=source,
                                source_sha256=hashlib.sha256(source.encode()).hexdigest(),
                                expected_stdout=expected, modes={},
@@ -323,15 +430,31 @@ def capture(compiler, root, repetitions=3, items=32, timeout=180):
                         binary.unlink(missing_ok=True)
                         argv = arguments(root, caches[mode])
                         record = row['modes'][mode] = {}
+                        if frontend and name in ('delete-incremental', 'corrupt-incremental'):
+                            record['perturbed_artifacts'] = perturb_incremental(
+                                caches[mode], name.split('-')[0])
+                        previous = (dict(workers[mode].frontend_counters or {})
+                                    if frontend and mode != 'fresh' else {})
                         record['compile'] = (run([compiler, *argv], timeout, cwd=root, env=compiler_env())
                                              if mode == 'fresh' else workers[mode].compile(argv))
+                        if frontend and mode == 'resident-values-on' and name in (
+                                'delete-incremental', 'corrupt-incremental'):
+                            current = workers[mode].frontend_counters
+                            validate_frontend_fallback(previous, current)
                         if record['compile']['status'] == 0:
                             record['artifact_sha256'] = digest(binary)
                             record['runtime'] = run([binary], timeout)
                     validate_pair(row['modes'], expected)
                 if workers['resident-values-off'].counters['resident_hits'] != 0:
                     raise AssertionError('Values-off worker unexpectedly reports resident hits')
-                if workers['resident-values-on'].counters['resident_hits'] <= 0:
+                if frontend:
+                    if workers['resident-values-on'].counters['resident_hits'] != 0:
+                        raise AssertionError('Frontend isolation requires scalar resident hits to be zero')
+                    validate_frontend_acceptance(workers['resident-values-off'].frontend_counters,
+                                                 workers['resident-values-on'].frontend_counters)
+                    for mode, worker in workers.items():
+                        sessions[mode]['frontend'] = worker.frontend_counters
+                elif workers['resident-values-on'].counters['resident_hits'] <= 0:
                     raise AssertionError('Values-on worker reports no resident query hits')
             finally:
                 failing = sys.exc_info()[0] is not None
@@ -372,6 +495,8 @@ def main():
     parser.add_argument('-n', '--repetitions', type=int, default=3)
     parser.add_argument('--items', type=int, default=32)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--frontend', action='store_true', help='Isolated owned graph/archive acceptance')
+    parser.add_argument('--order', choices=('fixed', 'rotate'), default='rotate')
     args = parser.parse_args()
     if args.repetitions < 1 or args.items < 1 or args.timeout <= 0:
         parser.error('repetitions, items and timeout must be positive')
@@ -379,7 +504,8 @@ def main():
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     print('Private raw evidence: ' + str(args.output.resolve()), flush=True)
     try:
-        report = capture(args.compiler, args.output, args.repetitions, args.items, args.timeout)
+        report = capture(args.compiler, args.output, args.repetitions, args.items, args.timeout,
+                         frontend=args.frontend, order=args.order)
         print(json.dumps(dict(verdict=report['verdict'], summary=report['summary']), indent=2))
     finally:
         receipt = args.output.resolve() / 'receipt.json'

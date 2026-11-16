@@ -40,11 +40,170 @@ class StableResidentTests(unittest.TestCase):
         self.assertIn('-Zincremental-verify-ich', fresh)
 
     def test_environment_is_fixed_and_fresh_strips_protocol(self):
-        with patch.dict(os.environ, JUSTRUST_RUSTC_RESIDENT_FD='999', JUSTRUST_RUSTC_RESIDENT_VALUES='1'):
+        with patch.dict(os.environ, JUSTRUST_RUSTC_RESIDENT_FD='999', JUSTRUST_RUSTC_RESIDENT_VALUES='1',
+                        JUSTRUST_RUSTC_RESIDENT_FRONTEND='1'):
             self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_FD', bench.compiler_env())
             self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_VALUES', bench.compiler_env())
             self.assertEqual(bench.compiler_env(False)['JUSTRUST_RUSTC_RESIDENT_VALUES'], '0')
             self.assertEqual(bench.compiler_env(True)['JUSTRUST_RUSTC_RESIDENT_VALUES'], '1')
+            for values in (None, False, True):
+                self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_FRONTEND', bench.compiler_env(values))
+            for frontend in (False, True):
+                env = bench.compiler_env(True, frontend=frontend)
+                self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_VALUES'], '0')
+                self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], str(int(frontend)))
+
+    def test_frontend_counter_gate_is_fail_closed(self):
+        off = dict.fromkeys(bench.FRONTEND_COUNTERS, 0)
+        on = dict.fromkeys(bench.FRONTEND_COUNTERS, 1)
+        bench.validate_frontend_acceptance(off, on)
+        for bad in (None, {}, {**on, 'graph_hits': True}, {**on, 'value_loads': -1}):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                bench.validate_frontend_acceptance(off, bad)
+        for key in ('graph_hits', 'archive_hits', 'value_loads'):
+            with self.subTest(key=key), self.assertRaisesRegex(AssertionError, 'no actual'):
+                bench.validate_frontend_acceptance(off, {**on, key: 0})
+        with self.assertRaisesRegex(AssertionError, 'all be zero'):
+            bench.validate_frontend_acceptance({**off, 'archive_bytes': 1}, on)
+        with self.assertRaisesRegex(AssertionError, 'decreased'):
+            bench.validate_frontend({**on, 'value_loads': 0}, on)
+        bench.validate_frontend({**on, 'graph_bytes': 0}, on)
+        with self.assertRaisesRegex(AssertionError, 'no frontend miss'):
+            bench.validate_frontend_fallback(on, on)
+        bench.validate_frontend_fallback(on, {**on, 'graph_misses': 2})
+        bench.validate_frontend_fallback(on, {**on, 'archive_misses': 2})
+
+    def test_frontend_child_env_isolation_and_pid_recovery(self):
+        for gate in (False, True):
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory() as tmp, \
+                    patch.dict(os.environ, JUSTRUST_RUSTC_RESIDENT_FRONTEND='1',
+                               JUSTRUST_RUSTC_RESIDENT_VALUES='1'):
+                root = Path(tmp)
+                source = root / 'source'
+                source.write_text('ok')
+                mutation = ("assert os.environ['JUSTRUST_RUSTC_RESIDENT_VALUES'] == '0'; "
+                            f"assert os.environ['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] == '{int(gate)}'; "
+                            f"response['frontend'] = dict.fromkeys({bench.FRONTEND_COUNTERS!r}, "
+                            f"request['id'] if {gate!r} else 0)")
+                server = bench.Resident(self.server(root, mutation), root, root, True,
+                                        timeout=2, frontend=gate)
+                try:
+                    first = server.compile([source])
+                    source.write_text('bad')
+                    error = server.compile([source])
+                    source.write_text('ok')
+                    recovery = server.compile([source])
+                    self.assertEqual([row['status'] for row in (first, error, recovery)], [0, 1, 0])
+                    self.assertEqual({row['pid'] for row in (first, error, recovery)}, {server.process.pid})
+                    self.assertEqual(server.frontend_counters['value_loads'], 3 if gate else 0)
+                finally:
+                    server.close()
+
+    def test_frontend_fixture_has_real_frontend_work_and_extra_transitions(self):
+        rows = bench.frontend_cases(3)
+        by_name = {name: (source, expected) for name, source, expected in rows}
+        self.assertIn('Vec<String>', by_name['warm'][0])
+        self.assertIn('map_err', by_name['warm'][0])
+        self.assertIn('archive_work(vec!', by_name['warm'][0])
+        for name in ('significant-body-edit', 'add-item', 'remove-item', 'reorder-items',
+                     'span-edit', 'delete-incremental', 'after-delete',
+                     'corrupt-incremental', 'after-corrupt'):
+            self.assertIn(name, by_name)
+        self.assertEqual(len(by_name['warm'][0]), len(by_name['body-edit'][0]))
+        self.assertNotEqual(by_name['warm'][0], by_name['body-edit'][0])
+        self.assertTrue(by_name['warm'][0].startswith('#![allow(dead_code)]'))
+        self.assertEqual(by_name['warm'], by_name['recovery'])
+
+    def test_incremental_damage_preserves_protocol_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root / 'resident.jsonl'
+            evidence.write_bytes(b'evidence')
+            artifact = root / 'session' / 'query-cache.bin'
+            artifact.parent.mkdir()
+            artifact.write_bytes(b'encoded archive')
+            self.assertEqual(bench.perturb_incremental(root, 'corrupt'), ['session/query-cache.bin'])
+            self.assertIn(b'intentionally invalid', artifact.read_bytes())
+            bench.perturb_incremental(root, 'delete')
+            self.assertFalse(artifact.exists())
+            self.assertEqual(evidence.read_bytes(), b'evidence')
+            with self.assertRaisesRegex(AssertionError, 'No incremental artifacts'):
+                bench.perturb_incremental(root, 'delete')
+
+    def test_frontend_protocol_rejects_missing_counters_only_when_enabled(self):
+        for gate in (None, False, True):
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / 'source'
+                source.write_text('ok')
+                server = bench.Resident(self.server(root), root, root, False, timeout=2, frontend=gate)
+                try:
+                    if gate is None:
+                        server.compile([source])
+                    else:
+                        with self.assertRaisesRegex(AssertionError, 'Missing frontend'):
+                            server.compile([source])
+                finally:
+                    server.close()
+
+    def test_frontend_capture_mock_receipt_and_damage_fallback(self):
+        workload = bench.frontend_cases(3)
+        expected_by_source = {source: expected for _, source, expected in workload}
+        instances = []
+
+        class FakeResident:
+            def __init__(self, compiler, directory, cwd, values, timeout, frontend=None):
+                self.command = ['protocol mock only, not native evidence']
+                self.process = type('Process', (), {'pid': 100 + len(instances)})()
+                self.frontend = frontend
+                self.frontend_counters = dict.fromkeys(bench.FRONTEND_COUNTERS, 0)
+                self.counters = dict.fromkeys(bench.COUNTERS, 0)
+                instances.append(self)
+
+            def compile(self, argv):
+                row = fake_run(['/compiler', *argv])
+                if self.frontend:
+                    self.frontend_counters = {key: value + 1
+                                              for key, value in self.frontend_counters.items()}
+                row.update(frontend=dict(self.frontend_counters),
+                           pid=self.process.pid, memory_after={})
+                return row
+
+            def close(self):
+                pass
+
+        def fake_run(command, timeout=180, **kwargs):
+            source = (Path(command[0]).parent / 'fixture.rs' if len(command) == 1
+                      else Path(command[1])).read_text()
+            expected = expected_by_source[source]
+            if len(command) == 1:
+                return record(stdout=expected.encode())
+            cache = Path(next(arg.split('=', 1)[1] for arg in command
+                              if str(arg).startswith('incremental=')))
+            (cache / 'query-cache.bin').write_bytes(b'fake cache')
+            if expected is None:
+                return record(1, stderr=b'identical type error')
+            Path(command[-1]).write_bytes(b'fake binary')
+            return record()
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(bench, 'Resident', FakeResident), \
+                patch.object(bench, 'run', fake_run), patch.object(bench, 'identity', return_value={'sha': 'a'}):
+            report = bench.capture('/compiler', Path(tmp), repetitions=1, items=3,
+                                   frontend=True, order='fixed')
+            self.assertEqual(report['verdict'], 'passed')
+            self.assertEqual(report['variant'], 'frontend')
+            self.assertIn('encoded frontend result archive', report['retention_scope'])
+            self.assertIn('rehydrated per session', report['retention_scope'])
+            self.assertEqual(len(report['workload_sha256']), 64)
+            self.assertEqual(len(report['observations']), len(workload))
+            for row in report['observations']:
+                self.assertEqual(row['order'], list(bench.MODES))
+                if row['name'] in ('delete-incremental', 'corrupt-incremental'):
+                    for mode in bench.MODES:
+                        self.assertEqual(row['modes'][mode]['perturbed_artifacts'], ['query-cache.bin'])
+            self.assertEqual([instance.frontend for instance in instances], [False, True])
+            for session in report['sessions']:
+                self.assertIn('archive_bytes', session['frontend'])
 
     def test_exact_diagnostics_and_error_recovery_contract(self):
         pair = {mode: dict(compile=record(1, stderr=b'type error\n')) for mode in bench.MODES}
