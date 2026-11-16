@@ -127,6 +127,23 @@ pub struct SessionGlobals {
 }
 
 impl SessionGlobals {
+    /// Enter another revision under the same scoped symbol, span and hygiene
+    /// owners. All workers from the preceding revision must have returned before
+    /// the caller can borrow this owner mutably. Reset the revision-local macro
+    /// argument map, which a completed query-cache encoding may have frozen.
+    ///
+    /// This does not refresh source files, validate crate/definition mappings or
+    /// authorize reuse of query results. The executor must provide those checks
+    /// and retire the entire owner when its batch budget is exhausted.
+    pub fn enter_resident_revision<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        assert!(
+            !SESSION_GLOBALS.is_set(),
+            "resident revision must start outside an active session-global scope"
+        );
+        self.metavar_spans = MetavarSpansMap::default();
+        set_session_globals_then(self, f)
+    }
+
     pub fn new(
         edition: Edition,
         extra_symbols: &[&'static str],

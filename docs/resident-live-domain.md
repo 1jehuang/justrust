@@ -21,17 +21,21 @@ Matching a dependency fingerprint does not establish that ownership either.
 The current request path recreates `SessionGlobals`, `Compiler`, `Session`,
 `GlobalCtxt`, interners, arenas and query caches. The lifetime origin is
 `rustc_interface::passes::create_and_enter_global_ctxt`. Its local owners are
-deliberately destroyed at the end of one request. Type interning is currently
-owned by that same context. Consequently, adding a process-global map of
-borrowed MIR or type-checking pointers would be unsound.
+deliberately destroyed at the end of one request. The ordinary path still owns
+its type-interner resources alongside that same context. Consequently, adding a
+process-global map of borrowed MIR or type-checking pointers would be unsound.
 
 ## Implemented building blocks
 
-- `ty::with_resident_type_domain` owns a native compiler arena and native
-  `CtxtInterners` for an entire higher-ranked callback. Actual `Ty`,
-  `TypeckResults` and MIR objects can live under that scope. A reference cannot
-  escape the callback, including by returning an object that contains it.
-  Reset means leaving and dropping the whole scope, not just clearing a map.
+- `ty::with_resident_type_domain` owns native compiler and HIR arenas, native
+  `CtxtInterners` and a native allocation-ID map for an entire higher-ranked
+  callback. Actual `Ty`, `TypeckResults` and MIR objects can live under that scope.
+  `GlobalCtxtResources` selects either fresh owners or borrowed domain owners at
+  context construction. The context's hot interner/allocation fields are plain
+  references, not per-query ownership-variant switches. A reference cannot escape
+  the callback, including by returning an object that contains it. Reset means
+  leaving and dropping the whole scope, not just clearing a map. Ordinary contexts
+  still construct fresh resources, and their query states remain revision-local.
 - `ty::resident_identity` checks bounded, exact, ordered crate and definition
   mappings, namespace and options. It rejects malformed identity universes and
   issues opaque authorization tied to the exact validated snapshots. The caller
@@ -43,6 +47,12 @@ borrowed MIR or type-checking pointers would be unsound.
   estimated reachable-byte budgets bound the cache's references, not the arena
   or the compiler's total RSS.
 
+- `SessionGlobals::enter_resident_revision` exclusively borrows the existing
+  scoped owner, preserving symbol/span/hygiene identities while replacing the
+  per-revision metavariable map that cache encoding can freeze. It requires all
+  prior workers to have returned. It neither refreshes source files nor validates
+  the meaning of foreign crate or expansion identities, and the driver does not
+  yet call it.
 - `SourceMap::new_source_file_version` explicitly appends a native source version.
   Historical byte positions still resolve to their original source and diagnostic
   coordinates, while stable-ID lookup selects the latest version. The ordinary

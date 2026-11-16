@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn resident_revision_keeps_symbols_and_interned_spans_but_resets_metavars() {
+    let mut globals = SessionGlobals::new(edition::DEFAULT_EDITION, &[], None);
+    let symbol_name = format!("resident-owned-symbol-{}", std::process::id());
+    let (symbol, span) = globals.enter_resident_revision(|| {
+        let symbol = Symbol::intern(&symbol_name);
+        // The length exceeds the inline span format, exercising the real interner.
+        let span = Span::with_root_ctxt(BytePos(1), BytePos(100_001));
+        with_metavar_spans(|map| {
+            assert!(map.insert(span, DUMMY_SP));
+            assert_eq!(map.get(span), Some(DUMMY_SP));
+            assert_eq!(map.freeze_and_get_read_spans().len(), 1);
+        });
+        (symbol, span)
+    });
+    globals.enter_resident_revision(|| {
+        assert_eq!(Symbol::intern(&symbol_name), symbol);
+        assert_eq!(symbol.as_str(), symbol_name.as_str());
+        assert_eq!((span.lo(), span.hi()), (BytePos(1), BytePos(100_001)));
+        let next_target = Span::with_root_ctxt(BytePos(3), BytePos(7));
+        with_metavar_spans(|map| {
+            assert_eq!(map.get(span), None);
+            assert!(map.insert(span, next_target));
+            assert_eq!(map.get(span), Some(next_target));
+        });
+    });
+}
+
+#[test]
+fn resident_revision_unwind_releases_global_scope_and_allows_reentry() {
+    let mut globals = SessionGlobals::new(edition::DEFAULT_EDITION, &[], None);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        globals.enter_resident_revision(|| {
+            with_metavar_spans(|map| {
+                let _ = map.freeze_and_get_read_spans();
+            });
+            panic!("discard this revision");
+        });
+    }));
+    assert!(failed.is_err());
+    globals.enter_resident_revision(|| {
+        let name = format!("after-revision-unwind-{}", std::process::id());
+        assert_eq!(Symbol::intern(&name).as_str(), name.as_str());
+        with_metavar_spans(|map| assert!(map.insert(DUMMY_SP, DUMMY_SP)));
+    });
+}
+
+#[test]
 fn test_lookup_line() {
     let source = "abcdefghijklm\nabcdefghij\n...".to_owned();
     let mut sf = SourceFile::new(
