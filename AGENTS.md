@@ -158,6 +158,15 @@ billing, private caches) and never weaken the security invariants in
   Do not run `cargo install --path . --locked` as the default final step: it
   replaces production dogfooding with an unpublished source build, and can
   update a different executable from the one selected by PATH.
+- For routine client-only releases, use
+  `python3 scripts/release-client.py --tag vX --execute` after committing and
+  pushing the matching Cargo version. It pushes one immutable tag, waits only
+  for shared publication (not the full post-publication suite), and immediately
+  activates/verifies the exact published bytes locally. Run without `--execute`
+  for a plan. Never leave the developer testing an old client via daily updates.
+  See `docs/fast-client-releases.md`. An unrelated compiler benchmark is not a
+  prerequisite for a client-only reporting fix; compiler default promotions
+  retain their own acceptance gates.
 - After publishing a release, activate and verify it with
   `python3 scripts/production-dogfood.py --expect vX --activate`. This downloads
   the published artifact, verifies its checksum and release marker, tests it on
