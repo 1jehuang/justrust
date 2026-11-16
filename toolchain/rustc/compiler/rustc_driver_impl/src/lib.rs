@@ -103,6 +103,9 @@ mod signal_handler {
     pub(super) fn install() {}
 }
 
+#[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
+mod resident;
+
 use crate::diagnostics::{
     CantEmitMIR, RLinkEmptyVersionNumber, RLinkEncodingVersionMismatch, RLinkRustcVersionMismatch,
     RLinkWrongFileType, RlinkCorruptFile, RlinkNotAFile, RlinkUnableToRead, UnstableFeatureUsage,
@@ -1742,12 +1745,24 @@ pub unsafe fn main() -> ExitCode {
     install_ice_hook(DEFAULT_BUG_REPORT_URL, |_| ());
     install_ctrlc_handler();
 
+    let raw_args = args::raw_args(&early_dcx);
+    if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident") {
+        if raw_args.len() != 2 || query_admission.is_some() {
+            eprintln!("jr-rustc resident: requires a dedicated unbound worker with no extra arguments");
+            return ExitCode::FAILURE;
+        }
+        #[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
+        // SAFETY: native main exclusively owns the launcher's response pipe.
+        return unsafe { resident::run() };
+        #[cfg(not(all(unix, any(target_env = "gnu", target_os = "macos"))))]
+        {
+            eprintln!("jr-rustc resident: unsupported platform");
+            return ExitCode::FAILURE;
+        }
+    }
+
     let exit_code = catch_with_exit_code(|| {
-        compiler_entrypoint_with_binding(
-            &args::raw_args(&early_dcx),
-            &mut callbacks,
-            query_admission,
-        )
+        compiler_entrypoint_with_binding(&raw_args, &mut callbacks, query_admission)
     });
 
     if let Some(format) = callbacks.time_passes {

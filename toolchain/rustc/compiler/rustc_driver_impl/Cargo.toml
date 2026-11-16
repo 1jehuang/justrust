@@ -31,6 +31,7 @@ rustc_middle = { path = "../rustc_middle" }
 rustc_mir_build = { path = "../rustc_mir_build" }
 rustc_parse = { path = "../rustc_parse" }
 rustc_public = { path = "../rustc_public", features = ["rustc_internal"] }
+rustc_query_impl = { path = "../rustc_query_impl" }
 rustc_resolve = { path = "../rustc_resolve" }
 rustc_session = { path = "../rustc_session" }
 rustc_span = { path = "../rustc_span" }
