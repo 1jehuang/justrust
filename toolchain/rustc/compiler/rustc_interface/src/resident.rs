@@ -302,7 +302,16 @@ mod tests {
                             domain,
                             krate,
                             |tcx| {
+                                let prefix_budget = rustc_middle::ty::resident_definition_prefix::PrefixBudget {
+                                    max_definitions: budget.max_definitions,
+                                    max_bytes: budget.max_identity_bytes,
+                                };
+                                let before = rustc_middle::ty::resident_definition_prefix::capture_definition_prefix(tcx, prefix_budget)
+                                    .expect("bounded native definition prefix before analysis");
                                 tcx.ensure_ok().analysis(());
+                                let after = rustc_middle::ty::resident_definition_prefix::capture_definition_prefix(tcx, prefix_budget)
+                                    .expect("bounded native definition prefix after analysis");
+                                assert!(before.is_preserved_by(&after));
                                 build_revision_identity(tcx, FrozenSemanticInvocation {
                                 namespace: b"native-fixed-no-core-test-v1",
                                 options: b"fixed-config(0),same-target,rlib,allow-internal-no-core",

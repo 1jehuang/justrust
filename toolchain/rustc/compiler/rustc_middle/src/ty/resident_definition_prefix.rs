@@ -186,7 +186,7 @@ mod tests {
     use rustc_data_structures::sync::FreezeLock;
     use rustc_hir::definitions::{DisambiguatedDefPathData, PerParentDisambiguatorState};
     use rustc_span::def_id::{CRATE_DEF_ID, DefIndex, StableCrateId};
-    use rustc_span::{Symbol, create_session_globals_then, edition::Edition};
+    use rustc_span::{create_session_globals_then, edition::Edition, sym};
 
     use super::*;
 
@@ -196,7 +196,7 @@ mod tests {
     fn native_capture_leaves_allocation_open_and_preserves_append() {
         create_session_globals_then(Edition::Edition2024, &[], None, || {
             let table = FreezeLock::new(Definitions::new(StableCrateId::new(
-                Symbol::intern("prefix_test"),
+                sym::test,
                 false,
                 vec![],
                 "test",
@@ -207,7 +207,7 @@ mod tests {
             let mut disambiguators = PerParentDisambiguatorState::new(CRATE_DEF_ID);
             let id = table.write().create_def(
                 CRATE_DEF_ID,
-                DefPathData::TypeNs(Symbol::intern("Added")),
+                DefPathData::TypeNs(sym::core),
                 &mut disambiguators,
             );
             assert_eq!(id.local_def_index.as_u32(), 1);
@@ -276,9 +276,9 @@ mod tests {
                 capture_keys(2, [(0, root), (1, key(Some(0), data, 0))].into_iter(), BUDGET)
                     .unwrap()
             };
-            let first = capture(DefPathData::TypeNs(Symbol::intern("ab")));
-            assert!(!first.is_preserved_by(&capture(DefPathData::TypeNs(Symbol::intern("a")))));
-            assert!(!first.is_preserved_by(&capture(DefPathData::ValueNs(Symbol::intern("ab")))));
+            let first = capture(DefPathData::TypeNs(sym::alloc));
+            assert!(!first.is_preserved_by(&capture(DefPathData::TypeNs(sym::core))));
+            assert!(!first.is_preserved_by(&capture(DefPathData::ValueNs(sym::alloc))));
         });
     }
 
