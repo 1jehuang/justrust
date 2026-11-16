@@ -79,7 +79,7 @@ class CheckpointTests(unittest.TestCase):
 
     def test_changed_runtime_policy_rejected(self):
         self.run_fixture()
-        with mock.patch.dict(os.environ, {"JUSTRUST_BENCH_RUNTIME_CONTEXT": "jcode-isolated-v2"}):
+        with mock.patch.dict(os.environ, {"JUSTRUST_BENCH_RUNTIME_CONTEXT": "jcode-isolated-v3"}):
             self.assert_rejected()
 
     def test_changed_toolchain_bytes_rejected(self):

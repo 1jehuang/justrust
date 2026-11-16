@@ -21,7 +21,7 @@ class RuntimeContextTests(unittest.TestCase):
         self.source = self.cwd / "source.rs"
         self.source.write_text("unchanged source\n")
         self.env = dict(os.environ, HOME=str(Path(self.temp.name) / "real-home"),
-                        JCODE_SOCKET="live", JCODE_SESSION_ID="live-session",
+                        JCODE_SOCKET="live", JCODE_SESSION_ID="live-session", JCODE_HOME="live-home",
                         ANTHROPIC_API_KEY="secret", OPENAI_API_KEY="secret",
                         RUSTFLAGS="-Zprivate-query-flag", JUSTRUST_TOOLCHAIN="frozen-native",
                         JUSTRUST_HOME="frozen-home", CARGO_HOME="explicit-cargo")
@@ -37,7 +37,7 @@ class RuntimeContextTests(unittest.TestCase):
             with runtime.runtime_context(self.env, self.cwd) as child:
                 home = Path(child["HOME"])
                 self.assertTrue(home.is_dir())
-                for key in ("JCODE_SOCKET", "JCODE_SESSION_ID", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+                for key in ("JCODE_SOCKET", "JCODE_SESSION_ID", "JCODE_HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
                     self.assertNotIn(key, child)
                 for key in ("RUSTFLAGS", "JUSTRUST_TOOLCHAIN", "JUSTRUST_HOME", "CARGO_HOME"):
                     self.assertEqual(child[key], self.env[key])
@@ -85,6 +85,17 @@ class RuntimeContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
             runtime.require_matching_context(old, new)
         with patch.dict(os.environ, {runtime.SELECTOR: "jcode-isolated-v1"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                with runtime.runtime_context(self.env, self.cwd):
+                    self.fail("obsolete runtime policy executed")
+
+    def test_v2_history_is_readable_but_cannot_mix_with_corrected_policy(self):
+        old = {"env": {"runtime_context": {"policy": "jcode-isolated-v2"}}}
+        new = {"env": {"runtime_context": {"policy": runtime.POLICY}}}
+        runtime.require_matching_context(old, old)
+        with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
+            runtime.require_matching_context(old, new)
+        with patch.dict(os.environ, {runtime.SELECTOR: "jcode-isolated-v2"}, clear=True):
             with self.assertRaisesRegex(ValueError, "unsupported"):
                 with runtime.runtime_context(self.env, self.cwd):
                     self.fail("obsolete runtime policy executed")
@@ -143,7 +154,7 @@ class RuntimeContextTests(unittest.TestCase):
     def test_counted_execution_records_policy_without_secrets_or_paths(self):
         with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):
             log = Path(self.temp.name) / "output.log"
-            result = versus.run_counted([sys.executable, "-c", "import os; print(os.environ['JCODE_HOME'])"],
+            result = versus.run_counted([sys.executable, "-c", "import os; print(os.environ['HOME'])"],
                                         self.cwd, self.env, log)
         self.assertEqual(result["exit"], 0)
         self.assertEqual(result["runtime_context"]["policy"], runtime.POLICY)

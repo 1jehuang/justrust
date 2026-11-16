@@ -66,7 +66,7 @@ benchmark_binary() {
     export JUSTRUST_LOCAL=1
     export JUSTRUST_LOCAL_REASON='Controlled clean GitHub runner before/after local synthetic benchmark'
     export JUSTRUST_NO_UPDATE=1 JUSTRUST_BENCH_DIRTY=0
-    export JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v2
+    export JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v3
     export JUSTRUST="$work/bin/$label" JUSTRUST_BIN="$work/bin/$label"
     export JUSTRUST_BENCH_REV="$revision"
     # GitHub runners install stock Cargo through rustup, not /usr/bin/cargo.
@@ -119,6 +119,7 @@ main() {
   "$hosted" remote use hosted
   build_binary before "$BASELINE_REF"
   build_binary after "$CANDIDATE_REF"
+  python3 "$root/ci/check-pinned-runtime.py" "$work/bin/before" "$work"
 
   # One unchanged suite, generator, weights, snapshots and warm target path.
   # Serial execution preserves the suite's normal cross-commit cache behavior.

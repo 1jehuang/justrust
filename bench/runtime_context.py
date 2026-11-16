@@ -6,8 +6,8 @@ import subprocess
 import tempfile
 
 SELECTOR = "JUSTRUST_BENCH_RUNTIME_CONTEXT"
-POLICY = "jcode-isolated-v2"
-LEGACY_POLICIES = ("jcode-isolated-v1",)
+POLICY = "jcode-isolated-v3"
+LEGACY_POLICIES = ("jcode-isolated-v1", "jcode-isolated-v2")
 PREFIXES = ("JCODE_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "CLAUDE_", "CODEX_", "GEMINI_", "GOOGLE_API_", "GIT_")
 
 
@@ -72,7 +72,10 @@ def runtime_context(env, cwd):
         child.setdefault("JUSTRUST_HOME", str(old_home / ".justrust"))
         child.setdefault("CARGO_HOME", str(old_home / ".cargo"))
         child.setdefault("RUSTUP_HOME", str(old_home / ".rustup"))
-        child.update(HOME=str(home), JCODE_HOME=str(home / ".jcode"),
+        # Do not inject JCODE_HOME. It overrides XDG_CONFIG_HOME in pinned
+        # jcode-storage, defeating tests' own per-test configuration isolation.
+        # Private HOME and XDG paths already isolate all application state.
+        child.update(HOME=str(home),
                      XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),
                      XDG_CACHE_HOME=str(home / ".cache"), XDG_STATE_HOME=str(home / ".local/state"),
                      XDG_RUNTIME_DIR=str(private / "runtime"))
