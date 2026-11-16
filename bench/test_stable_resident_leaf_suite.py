@@ -179,6 +179,8 @@ class AggregateTests(unittest.TestCase):
     def test_strict_comparison_mismatches_and_arm_ratios(self):
         # Mock validation isolates comparison policy without fabricating native receipts.
         original = {key: key for key in ('identity_before', 'workload', 'workload_sha256', 'host', 'execution')}
+        original['identity_before'] = dict(sha256=suite.BINARY_SHA,
+                                           drivers=[dict(sha256=suite.DRIVER_SHA)])
         stats = {arm: dict(median_seconds=value) for arm, value in zip(suite.ARMS, (4, 2, 1))}
         with patch.object(suite, 'validate', return_value=stats):
             for key in original:
@@ -198,7 +200,8 @@ class AggregateTests(unittest.TestCase):
 
     def test_explicit_compiler_comparison_preserves_all_other_invariants(self):
         original = {key: key for key in ('workload', 'workload_sha256', 'host', 'execution')}
-        original['identity_before'] = dict(drivers=[dict(sha256=suite.DRIVER_SHA)])
+        original['identity_before'] = dict(sha256=suite.BINARY_SHA,
+                                           drivers=[dict(sha256=suite.DRIVER_SHA)])
         changed = copy.deepcopy(original)
         changed['identity_before']['drivers'][0]['sha256'] = '1' * 64
         stats = {arm: dict(median_seconds=1) for arm in suite.ARMS}
@@ -267,6 +270,17 @@ class AggregateTests(unittest.TestCase):
                 suite.compare(report, candidate)
             with redirect_stdout(io.StringIO()):
                 suite.compare(report, candidate, allow_compiler_change=True)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                suite.compare(candidate, copy.deepcopy(candidate))
+            self.assertIn('before compiler_sha256=' + suite.BINARY_SHA, output.getvalue())
+            self.assertIn('after compiler_sha256=' + suite.BINARY_SHA, output.getvalue())
+            self.assertEqual(output.getvalue().count('driver_sha256=' + '1' * 64), 2)
+            for key in ('workload', 'workload_sha256', 'host', 'execution'):
+                bad = copy.deepcopy(candidate)
+                bad[key] = 'different'
+                with self.assertRaises((ValueError, TypeError)):
+                    suite.compare(candidate, bad)
             candidate['expected_identity']['driver_sha256'] = '2' * 64
             with self.assertRaisesRegex(ValueError, 'driver SHA'):
                 suite.compare(report, candidate, allow_compiler_change=True)

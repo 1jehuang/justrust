@@ -317,7 +317,10 @@ def validate(report, allow_compiler_change=False):
 def compare(a, b, floor=10.0, allow_compiler_change=False):
     require(type(floor) in (int, float) and math.isfinite(floor) and floor >= 0, 'invalid floor')
     require(type(allow_compiler_change) is bool, 'compiler comparison opt-in must be boolean')
-    sa, sb = (validate(report, allow_compiler_change=allow_compiler_change) for report in (a, b))
+    # Each receipt must match its own explicit attestation. The default policy
+    # below still requires identical complete compiler identities, including for
+    # optimized-compiler replicates. Cross-compiler comparisons remain opt-in.
+    sa, sb = (validate(report, allow_compiler_change=True) for report in (a, b))
     if allow_compiler_change:
         require(a['identity_before']['drivers'][0]['sha256'] != b['identity_before']['drivers'][0]['sha256'],
                 'compiler optimization comparison requires distinct driver SHA')
@@ -327,6 +330,10 @@ def compare(a, b, floor=10.0, allow_compiler_change=False):
     for key in invariant_keys:
         require(a[key] == b[key], 'comparison refuses different ' + key)
     print(CLAIM)
+    for label, report in (('before', a), ('after', b)):
+        identity = report['identity_before']
+        print(f'{label} compiler_sha256={identity["sha256"]} '
+              f'driver_sha256={identity["drivers"][0]["sha256"]}')
     for arm in ARMS:
         old, new = sa[arm]['median_seconds'], sb[arm]['median_seconds']
         delta = (new / old - 1) * 100
