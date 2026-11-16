@@ -139,8 +139,12 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertNotIn("gh release edit", summary)
         self.assertNotIn("gh release create", summary)
         self.assertNotIn("gh release upload", summary)
-        self.assertIn("archive + \".sha256\"", summary)
-        self.assertIn("Missing provenance", summary)
+        self.assertIn("ci/promote-complete-release.py", summary)
+        promoter = (ROOT / "ci/promote-complete-release.py").read_text()
+        self.assertIn('archive + ".sha256"', promoter)
+        self.assertIn("missing compiler provenance", promoter)
+        publisher = (ROOT / "ci/publish-platform-release.py").read_text()
+        self.assertIn('"--latest=false"', publisher)
 
     def test_platform_build_inputs_do_not_share_test_mirror_paths(self):
         build = self.job("build")

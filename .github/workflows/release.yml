@@ -313,25 +313,16 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          sparse-checkout: ci
       - name: Verify all platforms completed publication
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets > "$RUNNER_TEMP/release.json"
-          python3 - "$RUNNER_TEMP/release.json" <<'PY'
-          import json, sys
-          release = json.load(open(sys.argv[1]))
-          assert release["isDraft"] is False, "Release is still a draft"
-          names = {asset["name"] for asset in release["assets"]}
-          for target in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
-                         "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"):
-              archive = f"justrust-{target}.tar.gz"
-              assert {archive, archive + ".sha256"} <= names, f"Missing platform: {target}"
-              assert any(f"compiler-{target}.{ext}" in names for ext in ("json", "txt")), f"Missing provenance: {target}"
-          print("All platforms published. Faster platforms were available independently.")
-          PY
+          SHA: ${{ needs.preflight.outputs.sha }}
+        run: python3 ci/promote-complete-release.py --tag "$TAG" --sha "$SHA" --repo "$GITHUB_REPOSITORY"
 
   production-tests:
     needs: [preflight, release]

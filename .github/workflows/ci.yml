@@ -43,6 +43,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p test_production_dogfood.py -v
       - name: Test committed-source toolchain candidate flow
         run: python3 -m unittest discover -s scripts -p test_toolchain_candidate.py -v
+      - name: Test complete-release installer promotion
+        run: python3 ci/test-promote-complete-release.py
       - name: Test append-only platform publication
         run: python3 ci/test-publish-platform-release.py
       - name: Test pinned published bootstrap validation

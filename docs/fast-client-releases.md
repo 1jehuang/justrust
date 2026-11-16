@@ -47,8 +47,12 @@ compiling a bootstrap client on every release. Compatibility builds cache their
 dependencies and smoke-test native executable versions and release markers.
 Artifacts are published independently per platform. Preflight creates a shared
 draft. Each platform uploads its checked archive and compiler provenance, then
-its checksum last. The first ready platform publishes the version, and slower
-platforms append their own assets later. Published bytes are never overwritten:
+its checksum last. The first ready platform publishes the version without
+moving GitHub's global latest pointer, and slower platforms append their assets
+later. The target-aware updater can select each ready platform immediately.
+Legacy installers using GitHub's global latest download remain on the complete
+previous version until the final completeness check promotes the new version.
+Published bytes are never overwritten:
 identical retries are verified and reused, conflicting bytes fail closed.
 The updater selects a complete archive/checksum pair for the requested target,
 keeping the previous complete release while that target is still building.
