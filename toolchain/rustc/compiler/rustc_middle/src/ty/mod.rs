@@ -139,6 +139,7 @@ pub mod offload_meta;
 pub mod pattern;
 pub mod print;
 pub mod relate;
+pub mod resident_compiler_identity;
 pub mod resident_identity;
 pub mod resident_values;
 pub mod significant_drop_order;
