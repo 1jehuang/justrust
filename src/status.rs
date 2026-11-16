@@ -240,6 +240,7 @@ fn pick_reference<'a>(
     let remote = meta.place.as_deref().is_some_and(|p| p != "local");
     let same_place = index
         .iter()
+        .rev()
         .any(|r| r.cwd == meta.cwd && r.remote.is_some() == remote);
     let ok = |r: &&IndexEntry| {
         r.cwd == meta.cwd
@@ -247,23 +248,27 @@ fn pick_reference<'a>(
             && r.id != meta.id
             && (!same_place || r.remote.is_some() == remote)
     };
-    let same_args: Vec<&IndexEntry> = index
+    // Exact arguments win even if their only match is older than every
+    // subcommand match. Search to exhaustion on a miss, but keep only the
+    // newest 20 matches and never parse subcommands on an exact hit.
+    let mut pool: Vec<&IndexEntry> = index
         .iter()
+        .rev()
         .filter(ok)
         .filter(|r| r.args == meta.args)
+        .take(20)
         .collect();
-    let same_sub: Vec<&IndexEntry> = index
-        .iter()
-        .filter(ok)
-        .filter(|r| crate::record::subcommand(&os(&r.args)).unwrap_or_default() == meta.subcommand)
-        .collect();
-    let pool = if same_args.is_empty() {
-        same_sub
-    } else {
-        same_args
-    };
-    // Recent history only: the codebase and machine change.
-    let pool: Vec<&IndexEntry> = pool.into_iter().rev().take(20).collect();
+    if pool.is_empty() {
+        pool = index
+            .iter()
+            .rev()
+            .filter(ok)
+            .filter(|r| {
+                crate::record::subcommand(&os(&r.args)).unwrap_or_default() == meta.subcommand
+            })
+            .take(20)
+            .collect();
+    }
     let mut near: Vec<(usize, &IndexEntry)> = match to_compile {
         Some(n) => {
             let mut v: Vec<(usize, &IndexEntry)> = pool.into_iter().enumerate().collect();
@@ -301,12 +306,12 @@ fn build_end(s: &Summary) -> f64 {
     (p.startup + p.lock_wait + p.compile + p.build_gaps).min(s.wall)
 }
 
-fn estimate(
+fn estimate<'a>(
     now: f64,
     meta: &Meta,
     live: &LiveState,
     done_units: &[Unit],
-    index: &[IndexEntry],
+    index: impl FnOnce() -> &'a [IndexEntry],
     runs: &Path,
 ) -> Option<Estimate> {
     // A previous build's duration cannot predict provisioning, source sync,
@@ -326,7 +331,7 @@ fn estimate(
         return None;
     }
     let to_compile = (live.total > 0).then(|| live.total - live.first_done.unwrap_or(0));
-    let r = pick_reference(index, meta, to_compile)?;
+    let r = pick_reference(index(), meta, to_compile)?;
     let rdir = runs.join(&r.id);
     let (summary, ref_units) = reference_run(&rdir)?;
     let summary = &*summary;
@@ -519,8 +524,16 @@ pub fn collect() -> Result<Status> {
         let live = crate::live::load(&dir).unwrap_or_default();
         let (ncpu, cpu_cores, sampled_at) = measured_cpu(&dir, &meta, now);
         let done_units = crate::summary::load_units(&dir);
-        let index = index.get_or_insert_with(cached_index);
-        let est = estimate(now, &meta, &live, &done_units, index, &runs);
+        // Setup and unanchored remote runs cannot have an ETA. Keep loading
+        // the potentially large history behind estimate's eligibility checks.
+        let est = estimate(
+            now,
+            &meta,
+            &live,
+            &done_units,
+            || index.get_or_insert_with(cached_index).as_slice(),
+            &runs,
+        );
         let running = live
             .active
             .iter()
@@ -1361,7 +1374,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            estimate(159.0, &meta, &live, &[], &index, &dir)
+            estimate(159.0, &meta, &live, &[], || &index, &dir)
                 .unwrap()
                 .remaining,
             4.0
@@ -1377,7 +1390,15 @@ mod tests {
         ] {
             live.phase = phase.into();
             assert!(
-                estimate(159.0, &meta, &live, &[], &index, &dir).is_none(),
+                estimate(
+                    159.0,
+                    &meta,
+                    &live,
+                    &[],
+                    || panic!("setup loaded history"),
+                    &dir
+                )
+                .is_none(),
                 "{phase}"
             );
         }
@@ -1386,11 +1407,215 @@ mod tests {
             place: Some("hosted".into()),
             ..meta
         };
-        assert!(estimate(159.0, &remote, &live, &[], &index, &dir).is_none());
+        assert!(
+            estimate(
+                159.0,
+                &remote,
+                &live,
+                &[],
+                || panic!("unanchored remote loaded history"),
+                &dir
+            )
+            .is_none()
+        );
         live.phase = "testing".into();
         live.finished_at = Some(158.0);
-        assert!(estimate(159.0, &remote, &live, &[], &index, &dir).is_some());
+        assert!(estimate(159.0, &remote, &live, &[], || &index, &dir).is_some());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // Frozen pre-optimization algorithm: deliberately builds both full pools.
+    fn legacy_pick_reference<'a>(
+        index: &'a [IndexEntry],
+        meta: &Meta,
+        to_compile: Option<usize>,
+    ) -> Option<&'a IndexEntry> {
+        let remote = meta.place.as_deref().is_some_and(|p| p != "local");
+        let same_place = index
+            .iter()
+            .any(|r| r.cwd == meta.cwd && r.remote.is_some() == remote);
+        let ok = |r: &&IndexEntry| {
+            r.cwd == meta.cwd
+                && !r.compile_failed
+                && r.id != meta.id
+                && (!same_place || r.remote.is_some() == remote)
+        };
+        let same_args: Vec<&IndexEntry> = index
+            .iter()
+            .filter(ok)
+            .filter(|r| r.args == meta.args)
+            .collect();
+        let same_sub: Vec<&IndexEntry> = index
+            .iter()
+            .filter(ok)
+            .filter(|r| {
+                crate::record::subcommand(&os(&r.args)).unwrap_or_default() == meta.subcommand
+            })
+            .collect();
+        let pool = if same_args.is_empty() {
+            same_sub
+        } else {
+            same_args
+        };
+        let pool: Vec<&IndexEntry> = pool.into_iter().rev().take(20).collect();
+        let mut near: Vec<(usize, &IndexEntry)> = match to_compile {
+            Some(n) => {
+                let mut v: Vec<(usize, &IndexEntry)> = pool.into_iter().enumerate().collect();
+                v.sort_by_key(|(i, r)| (r.units_compiled.abs_diff(n), *i));
+                v
+            }
+            None => pool
+                .into_iter()
+                .filter(|r| r.units_compiled > 0)
+                .enumerate()
+                .collect(),
+        };
+        if let (Some(n), Some(best)) = (to_compile, near.first().map(|(_, r)| r.units_compiled)) {
+            let slack = (best.abs_diff(n)).max(best / 4).max(2);
+            near.retain(|(_, r)| r.units_compiled.abs_diff(best) <= slack);
+        }
+        near.truncate(5);
+        near.sort_by(|a, b| a.1.wall.total_cmp(&b.1.wall));
+        near.get(near.len() / 2).map(|(_, r)| *r)
+    }
+
+    fn varied_history(len: usize, seed: u64) -> Vec<IndexEntry> {
+        let mut state = seed;
+        (0..len)
+            .map(|i| {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let mut r = entry(
+                    &i.to_string(),
+                    match (state >> 32) % 5 {
+                        0 => &["check"],
+                        1 => &["check", "-q"],
+                        2 => &["test"],
+                        3 => &["--release", "check"],
+                        _ => &[],
+                    },
+                    (state >> 40) as usize % 80,
+                );
+                r.cwd = if state & 3 == 0 { "/other" } else { "/w" }.into();
+                r.compile_failed = state & 7 == 0;
+                r.remote = (state & 8 == 0).then(|| "hosted".into());
+                r.wall = match (state >> 48) % 16 {
+                    0 => f64::NAN,
+                    1 => -0.0,
+                    n => n as f64,
+                };
+                r
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reference_matches_fullscan_oracle() {
+        for seed in 0..24 {
+            let index = varied_history(160, seed);
+            for len in [0, 1, 2, 19, 20, 21, 60, 160] {
+                for args in [s(&["check"]), s(&["check", "--absent"]), s(&[])] {
+                    for place in [None, Some("local".into()), Some("hosted".into())] {
+                        let meta = Meta {
+                            id: (seed % 160).to_string(),
+                            cwd: "/w".into(),
+                            subcommand: crate::record::subcommand(&os(&args)).unwrap_or_default(),
+                            args: args.clone(),
+                            place,
+                            ..Default::default()
+                        };
+                        for n in [None, Some(0), Some(2), Some(40), Some(usize::MAX)] {
+                            let actual = pick_reference(&index[..len], &meta, n).map(|r| &r.id);
+                            let expected =
+                                legacy_pick_reference(&index[..len], &meta, n).map(|r| &r.id);
+                            assert_eq!(actual, expected, "seed={seed} len={len} n={n:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_preserves_old_exact_and_place_detection() {
+        let meta = Meta {
+            id: "self".into(),
+            cwd: "/w".into(),
+            args: s(&["check"]),
+            subcommand: "check".into(),
+            ..Default::default()
+        };
+        let mut index = vec![entry("old-exact", &["check"], 1)];
+        index.extend((0..100).map(|i| entry(&i.to_string(), &["check", "-q"], 1)));
+        assert_eq!(
+            pick_reference(&index, &meta, Some(1)).unwrap().id,
+            "old-exact"
+        );
+        // The old matching-place row may be failed or the current run itself.
+        // It still prevents falling back to successful opposite-place rows.
+        index[0].remote = Some("hosted".into());
+        for r in &mut index[1..] {
+            r.remote = Some("hosted".into());
+        }
+        for failed in [false, true] {
+            let mut local = entry(if failed { "failed" } else { "self" }, &["check"], 1);
+            local.compile_failed = failed;
+            index.insert(0, local);
+            assert!(pick_reference(&index, &meta, Some(1)).is_none());
+            assert!(legacy_pick_reference(&index, &meta, Some(1)).is_none());
+            index.remove(0);
+        }
+        assert_eq!(
+            pick_reference(&index, &meta, Some(1)).unwrap().id,
+            "old-exact"
+        );
+
+        // Truncation happens before zero-unit filtering, and equal walls keep
+        // the size/recency order through the stable median sort.
+        let mut index = vec![entry("too-old", &["check"], 1)];
+        index.extend((0..20).map(|i| entry(&i.to_string(), &["check"], 0)));
+        assert!(pick_reference(&index, &meta, None).is_none());
+        for r in &mut index {
+            r.units_compiled = 1;
+            r.wall = 3.0;
+        }
+        assert_eq!(pick_reference(&index, &meta, None).unwrap().id, "17");
+        assert_eq!(pick_reference(&index, &meta, Some(1)).unwrap().id, "17");
+    }
+
+    #[test]
+    #[ignore = "focused selector benchmark, run with --ignored --nocapture"]
+    fn benchmark_reference_selection() {
+        use std::hint::black_box;
+        let index = varied_history(40_000, 17);
+        for args in [s(&["check"]), s(&["check", "--absent"])] {
+            let meta = Meta {
+                id: "current".into(),
+                cwd: "/w".into(),
+                args,
+                subcommand: "check".into(),
+                ..Default::default()
+            };
+            type Selector =
+                for<'a> fn(&'a [IndexEntry], &Meta, Option<usize>) -> Option<&'a IndexEntry>;
+            for (name, select) in [
+                ("legacy", legacy_pick_reference as Selector),
+                ("current", pick_reference as Selector),
+            ] {
+                let start = std::time::Instant::now();
+                for _ in 0..100 {
+                    black_box(select(
+                        black_box(&index),
+                        black_box(&meta),
+                        black_box(Some(40)),
+                    ));
+                }
+                eprintln!(
+                    "{name} args={:?}: {:?}/100 selections (40000 rows)",
+                    meta.args,
+                    start.elapsed()
+                );
+            }
+        }
     }
 
     #[test]
