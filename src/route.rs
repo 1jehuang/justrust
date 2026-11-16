@@ -187,8 +187,7 @@ fn routable_build(args: &[String]) -> bool {
     if !zig && args.first().map(String::as_str) != Some("build") {
         return false;
     }
-    let cargo: Vec<&String> = args.iter().take_while(|a| *a != "--").collect();
-    if cargo.iter().any(|a| a.contains("target-dir")) {
+    if custom_target_dir(args) {
         return false;
     }
     if zig {
@@ -310,7 +309,7 @@ pub fn decide(
     };
     let build = routable_build(args);
     if !routable(sub) && !build {
-        return Choice::Local(local_only(sub));
+        return Choice::Local(local_only(sub, args));
     }
     let same: Vec<&IndexEntry> = entries
         .iter()
@@ -387,8 +386,17 @@ fn cold_rule(c: Choice, cold: bool) -> Choice {
 
 const NO_HISTORY: &str = "no history for this command";
 
-fn local_only(sub: &str) -> String {
+fn custom_target_dir(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--target-dir" || arg.starts_with("--target-dir="))
+}
+
+fn local_only(sub: &str, args: &[String]) -> String {
     match sub {
+        "build" | "zigbuild" if custom_target_dir(args) => {
+            "custom --target-dir is not supported by remote artifact return; remove --target-dir to allow hosted builds (even --remote cannot route this configuration)".into()
+        }
         "build" | "zigbuild" => {
             "debug and cross `build` run locally (only optimized builds come back cheaply)".into()
         }
@@ -797,7 +805,7 @@ pub fn maybe_remote(full: &[OsString]) {
         // `run` and debug `build` stay here, but their dependencies may
         // come from the machine's cache.
         warm_if_up(full);
-        return say_local(&local_only(sub));
+        return say_local(&local_only(sub, &args));
     }
     let Some(backend) = backend else {
         if m == Mode::Force {
@@ -990,6 +998,40 @@ pub fn maybe_remote(full: &[OsString]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_target_directory_has_an_actionable_local_reason() {
+        for flag in [
+            vec!["--target-dir", "/scratch/output"],
+            vec!["--target-dir=/scratch/output"],
+        ] {
+            let args: Vec<String> = [vec!["build", "--profile", "selfdev"], flag]
+                .concat()
+                .into_iter()
+                .map(String::from)
+                .collect();
+            assert!(!routable_build(&args));
+            let expected = local_only("build", &args);
+            assert!(expected.contains("--target-dir"));
+            assert!(expected.contains("--remote"));
+            assert_eq!(
+                decide(&args, "/scratch/project", &[], &|e| e.wall, 0.0),
+                Choice::Local(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn target_dir_in_binary_names_or_after_separator_is_not_an_override() {
+        for args in [
+            vec!["build", "--release", "--bin", "target-dir-demo"],
+            vec!["build", "--release", "--", "--target-dir=not-a-cargo-flag"],
+        ] {
+            let args: Vec<String> = args.into_iter().map(String::from).collect();
+            assert!(!custom_target_dir(&args));
+            assert!(routable_build(&args));
+        }
+    }
 
     #[test]
     fn hosted_first_is_the_default_for_hosted_accounts_only() {
