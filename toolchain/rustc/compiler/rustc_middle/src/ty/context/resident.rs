@@ -20,6 +20,8 @@ use rustc_data_structures::sync::WorkerLocal;
 use super::{CommonTypes, CtxtInterners, GlobalCtxt, GlobalCtxtResources, OwnedOrBorrowed};
 use crate::arena::Arena;
 use crate::mir::interpret;
+use crate::ty::resident_live::{LIVE_QUERY_NAMESPACE, LiveQueryState};
+use crate::ty::resident_values::{ResidentDomain, RetentionBudget};
 use crate::ty::{Ty, TypeckResults};
 
 /// An arena and interner universe shared by the revisions in one scoped batch.
@@ -32,6 +34,8 @@ pub struct ResidentTypeDomain<'domain> {
     interners: &'domain CtxtInterners<'domain>,
     common_types: CommonTypes<'domain>,
     resources: &'domain GlobalCtxtResources<'domain>,
+    live_resources: &'domain GlobalCtxtResources<'domain>,
+    live_queries: &'domain LiveQueryState<'domain>,
     context_cells: &'domain TypedArena<OnceLock<GlobalCtxt<'domain>>>,
     allocated_contexts: Cell<usize>,
 }
@@ -76,7 +80,22 @@ pub fn with_resident_type_domain_and_owner<Owner, R>(
     let interners = CtxtInterners::new(&arena);
     let alloc_map = interpret::AllocMap::new();
     let common_types = CommonTypes::new(&interners);
+    // Marker and lock-backed state precede context cells and outlive every
+    // context and typed borrow in the higher-ranked callback.
+    let resident_marker = ResidentDomain::new(LIVE_QUERY_NAMESPACE.to_vec());
+    let live_queries = LiveQueryState::new(
+        &resident_marker,
+        RetentionBudget { max_entries: 4096, max_estimated_bytes: 256 * 1024 * 1024 },
+    );
     let resources = GlobalCtxtResources {
+        resident_live_queries: None,
+        arena: &arena,
+        hir_arena: &hir_arena,
+        interners: OwnedOrBorrowed::Borrowed(&interners),
+        alloc_map: OwnedOrBorrowed::Borrowed(&alloc_map),
+    };
+    let live_resources = GlobalCtxtResources {
+        resident_live_queries: Some(&live_queries),
         arena: &arena,
         hir_arena: &hir_arena,
         interners: OwnedOrBorrowed::Borrowed(&interners),
@@ -90,6 +109,8 @@ pub fn with_resident_type_domain_and_owner<Owner, R>(
             interners: &interners,
             common_types,
             resources: &resources,
+            live_resources: &live_resources,
+            live_queries: &live_queries,
             context_cells: &context_cells,
             allocated_contexts: Cell::new(0),
         },
@@ -102,7 +123,16 @@ impl<'domain> ResidentTypeDomain<'domain> {
     /// Contexts may be dropped independently without discarding this universe.
     /// This alone does not validate source/DefId identity or query reuse.
     pub fn context_resources(&self) -> &'domain GlobalCtxtResources<'domain> {
-        self.resources
+        if self.live_queries.enabled() { self.live_resources } else { self.resources }
+    }
+
+    /// Explicit controlled-executor opt-in. Ordinary contexts remain unmodified.
+    pub fn enable_live_queries(&self, enabled: bool) {
+        self.live_queries.enable(enabled);
+    }
+
+    pub fn live_query_state(&self) -> Option<&'domain LiveQueryState<'domain>> {
+        self.live_queries.enabled().then_some(self.live_queries)
     }
 
     /// Reserve one actual context cell under the factory's batch lifetime.
@@ -175,6 +205,129 @@ mod tests {
                 })
                 .join()
                 .unwrap();
+        });
+    }
+
+    #[test]
+    fn live_queries_require_enable_completed_identity_and_transport_success() {
+        use crate::dep_graph::{DepKind, DepNode};
+        use crate::ty::resident_identity::{IdentityBudget, RevisionIdentity};
+        use rustc_data_structures::fingerprint::Fingerprint;
+
+        on_worker(|| {
+            with_resident_type_domain(|domain| {
+                assert!(domain.live_query_state().is_none());
+                assert!(domain.context_resources().resident_live_queries.is_none());
+                domain.enable_live_queries(true);
+                let state = domain.live_query_state().unwrap();
+                assert!(std::ptr::eq(
+                    state,
+                    domain.context_resources().resident_live_queries.unwrap()
+                ));
+                let identity = RevisionIdentity {
+                    namespace: b"justrust-local-same-source-v1".to_vec(),
+                    options: b"local test".to_vec(),
+                    crates: Vec::new(),
+                    definitions: Vec::new(),
+                    source: b"same source".to_vec(),
+                    body_revision: b"same body".to_vec(),
+                };
+                let budget =
+                    IdentityBudget { max_crates: 0, max_definitions: 0, max_identity_bytes: 1024 };
+                let dep = DepNode {
+                    kind: DepKind::typeck_root,
+                    key_fingerprint: Fingerprint::new(1, 2).into(),
+                };
+                let fingerprint = Fingerprint::new(3, 4);
+                let value = domain.alloc_typeck(TypeckResults::new(CRATE_OWNER_ID));
+                assert!(state.begin(1, Some(identity.clone()), budget));
+                assert!(state.insert_typeck(dep, fingerprint, value, 128));
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                // Transport alone is not completed analysis.
+                assert!(!state.finish(true));
+                assert_eq!(state.stats().retained_entries, 0);
+                assert!(state.begin(2, Some(identity.clone()), budget));
+                assert!(state.insert_typeck(dep, fingerprint, value, 128));
+                assert!(state.complete(Some(identity.clone()), budget));
+                // Successful analysis is still private staging.
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                assert!(state.finish(true));
+                assert!(state.begin(3, Some(identity.clone()), budget));
+                assert!(std::ptr::eq(state.get_typeck(dep, fingerprint).unwrap(), value));
+                assert!(state.get_typeck(dep, Fingerprint::new(3, 5)).is_none());
+                assert!(state.complete(Some(identity.clone()), budget));
+                assert!(!state.finish(false));
+                // Failed transport cannot replace revision 2's published values.
+                assert!(state.begin(4, Some(identity.clone()), budget));
+                assert!(std::ptr::eq(state.get_typeck(dep, fingerprint).unwrap(), value));
+                assert!(!state.complete(None, budget));
+                assert!(!state.finish(true));
+                let mut changed = identity.clone();
+                changed.source.push(b' ');
+                assert!(state.begin(5, Some(changed), budget));
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                state.finish(false);
+                let mut changed = identity.clone();
+                changed.body_revision.push(b' ');
+                assert!(state.begin(6, Some(changed), budget));
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                state.finish(false);
+                assert!(!state.begin(7, None, budget));
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                assert_eq!(state.stats().typeck_hits, 2);
+                assert_eq!(state.stats().retained_entries, 1);
+                assert_eq!(state.stats().retained_estimated_bytes, 128);
+                domain.enable_live_queries(false);
+                assert!(domain.live_query_state().is_none());
+                assert!(domain.context_resources().resident_live_queries.is_none());
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+            })
+        });
+    }
+
+    #[test]
+    fn live_mir_is_typed_and_dependency_and_value_fingerprints_both_gate_hits() {
+        use rustc_data_structures::fingerprint::Fingerprint;
+
+        use crate::dep_graph::{DepKind, DepNode};
+        use crate::ty::resident_identity::{IdentityBudget, RevisionIdentity};
+
+        on_worker(|| {
+            with_resident_type_domain(|domain| {
+                domain.enable_live_queries(true);
+                let state = domain.live_query_state().unwrap();
+                let identity = RevisionIdentity {
+                    namespace: b"justrust-local-same-source-v1".to_vec(),
+                    options: Vec::new(),
+                    crates: Vec::new(),
+                    definitions: Vec::new(),
+                    source: b"same".to_vec(),
+                    body_revision: b"same".to_vec(),
+                };
+                let budget =
+                    IdentityBudget { max_crates: 0, max_definitions: 0, max_identity_bytes: 1024 };
+                let dep = DepNode {
+                    kind: DepKind::optimized_mir,
+                    key_fingerprint: Fingerprint::new(1, 2).into(),
+                };
+                let fingerprint = Fingerprint::new(3, 4);
+                let body = domain.alloc_mir(crate::mir::Body::new_cfg_only(Default::default()));
+                assert!(state.begin(1, Some(identity.clone()), budget));
+                assert!(state.insert_mir(dep, fingerprint, body, 256));
+                assert!(state.complete(Some(identity.clone()), budget));
+                assert!(state.finish(true));
+                assert!(state.begin(2, Some(identity.clone()), budget));
+                assert!(std::ptr::eq(state.get_mir(dep, fingerprint).unwrap(), body));
+                let wrong_dep = DepNode { key_fingerprint: Fingerprint::new(1, 3).into(), ..dep };
+                assert!(state.get_mir(wrong_dep, fingerprint).is_none());
+                assert!(state.get_mir(dep, Fingerprint::new(3, 5)).is_none());
+                assert!(state.get_typeck(dep, fingerprint).is_none());
+                assert_eq!(state.stats().mir_hits, 1);
+                assert_eq!(state.stats().mir_misses, 2);
+                assert_eq!(state.stats().retained_entries, 1);
+                assert_eq!(state.stats().retained_estimated_bytes, 256);
+                state.finish(false);
+            })
         });
     }
 

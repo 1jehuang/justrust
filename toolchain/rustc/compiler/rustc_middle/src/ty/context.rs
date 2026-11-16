@@ -739,6 +739,7 @@ impl<'tcx> Deref for TyCtxt<'tcx> {
 /// Storage for a context's native allocation universe. Sharing this storage does
 /// not establish source/DefId compatibility or authorize reusing query results.
 pub struct GlobalCtxtResources<'tcx> {
+    resident_live_queries: Option<&'tcx super::resident_live::LiveQueryState<'tcx>>,
     arena: &'tcx WorkerLocal<Arena<'tcx>>,
     hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
     interners: OwnedOrBorrowed<'tcx, CtxtInterners<'tcx>>,
@@ -776,6 +777,7 @@ impl<'tcx> GlobalCtxtResources<'tcx> {
         Self {
             arena,
             hir_arena,
+            resident_live_queries: None,
             interners: OwnedOrBorrowed::Owned(CtxtInterners::new(arena)),
             alloc_map: OwnedOrBorrowed::Owned(interpret::AllocMap::new()),
         }
@@ -784,6 +786,7 @@ impl<'tcx> GlobalCtxtResources<'tcx> {
 
 /// See [TyCtxt] for details about this type.
 pub struct GlobalCtxt<'tcx> {
+    pub resident_live_queries: Option<&'tcx super::resident_live::LiveQueryState<'tcx>>,
     pub arena: &'tcx WorkerLocal<Arena<'tcx>>,
     pub hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
 
@@ -1021,6 +1024,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let common_consts = CommonConsts::new(interners, &common_types);
 
         let gcx = gcx_cell.get_or_init(|| GlobalCtxt {
+            resident_live_queries: resources.resident_live_queries,
             sess,
             crate_types,
             stable_crate_id,

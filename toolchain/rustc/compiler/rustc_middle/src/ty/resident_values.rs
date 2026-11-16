@@ -42,6 +42,7 @@ pub enum RetentionError {
     IdentityBudget(ResetReason),
     Oversize,
     DuplicateKey,
+    IdentityBudgetMismatch,
 }
 
 /// Both the dependency identity and the computed value identity must match.
@@ -69,6 +70,7 @@ enum TypedValue<'domain> {
 pub struct ResidentValues<'domain, 'identity> {
     domain: &'identity ResidentDomain,
     generations: Generations<RevisionIdentity, (ResidentKey, ValueKind), TypedValue<'domain>>,
+    pending_identity_budget: Option<IdentityBudget>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,7 +81,7 @@ enum ValueKind {
 
 impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     pub fn new(domain: &'identity ResidentDomain, budget: RetentionBudget) -> Self {
-        Self { domain, generations: Generations::new(budget) }
+        Self { domain, generations: Generations::new(budget), pending_identity_budget: None }
     }
 
     pub fn begin_revision(
@@ -92,7 +94,30 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
             return Err(RetentionError::NamespaceMismatch);
         }
         identity.check_budget(identity_budget).map_err(RetentionError::IdentityBudget)?;
-        self.generations.begin(generation, identity)
+        self.generations.begin(generation, identity)?;
+        self.pending_identity_budget = Some(identity_budget);
+        Ok(())
+    }
+
+    /// Replace only the active staging snapshot after successful analysis. This
+    /// does not publish values, and cannot alter an already published generation.
+    pub fn finish_pending_identity(
+        &mut self,
+        identity: RevisionIdentity,
+        identity_budget: IdentityBudget,
+    ) -> Result<(), RetentionError> {
+        if self.generations.pending.is_none() {
+            return Err(RetentionError::NoActiveRevision);
+        }
+        if self.pending_identity_budget != Some(identity_budget) {
+            return Err(RetentionError::IdentityBudgetMismatch);
+        }
+        if identity.namespace != self.domain.namespace {
+            return Err(RetentionError::NamespaceMismatch);
+        }
+        identity.check_budget(identity_budget).map_err(RetentionError::IdentityBudget)?;
+        self.generations.pending.as_mut().unwrap().identity = identity;
+        Ok(())
     }
 
     pub fn retain_typeck(
@@ -159,11 +184,14 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
 
     /// Call only after the complete revision has succeeded, including diagnostics.
     pub fn publish_success(&mut self) -> Result<(), RetentionError> {
-        self.generations.publish()
+        self.generations.publish()?;
+        self.pending_identity_budget = None;
+        Ok(())
     }
 
     pub fn abort_revision(&mut self) {
         self.generations.pending = None;
+        self.pending_identity_budget = None;
     }
 
     pub fn retained_usage(&self) -> (usize, usize) {
@@ -263,6 +291,62 @@ mod tests {
 
     fn cache(entries: usize, bytes: usize) -> Generations<&'static str, u32, &'static str> {
         Generations::new(RetentionBudget { max_entries: entries, max_estimated_bytes: bytes })
+    }
+
+    #[test]
+    fn completion_validates_namespace_and_original_budget_without_touching_publication() {
+        use super::{ResidentDomain, ResidentValues};
+
+        let marker = ResidentDomain::new(b"domain".to_vec());
+        let mut values = ResidentValues::new(
+            &marker,
+            RetentionBudget { max_entries: 4, max_estimated_bytes: 4096 },
+        );
+        let identity = RevisionIdentity {
+            namespace: b"domain".to_vec(),
+            options: Vec::new(),
+            crates: Vec::new(),
+            definitions: Vec::new(),
+            source: b"source".to_vec(),
+            body_revision: Vec::new(),
+        };
+        let budget = IdentityBudget { max_crates: 0, max_definitions: 0, max_identity_bytes: 128 };
+        assert_eq!(
+            values.finish_pending_identity(identity.clone(), budget),
+            Err(RetentionError::NoActiveRevision)
+        );
+        values.begin_revision(1, identity.clone(), budget).unwrap();
+        values.publish_success().unwrap();
+        values.begin_revision(2, identity.clone(), budget).unwrap();
+        let mut wrong = identity.clone();
+        wrong.namespace.push(b'!');
+        assert_eq!(
+            values.finish_pending_identity(wrong, budget),
+            Err(RetentionError::NamespaceMismatch)
+        );
+        let wrong_budget = IdentityBudget { max_identity_bytes: 256, ..budget };
+        assert_eq!(
+            values.finish_pending_identity(identity.clone(), wrong_budget),
+            Err(RetentionError::IdentityBudgetMismatch)
+        );
+        let mut oversized = identity.clone();
+        oversized.options = vec![0; 129];
+        assert!(matches!(
+            values.finish_pending_identity(oversized, budget),
+            Err(RetentionError::IdentityBudget(_))
+        ));
+        let mut completed = identity.clone();
+        completed.options = b"completed snapshot".to_vec();
+        values.finish_pending_identity(completed.clone(), budget).unwrap();
+        let (old, next) = values.revision_identities().unwrap();
+        assert_eq!(old, &identity);
+        assert_eq!(next, &completed);
+        values.abort_revision();
+        assert_eq!(&values.generations.published.as_ref().unwrap().identity, &identity);
+        assert_eq!(
+            values.finish_pending_identity(completed, budget),
+            Err(RetentionError::NoActiveRevision)
+        );
     }
 
     #[test]
