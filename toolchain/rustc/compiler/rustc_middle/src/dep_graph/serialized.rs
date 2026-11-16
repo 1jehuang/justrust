@@ -59,6 +59,7 @@ use rustc_session::Session;
 use tracing::{debug, instrument};
 
 use super::graph::{CurrentDepGraph, DepNodeColorMap, DesiredColor, TrySetColorResult};
+use super::resident;
 use super::retained::RetainedDepGraph;
 use super::{DepKind, DepNode, DepNodeIndex};
 
@@ -307,6 +308,13 @@ fn mask(bits: usize) -> usize {
 impl SerializedDepGraph {
     #[instrument(level = "debug", skip(d, profiler))]
     pub fn decode(d: &mut MemDecoder<'_>, profiler: &SelfProfilerRef) -> Arc<SerializedDepGraph> {
+        Self::decode_with_profiler(d, Some(profiler.clone()))
+    }
+
+    fn decode_with_profiler(
+        d: &mut MemDecoder<'_>,
+        profiler: Option<SelfProfilerRef>,
+    ) -> Arc<SerializedDepGraph> {
         // The last 16 bytes are the node count and edge count.
         debug!("position: {:?}", d.position());
 
@@ -426,7 +434,7 @@ impl SerializedDepGraph {
             reverse_index,
             live_node_count: node_count,
             session_count,
-            profiler: Some(profiler.clone()),
+            profiler,
         })
     }
 }
@@ -602,6 +610,251 @@ impl NodeInfo<'_> {
     }
 }
 
+/// Owned current-output capture. No query arenas or previous-session profiler escape.
+struct OwnedCapture {
+    namespace: resident::Namespace,
+    _permit: Option<resident::CapturePermit>,
+    graph: Option<SerializedDepGraph>,
+}
+
+impl OwnedCapture {
+    fn new(sess: &Session) -> Option<Self> {
+        Some(Self {
+            namespace: resident::namespace(sess)?,
+            _permit: Some(resident::CapturePermit::acquire()?),
+            graph: Some(SerializedDepGraph::default()),
+        })
+    }
+
+    // Includes sparse arrays, grouping arrays and a conservative allowance for all
+    // lazy hash tables (including spare buckets). Capture has no duplicate node buffer.
+    fn estimated_cost(node_capacity: usize, edge_capacity: usize) -> usize {
+        node_capacity
+            .saturating_mul(
+                size_of::<DepNode>()
+                    + size_of::<Fingerprint>()
+                    + size_of::<EdgeHeader>()
+                    + size_of::<Option<SerializedDepNodeIndex>>()
+                    + 96,
+            )
+            .saturating_add(edge_capacity)
+            .saturating_add(DepKind::NUM_VARIANTS * (size_of::<LazyKindIndex>() + 8))
+    }
+
+    fn record(&mut self, index: DepNodeIndex, info: &NodeInfo<'_>) {
+        let Some(graph) = self.graph.as_mut() else {
+            return;
+        };
+        let index = SerializedDepNodeIndex::from_curr_for_serialization(index);
+        let len = (index.as_usize() + 1).next_multiple_of(256);
+        let edge_max = info.edges.iter().map(|e| e.as_u32()).max().unwrap_or(0);
+        let header = SerializedNodeHeader::new(
+            &info.node,
+            DepNodeIndex::from_u32(index.as_u32()),
+            info.value_fingerprint,
+            edge_max,
+            info.edges.len(),
+        );
+        let bytes = header.bytes_per_index() * info.edges.len();
+        let edge_capacity =
+            (graph.edge_list_data.len().saturating_add(bytes).saturating_add(DEP_NODE_PAD))
+                .next_multiple_of(64 * 1024);
+        let node_capacity = graph.nodes.len().max(len);
+        if Self::estimated_cost(node_capacity, edge_capacity) > resident::CAPTURE_LIMIT {
+            self.graph = None;
+            resident::oversized();
+            return;
+        }
+        if len > graph.nodes.len() {
+            let null = DepNode { kind: DepKind::Null, key_fingerprint: Fingerprint::ZERO.into() };
+            graph.nodes.raw.reserve_exact(len - graph.nodes.len());
+            graph.value_fingerprints.raw.reserve_exact(len - graph.value_fingerprints.len());
+            graph.edge_list_indices.raw.reserve_exact(len - graph.edge_list_indices.len());
+            graph.nodes.resize(len, null);
+            graph.value_fingerprints.resize(len, Fingerprint::ZERO);
+            graph.edge_list_indices.resize(len, EdgeHeader { repr: 0, num_edges: 0 });
+        }
+        if edge_capacity > graph.edge_list_data.capacity() {
+            graph.edge_list_data.reserve_exact(edge_capacity - graph.edge_list_data.len());
+        }
+        debug_assert_eq!(graph.nodes[index].kind, DepKind::Null);
+        graph.nodes[index] = info.node;
+        graph.value_fingerprints[index] = info.value_fingerprint;
+        graph.edge_list_indices[index] =
+            header.edges_header(&graph.edge_list_data, info.edges.len() as u32);
+        for edge in info.edges {
+            graph
+                .edge_list_data
+                .extend_from_slice(&edge.as_u32().to_le_bytes()[..header.bytes_per_index()]);
+        }
+        graph.live_node_count += 1;
+    }
+
+    fn complete_graph(mut graph: SerializedDepGraph, session_count: u64) -> SerializedDepGraph {
+        // Match the decoder's index-space length, not the reserved batch boundary.
+        while graph.nodes.raw.last().is_some_and(|node| node.kind == DepKind::Null) {
+            graph.nodes.raw.pop();
+            graph.value_fingerprints.raw.pop();
+            graph.edge_list_indices.raw.pop();
+        }
+        graph.edge_list_data.extend_from_slice(&[0; DEP_NODE_PAD]);
+        let mut kinds: Vec<LazyKindIndex> =
+            iter::repeat_with(LazyKindIndex::default).take(DepKind::NUM_VARIANTS).collect();
+        for node in &graph.nodes {
+            if node.kind != DepKind::Null {
+                kinds[node.kind.as_usize()].len += 1;
+            }
+        }
+        let mut offset = 0;
+        for kind in &mut kinds {
+            kind.start = offset;
+            offset += kind.len;
+        }
+        let mut fill: Vec<u32> = kinds.iter().map(|kind| kind.start).collect();
+        let mut nodes_by_kind = vec![None; graph.live_node_count];
+        for (index, node) in graph.nodes.iter_enumerated() {
+            if node.kind == DepKind::Null {
+                continue;
+            }
+            let slot = &mut fill[node.kind.as_usize()];
+            nodes_by_kind[*slot as usize] = Some(index);
+            *slot += 1;
+        }
+        graph.reverse_index = LazyNodeIndex { nodes_by_kind, kinds };
+        graph.session_count = session_count;
+        graph
+    }
+
+    fn finish(mut self, output: &std::fs::File, session_count: u64) {
+        let Some(graph) = self.graph.take() else {
+            return;
+        };
+        let cost =
+            Self::estimated_cost(graph.nodes.raw.capacity(), graph.edge_list_data.capacity());
+        let graph = Self::complete_graph(graph, session_count);
+        // Bound the actual read, not just a racy metadata length check. This also
+        // preserves exact headers, options and session_count in the cache key.
+        use std::io::{Read, Seek, SeekFrom};
+        // Read the encoder's actual handle, never a potentially replaced path.
+        let Ok(mut file) = output.try_clone() else {
+            return;
+        };
+        if file.seek(SeekFrom::Start(0)).is_err() {
+            return;
+        }
+        let Ok(metadata) = file.metadata() else {
+            return;
+        };
+        let Ok(len) = usize::try_from(metadata.len()) else {
+            return;
+        };
+        if len > resident::CAPTURE_LIMIT {
+            resident::oversized();
+            return;
+        }
+        let mut bytes = vec![0; len];
+        if file.read_exact(&mut bytes).is_err() {
+            return;
+        }
+        let mut extra = [0];
+        if !matches!(file.read(&mut extra), Ok(0)) {
+            return;
+        }
+        resident::publish(self.namespace.clone(), bytes, Arc::new(graph), cost);
+    }
+}
+
+#[cfg(test)]
+mod resident_capture_tests {
+    use super::*;
+
+    fn capture() -> OwnedCapture {
+        OwnedCapture {
+            namespace: resident::Namespace {
+                root: "resident-capture-test".into(),
+                options: rustc_hashes::Hash64::ZERO,
+            },
+            _permit: None,
+            graph: Some(SerializedDepGraph::default()),
+        }
+    }
+
+    #[test]
+    fn native_owned_snapshot_matches_decode_with_sparse_batches_and_edges() {
+        let mut capture = capture();
+        let mut encoder = MemEncoder::new();
+        let mut edge_count = 0;
+        // Deliberately out of index order, as parallel worker flushes are.
+        let indices: Vec<u32> = iter::once(65536).chain((0..300).rev()).collect();
+        for &index in &indices {
+            let edges: Vec<DepNodeIndex> = match index {
+                0 => vec![DepNodeIndex::from_u32(65536)], // three-byte target
+                1 => vec![],
+                65536 => (0..300).map(DepNodeIndex::from_u32).collect(), // spilled length
+                _ => vec![DepNodeIndex::from_u32(0), DepNodeIndex::from_u32(256)],
+            };
+            edge_count += edges.len();
+            let info = NodeInfo {
+                node: DepNode {
+                    kind: DepKind::SideEffect,
+                    key_fingerprint: Fingerprint::new(index as u64 + 1, 99u64).into(),
+                },
+                value_fingerprint: Fingerprint::new(index as u64, 42u64),
+                edges: &edges,
+            };
+            let index = DepNodeIndex::from_u32(index);
+            capture.record(index, &info);
+            info.encode(&mut encoder, index);
+        }
+        for kind in 0..DepKind::NUM_VARIANTS {
+            encoder.emit_u32(if kind == DepKind::SideEffect.as_usize() { 301 } else { 0 });
+        }
+        encoder.emit_u64(8);
+        IntEncodedWithFixedSize(65537).encode(&mut encoder);
+        IntEncodedWithFixedSize(301).encode(&mut encoder);
+        IntEncodedWithFixedSize(edge_count as u64).encode(&mut encoder);
+        encoder.emit_raw_bytes(rustc_serialize::opaque::MAGIC_END_BYTES);
+        let mut decoder = MemDecoder::new(&encoder.data, 0).unwrap();
+        let decoded = SerializedDepGraph::decode_with_profiler(&mut decoder, None);
+        let owned = OwnedCapture::complete_graph(capture.graph.take().unwrap(), 8);
+        assert_eq!(owned.index_space_len(), decoded.index_space_len());
+        assert_eq!(owned.live_node_count(), decoded.live_node_count());
+        assert_eq!(owned.session_count(), decoded.session_count());
+        assert_eq!(owned.index_space_len(), 65537);
+        assert_eq!(owned.nodes[SerializedDepNodeIndex::from_u32(1000)].kind, DepKind::Null);
+        assert!(owned.profiler.is_none());
+        for index in indices {
+            let index = SerializedDepNodeIndex::from_u32(index);
+            let node = owned.index_to_node(index);
+            assert_eq!(node, decoded.index_to_node(index));
+            assert_eq!(owned.node_to_index_opt(node), Some(index));
+            assert_eq!(decoded.node_to_index_opt(node), Some(index));
+            assert_eq!(
+                owned.value_fingerprint_for_index(index),
+                decoded.value_fingerprint_for_index(index)
+            );
+            assert_eq!(
+                owned.edge_targets_from(index).collect::<Vec<_>>(),
+                decoded.edge_targets_from(index).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_sparse_capture_disables_without_retaining_partial_graph() {
+        let mut capture = capture();
+        let info = NodeInfo {
+            node: DepNode { kind: DepKind::SideEffect, key_fingerprint: Fingerprint::ZERO.into() },
+            value_fingerprint: Fingerprint::ZERO,
+            edges: &[],
+        };
+        capture.record(DepNodeIndex::from_u32(1_000_000), &info);
+        assert!(capture.graph.is_none());
+        capture.record(DepNodeIndex::from_u32(0), &info);
+        assert!(capture.graph.is_none());
+    }
+}
+
 struct Stat {
     kind: DepKind,
     node_counter: u64,
@@ -629,6 +882,7 @@ struct LocalEncoderResult {
 }
 
 struct EncoderState {
+    capture: Option<Lock<Option<OwnedCapture>>>,
     next_node_index: AtomicU64,
     previous: Arc<SerializedDepGraph>,
     file: Lock<Option<FileEncoder<'static>>>,
@@ -638,11 +892,13 @@ struct EncoderState {
 
 impl EncoderState {
     fn new(
+        sess: &Session,
         encoder: FileEncoder<'static>,
         record_stats: bool,
         previous: Arc<SerializedDepGraph>,
     ) -> Self {
         Self {
+            capture: OwnedCapture::new(sess).map(|capture| Lock::new(Some(capture))),
             previous,
             next_node_index: AtomicU64::new(0),
             stats: record_stats.then(|| Lock::new(FxHashMap::default())),
@@ -744,6 +1000,11 @@ impl EncoderState {
         retained_graph: &Option<Lock<RetainedDepGraph>>,
         local: &mut LocalEncoderState,
     ) {
+        if let Some(capture) = &self.capture {
+            if let Some(capture) = capture.lock().as_mut() {
+                capture.record(index, node);
+            }
+        }
         node.encode(&mut local.encoder, index);
         self.flush_mem_encoder(&mut *local);
         self.record(&node.node, index, node.edges.len(), node.edges, retained_graph, &mut *local);
@@ -822,6 +1083,13 @@ impl EncoderState {
         debug!("position: {:?}", encoder.position());
         // Drop the encoder so that nothing is written after the counts.
         let result = encoder.finish();
+        if let Some(capture) = &self.capture {
+            if let Some(capture) = capture.lock().take() {
+                if result.is_ok() {
+                    capture.finish(encoder.file(), self.previous.session_count + 1);
+                }
+            }
+        }
         if let Ok(position) = result {
             // FIXME(rylev): we hardcode the dep graph file name so we
             // don't need a dependency on rustc_incremental just for that.
@@ -911,7 +1179,8 @@ impl GraphEncoder {
             .unstable_opts
             .query_dep_graph
             .then(|| Lock::new(RetainedDepGraph::new(prev_index_space_len)));
-        let status = EncoderState::new(encoder, sess.opts.unstable_opts.incremental_info, previous);
+        let status =
+            EncoderState::new(sess, encoder, sess.opts.unstable_opts.incremental_info, previous);
         GraphEncoder { status, retained_graph, profiler: sess.prof.clone() }
     }
 

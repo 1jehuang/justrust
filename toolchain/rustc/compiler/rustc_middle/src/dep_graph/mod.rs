@@ -9,6 +9,7 @@ pub use self::graph::{
     WorkProductMap, hash_result,
 };
 use self::graph::{MarkFrame, print_markframe_trace};
+pub use self::resident::{ResidentGraphStats, resident_graph_lookup, resident_graph_stats};
 pub use self::retained::RetainedDepGraph;
 pub use self::serialized::{SerializedDepGraph, SerializedDepNodeIndex};
 pub use crate::dep_graph::debug::{DepNodeFilter, EdgeFilter};
@@ -20,6 +21,7 @@ pub(crate) mod dep_node;
 mod dep_node_key;
 mod edges;
 mod graph;
+mod resident;
 mod retained;
 mod serialized;
 
