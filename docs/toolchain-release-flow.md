@@ -1,8 +1,26 @@
 # Owned-source toolchain release flow
 
-This first iteration implements **BUILD only**. It does not publish, select a
-production default, deploy services, install a client, or run a canary. Packaging
-and direct gated promotion belong to the private cloud repository.
+This public entrypoint implements **BUILD only**. It does not publish, select a
+production default, deploy services, or install a client. Packaging and shared
+production activation belong to the private cloud repository.
+
+## Production-first release policy
+
+Release order is **bump -> commit -> build/package sanity -> tag/publish ->
+shared production -> test/measure -> keep or rollback**. Tests and benchmarks
+observe the globally published, activated release, not an unpublished candidate.
+Every customer uses the same shared production default. There is no canary,
+per-customer validation selection, successful-CI prerequisite, or 40-point
+benchmark gate before publication. A release is not declared correct or faster
+merely because publication succeeded.
+
+Before publication retain source/version identity, package completeness,
+checksums, executable identity, and runtime loader sanity checks. These checks
+establish that the intended artifact can run, not test-suite or performance
+acceptance. After activation, run correctness tests and representative workload
+measurements using the published artifacts. Record failures and measured
+regressions, then use the existing supported rollback mechanism if needed.
+Do not invent or change production rollback service APIs.
 
 ## Plan first
 
@@ -20,13 +38,11 @@ commit read from the vendored `toolchain/rustc/git-commit-info`. The plan also
 reads the committed `toolchain/version.toml` and records its numeric version and
 planned `toolchain-vVERSION` release tag. BUILD does not create or push a tag.
 
-Release order is version bump, source commit, build and validate, tag the exact
-validated source commit, publish, then activate. Toolchain tags use
-`toolchain-vVERSION`; client releases independently bump root `Cargo.toml` and
-use `vVERSION` tags through the existing client release pipeline. Do not tag an
-unvalidated candidate or move an existing release tag. This change initializes
-the toolchain's next candidate version at `0.1.1`; it does not change the client
-version or release either component.
+Toolchain tags use `toolchain-vVERSION`; client releases independently bump root
+`Cargo.toml` and use `vVERSION` tags through the client release pipeline. Tag the
+exact committed source identified by BUILD after build/package sanity, without
+waiting for correctness tests or benchmark acceptance. Never move an existing
+release tag. This documentation does not bump or release either component.
 
 The entrypoint refuses staged or unstaged tracked changes under `toolchain/`,
 the source/candidate scripts, root Cargo manifests/lockfile, `build.rs`, and
@@ -76,7 +92,7 @@ Mismatched compiler identity fails rather than being relabeled during packaging.
 Failed attempts retain their provenance. The checkout is revalidated before
 each helper and after the build, so concurrent relevant edits fail closed.
 
-## Package, validate, and promote privately
+## Package, publish, and activate privately
 
 Transfer the built compiler sysroot, jr-cargo binary, and provenance together to
 the private packaging workflow. Run private `toolchain_publish.py` with
@@ -85,16 +101,41 @@ artifact paths recorded by BUILD. Consult that tool's `--help` for the current
 required path and upload arguments. The phase ledger and Cargo are mandatory,
 not optional ways to bypass a packaging failure. Verify the packager's observed
 compiler commit against BUILD's recorded `rustc_verbose_version` and source SHA.
-BUILD provenance is not a substitute for the publisher's artifact checks,
-phase-ledger requirements, correctness gates, or benchmark evidence.
+BUILD provenance is not a substitute for the publisher's artifact identity,
+checksum, package completeness, and runtime loader sanity checks.
 
-Promotion is a separate, explicitly authorized operation through private
-`tools/promote-toolchain.py`, directly gated by its validation evidence. Before
-promotion, the `toolchain-vVERSION` tag must resolve to BUILD's exact full source
-revision and its committed version file must match the requested release version. There
-is no canary stage in this flow. Do not edit the production index manually or
-interpret BUILD success as permission to promote. This public script never
-invokes either private tool and makes no production changes.
+The private production-first controller publishes and activates the shared
+production default before correctness tests or performance measurements. The
+`toolchain-vVERSION` tag must resolve to BUILD's exact full source revision and
+its committed version file must match the requested release version. There is
+no canary stage or prepublication correctness/benchmark promotion gate. Do not
+edit the production index manually or interpret BUILD success as production
+activation. This public BUILD script makes no production changes.
+
+## Client acceptance after publication
+
+The client workflow builds and packages the tagged source and creates its GitHub
+release without waiting for a successful CI run. The service must select that
+published release as the shared production default before acceptance starts.
+Download the published client, verify its checksum, release marker, version and
+production selection, and use that exact published CLI to run the full client
+suite against the tagged source (`justrust test --remote --locked`). Never
+install an unpublished source build as a substitute. Keep full failing output
+and run receipts, and measure real workloads after activation.
+
+`scripts/production-dogfood.py` already checks the selected production tag,
+download checksum, release marker and exact executable bytes. Its current
+`--activate` path runs a smoke workload before replacing the local PATH client,
+then another smoke workload afterwards. This is post-publication artifact
+verification, not a global publication gate and not full client-suite coverage.
+A post-release full-suite job must depend on GitHub release creation and shared
+production activation. Until that integration exists, run the full suite
+explicitly with the verified published CLI against an immutable tagged source
+snapshot. Do not claim the existing smoke script supplies this acceptance.
+
+If post-publication tests or measurements fail, report the release and receipts
+and use supported shared production rollback. Never silently replace it with an
+unpublished binary or alter account-specific routing to hide a regression.
 
 ## Tests and limits
 
