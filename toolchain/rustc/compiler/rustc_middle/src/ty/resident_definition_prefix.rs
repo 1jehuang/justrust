@@ -49,6 +49,16 @@ impl PrefixSnapshot {
         self.definitions.len()
     }
 
+    /// Borrow the bounded observations in native allocation order without allocating.
+    /// Each item is `(crate_index, def_index, canonical_path_bytes)`. The bytes use
+    /// this module's versioned framing, not a display path or a complete identity.
+    /// Iteration grants neither identity completeness nor query reuse authorization.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = (u32, u32, &[u8])> + '_ {
+        self.definitions
+            .iter()
+            .map(|entry| (entry.crate_index, entry.def_index, entry.path.as_slice()))
+    }
+
     /// True only when every observed numeric ID and canonical path is unchanged.
     /// `later` may contain appended definitions. This does not prove completeness,
     /// temporal ordering, or that either snapshot came from the same compilation.
@@ -214,6 +224,24 @@ mod tests {
             parent: parent.map(DefIndex::from_u32),
             disambiguated_data: DisambiguatedDefPathData { data, disambiguator },
         }
+    }
+
+    #[test]
+    fn entries_borrow_exact_bounded_paths_in_native_order() {
+        let root = key(None, DefPathData::CrateRoot, 0);
+        let child = key(Some(0), DefPathData::Closure, 0);
+        let snapshot = capture_keys(2, [(0, root), (1, child)].into_iter(), BUDGET).unwrap();
+        let mut entries = snapshot.entries();
+        assert_eq!(entries.len(), snapshot.count());
+        for (index, definition) in snapshot.definitions.iter().enumerate() {
+            let (crate_index, def_index, path) = entries.next().unwrap();
+            assert_eq!(crate_index, LOCAL_CRATE.as_u32());
+            assert_eq!(def_index as usize, index);
+            assert_eq!(path, definition.path.as_slice());
+            assert_eq!(path.as_ptr(), definition.path.as_ptr());
+            assert_eq!(entries.len(), snapshot.count() - index - 1);
+        }
+        assert_eq!(entries.next(), None);
     }
 
     #[test]
