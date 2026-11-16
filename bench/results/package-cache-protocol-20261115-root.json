@@ -1,0 +1,765 @@
+{
+  "schema": "cargo-package-target-flock-matrix-v1",
+  "scope": "local kernel protocol, not Cargo or build speed",
+  "finished": "2026-11-14T23:53:33-0800",
+  "harness_sha256": "fcd165dda66f2935fb63c0e0346f0b41ed71e289e9c252568fd979465fd8d1e8",
+  "host": "xps14",
+  "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "source_sha256": {
+    "src/util/cache_lock.rs": "78ac4920b78a738cfd7d7ab68a60e19f696dec819a92607b4763b14f84524cb7",
+    "src/util/flock.rs": "d21295c277b89081a6081d9865f701b45cbfa5ec8f2c8331b8c3fd883a8d7c28",
+    "src/compiler/layout.rs": "c46199a6c85d27452718065bb358770f8124dec8a67c1a3bcd0cf5b613fca30e"
+  },
+  "samples": [
+    {
+      "holder": "download",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 101984655,
+      "parent_observation_ns": 102218347,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 178488,
+      "parent_observation_ns": 49489,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 102824490,
+      "parent_observation_ns": 103613374,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 328936,
+      "parent_observation_ns": 54475,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 359372,
+      "parent_observation_ns": 51342,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 213466,
+      "parent_observation_ns": 103910,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 163577,
+      "parent_observation_ns": 53392,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 100941447,
+      "parent_observation_ns": 101646404,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 313914,
+      "parent_observation_ns": 49024,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 343064,
+      "parent_observation_ns": 50867,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 100795783,
+      "parent_observation_ns": 100406998,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "shared",
+      "blocked": true,
+      "acquire_ns": 101445938,
+      "parent_observation_ns": 101720415,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 101865782,
+      "parent_observation_ns": 103410064,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 292564,
+      "parent_observation_ns": 52308,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 369434,
+      "parent_observation_ns": 51049,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 202961,
+      "parent_observation_ns": 54662,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 172351,
+      "parent_observation_ns": 44631,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 385602,
+      "parent_observation_ns": 52690,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "target",
+      "blocked": true,
+      "acquire_ns": 101610565,
+      "parent_observation_ns": 101414065,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 341188,
+      "parent_observation_ns": 48971,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 1263210,
+      "parent_observation_ns": 47246,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 181902,
+      "parent_observation_ns": 48567,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 245120,
+      "parent_observation_ns": 46295,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 273451,
+      "parent_observation_ns": 44281,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "other-target",
+      "blocked": true,
+      "acquire_ns": 100520492,
+      "parent_observation_ns": 100807851,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 100257732,
+      "parent_observation_ns": 100380673,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 212534,
+      "parent_observation_ns": 50107,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 100446554,
+      "parent_observation_ns": 101530539,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 318699,
+      "parent_observation_ns": 47945,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 407329,
+      "parent_observation_ns": 47089,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 205779,
+      "parent_observation_ns": 54023,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 136062,
+      "parent_observation_ns": 47771,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 101409117,
+      "parent_observation_ns": 100928256,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 320577,
+      "parent_observation_ns": 47429,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 362824,
+      "parent_observation_ns": 59427,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 100614312,
+      "parent_observation_ns": 101626718,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "shared",
+      "blocked": true,
+      "acquire_ns": 105845125,
+      "parent_observation_ns": 107784645,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 101503997,
+      "parent_observation_ns": 104630414,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 329326,
+      "parent_observation_ns": 49183,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 352572,
+      "parent_observation_ns": 46769,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 149028,
+      "parent_observation_ns": 51816,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 189242,
+      "parent_observation_ns": 47310,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 222620,
+      "parent_observation_ns": 40955,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "target",
+      "blocked": true,
+      "acquire_ns": 102190819,
+      "parent_observation_ns": 101642054,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 295537,
+      "parent_observation_ns": 46908,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 179816,
+      "parent_observation_ns": 43081,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 156619,
+      "parent_observation_ns": 44395,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 284041,
+      "parent_observation_ns": 49270,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 252848,
+      "parent_observation_ns": 43385,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "other-target",
+      "blocked": true,
+      "acquire_ns": 101781471,
+      "parent_observation_ns": 103335625,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 101345320,
+      "parent_observation_ns": 101166832,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 181994,
+      "parent_observation_ns": 48184,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 100927742,
+      "parent_observation_ns": 104246120,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 335076,
+      "parent_observation_ns": 44999,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "download",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 299558,
+      "parent_observation_ns": 47375,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 193536,
+      "parent_observation_ns": 50327,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 127863,
+      "parent_observation_ns": 44407,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 104703309,
+      "parent_observation_ns": 105200617,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 249796,
+      "parent_observation_ns": 45402,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "shared",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 348348,
+      "parent_observation_ns": 43700,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "download",
+      "blocked": true,
+      "acquire_ns": 100299248,
+      "parent_observation_ns": 100493404,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "shared",
+      "blocked": true,
+      "acquire_ns": 101303139,
+      "parent_observation_ns": 101380889,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "mutate",
+      "blocked": true,
+      "acquire_ns": 101085669,
+      "parent_observation_ns": 104060548,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 302115,
+      "parent_observation_ns": 46024,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "mutate",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 256172,
+      "parent_observation_ns": 45528,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 157870,
+      "parent_observation_ns": 43107,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 164004,
+      "parent_observation_ns": 44530,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 255342,
+      "parent_observation_ns": 42023,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "target",
+      "blocked": true,
+      "acquire_ns": 101042997,
+      "parent_observation_ns": 100483578,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "target",
+      "contender": "other-target",
+      "blocked": false,
+      "acquire_ns": 287471,
+      "parent_observation_ns": 46002,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "download",
+      "blocked": false,
+      "acquire_ns": 163236,
+      "parent_observation_ns": 45293,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "shared",
+      "blocked": false,
+      "acquire_ns": 161986,
+      "parent_observation_ns": 41502,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "mutate",
+      "blocked": false,
+      "acquire_ns": 251137,
+      "parent_observation_ns": 40806,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "target",
+      "blocked": false,
+      "acquire_ns": 283686,
+      "parent_observation_ns": 44048,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    },
+    {
+      "holder": "other-target",
+      "contender": "other-target",
+      "blocked": true,
+      "acquire_ns": 105998009,
+      "parent_observation_ns": 111531025,
+      "configured_hold_seconds": 0.1,
+      "clock": "monotonic_ns",
+      "scope": "local-kernel-protocol"
+    }
+  ]
+}

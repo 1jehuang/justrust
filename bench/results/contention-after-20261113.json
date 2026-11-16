@@ -1,0 +1,334 @@
+{
+ "schema": "contention_suite_v1",
+ "started": "2026-11-13T18:07:37-0800",
+ "finished": "2026-11-13T18:09:39-0800",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "noise_policy": {
+   "suite": "recorder-other-cpu-v1",
+   "counted": "proc-stat-wait4-v1",
+   "max_other_cores": 4.0
+  },
+  "justrust": "justrust 0.1.0-alpha.26",
+  "justrust_rev": "ee8a01d6f5a3",
+  "benchmark_repo_rev": "ee8a01d6f5a3",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "64c00522d2de5fa8f0ad0fe4f0a7c8d647e3172b76c8153a0b8947f4265195af",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "contention": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  },
+  "snapshot_format": "target-flock-shared-ledger-v1",
+  "snapshot_fingerprints": {
+   "contention": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  },
+  "runtime_prerequisites": {
+   "policy": "pinned-test-runtime-v1",
+   "child_umask": "0022",
+   "sqlite3": null
+  },
+  "execution": "remote",
+  "contention": {
+   "protocol": "target-flock-shared-ledger-v1",
+   "hold_seconds": 20,
+   "target": "default, slots eligible",
+   "fixture": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  }
+ },
+ "runs_per_scenario": 3,
+ "warmup_id": "20261113-180737007-1206383510",
+ "scope": "controlled hosted ext4 target-lock contention only, not broad speedup",
+ "scenarios": {
+  "hosted-ext4-target-contention": {
+   "what": "Focused real hosted target-lock acceptance, not a broad speed benchmark.",
+   "expect_test_fail": false,
+   "samples": [
+    {
+     "id": "20261113-180754136-1206383342",
+     "wall": 1.074,
+     "recorded_wall": 0.18352794647216797,
+     "startup": 0.14741921424865723,
+     "compile": 0.02446985244750977,
+     "test_run": 0.002377033233642578,
+     "cpu": 0.113067,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 1,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": true,
+     "other_cores": 15.181102362204724,
+     "lock_wait": 0.0,
+     "cargo_target_lock_message": false,
+     "slot": {
+      "slot": 0,
+      "target_dir": "/home/jeremy/.cache/justrust-bench/work/contention/2e000fb6815f02803e67/target/justrust-slots/0",
+      "how": "new",
+      "seed_secs": 0.0,
+      "busy": 0,
+      "capacity": 4,
+      "refresh_secs": 0.0,
+      "refreshed_units": 0,
+      "join_wait_secs": 0.0
+     },
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 41.382830000000006,
+      "client_wall": 1.053161337,
+      "sync": {
+       "lock_ms": 0.00233,
+       "link_ms": 0.001248,
+       "push_ms": 2.908013,
+       "barrier_ms": 38.457335
+      },
+      "run": {
+       "prepare_ms": 1.337961,
+       "execute_ms": 248.333387,
+       "finalize_ms": 2.172582,
+       "records_ms": 0.31837
+      },
+      "host_wall": 0.18352794647216797,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-180751689-1206383320",
+     "followup_id": "20261113-180814204-1206383963",
+     "followup_wall": 5.751,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.001,
+     "finished_before_release_secs": 18.972,
+     "host_lock_interval": {
+      "clock": "recorded-host-epoch",
+      "ready": 1794622073.1780944,
+      "release": 1794622093.18189,
+      "contender_start": 1794622074.0265994,
+      "contender_end": 1794622074.2101274,
+      "margin_secs": 0.25,
+      "finished_before_release_secs": 18.972,
+      "finished_under_lock": true
+     },
+     "client_finished_under_lock": true,
+     "finished_under_lock": true,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    },
+    {
+     "id": "20261113-180822181-1206383548",
+     "wall": 0.817,
+     "recorded_wall": 0.04983186721801758,
+     "startup": 0.034607887268066406,
+     "compile": 0.0,
+     "test_run": 0.004821300506591797,
+     "cpu": 0.037844,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 0,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": true,
+     "other_cores": 15.746031746031743,
+     "lock_wait": 0.0,
+     "cargo_target_lock_message": false,
+     "slot": {
+      "slot": 0,
+      "target_dir": "/home/jeremy/.cache/justrust-bench/work/contention/2e000fb6815f02803e67/target/justrust-slots/0",
+      "how": "warm",
+      "seed_secs": 0.0,
+      "busy": 0,
+      "capacity": 4,
+      "refresh_secs": 0.0,
+      "refreshed_units": 0,
+      "join_wait_secs": 0.0
+     },
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 67.651038,
+      "client_wall": 0.767933849,
+      "sync": {
+       "lock_ms": 0.003915,
+       "link_ms": 0.000998,
+       "push_ms": 3.1135759999999997,
+       "barrier_ms": 64.52019
+      },
+      "run": {
+       "prepare_ms": 1.460331,
+       "execute_ms": 98.694711,
+       "finalize_ms": 3.415182,
+       "records_ms": 0.228791
+      },
+      "host_wall": 0.04983186721801758,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-180819956-1206383488",
+     "followup_id": "20261113-180842313-1206383709",
+     "followup_wall": 8.464,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.0,
+     "finished_before_release_secs": 19.256,
+     "host_lock_interval": {
+      "clock": "recorded-host-epoch",
+      "ready": 1794622101.220651,
+      "release": 1794622121.225276,
+      "contender_start": 1794622101.9196975,
+      "contender_end": 1794622101.9695294,
+      "margin_secs": 0.25,
+      "finished_before_release_secs": 19.256,
+      "finished_under_lock": true
+     },
+     "client_finished_under_lock": true,
+     "finished_under_lock": true,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    },
+    {
+     "id": "20261113-180853431-1206383687",
+     "wall": 7.292,
+     "recorded_wall": 0.04122495651245117,
+     "startup": 0.03232455253601074,
+     "compile": 0.0,
+     "test_run": 0.00890040397644043,
+     "cpu": 0.035383,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 0,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": true,
+     "other_cores": 14.915254237288137,
+     "lock_wait": 0.0,
+     "cargo_target_lock_message": false,
+     "slot": {
+      "slot": 0,
+      "target_dir": "/home/jeremy/.cache/justrust-bench/work/contention/2e000fb6815f02803e67/target/justrust-slots/0",
+      "how": "warm",
+      "seed_secs": 0.0,
+      "busy": 0,
+      "capacity": 4,
+      "refresh_secs": 0.0,
+      "refreshed_units": 0,
+      "join_wait_secs": 0.0
+     },
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 6235.8136589999995,
+      "client_wall": 7.251116123,
+      "sync": {
+       "lock_ms": 0.001367,
+       "link_ms": 5449.73305,
+       "push_ms": 638.529793,
+       "barrier_ms": 147.450806
+      },
+      "run": {
+       "prepare_ms": 109.321678,
+       "execute_ms": 160.690485,
+       "finalize_ms": 44.546072,
+       "records_ms": 0.24037
+      },
+      "host_wall": 0.04122495651245117,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-180850778-1206383932",
+     "followup_id": "20261113-180913498-1206383734",
+     "followup_wall": 25.837,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.0,
+     "finished_before_release_secs": 12.823,
+     "host_lock_interval": {
+      "clock": "recorded-host-epoch",
+      "ready": 1794622132.4666457,
+      "release": 1794622152.471325,
+      "contender_start": 1794622139.6066072,
+      "contender_end": 1794622139.6478322,
+      "margin_secs": 0.25,
+      "finished_before_release_secs": 12.823,
+      "finished_under_lock": true
+     },
+     "client_finished_under_lock": true,
+     "finished_under_lock": true,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 1.074,
+    "min": 0.817,
+    "max": 7.292,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.035,
+     "compile": 0.0,
+     "test_run": 0.005,
+     "cpu": 0.038,
+     "link_secs": 0
+    },
+    "split": {
+     "frontend": 0,
+     "codegen": 0,
+     "link": 0,
+     "incremental": 0,
+     "other": 0
+    },
+    "units": 0
+   }
+  }
+ }
+}

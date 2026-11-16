@@ -1,0 +1,910 @@
+{
+ "started": "2026-11-15T12:01:42-0800",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "noise_policy": {
+   "suite": "recorder-other-cpu-v1",
+   "counted": "proc-stat-wait4-v1",
+   "max_other_cores": 4.0
+  },
+  "justrust": "justrust 0.1.0-alpha.28",
+  "justrust_rev": "3282d7878b09",
+  "benchmark_repo_rev": "3282d7878b09",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b",
+  "justrust_dirty": false,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 5abb73e57230a73e4504dbae6f518def2e651424)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "snapshot_format": 2,
+  "snapshot_fingerprints": {
+   "desktop": "f0755e5a9f68d952b977468eab79ca04772c2b621e7dfc0c270b7d509cf5e154",
+   "justrust": "b7ba71b4dfa9e2df3ae39e3e2a5dc0edba5dd3953e04c6f657a56dd977263adb"
+  },
+  "runtime_prerequisites": {
+   "policy": "pinned-test-runtime-v1",
+   "child_umask": "0022",
+   "sqlite3": {
+    "version": "3.54.0 2026-10-09 15:46:58 be8d059e9a49089ab2dce5ed26dd87aaf598fdc5fbe0b107c0dd758464bcalt1 (64-bit)",
+    "sha256": "a383f6a1fe7cda0f461d7848cfa312e53d67e8dd0f2621ff19a721270df74d81"
+   }
+  },
+  "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)"
+ },
+ "stacks": [
+  "remote"
+ ],
+ "stack_defs": [
+  {
+   "name": "remote",
+   "what": "justrust, JUSTRUST_REMOTE=force: check/clippy/test on the remote machine, wall includes sync and ssh",
+   "env": {
+    "JUSTRUST_REMOTE": "force"
+   },
+   "justrust": true
+  }
+ ],
+ "synth": {
+  "seed": 1,
+  "points": 40,
+  "reps": 1,
+  "generator": "86207da453da",
+  "sample_info": {
+   "shapes": 1689,
+   "calls": 4711,
+   "covered_calls": 4517,
+   "coverage": 0.9588,
+   "mined": {
+    "since": "2026-09-01",
+    "at": "2026-10-11",
+    "build_calls": 6717,
+    "skipped_background_or_bad": 1995,
+    "repos": {
+     "jcode-desktop": 3184,
+     "jcode": 1082,
+     "justrust": 317,
+     "jcode-website": 104,
+     "handterm": 14,
+     "mermaid-rs-renderer": 10
+    }
+   }
+  },
+  "stack_names": [
+   "remote"
+  ],
+  "results": [
+   {
+    "i": 0,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build-release",
+     "pkg": "jcode-desktop",
+     "flags": "",
+     "change": "first",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "pre": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "remote": [
+      {
+       "avg_other_cores": 0.8343378843110466,
+       "system_busy_cores": 3.627416918673322,
+       "tree_cores": 0.0559838439144987,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 0.23379230499267575,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 3.289,
+       "exit": 0,
+       "cpu": 0.18,
+       "max_rss_mb": 45.3,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-120231755-1837884666",
+       "tests_passed": 0,
+       "load_before": 1.14,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 64.147893,
+        "client_wall": 3.279445611,
+        "sync": {
+         "lock_ms": 0.0015,
+         "link_ms": 0.00135,
+         "push_ms": 35.919269,
+         "barrier_ms": 28.203082
+        },
+        "run": {
+         "prepare_ms": 0.6928099999999999,
+         "execute_ms": 238.180006,
+         "finalize_ms": 0.961999,
+         "records_ms": 0.6209399999999999
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 3.5714330747588234,
+        "system_busy_cores": 3.627416918673322,
+        "tree_cores": 0.0559838439144987,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 3.288841692992719,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-120231755-1837884666",
+       "cpu_noise_sample_count": 3,
+       "cpu_noise_sample_span_seconds": 0.23335981369018555,
+       "pre_wall": 47.048
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "remote": {
+      "n": 1,
+      "median": 3.289,
+      "min": 3.289,
+      "max": 3.289,
+      "quiet_median": 3.289,
+      "cpu": 0.18,
+      "max_rss_mb": 45.3,
+      "instructions": null,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 1,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 45,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "remote": [
+      {
+       "avg_other_cores": 0.3884584895316548,
+       "system_busy_cores": 2.2283250395745857,
+       "tree_cores": 0.017152448629282318,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 6.188018798828125,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 6.898,
+       "exit": 0,
+       "cpu": 0.12,
+       "max_rss_mb": 45.3,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-120306059-1837884837",
+       "tests_passed": 1304,
+       "load_before": 3.63,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 68.267647,
+        "client_wall": 6.861194481,
+        "sync": {
+         "lock_ms": 0.001565,
+         "link_ms": 0.001881,
+         "push_ms": 38.439708,
+         "barrier_ms": 29.807268
+        },
+        "run": {
+         "prepare_ms": 0.81492,
+         "execute_ms": 6212.620619,
+         "finalize_ms": 0.74014,
+         "records_ms": 1.51422
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 2.2111725909453033,
+        "system_busy_cores": 2.2283250395745857,
+        "tree_cores": 0.017152448629282318,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 6.897557459989912,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-120306059-1837884837",
+       "cpu_noise_sample_count": 32,
+       "cpu_noise_sample_span_seconds": 6.187682151794434,
+       "pre_wall": 3.051
+      }
+     ]
+    },
+    "errors": {},
+    "noisy_retries": {
+     "remote": [
+      {
+       "wall": 8.885,
+       "avg_other_cores": 2.0720219123952077,
+       "foreign_rustc_before": 0
+      }
+     ]
+    },
+    "stats": {
+     "remote": {
+      "n": 1,
+      "median": 6.898,
+      "min": 6.898,
+      "max": 6.898,
+      "quiet_median": 6.898,
+      "cpu": 0.12,
+      "max_rss_mb": 45.3,
+      "instructions": null,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 2,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "",
+     "flags": "",
+     "change": "new-file",
+     "spread": "multi-file",
+     "relation": "outside",
+     "files": 3,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 8,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "--",
+     "tests"
+    ],
+    "pre": [
+     "test",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "new-file:jcode-base:lib.rs"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "remote": []
+    },
+    "errors": {
+     "remote": "pre-build failed (exit 1), log /home/jeremy/.cache/justrust-bench/resource-promotion-20261115/versus/logs/synth-remote-pre-20261115-120459893-1837884341.log"
+    },
+    "stats": {}
+   }
+  ],
+  "checkpoint_identity": {
+   "schema": 1,
+   "stacks": [
+    {
+     "name": "remote",
+     "justrust": true,
+     "private_cache": false,
+     "toolchain": "system",
+     "installed_toolchains": {
+      "policy": {
+       "toolchain": "jr-ac20de5e7921",
+       "protocol": 1
+      },
+      "prefixes": {
+       "1.98.1": {
+        "justrust-toolchain.json": {
+         "sha256": "00bb6c9b0fed4858d86aceeccb9d8274786355ab88470f2beaacbdc46495ef99",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "da77c8b33849312255ccde3179198ada4c8deb370488d050286146b1d1b27e14",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "56478e37c2bc0a09b7442cb975bad0f00cd16a9c80463daca022756a12ef1b93",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "565dd9620e543887d4b955f6985a903a9ef30ef85b9efeac6c233ccf7aee9b6c",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "ac4a71be2cb2df0f3947419e757a76dabb6110ce4196e1b0bde43296f702287b",
+         "executable": true
+        },
+        "bin/rust-gdb": {
+         "sha256": "557985ec5a31f5617d25d26bd6fe23c4b8d6f85b1498e1aae82831ca0d7f17fe",
+         "executable": true
+        },
+        "bin/rust-gdbgui": {
+         "sha256": "bc60613775a098e59b49fa4584cea73631697fe1456c44284c337d6700340315",
+         "executable": true
+        },
+        "bin/rust-lldb": {
+         "sha256": "a82c91ccb285aa4a1dbcf08cda68ba4e8c36082af0adfefdee514673113815da",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "859254978c0a0402c32f949f6de0d99aee73be8d15f45aac00ae1448aac51e74",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "3ff7fed6d1064d8d75d24ae8beff9fe1d68031d3d819966481d22c3c9002b709",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "99e625e0640b50d773a0f54b93a7e66a0e89afd5351a4de9a17abe7087c11ac4",
+         "executable": true
+        },
+        "lib/librustc_driver-eaf3ed1d23ca5027.so": {
+         "sha256": "96218b68a4a569c06c6fea5ee95b9052ce61c7316ac265a7963e7fea90e985d2",
+         "executable": false
+        }
+       },
+       "1.99.0": {
+        "justrust-toolchain.json": {
+         "sha256": "218f71525d361f65602d562c83cf8928f3688450cd00b3507fea3fe8c89c7f67",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "2d6d576cdd70e29c1c6b6ae8026b35f6295b6bd67e6845552697440d9c3edf15",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "b0f75b88aa96033f3d26f11e8d49599e899dc9cfe305c31c50fd54a7f43feabc",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "ecf6d74d4e13728405acd3749bff486db899e793b5e3cd179ab663f7fe9d6fe6",
+         "executable": true
+        },
+        "bin/rust-gdb": {
+         "sha256": "7054a508ece38b5bb81860e8ddbcd62021fab6432026789970ebbba8b84f6163",
+         "executable": true
+        },
+        "bin/rust-gdbgui": {
+         "sha256": "bc60613775a098e59b49fa4584cea73631697fe1456c44284c337d6700340315",
+         "executable": true
+        },
+        "bin/rust-lldb": {
+         "sha256": "a82c91ccb285aa4a1dbcf08cda68ba4e8c36082af0adfefdee514673113815da",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "a1321a60578a6b2e3e0ff428201b8618bbd9a9fbcd475c0d0f151bbf17cb0a9e",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "a3ab6c445b26eda8d7bcfd5cc3f4b068dd7136af96822fd21378fc6fe8c2f2a3",
+         "executable": true
+        },
+        "lib/librustc_driver-999a121de2f042be.so": {
+         "sha256": "f45c41337f1516bb9f4d504a2a507202a01c431fc2063334913dde5480ffee03",
+         "executable": false
+        }
+       },
+       "jr-ac20de5e7921": {
+        "justrust-toolchain.json": {
+         "sha256": "b83dfca31910c0570f86e8c3510a8081f8442fe5e22fddb59e96b1abbf7c5d0e",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "758e6d10363d20e4d097deae43dc71429731d37df4578a5c139157a543bf30bf",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "e65f2a1ad25e97d0d5e18b8f5c49d0d298231042be47c3ab8b0f6b88a0b24321",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "d08fe509274008f9f44bf7dd825d026ce94932d1238912b79098c804b696f6fa",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "8c942c0bcdae5a680f6ad3bba6d44e2f8af32c277da4b543fd158ab4ff86e575",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-914ca0577d1fe276.so": {
+         "sha256": "d756da07c14fae9a4bf72670f74b10f4a53ad5a4a28d31c02975695aee5437ab",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "9faf36283b7547dd06cb33a51d57a5c27a020b0bde641eb1468e2886132df335",
+         "executable": true
+        }
+       },
+       "jr-b35416a3743d": {
+        "justrust-toolchain.json": {
+         "sha256": "aea11ac51c5781df6a30ea1c383b8e48f3c8c72eeed432775a68f8ba3114b490",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "afe25bf6278115e0250974ea54601b2aff6544175fbb633aef41a1955896c3d8",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "965ded8fb33270e20ea1a4dc2137a8e9c87f83d940f88e6feb5d30b9001ad9f5",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "a5938ccf4363170c2fda366497f61697c7e3dd4595754463fdc6be548fd97762",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "2da106c7d74398c854d10c9938fcd0d899081b82047dfbe09a76085d2945ed95",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "9421f7e0419662e101efbfa31145f375650c707bdb31302df94812842b6a192e",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-0455672044afeab7.so": {
+         "sha256": "eab11d4773dc2ba1247feab1d4ce5cb249c2e1fdeeac24a938796cf421c09e75",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "48d386f2ed375f7901a2c9d9b0dc492f7f3d03403af1894e270458fa0e0571fb",
+         "executable": true
+        }
+       },
+       "nightly-2026-10-08": {
+        "justrust-toolchain.json": {
+         "sha256": "8e70ccdb5bb5c2e6fa16e073125e14c9625c161d1c531b77df19d7b663c092a9",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "fa7965ea71b724c53949ff845d8da695cbd784de48f02a9dfd1dc3328c91b686",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "ac45c14da48d052f15d24fca35b7e50105866e719caa5e3c9c314448fb7cbddc",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rust-analyzer": {
+         "sha256": "cb1bc3e9f1b70cd6b93f8436ba81bcdd4a87cca3d77c5365715d28a600349c4b",
+         "executable": true
+        },
+        "bin/rust-gdb": {
+         "sha256": "7054a508ece38b5bb81860e8ddbcd62021fab6432026789970ebbba8b84f6163",
+         "executable": true
+        },
+        "bin/rust-gdbgui": {
+         "sha256": "bc60613775a098e59b49fa4584cea73631697fe1456c44284c337d6700340315",
+         "executable": true
+        },
+        "bin/rust-lldb": {
+         "sha256": "f9c40edb1b5943ce8dc18d1d1e9fc62e49486a0229bf655affee52e968c19168",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "7a7f7f709c03c0f51d5a2570659906a64edaf35a18f86f39fc914516b5736295",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-f344ad00d19f4329.so": {
+         "sha256": "4ee7c5c7778a8e229a8f5a5e8a3742c09d44321f1a0b501c1c8a190db6392709",
+         "executable": false
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "6c7a5d26aef3e649594b96747cc9a2458d24bbbf9baca9166592e9d0efc22fc5",
+         "executable": true
+        }
+       },
+       "staged/jr-38a07e7de9f5": {
+        "justrust-toolchain.json": {
+         "sha256": "64bc3fee236f315cd204729a370d62c77dcbbeb2b4d3ed948af5f31534908930",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "c5bbe14e34a4a848522adbd9942ef90100f68141b4c21e73e49922162aa5922d",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "7fa9292ea4dd6c51a1d48827a80fbf4646c39741a9031ca255b82a37620e54e4",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "64689a080e88a1aece4307ee5012a59bc0e89d54d3ec208dd16cb3102c60156d",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "3f3bcd1ec1cd9ccb49cdd82b05c1fe50d4d5ec9969745b3627712bd2687d6a41",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-d42c0c5f95053cd3.so": {
+         "sha256": "961a7344a71a7b1997557fa4167cc44305daa341ea2aee920ff88ee1e709ea43",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "97e114ae3dd6fcbbbfbc9553fe2b9ac48dee6a59949317e2474bbf004e26314d",
+         "executable": true
+        }
+       },
+       "staged/jr-60c5ee8a11aa": {
+        "justrust-toolchain.json": {
+         "sha256": "f1584a482b134ebdaffc23d24aae1bc523b5e7a3e8c45a252345dda50f3e2d05",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "a6dbb3b5dd7281c4afa00c9a1bda1d9aaf9811a57a4bf22c63c5a8dfa951d042",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "224816fd272cb0bdd891d16ec35d58492d854988e3ed13318d6fbe60580a81ce",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "ad2f345b8a7a18171cf7d3c86268923ae396ae6ab13a320eec04263d87baaf35",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "4556946d227dce65605955919683b79bb2d40a10151e02940f9836dfe016ba5d",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-254a776d4c0923ea.so": {
+         "sha256": "bf032954207c752a41b2db29cb378ac80263ad00ea83f19519a03921ada58613",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "dba4cec9640036302521cf22b6d2ff069d43b1f14e4db8fb71b788b4b9d784bb",
+         "executable": true
+        }
+       },
+       "staged/jr-910e39a6c3ef": {
+        "justrust-toolchain.json": {
+         "sha256": "19a4dd78ddfbe8afa77b3e22d1b0a6767c8bb46ffdb2d0e86ed5a81f00144dcc",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "ead1acd1f4f34e33fb4b09e7b6fcab664679cd6a7c065e44d63811b0beec914a",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "0a61066cb4b81a18f84f097b719a5b5dc853b23ae1eda4af1a9feebfbd19132f",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "6f16da371952f86c0874ed57a37a1ae4d35f5c747e4c93fceee9b5ce6bf88ee7",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "3df9dfd4a663435e1c6f40cbd1387f46e42627661afbb9100e647ee8c8fded17",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "3d011a3ab4d337b0482f87e7b507da88ff5debd77f63baa6a1d1482be216f6f3",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-5eec39586e530d64.so": {
+         "sha256": "16617750423a7a56a1bcc335ccd9f12d6f52d82cdb78a4646b2bb59e2e0a8dd8",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "d25ee39db84a6c941179c092aadcdc8902b8f71cded77f02a79590da8c70cea5",
+         "executable": true
+        }
+       },
+       "staged/jr-b7907f1fe8f7": {
+        "justrust-toolchain.json": {
+         "sha256": "3212070b1e443ad587c708505a1f6d17c572ed9cc39c10f83c51a2cc5a964b52",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "89ed327d338438860dbf5bb7932a5090f0d326dae17a0003d49f265024728073",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "7419ee274d9ae2d9e345106fbe9fbf33c7c79593ffe95fc81f8afb46f229575c",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "a5938ccf4363170c2fda366497f61697c7e3dd4595754463fdc6be548fd97762",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "efd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "37fbaaeb188472184c4af285745fab40ea2ad1558106f614c2dc0a5f19502f95",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-914ca0577d1fe276.so": {
+         "sha256": "7346ac4f468d1440e7b357679d1b95681f155f42a15d176943ebdccab5b22121",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "55ebadf6fdf6c47064418eb9346216ad940a9f3cb20883c817aa2eb501c6ab5a",
+         "executable": true
+        }
+       },
+       "staged/jr-d9a5aea08737": {
+        "justrust-toolchain.json": {
+         "sha256": "62cb06be9ce893820978f35d8dd55fa8c93073f99b563db1945549cf9cc9299d",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "2d88912eae1dda210b6d102f35c5c085e4b03b5794885b3a3b43c73610eaea5d",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "1737cd32de5dd420a7b9f6a5ae6fe580252dad861ef8587148f2f4b1c400a840",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "39979b16a2157ab69326a3e0fc80aa8096b192cd8a4deb4619399877ae7485fc",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "736e571505bf4a69ea0c065d8fb757ea5839dfd84d025a6b3f477093b4e8a035",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-1b75581e341637cf.so": {
+         "sha256": "76f30c16af96b2743aaaf54eb2e253d55cf03865c5cd721009885deea5520de9",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "6eb216b0f20354e769f14141de16d1682ac112f1764a2b61a043cc75224bb4d6",
+         "executable": true
+        }
+       }
+      }
+     },
+     "tools": {
+      "driver": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b",
+      "rustc": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853",
+      "cargo": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b"
+     },
+     "environment_sha256": "1b8df3ccccf0fda2e4f5a32b611a82ff0e1f1e3ba1dad603111e8b0b00cc2bd0"
+    }
+   ],
+   "runtime": {
+    "policy": "inherited"
+   },
+   "harness_sha256": {
+    "synth/run.py": "32cb351571f0f9f348a29f520a0d90ed4937c5a18f6df02621726ec73abe0b64",
+    "suite.py": "46a60ac7284645d6367d7876daad18de3aa7a653a0734a7918af8c4d2d3e2f2a",
+    "versus.py": "52c8409dbae715b6c04bc264553625955c8ec5cff7729d57a0993cb06dba5890",
+    "runtime_context.py": "d61af4c0dbae0b0ea27d47e23d7c529dc3ae096399f3d6366275a97bb2aac196"
+   },
+   "snapshots": {
+    "desktop": {
+     "jcode-desktop": "7d38fb7",
+     "jcode": "abff94eeb"
+    },
+    "justrust": {
+     "justrust": "f97fcc2"
+    }
+   },
+   "snapshot_format": 2,
+   "measurement_home_sha256": "ed1cea86830c78baa8237c8143ef38a9a1bad115d3be4dd909534852d8a51d5e",
+   "work_sha256": "e00f81490c765d208e43309402a98085dcec15d74a890a6771c9eb8b55c76712",
+   "controls": {},
+   "noise_policy": {
+    "suite": "recorder-other-cpu-v1",
+    "counted": "proc-stat-wait4-v1",
+    "max_other_cores": 4.0
+   },
+   "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+   "quiet_wait": 120.0,
+   "only": null,
+   "retry_noisy": 3
+  },
+  "stopped_early": "point 2: measurement errors"
+ },
+ "finished": "2026-11-15T12:05:37-0800"
+}

@@ -1,0 +1,1387 @@
+{
+ "started": "2026-11-15T23:11:59-0800",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "noise_policy": {
+   "suite": "recorder-other-cpu-v1",
+   "counted": "proc-stat-wait4-v1",
+   "max_other_cores": 4.0
+  },
+  "justrust": "justrust 0.1.0-alpha.28",
+  "justrust_rev": "c3a1c6def03c",
+  "benchmark_repo_rev": "c3a1c6def03c",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b",
+  "justrust_dirty": false,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "snapshot_format": 2,
+  "snapshot_fingerprints": {
+   "desktop": "2b3fdb3f14725ef850d7b599148b2ec53ce12bf8ad899b9f7c4a5b704018a7d9",
+   "justrust": "b7ba71b4dfa9e2df3ae39e3e2a5dc0edba5dd3953e04c6f657a56dd977263adb"
+  },
+  "runtime_prerequisites": {
+   "policy": "pinned-test-runtime-v1",
+   "child_umask": "0022",
+   "sqlite3": {
+    "version": "3.54.0 2026-10-09 15:46:58 be8d059e9a49089ab2dce5ed26dd87aaf598fdc5fbe0b107c0dd758464bcalt1 (64-bit)",
+    "sha256": "a383f6a1fe7cda0f461d7848cfa312e53d67e8dd0f2621ff19a721270df74d81"
+   }
+  },
+  "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)"
+ },
+ "stacks": [
+  "ledger-base",
+  "ledger-candidate"
+ ],
+ "stack_defs": [
+  {
+   "name": "ledger-base",
+   "what": "justrust defaults plus {'JUSTRUST_REMOTE': 'force', 'JUSTRUST_TOOLCHAIN': 'jr-ac20de5e7921', 'JUSTRUST_PREBUILT': 'default'}",
+   "env": {
+    "JUSTRUST_REMOTE": "force",
+    "JUSTRUST_TOOLCHAIN": "jr-ac20de5e7921",
+    "JUSTRUST_PREBUILT": "default"
+   },
+   "justrust": true
+  },
+  {
+   "name": "ledger-candidate",
+   "what": "justrust defaults plus {'JUSTRUST_REMOTE': 'force', 'JUSTRUST_TOOLCHAIN': 'jr-60c5ee8a11aa', 'JUSTRUST_PREBUILT': 'default'}",
+   "env": {
+    "JUSTRUST_REMOTE": "force",
+    "JUSTRUST_TOOLCHAIN": "jr-60c5ee8a11aa",
+    "JUSTRUST_PREBUILT": "default"
+   },
+   "justrust": true
+  }
+ ],
+ "synth": {
+  "seed": 1,
+  "points": 40,
+  "reps": 1,
+  "generator": "c893192c930a",
+  "sample_info": {
+   "shapes": 1689,
+   "calls": 4711,
+   "covered_calls": 4517,
+   "coverage": 0.9588,
+   "mined": {
+    "since": "2026-09-01",
+    "at": "2026-10-11",
+    "build_calls": 6717,
+    "skipped_background_or_bad": 1995,
+    "repos": {
+     "jcode-desktop": 3184,
+     "jcode": 1082,
+     "justrust": 317,
+     "jcode-website": 104,
+     "handterm": 14,
+     "mermaid-rs-renderer": 10
+    }
+   }
+  },
+  "stack_names": [
+   "ledger-base",
+   "ledger-candidate"
+  ],
+  "results": [
+   {
+    "i": 0,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build-release",
+     "pkg": "jcode-desktop",
+     "flags": "",
+     "change": "first",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "pre": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace_pending.rs:72",
+     "item:jcode-desktop-ui:inline_image.rs",
+     "item:jcode-desktop-ui:effort.rs",
+     "item:jcode-desktop-ui:markdown.rs",
+     "body:jcode-desktop-ui:panel_cache_miss.rs:45",
+     "body:jcode-desktop-ui:sidebar_edits.rs:6"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "ledger-base": [
+      {
+       "avg_other_cores": 0.23726393222918132,
+       "system_busy_cores": 1.0104968405215684,
+       "tree_cores": 0.012594379986868642,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 20.528563022613525,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 27.749,
+       "exit": 0,
+       "cpu": 0.35,
+       "max_rss_mb": 194.8,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231416574-2813016204",
+       "tests_passed": 0,
+       "load_before": 4.42,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 589.4725830000001,
+        "client_wall": 27.741257773,
+        "sync": {
+         "lock_ms": 0.0006519999999999999,
+         "link_ms": 0.0008500000000000001,
+         "push_ms": 12.888599,
+         "barrier_ms": 576.5798090000001
+        },
+        "run": {
+         "prepare_ms": 0.54467,
+         "execute_ms": 20538.750696000003,
+         "finalize_ms": 1.14551,
+         "records_ms": 1.41855
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 0.9979024605346998,
+        "system_busy_cores": 1.0104968405215684,
+        "tree_cores": 0.012594379986868642,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 27.74872604799748,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231416574-2813016204",
+       "cpu_noise_sample_count": 103,
+       "cpu_noise_sample_span_seconds": 20.52823519706726,
+       "pre_wall": 74.731
+      }
+     ],
+     "ledger-candidate": [
+      {
+       "avg_other_cores": 0.23343544642200262,
+       "system_busy_cores": 1.130904232879652,
+       "tree_cores": 0.012695598157394818,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 20.536457061767575,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 27.96,
+       "exit": 0,
+       "cpu": 0.35,
+       "max_rss_mb": 195.3,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231648350-2813016675",
+       "tests_passed": 0,
+       "load_before": 1.61,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 284.48424300000005,
+        "client_wall": 27.951800884,
+        "sync": {
+         "lock_ms": 0.001295,
+         "link_ms": 0.0010860000000000002,
+         "push_ms": 11.123071,
+         "barrier_ms": 273.348398
+        },
+        "run": {
+         "prepare_ms": 0.628519,
+         "execute_ms": 20546.429866,
+         "finalize_ms": 1.32284,
+         "records_ms": 1.47769
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 1.118208634722257,
+        "system_busy_cores": 1.130904232879652,
+        "tree_cores": 0.012695598157394818,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 27.95992718100024,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231648350-2813016675",
+       "cpu_noise_sample_count": 103,
+       "cpu_noise_sample_span_seconds": 20.53606104850769,
+       "pre_wall": 63.54
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "ledger-base": {
+      "n": 1,
+      "median": 27.749,
+      "min": 27.749,
+      "max": 27.749,
+      "quiet_median": 27.749,
+      "cpu": 0.35,
+      "max_rss_mb": 194.8,
+      "instructions": null,
+      "instructions_spread": null
+     },
+     "ledger-candidate": {
+      "n": 1,
+      "median": 27.96,
+      "min": 27.96,
+      "max": 27.96,
+      "quiet_median": 27.96,
+      "cpu": 0.35,
+      "max_rss_mb": 195.3,
+      "instructions": null,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 1,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 45,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace.rs:1926"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "ledger-base": [
+      {
+       "avg_other_cores": 0.9710432199661817,
+       "system_busy_cores": 2.457940691195637,
+       "tree_cores": 0.002159895885844796,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 15.08703327178955,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 21.799,
+       "exit": 0,
+       "cpu": 0.05,
+       "max_rss_mb": 48.1,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-232148893-2813016103",
+       "tests_passed": 1304,
+       "load_before": 4.35,
+       "foreign_rustc_before": 0,
+       "noisy": true,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 3372.739368,
+        "client_wall": 21.788859744,
+        "sync": {
+         "lock_ms": 0.0006039999999999999,
+         "link_ms": 0.0005239999999999999,
+         "push_ms": 12.949765,
+         "barrier_ms": 3358.231277
+        },
+        "run": {
+         "prepare_ms": 0.9642,
+         "execute_ms": 15112.358029,
+         "finalize_ms": 1.63944,
+         "records_ms": 2.12031
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 2.455780795309792,
+        "system_busy_cores": 2.457940691195637,
+        "tree_cores": 0.002159895885844796,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 21.798735906006186,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 4,
+       "cpu_noise_remote_run_id": "20261115-232148893-2813016103",
+       "cpu_noise_sample_count": 76,
+       "cpu_noise_sample_span_seconds": 15.086706638336182,
+       "pre_wall": 83.31
+      }
+     ],
+     "ledger-candidate": [
+      {
+       "avg_other_cores": 0.3910385719302737,
+       "system_busy_cores": 3.9297892441420252,
+       "tree_cores": 0.002347701067515365,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 14.728938341140749,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 16.81,
+       "exit": 0,
+       "cpu": 0.04,
+       "max_rss_mb": 48.1,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231908069-2813016770",
+       "tests_passed": 1304,
+       "load_before": 1.95,
+       "foreign_rustc_before": 4,
+       "noisy": true,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 971.902154,
+        "client_wall": 16.801036608,
+        "sync": {
+         "lock_ms": 0.000594,
+         "link_ms": 0.000634,
+         "push_ms": 12.745842,
+         "barrier_ms": 959.150241
+        },
+        "run": {
+         "prepare_ms": 10.456099,
+         "execute_ms": 14758.83731,
+         "finalize_ms": 2.57506,
+         "records_ms": 2.05094
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 3.9274415430745098,
+        "system_busy_cores": 3.9297892441420252,
+        "tree_cores": 0.002347701067515365,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 16.810061786003644,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231908069-2813016770",
+       "cpu_noise_sample_count": 75,
+       "cpu_noise_sample_span_seconds": 14.728446245193481,
+       "pre_wall": 111.348
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "ledger-base": {
+      "n": 1,
+      "median": 21.799,
+      "min": 21.799,
+      "max": 21.799,
+      "quiet_median": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 48.1,
+      "instructions": null,
+      "instructions_spread": null
+     },
+     "ledger-candidate": {
+      "n": 1,
+      "median": 16.81,
+      "min": 16.81,
+      "max": 16.81,
+      "quiet_median": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 48.1,
+      "instructions": null,
+      "instructions_spread": null
+     }
+    }
+   }
+  ],
+  "checkpoint_identity": {
+   "schema": 1,
+   "stacks": [
+    {
+     "name": "ledger-base",
+     "justrust": true,
+     "private_cache": true,
+     "toolchain": "jr-ac20de5e7921",
+     "installed_toolchains": {
+      "policy": null,
+      "prefixes": {
+       "jr-ac20de5e7921": {
+        "justrust-toolchain.json": {
+         "sha256": "b83dfca31910c0570f86e8c3510a8081f8442fe5e22fddb59e96b1abbf7c5d0e",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "758e6d10363d20e4d097deae43dc71429731d37df4578a5c139157a543bf30bf",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "e65f2a1ad25e97d0d5e18b8f5c49d0d298231042be47c3ab8b0f6b88a0b24321",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "d08fe509274008f9f44bf7dd825d026ce94932d1238912b79098c804b696f6fa",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "8c942c0bcdae5a680f6ad3bba6d44e2f8af32c277da4b543fd158ab4ff86e575",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-914ca0577d1fe276.so": {
+         "sha256": "d756da07c14fae9a4bf72670f74b10f4a53ad5a4a28d31c02975695aee5437ab",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "9faf36283b7547dd06cb33a51d57a5c27a020b0bde641eb1468e2886132df335",
+         "executable": true
+        }
+       }
+      }
+     },
+     "tools": {
+      "driver": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b",
+      "rustc": "d08fe509274008f9f44bf7dd825d026ce94932d1238912b79098c804b696f6fa",
+      "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+     },
+     "environment_sha256": "d1012d1654d133e13392d29977c05e736ae27590f6a98349ba0c631ad130ba68"
+    },
+    {
+     "name": "ledger-candidate",
+     "justrust": true,
+     "private_cache": true,
+     "toolchain": "jr-60c5ee8a11aa",
+     "installed_toolchains": {
+      "policy": null,
+      "prefixes": {
+       "jr-ac20de5e7921": {
+        "justrust-toolchain.json": {
+         "sha256": "b83dfca31910c0570f86e8c3510a8081f8442fe5e22fddb59e96b1abbf7c5d0e",
+         "executable": false
+        },
+        "bin/cargo": {
+         "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+         "executable": true
+        },
+        "bin/cargo-clippy": {
+         "sha256": "758e6d10363d20e4d097deae43dc71429731d37df4578a5c139157a543bf30bf",
+         "executable": true
+        },
+        "bin/cargo-fmt": {
+         "sha256": "cffdebf01db513582137969de8f258297e33581b3aab08a4bdabc1138dd2a79e",
+         "executable": true
+        },
+        "bin/clippy-driver": {
+         "sha256": "e65f2a1ad25e97d0d5e18b8f5c49d0d298231042be47c3ab8b0f6b88a0b24321",
+         "executable": true
+        },
+        "bin/jr-cargo": {
+         "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+         "executable": true
+        },
+        "bin/rustc": {
+         "sha256": "d08fe509274008f9f44bf7dd825d026ce94932d1238912b79098c804b696f6fa",
+         "executable": true
+        },
+        "bin/rustdoc": {
+         "sha256": "8c942c0bcdae5a680f6ad3bba6d44e2f8af32c277da4b543fd158ab4ff86e575",
+         "executable": true
+        },
+        "bin/rustfmt": {
+         "sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+         "executable": true
+        },
+        "lib/librustc_driver-914ca0577d1fe276.so": {
+         "sha256": "d756da07c14fae9a4bf72670f74b10f4a53ad5a4a28d31c02975695aee5437ab",
+         "executable": true
+        },
+        "lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+         "sha256": "9faf36283b7547dd06cb33a51d57a5c27a020b0bde641eb1468e2886132df335",
+         "executable": true
+        }
+       }
+      }
+     },
+     "tools": {
+      "driver": "64d3e478458325228529ac3fb3c6628318c2a6c22bfc92245691ac86344b099b",
+      "rustc": "ad2f345b8a7a18171cf7d3c86268923ae396ae6ab13a320eec04263d87baaf35",
+      "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+     },
+     "environment_sha256": "11ea898c6d8cba69b5adc34d1684af3836e7f1d6156e3ec46eb8ab27714f2aec"
+    }
+   ],
+   "runtime": {
+    "policy": "inherited"
+   },
+   "harness_sha256": {
+    "synth/run.py": "cb9ed619e945848e3c7a62994747edc58f1073eb27597794aa31bb9f19237803",
+    "suite.py": "46a60ac7284645d6367d7876daad18de3aa7a653a0734a7918af8c4d2d3e2f2a",
+    "versus.py": "8f92b31b0ab950c93eb7a1bfa6dab44e3547d44e3906d8fc18143265cf47f836",
+    "runtime_context.py": "d61af4c0dbae0b0ea27d47e23d7c529dc3ae096399f3d6366275a97bb2aac196"
+   },
+   "snapshots": {
+    "desktop": {
+     "jcode-desktop": "7d38fb7",
+     "jcode": "abff94eeb"
+    },
+    "justrust": {
+     "justrust": "f97fcc2"
+    }
+   },
+   "snapshot_format": 2,
+   "measurement_home_sha256": "7f5fdce129c67d00a566a916c4753a8cfc9341e7e540da0409222ec436fe756a",
+   "work_sha256": "1bbbdc3b6b9bafb85c272b174e0e8c9bb5424a55a7044e2a8dc1192d0f90c7ed",
+   "controls": {},
+   "noise_policy": {
+    "suite": "recorder-other-cpu-v1",
+    "counted": "proc-stat-wait4-v1",
+    "max_other_cores": 4.0
+   },
+   "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+   "quiet_wait": 60.0,
+   "only": null,
+   "retry_noisy": 0,
+   "retry_infra": 1
+  },
+  "retry_infra": 1,
+  "wall_scope": "successful samples conditioned on infrastructure availability; not total agent wait",
+  "infra_attempts": [
+   {
+    "point": 0,
+    "stack": "ledger-base",
+    "rep": 0,
+    "attempts": [
+     {
+      "result": {
+       "avg_other_cores": 0.23726393222918132,
+       "system_busy_cores": 1.0104968405215684,
+       "tree_cores": 0.012594379986868642,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 20.528563022613525,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 27.749,
+       "exit": 0,
+       "cpu": 0.35,
+       "max_rss_mb": 194.8,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231416574-2813016204",
+       "tests_passed": 0,
+       "load_before": 4.42,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 589.4725830000001,
+        "client_wall": 27.741257773,
+        "sync": {
+         "lock_ms": 0.0006519999999999999,
+         "link_ms": 0.0008500000000000001,
+         "push_ms": 12.888599,
+         "barrier_ms": 576.5798090000001
+        },
+        "run": {
+         "prepare_ms": 0.54467,
+         "execute_ms": 20538.750696000003,
+         "finalize_ms": 1.14551,
+         "records_ms": 1.41855
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 0.9979024605346998,
+        "system_busy_cores": 1.0104968405215684,
+        "tree_cores": 0.012594379986868642,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 27.74872604799748,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231416574-2813016204",
+       "cpu_noise_sample_count": 103,
+       "cpu_noise_sample_span_seconds": 20.52823519706726,
+       "pre_wall": 74.731
+      },
+      "commands": [
+       {
+        "stage": "pre",
+        "command": [
+         "build",
+         "--release",
+         "-p",
+         "jcode-desktop"
+        ],
+        "raw": {
+         "avg_other_cores": 1.8463421552396122,
+         "system_busy_cores": 1.8549136574579617,
+         "tree_cores": 0.008571502218349548,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": false,
+         "cpu_noise_scope": "client-host-only",
+         "cpu_noise_wall_seconds": 74.73124123198795,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 74.731,
+         "exit": 0,
+         "cpu": 0.64,
+         "max_rss_mb": 100.1,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231301666-2813016640",
+         "tests_passed": 0,
+         "load_before": 5.44,
+         "foreign_rustc_before": 0,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-base-pre-20261115-231301666-2813016640.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 68
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 1.8463421552396122,
+          "system_busy_cores": 1.8549136574579617,
+          "tree_cores": 0.008571502218349548,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 74.73124123198795,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "cpu_noise_error": "unverified remote CPU samples: incomplete or inconsistent sample coverage"
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: build succeeded, tests not run in 66.7s\n  time    startup 0.25s | compile 66.25s | gaps 0.17s | after 0.08s\n  rustc   pinned toolchain jr-ac20de5e7921\n  avoided estimated task time avoided 1197.20s (1430.63s original - 233.42s measured hit overhead). Not CPU time, wall-clock savings, or a stock comparison.\n  units   895 compiled (53 local, 764 deps, 78 build scripts), 0 fresh, depcache 839 hit/0 miss (original ~1328.3s of rustc), localcache 0 hit/55 miss. Rebuilt because: the toolchain changed (750 crates)\n          jcode_desktop_ui                  18.96s  cpu 134.4s   3127 MB\n          jcode_base                        14.92s  cpu 147.4s   3434 MB\n          jcode_sdk                          1.70s  cpu  15.5s    495 MB\n          jcode_protocol                     1.61s  cpu  11.9s    617 MB\n  cpu     441.9s total, avg 6.6/peak 14.8 of 16 cores; others used 0.5 cores\n  memory  peak 4394 MB build, 3434 MB largest rustc, 24.7 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 45 hidden; 2481 progress and 0 passing-test lines hidden\n  waste   2 issues (estimated cost each; they can overlap):\n          ~ 28.6s  33.9s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 19.0s), jcode_base (139k lines, 14.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits\n          ~  0.4s  rebuilt 764 registry dependencies and 78 build scripts (0.4s): the toolchain changed (x739)\n  more    `justrust log 20261115-231301666-2813016640` full output, `justrust show 20261115-231301666-2813016640` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224576 builds left)\njustrust remote: brought back 1 artifact (29.8 MB, 0 as delta) in 6.94s\njustrust remote: ok on hosted in 74.7s (sync 68 ms, 0 files at build time)\n"
+       },
+       {
+        "stage": "run",
+        "command": [
+         "build",
+         "--release",
+         "-p",
+         "jcode-desktop"
+        ],
+        "raw": {
+         "avg_other_cores": 0.23726393222918132,
+         "system_busy_cores": 1.0104968405215684,
+         "tree_cores": 0.012594379986868642,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": true,
+         "cpu_noise_scope": "remote-host-recorded",
+         "cpu_noise_wall_seconds": 20.528563022613525,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 27.749,
+         "exit": 0,
+         "cpu": 0.35,
+         "max_rss_mb": 194.8,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231416574-2813016204",
+         "tests_passed": 0,
+         "load_before": 4.42,
+         "foreign_rustc_before": 0,
+         "noisy": false,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-base-run-20261115-231416574-2813016204.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 589.4725830000001,
+          "client_wall": 27.741257773,
+          "sync": {
+           "lock_ms": 0.0006519999999999999,
+           "link_ms": 0.0008500000000000001,
+           "push_ms": 12.888599,
+           "barrier_ms": 576.5798090000001
+          },
+          "run": {
+           "prepare_ms": 0.54467,
+           "execute_ms": 20538.750696000003,
+           "finalize_ms": 1.14551,
+           "records_ms": 1.41855
+          }
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 0.9979024605346998,
+          "system_busy_cores": 1.0104968405215684,
+          "tree_cores": 0.012594379986868642,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 27.74872604799748,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "remote_foreign_rustc": 0,
+         "cpu_noise_remote_run_id": "20261115-231416574-2813016204",
+         "cpu_noise_sample_count": 103,
+         "cpu_noise_sample_span_seconds": 20.52823519706726
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: build succeeded, tests not run in 20.5s\n  time    startup 0.21s | compile 20.19s | gaps 0.09s | after 0.04s\n  rustc   pinned toolchain jr-ac20de5e7921\n  units   2 compiled (2 local, 0 deps, 0 build scripts), 748 fresh, localcache 0 hit/1 miss. Rebuilt because: edited crates/jcode-desktop-ui/src (jcode-desktop-ui); jcode-desktop-ui changed (jcode-desktop)\n          jcode_desktop_ui                  18.81s  cpu 135.0s   3095 MB\n          jcode_desktop                      1.38s  cpu   5.9s    624 MB\n  cpu     141.5s total (sampled process lower bound), avg 6.9/peak 14.5 of 16 cores; others used 0.2 cores\n  memory  peak 3334 MB build, 3095 MB largest rustc, 25.1 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 45 hidden; 756 progress and 0 passing-test lines hidden\n  waste   2 issues (estimated cost each; they can overlap):\n          ~ 15.7s  18.8s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 18.8s). Specifically, crates/jcode-desktop-ui/src is an input of jcode-desktop-ui's build script, so each edit reruns it and recompiles jcode-desktop-ui and its 1 dependents (~20.5s per edit over 4 recorded runs). Embed it in a small leaf crate used only where it is read, or load it at runtime (`justrust split` for all candidates)\n          ~  1.4s  jcode-desktop rebuilt only because jcode-desktop-ui changed (edited crates/jcode-desktop-ui/src) (1.4s). See the split recommendation above\n  more    `justrust log 20261115-231416574-2813016204` full output, `justrust show 20261115-231416574-2813016204` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224575 builds left)\njustrust remote: brought back 1 artifact (15.7 MB, 1 as delta) in 6.39s\n  waste   ~  6.4s  6.4s copying build outputs back from the build machine. Build only the binaries you need (-p, --bin), or use check/test, which return no binaries\n  habit   `jcode_desktop_ui` rebuild has cost 134s over 7 runs this week (~19s each). Every edit recompiles the whole crate: `justrust split` shows where to cut it so edits rebuild a smaller piece\njustrust remote: ok on hosted in 27.7s (sync 589 ms, 0 files at build time)\n"
+       }
+      ],
+      "infra_failure": false,
+      "backoff_seconds": 0
+     }
+    ],
+    "elapsed_seconds": 102.7203677679936,
+    "backoff_seconds": 0
+   },
+   {
+    "point": 0,
+    "stack": "ledger-candidate",
+    "rep": 0,
+    "attempts": [
+     {
+      "result": {
+       "avg_other_cores": 0.23343544642200262,
+       "system_busy_cores": 1.130904232879652,
+       "tree_cores": 0.012695598157394818,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 20.536457061767575,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 27.96,
+       "exit": 0,
+       "cpu": 0.35,
+       "max_rss_mb": 195.3,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231648350-2813016675",
+       "tests_passed": 0,
+       "load_before": 1.61,
+       "foreign_rustc_before": 0,
+       "noisy": false,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 284.48424300000005,
+        "client_wall": 27.951800884,
+        "sync": {
+         "lock_ms": 0.001295,
+         "link_ms": 0.0010860000000000002,
+         "push_ms": 11.123071,
+         "barrier_ms": 273.348398
+        },
+        "run": {
+         "prepare_ms": 0.628519,
+         "execute_ms": 20546.429866,
+         "finalize_ms": 1.32284,
+         "records_ms": 1.47769
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 1.118208634722257,
+        "system_busy_cores": 1.130904232879652,
+        "tree_cores": 0.012695598157394818,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 27.95992718100024,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231648350-2813016675",
+       "cpu_noise_sample_count": 103,
+       "cpu_noise_sample_span_seconds": 20.53606104850769,
+       "pre_wall": 63.54
+      },
+      "commands": [
+       {
+        "stage": "pre",
+        "command": [
+         "build",
+         "--release",
+         "-p",
+         "jcode-desktop"
+        ],
+        "raw": {
+         "avg_other_cores": 0.6964481415993814,
+         "system_busy_cores": 0.8734693679757736,
+         "tree_cores": 0.007926632216165878,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": true,
+         "cpu_noise_scope": "remote-host-recorded",
+         "cpu_noise_wall_seconds": 54.11908149719238,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 63.54,
+         "exit": 0,
+         "cpu": 0.5,
+         "max_rss_mb": 99.9,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231544701-2813016643",
+         "tests_passed": 0,
+         "load_before": 2.06,
+         "foreign_rustc_before": 0,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-candidate-pre-20261115-231544701-2813016643.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 96.796431,
+          "client_wall": 63.516716841,
+          "sync": {
+           "lock_ms": 0.000679,
+           "link_ms": 0.00058,
+           "push_ms": 12.010316,
+           "barrier_ms": 84.778882
+          },
+          "run": {
+           "prepare_ms": 0.78498,
+           "execute_ms": 54150.522551999995,
+           "finalize_ms": 2.58731,
+           "records_ms": 15.499539
+          }
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 0.8655427357596077,
+          "system_busy_cores": 0.8734693679757736,
+          "tree_cores": 0.007926632216165878,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 63.53972106499714,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "remote_foreign_rustc": 1,
+         "cpu_noise_remote_run_id": "20261115-231544701-2813016643",
+         "cpu_noise_sample_count": 270,
+         "cpu_noise_sample_span_seconds": 54.11870265007019
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: build succeeded, tests not run in 54.1s\n  time    startup 0.25s | compile 52.11s | gaps 1.68s | after 0.08s\n  rustc   pinned toolchain jr-60c5ee8a11aa\n  avoided estimated task time avoided 1183.42s (1197.47s original - 14.05s measured hit overhead). Not CPU time, wall-clock savings, or a stock comparison.\n  units   895 compiled (53 local, 764 deps, 78 build scripts), 0 fresh, depcache 839 hit/0 miss (original ~1059.6s of rustc), localcache 0 hit/55 miss. Rebuilt because: the toolchain changed (750 crates)\n          jcode_desktop_ui                  19.35s  cpu 134.3s   3105 MB  frontend 5.99 codegen 12.67 link 0.22 incr 0.00  top LLVM_module_optimize 41.25s\n          jcode_base                        15.02s  cpu 148.7s   3419 MB  frontend 8.26 codegen 13.91 link 0.04 incr 0.00  top LLVM_module_optimize 46.50s\n          jcode_sdk                          1.73s  cpu  15.5s    509 MB  frontend 0.93 codegen 6.34 link 0.01 incr 0.00  top LLVM_module_optimize 5.61s\n          jcode_protocol                     1.65s  cpu  11.9s    631 MB  frontend 2.82 codegen 5.25 link 0.01 incr 0.00  top finish_ongoing_codegen 4.44s\n  cpu     451.4s total, avg 8.3/peak 14.7 of 16 cores; others used 0.7 cores (1 other rustc)\n  memory  peak 4401 MB build, 3419 MB largest rustc, 24.7 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 45 hidden; 2481 progress and 0 passing-test lines hidden\n  waste   9 issues (estimated cost each; they can overlap):\n          ~ 29.0s  34.4s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 19.3s), jcode_base (139k lines, 15.0s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits\n          ~ 13.9s  jcode_base spent 13.9s in codegen vs 8.3s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~ 12.7s  jcode_desktop_ui spent 12.7s in codegen (2.9s monomorphizing) vs 6.0s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  6.3s  jcode_sdk spent 6.3s in codegen vs 0.9s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  5.2s  jcode_protocol spent 5.2s in codegen vs 2.8s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  4.6s  jcode_provider_bedrock spent 4.6s in codegen vs 0.7s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ... 3 more in `justrust show`\n  more    `justrust log 20261115-231544701-2813016643` full output, `justrust show 20261115-231544701-2813016643` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224574 builds left)\njustrust remote: brought back 1 artifact (29.8 MB, 0 as delta) in 8.13s\n  habit   `jcode_desktop_ui` rebuild has cost 153s over 8 runs this week (~19s each). Every edit recompiles the whole crate: `justrust split` shows where to cut it so edits rebuild a smaller piece\njustrust remote: ok on hosted in 63.5s (sync 97 ms, 0 files at build time)\n"
+       },
+       {
+        "stage": "run",
+        "command": [
+         "build",
+         "--release",
+         "-p",
+         "jcode-desktop"
+        ],
+        "raw": {
+         "avg_other_cores": 0.23343544642200262,
+         "system_busy_cores": 1.130904232879652,
+         "tree_cores": 0.012695598157394818,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": true,
+         "cpu_noise_scope": "remote-host-recorded",
+         "cpu_noise_wall_seconds": 20.536457061767575,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 27.96,
+         "exit": 0,
+         "cpu": 0.35,
+         "max_rss_mb": 195.3,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231648350-2813016675",
+         "tests_passed": 0,
+         "load_before": 1.61,
+         "foreign_rustc_before": 0,
+         "noisy": false,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-candidate-run-20261115-231648350-2813016675.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 284.48424300000005,
+          "client_wall": 27.951800884,
+          "sync": {
+           "lock_ms": 0.001295,
+           "link_ms": 0.0010860000000000002,
+           "push_ms": 11.123071,
+           "barrier_ms": 273.348398
+          },
+          "run": {
+           "prepare_ms": 0.628519,
+           "execute_ms": 20546.429866,
+           "finalize_ms": 1.32284,
+           "records_ms": 1.47769
+          }
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 1.118208634722257,
+          "system_busy_cores": 1.130904232879652,
+          "tree_cores": 0.012695598157394818,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 27.95992718100024,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "remote_foreign_rustc": 0,
+         "cpu_noise_remote_run_id": "20261115-231648350-2813016675",
+         "cpu_noise_sample_count": 103,
+         "cpu_noise_sample_span_seconds": 20.53606104850769
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: build succeeded, tests not run in 20.5s\n  time    startup 0.20s | compile 20.20s | gaps 0.09s | after 0.05s\n  rustc   pinned toolchain jr-60c5ee8a11aa\n  units   2 compiled (2 local, 0 deps, 0 build scripts), 748 fresh, localcache 0 hit/1 miss. Rebuilt because: edited crates/jcode-desktop-ui/src (jcode-desktop-ui); jcode-desktop-ui changed (jcode-desktop)\n          jcode_desktop_ui                  18.81s  cpu 134.2s   3144 MB  frontend 5.97 codegen 12.12 link 0.24 incr 0.00  top LLVM_module_optimize 41.39s\n          jcode_desktop                      1.39s  cpu   5.9s    633 MB  frontend 0.17 codegen 0.90 link 0.21 incr 0.00  top LLVM_module_optimize 1.74s\n  cpu     140.7s total (sampled process lower bound), avg 6.8/peak 15.0 of 16 cores; others used 0.2 cores\n  memory  peak 3379 MB build, 3144 MB largest rustc, 25.1 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 45 hidden; 756 progress and 0 passing-test lines hidden\n  waste   3 issues (estimated cost each; they can overlap):\n          ~ 15.7s  18.8s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 18.8s). Specifically, crates/jcode-desktop-ui/src is an input of jcode-desktop-ui's build script, so each edit reruns it and recompiles jcode-desktop-ui and its 1 dependents (~20.5s per edit over 5 recorded runs). Embed it in a small leaf crate used only where it is read, or load it at runtime (`justrust split` for all candidates)\n          ~ 12.1s  jcode_desktop_ui spent 12.1s in codegen (2.9s monomorphizing) vs 6.0s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  1.4s  jcode-desktop rebuilt only because jcode-desktop-ui changed (edited crates/jcode-desktop-ui/src) (1.4s). See the split recommendation above\n  more    `justrust log 20261115-231648350-2813016675` full output, `justrust show 20261115-231648350-2813016675` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224573 builds left)\njustrust remote: brought back 1 artifact (15.7 MB, 1 as delta) in 6.49s\n  waste   ~  6.5s  6.5s copying build outputs back from the build machine. Build only the binaries you need (-p, --bin), or use check/test, which return no binaries\n  habit   `jcode_desktop_ui` rebuild has cost 172s over 9 runs this week (~19s each). Every edit recompiles the whole crate: `justrust split` shows where to cut it so edits rebuild a smaller piece\njustrust remote: ok on hosted in 28.0s (sync 284 ms, 0 files at build time)\n"
+       }
+      ],
+      "infra_failure": false,
+      "backoff_seconds": 0
+     }
+    ],
+    "elapsed_seconds": 91.64554880200012,
+    "backoff_seconds": 0
+   },
+   {
+    "point": 1,
+    "stack": "ledger-candidate",
+    "rep": 0,
+    "attempts": [
+     {
+      "result": {
+       "avg_other_cores": 0.3910385719302737,
+       "system_busy_cores": 3.9297892441420252,
+       "tree_cores": 0.002347701067515365,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 14.728938341140749,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 16.81,
+       "exit": 0,
+       "cpu": 0.04,
+       "max_rss_mb": 48.1,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-231908069-2813016770",
+       "tests_passed": 1304,
+       "load_before": 1.95,
+       "foreign_rustc_before": 4,
+       "noisy": true,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 971.902154,
+        "client_wall": 16.801036608,
+        "sync": {
+         "lock_ms": 0.000594,
+         "link_ms": 0.000634,
+         "push_ms": 12.745842,
+         "barrier_ms": 959.150241
+        },
+        "run": {
+         "prepare_ms": 10.456099,
+         "execute_ms": 14758.83731,
+         "finalize_ms": 2.57506,
+         "records_ms": 2.05094
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 3.9274415430745098,
+        "system_busy_cores": 3.9297892441420252,
+        "tree_cores": 0.002347701067515365,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 16.810061786003644,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 0,
+       "cpu_noise_remote_run_id": "20261115-231908069-2813016770",
+       "cpu_noise_sample_count": 75,
+       "cpu_noise_sample_span_seconds": 14.728446245193481,
+       "pre_wall": 111.348
+      },
+      "commands": [
+       {
+        "stage": "pre",
+        "command": [
+         "test",
+         "-p",
+         "jcode-desktop-ui",
+         "--lib",
+         "--no-run"
+        ],
+        "raw": {
+         "avg_other_cores": 1.434760064413456,
+         "system_busy_cores": 1.4437659451646125,
+         "tree_cores": 0.009005880751156698,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": false,
+         "cpu_noise_scope": "client-host-only",
+         "cpu_noise_wall_seconds": 111.34768799500307,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 111.348,
+         "exit": 0,
+         "cpu": 1.0,
+         "max_rss_mb": 286.4,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231716377-2813016794",
+         "tests_passed": 0,
+         "load_before": 1.82,
+         "foreign_rustc_before": 0,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-candidate-pre-20261115-231716377-2813016794.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 103
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 1.434760064413456,
+          "system_busy_cores": 1.4437659451646125,
+          "tree_cores": 0.009005880751156698,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 111.34768799500307,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "cpu_noise_error": "unverified remote CPU samples: incomplete or inconsistent sample coverage"
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: test binaries built, tests not run (--no-run) in 95.4s\n  time    startup 0.72s | compile 90.98s | gaps 3.63s | after 0.08s\n  rustc   pinned toolchain jr-60c5ee8a11aa\n  units   887 compiled (52 local, 759 deps, 76 build scripts), 0 fresh, depcache 0 hit/833 miss, localcache 0 hit/54 miss\n          jcode_desktop_ui (test)           14.83s  cpu  57.9s   3133 MB  frontend 5.41 codegen 8.01 link 0.50 incr 0.46  top LLVM_module_codegen 12.03s\n          aws_sdk_bedrock                   10.49s  cpu  18.9s   1719 MB  frontend 11.34 codegen 1.46 link 0.10 incr 0.00  top LLVM_module_codegen 4.68s\n          jcode_base                         8.15s  cpu  40.3s   2344 MB  frontend 6.28 codegen 2.68 link 0.12 incr 0.35  top LLVM_module_codegen 6.48s\n          gpui_linux                         3.58s  cpu  44.7s    984 MB  frontend 2.77 codegen 8.05 link 0.04 incr 0.00  top LLVM_module_optimize 14.34s\n  cpu     750.2s total, avg 7.9/peak 14.1 of 16 cores; others used 1.7 cores\n  memory  peak 6091 MB build, 3133 MB largest rustc, 24.1 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 24 hidden; 1708 progress and 0 passing-test lines hidden\n  waste   5 issues (estimated cost each; they can overlap):\n          ~ 29.1s  833 dependency units missed the shared dependency cache and compiled (466.0s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them. Why: 424 toolchain (356s), 409 flags (110s) (`justrust cache --misses` lists them)\n          ~ 27.7s  rebuilt 759 registry dependencies and 76 build scripts (27.7s)\n          ~ 19.3s  23.0s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 14.8s), jcode_base (139k lines, 8.2s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits\n          ~  8.0s  jcode_desktop_ui (test) spent 8.0s in codegen (2.2s monomorphizing) vs 5.4s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  3.6s  3.6s inside the build with no compiler running (build scripts or scheduling)\n  more    `justrust log 20261115-231716377-2813016794` full output, `justrust show 20261115-231716377-2813016794` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224570 builds left)\njustrust test executable: /home/jeremy/.cache/justrust-bench/ledger-promotion-versus/target/desktop/ledger-candidate/debug/deps/jcode_desktop_ui-04ef0ccfa0e64f4e\njustrust remote: brought back 1 artifact (45.7 MB, 0 as delta) in 14.37s; selected manifest /home/jeremy/.jcode/scratch/ledger-promotion-20261116/state/runs/20261115-231716377-2813016794/selected-artifacts.json\njustrust remote: ok on hosted in 111.3s (sync 103 ms, 0 files at build time)\n"
+       },
+       {
+        "stage": "run",
+        "command": [
+         "test",
+         "-p",
+         "jcode-desktop-ui",
+         "--lib"
+        ],
+        "raw": {
+         "avg_other_cores": 0.3910385719302737,
+         "system_busy_cores": 3.9297892441420252,
+         "tree_cores": 0.002347701067515365,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": true,
+         "cpu_noise_scope": "remote-host-recorded",
+         "cpu_noise_wall_seconds": 14.728938341140749,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 16.81,
+         "exit": 0,
+         "cpu": 0.04,
+         "max_rss_mb": 48.1,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-231908069-2813016770",
+         "tests_passed": 1304,
+         "load_before": 1.95,
+         "foreign_rustc_before": 4,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-candidate-run-20261115-231908069-2813016770.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 971.902154,
+          "client_wall": 16.801036608,
+          "sync": {
+           "lock_ms": 0.000594,
+           "link_ms": 0.000634,
+           "push_ms": 12.745842,
+           "barrier_ms": 959.150241
+          },
+          "run": {
+           "prepare_ms": 10.456099,
+           "execute_ms": 14758.83731,
+           "finalize_ms": 2.57506,
+           "records_ms": 2.05094
+          }
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 3.9274415430745098,
+          "system_busy_cores": 3.9297892441420252,
+          "tree_cores": 0.002347701067515365,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 16.810061786003644,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "remote_foreign_rustc": 0,
+         "cpu_noise_remote_run_id": "20261115-231908069-2813016770",
+         "cpu_noise_sample_count": 75,
+         "cpu_noise_sample_span_seconds": 14.728446245193481
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\njustrust: reflink probe failed; isolated build slots cannot be seeded or refreshed (no artifact copies)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\njustrust: test process started: jcode_desktop_ui-04ef0ccfa0e64f4e (pid 627793)\n\njustrust: ok: 1304 tests passed in 14.7s\n  time    startup 0.26s | compile 8.31s | gaps 0.06s | tests 5.79s | after 0.32s\n  rustc   pinned toolchain jr-60c5ee8a11aa\n  units   1 compiled (1 local, 0 deps, 0 build scripts), 743 fresh, localcache 0 hit/1 miss. Rebuilt because: edited crates/jcode-desktop-ui/src (jcode-desktop-ui)\n          jcode_desktop_ui (test)            8.31s  cpu  15.0s   2276 MB  frontend 3.31 codegen 3.36 link 0.49 incr 0.60  top codegen_crate 3.34s\n  tests   1304 passed, 0 failed, 10 ignored, 0 filtered out, 1 binary in 5.79s\n          slowest tests (1304 timed, 50.7s summed; a suite cannot finish before its slowest test):\n              3.98s  workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow\n              3.43s  panel::startup_lifecycle_tests::startup_each_native_submission_paints_the_newest_row\n              2.33s  panel::prompt::tests::native_scroll_paints_historical_prompt_cards\n              2.25s  panel::tail_glide::tests::tool_cards_and_text_after_them_glide_instead_of_jumping\n              1.53s  panel::tail_glide::tests::fast_streams_follow_without_snapping\n  cpu     54.2s total (sampled process lower bound), avg 3.7/peak 14.1 of 16 cores; others used 0.4 cores\n  memory  peak 3968 MB build, 2276 MB largest rustc, 24.4 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 24 hidden; 752 progress and 1314 passing-test lines hidden\n  waste   4 issues (estimated cost each; they can overlap):\n          ~  6.9s  8.3s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 8.3s). Specifically, crates/jcode-desktop-ui/src is an input of jcode-desktop-ui's build script, so each edit reruns it and recompiles jcode-desktop-ui and its 1 dependents (~20.4s per edit over 6 recorded runs). Embed it in a small leaf crate used only where it is read, or load it at runtime (`justrust split` for all candidates)\n          ~  5.8s  tests in jcode_desktop_ui-04ef0ccfa0e64f4e took 5.8s to run; the slowest test alone took 4.0s (workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow). Speed it up or split it, or filter to the tests you changed\n          ~  3.4s  jcode_desktop_ui (test) spent 3.4s in codegen vs 3.3s type-checking. Large codegen after a small edit means little was reused from the incremental cache\n          ~  2.5s  build averaged 3.7 of 16 cores: jcode_desktop_ui (test) ran 8.3s mostly alone (frontend threads 8)\n  more    `justrust log 20261115-231908069-2813016770` full output, `justrust show 20261115-231908069-2813016770` full profile\njustrust remote: ok on hosted in 16.8s (sync 972 ms, 0 files at build time)\n"
+       }
+      ],
+      "infra_failure": false,
+      "backoff_seconds": 0
+     }
+    ],
+    "elapsed_seconds": 128.5334294050117,
+    "backoff_seconds": 0
+   },
+   {
+    "point": 1,
+    "stack": "ledger-base",
+    "rep": 0,
+    "attempts": [
+     {
+      "result": {
+       "avg_other_cores": 0.9710432199661817,
+       "system_busy_cores": 2.457940691195637,
+       "tree_cores": 0.002159895885844796,
+       "steal_cores": 0.0,
+       "cpu_noise_valid": true,
+       "cpu_noise_scope": "remote-host-recorded",
+       "cpu_noise_wall_seconds": 15.08703327178955,
+       "cpu_noise_clock_ticks_per_second": 100,
+       "wall": 21.799,
+       "exit": 0,
+       "cpu": 0.05,
+       "max_rss_mb": 48.1,
+       "instructions": null,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261115-232148893-2813016103",
+       "tests_passed": 1304,
+       "load_before": 4.35,
+       "foreign_rustc_before": 0,
+       "noisy": true,
+       "remote": {
+        "machine": "hosted",
+        "sync_ms": 3372.739368,
+        "client_wall": 21.788859744,
+        "sync": {
+         "lock_ms": 0.0006039999999999999,
+         "link_ms": 0.0005239999999999999,
+         "push_ms": 12.949765,
+         "barrier_ms": 3358.231277
+        },
+        "run": {
+         "prepare_ms": 0.9642,
+         "execute_ms": 15112.358029,
+         "finalize_ms": 1.63944,
+         "records_ms": 2.12031
+        }
+       },
+       "client_cpu_noise": {
+        "avg_other_cores": 2.455780795309792,
+        "system_busy_cores": 2.457940691195637,
+        "tree_cores": 0.002159895885844796,
+        "steal_cores": 0.0,
+        "cpu_noise_valid": true,
+        "cpu_noise_scope": "invocation-host",
+        "cpu_noise_wall_seconds": 21.798735906006186,
+        "cpu_noise_clock_ticks_per_second": 100
+       },
+       "remote_foreign_rustc": 4,
+       "cpu_noise_remote_run_id": "20261115-232148893-2813016103",
+       "cpu_noise_sample_count": 76,
+       "cpu_noise_sample_span_seconds": 15.086706638336182,
+       "pre_wall": 83.31
+      },
+      "commands": [
+       {
+        "stage": "pre",
+        "command": [
+         "test",
+         "-p",
+         "jcode-desktop-ui",
+         "--lib",
+         "--no-run"
+        ],
+        "raw": {
+         "avg_other_cores": 3.8669296594610683,
+         "system_busy_cores": 3.8803341632167108,
+         "tree_cores": 0.013404503755642368,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": false,
+         "cpu_noise_scope": "client-host-only",
+         "cpu_noise_wall_seconds": 83.30983528800425,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 83.31,
+         "exit": 0,
+         "cpu": 1.12,
+         "max_rss_mb": 284.7,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-232025207-2813016770",
+         "tests_passed": 0,
+         "load_before": 3.41,
+         "foreign_rustc_before": 1,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-base-pre-20261115-232025207-2813016770.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 132
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 3.8669296594610683,
+          "system_busy_cores": 3.8803341632167108,
+          "tree_cores": 0.013404503755642368,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 83.30983528800425,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "cpu_noise_error": "unverified remote CPU samples: incomplete or inconsistent sample coverage"
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\njustrust: reflink probe failed; isolated build slots cannot be seeded or refreshed (no artifact copies)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\n\njustrust: ok: test binaries built, tests not run (--no-run) in 63.0s\n  time    startup 0.26s | compile 62.27s | gaps 0.36s | after 0.08s\n  rustc   pinned toolchain jr-ac20de5e7921\n  avoided estimated task time avoided 281.54s (729.97s original - 448.43s measured hit overhead). Not CPU time, wall-clock savings, or a stock comparison.\n  units   887 compiled (52 local, 759 deps, 76 build scripts), 0 fresh, depcache 833 hit/0 miss (original ~662.8s of rustc), localcache 0 hit/54 miss. Rebuilt because: the toolchain changed (744 crates)\n          jcode_desktop_ui (test)           15.34s  cpu  57.5s   3126 MB\n          jcode_base                         7.54s  cpu  40.2s   2315 MB\n          ash                                0.87s  cpu   0.0s      0 MB\n          aws_sdk_bedrock                    0.79s  cpu   0.0s      0 MB\n  cpu     165.0s total, avg 2.6/peak 10.9 of 16 cores; others used 0.6 cores\n  memory  peak 3875 MB build, 3126 MB largest rustc, 25.4 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 24 hidden; 2452 progress and 0 passing-test lines hidden\n  waste   2 issues (estimated cost each; they can overlap):\n          ~ 19.2s  22.9s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 15.3s), jcode_base (139k lines, 7.5s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits\n          ~  4.8s  rebuilt 759 registry dependencies and 76 build scripts (4.8s): the toolchain changed (x740)\n  more    `justrust log 20261115-232025207-2813016770` full output, `justrust show 20261115-232025207-2813016770` full profile\nhosted: connecting to a build machine...\nhosted: native TLS verified at 35.92.71.210:443\nhosted: ready at ubuntu@35.92.71.210 (224562 builds left)\njustrust test executable: /home/jeremy/.cache/justrust-bench/ledger-promotion-versus/target/desktop/ledger-base/debug/deps/jcode_desktop_ui-04ef0ccfa0e64f4e\njustrust remote: brought back 1 artifact (45.6 MB, 0 as delta) in 18.79s; selected manifest /home/jeremy/.jcode/scratch/ledger-promotion-20261116/state/runs/20261115-232025207-2813016770/selected-artifacts.json\n  waste   ~ 18.8s  18.8s copying build outputs back from the build machine. Build only the binaries you need (-p, --bin), or use check/test, which return no binaries\njustrust remote: ok on hosted in 83.3s (sync 132 ms, 0 files at build time)\n"
+       },
+       {
+        "stage": "run",
+        "command": [
+         "test",
+         "-p",
+         "jcode-desktop-ui",
+         "--lib"
+        ],
+        "raw": {
+         "avg_other_cores": 0.9710432199661817,
+         "system_busy_cores": 2.457940691195637,
+         "tree_cores": 0.002159895885844796,
+         "steal_cores": 0.0,
+         "cpu_noise_valid": true,
+         "cpu_noise_scope": "remote-host-recorded",
+         "cpu_noise_wall_seconds": 15.08703327178955,
+         "cpu_noise_clock_ticks_per_second": 100,
+         "wall": 21.799,
+         "exit": 0,
+         "cpu": 0.05,
+         "max_rss_mb": 48.1,
+         "instructions": null,
+         "compile_failed": false,
+         "tests_failed": 0,
+         "id": "20261115-232148893-2813016103",
+         "tests_passed": 1304,
+         "load_before": 4.35,
+         "foreign_rustc_before": 0,
+         "noisy": true,
+         "log": "/home/jeremy/.cache/justrust-bench/ledger-promotion-versus/logs/synth-ledger-base-run-20261115-232148893-2813016103.log",
+         "remote": {
+          "machine": "hosted",
+          "sync_ms": 3372.739368,
+          "client_wall": 21.788859744,
+          "sync": {
+           "lock_ms": 0.0006039999999999999,
+           "link_ms": 0.0005239999999999999,
+           "push_ms": 12.949765,
+           "barrier_ms": 3358.231277
+          },
+          "run": {
+           "prepare_ms": 0.9642,
+           "execute_ms": 15112.358029,
+           "finalize_ms": 1.63944,
+           "records_ms": 2.12031
+          }
+         },
+         "client_cpu_noise": {
+          "avg_other_cores": 2.455780795309792,
+          "system_busy_cores": 2.457940691195637,
+          "tree_cores": 0.002159895885844796,
+          "steal_cores": 0.0,
+          "cpu_noise_valid": true,
+          "cpu_noise_scope": "invocation-host",
+          "cpu_noise_wall_seconds": 21.798735906006186,
+          "cpu_noise_clock_ticks_per_second": 100
+         },
+         "remote_foreign_rustc": 4,
+         "cpu_noise_remote_run_id": "20261115-232148893-2813016103",
+         "cpu_noise_sample_count": 76,
+         "cpu_noise_sample_span_seconds": 15.086706638336182
+        },
+        "log_text": "justrust: remote (JUSTRUST_REMOTE=force)\njustrust remote: not mirrored (over 8 MB): /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup.mp4 (18.4 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/exports/memory_demo_1m40_spedup_v2.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode-claudeai-demo.mp4 (24.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_final.mp4 (11.2 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/jcode_wolf_demo_v2.mp4 (10.5 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/demos/memory_demo.mp4 (16.0 MB), /home/jeremy/.cache/justrust-bench/ledger-promotion-work/desktop/v2-2b3fdb3f1472-jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/assets/readme/100-sessions-spawn-demo.gif (54.4 MB)\njustrust: reflink probe failed; isolated build slots cannot be seeded or refreshed (no artifact copies)\nwarning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency\n  --> crates/jcode-desktop-api/src/image_ids.rs:41:18\n   |\n41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |                  ^^^^^^^^^^^^\n   |\n   = note: `#[warn(deprecated)]` on by default\nhelp: replace the use of the deprecated method\n   |\n41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))\n   |\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n29 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\n\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9\n   |\n23 | #[derive(Clone, PartialEq)]\n   |                 --------- in this derive macro expansion\n...\n37 |         curve: fn(f32) -> f32,\n   |         ^^^^^^^^^^^^^^^^^^^^^\n   |\n   = note: the address of the same function can vary between different codegen units\n   = note: furthermore, different functions could have the same address after being merged together\n   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n\njustrust: test process started: jcode_desktop_ui-04ef0ccfa0e64f4e (pid 640679)\njustrust: test process started: jcode_desktop_ui-04ef0ccfa0e64f4e (pid 640680)\njustrust: test process started: jcode_desktop_ui-04ef0ccfa0e64f4e (pid 642183)\njustrust: test process started: jcode_desktop_ui-04ef0ccfa0e64f4e (pid 642187)\njustrust: jcode_desktop_ui-04ef0ccfa0e64f4e: workspace::live_tabs::tests::live_tabs_switch_rows_and_stay_detached_from_panels failed while other test processes ran in parallel and passed when rerun alone by name; not counted as failures\nfailures:\n\n---- workspace::live_tabs::tests::live_tabs_switch_rows_and_stay_detached_from_panels stdout ----\n\nthread 'workspace::live_tabs::tests::live_tabs_switch_rows_and_stay_detached_from_panels' (641202) panicked at crates/jcode-desktop-ui/src/live_tabs.rs:2009:13:\nassertion `left == right` failed\n  left: 1\n right: 2\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nfailures:\n    workspace::live_tabs::tests::live_tabs_switch_rows_and_stay_detached_from_panels\n\n\njustrust: ok: 1304 tests passed in 15.1s\n  time    startup 0.21s | compile 8.76s | gaps 0.04s | tests 5.81s | after 0.25s\n  rustc   pinned toolchain jr-ac20de5e7921\n  units   1 compiled (1 local, 0 deps, 0 build scripts), 743 fresh, localcache 0 hit/1 miss. Rebuilt because: edited crates/jcode-desktop-ui/src (jcode-desktop-ui)\n          jcode_desktop_ui (test)            8.76s  cpu  15.0s   2275 MB\n  tests   1304 passed, 0 failed, 10 ignored, 0 filtered out, 1 binary in 5.81s\n          slowest tests (1304 timed, 119.8s summed; a suite cannot finish before its slowest test):\n              4.29s  workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow\n              3.38s  panel::startup_lifecycle_tests::startup_each_native_submission_paints_the_newest_row\n              2.50s  panel::prompt::tests::native_scroll_paints_historical_prompt_cards\n              2.32s  panel::tail_glide::tests::tool_cards_and_text_after_them_glide_instead_of_jumping\n              2.15s  native_mermaid::tests::every_mmdr_diagram_family_tessellates_natively\n  cpu     55.8s total, avg 3.7/peak 11.3 of 16 cores; others used 1.0 cores (4 other rustc)\n  memory  peak 4078 MB build, 2275 MB largest rustc, 22.9 GB free; stalls not measured (no PSI on this machine)\n  output  3 warnings shown, 24 hidden; 755 progress and 1314 passing-test lines hidden\n  waste   3 issues (estimated cost each; they can overlap):\n          ~  7.3s  8.8s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 8.8s). Specifically, crates/jcode-desktop-ui/src is an input of jcode-desktop-ui's build script, so each edit reruns it and recompiles jcode-desktop-ui and its 1 dependents (~17.5s per edit over 7 recorded runs). Embed it in a small leaf crate used only where it is read, or load it at runtime (`justrust split` for all candidates)\n          ~  5.8s  tests in jcode_desktop_ui-04ef0ccfa0e64f4e took 5.8s to run; the slowest test alone took 4.3s (workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow). Speed it up or split it, or filter to the tests you changed\n          ~  2.6s  build averaged 3.7 of 16 cores: jcode_desktop_ui (test) ran 8.8s mostly alone (frontend threads 8)\n  more    `justrust log 20261115-232148893-2813016103` full output, `justrust show 20261115-232148893-2813016103` full profile\njustrust remote: ok on hosted in 21.8s (sync 3373 ms, 0 files at build time)\n"
+       }
+      ],
+      "infra_failure": false,
+      "backoff_seconds": 0
+     }
+    ],
+    "elapsed_seconds": 105.53373770599137,
+    "backoff_seconds": 0
+   }
+  ],
+  "execution_elapsed_seconds": 609.9645954000007,
+  "stopped_early": "point 1: noisy samples"
+ },
+ "finished": "2026-11-15T23:22:10-0800"
+}

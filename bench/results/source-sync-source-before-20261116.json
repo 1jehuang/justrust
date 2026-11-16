@@ -1,0 +1,300 @@
+{
+ "started": "2026-11-15T22:15:33-0800",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "noise_policy": {
+   "suite": "recorder-other-cpu-v1",
+   "counted": "proc-stat-wait4-v1",
+   "max_other_cores": 4.0
+  },
+  "justrust": "justrust 0.1.0-alpha.28",
+  "justrust_rev": "6b3301f2033a",
+  "benchmark_repo_rev": "6b3301f2033a",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "e73584e20b03ae6d8ffdff86d865cb096416c008eaf608430779e0e1b71c971f",
+  "justrust_dirty": false,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "snapshot_format": 2,
+  "snapshot_fingerprints": {
+   "desktop": "2b3fdb3f14725ef850d7b599148b2ec53ce12bf8ad899b9f7c4a5b704018a7d9",
+   "justrust": "b7ba71b4dfa9e2df3ae39e3e2a5dc0edba5dd3953e04c6f657a56dd977263adb"
+  },
+  "runtime_prerequisites": {
+   "policy": "pinned-test-runtime-v1",
+   "child_umask": "0022",
+   "sqlite3": null
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "desktop-noop-test": {
+   "what": "no edit: pure overhead of a fresh `test` (cargo startup, fingerprints, test run)",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "expect_test_fail": false,
+   "samples": [
+    {
+     "id": "20261115-221627302-2390801896",
+     "wall": 9.947,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.381,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 6700.860964,
+      "client_wall": 9.943456717,
+      "sync": {
+       "lock_ms": 0.000334,
+       "link_ms": 5898.209557,
+       "push_ms": 769.600177,
+       "barrier_ms": 33.014455
+      },
+      "run": {
+       "prepare_ms": 3.27914,
+       "execute_ms": 403.730666,
+       "finalize_ms": 1.73619,
+       "records_ms": 0.529259
+      },
+      "host_wall": 0.38110780715942383,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.4,
+     "startup": 0.366,
+     "compile": 0.0,
+     "test_run": 0.008,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 12.64,
+     "foreign_rustc_before": 0,
+     "load_before": 27.77,
+     "noisy": true,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261115-221637289-2390801679",
+     "wall": 1.241,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.331,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 41.121543,
+      "client_wall": 1.238010415,
+      "sync": {
+       "lock_ms": 0.00023,
+       "link_ms": 0.000435,
+       "push_ms": 9.367455,
+       "barrier_ms": 31.750273000000004
+      },
+      "run": {
+       "prepare_ms": 0.6802400000000001,
+       "execute_ms": 357.667589,
+       "finalize_ms": 184.926909,
+       "records_ms": 0.51423
+      },
+      "host_wall": 0.3305068016052246,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.37,
+     "startup": 0.314,
+     "compile": 0.0,
+     "test_run": 0.007,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 9.95,
+     "foreign_rustc_before": 0,
+     "load_before": 24.95,
+     "noisy": true,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261115-221638563-2390801190",
+     "wall": 1.076,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.321,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 45.943336,
+      "client_wall": 1.072930274,
+      "sync": {
+       "lock_ms": 0.0007,
+       "link_ms": 0.000594,
+       "push_ms": 16.473551,
+       "barrier_ms": 29.463779
+      },
+      "run": {
+       "prepare_ms": 0.67159,
+       "execute_ms": 340.503559,
+       "finalize_ms": 37.357988,
+       "records_ms": 0.48446
+      },
+      "host_wall": 0.3205444812774658,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.35,
+     "startup": 0.312,
+     "compile": 0.0,
+     "test_run": 0.007,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 7.67,
+     "foreign_rustc_before": 0,
+     "load_before": 24.95,
+     "noisy": true,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 1.241,
+    "min": 1.076,
+    "max": 9.947,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.314,
+     "compile": 0.0,
+     "test_run": 0.007,
+     "cpu": 0.37,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0
+   }
+  }
+ },
+ "finished": "2026-11-15T22:16:39-0800"
+}

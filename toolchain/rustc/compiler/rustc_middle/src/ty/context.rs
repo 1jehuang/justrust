@@ -3,6 +3,7 @@
 #![allow(rustc::usage_of_ty_tykind)]
 
 mod impl_interner;
+pub mod resident;
 pub mod tls;
 
 use std::borrow::{Borrow, Cow};

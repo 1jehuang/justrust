@@ -72,6 +72,7 @@ pub use self::consts::{
     Expr, ExprKind, LitToConstInput, ScalarInt, SimdAlign, ValTree, ValTreeKindExt, Value,
     const_lit_matches_ty,
 };
+pub use self::context::resident::{ResidentTypeDomain, with_resident_type_domain};
 pub use self::context::{
     CtxtInterners, CurrentGcx, FreeRegionInfo, GlobalCtxt, Lift, TyCtxt, TyCtxtFeed, tls,
 };

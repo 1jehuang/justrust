@@ -1,0 +1,333 @@
+{
+  "schema": "native_frame_tls_v1",
+  "timestamp": "20261115T135525.065987Z",
+  "variant": "before",
+  "coalesced": false,
+  "env": {
+    "host": "xps14",
+    "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+    "ncpu": 16,
+    "mem_gb": 62.3,
+    "kernel": "7.2.11-arch1-1",
+    "foreign_rustc_policy": "unmeasured",
+    "noise_policy": "unknown foreign contention; noisy=null",
+    "justrust": "justrust 0.1.0-alpha.27",
+    "justrust_rev": "a186b79d3953",
+    "benchmark_repo_rev": "a186b79d3953",
+    "justrust_binary_revision": null,
+    "justrust_revision_source": "repository HEAD, not binary revision",
+    "justrust_binary_sha256": "2c51e2e2ee476db761ddd96fa845eb0342f07e63a03f6aec3d23f8482a99a321",
+    "justrust_dirty": true,
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "toolchain": "system",
+    "optimization_env": {},
+    "runtime_context": {
+      "policy": "inherited"
+    },
+    "rustc_threads": null,
+    "workspace_threads": null,
+    "pass_times": false,
+    "miniz_opt_level": null,
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "governor": "powersave",
+    "on_ac": "1",
+    "snapshots": {
+      "desktop": {
+        "jcode-desktop": "7d38fb7",
+        "jcode": "abff94eeb"
+      },
+      "justrust": {
+        "justrust": "f97fcc2"
+      }
+    },
+    "snapshot_format": 2,
+    "snapshot_fingerprints": {
+      "desktop": "14070917e003c5fa6489b257c1965001dc00fc78f275a22fb414750f687211f2",
+      "justrust": "b7ba71b4dfa9e2df3ae39e3e2a5dc0edba5dd3953e04c6f657a56dd977263adb"
+    },
+    "runtime_prerequisites": {
+      "policy": "pinned-test-runtime-v1",
+      "child_umask": "0022",
+      "sqlite3": null
+    },
+    "execution": "hosted-default"
+  },
+  "source_sha256": "e793239d8714f3a7fc0fc6cae39a1052c87b36d68a621d6aa5d66d4d8015a28d",
+  "command": [
+    "justrust",
+    "test",
+    "--lib",
+    "--locked",
+    "--release",
+    "native_frame_tls_benchmark",
+    "--",
+    "--ignored",
+    "--nocapture"
+  ],
+  "scope": "focused TLS loopback only, excludes build and agent wait",
+  "speed_claim_eligible": false,
+  "default_promotion": false,
+  "foreign_contention": "unmeasured",
+  "order": [
+    [
+      0,
+      64,
+      false
+    ],
+    [
+      0,
+      64,
+      true
+    ],
+    [
+      0,
+      64,
+      true
+    ],
+    [
+      0,
+      64,
+      false
+    ],
+    [
+      1,
+      64,
+      false
+    ],
+    [
+      1,
+      64,
+      true
+    ],
+    [
+      1,
+      64,
+      true
+    ],
+    [
+      1,
+      64,
+      false
+    ],
+    [
+      2,
+      64,
+      false
+    ],
+    [
+      2,
+      64,
+      true
+    ],
+    [
+      2,
+      64,
+      true
+    ],
+    [
+      2,
+      64,
+      false
+    ],
+    [
+      0,
+      32768,
+      false
+    ],
+    [
+      0,
+      32768,
+      true
+    ],
+    [
+      0,
+      32768,
+      true
+    ],
+    [
+      0,
+      32768,
+      false
+    ],
+    [
+      1,
+      32768,
+      false
+    ],
+    [
+      1,
+      32768,
+      true
+    ],
+    [
+      1,
+      32768,
+      true
+    ],
+    [
+      1,
+      32768,
+      false
+    ],
+    [
+      2,
+      32768,
+      false
+    ],
+    [
+      2,
+      32768,
+      true
+    ],
+    [
+      2,
+      32768,
+      true
+    ],
+    [
+      2,
+      32768,
+      false
+    ]
+  ],
+  "scenarios": {
+    "native-frame-tls-64": {
+      "samples": [
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 0,
+          "size": 64,
+          "wall": 0.183006659,
+          "recorded_wall": 0.183006659,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 0,
+          "size": 64,
+          "wall": 0.180188169,
+          "recorded_wall": 0.180188169,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 1,
+          "size": 64,
+          "wall": 0.179689499,
+          "recorded_wall": 0.179689499,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 1,
+          "size": 64,
+          "wall": 0.180037619,
+          "recorded_wall": 0.180037619,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 2,
+          "size": 64,
+          "wall": 0.179066149,
+          "recorded_wall": 0.179066149,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 32768,
+          "round": 2,
+          "size": 64,
+          "wall": 0.17960362,
+          "recorded_wall": 0.17960362,
+          "noisy": null
+        }
+      ],
+      "expect_test_fail": false,
+      "stats": {
+        "n": 6,
+        "median": 0.179863559,
+        "min": 0.179066149,
+        "max": 0.183006659,
+        "quiet_n": 0,
+        "quiet_median": null,
+        "first_error": null,
+        "first_fail": null
+      }
+    },
+    "native-frame-tls-32768": {
+      "samples": [
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 0,
+          "size": 32768,
+          "wall": 0.083917245,
+          "recorded_wall": 0.083917245,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 0,
+          "size": 32768,
+          "wall": 0.083071745,
+          "recorded_wall": 0.083071745,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 1,
+          "size": 32768,
+          "wall": 0.083504445,
+          "recorded_wall": 0.083504445,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 1,
+          "size": 32768,
+          "wall": 0.083551345,
+          "recorded_wall": 0.083551345,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 2,
+          "size": 32768,
+          "wall": 0.082963495,
+          "recorded_wall": 0.082963495,
+          "noisy": null
+        },
+        {
+          "coalesced": false,
+          "frames": 4096,
+          "round": 2,
+          "size": 32768,
+          "wall": 0.082982005,
+          "recorded_wall": 0.082982005,
+          "noisy": null
+        }
+      ],
+      "expect_test_fail": false,
+      "stats": {
+        "n": 6,
+        "median": 0.083288095,
+        "min": 0.082963495,
+        "max": 0.083917245,
+        "quiet_n": 0,
+        "quiet_median": null,
+        "first_error": null,
+        "first_fail": null
+      }
+    }
+  }
+}

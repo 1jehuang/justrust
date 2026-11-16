@@ -1,0 +1,271 @@
+{
+ "schema": "contention_suite_v1",
+ "started": "2026-11-13T17:44:56-0800",
+ "finished": "2026-11-13T17:50:00-0800",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "noise_policy": {
+   "suite": "recorder-other-cpu-v1",
+   "counted": "proc-stat-wait4-v1",
+   "max_other_cores": 4.0
+  },
+  "justrust": "justrust 0.1.0-alpha.26",
+  "justrust_rev": "4f997319bb7c",
+  "benchmark_repo_rev": "4f997319bb7c",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "0e0126f5b912972d2973db0d969413e43481d830ab03f88c585ff2397e3f46e2",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "contention": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  },
+  "snapshot_format": "target-flock-shared-ledger-v1",
+  "snapshot_fingerprints": {
+   "contention": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  },
+  "runtime_prerequisites": {
+   "policy": "pinned-test-runtime-v1",
+   "child_umask": "0022",
+   "sqlite3": null
+  },
+  "execution": "remote",
+  "contention": {
+   "protocol": "target-flock-shared-ledger-v1",
+   "hold_seconds": 20,
+   "target": "default, slots eligible",
+   "fixture": "2e000fb6815f02803e6770f79c9575710d44b4ab0552ac8dc6c9c8d20ea66d95"
+  }
+ },
+ "runs_per_scenario": 3,
+ "warmup_id": "20261113-174456189-1070803335",
+ "scope": "controlled hosted ext4 target-lock contention only, not broad speedup",
+ "scenarios": {
+  "hosted-ext4-target-contention": {
+   "what": "Focused real hosted target-lock acceptance, not a broad speed benchmark.",
+   "expect_test_fail": false,
+   "samples": [
+    {
+     "id": "20261113-174559863-1070803864",
+     "wall": 39.667,
+     "recorded_wall": 16.995322942733765,
+     "startup": 0.020432233810424805,
+     "compile": 0.0,
+     "test_run": 0.003963947296142578,
+     "cpu": 0.041141,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 0,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": false,
+     "other_cores": 2.619813105871942,
+     "lock_wait": 16.970926761627197,
+     "cargo_target_lock_message": true,
+     "slot": {},
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 885.652266,
+      "client_wall": 39.641623562,
+      "sync": {
+       "lock_ms": 0.000387,
+       "link_ms": 0.000656,
+       "push_ms": 1.729591,
+       "barrier_ms": 883.916014
+      },
+      "run": {
+       "prepare_ms": 958.922806,
+       "execute_ms": 17533.885701,
+       "finalize_ms": 18947.671972,
+       "records_ms": 0.369041
+      },
+      "host_wall": 16.995322942733765,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-174547783-1070803282",
+     "followup_id": "20261113-174640159-1070803456",
+     "followup_wall": 34.769,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.0,
+     "finished_before_release_secs": -19.644,
+     "finished_under_lock": false,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    },
+    {
+     "id": "20261113-174728076-1070803166",
+     "wall": 44.562,
+     "recorded_wall": 0.017116069793701172,
+     "startup": 0.013756990432739258,
+     "compile": 0.0,
+     "test_run": 0.0017037391662597656,
+     "cpu": 0.035549,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 0,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": true,
+     "other_cores": 8.0,
+     "lock_wait": 0.0,
+     "cargo_target_lock_message": false,
+     "slot": {},
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 231.079057,
+      "client_wall": 44.514586716,
+      "sync": {
+       "lock_ms": 0.000267,
+       "link_ms": 0.000557,
+       "push_ms": 1.64153,
+       "barrier_ms": 229.427641
+      },
+      "run": {
+       "prepare_ms": 32683.500177,
+       "execute_ms": 52.410138,
+       "finalize_ms": 10636.882228,
+       "records_ms": 0.25611999999999996
+      },
+      "host_wall": 0.017116069793701172,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-174714928-1070803654",
+     "followup_id": "20261113-174812639-1070803858",
+     "followup_wall": 46.632,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.0,
+     "finished_before_release_secs": -24.653,
+     "finished_under_lock": false,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    },
+    {
+     "id": "20261113-174911614-1070803864",
+     "wall": 23.211,
+     "recorded_wall": 1.523916482925415,
+     "startup": 1.4787442684173584,
+     "compile": 0.0,
+     "test_run": 0.03972458839416504,
+     "cpu": 0.039049,
+     "link_secs": 0,
+     "split": {
+      "frontend": 0,
+      "codegen": 0,
+      "link": 0,
+      "incremental": 0,
+      "other": 0
+     },
+     "units": 0,
+     "tests_passed": 2,
+     "tests_failed": 0,
+     "first_error": null,
+     "first_fail": null,
+     "noisy": false,
+     "other_cores": 2.022067412609568,
+     "lock_wait": 0.0054476261138916016,
+     "cargo_target_lock_message": true,
+     "slot": {},
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 47.456477,
+      "client_wall": 23.193936048,
+      "sync": {
+       "lock_ms": 0.000805,
+       "link_ms": 0.001158,
+       "push_ms": 4.163653,
+       "barrier_ms": 43.277273
+      },
+      "run": {
+       "prepare_ms": 17812.675671,
+       "execute_ms": 2827.585642,
+       "finalize_ms": 1674.917828,
+       "records_ms": 0.26592
+      },
+      "host_wall": 1.523916482925415,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "holder_id": "20261113-174859271-1070803573",
+     "followup_id": "20261113-174934826-1070803707",
+     "followup_wall": 25.468,
+     "followup_target": "shared default target",
+     "followup_units": 0,
+     "followup_tests_passed": 2,
+     "lock_ready_delay": 0.0,
+     "finished_before_release_secs": -2.521,
+     "finished_under_lock": false,
+     "shared_artifacts_unchanged": true,
+     "filesystem_magic": "ef53"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 39.667,
+    "min": 23.211,
+    "max": 44.562,
+    "quiet_n": 2,
+    "quiet_median": 31.439,
+    "phases": {
+     "startup": 0.02,
+     "compile": 0.0,
+     "test_run": 0.004,
+     "cpu": 0.039,
+     "link_secs": 0
+    },
+    "split": {
+     "frontend": 0,
+     "codegen": 0,
+     "link": 0,
+     "incremental": 0,
+     "other": 0
+    },
+    "units": 0
+   }
+  }
+ }
+}
