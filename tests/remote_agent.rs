@@ -200,6 +200,9 @@ impl Agent {
                 (Msg::Out { id: i, stream: 1 }, d) if i == id => {
                     out.push_str(&String::from_utf8_lossy(&d))
                 }
+                (Msg::Out { id, stream: 2 }, d) => {
+                    eprintln!("run {id}: {}", String::from_utf8_lossy(&d));
+                }
                 (Msg::Out { .. }, _) => {}
                 (Msg::Exit { id: i, code, .. }, _) if i == id => return (out, code),
                 (Msg::Error { msg, .. }, _) => panic!("run error: {msg}"),
@@ -621,7 +624,7 @@ fn run_children_preserve_distinct_umasks_without_changing_agent_default() {
         &[],
     );
     for (id, mask) in [(80, Some("0077")), (81, Some("0022")), (82, None)] {
-        let mut env = vec![("JUSTRUST_REAL_CARGO".into(), "sh".into())];
+        let mut env = fake_cargo_env("sh");
         if let Some(mask) = mask {
             env.push((remote_proto::CLIENT_UMASK.into(), mask.into()));
         }
@@ -640,7 +643,7 @@ fn run_children_preserve_distinct_umasks_without_changing_agent_default() {
                 .or_default()
                 .push_str(&String::from_utf8_lossy(&data)),
             (Msg::Exit { id, code, .. }, _) => {
-                assert_eq!(code, 0);
+                assert_eq!(code, 0, "run {id}: {:?}", outputs.get(&id));
                 assert!(pending.remove(&id));
             }
             other => panic!("unexpected mask frame {other:?}"),
@@ -1201,6 +1204,16 @@ fn remote_shadow_preserves_leaf_verdicts_and_normal_build_fallback() {
     );
 }
 
+// A managed toolchain's Cargo intentionally takes precedence over REAL_CARGO.
+// These protocol fixtures execute sh/sleep, not Rust builds, so explicitly opt
+// out of compiler selection instead of depending on the host's installed state.
+fn fake_cargo_env(program: &str) -> Vec<(String, String)> {
+    vec![
+        ("JUSTRUST_REAL_CARGO".into(), program.into()),
+        ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+    ]
+}
+
 /// `justrust cargo <secs>` with the real cargo pointed at `sleep` is a
 /// long-running run that needs no toolchain.
 fn sleep_run(id: u64, secs: &str) -> Msg {
@@ -1208,7 +1221,7 @@ fn sleep_run(id: u64, secs: &str) -> Msg {
         id,
         cwd: "/proj".into(),
         args: vec!["cargo".into(), secs.into()],
-        env: vec![("JUSTRUST_REAL_CARGO".into(), "sleep".into())],
+        env: fake_cargo_env("sleep"),
         roots: vec![],
         start: false,
         run_id: String::new(),
@@ -1266,7 +1279,7 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
                 id,
                 cwd: "/proj".into(),
                 args: vec!["cargo".into(), "30.404".into()],
-                env: vec![("JUSTRUST_REAL_CARGO".into(), "sleep".into())],
+                env: fake_cargo_env("sleep"),
                 roots: vec![],
                 start: false,
                 run_id: String::new(),
