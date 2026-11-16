@@ -4,6 +4,7 @@ No compiler runs and no live tenant is interrupted. Set JUSTRUST_ACCEPT_BIN to
 an executable built on hosted. Covers actual framing, admission, replay, final
 exit status, generic failures, stale receipts, and bounded retries.
 """
+import hashlib
 import http.server
 import json
 import os
@@ -53,14 +54,14 @@ class HostedUpdateAcceptance(unittest.TestCase):
             (project / 'src').mkdir(parents=True)
             (project / 'Cargo.toml').write_text('[package]\nname="update_acceptance"\nversion="0.1.0"\nedition="2024"\n')
             (project / 'src/lib.rs').write_text('')
-            attempts, charges, events, requests = [], [], [], []
+            attempts, charges, events, requests, admissions, event_paths = [], [], [], [], [], []
             started = int(time.time())
             class API(http.server.BaseHTTPRequestHandler):
                 def log_message(self, *args):
                     pass
-                def reply(self, data):
+                def reply(self, data, status=200):
                     value = json.dumps(data).encode()
-                    self.send_response(200)
+                    self.send_response(status)
                     self.send_header('Content-Length', str(len(value)))
                     self.end_headers()
                     self.wfile.write(value)
@@ -68,8 +69,7 @@ class HostedUpdateAcceptance(unittest.TestCase):
                     requests.append(self.path)
                     update = None if mode == 'generic' else {
                         'id': 'acceptance-update', 'reason': 'isolated update acceptance',
-                        'state': ('failed' if mode == 'failed' else
-                                  'announced' if mode == 'waiting' and len(requests) == 1 else 'completed'),
+                        'state': 'failed' if mode == 'failed' else 'completed',
                         'started_at': started - 5,
                         'completed_at': started - 100 if mode == 'stale' else int(time.time()) + 1,
                         'interrupted_work_stopped': mode != 'failed',
@@ -78,8 +78,20 @@ class HostedUpdateAcceptance(unittest.TestCase):
                 def do_POST(self):
                     data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or '{}')
                     if self.path == '/v1/build/runs':
+                        admissions.append(data)
+                        if mode == 'waiting' and len(admissions) == 1:
+                            self.reply({'admission': 'maintenance-v1',
+                                        'error': {'code': 'host_updating'},
+                                        'update': {'id': 'acceptance-update',
+                                                   'reason': 'isolated update acceptance',
+                                                   'state': 'announced',
+                                                   'started_at': started - 5}}, status=409)
+                            return
                         charges.append(data)
+                        self.reply({'admission': 'maintenance-v1'})
+                        return
                     elif self.path.endswith('/event'):
+                        event_paths.append(self.path)
                         events.append(data)
                     self.reply({})
             api = http.server.ThreadingHTTPServer(('127.0.0.1', 0), API)
@@ -91,8 +103,11 @@ class HostedUpdateAcceptance(unittest.TestCase):
             listener.settimeout(0.2)
             stop = threading.Event()
             errors = []
-            stat = os.stat(BIN)
-            build = f'{stat.st_size}-{int(stat.st_mtime)}'
+            # Match the daemon's content and connection-policy identity, not the
+            # obsolete size/mtime identity. Freeze policy below so host settings
+            # cannot retire this isolated mock and launch a real daemon.
+            build = ('sha256-' + hashlib.sha256(Path(BIN).read_bytes()).hexdigest()
+                     + ':native=off:only=false:mirror-isolation=false')
             def serve():
                 while not stop.is_set():
                     try:
@@ -129,6 +144,8 @@ class HostedUpdateAcceptance(unittest.TestCase):
             env = dict(os.environ, JUSTRUST_HOME=str(home), JCODE_API_KEY='isolated-acceptance-not-a-real-key',
                        JCODE_API_BASE=f'http://127.0.0.1:{api.server_port}/v1',
                        JUSTRUST_BUILD_BASE=f'http://127.0.0.1:{api.server_port}/v1',
+                       JUSTRUST_HOSTED_NATIVE='off', JUSTRUST_HOSTED_NATIVE_ONLY='0',
+                       JUSTRUST_HOSTED_MIRROR_ISOLATION='0',
                        JUSTRUST_NO_UPDATE='1', JUSTRUST_TELEMETRY='0', JUSTRUST_REMOTE_REQUIRED='1')
             try:
                 result = subprocess.run([BIN, 'remote', 'check'], cwd=project, env=env,
@@ -142,11 +159,19 @@ class HostedUpdateAcceptance(unittest.TestCase):
                 daemon.join(timeout=2)
             self.assertEqual(errors, [])
             self.assertEqual(len(charges), 1, result.stderr)
+            self.assertTrue(charges[0]['run_id'])
+            self.assertTrue(attempts, result.stderr)
+            for attempt in attempts:
+                self.assertEqual(attempt['run_id'], charges[0]['run_id'])
+            self.assertTrue(event_paths, result.stderr)
+            self.assertEqual(set(event_paths), {f"/v1/build/runs/{charges[0]['run_id']}/event"})
             if mode in ('success', 'presync', 'waiting'):
                 self.assertEqual(result.returncode, final_code, result.stderr)
                 self.assertEqual(len(attempts), 1 if mode == 'waiting' else 2, result.stderr)
                 if mode == 'waiting':
-                    self.assertIn('waiting before starting work', result.stderr)
+                    self.assertIn('waiting before admission', result.stderr)
+                    self.assertEqual(len(admissions), 2)
+                    self.assertEqual(admissions[0], admissions[1])
                 else:
                     self.assertEqual(attempts[0]['run_id'], attempts[1]['run_id'])
                     self.assertIn('interrupted by planned hosted update', result.stderr)
