@@ -25,8 +25,8 @@ HITS = ('typeck_hits', 'mir_hits')
 
 
 def environment(mode):
-    if mode not in ('control', '1'):
-        raise ValueError('Expected explicit typed control or 1')
+    if mode not in ('control', '1', 'leaf'):
+        raise ValueError('Expected explicit typed control, 1 or leaf')
     env = owned.environment()
     env['JUSTRUST_RUSTC_RESIDENT_TYPED'] = mode
     return env

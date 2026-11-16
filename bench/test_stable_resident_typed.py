@@ -28,7 +28,7 @@ class TypedValidationTests(unittest.TestCase):
         with patch.dict(os.environ, {'JUSTRUST_RUSTC_RESIDENT_VALUES': '1',
                         'JUSTRUST_RUSTC_RESIDENT_TYPED': 'bad'}):
             before = dict(os.environ)
-            for mode in ('control', '1'):
+            for mode in ('control', '1', 'leaf'):
                 env = typed.environment(mode)
                 self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_TYPED'], mode)
                 self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_VALUES', env)
