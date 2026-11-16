@@ -1,8 +1,10 @@
-//! Compiler-derived, owned identity prerequisite for a completed local-only revision.
+//! Compiler-derived, owned identity prerequisites for local-only revisions.
 //!
-//! This does not retain a context, wire queries, authorize changed source, or prove
-//! that analysis is complete. Call only after the native executor has finished all
-//! source loading and semantic work, while its source revision guard is still live.
+//! The completed builder finishes analysis and freezes allocation. The preanalysis
+//! builder captures only the allocated prefix after resolver/HIR materialization.
+//! That prefix is not completeness or standalone reuse authorization. Neither
+//! builder retains a context, wires queries, or authorizes changed source. Capture
+//! while the native source revision guard is still live.
 //! External crates are deliberately unsupported, including implicit sysroot crates.
 //! The caller must freeze *exact* semantic invocation material (including environment,
 //! target/toolchain identity, version overrides, build/proc-macro inputs and options),
@@ -12,12 +14,12 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use rustc_hir::definitions::DefPathData;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::{FileName, RemapPathScopeComponents};
 use rustc_structures::CrateType;
 
 use super::TyCtxt;
+use super::resident_definition_prefix::{PrefixBudget, PrefixError, capture_definition_prefix};
 use super::resident_identity::{
     CrateIdentity, DefinitionIdentity, IdentityBudget, ResetReason, RevisionIdentity,
 };
@@ -39,6 +41,7 @@ pub enum CompilerIdentityError {
     /// An active file has no exact frozen native-loader raw input.
     UnfrozenSource,
     InvalidBodyOwner,
+    InvalidDefinitionPrefix(PrefixError),
 }
 
 /// Capture real numeric IDs and canonical local definition paths in allocation order.
@@ -59,11 +62,25 @@ pub fn build_revision_identity(
     invocation: FrozenSemanticInvocation<'_>,
     budget: IdentityBudget,
 ) -> Result<RevisionIdentity, CompilerIdentityError> {
-    use CompilerIdentityError as Error;
+    // This completed path deliberately finishes analysis and freezes allocation.
+    let _ = tcx.definitions();
+    build_preanalysis_identity(tcx, invocation, budget)
+}
 
-    // Complete analysis before observing the crate universe. iter_local_def_id also
-    // depends on analysis and freezes definition allocation when exhausted.
-    let local_definitions = tcx.definitions();
+/// Capture only the currently allocated definition prefix before analysis.
+///
+/// The driver must first materialize resolver/HIR crate inputs. This function
+/// neither runs analysis nor freezes allocation. Appended definitions cannot alter
+/// captured IDs, but this observation is NOT completeness or reuse authorization.
+/// Reuse requires a completed old snapshot with exactly the same definition count,
+/// every definition and every other identity field, plus the native domain gates.
+/// Changed raw sources and body inputs must always reject reuse.
+pub fn build_preanalysis_identity(
+    tcx: TyCtxt<'_>,
+    invocation: FrozenSemanticInvocation<'_>,
+    budget: IdentityBudget,
+) -> Result<RevisionIdentity, CompilerIdentityError> {
+    use CompilerIdentityError as Error;
     if !tcx.crates(()).is_empty() {
         return Err(Error::UnsupportedExternalCrates);
     }
@@ -106,27 +123,27 @@ pub fn build_revision_identity(
     }
     let body_revision = bodies.finish();
 
-    let mut definitions = Vec::new();
-    for id in tcx.iter_local_def_id() {
-        if definitions.len() >= budget.max_definitions {
-            return Err(Error::Budget(ResetReason::DefinitionBudget));
-        }
-        let index = id.local_def_index.as_u32();
-        let path = local_definitions.def_path(id);
-        let mut stable = Bytes::new(&mut remaining);
-        stable.bytes(b"resident-def-path-v1")?;
-        stable.u64(path.data.len() as u64)?;
-        for component in path.data {
-            encode_path_data(&mut stable, component.data)?;
-            stable.u32(component.disambiguator)?;
-        }
-        definitions.push(DefinitionIdentity {
-            stable: stable.finish(),
-            crate_index: LOCAL_CRATE.as_u32(),
-            def_index: index,
-            owner_index: owners.remove(&index).then_some(index),
-        });
+    // Both builders consume the same bounded, nonfreezing canonical path encoding.
+    let prefix = capture_definition_prefix(
+        tcx,
+        PrefixBudget { max_definitions: budget.max_definitions, max_bytes: remaining },
+    )
+    .map_err(|error| match error {
+        PrefixError::DefinitionBudget => Error::Budget(ResetReason::DefinitionBudget),
+        PrefixError::ByteBudget => Error::Budget(ResetReason::IdentityByteBudget),
+        other => Error::InvalidDefinitionPrefix(other),
+    })?;
+    let mut definitions = Vec::with_capacity(prefix.count());
+    for (crate_index, index, path) in prefix.entries() {
+        definitions.push(definition_identity(
+            crate_index,
+            index,
+            path,
+            owners.remove(&index).then_some(index),
+            &mut remaining,
+        )?);
     }
+    drop(prefix);
     if !owners.is_empty() {
         return Err(Error::InvalidBodyOwner);
     }
@@ -202,33 +219,20 @@ pub fn build_revision_identity(
     Ok(identity)
 }
 
-fn encode_path_data(bytes: &mut Bytes<'_>, data: DefPathData) -> Result<(), CompilerIdentityError> {
-    // Exhaustive tags, never Debug(Symbol), numeric Symbol IDs or def-path hashes.
-    let (tag, symbol) = match data {
-        DefPathData::CrateRoot => (0, None),
-        DefPathData::Impl => (1, None),
-        DefPathData::ForeignMod => (2, None),
-        DefPathData::Use => (3, None),
-        DefPathData::GlobalAsm => (4, None),
-        DefPathData::TypeNs(name) => (5, Some(name)),
-        DefPathData::ValueNs(name) => (6, Some(name)),
-        DefPathData::MacroNs(name) => (7, Some(name)),
-        DefPathData::LifetimeNs(name) => (8, Some(name)),
-        DefPathData::Closure => (9, None),
-        DefPathData::TestBinderConstraints => (10, None),
-        DefPathData::Ctor => (11, None),
-        DefPathData::AnonConst => (12, None),
-        DefPathData::OpaqueTy => (13, None),
-        DefPathData::OpaqueLifetime(name) => (14, Some(name)),
-        DefPathData::AnonAssocTy(name) => (15, Some(name)),
-        DefPathData::SyntheticCoroutineBody => (16, None),
-        DefPathData::NestedStatic => (17, None),
-    };
-    bytes.u32(tag)?;
-    if let Some(symbol) = symbol {
-        bytes.bytes(symbol.as_str().as_bytes())?;
-    }
-    Ok(())
+fn definition_identity(
+    crate_index: u32,
+    def_index: u32,
+    canonical_path: &[u8],
+    owner_index: Option<u32>,
+    remaining: &mut usize,
+) -> Result<DefinitionIdentity, CompilerIdentityError> {
+    // Preserve PrefixSnapshot's canonical bytes verbatim in both builder modes.
+    Ok(DefinitionIdentity {
+        stable: copy_bytes(canonical_path, remaining)?,
+        crate_index,
+        def_index,
+        owner_index,
+    })
 }
 
 fn encode_file_name(bytes: &mut Bytes<'_>, name: &FileName) -> Result<(), CompilerIdentityError> {
@@ -364,16 +368,66 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_path_tags_and_disambiguators_are_not_collapsed() {
-        fn component(data: DefPathData, disambiguator: u32) -> Vec<u8> {
-            let mut budget = 100;
-            let mut bytes = Bytes::new(&mut budget);
-            encode_path_data(&mut bytes, data).unwrap();
-            bytes.u32(disambiguator).unwrap();
-            bytes.finish()
+    fn canonical_prefix_encoding_is_preserved_in_shared_definition_path() {
+        let path = b"resident-definition-prefix-path-v1\0CrateRoot\0Closure\0";
+        let mut completed_budget = path.len();
+        let mut preanalysis_budget = path.len();
+        let completed = definition_identity(0, 1, path, Some(1), &mut completed_budget).unwrap();
+        let preanalysis =
+            definition_identity(0, 1, path, Some(1), &mut preanalysis_budget).unwrap();
+        assert_eq!(completed, preanalysis);
+        assert_eq!(completed.stable, path);
+        assert_eq!(completed_budget, 0);
+        assert_eq!(preanalysis_budget, 0);
+        assert!(definition_identity(0, 1, path, Some(1), &mut (path.len() - 1)).is_err());
+    }
+
+    #[test]
+    fn exact_reuse_ignores_no_identity_field_or_definition_count() {
+        use super::super::resident_identity::Compatibility;
+
+        let budget = IdentityBudget { max_crates: 4, max_definitions: 4, max_identity_bytes: 4096 };
+        let old = RevisionIdentity {
+            namespace: b"namespace".to_vec(),
+            options: b"options".to_vec(),
+            crates: vec![CrateIdentity { stable: b"crate".to_vec(), crate_index: 0 }],
+            definitions: vec![DefinitionIdentity {
+                stable: b"canonical-root".to_vec(),
+                crate_index: 0,
+                def_index: 0,
+                owner_index: Some(0),
+            }],
+            source: b"exact raw source\r\n".to_vec(),
+            body_revision: b"body owner and HIR numeric mapping".to_vec(),
+        };
+        assert_eq!(old.compatibility(&old, budget), Compatibility::Reusable);
+        let mutations: &[fn(&mut RevisionIdentity)] = &[
+            |id| id.namespace.push(0),
+            |id| id.options.push(0),
+            |id| id.crates[0].stable.push(0),
+            |id| id.crates[0].crate_index = 1,
+            |id| id.definitions[0].stable.push(0),
+            |id| id.definitions[0].crate_index = 1,
+            |id| id.definitions[0].def_index = 1,
+            |id| id.definitions[0].owner_index = None,
+            |id| id.source.push(0),
+            |id| id.body_revision.push(0),
+            |id| id.definitions.clear(),
+            |id| {
+                id.definitions.push(DefinitionIdentity {
+                    stable: b"appended canonical child".to_vec(),
+                    crate_index: 0,
+                    def_index: 1,
+                    owner_index: None,
+                });
+            },
+        ];
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut next = old.clone();
+            mutate(&mut next);
+            assert_ne!(old.compatibility(&next, budget), Compatibility::Reusable, "field {index}");
+            assert!(old.authorize_reuse(&next, budget).is_err(), "field {index}");
         }
-        assert_ne!(component(DefPathData::Closure, 0), component(DefPathData::Ctor, 0));
-        assert_ne!(component(DefPathData::Closure, 0), component(DefPathData::Closure, 1));
     }
 
     #[test]
