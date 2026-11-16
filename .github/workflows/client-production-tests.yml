@@ -1,0 +1,109 @@
+name: Published client production tests
+
+# Called only after Release has published all assets. Exact preflight outputs
+# avoid workflow_run's ambiguous head_sha for workflow_dispatch tag releases.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      JCODE_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  published-client-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
+      JUSTRUST_REMOTE_REQUIRED: "1"
+      JUSTRUST_NO_UPDATE: "1"
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact tagged source
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          [[ $(git rev-parse HEAD) == "$RELEASE_SHA" ]]
+          [[ $(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}") == "$RELEASE_SHA" ]]
+          : "${JCODE_API_KEY:?Hosted credentials required}"
+
+      - name: Install hosted transport prerequisites
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends rsync zstd
+
+      - name: Download shared production client, never build a bootstrap
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+          import time
+          spec = importlib.util.spec_from_file_location("dogfood", "scripts/production-dogfood.py")
+          dogfood = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(dogfood)
+          triple = dogfood.target()
+          deadline = time.monotonic() + 600
+          while True:
+              try:
+                  info = dogfood.release_info(os.environ["RELEASE_TAG"], triple)
+                  break
+              except (ValueError, OSError) as error:
+                  if time.monotonic() >= deadline:
+                      raise
+                  print(f"Waiting for shared production selection: {error}", flush=True)
+                  time.sleep(15)
+          binary = Path(os.environ["RUNNER_TEMP"]) / "published-client" / "justrust"
+          binary.parent.mkdir()
+          binary.write_bytes(dogfood.verified_binary(info, triple))
+          binary.chmod(0o700)
+          dogfood.validate_release(binary, os.environ["RELEASE_TAG"][1:])
+          with open(os.environ["GITHUB_PATH"], "a") as output:
+              print(binary.parent, file=output)
+          PY
+
+      - name: Activate and verify published client on hosted
+        run: python3 scripts/production-dogfood.py --expect "$RELEASE_TAG" --activate
+
+      - name: Full tagged-source suite via published CLI
+        run: |
+          set -euo pipefail
+          python3 scripts/production-dogfood.py --expect "$RELEASE_TAG"
+          justrust test --remote --locked
+          justrust runs --here --json -n 10 > "$RUNNER_TEMP/published-client-runs.json"
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location("dogfood", "scripts/production-dogfood.py")
+          dogfood = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(dogfood)
+          receipt = Path(os.environ["RUNNER_TEMP"]) / "published-client-runs.json"
+          print("Full-suite hosted receipt:", dogfood.validate_run(receipt.read_text(), Path.cwd()))
+          PY
+          python3 scripts/production-dogfood.py --expect "$RELEASE_TAG"
+
+      - name: Preserve available hosted receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-client-test-receipts
+          path: ${{ runner.temp }}/published-client-runs.json
+          if-no-files-found: ignore
