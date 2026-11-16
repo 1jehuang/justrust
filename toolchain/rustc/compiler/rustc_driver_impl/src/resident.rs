@@ -14,6 +14,41 @@ use serde_json::{Value, json};
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
+// Boundary admission budget, not a hard peak allocation cap: a single compilation
+// may exceed it before finalization. Retiring returns from the whole owner scope.
+const OWNED_RSS_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const OWNED_MAX_REVISIONS: usize = 64;
+
+fn owned_retirement(rss: Option<usize>, revisions: usize, contexts: usize) -> Option<&'static str> {
+    match rss {
+        None => Some("rss_unavailable"),
+        Some(bytes) if bytes >= OWNED_RSS_BUDGET_BYTES => Some("rss_budget"),
+        Some(_) if revisions >= OWNED_MAX_REVISIONS || contexts >= OWNED_MAX_REVISIONS => {
+            Some("context_capacity")
+        }
+        Some(_) => None,
+    }
+}
+
+// None means preflight refused the request, not a compiler result. Retirement
+// after execution must never replace the actual success/failure status.
+fn owned_completion(
+    status: Option<i32>,
+    rss: Option<usize>,
+    revisions: usize,
+    contexts: usize,
+) -> Value {
+    json!({
+        "status": status.unwrap_or(1),
+        "executed": status.is_some(),
+        "owned": {
+            "revisions": revisions, "contexts": contexts,
+            "retirement_reason": owned_retirement(rss, revisions, contexts),
+            "rss_bytes": rss,
+        },
+    })
+}
+
 fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
     let value: Value = serde_json::from_slice(line).map_err(|e| e.to_string())?;
     let object = value.as_object().ok_or("request must be an object")?;
@@ -242,6 +277,20 @@ fn serve_owned(mut response: File) -> Result<(), String> {
             let mut argv = first_argv;
             loop {
                 let start = Instant::now();
+                let (revisions, contexts) = batch.counts();
+                let rss = rustc_data_structures::profiling::get_resident_set_size();
+                if owned_retirement(rss, revisions, contexts).is_some() {
+                    let mut reply = owned_completion(None, rss, revisions, contexts);
+                    reply["id"] = json!(id);
+                    reply["pid"] = json!(std::process::id());
+                    reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
+                    io::stdout().flush().map_err(|e| e.to_string())?;
+                    io::stderr().flush().map_err(|e| e.to_string())?;
+                    serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
+                    response.write_all(b"\n").map_err(|e| e.to_string())?;
+                    response.flush().map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
                 let mut callbacks = crate::TimePassesCallbacks::default();
                 let status = if crate::catch_fatal_errors(|| {
                     let prepared =
@@ -286,14 +335,20 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                 io::stdout().flush().map_err(|e| e.to_string())?;
                 io::stderr().flush().map_err(|e| e.to_string())?;
                 let (revisions, contexts) = batch.counts();
-                let reply = json!({
-                    "id": id, "status": status, "pid": std::process::id(),
-                    "elapsed_seconds": start.elapsed().as_secs_f64(),
-                    "owned": {"revisions": revisions, "contexts": contexts},
-                });
+                // batch.run has returned through normal revision finalization.
+                let rss = rustc_data_structures::profiling::get_resident_set_size();
+                let mut reply = owned_completion(Some(status), rss, revisions, contexts);
+                reply["id"] = json!(id);
+                reply["pid"] = json!(std::process::id());
+                reply["elapsed_seconds"] = json!(start.elapsed().as_secs_f64());
                 serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
                 response.write_all(b"\n").map_err(|e| e.to_string())?;
                 response.flush().map_err(|e| e.to_string())?;
+                if owned_retirement(rss, revisions, contexts).is_some() {
+                    // Do not read another request. Returning from this callback
+                    // drops the actual batch owners before process termination.
+                    return Ok(());
+                }
                 let Some((next_id, args)) = requests.next()? else {
                     return Ok(());
                 };
@@ -308,7 +363,40 @@ fn serve_owned(mut response: File) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::request;
+    use super::{OWNED_RSS_BUDGET_BYTES, owned_completion, owned_retirement, request};
+
+    #[test]
+    fn owned_boundary_rss_admission() {
+        assert_eq!(owned_retirement(Some(OWNED_RSS_BUDGET_BYTES - 1), 0, 0), None);
+        for rss in [OWNED_RSS_BUDGET_BYTES, OWNED_RSS_BUDGET_BYTES + 1] {
+            assert_eq!(owned_retirement(Some(rss), 0, 0), Some("rss_budget"));
+        }
+        assert_eq!(owned_retirement(None, 0, 0), Some("rss_unavailable"));
+    }
+
+    #[test]
+    fn owned_boundary_count_exhaustion() {
+        assert_eq!(owned_retirement(Some(1), 63, 63), None);
+        for (revisions, contexts) in [(64, 0), (0, 64), (65, 65)] {
+            assert_eq!(owned_retirement(Some(1), revisions, contexts), Some("context_capacity"));
+        }
+    }
+
+    #[test]
+    fn owned_retirement_preserves_executed_result() {
+        for status in [0, 1] {
+            let reply = owned_completion(Some(status), Some(OWNED_RSS_BUDGET_BYTES), 64, 64);
+            assert_eq!(reply["status"], status);
+            assert_eq!(reply["executed"], true);
+            assert_eq!(reply["owned"]["retirement_reason"], "rss_budget");
+            assert_eq!(reply["owned"]["rss_bytes"], OWNED_RSS_BUDGET_BYTES);
+        }
+        let refused = owned_completion(None, None, 0, 0);
+        assert_eq!(refused["status"], 1);
+        assert_eq!(refused["executed"], false);
+        assert_eq!(refused["owned"]["retirement_reason"], "rss_unavailable");
+        assert!(refused["owned"]["rss_bytes"].is_null());
+    }
 
     #[test]
     fn accepts_fixed_compiler_request() {
