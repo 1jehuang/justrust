@@ -223,9 +223,15 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
     }
     let local = &local_decls[mir::RETURN_PLACE];
     let mir::LocalDecl { mutability: _, local_info, ty, user_ty, source_info } = local;
+    // run_runtime_cleanup_passes clears borrowck-only local metadata before
+    // optimized_mir. Clear retains no hidden types/IDs/spans to close over.
+    let boring_or_cleared = match local_info {
+        mir::ClearCrossCrate::Clear => true,
+        mir::ClearCrossCrate::Set(info) => matches!(**info, mir::LocalInfo::Boring),
+    };
     if !primitive(*ty)
         || user_ty.is_some()
-        || !matches!(local_info, mir::ClearCrossCrate::Set(info) if matches!(**info, mir::LocalInfo::Boring))
+        || !boring_or_cleared
         || source_info.scope != mir::OUTERMOST_SOURCE_SCOPE
     {
         return Err(LeafError::Local);
@@ -267,7 +273,14 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
     if place.local != mir::RETURN_PLACE || !place.projection.is_empty() {
         return Err(LeafError::Statement);
     }
-    let mir::Rvalue::Use(mir::Operand::Constant(constant), mir::WithRetag::No) = value else {
+    // Literal lowering emits WithRetag::Yes. Both reviewed flags are closure-
+    // neutral here: the sole local and literal must be pointer-free primitives,
+    // and the constant below must be Scalar::Int, never a pointer/allocation.
+    let mir::Rvalue::Use(
+        mir::Operand::Constant(constant),
+        mir::WithRetag::No | mir::WithRetag::Yes,
+    ) = value
+    else {
         return Err(LeafError::Constant);
     };
     let mir::ConstOperand { span: _, user_ty, const_ } = &**constant;
@@ -434,7 +447,7 @@ mod tests {
             info,
             mir::StatementKind::Assign(Box::new((
                 mir::Place::return_place(),
-                mir::Rvalue::Use(constant, mir::WithRetag::No),
+                mir::Rvalue::Use(constant, mir::WithRetag::Yes),
             ))),
         ));
         let mut blocks = IndexVec::new();
@@ -448,7 +461,11 @@ mod tests {
             local_data: mir::ClearCrossCrate::Clear,
         });
         let mut locals = IndexVec::new();
-        locals.push(mir::LocalDecl::new(ty, span));
+        let mut return_decl = mir::LocalDecl::new(ty, span);
+        // Match real optimized_mir after run_runtime_cleanup_passes, not the
+        // pre-cleanup constructor's borrowck-only LocalInfo::Boring metadata.
+        return_decl.local_info = mir::ClearCrossCrate::Clear;
+        locals.push(return_decl);
         let mut body = mir::Body::new(
             mir::MirSource::item(rustc_hir::def_id::CRATE_DEF_ID.to_def_id()),
             blocks,
@@ -576,6 +593,50 @@ mod tests {
                 local_id: rustc_hir::ItemLocalId::from_u32(1),
             };
             assert_eq!(check_lint_root(&body, other_node), Err(LeafError::Scope));
+        });
+    }
+
+    #[test]
+    fn optimized_native_u8_leaf_accepts_cleared_metadata_and_literal_retag() {
+        native_test(|| {
+            let (sm, text) = setup();
+            *text.lock().unwrap() = "#[unsafe(no_mangle)] pub fn leaf_a() -> u8 { 7 }".into();
+            let _revision = sm.begin_resident_source_revision(2, 1024, 2).unwrap();
+            let file = sm.load_file(Path::new("leaf.rs")).unwrap();
+            let u8_cached = cached(ty::Uint(ty::UintTy::U8));
+            let ty = Ty(Interned::new_unchecked(&u8_cached));
+            let mut body = leaf(ty, span(&file));
+            let mir::StatementKind::Assign(assign) =
+                &mut body.basic_blocks.as_mut()[mir::START_BLOCK].statements[0].kind
+            else {
+                unreachable!()
+            };
+            let mir::Rvalue::Use(mir::Operand::Constant(operand), mir::WithRetag::Yes) =
+                &mut assign.1
+            else {
+                unreachable!()
+            };
+            operand.const_ = mir::Const::Val(mir::ConstValue::Scalar(Scalar::from_u8(7)), ty);
+            assert!(matches!(
+                body.local_decls[mir::RETURN_PLACE].local_info,
+                mir::ClearCrossCrate::Clear
+            ));
+            assert!(inspect_body_closure(&body, &sm, LeafLimits::default()).is_ok());
+            // Preserve the already reviewed pre-cleanup metadata and explicit
+            // no-retag forms, but never admit arbitrary retained local metadata.
+            body.local_decls[mir::RETURN_PLACE].local_info =
+                mir::ClearCrossCrate::Set(Box::new(mir::LocalInfo::Boring));
+            let mir::StatementKind::Assign(assign) =
+                &mut body.basic_blocks.as_mut()[mir::START_BLOCK].statements[0].kind
+            else {
+                unreachable!()
+            };
+            let mir::Rvalue::Use(_, retag) = &mut assign.1 else { unreachable!() };
+            *retag = mir::WithRetag::No;
+            assert!(inspect_body_closure(&body, &sm, LeafLimits::default()).is_ok());
+            body.local_decls[mir::RETURN_PLACE].local_info =
+                mir::ClearCrossCrate::Set(Box::new(mir::LocalInfo::AggregateTemp));
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
         });
     }
 
