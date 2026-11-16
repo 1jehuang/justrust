@@ -769,7 +769,7 @@ pub fn render_waybar(s: &Status) -> String {
 
 pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
     let mut last = String::new();
-    let wake = Wake::new();
+    let mut wake = Wake::new();
     loop {
         let s = collect()?;
         let out = if waybar {
@@ -812,10 +812,18 @@ pub fn command(json: bool, waybar: bool, watch: Option<f64>) -> Result<()> {
 struct Wake {
     #[cfg(target_os = "linux")]
     fd: Option<std::os::fd::OwnedFd>,
+    #[cfg(target_os = "linux")]
+    home_watch: i32,
+    #[cfg(target_os = "linux")]
+    runs_watch: i32,
 }
 
 impl Wake {
     fn new() -> Self {
+        Self::new_at(paths::home().ok(), paths::runs_dir().ok())
+    }
+
+    fn new_at(home: Option<std::path::PathBuf>, runs: Option<std::path::PathBuf>) -> Self {
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::FromRawFd;
@@ -823,35 +831,107 @@ impl Wake {
             // SAFETY: plain syscall; the fd is owned below.
             let raw = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
             if raw < 0 {
-                return Wake { fd: None };
+                return Wake {
+                    fd: None,
+                    home_watch: -1,
+                    runs_watch: -1,
+                };
             }
             // SAFETY: fresh fd we own.
             let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) };
-            let mask = libc::IN_CREATE
-                | libc::IN_MODIFY
-                | libc::IN_CLOSE_WRITE
+            let topology = libc::IN_CREATE
                 | libc::IN_MOVED_TO
-                | libc::IN_DELETE;
-            let mut ok = false;
-            for dir in [paths::home(), paths::runs_dir()].into_iter().flatten() {
+                | libc::IN_MOVED_FROM
+                | libc::IN_DELETE
+                | libc::IN_DELETE_SELF
+                | libc::IN_MOVE_SELF;
+            let mut watches = [-1; 2];
+            for (i, dir) in [home, runs].into_iter().enumerate() {
+                let Some(dir) = dir else { continue };
                 let _ = std::fs::create_dir_all(&dir);
                 let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
                     continue;
                 };
+                let mask = topology
+                    | if i == 0 {
+                        libc::IN_MODIFY | libc::IN_CLOSE_WRITE
+                    } else {
+                        0
+                    };
                 // SAFETY: valid fd and NUL-terminated path.
-                ok |= unsafe { libc::inotify_add_watch(raw, c.as_ptr(), mask) } >= 0;
+                watches[i] = unsafe { libc::inotify_add_watch(raw, c.as_ptr(), mask) };
             }
             Wake {
-                fd: ok.then_some(fd),
+                // Partial registration could miss a run or completion forever.
+                fd: watches.iter().all(|w| *w >= 0).then_some(fd),
+                home_watch: watches[0],
+                runs_watch: watches[1],
             }
         }
         #[cfg(not(target_os = "linux"))]
-        Wake {}
+        {
+            let _ = (home, runs);
+            Wake {}
+        }
+    }
+
+    /// Drain the nonblocking queue before deciding whether a snapshot is needed.
+    #[cfg(target_os = "linux")]
+    fn drain(&self) -> std::io::Result<bool> {
+        use std::os::fd::AsRawFd;
+        let mut relevant = false;
+        let mut buf = [0u8; 16 << 10];
+        loop {
+            // SAFETY: owned buffer and live, nonblocking inotify descriptor.
+            let n = unsafe {
+                libc::read(
+                    self.fd.as_ref().unwrap().as_raw_fd(),
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                )
+            };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    return Ok(relevant);
+                }
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(err);
+            }
+            if n == 0 {
+                return Err(std::io::Error::other("inotify closed"));
+            }
+            let mut offset = 0;
+            let size = std::mem::size_of::<libc::inotify_event>();
+            while offset + size <= n as usize {
+                // SAFETY: header fits, but the byte buffer need not be aligned.
+                let event = unsafe {
+                    std::ptr::read_unaligned(buf.as_ptr().add(offset).cast::<libc::inotify_event>())
+                };
+                let start = offset + size;
+                let end = start + event.len as usize;
+                if end > n as usize {
+                    return Err(std::io::Error::other("short inotify event"));
+                }
+                if event.mask & (libc::IN_IGNORED | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0
+                {
+                    return Err(std::io::Error::other("status watch invalidated"));
+                }
+                let name = &buf[start..end];
+                let name = name.split(|b| *b == 0).next().unwrap_or_default();
+                relevant |= event.mask & libc::IN_Q_OVERFLOW != 0
+                    || (event.wd == self.home_watch && name == b"index.jsonl")
+                    || (event.wd == self.runs_watch && event.mask & libc::IN_ISDIR != 0);
+                offset = end;
+            }
+        }
     }
 
     /// Waits up to `timeout` seconds (forever if None). Returns false if it
     /// could not wait, so the caller sleeps instead.
-    fn wait(&self, timeout: Option<f64>) -> bool {
+    fn wait(&mut self, timeout: Option<f64>) -> bool {
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
@@ -872,25 +952,57 @@ impl Wake {
                     revents: 0,
                 },
             ];
-            let ms = timeout.map_or(-1, |t| (t * 1000.0).ceil() as i32);
-            // SAFETY: two valid pollfds.
-            let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, ms) };
-            if pfds[1].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
-                std::process::exit(0);
+            let deadline =
+                timeout.map(|t| std::time::Instant::now() + std::time::Duration::from_secs_f64(t));
+            loop {
+                let ms = deadline.map_or(-1, |end| {
+                    (end.saturating_duration_since(std::time::Instant::now())
+                        .as_secs_f64()
+                        * 1000.0)
+                        .ceil()
+                        .min(i32::MAX as f64) as i32
+                });
+                for pfd in &mut pfds {
+                    pfd.revents = 0;
+                }
+                // SAFETY: two valid pollfds.
+                let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, ms) };
+                if pfds[1].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+                    std::process::exit(0);
+                }
+                if n < 0 {
+                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return false;
+                }
+                if n == 0 {
+                    return true;
+                }
+                if pfds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                    self.fd = None;
+                    return false;
+                }
+                match self.drain() {
+                    Ok(true) => {
+                        // Coalesce only relevant bursts, never telemetry noise.
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        if self.drain().is_err() {
+                            self.fd = None;
+                        }
+                        return true;
+                    }
+                    Ok(false) => {
+                        if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
+                            return true;
+                        }
+                    }
+                    Err(_) => {
+                        self.fd = None;
+                        return false;
+                    }
+                }
             }
-            let n = if pfds[0].revents & libc::POLLIN != 0 {
-                n
-            } else {
-                n.min(0)
-            };
-            if n > 0 {
-                // Coalesce a burst (a build writes many files at once).
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                let mut buf = [0u8; 16 << 10];
-                // SAFETY: reading into a buffer we own; fd is non-blocking.
-                while unsafe { libc::read(raw, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
-            }
-            n >= 0
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -903,6 +1015,122 @@ impl Wake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    fn wake_fixture() -> (std::path::PathBuf, Wake) {
+        let dir = std::env::temp_dir().join(format!(
+            "justrust-wake-{}-{}",
+            std::process::id(),
+            paths::now()
+        ));
+        let runs = dir.join("runs");
+        let wake = Wake::new_at(Some(dir.clone()), Some(runs));
+        assert!(wake.fd.is_some());
+        (dir, wake)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn status_wake_filters_real_inotify_events() {
+        use std::io::Write;
+        let (dir, mut wake) = wake_fixture();
+        // Home telemetry and non-directory run entries do not change status.
+        for _ in 0..100 {
+            std::fs::write(dir.join("telemetry.json"), "noise").unwrap();
+            std::fs::write(dir.join("runs/upload.tmp"), "noise").unwrap();
+        }
+        assert!(!wake.drain().unwrap());
+        let start = std::time::Instant::now();
+        assert!(wake.wait(Some(0.03)));
+        assert!(start.elapsed() >= std::time::Duration::from_millis(20));
+        // Continuous unrelated writes must not postpone the active-run tick.
+        let noise_dir = dir.clone();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..20 {
+                std::fs::write(noise_dir.join("telemetry.json"), "noise").unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        let start = std::time::Instant::now();
+        assert!(wake.wait(Some(0.03)));
+        assert!(start.elapsed() >= std::time::Duration::from_millis(20));
+        writer.join().unwrap();
+        assert!(!wake.drain().unwrap());
+        // New runs wake, even before they have metadata.
+        std::fs::create_dir(dir.join("runs/new-run")).unwrap();
+        assert!(wake.drain().unwrap());
+        // Completion append must wake before the writer closes the index.
+        let mut index = std::fs::File::create(dir.join("index.jsonl")).unwrap();
+        wake.drain().unwrap();
+        index.write_all(b"{}\n").unwrap();
+        assert!(wake.drain().unwrap());
+        drop(index);
+        assert!(wake.drain().unwrap());
+        std::fs::write(dir.join("index.tmp"), "replacement").unwrap();
+        std::fs::rename(dir.join("index.tmp"), dir.join("index.jsonl")).unwrap();
+        assert!(wake.drain().unwrap());
+        std::fs::remove_dir(dir.join("runs/new-run")).unwrap();
+        assert!(wake.drain().unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        // Losing either directory switches permanently to timed fallback.
+        assert!(!wake.wait(Some(0.01)));
+        assert!(wake.fd.is_none());
+        assert!(!wake.wait(Some(0.01)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn status_wake_output_reader_closure() {
+        const READY: &str = "JUSTRUST_STATUS_WAKE_TEST_READY";
+        if let Some(ready) = std::env::var_os(READY) {
+            let ready = std::path::PathBuf::from(ready);
+            let dir = ready.parent().unwrap();
+            let mut wake = Wake::new_at(Some(dir.to_owned()), Some(dir.join("runs")));
+            std::fs::write(&ready, b"ready").unwrap();
+            wake.wait(None);
+            panic!("closed stdout should exit the watcher");
+        }
+        let (dir, _wake) = wake_fixture();
+        let ready = dir.join("ready");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "status::tests::status_wake_output_reader_closure",
+                "--nocapture",
+            ])
+            .env(READY, &ready)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "child did not reach inotify wait");
+        drop(child.stdout.take());
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("idle watcher did not exit after output reader closed");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn status_wake_partial_registration_falls_back() {
+        let (dir, _wake) = wake_fixture();
+        let mut partial = Wake::new_at(Some(dir.clone()), None);
+        assert!(!partial.wait(Some(0.01)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn cpu_samples_are_measured_fresh_and_bounded() {
