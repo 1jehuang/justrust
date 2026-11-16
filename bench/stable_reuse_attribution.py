@@ -36,7 +36,7 @@ METRICS = {
     "llvm_worker_thread_sum": ("units.llvm_thread_secs", 1, "worker-thread seconds, can exceed wall, ledger coverage required"),
     "link_pass_sum": ("units.phase_split.link", 1, "compiler link phases across covered units"),
     "linker_cpu": ("link.linker_cpu_secs", 1, "linker process CPU, overlaps compiler link phases"),
-    "incremental_cache_io_sum": ("units.phase_split.incremental", 1, "incremental cache load/save, NOT query cache lookup or hit timing"),
+    "incremental_cache_io_sum": ("units.phase_split.incremental", 1, "incremental load/save including encoding/validation CPU, NOT disk wait or all query-cache work"),
     "phase_covered_unit_wall_sum": ("units.phase_wall_secs", 1, "coverage denominator, not an extra cost"),
     "rustc_unit_wall_sum": ("units.rustc_wall_sum", 1, "overlapping compiler unit wall sum"),
 }

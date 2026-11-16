@@ -52,6 +52,12 @@ class AttributionTests(unittest.TestCase):
         self.assertIsNone(metrics["host_wall"]["seconds"])
         self.assertIsNone(metrics["query_cache"]["seconds"])
 
+    def test_incremental_serialization_is_not_disk_wait(self):
+        metric = self.compare()["baseline"]["metrics"]["incremental_cache_io_sum"]
+        self.assertIn("encoding/validation CPU", metric["scope"])
+        self.assertIn("NOT disk wait", metric["scope"])
+        self.assertEqual(metric["seconds"], .5)
+
     def test_real_archived_shipping_summary(self):
         path = Path(__file__).resolve().parents[1] / "data/runs/xps14/readme-cli-acceptance-20261014.jsonl"
         with path.open() as handle:
