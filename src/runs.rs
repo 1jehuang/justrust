@@ -343,17 +343,21 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     }
     let _ = writeln!(o, "Where cargo's wall time went");
     let p = &s.phases;
+    let lock_note = if s.locks_waited.is_empty() {
+        "stderr-based Cargo lock estimate; lock kind unknown".to_string()
+    } else {
+        format!(
+            "stderr-based Cargo lock estimate: {}",
+            s.locks_waited.join(", ")
+        )
+    };
     for (label, v, note) in [
         (
             "cargo startup",
             p.startup,
             "resolve, fingerprints, planning",
         ),
-        (
-            "lock wait",
-            p.lock_wait,
-            "another cargo held the build directory",
-        ),
+        ("lock wait", p.lock_wait, lock_note.as_str()),
         ("compiling", p.compile, "at least one rustc running"),
         (
             "build gaps",
@@ -630,6 +634,42 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tail_tests {
     use super::*;
+
+    #[test]
+    fn show_lock_wait_uses_observed_labels_without_inventing_target_contention() {
+        for labels in [
+            vec![],
+            vec!["package cache".to_string()],
+            vec!["package cache".to_string(), "build directory".to_string()],
+        ] {
+            let summary = Summary {
+                locks_waited: labels.clone(),
+                wall: 2.0,
+                phases: crate::summary::Phases {
+                    lock_wait: 1.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let report = render(
+                &summary,
+                std::path::Path::new("/nonexistent/lock-label-fixture"),
+            );
+            assert!(
+                report.contains("stderr-based Cargo lock estimate"),
+                "{report}"
+            );
+            assert!(
+                !report.contains("another cargo held the build directory"),
+                "{report}"
+            );
+            if labels.is_empty() {
+                assert!(report.contains("lock kind unknown"), "{report}");
+            } else {
+                assert!(report.contains(&labels.join(", ")), "{report}");
+            }
+        }
+    }
 
     #[test]
     fn show_reports_saved_execution_location_not_generic_remote() {

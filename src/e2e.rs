@@ -315,7 +315,7 @@ pub fn label(key: &str) -> &str {
         "sync.other" => "sync: relay",
         "sync.total" => "sync (total)",
         "build.cargo_startup" | "host.cargo_startup" => "cargo startup",
-        "build.lock_wait" | "host.lock_wait" => "build dir lock",
+        "build.lock_wait" | "host.lock_wait" => "Cargo lock estimate",
         "build.compile" | "host.compile" => "compiling",
         "build.build_gaps" | "host.build_gaps" => "build gaps",
         "build.tests" | "host.tests" => "running tests",
@@ -376,6 +376,12 @@ pub fn render(e: &E2e) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn aggregate_lock_segments_do_not_claim_target_directory_attribution() {
+        for key in ["build.lock_wait", "host.lock_wait"] {
+            assert_eq!(super::label(key), "Cargo lock estimate");
+        }
+    }
     use super::*;
     use crate::summary::Phases;
 
