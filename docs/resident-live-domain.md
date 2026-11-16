@@ -108,6 +108,41 @@ general-project conclusion or default promotion is claimed. Repeated complete
 identity validation at each query lookup is the next optimization hypothesis,
 not an established attribution. The original slow baselines remain unchanged.
 
+The next candidate, `15a9a1f35`, memoizes full identity compatibility once per
+actual private published/pending generation pair and identity budget. Replacing
+the pending identity, aborting, publishing or evicting the previous generation
+invalidates the memo. Rejections are memoized too. The public borrowed snapshot
+authorization API is unchanged. Leaf inspection and its exact body/current-source
+recheck remain mandatory, as do dependency-green and incremental hash checks.
+No borrowed token is retained or lifetime extended by the memo.
+
+The complete frozen 1555 sysroot has driver SHA256
+`5b69dcb65e4e25971d5b57be0175d77c7b55a04511b4fefc9e6201ef120e9669`.
+Driver checking, 69 resident native tests, two lifetime-escape doctests, strict
+same-source/cross-edit acceptance, safety guards and three-repetition shipping
+module correctness dogfood passed. Exact original acceptance records are
+`bench/stable-resident-memo-20261116-1555-{leaf,typed,guard,dogfood}`.
+
+Four further identical-workload local runs used old/new/new/old compiler order.
+Each still rotates its three arms and has 48 measured samples per arm:
+
+| Run | Fresh median | Process-only control | Live leaf | Leaf/control |
+| --- | ---: | ---: | ---: | ---: |
+| Before A | 38.250 ms | 14.351 ms | 133.361 ms | 9.293x |
+| After A | 36.249 ms | 20.345 ms | 20.945 ms | 1.029x |
+| After B | 38.507 ms | 20.057 ms | 15.318 ms | 0.764x |
+| Before B | 42.700 ms | 21.665 ms | 104.929 ms | 4.843x |
+
+Both `bench/suite.py compare --allow-compiler-change` comparisons passed exact
+workload, host, semantic execution and artifact checks, with explicitly attested
+different driver hashes. Originals are stored with authenticated exact-JSON
+readback as `bench/stable-resident-memo-suite-20261116-1556-{before-a,after-a,after-b,before-b}`.
+The large old-engine regression is substantially reduced, but retention itself
+does not yet show a consistent advantage over the same-process control: After A
+is 2.95% slower and After B is 23.63% faster. Control medians also varied. Machine
+load observations remain in the receipts, and this is not a quiet-machine,
+statistical, production-performance or representative-project speed claim.
+
 ## Why a second cache is insufficient
 
 A `Ty<'tcx>`, `TypeckResults<'tcx>` or MIR `Body<'tcx>` can refer to an interner,
