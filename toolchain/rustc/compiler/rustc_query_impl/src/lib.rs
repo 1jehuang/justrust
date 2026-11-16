@@ -24,6 +24,7 @@ mod handle_cycle_error;
 mod incremental;
 mod job;
 mod query_vtables;
+pub mod resident;
 mod self_profile;
 
 pub fn query_system<'tcx>(
@@ -38,6 +39,7 @@ pub fn query_system<'tcx>(
 ) -> QuerySystem<'tcx> {
     let jobs = rustc_session::query_admission::QueryJobAllocator::new(observer);
     QuerySystem {
+        resident_value_namespace: Default::default(),
         arenas: Default::default(),
         dep_kind_vtables: dep_kind_vtables::make_dep_kind_vtables(
             arena,

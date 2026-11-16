@@ -789,7 +789,20 @@ fn execute_job_incr<'tcx, C: QueryCache>(
 
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
+    retain_resident_value(tcx, query, dep_node, result);
     (result, dep_node_index)
+}
+
+fn retain_resident_value<'tcx, C: QueryCache>(
+    tcx: TyCtxt<'tcx>,
+    query: &QueryVTable<'tcx, C>,
+    dep_node: DepNode,
+    value: C::Value,
+) {
+    if let (Some(insert), Some(hash)) = (query.resident_insert_fn, query.hash_value_fn) {
+        let fingerprint = tcx.with_stable_hashing_context(|mut hcx| hash(&mut hcx, &value));
+        insert(tcx, dep_node, fingerprint, value);
+    }
 }
 
 /// Given that the dep node for this query+key is green, obtain a value for it
@@ -815,6 +828,25 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     // Keep that distinction observable without treating ordinary query cache
     // hits (which can be within this session) as cross-session value reuse.
     let _reuse_timer = tcx.prof.generic_activity_with_arg("jr_incremental_green_query", query.name);
+
+    // try_mark_green has validated dependencies and replayed diagnostics before
+    // entering this function. Never consult process RAM before that point.
+    if let Some(get) = query.resident_get_fn
+        && let Some(value) =
+            get(tcx, *dep_node, dep_graph_data.prev_value_fingerprint_of(prev_index))
+    {
+        // RAM reuse must not bypass incremental result verification.
+        incremental_verify_ich(
+            tcx,
+            dep_graph_data,
+            &value,
+            prev_index,
+            query.hash_value_fn,
+            query.format_value,
+        );
+        retain_resident_value(tcx, query, *dep_node, value);
+        return value;
+    }
 
     // First try to load the result from the on-disk cache. Some things are never cached on disk.
     let try_value = if query.will_cache_on_disk_for_key(key) {
@@ -871,6 +903,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
         );
     }
 
+    retain_resident_value(tcx, query, *dep_node, value);
     value
 }
 

@@ -4,6 +4,32 @@ use rustc_middle::query::{QueryCache, QueryKey, QueryMode, QueryVTable};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
+// Deliberate name whitelist, not type-driven specialization. Adding a query
+// requires reviewing its result for session-owned identity and side effects.
+macro_rules! resident_hooks {
+    (type_alias_is_checked, $op:ident) => { resident_hooks!(@bool $op) };
+    (is_promotable_const_fn, $op:ident) => { resident_hooks!(@bool $op) };
+    (should_inherit_track_caller, $op:ident) => { resident_hooks!(@bool $op) };
+    (is_doc_hidden, $op:ident) => { resident_hooks!(@bool $op) };
+    (is_doc_notable_trait, $op:ident) => { resident_hooks!(@bool $op) };
+    (is_mir_available, $op:ident) => { resident_hooks!(@bool $op) };
+    (is_dyn_compatible, $op:ident) => { resident_hooks!(@bool $op) };
+    (generics_require_sized_self, $op:ident) => { resident_hooks!(@bool $op) };
+    (cross_crate_inlinable, $op:ident) => { resident_hooks!(@bool $op) };
+    (@bool get) => {
+        if crate::resident::enabled() { Some(|tcx, node, fingerprint| {
+            crate::resident::get(tcx, node, fingerprint).map(erase::erase_val)
+        }) } else { None }
+    };
+    (@bool insert) => {
+        if crate::resident::enabled() { Some(|tcx, node, fingerprint, value| {
+            let value: bool = erase::restore_val(value);
+            crate::resident::insert(tcx, node, fingerprint, value);
+        }) } else { None }
+    };
+    ($other:ident, $op:ident) => { None };
+}
+
 /// Trait that knows how to look up the [`QueryVTable`] for a particular query.
 ///
 /// This trait allows some per-query code to be defined in generic functions
@@ -177,6 +203,8 @@ macro_rules! define_queries {
                         separate_provide_extern: $separate_provide_extern,
 
                         invoke_provider_fn: self::invoke_provider_fn::__rust_begin_short_backtrace,
+                        resident_get_fn: resident_hooks!($name, get),
+                        resident_insert_fn: resident_hooks!($name, insert),
 
                         #[cfg($cache_on_disk)]
                         try_load_from_disk_fn: |tcx, prev_index| {

@@ -7,7 +7,7 @@ use rustc_errors::Diag;
 use rustc_span::{Span, Symbol};
 
 use crate::dep_graph::{
-    DepKind, DepKindVTable, DepNodeIndex, QuerySideEffect, SerializedDepNodeIndex,
+    DepKind, DepKindVTable, DepNode, DepNodeIndex, QuerySideEffect, SerializedDepNodeIndex,
 };
 use crate::ich::StableHashState;
 use crate::queries::{ExternProviders, Providers, QueryArenas, QueryVTables, TaggedQueryKey};
@@ -59,6 +59,11 @@ pub struct QueryVTable<'tcx, C: QueryCache> {
     /// For `no_hash` queries, this function pointer is None.
     pub hash_value_fn: Option<fn(&mut StableHashState<'_>, &C::Value) -> Fingerprint>,
 
+    /// Opt-in owned scalar retention. Called only after green dependency validation.
+    pub resident_get_fn: Option<fn(TyCtxt<'tcx>, DepNode, Fingerprint) -> Option<C::Value>>,
+    /// Values are fingerprinted in the current session before insertion.
+    pub resident_insert_fn: Option<fn(TyCtxt<'tcx>, DepNode, Fingerprint, C::Value)>,
+
     /// Function pointer that handles a cycle error. `error` must be consumed, e.g. with `emit` (if
     /// it should be emitted) or `delay_as_bug` (if it need not be emitted because an alternative
     /// error is created and emitted). A value may be returned, or (more commonly) the function may
@@ -107,6 +112,8 @@ impl<'tcx, C: QueryCache> fmt::Debug for QueryVTable<'tcx, C> {
 }
 
 pub struct QuerySystem<'tcx> {
+    /// Owned resident-value namespace, initialized once per compiler session.
+    pub resident_value_namespace: std::sync::OnceLock<Option<(std::path::PathBuf, u64)>>,
     pub arenas: WorkerLocal<QueryArenas<'tcx>>,
     pub dep_kind_vtables: &'tcx [DepKindVTable<'tcx>],
     pub query_vtables: QueryVTables<'tcx>,
