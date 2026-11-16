@@ -736,12 +736,54 @@ impl<'tcx> Deref for TyCtxt<'tcx> {
     }
 }
 
+/// Storage for a context's native allocation universe. Sharing this storage does
+/// not establish source/DefId compatibility or authorize reusing query results.
+pub struct GlobalCtxtResources<'tcx> {
+    arena: &'tcx WorkerLocal<Arena<'tcx>>,
+    hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
+    interners: OwnedOrBorrowed<'tcx, CtxtInterners<'tcx>>,
+    alloc_map: OwnedOrBorrowed<'tcx, interpret::AllocMap<'tcx>>,
+}
+
+// Crate visibility is needed for the GlobalCtxt allocation-map field's users.
+// The public resource adapter deliberately exposes neither storage variant.
+pub(crate) enum OwnedOrBorrowed<'a, T> {
+    Owned(T),
+    Borrowed(&'a T),
+}
+
+impl<T> std::ops::Deref for OwnedOrBorrowed<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            Self::Owned(value) => value,
+            Self::Borrowed(value) => value,
+        }
+    }
+}
+
+impl<'tcx> GlobalCtxtResources<'tcx> {
+    /// A normal one-shot context owns fresh interners and a fresh AllocId map.
+    pub fn fresh(
+        arena: &'tcx WorkerLocal<Arena<'tcx>>,
+        hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
+    ) -> Self {
+        Self {
+            arena,
+            hir_arena,
+            interners: OwnedOrBorrowed::Owned(CtxtInterners::new(arena)),
+            alloc_map: OwnedOrBorrowed::Owned(interpret::AllocMap::new()),
+        }
+    }
+}
+
 /// See [TyCtxt] for details about this type.
 pub struct GlobalCtxt<'tcx> {
     pub arena: &'tcx WorkerLocal<Arena<'tcx>>,
     pub hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
 
-    interners: CtxtInterners<'tcx>,
+    interners: OwnedOrBorrowed<'tcx, CtxtInterners<'tcx>>,
 
     pub sess: &'tcx Session,
     crate_types: Vec<CrateType>,
@@ -784,7 +826,7 @@ pub struct GlobalCtxt<'tcx> {
     pub data_layout: TargetDataLayout,
 
     /// Stores memory for globals (statics/consts).
-    pub(crate) alloc_map: interpret::AllocMap<'tcx>,
+    pub(crate) alloc_map: OwnedOrBorrowed<'tcx, interpret::AllocMap<'tcx>>,
 
     current_gcx: CurrentGcx,
 
@@ -954,8 +996,7 @@ impl<'tcx> TyCtxt<'tcx> {
         sess: &'tcx Session,
         crate_types: Vec<CrateType>,
         stable_crate_id: StableCrateId,
-        arena: &'tcx WorkerLocal<Arena<'tcx>>,
-        hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
+        resources: GlobalCtxtResources<'tcx>,
         untracked: Untracked,
         incr_comp_session: Option<IncrCompSessionPaths>,
         dep_graph: DepGraph,
@@ -967,7 +1008,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let data_layout = sess.target.parse_data_layout().unwrap_or_else(|err| {
             sess.dcx().emit_fatal(err);
         });
-        let interners = CtxtInterners::new(arena);
+        let GlobalCtxtResources { arena, hir_arena, interners, alloc_map } = resources;
         let common_types = CommonTypes::new(&interners);
         let common_lifetimes = CommonLifetimes::new(&interners);
         let common_consts = CommonConsts::new(&interners, &common_types);
@@ -990,7 +1031,7 @@ impl<'tcx> TyCtxt<'tcx> {
             query_system,
             caches: Default::default(),
             data_layout,
-            alloc_map: interpret::AllocMap::new(),
+            alloc_map,
             current_gcx,
             jr_finished: std::sync::atomic::AtomicBool::new(false),
         });

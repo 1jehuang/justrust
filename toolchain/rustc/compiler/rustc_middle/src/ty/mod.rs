@@ -74,7 +74,8 @@ pub use self::consts::{
 };
 pub use self::context::resident::{ResidentTypeDomain, with_resident_type_domain};
 pub use self::context::{
-    CtxtInterners, CurrentGcx, FreeRegionInfo, GlobalCtxt, Lift, TyCtxt, TyCtxtFeed, tls,
+    CtxtInterners, CurrentGcx, FreeRegionInfo, GlobalCtxt, GlobalCtxtResources, Lift, TyCtxt,
+    TyCtxtFeed, tls,
 };
 pub use self::fold::*;
 pub use self::instance::{Instance, InstanceKind, ReifyReason, ShimKind};

@@ -3,8 +3,9 @@
 //! This is the lifetime boundary needed by a future multi-revision compiler
 //! executor, not a process-global cache and not an active driver mode. In
 //! particular, creating this domain does not make an old `GlobalCtxt` reusable.
-//! Sessions, source/hygiene identities, allocation IDs and dependency validation
-//! must be brought under the same executor before queries may use these values.
+//! Sessions, source/hygiene identities and dependency validation must be brought
+//! under the same executor before queries may reuse these values. The allocation
+//! map is shared here so native AllocIds retain their meaning within the domain.
 //!
 //! The higher-ranked callback prevents a type or arena reference from escaping
 //! its owner. No lifetime extension, permanent allocation, or serialized proxy
@@ -12,8 +13,9 @@
 
 use rustc_data_structures::sync::WorkerLocal;
 
-use super::{CommonTypes, CtxtInterners};
+use super::{CommonTypes, CtxtInterners, GlobalCtxtResources, OwnedOrBorrowed};
 use crate::arena::Arena;
+use crate::mir::interpret;
 use crate::ty::{Ty, TypeckResults};
 
 /// An arena and interner universe shared by the revisions in one scoped batch.
@@ -23,7 +25,9 @@ use crate::ty::{Ty, TypeckResults};
 /// must not be transplanted into ordinary one-shot contexts.
 pub struct ResidentTypeDomain<'domain> {
     arena: &'domain WorkerLocal<Arena<'domain>>,
-    interners: CtxtInterners<'domain>,
+    hir_arena: &'domain WorkerLocal<rustc_hir::Arena<'domain>>,
+    interners: &'domain CtxtInterners<'domain>,
+    alloc_map: &'domain interpret::AllocMap<'domain>,
     common_types: CommonTypes<'domain>,
 }
 
@@ -42,12 +46,32 @@ pub fn with_resident_type_domain<R>(
     f: impl for<'domain> FnOnce(ResidentTypeDomain<'domain>) -> R,
 ) -> R {
     let arena = WorkerLocal::new(|_| Arena::default());
+    let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
     let interners = CtxtInterners::new(&arena);
+    let alloc_map = interpret::AllocMap::new();
     let common_types = CommonTypes::new(&interners);
-    f(ResidentTypeDomain { arena: &arena, interners, common_types })
+    f(ResidentTypeDomain {
+        arena: &arena,
+        hir_arena: &hir_arena,
+        interners: &interners,
+        alloc_map: &alloc_map,
+        common_types,
+    })
 }
 
 impl<'domain> ResidentTypeDomain<'domain> {
+    /// Borrow the batch's actual native arenas, interners and allocation map.
+    /// Contexts may be dropped independently without discarding this universe.
+    /// This alone does not validate source/DefId identity or query reuse.
+    pub fn context_resources(&self) -> GlobalCtxtResources<'domain> {
+        GlobalCtxtResources {
+            arena: self.arena,
+            hir_arena: self.hir_arena,
+            interners: OwnedOrBorrowed::Borrowed(self.interners),
+            alloc_map: OwnedOrBorrowed::Borrowed(self.alloc_map),
+        }
+    }
+
     /// One actual interned compiler type, not a type name or encoded type record.
     pub fn bool_type(&self) -> Ty<'domain> {
         self.common_types.bool
@@ -140,5 +164,71 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn resident_resources_keep_native_owners_after_domain_view_is_dropped() {
+        on_worker(|| {
+            with_resident_type_domain(|domain| {
+                let old = domain.context_resources();
+                let new = domain.context_resources();
+                assert!(matches!(&old.interners, OwnedOrBorrowed::Borrowed(_)));
+                assert!(matches!(&old.alloc_map, OwnedOrBorrowed::Borrowed(_)));
+                assert!(std::ptr::eq(old.arena, new.arena));
+                assert!(std::ptr::eq(old.hir_arena, new.hir_arena));
+                assert!(std::ptr::eq(&*old.interners, &*new.interners));
+                assert!(std::ptr::eq(&*old.alloc_map, &*new.alloc_map));
+                let old_ty = old.interners.intern_ty(crate::ty::TyKind::Bool);
+                let old_typeck = old.arena.alloc(TypeckResults::new(CRATE_OWNER_ID));
+                let old_hir_owner = old.hir_arena.alloc(CRATE_OWNER_ID);
+                // The factory, not this movable domain view or a context's
+                // resource adapter, owns the interner and allocation map.
+                drop(domain);
+                drop(old);
+                let next_ty = new.interners.intern_ty(crate::ty::TyKind::Bool);
+                assert!(std::ptr::eq(old_ty.kind(), next_ty.kind()));
+                assert_eq!(old_typeck.hir_owner, *old_hir_owner);
+                let next_hir_owner = new.hir_arena.alloc(CRATE_OWNER_ID);
+                assert!(!std::ptr::eq(old_hir_owner, next_hir_owner));
+            });
+        });
+    }
+
+    #[test]
+    fn fresh_resources_own_independent_native_interners_and_maps() {
+        on_worker(|| {
+            let arena = WorkerLocal::new(|_| Arena::default());
+            let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
+            let first = GlobalCtxtResources::fresh(&arena, &hir_arena);
+            let second = GlobalCtxtResources::fresh(&arena, &hir_arena);
+            assert!(matches!(&first.interners, OwnedOrBorrowed::Owned(_)));
+            assert!(matches!(&first.alloc_map, OwnedOrBorrowed::Owned(_)));
+            assert!(!std::ptr::eq(&*first.interners, &*second.interners));
+            assert!(!std::ptr::eq(&*first.alloc_map, &*second.alloc_map));
+            let first_ty = first.interners.intern_ty(crate::ty::TyKind::Bool);
+            let second_ty = second.interners.intern_ty(crate::ty::TyKind::Bool);
+            assert!(!std::ptr::eq(first_ty.kind(), second_ty.kind()));
+        });
+    }
+
+    #[test]
+    fn resource_wrapper_drops_only_its_owned_value() {
+        use std::cell::Cell;
+
+        struct DropProbe<'a>(&'a Cell<usize>);
+        impl Drop for DropProbe<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Cell::new(0);
+        let owner = DropProbe(&drops);
+        drop(OwnedOrBorrowed::Borrowed(&owner));
+        assert_eq!(drops.get(), 0);
+        drop(OwnedOrBorrowed::Owned(DropProbe(&drops)));
+        assert_eq!(drops.get(), 1);
+        drop(owner);
+        assert_eq!(drops.get(), 2);
     }
 }
