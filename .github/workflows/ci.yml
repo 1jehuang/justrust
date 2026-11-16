@@ -6,6 +6,13 @@ on:
     tags: ["v*"]
   pull_request:
 
+# Coalesce transient stable commits and updates to the same PR, not releases.
+# Unique run IDs for tags/other refs also prevent pending-run replacement.
+# PR numbers, unlike contributor branch names, are unique within this repo.
+concurrency:
+  group: client-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/stable' && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/stable') }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -25,6 +32,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Test client CI concurrency policy
+        run: python3 -m unittest discover -s scripts -p test_client_ci_concurrency.py -v
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked
       - run: cargo test --locked
