@@ -215,6 +215,57 @@ fn run_in_thread_with_globals<F: FnOnce(CurrentGcx) -> R + Send, R: Send>(
     })
 }
 
+/// Run an explicitly selected resident batch on one registered, large-stack worker.
+///
+/// The worker owns its session globals, but does not install them in TLS for the
+/// batch. The callback must enter each request with
+/// `SessionGlobals::enter_resident_revision`, returning from that scope before
+/// starting the next request. It is responsible for revision validation, owner
+/// retirement and keeping all revision-local compiler state inside its scope.
+/// Like the ordinary serial path, this does not create a frontend jobserver
+/// proxy or acquire additional frontend permits. Parallel frontend mode is not
+/// supported, even when configured with only one worker.
+pub(crate) fn run_in_serial_worker_with_owned_globals<
+    F: FnOnce(&mut SessionGlobals) -> R + Send,
+    R: Send,
+>(
+    thread_builder_diag: &EarlyDiagCtxt,
+    edition: Edition,
+    jobs: Jobs,
+    extra_symbols: &[&'static str],
+    sm_inputs: SourceMapInputs,
+    f: F,
+) -> R {
+    let thread_stack_size = init_stack_size(thread_builder_diag);
+
+    if jobs.frontend.is_some() || sync::check_dyn_thread_safe().is_some() {
+        thread_builder_diag.early_fatal(
+            "resident batch execution requires serial frontend mode; parallel frontends are unsupported",
+        );
+    }
+
+    let registry = sync::Registry::new(NonZero::new(1).unwrap());
+    let builder = thread::Builder::new().name("rustc".to_string()).stack_size(thread_stack_size);
+
+    // Construct the non-Send owner on the worker and never move it across threads.
+    thread::scope(|s| {
+        let r = builder
+            .spawn_scoped(s, move || {
+                registry.register();
+                let mut session_globals =
+                    SessionGlobals::new(edition, extra_symbols, Some(sm_inputs));
+                f(&mut session_globals)
+            })
+            .unwrap()
+            .join();
+
+        match r {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    })
+}
+
 type ResourcePublisher = Box<dyn Fn(PrefixFacts) + Send + Sync>;
 
 /// Explicit controller transport, never a policy selector or a query owner.
