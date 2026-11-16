@@ -6,7 +6,7 @@ use rustc_middle::query::on_disk_cache;
 use rustc_middle::ty::TyCtxt;
 use rustc_serialize::Encodable as RustcEncodable;
 use rustc_serialize::opaque::FileEncoder;
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{IncrCompSessionPaths, Session};
 use tracing::debug;
 
 use super::data::*;
@@ -112,7 +112,7 @@ pub(crate) fn save_dep_graph(tcx: TyCtxt<'_>) {
 /// Saves the work product index.
 pub fn save_work_product_index(
     sess: &Session,
-    incr_comp_session: Option<&IncrCompSession>,
+    incr_comp_session: Option<&IncrCompSessionPaths>,
     dep_graph: &DepGraph,
     new_work_products: WorkProductMap,
 ) {

@@ -7,7 +7,7 @@ use std::path::Path;
 use rustc_data_structures::unord::UnordMap;
 use rustc_fs_util::link_or_copy;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{IncrCompSessionPaths, Session};
 use tracing::debug;
 
 use crate::diagnostics;
@@ -19,7 +19,7 @@ use crate::persist::fs::*;
 /// Panics when incr comp is disabled.
 pub fn copy_cgu_workproduct_to_incr_comp_cache_dir(
     sess: &Session,
-    incr_comp_session: &IncrCompSession,
+    incr_comp_session: &IncrCompSessionPaths,
     cgu_name: &str,
     files: &[(&'static str, &Path)],
 ) -> (WorkProductId, WorkProduct) {

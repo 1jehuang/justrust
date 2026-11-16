@@ -25,7 +25,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{
     self, Lto, OptLevel, OutFileName, OutputFilenames, OutputType, Passes, SwitchWithOptPath,
 };
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{IncrCompSessionPaths, Session};
 use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, FileName, InnerSpan, Span, SyntaxContext, bug};
 use rustc_structures::CrateType;
@@ -460,7 +460,7 @@ pub(crate) fn start_async_codegen<B: WriteBackendMethods>(
 
 fn copy_all_cgu_workproducts_to_incr_comp_cache_dir(
     sess: &Session,
-    incr_comp_session: Option<&IncrCompSession>,
+    incr_comp_session: Option<&IncrCompSessionPaths>,
     compiled_modules: &CompiledModules,
 ) -> WorkProductMap {
     let mut work_products = WorkProductMap::default();
@@ -2090,7 +2090,7 @@ impl<B: WriteBackendMethods> OngoingCodegen<B> {
     pub fn join(
         self,
         sess: &Session,
-        incr_comp_session: Option<&IncrCompSession>,
+        incr_comp_session: Option<&IncrCompSessionPaths>,
         crate_info: &CrateInfo,
     ) -> (CompiledModules, WorkProductMap) {
         self.shared_emitter_main.check(sess, true);

@@ -9,7 +9,7 @@ use rustc_middle::dep_graph::WorkProductMap;
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::util::Providers;
 use rustc_session::config::{OutputFilenames, PrintRequest};
-use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
+use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSessionPaths, Session};
 use rustc_span::Symbol;
 use rustc_structures::CrateType;
 
@@ -115,7 +115,7 @@ pub trait CodegenBackend {
         &self,
         ongoing_codegen: Box<dyn Any>,
         sess: &Session,
-        incr_comp_session: Option<&IncrCompSession>,
+        incr_comp_session: Option<&IncrCompSessionPaths>,
         outputs: &OutputFilenames,
         crate_info: &CrateInfo,
     ) -> (CompiledModules, WorkProductMap);
