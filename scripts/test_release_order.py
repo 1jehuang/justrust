@@ -142,6 +142,15 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertIn("archive + \".sha256\"", summary)
         self.assertIn("Missing provenance", summary)
 
+    def test_platform_build_inputs_do_not_share_test_mirror_paths(self):
+        build = self.job("build")
+        self.assertIn("working-directory: release-client/${{ matrix.target }}", build)
+        self.assertIn("path: release-client/${{ matrix.target }}", build)
+        self.assertIn("workspaces: release-client/${{ matrix.target }} -> target", build)
+        # Preserve hosted Linux account fencing while separating mirrored paths.
+        self.assertIn("justrust-hosted-linux", build)
+        self.assertIn("cancel-in-progress: false", build)
+
     def test_documented_shared_production_first_order(self):
         flattened = " ".join(self.docs.split())
         self.assertIn("bump -> commit -> build/package sanity -> tag/publish -> shared production -> test/measure -> fix forward", flattened)

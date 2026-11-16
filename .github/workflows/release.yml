@@ -93,6 +93,11 @@ jobs:
     needs: preflight
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # Hosted mirrors preserve absolute checkout paths. Keep release inputs
+        # out of the root checkout used by concurrent post-publication tests.
+        working-directory: release-client/${{ matrix.target }}
     concurrency:
       group: ${{ matrix.zig && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
       cancel-in-progress: false
@@ -119,6 +124,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.preflight.outputs.sha }}
+          path: release-client/${{ matrix.target }}
           # Client Cargo package excludes these separately built source trees.
           # Do not mirror a vendored compiler just to build the client.
           sparse-checkout-cone-mode: false
@@ -160,6 +166,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: client-release-${{ matrix.target }}
+          workspaces: release-client/${{ matrix.target }} -> target
 
       - name: Build
         if: ${{ !matrix.zig }}
