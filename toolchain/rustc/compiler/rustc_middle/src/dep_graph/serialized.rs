@@ -725,41 +725,16 @@ impl OwnedCapture {
         graph
     }
 
-    fn finish(mut self, output: &std::fs::File, session_count: u64) {
+    fn finish(mut self, bytes: Vec<u8>, session_count: u64) {
         let Some(graph) = self.graph.take() else {
             return;
         };
         let cost =
             Self::estimated_cost(graph.nodes.raw.capacity(), graph.edge_list_data.capacity());
         let graph = Self::complete_graph(graph, session_count);
-        // Bound the actual read, not just a racy metadata length check. This also
-        // preserves exact headers, options and session_count in the cache key.
-        use std::io::{Read, Seek, SeekFrom};
-        // Read the encoder's actual handle, never a potentially replaced path.
-        let Ok(mut file) = output.try_clone() else {
-            return;
-        };
-        if file.seek(SeekFrom::Start(0)).is_err() {
-            return;
-        }
-        let Ok(metadata) = file.metadata() else {
-            return;
-        };
-        let Ok(len) = usize::try_from(metadata.len()) else {
-            return;
-        };
-        if len > resident::CAPTURE_LIMIT {
-            resident::oversized();
-            return;
-        }
-        let mut bytes = vec![0; len];
-        if file.read_exact(&mut bytes).is_err() {
-            return;
-        }
-        let mut extra = [0];
-        if !matches!(file.read(&mut extra), Ok(0)) {
-            return;
-        }
+        // These are the encoder-owned exact output bytes, including the header,
+        // options and terminal magic. Never pair native graph state with bytes
+        // reread from a mutable artifact, even through its original file handle.
         resident::publish(self.namespace.clone(), bytes, Arc::new(graph), cost);
     }
 }
@@ -893,12 +868,14 @@ struct EncoderState {
 impl EncoderState {
     fn new(
         sess: &Session,
-        encoder: FileEncoder<'static>,
+        mut encoder: FileEncoder<'static>,
         record_stats: bool,
         previous: Arc<SerializedDepGraph>,
     ) -> Self {
+        let capture = OwnedCapture::new(sess)
+            .filter(|_| encoder.enable_memory_snapshot(resident::CAPTURE_LIMIT));
         Self {
-            capture: OwnedCapture::new(sess).map(|capture| Lock::new(Some(capture))),
+            capture: capture.map(|capture| Lock::new(Some(capture))),
             previous,
             next_node_index: AtomicU64::new(0),
             stats: record_stats.then(|| Lock::new(FxHashMap::default())),
@@ -1086,7 +1063,11 @@ impl EncoderState {
         if let Some(capture) = &self.capture {
             if let Some(capture) = capture.lock().take() {
                 if result.is_ok() {
-                    capture.finish(encoder.file(), self.previous.session_count + 1);
+                    if let Some(bytes) = encoder.take_memory_snapshot() {
+                        capture.finish(bytes, self.previous.session_count + 1);
+                    } else {
+                        resident::oversized();
+                    }
                 }
             }
         }
