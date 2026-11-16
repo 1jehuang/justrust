@@ -293,6 +293,26 @@ fn admission_timing_enabled(method: &str, path: &str, trace: bool) -> bool {
     trace && method == "POST" && path == "build/runs"
 }
 
+fn api_response_limit(method: &str, path: &str) -> &'static str {
+    // The private record endpoint accepts up to 1,980,000 bytes of data.
+    // Allow its envelope too, without relaxing admission or other API limits.
+    if method == "GET"
+        && let Some((kind, id)) = path
+            .strip_prefix("build/records/")
+            .and_then(|p| p.split_once('/'))
+        && matches!(kind, "run" | "bench")
+        && !id.is_empty()
+        && id.len() <= 128
+        && id.as_bytes()[0].is_ascii_alphanumeric()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return "2097152";
+    }
+    "1048576"
+}
+
 fn curl_with_timing(
     c: &Creds,
     method: &str,
@@ -317,7 +337,7 @@ fn curl_with_timing(
         "--max-time",
         "30",
         "--max-filesize",
-        "1048576",
+        api_response_limit(method, path),
         "-X",
         method,
         "-H",
@@ -3463,6 +3483,39 @@ mod tests {
         ] {
             assert!(!admission_timing_enabled(method, path, trace));
         }
+    }
+
+    #[test]
+    fn large_response_limit_is_only_for_one_valid_private_record() {
+        for path in ["build/records/bench/receipt-1", "build/records/run/r1"] {
+            assert_eq!(api_response_limit("GET", path), "2097152");
+            assert_eq!(api_response_limit("POST", path), "1048576");
+            let c = Creds::new("https://build.jcode.sh/v1".into(), "sk-secret".into()).unwrap();
+            let (cmd, config) = curl(&c, "GET", path, None);
+            let args: Vec<_> = cmd.get_args().map(|v| v.to_string_lossy()).collect();
+            let index = args.iter().position(|v| v == "--max-filesize").unwrap();
+            assert_eq!(args[index + 1], "2097152");
+            assert!(config.contains("sk-secret"));
+            assert!(args.iter().all(|arg| !arg.contains("sk-secret")));
+        }
+        for path in [
+            "build/runs",
+            "build/records",
+            "build/records?kind=bench",
+            "build/records/other/r1",
+            "build/records/bench/",
+            "build/records/bench/r1/extra",
+            "build/records/bench/r1?query=1",
+            "build/records/bench/../r1",
+            "build/records/bench/%2f",
+            "build/records/bench/-r1",
+        ] {
+            assert_eq!(api_response_limit("GET", path), "1048576", "{path}");
+        }
+        assert_eq!(
+            api_response_limit("GET", &format!("build/records/bench/{}", "x".repeat(129))),
+            "1048576"
+        );
     }
 
     #[test]
