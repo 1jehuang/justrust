@@ -50,6 +50,25 @@ is descriptive attribution, not a causal speedup or a comprehensive gate.
 A live compiler-state RAM tier must actually exist and pass invalidation and
 memory-budget checks before it can be included in a three-tier comparison.
 
+The existing native disk-retention switches can be tested with one frozen LLVM
+rustc, independent of the alternate resident engine:
+
+```sh
+python3 bench/same_rustc_retention.py \
+  --compiler /absolute/frozen/sysroot/bin/rustc \
+  --output-parent "$JCODE_SCRATCH_DIR" --repetitions 4 --items 32
+```
+
+This is a local-only native incremental-protocol acceptance test. It forces
+unchanged recompilations that Cargo would skip, rotates OFF/ON order, and
+checks type errors, recovery, runtime output and incremental fingerprints.
+Both associated-item and small-query disk-retention flags change together,
+so it does not isolate their individual contributions. Schema 2 receipts
+hash the executable, driver and installed sysroot/LLVM artifacts before and
+after execution, retain raw results privately, and use the normal account
+record upload queue. It does not measure a live RAM tier, hosted request
+latency, eviction policy or general agent workload performance.
+
 ## Find the expensive lock queues first
 
 Read existing run summaries without starting builds or changing caches:
