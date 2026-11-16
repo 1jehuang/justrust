@@ -23,6 +23,8 @@ pub struct LiveQueryStats {
     pub mir_hits: u64,
     /// A distinct counter for the separate primitive-leaf source-closure path.
     pub mir_leaf_hits: u64,
+    pub mir_leaf_candidate_misses: u64,
+    pub mir_leaf_last_rejection: Option<super::resident_mir_leaf::LeafError>,
     pub mir_misses: u64,
     pub retained_entries: usize,
     pub retained_estimated_bytes: usize,
@@ -198,21 +200,30 @@ impl<'tcx> LiveQueryState<'tcx> {
         }
         let key = ResidentKey { dep_node, value_fingerprint: fingerprint };
         let (body, budget) = {
-            let state = self.state.lock();
+            let mut state = self.state.lock();
             if !state.enabled || !state.leaf_enabled {
                 return None;
             }
             let budget = state.identity_budget?;
-            (state.values.mir_leaf_candidate(key, budget)?, budget)
+            let Some(body) = state.values.mir_leaf_candidate(key, budget) else {
+                state.stats.mir_leaf_candidate_misses += 1;
+                return None;
+            };
+            (body, budget)
         };
         let source_map = tcx.sess.source_map();
-        let proof = super::resident_mir_leaf::inspect(
+        let proof = match super::resident_mir_leaf::inspect(
             tcx,
             body,
             source_map,
             super::resident_mir_leaf::LeafLimits::default(),
-        )
-        .ok()?;
+        ) {
+            Ok(proof) => proof,
+            Err(reason) => {
+                self.state.lock().stats.mir_leaf_last_rejection = Some(reason);
+                return None;
+            }
+        };
         let mut state = self.state.lock();
         if !state.enabled || !state.leaf_enabled || state.identity_budget != Some(budget) {
             return None;

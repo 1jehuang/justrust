@@ -378,6 +378,8 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                         "typeck_misses": live.typeck_misses,
                         "mir_hits": live.mir_hits,
                     "mir_leaf_hits": live.mir_leaf_hits,
+                    "mir_leaf_candidate_misses": live.mir_leaf_candidate_misses,
+                    "mir_leaf_last_rejection": live.mir_leaf_last_rejection.map(|reason| format!("{reason:?}")),
                         "mir_misses": live.mir_misses,
                         "retained_entries": live.retained_entries,
                         "retained_estimated_bytes": live.retained_estimated_bytes,
