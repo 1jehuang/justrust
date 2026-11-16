@@ -21,12 +21,16 @@ This is an experiment, not a production default or a Rust parity claim.\n\
 JUSTRUST_HYBRID_PREWARM=after-success opts into background preparation\n\
 after a successful Cargo fallback. Only one preparation runs per namespace.\n";
 
+// Only Unix executes the native decision protocol. Keep its pure parser
+// available to tests on every platform without adding unused Windows runtime.
+#[cfg(any(unix, test))]
 #[derive(Debug, PartialEq, Eq)]
 enum Decision {
     Miss,
     Committed,
 }
 
+#[cfg(any(unix, test))]
 fn decision(bytes: &[u8]) -> anyhow::Result<Decision> {
     match bytes {
         b"miss\n" => Ok(Decision::Miss),
