@@ -245,17 +245,22 @@ impl OwnedRequests {
     }
 }
 
-/// Actual common native owners, still without cross-revision query lookups.
-/// This mode intentionally excludes incremental persistence until its source-file
-/// encoder view is revision-aware. It is not a production compiler selection.
+fn typed_selection(value: Option<&std::ffi::OsStr>) -> Result<(bool, bool, bool), String> {
+    match value {
+        None => Ok((false, false, false)),
+        Some(value) if value == "0" => Ok((false, false, false)),
+        Some(value) if value == "control" => Ok((false, true, false)),
+        Some(value) if value == "1" => Ok((true, false, false)),
+        Some(value) if value == "leaf" => Ok((true, false, true)),
+        Some(_) => Err("invalid native typed experiment selection".into()),
+    }
+}
+
+/// Actual common native owners. Persistence and typed queries require separate
+/// explicit development selections, never a production compiler default change.
 fn serve_owned(mut response: File) -> Result<(), String> {
-    let mode = std::env::var("JUSTRUST_RUSTC_RESIDENT_TYPED").ok();
-    let live_queries = match mode.as_deref() {
-        None | Some("0") | Some("control") => false,
-        Some("1") => true,
-        Some(_) => return Err("invalid native typed experiment selection".into()),
-    };
-    let incremental_control = mode.as_deref() == Some("control");
+    let mode = std::env::var_os("JUSTRUST_RUSTC_RESIDENT_TYPED");
+    let (live_queries, incremental_control, selective_leaf) = typed_selection(mode.as_deref())?;
     for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
         if std::env::var_os(name).is_some_and(|value| value == "1") {
             return Err(format!("{name} cannot be combined with the native owned batch"));
@@ -285,7 +290,11 @@ fn serve_owned(mut response: File) -> Result<(), String> {
     crate::catch_fatal_errors(|| {
         rustc_interface::resident::with_resident_compiler_batch_options(
             config,
-            rustc_interface::resident::ResidentBatchOptions { live_queries, incremental_control },
+            rustc_interface::resident::ResidentBatchOptions {
+                live_queries,
+                incremental_control,
+                selective_leaf,
+            },
             move |batch, config| {
                 let mut first = Some((config, first_callbacks, registered_lints));
                 let mut id = first_id;
@@ -368,6 +377,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                         "typeck_hits": live.typeck_hits,
                         "typeck_misses": live.typeck_misses,
                         "mir_hits": live.mir_hits,
+                    "mir_leaf_hits": live.mir_leaf_hits,
                         "mir_misses": live.mir_misses,
                         "retained_entries": live.retained_entries,
                         "retained_estimated_bytes": live.retained_estimated_bytes,
@@ -412,7 +422,33 @@ fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OWNED_RSS_BUDGET_BYTES, owned_completion, owned_retirement, request};
+    use super::{
+        OWNED_RSS_BUDGET_BYTES, owned_completion, owned_retirement, request, typed_selection,
+    };
+
+    #[test]
+    fn typed_selection_is_explicit_and_separates_leaf_authorization() {
+        use std::ffi::OsStr;
+        assert_eq!(typed_selection(None).unwrap(), (false, false, false));
+        for (mode, expected) in [
+            ("0", (false, false, false)),
+            ("control", (false, true, false)),
+            ("1", (true, false, false)),
+            ("leaf", (true, false, true)),
+        ] {
+            assert_eq!(typed_selection(Some(OsStr::new(mode))).unwrap(), expected);
+        }
+        for invalid in ["", "true", "LEAF", " leaf"] {
+            assert!(typed_selection(Some(OsStr::new(invalid))).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_selection_rejects_non_unicode_instead_of_becoming_default() {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(typed_selection(Some(std::ffi::OsStr::from_bytes(b"\xff"))).is_err());
+    }
 
     #[test]
     fn owned_boundary_rss_admission() {

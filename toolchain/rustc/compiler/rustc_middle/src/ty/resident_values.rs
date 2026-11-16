@@ -174,6 +174,38 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
         }
     }
 
+    /// Read-only candidate for closure inspection, never a query-cache hit. The
+    /// caller must inspect it outside the live-state lock, then revalidate with
+    /// `mir_leaf_with_proof` before returning it to a query. This path does not
+    /// change or issue the ordinary same-source authorization token.
+    pub(crate) fn mir_leaf_candidate(
+        &self,
+        key: ResidentKey,
+        budget: IdentityBudget,
+    ) -> Option<&'domain mir::Body<'domain>> {
+        let value = self
+            .generations
+            .get(&(key, ValueKind::Mir), |old, next| leaf_identity_compatible(old, next, budget))?;
+        match value {
+            TypedValue::Mir(body) => Some(*body),
+            TypedValue::Typeck(_) => None,
+        }
+    }
+
+    /// Recheck the actual published/current snapshot pair and exact candidate
+    /// after inspecting its native closure. The opaque proof is bound to this
+    /// body allocation and must still describe the current source-map view.
+    pub(crate) fn mir_leaf_with_proof(
+        &self,
+        key: ResidentKey,
+        budget: IdentityBudget,
+        proof: &super::resident_mir_leaf::LeafProof<'_, 'domain>,
+        source_map: &rustc_span::source_map::SourceMap,
+    ) -> Option<&'domain mir::Body<'domain>> {
+        let body = self.mir_leaf_candidate(key, budget)?;
+        (proof.is_for(body) && proof.is_current_for(source_map)).then_some(body)
+    }
+
     fn lookup(
         &self,
         key: (ResidentKey, ValueKind),
@@ -197,6 +229,27 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     pub fn retained_usage(&self) -> (usize, usize) {
         self.generations.usage()
     }
+}
+
+/// Separate, deliberately local-only identity gate for a primitive MIR closure
+/// proof. Ordinary `authorize_reuse` remains unchanged and rejects source edits.
+/// Complete numeric mappings must agree, and body/semantic inputs other than the
+/// active source snapshot must be byte-identical. A source difference alone is
+/// not authorization: the exact selected native body still needs `LeafProof`.
+fn leaf_identity_compatible(
+    old: &RevisionIdentity,
+    next: &RevisionIdentity,
+    budget: IdentityBudget,
+) -> bool {
+    use super::resident_identity::{Compatibility, RevisionGate};
+    matches!(
+        old.compatibility(next, budget),
+        Compatibility::IdentityOnly(RevisionGate::SourceChanged)
+    ) && old.namespace == b"justrust-local-same-source-v1"
+        && old.crates.len() == 1
+        && old.crates[0].crate_index == 0
+        && old.definitions.iter().all(|definition| definition.crate_index == 0)
+        && old.body_revision == next.body_revision
 }
 
 struct Entry<K, V> {
@@ -291,6 +344,55 @@ mod tests {
 
     fn cache(entries: usize, bytes: usize) -> Generations<&'static str, u32, &'static str> {
         Generations::new(RetentionBudget { max_entries: entries, max_estimated_bytes: bytes })
+    }
+
+    #[test]
+    fn leaf_identity_gate_is_separate_and_never_ignores_other_semantic_changes() {
+        use super::super::resident_identity::{CrateIdentity, DefinitionIdentity};
+        let budget = IdentityBudget { max_crates: 2, max_definitions: 8, max_identity_bytes: 4096 };
+        let old = RevisionIdentity {
+            namespace: b"justrust-local-same-source-v1".to_vec(),
+            options: b"exact invocation".to_vec(),
+            crates: vec![CrateIdentity { stable: b"native local crate".to_vec(), crate_index: 0 }],
+            definitions: vec![DefinitionIdentity {
+                stable: b"native local root".to_vec(),
+                crate_index: 0,
+                def_index: 0,
+                owner_index: Some(0),
+            }],
+            source: b"previous exact source snapshot".to_vec(),
+            body_revision: b"exact non-source inputs".to_vec(),
+        };
+        let mut changed = old.clone();
+        changed.source = b"next exact source snapshot".to_vec();
+        assert!(super::leaf_identity_compatible(&old, &changed, budget));
+        assert!(old.authorize_reuse(&changed, budget).is_err());
+        assert!(!super::leaf_identity_compatible(&old, &old, budget));
+        for mutate in [
+            |id: &mut RevisionIdentity| id.namespace.push(0),
+            |id: &mut RevisionIdentity| id.options.push(0),
+            |id: &mut RevisionIdentity| id.body_revision.push(0),
+            |id: &mut RevisionIdentity| id.crates[0].stable.push(0),
+            |id: &mut RevisionIdentity| id.crates[0].crate_index = 1,
+            |id: &mut RevisionIdentity| id.definitions[0].stable.push(0),
+            |id: &mut RevisionIdentity| id.definitions[0].def_index = 1,
+            |id: &mut RevisionIdentity| id.definitions.push(id.definitions[0].clone()),
+        ] {
+            let mut invalid = changed.clone();
+            mutate(&mut invalid);
+            assert!(!super::leaf_identity_compatible(&old, &invalid, budget));
+        }
+        let mut external = old.clone();
+        external.crates[0].crate_index = 1;
+        external.definitions[0].crate_index = 1;
+        let mut external_changed = external.clone();
+        external_changed.source.push(0);
+        assert!(!super::leaf_identity_compatible(&external, &external_changed, budget));
+        assert!(!super::leaf_identity_compatible(
+            &old,
+            &changed,
+            IdentityBudget { max_identity_bytes: 1, ..budget },
+        ));
     }
 
     #[test]

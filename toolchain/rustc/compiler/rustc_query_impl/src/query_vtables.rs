@@ -24,7 +24,10 @@ macro_rules! resident_hooks {
     };
     (optimized_mir, get) => {
         Some(|tcx, node, fingerprint| {
-            tcx.resident_live_queries?.get_mir(node, fingerprint).map(erase::erase_val)
+            let state = tcx.resident_live_queries?;
+            state.get_mir(node, fingerprint)
+                .or_else(|| state.get_mir_leaf_after_green(tcx, node, fingerprint))
+                .map(erase::erase_val)
         })
     };
     (optimized_mir, insert) => {

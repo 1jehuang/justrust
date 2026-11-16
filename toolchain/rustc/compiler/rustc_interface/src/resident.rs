@@ -45,6 +45,8 @@ pub struct ResidentCompilerBatch<'domain> {
 pub struct ResidentBatchOptions {
     pub incremental_control: bool,
     pub live_queries: bool,
+    /// Separately gated primitive MIR leaf closure experiment.
+    pub selective_leaf: bool,
 }
 
 impl<'domain> ResidentCompilerBatch<'domain> {
@@ -132,6 +134,9 @@ fn reject_unsupported(early_dcx: &EarlyDiagCtxt, config: &Config, options: Resid
             "resident owned batch incremental persistence requires an active-revision source-file view",
         );
     }
+    if options.selective_leaf && !options.live_queries {
+        early_dcx.early_fatal("resident leaf closure experiment requires native typed state");
+    }
     if options.live_queries && config.opts.incremental.is_none() {
         early_dcx.early_fatal("resident typed reuse requires an explicit incremental directory");
     }
@@ -214,6 +219,9 @@ pub fn with_resident_compiler_batch_options<R: Send>(
             };
             with_resident_type_domain_and_owner(owners, |domain, owners| {
                 domain.enable_live_queries(options.live_queries);
+                if let Some(state) = domain.live_query_state() {
+                    state.enable_leaf(options.selective_leaf);
+                }
                 f(
                     ResidentCompilerBatch {
                         domain,

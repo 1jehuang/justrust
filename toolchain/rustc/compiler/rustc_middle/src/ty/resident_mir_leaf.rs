@@ -14,6 +14,7 @@ use rustc_span::{SourceFile, Span, SyntaxContext};
 
 use crate::mir::interpret::Scalar;
 use crate::mir::visit::Visitor;
+use crate::ty::{Ty, TyCtxt};
 use crate::{mir, ty};
 
 #[derive(Clone, Copy, Debug)]
@@ -103,7 +104,7 @@ impl<'body, 'tcx> LeafProof<'body, 'tcx> {
 /// does not provide a bounded atomic snapshot with its historical-file count.
 /// No claim of concurrent or subsequent revision freshness is made.
 pub fn inspect<'body, 'tcx>(
-    tcx: ty::TyCtxt<'tcx>,
+    tcx: TyCtxt<'tcx>,
     body: &'body mir::Body<'tcx>,
     source_map: &'body SourceMap,
     limits: LeafLimits,
@@ -174,7 +175,7 @@ fn inspect_body_closure<'body, 'tcx>(
     Ok(LeafProof { body, source_map, files, spans, limits })
 }
 
-fn primitive(ty: ty::Ty<'_>) -> bool {
+fn primitive(ty: Ty<'_>) -> bool {
     matches!(ty.kind(), ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_))
 }
 
@@ -414,7 +415,7 @@ mod tests {
         }
     }
 
-    fn leaf<'tcx>(ty: ty::Ty<'tcx>, span: Span) -> mir::Body<'tcx> {
+    fn leaf<'tcx>(ty: Ty<'tcx>, span: Span) -> mir::Body<'tcx> {
         let info = mir::SourceInfo::outermost(span);
         let constant = mir::Operand::Constant(Box::new(mir::ConstOperand {
             span,

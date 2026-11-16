@@ -7,9 +7,9 @@
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::sync::Lock;
 
-use super::TypeckResults;
 use super::resident_identity::{IdentityBudget, RevisionIdentity};
 use super::resident_values::{ResidentDomain, ResidentKey, ResidentValues, RetentionBudget};
+use super::{TyCtxt, TypeckResults};
 use crate::dep_graph::DepNode;
 use crate::mir;
 
@@ -21,6 +21,8 @@ pub struct LiveQueryStats {
     pub typeck_hits: u64,
     pub typeck_misses: u64,
     pub mir_hits: u64,
+    /// A distinct counter for the separate primitive-leaf source-closure path.
+    pub mir_leaf_hits: u64,
     pub mir_misses: u64,
     pub retained_entries: usize,
     pub retained_estimated_bytes: usize,
@@ -28,6 +30,7 @@ pub struct LiveQueryStats {
 
 struct LiveState<'tcx> {
     enabled: bool,
+    leaf_enabled: bool,
     values: ResidentValues<'tcx, 'tcx>,
     identity_budget: Option<IdentityBudget>,
     completed: bool,
@@ -45,6 +48,7 @@ impl<'tcx> LiveQueryState<'tcx> {
         Self {
             state: Lock::new(LiveState {
                 enabled: false,
+                leaf_enabled: false,
                 values: ResidentValues::new(domain, budget),
                 identity_budget: None,
                 completed: false,
@@ -66,6 +70,11 @@ impl<'tcx> LiveQueryState<'tcx> {
             state.identity_budget = None;
             state.completed = false;
         }
+    }
+
+    /// Separate experimental opt-in, never implied by the same-source mode.
+    pub fn enable_leaf(&self, enabled: bool) {
+        self.state.lock().leaf_enabled = enabled;
     }
 
     /// Called by the pipeline only after HIR is complete, before analysis.
@@ -171,6 +180,46 @@ impl<'tcx> LiveQueryState<'tcx> {
             state.stats.mir_misses += 1;
         }
         value
+    }
+
+    /// Called exclusively after the normal dep-graph green validation and
+    /// diagnostic replay. The separate leaf experiment permits a source change
+    /// only when the selected native body's entire conservative closure remains
+    /// current. Inspection can run native item queries, so it occurs outside the
+    /// live-state lock; snapshots and the exact body are checked again afterward.
+    pub fn get_mir_leaf_after_green(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        dep_node: DepNode,
+        fingerprint: Fingerprint,
+    ) -> Option<&'tcx mir::Body<'tcx>> {
+        if !tcx.resident_live_queries.is_some_and(|state| std::ptr::eq(state, self)) {
+            return None;
+        }
+        let key = ResidentKey { dep_node, value_fingerprint: fingerprint };
+        let (body, budget) = {
+            let state = self.state.lock();
+            if !state.enabled || !state.leaf_enabled {
+                return None;
+            }
+            let budget = state.identity_budget?;
+            (state.values.mir_leaf_candidate(key, budget)?, budget)
+        };
+        let source_map = tcx.sess.source_map();
+        let proof = super::resident_mir_leaf::inspect(
+            tcx,
+            body,
+            source_map,
+            super::resident_mir_leaf::LeafLimits::default(),
+        )
+        .ok()?;
+        let mut state = self.state.lock();
+        if !state.enabled || !state.leaf_enabled || state.identity_budget != Some(budget) {
+            return None;
+        }
+        let value = state.values.mir_leaf_with_proof(key, budget, &proof, source_map)?;
+        state.stats.mir_leaf_hits += 1;
+        Some(value)
     }
 
     pub fn insert_typeck(
