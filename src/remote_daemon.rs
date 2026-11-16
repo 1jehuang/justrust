@@ -47,6 +47,10 @@ use crate::remote_resume;
 use crate::remote_sync::{self, MAX_FILE, Manifest, Mirror, UNKNOWN};
 use crate::remote_watch::Watcher;
 
+#[path = "remote_sync_queue.rs"]
+mod sync_queue;
+use sync_queue::SyncQueue;
+
 const IDLE_EXIT: Duration = Duration::from_secs(3600);
 const BARRIER_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -54,18 +58,52 @@ pub fn sock_path() -> Result<PathBuf> {
     Ok(crate::remote::dir()?.join("daemon.sock"))
 }
 
-/// Identity of this process's binary, fixed at first use: after `cargo
-/// install` replaces the file, a running daemon still reports the build it
-/// started from, so clients of the new build replace it.
+/// Content identity, cached once so reinstalling identical bytes keeps the daemon.
 pub fn build_id() -> String {
     static ID: OnceLock<String> = OnceLock::new();
     ID.get_or_init(|| {
-        std::env::current_exe()
-            .and_then(std::fs::metadata)
-            .map(|m| format!("{}-{}", m.len(), crate::sys::mtime(&m).0))
-            .unwrap_or_default()
+        #[cfg(unix)]
+        let executable = crate::procfs::running_executable();
+        #[cfg(not(unix))]
+        let executable = std::env::current_exe().and_then(std::fs::File::open);
+        binary_identity(executable.and_then(binary_digest))
     })
     .clone()
+}
+
+fn binary_digest(mut reader: impl Read) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    // Fixed memory regardless of binary size, one streaming pass per process.
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(format!("sha256-{:x}", hash.finalize()))
+}
+
+fn binary_identity(digest: std::io::Result<String>) -> String {
+    digest.unwrap_or_else(|_| {
+        // Do not share potentially incompatible binaries on read failure.
+        // OnceLock freezes this conservative process-local fallback at first use.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        format!(
+            "unreadable-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
+    })
 }
 
 /// Run/RunSync carries the build environment, not the daemon's connection
@@ -486,7 +524,7 @@ fn write_status_hint(path: &Path) {
 }
 
 struct Daemon {
-    sync: Mutex<Sync>,
+    sync: SyncQueue<Sync>,
     info: Mutex<Info>,
     status_hint: Option<std::sync::mpsc::SyncSender<()>>,
     next_id: AtomicU64,
@@ -645,7 +683,7 @@ fn daemon() -> Result<()> {
             last_client: Some(Instant::now()),
             ..Default::default()
         }),
-        sync: Mutex::new(Sync {
+        sync: SyncQueue::new(Sync {
             backend,
             link: None,
             roots: BTreeMap::new(),
@@ -717,17 +755,35 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
         if d.draining.load(Ordering::SeqCst) {
             continue;
         }
-        let Ok(mut st) = d.sync.lock() else { return };
-        if !st.link.as_ref().is_some_and(|l| l.alive()) {
-            continue;
-        }
-        let roots: Vec<PathBuf> = st
-            .roots
-            .keys()
-            .filter(|r| !st.roots[*r].needs_full_sync && touched.iter().any(|t| t.starts_with(r)))
-            .cloned()
-            .collect();
+        let roots: Vec<PathBuf> = {
+            let Ok(st) = d.sync.background_lock() else {
+                return;
+            };
+            if !st.link.as_ref().is_some_and(|l| l.alive()) {
+                continue;
+            }
+            st.roots
+                .keys()
+                .filter(|r| {
+                    !st.roots[*r].needs_full_sync && touched.iter().any(|t| t.starts_with(r))
+                })
+                .cloned()
+                .collect()
+        };
         for r in roots {
+            // One complete root remains atomic. Yield the mirror lock between
+            // roots so a queued foreground build need not wait for the batch.
+            let Ok(mut st) = d.sync.background_lock() else {
+                return;
+            };
+            if d.draining.load(Ordering::SeqCst) || !st.link.as_ref().is_some_and(|l| l.alive()) {
+                break;
+            }
+            // A foreground sync may have repaired, replaced or removed this
+            // root while the watcher yielded. Recheck under the same lock.
+            if !st.roots.get(&r).is_some_and(|root| !root.needs_full_sync) {
+                continue;
+            }
             if !r.is_dir() {
                 // Deleted (a removed worktree): forget it instead of
                 // dropping the link over a failed rsync.
@@ -1862,7 +1918,7 @@ fn run(
     let id = d.id();
     let (tx, rx) = channel();
     let (link, files, note, timing) = {
-        let mut st = d.sync.lock().unwrap();
+        let mut st = d.sync.foreground_lock().unwrap();
         let locked = t.elapsed();
         if d.draining.load(Ordering::SeqCst) {
             bail!("sync daemon transport policy changed; reconnect before starting a build");
@@ -2145,6 +2201,84 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_identity_tracks_bytes_not_copy_metadata() {
+        let base = std::env::temp_dir().join(format!("jr-binary-id-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let first = base.join("first");
+        let copy = base.join("copy");
+        std::fs::write(&first, vec![1u8; 150_000]).unwrap();
+        std::fs::copy(&first, &copy).unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let new = old + Duration::from_secs(60);
+        let set_time = |path: &Path, time| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(time))
+                .unwrap();
+        };
+        let identity =
+            |path: &Path| binary_identity(std::fs::File::open(path).and_then(binary_digest));
+        set_time(&first, old);
+        set_time(&copy, new);
+        assert_ne!(
+            std::fs::metadata(&first).unwrap().modified().unwrap(),
+            std::fs::metadata(&copy).unwrap().modified().unwrap()
+        );
+        assert_eq!(identity(&first), identity(&copy));
+        std::fs::write(&copy, vec![2u8; 150_000]).unwrap();
+        set_time(&copy, old);
+        assert_eq!(
+            std::fs::metadata(&first).unwrap().len(),
+            std::fs::metadata(&copy).unwrap().len()
+        );
+        assert_eq!(
+            std::fs::metadata(&first).unwrap().modified().unwrap(),
+            std::fs::metadata(&copy).unwrap().modified().unwrap()
+        );
+        assert_ne!(identity(&first), identity(&copy));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn binary_identity_read_failure_never_uses_partial_or_shared_digest() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("unreadable binary"))
+            }
+        }
+        let first = binary_identity(binary_digest(Broken));
+        assert!(first.starts_with("unreadable-"));
+        assert_ne!(first, binary_identity(binary_digest(Broken)));
+        assert_eq!(
+            binary_digest(&b"abc"[..]).unwrap(),
+            "sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(build_id(), build_id());
+    }
+
+    #[test]
+    #[ignore = "explicit hashing cost measurement"]
+    fn binary_identity_hashing_cost() {
+        let executable = std::env::current_exe().unwrap();
+        let bytes = std::fs::metadata(&executable).unwrap().len();
+        let start = Instant::now();
+        let expected = binary_digest(std::fs::File::open(&executable).unwrap()).unwrap();
+        let elapsed = start.elapsed();
+        let cached = build_id();
+        assert_eq!(expected, cached);
+        let start = Instant::now();
+        for _ in 0..10_000 {
+            std::hint::black_box(build_id());
+        }
+        eprintln!(
+            "binary identity: {bytes} bytes, streaming hash {elapsed:?}, 10000 cached calls {:?}, buffer 65536 bytes",
+            start.elapsed()
+        );
+    }
     #[cfg(unix)]
     #[test]
     fn daemon_startup_waits_for_shutdown_lock_after_socket_closes() {
@@ -2322,7 +2456,7 @@ mod tests {
         link.routes.lock().unwrap().runs.insert(77, tx);
         let d = Daemon {
             status_hint: None,
-            sync: Mutex::new(Sync {
+            sync: SyncQueue::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::new(),
@@ -2632,7 +2766,7 @@ mod tests {
         });
         let d = Daemon {
             status_hint: None,
-            sync: Mutex::new(Sync {
+            sync: SyncQueue::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(a.clone(), make_root(&a)), (b.clone(), make_root(&b))]),
@@ -2742,7 +2876,7 @@ mod tests {
         };
         let d = Daemon {
             status_hint: None,
-            sync: Mutex::new(Sync {
+            sync: SyncQueue::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(root.clone(), tracked)]),
@@ -2937,7 +3071,7 @@ mod tests {
         let other = base.join("unrelated");
         let d = Daemon {
             status_hint: None,
-            sync: Mutex::new(Sync {
+            sync: SyncQueue::new(Sync {
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(base.clone(), make_root()), (other.clone(), make_root())]),
