@@ -1700,21 +1700,6 @@ fn git_info() -> GitInfo {
     }
 }
 
-/// Resolve dependency features once for the whole workspace instead of per
-/// command, so `-p a`, `-p b`, and `--workspace` compile the same build of
-/// each dependency. Without it, switching packages rebuilds dependencies
-/// with different feature sets (27 dirty units going from `-p
-/// jcode-desktop-harness` to `-p jcode-desktop-model`), and every variant
-/// is a separate depcache entry. Measured in FINDINGS.md section 18.
-///
-/// Uses cargo's `-Zfeature-unification` (`resolver.feature-unification =
-/// "workspace"`). The nightly gate is opened with cargo's channel override
-/// rather than `RUSTC_BOOTSTRAP`, because rustc sees `RUSTC_BOOTSTRAP`, so
-/// cargo fingerprints it and setting it would rebuild everything once.
-/// The override only affects cargo, not rustc.
-///
-/// Off with `JUSTRUST_UNIFY_FEATURES=0`. Respects an explicit
-/// `CARGO_RESOLVER_FEATURE_UNIFICATION` (`selected` restores cargo's default).
 /// Test-filter-aware compilation (jr-rustc `JUSTRUST_RUSTC_TEST_FILTER`): the
 /// libtest name filters of a `test` command (positional arguments after `--`,
 /// and `--exact`), one per line, so jr-rustc builds a harness with only the
@@ -1776,12 +1761,19 @@ fn test_filter_lines(cargo_args: &[OsString]) -> Option<String> {
     Some(filters.join("\n"))
 }
 
+/// Opt-in workspace-wide feature resolution can enable defaults of dependencies
+/// in other workspaces that the selected package explicitly disabled. Preserve
+/// Cargo's selected-package semantics unless requested, and respect explicit
+/// CARGO_RESOLVER_FEATURE_UNIFICATION configuration.
+fn workspace_features_requested(request: Option<&str>, explicit_resolver: bool) -> bool {
+    !explicit_resolver && matches!(request, Some("1" | "on" | "true" | "yes"))
+}
+
 fn unify_features(cmd: &mut Command) {
-    if matches!(
-        std::env::var("JUSTRUST_UNIFY_FEATURES").as_deref(),
-        Ok("0") | Ok("off") | Ok("false") | Ok("no")
-    ) || std::env::var_os("CARGO_RESOLVER_FEATURE_UNIFICATION").is_some()
-    {
+    if !workspace_features_requested(
+        std::env::var("JUSTRUST_UNIFY_FEATURES").ok().as_deref(),
+        std::env::var_os("CARGO_RESOLVER_FEATURE_UNIFICATION").is_some(),
+    ) {
         return;
     }
     cmd.env("CARGO_RESOLVER_FEATURE_UNIFICATION", "workspace")
@@ -1793,6 +1785,20 @@ fn unify_features(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_feature_unification_requires_explicit_opt_in() {
+        // A no-default-features path dependency must not acquire its parent
+        // workspace's desktop defaults in an ordinary justrust build.
+        assert!(!super::workspace_features_requested(None, false));
+        for value in ["0", "off", "false", "no", "", "workspace"] {
+            assert!(!super::workspace_features_requested(Some(value), false));
+        }
+        for value in ["1", "on", "true", "yes"] {
+            assert!(super::workspace_features_requested(Some(value), false));
+            assert!(!super::workspace_features_requested(Some(value), true));
+        }
+    }
+
     #[test]
     fn sampling_cadence_switches_at_initial_window_boundary() {
         use std::time::Duration;
