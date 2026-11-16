@@ -21,7 +21,7 @@ pub(super) struct Indexes {
 }
 
 impl Indexes {
-    pub fn new(footer: Footer) -> Self {
+    pub(super) fn new(footer: Footer) -> Self {
         Self {
             file_index_to_stable_id: Arc::new(footer.file_index_to_stable_id),
             query_values_index: Arc::new(footer.query_values_index.into_iter().collect()),
@@ -36,15 +36,21 @@ impl Indexes {
     fn retained_bytes(&self) -> usize {
         // Hash tables need buckets, control bytes and allocation headers. Charge
         // conservatively rather than counting only their encoded file footprint.
-        fn map<K, V>(map: &std::collections::HashMap<K, V, impl std::hash::BuildHasher>) -> usize {
-            2 * map.capacity() * (std::mem::size_of::<(K, V)>() + std::mem::size_of::<usize>()) + 64
+        fn map<K, V>(capacity: usize) -> usize {
+            2 * capacity * (std::mem::size_of::<(K, V)>() + std::mem::size_of::<usize>()) + 64
         }
-        map(&self.file_index_to_stable_id)
-            + map(&self.query_values_index)
-            + map(&self.side_effects_index)
-            + map(&self.syntax_contexts)
-            + map(&self.expn_data)
-            + map(&self.foreign_expn_data)
+        fn fx_map<K, V>(map_value: &FxHashMap<K, V>) -> usize {
+            map::<K, V>(map_value.capacity())
+        }
+        fn unhash_map<K, V>(map_value: &UnhashMap<K, V>) -> usize {
+            map::<K, V>(map_value.capacity())
+        }
+        fx_map(&self.file_index_to_stable_id)
+            + fx_map(&self.query_values_index)
+            + fx_map(&self.side_effects_index)
+            + fx_map(&self.syntax_contexts)
+            + unhash_map(&self.expn_data)
+            + unhash_map(&self.foreign_expn_data)
             + self.interpret_alloc_index.capacity() * std::mem::size_of::<u64>()
             + std::mem::size_of::<Self>()
     }
