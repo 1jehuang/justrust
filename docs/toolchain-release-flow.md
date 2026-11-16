@@ -7,7 +7,7 @@ production activation belong to the private cloud repository.
 ## Production-first release policy
 
 Release order is **bump -> commit -> build/package sanity -> tag/publish ->
-shared production -> test/measure -> keep or rollback**. Tests and benchmarks
+shared production -> test/measure -> fix forward**. Tests and benchmarks
 observe the globally published, activated release, not an unpublished candidate.
 Every customer uses the same shared production default. There is no canary,
 per-customer validation selection, successful-CI prerequisite, or 40-point
@@ -19,8 +19,9 @@ checksums, executable identity, and runtime loader sanity checks. These checks
 establish that the intended artifact can run, not test-suite or performance
 acceptance. After activation, run correctness tests and representative workload
 measurements using the published artifacts. Record failures and measured
-regressions, then use the existing supported rollback mechanism if needed.
-Do not invent or change production rollback service APIs.
+regressions, then publish a new immutable fix-forward release. Failed toolchain
+validation never automatically switches production back. An explicit emergency
+recovery remains an operator action, not the normal iteration loop.
 
 ## Plan first
 
@@ -128,14 +129,14 @@ download checksum, release marker and exact executable bytes. Its current
 `--activate` path runs a smoke workload before replacing the local PATH client,
 then another smoke workload afterwards. This is post-publication artifact
 verification, not a global publication gate and not full client-suite coverage.
-A post-release full-suite job must depend on GitHub release creation and shared
-production activation. Until that integration exists, run the full suite
-explicitly with the verified published CLI against an immutable tagged source
-snapshot. Do not claim the existing smoke script supplies this acceptance.
+The release workflow calls `.github/workflows/client-production-tests.yml` after
+GitHub release creation. It waits for shared production selection, downloads the
+verified published executable, and runs the full tagged-source suite through it.
+The smoke helper alone is not full-suite acceptance.
 
 If post-publication tests or measurements fail, report the release and receipts
-and use supported shared production rollback. Never silently replace it with an
-unpublished binary or alter account-specific routing to hide a regression.
+and publish a fix-forward release. Never silently replace it with an unpublished
+binary or alter account-specific routing to hide a regression.
 
 ## Tests and limits
 

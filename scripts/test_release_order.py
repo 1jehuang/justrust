@@ -112,7 +112,7 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_documented_shared_production_first_order(self):
         flattened = " ".join(self.docs.split())
-        self.assertIn("bump -> commit -> build/package sanity -> tag/publish -> shared production -> test/measure -> keep or rollback", flattened)
+        self.assertIn("bump -> commit -> build/package sanity -> tag/publish -> shared production -> test/measure -> fix forward", flattened)
         self.assertIn("Every customer uses the same shared production default", flattened)
         self.assertIn("justrust test --remote --locked", self.docs)
         self.assertNotIn("Do not tag an\nunvalidated candidate", self.docs)
