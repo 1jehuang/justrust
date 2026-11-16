@@ -68,6 +68,20 @@ jobs:
           python3 ci/release-policy.py freeze --protocol-source "$RUNNER_TEMP/release-toolchain-policy.rs" --output "$RUNNER_TEMP/release-policy.json" >> "$GITHUB_OUTPUT"
           cp ci/release-policy.py "$RUNNER_TEMP/release-policy.py"
 
+      - name: Prepare shared release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ref=$(jq -rn --arg ref "refs/tags/$TAG" '$ref | @uri')
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+          [[ "$current" == "$SHA" ]] || { echo "Release tag moved after preflight" >&2; exit 1; }
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --target "$SHA" --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-policy
@@ -269,38 +283,48 @@ jobs:
             dist/*.sha256
             dist/compiler-*
 
-  release:
-    needs: [preflight, build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: justrust-*
-          path: dist
-          merge-multiple: true
-
-      - name: Create GitHub release
+      # Publication belongs to this platform, not the matrix completion barrier.
+      # The checksum is uploaded last, making the platform selectable only after
+      # its archive and compiler provenance are available.
+      - name: Publish checked platform independently
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
           SHA: ${{ needs.preflight.outputs.sha }}
         run: |
+          publish_dir="$RUNNER_TEMP/platform-release"
+          mkdir -p "$publish_dir"
+          cp "dist/justrust-${{ matrix.target }}.tar.gz" \
+            "dist/justrust-${{ matrix.target }}.tar.gz.sha256" \
+            dist/compiler-${{ matrix.target }}.* "$publish_dir/"
+          python3 ci/publish-platform-release.py --tag "$TAG" --sha "$SHA" \
+            --target "${{ matrix.target }}" --dist "$publish_dir" --repo "$GITHUB_REPOSITORY"
+
+  release:
+    # This is a completion report, never a publication gate for faster platforms.
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all platforms completed publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
           set -euo pipefail
-          # Builds are pinned to SHA. Refuse a moved/deleted tag before upload.
-          ref=$(jq -rn --arg ref "refs/tags/$TAG" '$ref | @uri')
-          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
-          [[ "$current" == "$SHA" ]] || { echo "Release tag moved after preflight" >&2; exit 1; }
-          ls -l dist
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-            [[ "$draft" == "true" ]] || { echo "Published release assets are immutable. Choose a new version." >&2; exit 1; }
-            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$TAG" dist/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"
-          fi
-          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
-          [[ "$current" == "$SHA" ]] || { echo "Release tag moved during upload" >&2; exit 1; }
-          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets > "$RUNNER_TEMP/release.json"
+          python3 - "$RUNNER_TEMP/release.json" <<'PY'
+          import json, sys
+          release = json.load(open(sys.argv[1]))
+          assert release["isDraft"] is False, "Release is still a draft"
+          names = {asset["name"] for asset in release["assets"]}
+          for target in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+                         "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"):
+              archive = f"justrust-{target}.tar.gz"
+              assert {archive, archive + ".sha256"} <= names, f"Missing platform: {target}"
+              assert any(f"compiler-{target}.{ext}" in names for ext in ("json", "txt")), f"Missing provenance: {target}"
+          print("All platforms published. Faster platforms were available independently.")
+          PY
 
   production-tests:
     needs: [preflight, release]

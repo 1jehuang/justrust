@@ -39,8 +39,11 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertIn("dist/*.sha256", build)
         release = self.job("release")
         self.assertIn("needs: [preflight, build]", release)
-        self.assertIn("Release tag moved after preflight", release)
-        self.assertIn("gh release create", release)
+        self.assertIn("Verify all platforms completed publication", release)
+        self.assertIn("Publish checked platform independently", build)
+        self.assertIn("ci/publish-platform-release.py", build)
+        self.assertIn("gh release create", self.job("preflight"))
+        self.assertNotIn("gh release upload", release)
 
     def test_postpublication_workflow_uses_exact_published_client(self):
         caller = self.job("production-tests")
@@ -122,63 +125,22 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertIn('"$binary" update status', build)
         self.assertIn("Freeze service-selected release compiler once", self.job("preflight"))
 
-    def test_publication_never_overwrites_public_assets(self):
-        import json
-        import os
-        import subprocess
-        import tempfile
-        import textwrap
-
-        release = self.job("release")
-        script = textwrap.dedent(release.split("        run: |\n", 1)[1])
-        fake_gh = '''#!/usr/bin/env python3
-import json, os, pathlib, sys
-args = sys.argv[1:]
-log = pathlib.Path(os.environ["MOCK_LOG"])
-with log.open("a") as out:
-    out.write(json.dumps(args) + "\\n")
-mode = os.environ["MOCK_MODE"]
-if args[0] == "api":
-    calls = [line for line in log.read_text().splitlines() if json.loads(line)[0] == "api"]
-    print("moved" if mode == "moved" and len(calls) > 1 else "source-sha")
-elif args[:2] == ["release", "view"]:
-    if mode in ("new", "moved"):
-        sys.exit(1)
-    if "--json" in args:
-        print("false" if mode == "public" else "true")
-'''
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "dist").mkdir()
-            (root / "dist/client.tar.gz").write_bytes(b"artifact")
-            gh = root / "gh"
-            gh.write_text(fake_gh)
-            gh.chmod(0o755)
-            for mode in ("new", "draft", "public", "moved"):
-                with self.subTest(mode=mode):
-                    log = root / f"{mode}.jsonl"
-                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                               MOCK_LOG=str(log), MOCK_MODE=mode, TAG="v1.2.3",
-                               SHA="source-sha", GITHUB_REPOSITORY="owner/repo")
-                    result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
-                                            text=True, capture_output=True)
-                    calls = [json.loads(line) for line in log.read_text().splitlines()]
-                    mutations = [args for args in calls if args[0] == "release" and args[1] != "view"]
-                    if mode in ("new", "draft"):
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(mutations[-1][:2], ["release", "edit"])
-                        self.assertIn("--draft=false", mutations[-1])
-                        self.assertEqual(mutations[0][1], "create" if mode == "new" else "upload")
-                        if mode == "new":
-                            self.assertIn("--draft", mutations[0])
-                    elif mode == "public":
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertEqual(mutations, [])
-                        self.assertIn("immutable", result.stderr)
-                    else:
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertFalse(any(args[1] == "edit" for args in mutations))
-                        self.assertIn("moved during upload", result.stderr)
+    def test_platform_publication_does_not_wait_for_matrix_completion(self):
+        build = self.job("build")
+        self.assertIn("needs: preflight", build)
+        self.assertIn("fail-fast: false", build)
+        self.assertLess(build.index("- name: Package"), build.index("Publish checked platform independently"))
+        self.assertIn('--target "${{ matrix.target }}" --dist "$publish_dir" --repo "$GITHUB_REPOSITORY"', build)
+        preflight = self.job("preflight")
+        self.assertIn('gh release create "$TAG" --draft --verify-tag --target "$SHA"', preflight)
+        self.assertNotIn("--clobber", self.workflow)
+        self.assertIn("justrust-hosted-linux", build)
+        summary = self.job("release")
+        self.assertNotIn("gh release edit", summary)
+        self.assertNotIn("gh release create", summary)
+        self.assertNotIn("gh release upload", summary)
+        self.assertIn("archive + \".sha256\"", summary)
+        self.assertIn("Missing provenance", summary)
 
     def test_documented_shared_production_first_order(self):
         flattened = " ".join(self.docs.split())

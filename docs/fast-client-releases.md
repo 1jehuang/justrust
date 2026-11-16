@@ -45,15 +45,25 @@ After publication: full published-client hosted regression and broader CI.
 Linux runners download a reviewed, SHA256-pinned published bootstrap instead of
 compiling a bootstrap client on every release. Compatibility builds cache their
 dependencies and smoke-test native executable versions and release markers.
-Artifacts are uploaded to a draft first, then published after a final tag check.
-Retries may replace draft assets, never bytes in an already published release.
+Artifacts are published independently per platform. Preflight creates a shared
+draft. Each platform uploads its checked archive and compiler provenance, then
+its checksum last. The first ready platform publishes the version, and slower
+platforms append their own assets later. Published bytes are never overwritten:
+identical retries are verified and reused, conflicting bytes fail closed.
+The updater selects a complete archive/checksum pair for the requested target,
+keeping the previous complete release while that target is still building.
+Repositories with GitHub's immutable-release setting enabled cannot append
+platforms after publication. The publisher fails clearly rather than weakening
+that repository setting or replacing assets.
 Compiler performance experiments are not prerequisites for an unrelated client
 reporting fix. Changing the default compiler still needs its own acceptance.
 
 Stable branch CI and same-PR updates coalesce so obsolete commits do not consume
 all runner slots. Tag checks remain independent. Platform builds and immutable
-artifacts still have real costs: this is not a promise that an all-platform
-release will take the same time as one warm local incremental build.
+artifacts still have real costs, but a queued Mac or Windows build no longer
+blocks publication and local activation of an already checked Linux executable.
+The final all-platform job reports completeness and starts full published-client
+acceptance. It is not the publication gate.
 
 The shared production selector may briefly cache the previous release, or be
 held by the operator rollout controls. The helper waits for shared selection
@@ -67,6 +77,7 @@ the developer's test client current.
 python3 -m unittest discover -s scripts -p test_release_client.py -v
 python3 -m unittest discover -s scripts -p test_client_ci_concurrency.py -v
 python3 -m unittest discover -s scripts -p test_production_dogfood.py -v
+python3 ci/test-publish-platform-release.py
 python3 -m unittest discover -s scripts -p test_release_order.py -v
 ```
 

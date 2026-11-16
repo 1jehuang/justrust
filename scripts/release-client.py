@@ -70,6 +70,15 @@ def release_runs(tag, sha):
     return [row for row in rows if row["headBranch"] == tag and row["headSha"] == sha]
 
 
+def platform_failed(release_run, triple):
+    """Only this platform or shared preflight can block local publication."""
+    result = json.loads(run("gh", "run", "view", str(release_run["databaseId"]),
+                            "--repo", REPO, "--json", "jobs"))
+    critical = {"preflight", "build " + triple}
+    return any(job["name"] in critical and job["status"] == "completed"
+               and job["conclusion"] != "success" for job in result["jobs"])
+
+
 def production_module():
     spec = importlib.util.spec_from_file_location("production_dogfood", ROOT / "scripts/production-dogfood.py")
     module = importlib.util.module_from_spec(spec)
@@ -93,8 +102,9 @@ def wait_for_publication(tag, sha, timeout, poll, production, clock=time.monoton
         runs = release_runs(tag, sha)
         # A workflow's full acceptance can continue after publication. We never
         # wait for overall success before accepting service-selected bytes.
-        if runs and runs[0]["status"] == "completed" and runs[0]["conclusion"] != "success":
-            raise RuntimeError("release workflow failed before production selection: " + runs[0]["url"])
+        if (runs and runs[0]["status"] == "completed" and runs[0]["conclusion"] != "success"
+                and platform_failed(runs[0], triple)):
+            raise RuntimeError("release preflight or local platform failed before production selection: " + runs[0]["url"])
         if clock() >= deadline:
             raise TimeoutError("publication/production selection timed out: " + message)
         print("Waiting for published production client: " + message, flush=True)

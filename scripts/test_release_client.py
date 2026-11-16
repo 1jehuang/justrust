@@ -75,7 +75,8 @@ class ReleaseClientTests(unittest.TestCase):
     def test_failed_publication_and_timeout_never_activate(self):
         production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock(side_effect=ValueError("held")))
         with mock.patch.object(release, "remote_tag", return_value=SHA), \
-                mock.patch.object(release, "release_runs", return_value=[dict(status="completed", conclusion="failure", url="run")]):
+                mock.patch.object(release, "release_runs", return_value=[dict(status="completed", conclusion="failure", url="run")]), \
+                mock.patch.object(release, "platform_failed", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "failed"):
                 release.wait_for_publication(VERSION, SHA, 10, 1, production)
         with mock.patch.object(release, "remote_tag", return_value=SHA), \
@@ -83,6 +84,27 @@ class ReleaseClientTests(unittest.TestCase):
             clock = mock.Mock(side_effect=[0, 11])
             with self.assertRaisesRegex(TimeoutError, "held"):
                 release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=clock)
+
+    def test_other_platform_failure_does_not_block_ready_local_platform(self):
+        production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock(side_effect=[ValueError("cached old"), {}]))
+        with mock.patch.object(release, "remote_tag", return_value=SHA), \
+                mock.patch.object(release, "release_runs", return_value=[dict(status="completed", conclusion="failure", url="run")]), \
+                mock.patch.object(release, "platform_failed", return_value=False):
+            release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=lambda: 0, sleep=mock.Mock())
+            self.assertEqual(production.release_info.call_count, 2)
+
+    def test_failure_check_is_scoped_to_preflight_and_local_target(self):
+        import json
+        jobs = [dict(name="preflight", status="completed", conclusion="success"),
+                dict(name="build triple", status="completed", conclusion="success"),
+                dict(name="build other", status="completed", conclusion="failure")]
+        with mock.patch.object(release, "run", return_value=json.dumps(dict(jobs=jobs))):
+            self.assertFalse(release.platform_failed(dict(databaseId=123), "triple"))
+        for index in (0, 1):
+            changed = [dict(job) for job in jobs]
+            changed[index]["conclusion"] = "failure"
+            with mock.patch.object(release, "run", return_value=json.dumps(dict(jobs=changed))):
+                self.assertTrue(release.platform_failed(dict(databaseId=123), "triple"))
 
     def test_tag_drift_aborts_even_after_initial_push(self):
         production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock())
