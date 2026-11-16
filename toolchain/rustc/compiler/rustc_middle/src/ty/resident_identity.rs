@@ -7,6 +7,8 @@
 //! compiler lifetime or move values between context domains. The context domain must also
 //! be retained and validated separately.
 
+use std::collections::BTreeSet;
+
 /// Exact stable crate identity and its session-local numeric assignment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrateIdentity {
@@ -56,6 +58,12 @@ pub enum ResetReason {
     OptionsChanged,
     CrateUniverseChanged,
     DefinitionMappingChanged,
+    DuplicateCrateIdentity,
+    DuplicateCrateIndex,
+    DuplicateDefinitionIdentity,
+    DuplicateDefinitionIndex,
+    DuplicateOwnerIndex,
+    DanglingDefinitionCrate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +82,50 @@ pub enum Compatibility {
     Reset(ResetReason),
 }
 
+/// Opaque evidence that these two exact immutable snapshots passed the identity gate.
+///
+/// This is not an owner-green proof and does not authorize transferring values between
+/// compiler context domains. A consumer must independently bind stored values to its
+/// retained context and to `previous`. Changed source/body inputs never yield this token.
+/// Borrowing snapshots prevents their mutation while the authorization is alive.
+#[derive(Debug)]
+pub struct ReuseAuthorization<'a> {
+    previous: &'a RevisionIdentity,
+    next: &'a RevisionIdentity,
+    budget: IdentityBudget,
+}
+
+impl ReuseAuthorization<'_> {
+    /// Bind authorization to the actual checked snapshot objects, not merely equal
+    /// caller-provided data or a freely constructible `Compatibility::Reusable` value.
+    pub fn authorizes(&self, previous: &RevisionIdentity, next: &RevisionIdentity) -> bool {
+        std::ptr::eq(self.previous, previous) && std::ptr::eq(self.next, next)
+    }
+
+    pub fn budget(&self) -> IdentityBudget {
+        self.budget
+    }
+}
+
 impl RevisionIdentity {
+    /// Issue non-forgeable evidence only for complete, well-formed, unchanged revisions.
+    /// Identity-only matches are deliberately errors until a separate owner-green path
+    /// can validate individual retained results inside their original context domain.
+    pub fn authorize_reuse<'a>(
+        &'a self,
+        next: &'a Self,
+        budget: IdentityBudget,
+    ) -> Result<ReuseAuthorization<'a>, Compatibility> {
+        match self.compatibility(next, budget) {
+            Compatibility::Reusable => Ok(ReuseAuthorization {
+                previous: self,
+                next,
+                budget,
+            }),
+            incompatible => Err(incompatible),
+        }
+    }
+
     /// Check both snapshots before authorizing any reuse. Comparisons are exact and
     /// ordered: matching old numeric IDs or a matching fingerprint cannot pass alone.
     /// When several inputs differ, return the first reason in domain-to-revision order.
@@ -82,6 +133,8 @@ impl RevisionIdentity {
         if let Err(reason) = self
             .check_budget(budget)
             .and_then(|()| next.check_budget(budget))
+            .and_then(|()| self.check_mapping())
+            .and_then(|()| next.check_mapping())
         {
             return Compatibility::Reset(reason);
         }
@@ -105,6 +158,41 @@ impl RevisionIdentity {
         } else {
             Compatibility::Reusable
         }
+    }
+
+    /// Validate exact identities and numeric assignments, including equal malformed snapshots.
+    /// Budget checking must precede this allocation-bounded structural validation.
+    fn check_mapping(&self) -> Result<(), ResetReason> {
+        let mut crate_ids = BTreeSet::new();
+        let mut crate_indices = BTreeSet::new();
+        for krate in &self.crates {
+            if !crate_ids.insert(krate.stable.as_slice()) {
+                return Err(ResetReason::DuplicateCrateIdentity);
+            }
+            if !crate_indices.insert(krate.crate_index) {
+                return Err(ResetReason::DuplicateCrateIndex);
+            }
+        }
+        let mut def_ids = BTreeSet::new();
+        let mut def_indices = BTreeSet::new();
+        let mut owner_indices = BTreeSet::new();
+        for def in &self.definitions {
+            if !crate_indices.contains(&def.crate_index) {
+                return Err(ResetReason::DanglingDefinitionCrate);
+            }
+            if !def_ids.insert((def.crate_index, def.stable.as_slice())) {
+                return Err(ResetReason::DuplicateDefinitionIdentity);
+            }
+            if !def_indices.insert((def.crate_index, def.def_index)) {
+                return Err(ResetReason::DuplicateDefinitionIndex);
+            }
+            if let Some(owner) = def.owner_index {
+                if !owner_indices.insert((def.crate_index, owner)) {
+                    return Err(ResetReason::DuplicateOwnerIndex);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Allows a caller to reject an oversized snapshot before retaining it.
@@ -205,13 +293,17 @@ mod tests {
 
     #[test]
     fn neither_old_numbers_nor_stable_identity_alone_authorizes() {
-        let old = snapshot();
+        let mut old = snapshot();
+        old.crates.push(CrateIdentity {
+            stable: b"dep".to_vec(),
+            crate_index: 1,
+        });
         for field in 0..4 {
             let mut next = old.clone();
             let def = &mut next.definitions[0];
             match field {
                 0 => def.stable = b"crate::different".to_vec(),
-                1 => def.def_index += 1,
+                1 => def.def_index += 10,
                 2 => def.owner_index = None,
                 _ => def.crate_index += 1,
             }
@@ -259,6 +351,9 @@ mod tests {
                 }
                 3 => {
                     next.crates[0].crate_index = 1;
+                    for def in &mut next.definitions {
+                        def.crate_index = 1;
+                    }
                     ResetReason::CrateUniverseChanged
                 }
                 4 => {
@@ -270,6 +365,7 @@ mod tests {
                 }
                 _ => {
                     next.crates.clear();
+                    next.definitions.clear();
                     ResetReason::CrateUniverseChanged
                 }
             };
@@ -320,6 +416,115 @@ mod tests {
             }),
             Err(ResetReason::IdentityByteBudget)
         );
+    }
+
+    #[test]
+    fn authorization_is_bound_to_actual_snapshots_and_budget() {
+        let old = snapshot();
+        let next = old.clone();
+        let authorization = old.authorize_reuse(&next, BUDGET).unwrap();
+        assert!(authorization.authorizes(&old, &next));
+        assert_eq!(authorization.budget(), BUDGET);
+        assert!(!authorization.authorizes(&old.clone(), &next));
+        assert!(!authorization.authorizes(&old, &next.clone()));
+        assert!(!authorization.authorizes(&next, &old));
+    }
+
+    #[test]
+    fn source_body_and_budget_failures_cannot_issue_authorization() {
+        let old = snapshot();
+        let mut next = old.clone();
+        next.source.push(0);
+        assert!(matches!(
+            old.authorize_reuse(&next, BUDGET),
+            Err(Compatibility::IdentityOnly(RevisionGate::SourceChanged))
+        ));
+        next = old.clone();
+        next.body_revision.push(0);
+        assert!(matches!(
+            old.authorize_reuse(&next, BUDGET),
+            Err(Compatibility::IdentityOnly(
+                RevisionGate::BodyRevisionChanged
+            ))
+        ));
+        assert!(matches!(
+            old.authorize_reuse(
+                &old,
+                IdentityBudget {
+                    max_crates: 0,
+                    ..BUDGET
+                }
+            ),
+            Err(Compatibility::Reset(ResetReason::CrateBudget))
+        ));
+    }
+
+    #[test]
+    fn equal_malformed_mappings_fail_closed() {
+        let valid = snapshot();
+        for field in 0..6 {
+            let mut invalid = valid.clone();
+            let reason = match field {
+                0 => {
+                    invalid.crates.push(CrateIdentity {
+                        stable: invalid.crates[0].stable.clone(),
+                        crate_index: 1,
+                    });
+                    ResetReason::DuplicateCrateIdentity
+                }
+                1 => {
+                    invalid.crates.push(CrateIdentity {
+                        stable: b"other crate".to_vec(),
+                        crate_index: 0,
+                    });
+                    ResetReason::DuplicateCrateIndex
+                }
+                2 => {
+                    invalid.definitions[1].stable = invalid.definitions[0].stable.clone();
+                    ResetReason::DuplicateDefinitionIdentity
+                }
+                3 => {
+                    invalid.definitions[1].def_index = invalid.definitions[0].def_index;
+                    ResetReason::DuplicateDefinitionIndex
+                }
+                4 => {
+                    invalid.definitions[1].owner_index = invalid.definitions[0].owner_index;
+                    ResetReason::DuplicateOwnerIndex
+                }
+                _ => {
+                    invalid.definitions[0].crate_index = 99;
+                    ResetReason::DanglingDefinitionCrate
+                }
+            };
+            assert!(invalid.authorize_reuse(&invalid, BUDGET).is_err());
+            assert_eq!(
+                invalid.compatibility(&invalid, BUDGET),
+                Compatibility::Reset(reason)
+            );
+            assert_eq!(
+                valid.compatibility(&invalid, BUDGET),
+                Compatibility::Reset(reason)
+            );
+            assert_eq!(
+                invalid.compatibility(&valid, BUDGET),
+                Compatibility::Reset(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn definition_and_owner_numbers_are_scoped_to_crate() {
+        let mut valid = snapshot();
+        valid.crates.push(CrateIdentity {
+            stable: b"dep".to_vec(),
+            crate_index: 1,
+        });
+        let mut external = valid.definitions[0].clone();
+        external.crate_index = 1;
+        valid.definitions.push(external);
+        valid.definitions[0].owner_index = None;
+        valid.definitions[1].owner_index = None;
+        assert_eq!(valid.compatibility(&valid, BUDGET), Compatibility::Reusable);
     }
 
     #[test]
