@@ -2,7 +2,9 @@
 """Exercise the real client executable against isolated API/daemon transports.
 No compiler runs and no live tenant is interrupted. Set JUSTRUST_ACCEPT_BIN to
 an executable built on hosted. Covers actual framing, admission, replay, final
-exit status, generic failures, stale receipts, and bounded retries.
+exit status, generic failures, stale receipts, and bounded retries. For a
+retained alpha28 executable, set JUSTRUST_ACCEPT_DAEMON_IDENTITY=legacy-stat
+explicitly to model its historical daemon handshake. Default remains SHA256.
 """
 import hashlib
 import http.server
@@ -103,11 +105,18 @@ class HostedUpdateAcceptance(unittest.TestCase):
             listener.settimeout(0.2)
             stop = threading.Event()
             errors = []
-            # Match the daemon's content and connection-policy identity, not the
-            # obsolete size/mtime identity. Freeze policy below so host settings
-            # cannot retire this isolated mock and launch a real daemon.
-            build = ('sha256-' + hashlib.sha256(Path(BIN).read_bytes()).hexdigest()
-                     + ':native=off:only=false:mirror-isolation=false')
+            # Default to current content identity. The explicit legacy mode is
+            # only for testing already-running published clients during upgrades.
+            # Freeze policy so host settings cannot launch a real daemon.
+            identity_mode = os.environ.get('JUSTRUST_ACCEPT_DAEMON_IDENTITY', 'sha256')
+            if identity_mode == 'sha256':
+                binary_id = 'sha256-' + hashlib.sha256(Path(BIN).read_bytes()).hexdigest()
+            elif identity_mode == 'legacy-stat':
+                metadata = Path(BIN).stat()
+                binary_id = f'{metadata.st_size}-{metadata.st_mtime_ns // 1_000_000_000}'
+            else:
+                raise ValueError('unknown acceptance daemon identity mode')
+            build = binary_id + ':native=off:only=false:mirror-isolation=false'
             def serve():
                 while not stop.is_set():
                     try:
