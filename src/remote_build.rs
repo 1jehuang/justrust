@@ -147,9 +147,52 @@ pub(crate) fn forwarded_env(
     env
 }
 
+/// Native hybrid execution is Unix-only. Other clients retain standard hosted
+/// Cargo semantics, including its required telemetry, even with hybrid controls.
+fn hosted_hybrid_eligible(args: &[String], env: &[(String, String)]) -> bool {
+    #[cfg(unix)]
+    {
+        crate::remote_agent::hosted_hybrid_env(args, env).is_ok_and(|mapped| !mapped.is_empty())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (args, env);
+        false
+    }
+}
+
 #[cfg(test)]
 mod platform_env_tests {
     use super::forwarded_env;
+
+    #[test]
+    fn hosted_hybrid_eligibility_preserves_platform_and_cargo_contracts() {
+        let env: Vec<(String, String)> = [
+            ("JUSTRUST_HOSTED_HYBRID", "ready"),
+            ("JUSTRUST_HOSTED_HYBRID_ENGINE", "/guest/bin/engine"),
+            ("JUSTRUST_HOSTED_HYBRID_TOOLCHAIN", "/guest/toolchain"),
+            ("JUSTRUST_HOSTED_HYBRID_HOME", "/guest/hybrid"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect();
+        for command in ["check", "test"] {
+            assert_eq!(
+                super::hosted_hybrid_eligible(&[command.into()], &env),
+                cfg!(unix)
+            );
+        }
+        for args in [
+            vec!["build"],
+            vec!["test", "--no-run"],
+            vec!["check", "--fetch"],
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(!super::hosted_hybrid_eligible(&args, &env));
+        }
+        assert!(!super::hosted_hybrid_eligible(&["check".into()], &[]));
+        assert!(!super::hosted_hybrid_eligible(&["check".into()], &env[..1]));
+    }
 
     #[test]
     fn hosted_hybrid_controls_are_separate_from_local_native_paths() {
@@ -1522,8 +1565,7 @@ fn run_remote_inner(
     full.extend(args.iter().cloned());
     // Only an actually native-eligible request may omit Cargo telemetry.
     // Artifact-delivery fallbacks retain the ordinary missing-summary policy.
-    let hosted_hybrid =
-        crate::remote_agent::hosted_hybrid_env(&full, &env).is_ok_and(|mapped| !mapped.is_empty());
+    let hosted_hybrid = hosted_hybrid_eligible(&full, &env);
     let compile_only = crate::remote_artifacts::test_no_run(&full);
     let json_output = full
         .iter()
