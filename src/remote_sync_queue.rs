@@ -17,12 +17,28 @@ impl<T> SyncQueue<T> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn lock(&self) -> LockResult<MutexGuard<'_, T>> {
         self.inner.lock()
     }
 
     pub(super) fn try_lock(&self) -> TryLockResult<MutexGuard<'_, T>> {
         self.inner.try_lock()
+    }
+
+    /// Optional connection warmup must never join the mirror queue or overtake
+    /// a build already waiting. Check again after acquiring to cover a build
+    /// registering between the initial check and the nonblocking lock attempt.
+    pub(super) fn try_background_lock(&self) -> TryLockResult<MutexGuard<'_, T>> {
+        use std::sync::TryLockError;
+        if self.foreground_waiters.load(Ordering::SeqCst) != 0 {
+            return Err(TryLockError::WouldBlock);
+        }
+        let guard = self.inner.try_lock()?;
+        if self.foreground_waiters.load(Ordering::SeqCst) != 0 {
+            return Err(TryLockError::WouldBlock);
+        }
+        Ok(guard)
     }
 
     pub(super) fn foreground_lock(&self) -> LockResult<MutexGuard<'_, T>> {
@@ -152,6 +168,41 @@ mod tests {
     }
 
     #[test]
+    fn optional_warmup_never_queues_behind_a_busy_mirror() {
+        let queue = Arc::new(SyncQueue::new(()));
+        let held = queue.lock().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let other = queue.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(matches!(
+                other.try_background_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ))
+            .unwrap();
+        });
+        // The owner remains locked until after the optional call has returned.
+        let result = rx.recv_timeout(Duration::from_secs(5));
+        drop(held);
+        worker.join().unwrap();
+        assert!(result.unwrap());
+        assert!(queue.try_background_lock().is_ok());
+    }
+
+    #[test]
+    fn optional_warmup_yields_even_when_mirror_is_free_but_build_is_queued() {
+        let queue = SyncQueue::new(());
+        queue.foreground_waiters.store(1, Ordering::SeqCst);
+        assert!(matches!(
+            queue.try_background_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        // A declined warmup must not retain the mirror lock.
+        assert!(queue.try_lock().is_ok());
+        queue.foreground_waiters.store(0, Ordering::SeqCst);
+        assert!(queue.try_background_lock().is_ok());
+    }
+
+    #[test]
     fn poisoned_foreground_acquisition_does_not_leave_waiter_registered() {
         let queue = Arc::new(SyncQueue::new(()));
         let other = queue.clone();
@@ -166,5 +217,9 @@ mod tests {
         assert!(queue.foreground_lock().is_err());
         assert_eq!(queue.foreground_waiters.load(Ordering::SeqCst), 0);
         assert!(queue.background_lock().is_err());
+        assert!(matches!(
+            queue.try_background_lock(),
+            Err(std::sync::TryLockError::Poisoned(_))
+        ));
     }
 }

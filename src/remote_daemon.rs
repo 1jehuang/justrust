@@ -744,14 +744,13 @@ fn daemon() -> Result<()> {
     Ok(())
 }
 
+#[path = "remote_daemon_debounce.rs"]
+mod debounce;
+
 /// Debounce watch events, then push the touched roots.
 fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
     while let Ok(first) = rx.recv() {
-        let mut touched = vec![first];
-        // Editors write a burst (temp file, rename, chmod): settle briefly.
-        while let Ok(p) = rx.recv_timeout(Duration::from_millis(15)) {
-            touched.push(p);
-        }
+        let touched = debounce::collect(first, &rx);
         if d.draining.load(Ordering::SeqCst) {
             continue;
         }
@@ -846,7 +845,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 let d = d.clone();
                 std::thread::spawn(move || {
                     peercache::CONNECTING.store(true, Ordering::SeqCst);
-                    if let Ok(mut st) = d.sync.lock()
+                    if let Ok(mut st) = d.sync.try_background_lock()
                         && let Err(e) = ensure_link(&d, &mut st, false)
                     {
                         log(&format!("warm: {e:#}"));
