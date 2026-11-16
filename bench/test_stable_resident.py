@@ -54,9 +54,19 @@ class StableResidentTests(unittest.TestCase):
                 self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], str(int(frontend)))
 
     def test_frontend_counter_gate_is_fail_closed(self):
-        off = dict.fromkeys(bench.FRONTEND_COUNTERS, 0)
-        on = dict.fromkeys(bench.FRONTEND_COUNTERS, 1)
+        off = dict.fromkeys(bench.FRONTEND_COUNTERS + bench.FRONTEND_OPTIONAL, 0)
+        on = dict.fromkeys(bench.FRONTEND_COUNTERS + bench.FRONTEND_OPTIONAL, 1)
         bench.validate_frontend_acceptance(off, on)
+        for key in bench.FRONTEND_OPTIONAL:
+            missing = {name: value for name, value in on.items() if name != key}
+            with self.subTest(missing=key), self.assertRaisesRegex(AssertionError, key):
+                bench.validate_frontend_acceptance(off, missing)
+            with self.subTest(off_missing=key), self.assertRaisesRegex(AssertionError, key):
+                bench.validate_frontend_acceptance(
+                    {name: value for name, value in off.items() if name != key}, on)
+            bench.validate_frontend_acceptance(off, {**on, key: 0})
+        with self.assertRaisesRegex(AssertionError, 'no actual typeck_loads or mir_loads'):
+            bench.validate_frontend_acceptance(off, {**on, 'typeck_loads': 0, 'mir_loads': 0})
         for bad in (None, {}, {**on, 'graph_hits': True}, {**on, 'value_loads': -1}):
             with self.subTest(bad=bad), self.assertRaises(AssertionError):
                 bench.validate_frontend_acceptance(off, bad)
@@ -83,7 +93,7 @@ class StableResidentTests(unittest.TestCase):
                 source.write_text('ok')
                 mutation = ("assert os.environ['JUSTRUST_RUSTC_RESIDENT_VALUES'] == '0'; "
                             f"assert os.environ['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] == '{int(gate)}'; "
-                            f"response['frontend'] = dict.fromkeys({bench.FRONTEND_COUNTERS!r}, "
+                            f"response['frontend'] = dict.fromkeys({(bench.FRONTEND_COUNTERS + bench.FRONTEND_OPTIONAL)!r}, "
                             f"request['id'] if {gate!r} else 0)")
                 server = bench.Resident(self.server(root, mutation), root, root, True,
                                         timeout=2, frontend=gate)
@@ -156,7 +166,7 @@ class StableResidentTests(unittest.TestCase):
                 self.command = ['protocol mock only, not native evidence']
                 self.process = type('Process', (), {'pid': 100 + len(instances)})()
                 self.frontend = frontend
-                self.frontend_counters = dict.fromkeys(bench.FRONTEND_COUNTERS, 0)
+                self.frontend_counters = dict.fromkeys(bench.FRONTEND_COUNTERS + bench.FRONTEND_OPTIONAL, 0)
                 self.counters = dict.fromkeys(bench.COUNTERS, 0)
                 instances.append(self)
 

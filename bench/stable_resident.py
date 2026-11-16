@@ -51,6 +51,7 @@ MODES = ('fresh', 'resident-values-off', 'resident-values-on')
 COUNTERS = ('resident_hits', 'resident_misses', 'resident_entries')
 FRONTEND_COUNTERS = ('graph_hits', 'graph_misses', 'graph_bytes', 'archive_hits',
                      'archive_misses', 'archive_bytes', 'value_loads')
+# Historical public alias retained for callers. Both fields are now required.
 FRONTEND_OPTIONAL = ('typeck_loads', 'mir_loads')
 
 
@@ -71,8 +72,6 @@ def validate_frontend(stats, previous=None):
     if not isinstance(stats, dict):
         raise AssertionError('Missing frontend counters')
     for key in FRONTEND_COUNTERS + FRONTEND_OPTIONAL:
-        if key in FRONTEND_OPTIONAL and key not in stats:
-            continue
         value = stats.get(key)
         if type(value) is not int or value < 0:
             raise AssertionError('Invalid or missing frontend counter: ' + key)
@@ -88,6 +87,8 @@ def validate_frontend_acceptance(off, on):
     for key in ('graph_hits', 'archive_hits', 'value_loads'):
         if on[key] <= 0:
             raise AssertionError('Frontend reports no actual ' + key)
+    if not any(on[key] > 0 for key in FRONTEND_OPTIONAL):
+        raise AssertionError('Frontend reports no actual typeck_loads or mir_loads')
 
 
 def validate_frontend_fallback(previous, current):
