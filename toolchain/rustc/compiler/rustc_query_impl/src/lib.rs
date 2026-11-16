@@ -27,6 +27,12 @@ mod query_vtables;
 pub mod resident;
 mod self_profile;
 
+/// Process-wide resident value (hits, misses, live entries) for the native driver.
+pub fn resident_stats() -> (u64, u64, usize) {
+    let (hits, misses, _evicted, live) = resident::counters();
+    (hits, misses, live)
+}
+
 pub fn query_system<'tcx>(
     arena: &'tcx Arena<'tcx>,
     local_providers: Providers,

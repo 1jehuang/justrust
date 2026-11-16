@@ -1,11 +1,11 @@
 //! First resident-value slice, not GlobalCtxt residency. Only explicitly selected
 //! owned booleans cross sessions. No arena data, erased storage, or query keys do.
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::dep_graph::DepNode;
 use rustc_middle::ty::TyCtxt;
 
@@ -21,7 +21,7 @@ struct Key {
 }
 
 struct Store<K> {
-    values: HashMap<K, bool>,
+    values: FxHashMap<K, bool>,
     hits: u64,
     misses: u64,
     evictions: u64,
@@ -30,7 +30,7 @@ struct Store<K> {
 impl<K: Eq + Hash> Store<K> {
     fn new() -> Self {
         Self {
-            values: HashMap::new(),
+            values: FxHashMap::default(),
             hits: 0,
             misses: 0,
             evictions: 0,
