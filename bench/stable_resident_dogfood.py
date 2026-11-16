@@ -23,6 +23,8 @@ ORIGINAL_TESTS = (
     'remote_sync_queue::tests::queued_foreground_precedes_remaining_background_roots',
     'remote_sync_queue::tests::foreground_batch_contention_acceptance',
     'remote_sync_queue::tests::poisoned_foreground_acquisition_does_not_leave_waiter_registered',
+    'remote_sync_queue::tests::optional_warmup_never_queues_behind_a_busy_mirror',
+    'remote_sync_queue::tests::optional_warmup_yields_even_when_mirror_is_free_but_build_is_queued',
 )
 PROBE = 'fresh_nonce_probe'
 NONCE_KEY = 'JUSTRUST_DOGFOOD_RUNTIME_NONCE'
@@ -38,24 +40,39 @@ fn fresh_nonce_probe() {
 '''
 
 
-def variants(source):
+def variants(source, frontend=False):
     body = 'Duration::from_millis(1)'
     assertion = 'assert_eq!(queue.foreground_waiters.load(Ordering::SeqCst), 0);'
     if source.count(body) != 1 or source.count(assertion) != 2:
         raise ValueError('Supplied shipping source does not match the reviewed edit anchors')
-    if len(re.findall(r'#\[test\]', source)) != 3:
-        raise ValueError('Expected exactly three original shipping-module tests')
+    if len(re.findall(r'#\[test\]', source)) != len(ORIGINAL_TESTS):
+        raise ValueError('Expected all original shipping-module tests')
     prefix, suffix = source.rsplit(assertion, 1)
     failing = prefix + assertion.replace(', 0);', ', 1);') + suffix
     type_anchor = 'Self {\n            inner: Mutex::new(value),'
     if source.count(type_anchor) != 1:
         raise ValueError('Expected unique type-error anchor')
     wrong_type = source.replace(type_anchor, 'Self {\n            inner: "deliberate type error",')
-    return [('baseline', source, 'pass'), ('unchanged', source, 'pass'),
+    rows = [('baseline', source, 'pass'), ('unchanged', source, 'pass'),
             ('body-edit', source.replace(body, 'Duration::from_millis(2)'), 'pass'),
             ('revert', source, 'pass'), ('assertion-failure', failing, 'test-fail'),
             ('recovery', source, 'pass'), ('type-error', wrong_type, 'compile-fail'),
             ('type-recovery', source, 'pass')]
+    if frontend:
+        signature = "pub(super) fn background_lock(&self) -> LockResult<MutexGuard<'_, T>>"
+        if source.count(signature) != 1:
+            raise ValueError('Expected unique signature-edit anchor')
+        edited = source.replace(
+            signature,
+            "pub(super) fn background_lock(&self, prioritize_foreground: bool) -> LockResult<MutexGuard<'_, T>>")
+        condition = 'if self.foreground_waiters.load(Ordering::SeqCst) == 0 {'
+        if source.count(condition) != 1:
+            raise ValueError('Expected unique signature behavior anchor')
+        edited = edited.replace(condition,
+                                'if !prioritize_foreground || self.foreground_waiters.load(Ordering::SeqCst) == 0 {')
+        edited = edited.replace('.background_lock()', '.background_lock(true)')
+        rows.extend([('signature-edit', edited, 'pass'), ('signature-recovery', source, 'pass')])
+    return rows
 
 
 def arguments(root, cache):
@@ -74,7 +91,7 @@ def statuses(record, nonce, expectation):
     expected = {name: 'ok' for name in (*ORIGINAL_TESTS, PROBE)}
     if expectation == 'test-fail':
         expected[ORIGINAL_TESTS[2]] = 'FAILED'
-    if len(pairs) != 4 or len(set(names)) != 4 or dict(pairs) != expected:
+    if len(pairs) != len(expected) or len(set(names)) != len(expected) or dict(pairs) != expected:
         raise AssertionError(f'Unexpected full test names/statuses: {pairs!r}')
     expected_code = 101 if expectation == 'test-fail' else 0
     if record['status'] != expected_code:
@@ -82,7 +99,8 @@ def statuses(record, nonce, expectation):
     markers = re.findall(r'^JR_DOGFOOD_NONCE=(.*)$', stderr, re.MULTILINE)
     if markers != [nonce]:
         raise AssertionError('Runtime nonce absent, duplicated, or stale')
-    passed, failed = (3, 1) if expectation == 'test-fail' else (4, 0)
+    failed = int(expectation == 'test-fail')
+    passed = len(expected) - failed
     outcome = 'FAILED' if failed else 'ok'
     summary = f'test result: {outcome}. {passed} passed; {failed} failed; 0 ignored; 0 measured; 0 filtered out;'
     if summary not in stdout:
@@ -128,7 +146,7 @@ def upload(root):
         print('Upload unavailable, private receipt retained: ' + str(error), file=sys.stderr)
 
 
-def capture(compiler, source_path, root, repetitions=3, timeout=180):
+def capture(compiler, source_path, root, repetitions=3, timeout=180, frontend=False):
     if repetitions < 1 or timeout <= 0:
         raise ValueError('Repetitions and timeout must be positive')
     compiler, source_path, root = (Path(path).resolve() for path in (compiler, source_path, root))
@@ -143,7 +161,13 @@ def capture(compiler, source_path, root, repetitions=3, timeout=180):
         original = source_path.read_bytes()
         if hashlib.sha256(original).hexdigest() != report['source_sha256_before']:
             raise AssertionError('Source changed while capturing private copy')
-        matrix = variants(original.decode('utf-8'))
+        report['variant'] = 'frontend' if frontend else 'scalar'
+        if frontend:
+            report['retention_scope'] = ('Owned dependency graph + encoded frontend result archives '
+                                         'rehydrated into each fresh session, not a retained typed GlobalCtxt.')
+            report['frontend_counter_note'] = ('Hits, misses and loads are cumulative per resident process. '
+                                               'Graph/archive bytes are live gauges and may decrease.')
+        matrix = variants(original.decode('utf-8'), frontend=frontend)
         report['identity_before'] = native.identity(compiler)
         work = root / 'private-workload'
         work.mkdir(mode=0o700)
@@ -159,8 +183,10 @@ def capture(compiler, source_path, root, repetitions=3, timeout=180):
             try:
                 for mode in native.MODES[1:]:
                     start = time.monotonic()
+                    options = {'frontend': mode == 'resident-values-on'} if frontend else {}
                     worker = native.Resident(compiler, caches[mode], work,
-                                             mode == 'resident-values-on', timeout)
+                                             not frontend and mode == 'resident-values-on', timeout,
+                                             **options)
                     workers[mode] = worker
                     session = dict(repetition=rep, mode=mode, pid=worker.process.pid,
                                    command=worker.command, spawn_seconds=time.monotonic() - start,
@@ -197,12 +223,24 @@ def capture(compiler, source_path, root, repetitions=3, timeout=180):
                 if workers['resident-values-off'].counters['resident_hits'] != 0:
                     raise AssertionError('Values-off worker reported RAM hits')
                 hits = workers['resident-values-on'].counters['resident_hits']
-                sessions['resident-values-on']['live_hits_observed'] = hits > 0
+                if frontend:
+                    if hits != 0:
+                        raise AssertionError('Frontend variant reported scalar RAM hits')
+                    native.validate_frontend_acceptance(
+                        workers['resident-values-off'].frontend_counters,
+                        workers['resident-values-on'].frontend_counters)
+                    for mode, worker in workers.items():
+                        sessions[mode]['frontend'] = dict(worker.frontend_counters)
+                    sessions['resident-values-on']['live_hits_observed'] = True
+                else:
+                    sessions['resident-values-on']['live_hits_observed'] = hits > 0
             finally:
                 failing = sys.exc_info()[0] is not None
                 errors = []
                 for mode, worker in workers.items():
                     sessions[mode]['final_counters'] = dict(worker.counters)
+                    if frontend:
+                        sessions[mode]['frontend'] = worker.frontend_counters
                     try:
                         worker.close()
                     except Exception as error:
@@ -217,7 +255,8 @@ def capture(compiler, source_path, root, repetitions=3, timeout=180):
         if report['source_sha256_before'] != report['source_sha256_after']:
             raise AssertionError('Repository source changed during capture')
         report['live_hits_observed'] = any(session.get('live_hits_observed') for session in report['sessions'])
-        report['retention_verdict'] = ('live-query-value-hits-observed' if report['live_hits_observed']
+        report['retention_verdict'] = ('owned-graph-and-encoded-frontend-archive-loads-observed' if frontend
+                                       else 'live-query-value-hits-observed' if report['live_hits_observed']
                                        else 'no-live-hits-observed-no-retention-claim')
         report['summary'] = native.summarize(report['observations'])
         report['verdict'] = 'passed'
@@ -250,6 +289,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='New private evidence directory')
     parser.add_argument('-n', '--repetitions', type=int, default=3)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--frontend', action='store_true', help='Isolate owned graph/archive cache from scalar values')
     args = parser.parse_args()
     if args.repetitions < 1 or args.timeout <= 0:
         parser.error('repetitions and timeout must be positive')
@@ -257,7 +297,8 @@ def main():
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     print('Private evidence: ' + str(args.output.resolve()), flush=True)
     try:
-        report = capture(args.compiler, args.source, args.output, args.repetitions, args.timeout)
+        report = capture(args.compiler, args.source, args.output, args.repetitions, args.timeout,
+                         frontend=args.frontend)
         print(json.dumps({key: report[key] for key in ('verdict', 'retention_verdict', 'source_unchanged')}, indent=2))
     finally:
         upload(args.output.resolve())
