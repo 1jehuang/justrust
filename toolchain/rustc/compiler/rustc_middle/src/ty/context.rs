@@ -42,7 +42,7 @@ use rustc_lint_defs::Lint;
 use rustc_lint_defs::builtin::UNUSED_FEATURES;
 use rustc_macros::Diagnostic;
 use rustc_session::config::NextSolverConfig;
-use rustc_session::{IncrCompSession, Session};
+use rustc_session::{IncrCompSessionPaths, Session};
 use rustc_span::def_id::{CRATE_DEF_ID, DefPathHash, StableCrateId};
 use rustc_span::{DUMMY_SP, Ident, Span, Symbol, bug, kw, sym};
 use rustc_structures::{CrateType, Limit};
@@ -752,7 +752,9 @@ pub struct GlobalCtxt<'tcx> {
     /// `rustc_symbol_mangling` crate for more information.
     stable_crate_id: StableCrateId,
 
-    pub incr_comp_session: Option<&'tcx IncrCompSession>,
+    /// A lock-free path snapshot. The executor retains the actual incremental
+    /// session locks until finalization, independently of this context's lifetime.
+    pub incr_comp_session: Option<IncrCompSessionPaths>,
     pub dep_graph: DepGraph,
 
     /// This duplicates `Session::prof` because this field is hot enough that accessing it via
@@ -955,7 +957,7 @@ impl<'tcx> TyCtxt<'tcx> {
         arena: &'tcx WorkerLocal<Arena<'tcx>>,
         hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
         untracked: Untracked,
-        incr_comp_session: Option<&'tcx IncrCompSession>,
+        incr_comp_session: Option<IncrCompSessionPaths>,
         dep_graph: DepGraph,
         query_system: QuerySystem<'tcx>,
         hooks: crate::hooks::Providers,

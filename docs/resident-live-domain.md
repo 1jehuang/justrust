@@ -43,6 +43,18 @@ borrowed MIR or type-checking pointers would be unsound.
   estimated reachable-byte budgets bound the cache's references, not the arena
   or the compiler's total RSS.
 
+- `IncrCompSessionPaths` separates the immutable directory view used by contexts
+  and codegen from `IncrCompSession`, which still owns the real filesystem locks.
+  `GlobalCtxt` owns a cloned path snapshot, so keeping a context does not borrow
+  the lock owner. The ordinary executor still holds locks through cache writes,
+  codegen joining and finalization. A retained snapshot grants no right to read
+  a directory after the executor has released its lock or renamed that directory.
+- The native interface now separates owned `Compiler` construction from borrowed
+  execution and diagnostic finalization. An enclosing scoped owner can choose
+  storage for the compiler while construction, execution and teardown remain
+  inside the normal worker/global and frontend-admission scope. This extraction
+  does not repeat an invocation or connect the resident driver to such an owner.
+
 These are native compiler types and native ownership tests, not successful
 multi-revision project compiles. The initial identity gate rejects changed
 source or body revisions. It must not be loosened to accept edits merely to

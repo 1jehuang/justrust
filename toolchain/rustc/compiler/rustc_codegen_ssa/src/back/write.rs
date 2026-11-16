@@ -2220,8 +2220,8 @@ pub(crate) fn submit_pre_lto_module_to_llvm<B: WriteBackendMethods>(
 ) {
     let filename = pre_lto_bitcode_filename(&module.name);
     let old_bitcode_path =
-        in_old_incr_comp_dir_sess(tcx.incr_comp_session.unwrap(), &filename).unwrap();
-    let bitcode_path = in_incr_comp_dir_sess(tcx.incr_comp_session.unwrap(), &filename);
+        in_old_incr_comp_dir_sess(tcx.incr_comp_session.as_ref().unwrap(), &filename).unwrap();
+    let bitcode_path = in_incr_comp_dir_sess(tcx.incr_comp_session.as_ref().unwrap(), &filename);
 
     match link_or_copy(&old_bitcode_path, &bitcode_path) {
         Ok(_) => {}

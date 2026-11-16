@@ -45,9 +45,9 @@ use rustc_structures::CrateType;
 use tracing::{debug, instrument, trace};
 use twox_hash::XxHash3_128;
 
+use crate::creader::CStore;
 use crate::diagnostics::{FailCreateFileEncoder, FailWriteFile};
 use crate::eii::EiiMapEncodedKeyValue;
-use crate::creader::CStore;
 use crate::rmeta::*;
 
 pub(super) struct EncodeContext<'a, 'tcx> {
@@ -737,7 +737,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 if self.opaque.iface_active()
                     && std::env::var_os("JUSTRUST_RUSTC_IFACE_DUMP").is_some()
                 {
-                    eprintln!("jr-iface-section {} at fed {}", $label, self.opaque.iface_fed_total());
+                    eprintln!(
+                        "jr-iface-section {} at fed {}",
+                        $label,
+                        self.opaque.iface_fed_total()
+                    );
                 }
                 let res = $f();
                 stats.push(($label, self.position() - orig_pos));
@@ -2711,7 +2715,7 @@ pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path, ref_path: Option<&Path>) {
 
     // If the metadata dep-node is green, try to reuse the saved work product.
     if tcx.dep_graph.is_fully_enabled()
-        && let incr_comp_session = tcx.incr_comp_session.unwrap()
+        && let incr_comp_session = tcx.incr_comp_session.as_ref().unwrap()
         && let Some(old_incr_comp_session_dir) = &incr_comp_session.old_session_directory
         && let work_product_id =
             WorkProductId::from_cgu_name(WorkProduct::METADATA_WORKPRODUCT_CGU_NAME)

@@ -34,7 +34,7 @@ pub(crate) fn save_dep_graph(tcx: TyCtxt<'_>) {
             return;
         }
 
-        let incr_comp_session = tcx.incr_comp_session.unwrap();
+        let incr_comp_session = tcx.incr_comp_session.as_ref().unwrap();
         let query_cache_path = query_cache_path(incr_comp_session);
         let dep_graph_path = dep_graph_path(incr_comp_session);
         let staging_dep_graph_path = staging_dep_graph_path(incr_comp_session);
@@ -88,9 +88,8 @@ pub(crate) fn save_dep_graph(tcx: TyCtxt<'_>) {
                         // additional green values merely to retain them for a future session.
                         // A later demand for a missing disk value uses the existing provider
                         // fallback and incremental hash verification.
-                        let _timer = tcx
-                            .prof
-                            .generic_activity("jr_demand_query_cache_promotion_skipped");
+                        let _timer =
+                            tcx.prof.generic_activity("jr_demand_query_cache_promotion_skipped");
                     } else {
                         tcx.dep_graph.exec_cache_promotions(tcx);
                     }

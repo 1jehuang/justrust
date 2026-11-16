@@ -11,8 +11,9 @@ mod diagnostics;
 mod persist;
 
 pub use persist::{
-    JR_PERSISTING, copy_cgu_workproduct_to_incr_comp_cache_dir, finalize_session_directory, in_incr_comp_dir_sess,
-    in_old_incr_comp_dir_sess, load_query_result_cache, save_work_product_index, setup_dep_graph,
+    JR_PERSISTING, copy_cgu_workproduct_to_incr_comp_cache_dir, finalize_session_directory,
+    in_incr_comp_dir_sess, in_old_incr_comp_dir_sess, load_query_result_cache,
+    save_work_product_index, setup_dep_graph,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::util::Providers;
@@ -38,7 +39,7 @@ pub fn provide(providers: &mut Providers) {
 fn jr_proc_macro_inputs(tcx: TyCtxt<'_>, (): ()) -> rustc_data_structures::svh::Svh {
     use rustc_data_structures::fingerprint::Fingerprint;
     use rustc_data_structures::svh::Svh;
-    let validated = tcx.incr_comp_session.and_then(|session| {
+    let validated = tcx.incr_comp_session.as_ref().and_then(|session| {
         #[cfg(unix)]
         {
             let old = in_old_incr_comp_dir_sess(
