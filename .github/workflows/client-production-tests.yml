@@ -2,7 +2,16 @@ name: Published client production tests
 
 # Called only after Release has published all assets. Exact preflight outputs
 # avoid workflow_run's ambiguous head_sha for workflow_dispatch tag releases.
+# Exact inputs also allow acceptance to be rerun after artifact-only recovery.
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
   workflow_call:
     inputs:
       tag:
