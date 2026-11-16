@@ -130,7 +130,8 @@ impl SessionGlobals {
     /// Enter another revision under the same scoped symbol, span and hygiene
     /// owners. All workers from the preceding revision must have returned before
     /// the caller can borrow this owner mutably. Reset the revision-local macro
-    /// argument map, which a completed query-cache encoding may have frozen.
+    /// argument map, which a completed query-cache encoding may have frozen, and
+    /// keep the new resolver's `$crate` name updates out of historical hygiene.
     ///
     /// This does not refresh source files, validate crate/definition mappings or
     /// authorize reuse of query results. The executor must provide those checks
@@ -141,6 +142,7 @@ impl SessionGlobals {
             "resident revision must start outside an active session-global scope"
         );
         self.metavar_spans = MetavarSpansMap::default();
+        self.hygiene_data.borrow_mut().enter_resident_revision();
         set_session_globals_then(self, f)
     }
 

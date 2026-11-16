@@ -355,6 +355,11 @@ pub(crate) struct HygieneData {
     expn_hash_to_expn_id: UnhashMap<ExpnHash, ExpnId>,
     syntax_context_data: Vec<SyntaxContextData>,
     syntax_context_map: FxHashMap<SyntaxContextKey, SyntaxContext>,
+    /// The first context owned by the current resident revision. `None` also
+    /// preserves the ordinary, non-resident behavior. Historical contexts must
+    /// not be passed to a new resolver: their expansion DefIds belong to the
+    /// preceding revision's crate store, even if their name is still `$crate`.
+    dollar_crate_name_update_start: Option<usize>,
     /// Maps the `local_hash` of an `ExpnData` to the next disambiguator value.
     /// This is used by `update_disambiguator` to keep track of which `ExpnData`s
     /// would have collisions without a disambiguator.
@@ -385,8 +390,23 @@ impl HygieneData {
                 .collect(),
             syntax_context_data: vec![root_ctxt_data],
             syntax_context_map: iter::once((root_ctxt_data.key(), SyntaxContext(0))).collect(),
+            dollar_crate_name_update_start: None,
             expn_data_disambiguators: UnhashMap::default(),
         }
+    }
+
+    pub(crate) fn enter_resident_revision(&mut self) {
+        // Include the root context on entry with a fresh owner, just as in a
+        // regular session. Otherwise retain all context identities and cached
+        // meanings, but only resolve names for newly allocated contexts.
+        let start = if self.dollar_crate_name_update_start.is_none()
+            && self.syntax_context_data.len() == 1
+        {
+            0
+        } else {
+            self.syntax_context_data.len()
+        };
+        self.dollar_crate_name_update_start = Some(start);
     }
 
     #[inline]
@@ -637,7 +657,13 @@ pub fn update_dollar_crate_names(mut get_name: impl FnMut(SyntaxContext) -> Symb
     // The new contexts that need updating are at the end of the list and have `$crate` as a name.
     let mut to_update = vec![];
     HygieneData::with(|data| {
-        for (idx, scdata) in data.syntax_context_data.iter().enumerate().rev() {
+        for (idx, scdata) in data
+            .syntax_context_data
+            .iter()
+            .enumerate()
+            .skip(data.dollar_crate_name_update_start.unwrap_or(0))
+            .rev()
+        {
             if scdata.dollar_crate_name == kw::DollarCrate {
                 to_update.push((idx, kw::DollarCrate));
             } else {
@@ -1623,5 +1649,136 @@ impl StableHash for ExpnId {
 impl StableHash for LocalExpnId {
     fn stable_hash<Hcx: StableHashCtxt>(&self, hcx: &mut Hcx, hasher: &mut StableHasher) {
         self.to_expn_id().stable_hash(hcx, hasher);
+    }
+}
+
+#[cfg(test)]
+mod resident_revision_tests {
+    use super::*;
+    use crate::def_id::DefIndex;
+    use crate::{BytePos, SessionGlobals, create_default_session_globals_then};
+
+    fn new_context(parent: SyntaxContext) -> SyntaxContext {
+        let expn = LocalExpnId::fresh_empty();
+        HygieneData::with(|data| data.alloc_ctxt(parent, expn.to_expn_id(), Transparency::Opaque))
+    }
+
+    #[test]
+    fn ordinary_dollar_crate_updates_still_include_root_and_pending_contexts() {
+        create_default_session_globals_then(|| {
+            let ctxt = new_context(SyntaxContext::root());
+            let mut visited = Vec::new();
+            update_dollar_crate_names(|ctxt| {
+                visited.push(ctxt);
+                kw::DollarCrate
+            });
+            assert_eq!(visited, [ctxt, SyntaxContext::root()]);
+            visited.clear();
+            update_dollar_crate_names(|ctxt| {
+                visited.push(ctxt);
+                kw::Crate
+            });
+            assert_eq!(visited, [ctxt, SyntaxContext::root()]);
+            update_dollar_crate_names(|_| panic!("resolved contexts must not be revisited"));
+        });
+    }
+
+    #[test]
+    fn resident_dollar_crate_updates_do_not_visit_historical_contexts() {
+        let mut globals = SessionGlobals::new(crate::edition::DEFAULT_EDITION, &[], None);
+        let historical_def = DefId { krate: CrateNum::from_u32(2), index: DefIndex::from_u32(7) };
+        let (resolved, pending, old_name, span, marks) = globals.enter_resident_revision(|| {
+            let resolved = new_context(SyntaxContext::root());
+            let old_name = Symbol::intern("historical_crate");
+            let mut visited = Vec::new();
+            update_dollar_crate_names(|ctxt| {
+                visited.push(ctxt);
+                old_name
+            });
+            assert_eq!(visited, [resolved, SyntaxContext::root()]);
+
+            // Leave a trailing unresolved context with a definition from the old
+            // crate store. This is the shape that made the next resolver load a
+            // crate number absent from its own store in the native std build.
+            let pending = new_context(resolved);
+            HygieneData::with(|data| {
+                let expn = data.outer_expn(pending).expect_local();
+                data.local_expn_data[expn] = Some(ExpnData::default(
+                    ExpnKind::Macro(MacroKind::Bang, sym::dummy),
+                    DUMMY_SP,
+                    crate::edition::DEFAULT_EDITION,
+                    Some(historical_def),
+                    None,
+                ));
+            });
+            let span = Span::new(BytePos(1), BytePos(100_001), pending, None);
+            (resolved, pending, old_name, span, pending.marks())
+        });
+
+        globals.enter_resident_revision(|| {
+            // Also test a revision with no new contexts before creating any.
+            update_dollar_crate_names(|_| panic!("new resolver visited historical hygiene"));
+            assert_eq!(resolved.dollar_crate_name(), old_name);
+            assert_eq!(SyntaxContext::root().dollar_crate_name(), old_name);
+            assert_eq!(pending.dollar_crate_name(), kw::DollarCrate);
+            assert_eq!(pending.outer_expn_data().macro_def_id, Some(historical_def));
+            assert_eq!(pending.marks(), marks);
+            assert_eq!(span.ctxt(), pending);
+            assert_eq!((span.lo(), span.hi()), (BytePos(1), BytePos(100_001)));
+
+            // An interned old key must still have its old identity and meaning.
+            HygieneData::with(|data| {
+                let expn = data.outer_expn(pending);
+                assert_eq!(data.alloc_ctxt(resolved, expn, Transparency::Opaque), pending);
+            });
+            let current = new_context(pending);
+            let mut visited = Vec::new();
+            update_dollar_crate_names(|ctxt| {
+                assert_eq!(ctxt, current);
+                // The callback must still be able to acquire the hygiene lock.
+                assert_eq!(ctxt.marks().len(), marks.len() + 1);
+                visited.push(ctxt);
+                kw::DollarCrate
+            });
+            assert_eq!(visited, [current]);
+            update_dollar_crate_names(|ctxt| {
+                assert_eq!(ctxt, current);
+                kw::Crate
+            });
+            assert_eq!(current.dollar_crate_name(), kw::Crate);
+            assert_eq!(pending.dollar_crate_name(), kw::DollarCrate);
+            assert_eq!(resolved.dollar_crate_name(), old_name);
+            assert_eq!(pending.outer_expn_data().macro_def_id, Some(historical_def));
+        });
+        globals.enter_resident_revision(|| {
+            update_dollar_crate_names(|_| panic!("empty revision visited old contexts"));
+            assert_eq!(pending.marks(), marks);
+            assert_eq!(pending.dollar_crate_name(), kw::DollarCrate);
+            assert_eq!(resolved.dollar_crate_name(), old_name);
+            assert_eq!(span.ctxt(), pending);
+        });
+    }
+
+    #[test]
+    fn resident_revision_after_unwind_does_not_resolve_abandoned_contexts() {
+        let mut globals = SessionGlobals::new(crate::edition::DEFAULT_EDITION, &[], None);
+        let mut abandoned = SyntaxContext::root();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            globals.enter_resident_revision(|| {
+                abandoned = new_context(SyntaxContext::root());
+                panic!("abandon revision before dollar-crate resolution");
+            });
+        }));
+        assert!(result.is_err());
+        globals.enter_resident_revision(|| {
+            update_dollar_crate_names(|_| panic!("visited abandoned revision"));
+            assert_eq!(abandoned.dollar_crate_name(), kw::DollarCrate);
+            let current = new_context(SyntaxContext::root());
+            update_dollar_crate_names(|ctxt| {
+                assert_eq!(ctxt, current);
+                kw::Crate
+            });
+            assert_eq!(abandoned.dollar_crate_name(), kw::DollarCrate);
+        });
     }
 }
