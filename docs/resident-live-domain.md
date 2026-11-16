@@ -8,12 +8,16 @@ building blocks for live typed frontend retention. The explicit
 requests, fresh contexts and revision-aware source reads. It **does not connect
 cross-revision typed query lookups**, incremental persistence or managed hosted
 routing. Native compiler checks, scoped ownership tests and a runnable build pass.
-The first std-based executable compiles and runs, but the initial end-to-end
-owned test fails on its second request: historical macro hygiene reaches a fresh
-crate store with an old numeric crate ID. The failed original receipt is stored
-as `bench/stable-resident-owned-20261116-1334-native`. This mode is not yet
-accepted for ordinary repeated std builds. No full live engine, speedup, or
-default promotion follows from this mode.
+The initial std-based test exposed historical macro hygiene reaching a fresh
+crate store with an old numeric crate ID. Its failed original receipt remains
+stored as `bench/stable-resident-owned-20261116-1334-native`. A revision-local
+hygiene traversal boundary fixes that failure without resetting historical
+contexts. The corrected frozen compiler passes eight same-PID source-edit,
+error/recovery and nonce-checked executable transitions with exact fresh-compiler
+diagnostics. That original is stored and verified as
+`bench/stable-resident-owned-20261116-1346-native`. This is correctness evidence
+for the scoped request loop, not typed-cache reuse or a speedup. No full live
+engine or default promotion follows from this mode.
 The previously measured `JUSTRUST_RUSTC_RESIDENT_FRONTEND` mode still retains
 encoded snapshots and starts a fresh `GlobalCtxt` per request. Its results do
 not measure the live design described here.
@@ -73,10 +77,12 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
 
 - `SessionGlobals::enter_resident_revision` exclusively borrows the existing
   scoped owner, preserving symbol/span/hygiene identities while replacing the
-  per-revision metavariable map that cache encoding can freeze. It requires all
-  prior workers to have returned. It neither refreshes source files nor validates
-  the meaning of foreign crate or expansion identities. The experimental owned
-  batch calls this entry, but does not reuse old typed query results.
+  per-revision metavariable map that cache encoding can freeze. It restricts
+  `$crate` name updates to contexts created in the current revision so the new
+  resolver does not traverse historical contexts through a fresh crate store.
+  It requires all prior workers to have returned. It neither refreshes source
+  files nor validates foreign crate or expansion identities for typed reuse. The
+  experimental owned batch calls this entry, but does not reuse old typed query results.
 - `SourceMap::new_source_file_version` explicitly appends a native source version.
   Historical byte positions still resolve to their original source and diagnostic
   coordinates, while stable-ID lookup selects the latest version. The explicit
@@ -84,8 +90,11 @@ process-global map of borrowed MIR or type-checking pointers would be unsound.
   calls through fresh first reads, exact raw-content reuse and bounded tracking.
   Repeated reads freeze within the scope, loading errors poison that revision,
   and reads outside an enabled scope fail closed. Default one-shot loading is
-  unchanged. This is not an active-revision file view or a span-remapping policy,
-  and does not authorize reusing old results.
+  unchanged. A fallible active-revision view preserves original all-history
+  indices and excludes unloaded historical files from dep-info and local source
+  identity hashing. Metadata and query-cache span encoding still use historical
+  indices, so incremental persistence remains refused. This is not a
+  span-remapping policy and does not authorize reusing old results.
 - `IncrCompSessionPaths` separates the immutable directory view used by contexts
   and codegen from `IncrCompSession`, which still owns the real filesystem locks.
   `GlobalCtxt` owns a cloned path snapshot, so keeping a context does not borrow

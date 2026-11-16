@@ -1213,15 +1213,25 @@ fn legacy_crate_hash(tcx: TyCtxt<'_>) -> Svh {
     // If we included the full mapping in the SVH, we could only have
     // reproducible builds by compiling from the same directory. So we just
     // hash the result of the mapping instead of the mapping itself.
-    let mut source_file_names: Vec<_> = tcx
-        .sess
-        .source_map()
-        .files()
+    let source_map = tcx.sess.source_map();
+    let active = source_map.active_source_files().unwrap_or_else(|error| {
+        tcx.sess.dcx().fatal(format!("resident source hashing refused: {error}"))
+    });
+    let source_files = source_map.files();
+    let mut source_file_names: Vec<_> = source_files
         .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            active.as_ref().is_none_or(|active| {
+                active.binary_search_by_key(index, |(index, _)| *index).is_ok()
+            })
+        })
+        .map(|(_, file)| file)
         .filter(|source_file| source_file.cnum == LOCAL_CRATE)
         .map(|source_file| source_file.stable_id)
         .collect();
 
+    drop(source_files);
     source_file_names.sort_unstable();
 
     // We have to take care of debugger visualizers explicitly. The HIR (and

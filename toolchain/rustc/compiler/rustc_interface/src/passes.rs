@@ -591,10 +591,20 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
     let result = try {
         // Build a list of files used to compile the output and
         // write Makefile-compatible dependency rules
-        let mut files: IndexMap<String, (u64, Option<SourceFileHash>)> = sess
-            .source_map()
-            .files()
+        let source_map = sess.source_map();
+        let active = source_map.active_source_files().unwrap_or_else(|error| {
+            sess.dcx().fatal(format!("resident source export refused: {error}"))
+        });
+        let source_files = source_map.files();
+        let mut files: IndexMap<String, (u64, Option<SourceFileHash>)> = source_files
             .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                active.as_ref().is_none_or(|active| {
+                    active.binary_search_by_key(index, |(index, _)| *index).is_ok()
+                })
+            })
+            .map(|(_, file)| file)
             .filter(|fmap| fmap.is_real_file())
             .filter(|fmap| !fmap.is_imported())
             .map(|fmap| {
@@ -609,6 +619,7 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
                 )
             })
             .collect();
+        drop(source_files);
 
         let checksum_hash_algo = sess.opts.unstable_opts.checksum_hash_algorithm;
 

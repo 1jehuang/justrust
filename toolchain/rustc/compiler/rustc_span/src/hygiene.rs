@@ -1689,7 +1689,7 @@ mod resident_revision_tests {
         let historical_def = DefId { krate: CrateNum::from_u32(2), index: DefIndex::from_u32(7) };
         let (resolved, pending, old_name, span, marks) = globals.enter_resident_revision(|| {
             let resolved = new_context(SyntaxContext::root());
-            let old_name = Symbol::intern("historical_crate");
+            let old_name = sym::core;
             let mut visited = Vec::new();
             update_dollar_crate_names(|ctxt| {
                 visited.push(ctxt);
