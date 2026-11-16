@@ -67,6 +67,14 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'cannot find crate'):
             self.run_probe([self.diagnostic('cannot find crate', 'E0463')])
 
+    def test_shell_lost_binary_environment_is_not_dead_code(self):
+        diagnostics = [self.diagnostic('jrprobe_0', 'E0308', self.source),
+                       self.diagnostic('environment variable `CARGO_BIN_EXE_fixture-bin` '
+                                       'not defined at compile time',
+                                       file=self.root / 'tests/version.rs')]
+        with self.assertRaisesRegex(SystemExit, 'CARGO_BIN_EXE_fixture-bin'):
+            self.run_probe(diagnostics)
+
     def test_internal_compiler_error_mentioning_probe_is_fatal(self):
         with self.assertRaisesRegex(SystemExit, 'compiler crashed at jrprobe_0'):
             self.run_probe([self.diagnostic('compiler crashed at jrprobe_0',

@@ -60,6 +60,13 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dri mesa-vulkan-drivers openbox wayland-utils weston x11-utils xvfb
+          # Pinned Desktop's rustc wrapper is #!/bin/sh. dash discards Cargo's
+          # hyphenated CARGO_BIN_EXE_jcode-desktop variable before exec rustc.
+          # Match the benchmark host's bash-backed sh, without touching snapshot
+          # source bytes, compiler flags, or Cargo's binary prerequisite graph.
+          python3 -m unittest bench.test_source_sync_gate
+          sudo ln -sf /bin/bash /bin/sh
+          python3 ci/check-shell-environment.py
           # Ephemeral runner only: reserve disk for the full Desktop target/cache.
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h "$HOME"
