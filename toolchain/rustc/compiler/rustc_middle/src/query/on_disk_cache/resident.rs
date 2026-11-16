@@ -1,13 +1,11 @@
 //! Cross-session encoded archives only. Nothing here owns a tcx, arena, decoded
 //! span, source file, allocation, or hygiene decoding context.
 use std::collections::VecDeque;
-use std::io::Read;
-use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use super::*;
 
-const MAX_BYTES: usize = 128 * 1024 * 1024;
+pub(super) const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_NAMESPACES: usize = 4;
 const MAX_ROOT: usize = 4096;
 
@@ -57,6 +55,18 @@ pub(super) struct Archive {
     pub indexes: Indexes,
     // Header length is part of identity even when the artifact bytes match.
     start_pos: Option<usize>,
+}
+
+impl Archive {
+    fn from_snapshot(bytes: Vec<u8>, footer: Footer) -> Self {
+        Self {
+            bytes: bytes.into(),
+            indexes: Indexes::new(footer),
+            // Header validation precedes new(); its writer does not need to
+            // separately track the file-format header length.
+            start_pos: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,26 +188,14 @@ pub(super) fn admit(
     cache().lock().ok()?.insert(key, archive.clone()).then_some(archive)
 }
 
-pub(super) fn publish(key: Key, path: &Path, expected_len: usize, footer: Footer) {
-    // Bound both the stat and the read, including a file that grows concurrently.
-    let Ok(file) = std::fs::File::open(path) else { return };
-    let Ok(metadata) = file.metadata() else { return };
-    if metadata.len() != expected_len as u64 || expected_len > MAX_BYTES {
+pub(super) fn publish(key: Key, bytes: Vec<u8>, footer: Footer) {
+    // These bytes come directly from the successfully finished encoder, not a
+    // reread of its path. A concurrently replaced file cannot pair unrelated
+    // bytes with this native footer. The reader still compares every byte.
+    if bytes.len() > MAX_BYTES {
         return;
     }
-    let mut bytes = Vec::new();
-    if file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).is_err()
-        || bytes.len() != expected_len
-    {
-        return;
-    }
-    let archive = Arc::new(Archive {
-        bytes: bytes.into(),
-        indexes: Indexes::new(footer),
-        // The writer does not need to know the file-format header length. The
-        // reader already validates the entire header before calling new().
-        start_pos: None,
-    });
+    let archive = Arc::new(Archive::from_snapshot(bytes, footer));
     if let Ok(mut cache) = cache().lock() {
         cache.insert(key, archive);
     }
@@ -332,5 +330,32 @@ mod tests {
         assert_eq!(stats.value_loads, 4);
         assert_eq!(stats.typeck_loads, 1);
         assert_eq!(stats.mir_loads, 2);
+    }
+
+    #[test]
+    fn native_footer_is_paired_with_writer_snapshot_not_replacement_bytes() {
+        let template = archive(b"unused");
+        let node = SerializedDepNodeIndex::from_u32(7);
+        let footer = Footer {
+            file_index_to_stable_id: (*template.indexes.file_index_to_stable_id).clone(),
+            query_values_index: vec![(node, AbsoluteBytePos(8))],
+            side_effects_index: Vec::new(),
+            interpret_alloc_index: vec![9],
+            syntax_contexts: Default::default(),
+            expn_data: Default::default(),
+            foreign_expn_data: Default::default(),
+        };
+        let snapshot = b"header--native-query-value-and-footer".to_vec();
+        let replacement = b"header--foreign-data-with-other-table";
+        assert_eq!(snapshot.len(), replacement.len());
+        let mut cache = Cache::default();
+        cache.insert(key(0), Arc::new(Archive::from_snapshot(snapshot.clone(), footer)));
+        assert!(cache.lookup(&key(0), replacement, 8).is_none());
+        let hit = cache.lookup(&key(0), &snapshot, 8).unwrap();
+        assert_eq!(hit.indexes.query_values_index[&node], AbsoluteBytePos(8));
+        assert_eq!(hit.indexes.interpret_alloc_index, vec![9]);
+        let session = OnDiskCache::from_archive(hit, true);
+        assert!(session.resident_archive_hit);
+        assert_eq!(cache.stats.hits, 1);
     }
 }

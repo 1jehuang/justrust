@@ -271,7 +271,9 @@ impl OnDiskCache {
 
     /// Serialize the current-session data that will be loaded by [`OnDiskCache`]
     /// in a subsequent incremental compilation session.
-    pub fn serialize(tcx: TyCtxt<'_>, encoder: FileEncoder<'static>) -> FileEncodeResult {
+    pub fn serialize(tcx: TyCtxt<'_>, mut encoder: FileEncoder<'static>) -> FileEncodeResult {
+        let key =
+            resident::key(tcx.sess).filter(|_| encoder.enable_memory_snapshot(resident::MAX_BYTES));
         // Serializing the `DepGraph` should not modify it.
         tcx.dep_graph.with_ignore(|| {
             // Allocate `SourceFileIndex`es.
@@ -388,12 +390,12 @@ impl OnDiskCache {
             // DO NOT WRITE ANYTHING TO THE ENCODER AFTER THIS POINT! The address
             // of the footer must be the last thing in the data stream.
 
-            let key = resident::key(tcx.sess);
-            let path = key.as_ref().map(|_| encoder.encoder.path().to_owned());
-            let result = encoder.finish();
-            if let Ok(expected_len) = &result {
-                if let (Some(key), Some(path)) = (key, path) {
-                    resident::publish(key, &path, *expected_len, footer);
+            let result = encoder.encoder.finish();
+            if result.is_ok() {
+                if let Some(key) = key {
+                    if let Some(bytes) = encoder.encoder.take_memory_snapshot() {
+                        resident::publish(key, bytes, footer);
+                    }
                 }
             }
             result
@@ -897,11 +899,6 @@ impl<'tcx> CacheEncoder<'tcx> {
                 }
             }
         }
-    }
-
-    #[inline]
-    fn finish(mut self) -> FileEncodeResult {
-        self.encoder.finish()
     }
 }
 
