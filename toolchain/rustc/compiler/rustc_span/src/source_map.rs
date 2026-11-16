@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{self, BorrowedBuf, Read};
 use std::{fs, path};
 
-use rustc_data_structures::sync::{IntoDynSyncSend, MappedReadGuard, ReadGuard, RwLock};
+use rustc_data_structures::sync::{IntoDynSyncSend, Lock, MappedReadGuard, ReadGuard, RwLock};
 use rustc_data_structures::unhash::UnhashMap;
 use tracing::{debug, instrument, trace};
 
@@ -205,6 +205,10 @@ pub struct SourceMapInputs {
 /// loader. Such loads are not part of this loader's frozen view.
 pub struct SourceRevisionLoader<'sm> {
     source_map: &'sm SourceMap,
+    state: SourceRevisionState,
+}
+
+struct SourceRevisionState {
     working_directory: PathBuf,
     entries: BTreeMap<PathBuf, RevisionSourceFile>,
     raw_bytes: usize,
@@ -236,10 +240,10 @@ impl<'sm> SourceRevisionLoader<'sm> {
     /// across this loader's entire lifetime, not just the currently loaded set.
     /// Exhausting the revision budget fails closed without wrapping the counter.
     pub fn begin_revision(&mut self) -> io::Result<SourceRevision<'_, 'sm>> {
-        if self.revision == self.max_revisions {
+        if self.state.revision == self.state.max_revisions {
             return Err(io::Error::other("source revision budget exhausted"));
         }
-        self.revision += 1;
+        self.state.revision += 1;
         Ok(SourceRevision { loader: self, failed: false })
     }
 }
@@ -261,7 +265,13 @@ impl SourceRevision<'_, '_> {
     }
 
     fn try_load_file(&mut self, path: &Path) -> io::Result<Arc<SourceFile>> {
-        let loader = &mut self.loader;
+        self.loader.state.load_file(self.loader.source_map, path)
+    }
+}
+
+impl SourceRevisionState {
+    fn load_file(&mut self, sm: &SourceMap, path: &Path) -> io::Result<Arc<SourceFile>> {
+        let loader = self;
         let path = loader.working_directory.join(path);
         if let Some(entry) = loader.entries.get(&path) {
             if entry.loaded_revision == loader.revision {
@@ -271,7 +281,7 @@ impl SourceRevision<'_, '_> {
             return Err(io::Error::other("source revision file budget exhausted"));
         }
 
-        let raw = loader.source_map.file_loader.read_file(&path)?;
+        let raw = sm.file_loader.read_file(&path)?;
         let previous = loader.entries.get(&path);
         let previous_len = previous.map_or(0, |entry| entry.raw.len());
         let raw_bytes = loader
@@ -283,7 +293,6 @@ impl SourceRevision<'_, '_> {
         let file = if let Some(entry) = previous.filter(|entry| entry.raw == raw) {
             Arc::clone(&entry.file)
         } else {
-            let sm = loader.source_map;
             let filename = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, &path));
             sm.new_source_file_version(filename, raw.clone()).map_err(|_| {
                 io::Error::other("source revision source-map address space exhausted")
@@ -295,6 +304,29 @@ impl SourceRevision<'_, '_> {
         );
         loader.raw_bytes = raw_bytes;
         Ok(file)
+    }
+}
+
+#[derive(Default)]
+struct ResidentSourceState {
+    enabled: bool,
+    active: bool,
+    failed: bool,
+    // Taken while loading, so no lock is held across FileLoader callbacks.
+    state: Option<SourceRevisionState>,
+}
+
+/// A native source-loading scope. Dropping it disables loading until the next
+/// explicit revision, never falling back to the ordinary stable-id cache.
+#[must_use]
+pub struct ResidentSourceRevision<'sm> {
+    source_map: &'sm SourceMap,
+}
+
+impl Drop for ResidentSourceRevision<'_> {
+    fn drop(&mut self) {
+        let mut resident = self.source_map.resident_source.lock();
+        resident.active = false;
     }
 }
 
@@ -348,6 +380,125 @@ mod revision_loader_tests {
             .unwrap()
             .contents
             .insert(std::env::current_dir().unwrap().join(name), text.to_string());
+    }
+
+    #[test]
+    fn native_loads_freeze_first_read_and_preserve_old_snippets() {
+        let (sm, disk) = setup();
+        let path = Path::new("native.rs");
+        write(&disk, "native.rs", "old");
+        let old = {
+            let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+            let old = sm.load_file(path).unwrap();
+            write(&disk, "native.rs", "new");
+            assert!(Arc::ptr_eq(&old, &sm.load_file(path).unwrap()));
+            assert_eq!(disk.lock().unwrap().reads, 1);
+            old
+        };
+        assert!(sm.load_file(path).is_err());
+        let new = {
+            let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+            sm.load_file(path).unwrap()
+        };
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert_eq!(old.stable_id, new.stable_id);
+        assert!(new.start_pos > old.end_position());
+        assert!(Arc::ptr_eq(&sm.source_file_by_stable_id(new.stable_id).unwrap(), &new));
+        let span = |file: &SourceFile| {
+            Span::new(file.start_pos, file.end_position(), SyntaxContext::root(), None)
+        };
+        assert_eq!(sm.span_to_snippet(span(&old)).unwrap(), "old");
+        assert_eq!(sm.span_to_snippet(span(&new)).unwrap(), "new");
+        {
+            let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+            assert!(Arc::ptr_eq(&new, &sm.load_file(path).unwrap()));
+        }
+        assert_eq!(sm.files().len(), 2);
+        assert_eq!(disk.lock().unwrap().reads, 3);
+        assert!(sm.begin_resident_source_revision(1, 8, 3).is_err());
+        assert!(sm.load_file(path).is_err());
+    }
+
+    #[test]
+    fn native_scopes_reject_nesting_and_changed_limits_and_poison_errors() {
+        let (sm, disk) = setup();
+        let path = Path::new("native.rs");
+        {
+            let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
+            assert!(sm.begin_resident_source_revision(1, 8, 2).is_err());
+            assert!(sm.load_file(path).is_err());
+            write(&disk, "native.rs", "fixed");
+            assert!(sm.load_file(path).is_err());
+            assert_eq!(disk.lock().unwrap().reads, 1);
+        }
+        assert!(sm.load_file(path).is_err());
+        assert!(sm.begin_resident_source_revision(2, 8, 2).is_err());
+        let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
+        assert_eq!(sm.load_file(path).unwrap().src.as_deref().unwrap(), "fixed");
+    }
+
+    #[test]
+    fn native_raw_budget_is_current_exact_text_not_normalized_history() {
+        let (sm, disk) = setup();
+        let path = Path::new("native.rs");
+        write(&disk, "native.rs", "x\r\n");
+        let old = {
+            let _revision = sm.begin_resident_source_revision(1, 3, 3).unwrap();
+            sm.load_file(path).unwrap()
+        };
+        write(&disk, "native.rs", "x\n");
+        {
+            let _revision = sm.begin_resident_source_revision(1, 3, 3).unwrap();
+            let new = sm.load_file(path).unwrap();
+            assert!(!Arc::ptr_eq(&old, &new));
+            assert_eq!(old.src, new.src);
+        }
+        write(&disk, "native.rs", "long");
+        let _revision = sm.begin_resident_source_revision(1, 3, 3).unwrap();
+        assert!(sm.load_file(path).is_err());
+        write(&disk, "native.rs", "x");
+        assert!(sm.load_file(path).is_err());
+        assert_eq!(sm.files().len(), 2);
+    }
+
+    #[test]
+    fn disabled_native_dispatch_preserves_ordinary_stable_id_loading() {
+        let (sm, disk) = setup();
+        let path = std::env::current_dir().unwrap().join("ordinary.rs");
+        write(&disk, "ordinary.rs", "old");
+        let old = sm.load_file(&path).unwrap();
+        write(&disk, "ordinary.rs", "new");
+        assert!(Arc::ptr_eq(&old, &sm.load_file(&path).unwrap()));
+        assert_eq!(disk.lock().unwrap().reads, 2);
+        assert_eq!(sm.files().len(), 1);
+    }
+
+    #[test]
+    fn native_zero_budgets_never_fall_through_to_ordinary_loading() {
+        for limits in [(0, 8, 1), (1, 0, 1), (1, 8, 0)] {
+            let (sm, disk) = setup();
+            write(&disk, "native.rs", "x");
+            if let Ok(_revision) = sm.begin_resident_source_revision(limits.0, limits.1, limits.2) {
+                assert!(sm.load_file(Path::new("native.rs")).is_err());
+            }
+            assert!(sm.load_file(Path::new("native.rs")).is_err());
+            assert!(sm.files().is_empty());
+        }
+    }
+
+    #[test]
+    fn native_guard_unwind_ends_scope() {
+        let (sm, disk) = setup();
+        write(&disk, "native.rs", "x");
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
+            sm.load_file(Path::new("native.rs")).unwrap();
+            panic!("leave native source scope");
+        }));
+        assert!(panic.is_err());
+        assert!(sm.load_file(Path::new("native.rs")).is_err());
+        let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
+        assert!(sm.load_file(Path::new("native.rs")).is_ok());
     }
 
     #[test]
@@ -432,7 +583,7 @@ mod revision_loader_tests {
             assert!(revision.load_file(Path::new("a.rs")).is_err());
         }
         assert_eq!(sm.files().len(), 1);
-        assert_eq!(loader.raw_bytes, 1);
+        assert_eq!(loader.state.raw_bytes, 1);
         loader.begin_revision().unwrap().load_file(Path::new("a.rs")).unwrap();
         assert_eq!(sm.files().len(), 1);
     }
@@ -471,6 +622,7 @@ mod revision_loader_tests {
 
 pub struct SourceMap {
     files: RwLock<SourceMapFiles>,
+    resident_source: Lock<ResidentSourceState>,
     file_loader: IntoDynSyncSend<Box<dyn FileLoader + Sync + Send>>,
 
     // This is used to apply the file path remapping as specified via
@@ -494,6 +646,7 @@ impl std::fmt::Debug for SourceMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let SourceMap {
             files,
+            resident_source: _,
             file_loader,
             path_mapping,
             working_dir,
@@ -532,6 +685,7 @@ impl SourceMap {
         debug!(?working_dir);
         SourceMap {
             files: Default::default(),
+            resident_source: Default::default(),
             working_dir,
             file_loader: IntoDynSyncSend(file_loader),
             path_mapping,
@@ -553,9 +707,39 @@ impl SourceMap {
     }
 
     pub fn load_file(&self, path: &Path) -> io::Result<Arc<SourceFile>> {
+        let mut resident = self.resident_source.lock();
+        if resident.enabled {
+            if !resident.active || resident.failed {
+                return Err(io::Error::other("resident source revision is inactive or poisoned"));
+            }
+            let Some(mut state) = resident.state.take() else {
+                resident.failed = true;
+                return Err(io::Error::other("concurrent or reentrant resident source load"));
+            };
+            drop(resident);
+            let result = state.load_file(self, path);
+            let mut resident = self.resident_source.lock();
+            resident.state = Some(state);
+            resident.failed |= result.is_err();
+            if !resident.active || resident.failed {
+                return Err(result.err().unwrap_or_else(|| {
+                    io::Error::other("resident source revision ended or was poisoned during load")
+                }));
+            }
+            return result;
+        }
+        drop(resident);
         let src = self.file_loader.read_file(path)?;
+        // Opt-in may have happened inside the callback or on another thread.
+        // Serialize registration against activation without locking the callback.
+        let resident = self.resident_source.lock();
+        if resident.enabled {
+            return Err(io::Error::other("resident source revisions enabled during ordinary load"));
+        }
         let filename = FileName::Real(self.path_mapping.to_real_filename(&self.working_dir, path));
-        Ok(self.new_source_file(filename, src))
+        let file = self.new_source_file(filename, src);
+        drop(resident);
+        Ok(file)
     }
 
     /// Opt in to bounded revision-aware loading. No existing loading entry point
@@ -579,14 +763,61 @@ impl SourceMap {
         }
         Ok(SourceRevisionLoader {
             source_map: self,
-            working_directory,
-            entries: BTreeMap::new(),
-            raw_bytes: 0,
-            max_files,
-            max_raw_bytes,
-            max_revisions,
-            revision: 0,
+            state: SourceRevisionState {
+                working_directory,
+                entries: BTreeMap::new(),
+                raw_bytes: 0,
+                max_files,
+                max_raw_bytes,
+                max_revisions,
+                revision: 0,
+            },
         })
+    }
+
+    /// Permanently opt this map into native revision dispatch through `load_file`.
+    /// Limits are fixed on initialization. Paths and current exact raw
+    /// text are bounded, not total arena bytes. The revision limit bounds retained
+    /// source-version count for these loads (at most `file_limit * revision_limit`);
+    /// `files()` continues to include every historical file, including other inputs.
+    /// Errors poison the current scope. Nested/concurrent scopes are rejected.
+    /// Concurrent or reentrant loads are rejected and poison the active scope,
+    /// rather than holding a lock across injected `FileLoader` callbacks.
+    pub fn begin_resident_source_revision(
+        &self,
+        file_limit: usize,
+        raw_bytes_limit: usize,
+        revision_limit: usize,
+    ) -> io::Result<ResidentSourceRevision<'_>> {
+        let mut resident = self.resident_source.lock();
+        if resident.active || (resident.enabled && resident.state.is_none()) {
+            return Err(io::Error::other("resident source revision already active or loading"));
+        }
+        if !resident.enabled {
+            // Reserve initialization before invoking an arbitrary cwd callback.
+            // A callback error or panic leaves dispatch permanently fail-closed.
+            resident.enabled = true;
+            resident.active = true;
+            drop(resident);
+            let candidate =
+                self.source_revision_loader(file_limit, raw_bytes_limit, revision_limit);
+            resident = self.resident_source.lock();
+            resident.active = false;
+            resident.state = Some(candidate?.state);
+        }
+        let state = resident.state.as_mut().unwrap();
+        if (state.max_files, state.max_raw_bytes, state.max_revisions)
+            != (file_limit, raw_bytes_limit, revision_limit)
+        {
+            return Err(io::Error::other("resident source revision limits cannot change"));
+        }
+        if state.revision == state.max_revisions {
+            return Err(io::Error::other("source revision budget exhausted"));
+        }
+        state.revision += 1;
+        resident.active = true;
+        resident.failed = false;
+        Ok(ResidentSourceRevision { source_map: self })
     }
 
     /// Loads source file as a binary blob.
@@ -670,8 +901,9 @@ impl SourceMap {
     /// This primitive does not advance a compiler revision or remap old spans.
     /// `files()` still includes all historical versions. A scoped executor must
     /// supply active-revision file views and bound or retire the owning source
-    /// universe before enabling multi-revision compilation. Ordinary `load_file`
-    /// and `new_source_file` retain their existing deduplication behavior.
+    /// universe before enabling multi-revision compilation. `new_source_file`
+    /// retains its deduplication behavior, as does `load_file` until resident
+    /// source revisions are enabled.
     pub fn new_source_file_version(
         &self,
         filename: FileName,
