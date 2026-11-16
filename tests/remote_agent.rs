@@ -643,7 +643,7 @@ fn run_children_preserve_distinct_umasks_without_changing_agent_default() {
                 .or_default()
                 .push_str(&String::from_utf8_lossy(&data)),
             (Msg::Exit { id, code, .. }, _) => {
-                assert_eq!(code, 0, "run {id}: {:?}", outputs.get(&id));
+                assert_eq!(code, 0, "run {id}: {outputs:?}");
                 assert!(pending.remove(&id));
             }
             other => panic!("unexpected mask frame {other:?}"),
