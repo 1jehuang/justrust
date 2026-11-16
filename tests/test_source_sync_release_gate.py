@@ -54,6 +54,8 @@ class SourceSyncReleaseGateTests(unittest.TestCase):
         self.assertEqual(env["JUSTRUST"], env["JUSTRUST_BIN"])
         self.assertTrue(env["JUSTRUST"].endswith("/bin/before"))
         self.assertEqual(env["JUSTRUST_BENCH_REV"], "a" * 40)
+        self.assertTrue(Path(env["VERSUS_STOCK_CARGO"]).is_absolute())
+        self.assertEqual(Path(env["VERSUS_STOCK_CARGO"]).name, "cargo")
         self.assertNotIn("JUSTRUST_REMOTE_REQUIRED", env)
         self.assertNotIn("JUSTRUST_TOOLCHAIN", env)
         self.assertNotIn("BENCH_NOISY_CORES", env)

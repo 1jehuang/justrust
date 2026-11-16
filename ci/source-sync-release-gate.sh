@@ -69,6 +69,9 @@ benchmark_binary() {
     export JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v2
     export JUSTRUST="$work/bin/$label" JUSTRUST_BIN="$work/bin/$label"
     export JUSTRUST_BENCH_REV="$revision"
+    # GitHub runners install stock Cargo through rustup, not /usr/bin/cargo.
+    # The unchanged generator supports this explicit probe-driver selection.
+    export VERSUS_STOCK_CARGO="$(command -v cargo)"
     unset JUSTRUST_REMOTE_REQUIRED JUSTRUST_TOOLCHAIN_REQUIRED JUSTRUST_TOOLCHAIN CARGO_TARGET_DIR
     python3 bench/suite.py run --synth 1 --points 40 -n 1 --stop-on-invalid \
       -o "$evidence/$label.json"
