@@ -26,9 +26,15 @@ pub(super) fn namespace(sess: &Session) -> Option<Namespace> {
         return None;
     }
     Some(Namespace {
-        root: std::fs::canonicalize(sess.opts.incremental.as_ref()?).ok()?,
+        root: incremental_root(sess.opts.incremental.as_ref()?)?,
         options: sess.opts.dep_tracking_hash(false),
     })
+}
+
+// Missing/deleted incremental directories still identify an unavailable load.
+// Canonicalize when possible, otherwise retain an absolute lexical root.
+fn incremental_root(root: &std::path::Path) -> Option<PathBuf> {
+    std::fs::canonicalize(root).or_else(|_| std::path::absolute(root)).ok()
 }
 
 struct Entry {
@@ -68,6 +74,10 @@ impl Cache {
             },
             capturing: false,
         }
+    }
+
+    fn unavailable(&mut self) {
+        self.stats.misses += 1;
     }
 
     fn lookup(&mut self, namespace: &Namespace, bytes: &[u8]) -> Option<Arc<SerializedDepGraph>> {
@@ -148,6 +158,17 @@ pub fn resident_graph_lookup(
     graph
 }
 
+/// Count one ordinary loader fallback when the graph file is absent or fails
+/// format/options validation. This never consults or returns a resident graph.
+/// Call exactly once for a non-Ok graph load, not in addition to a lookup miss.
+pub fn resident_graph_unavailable(sess: &Session) {
+    if namespace(sess).is_none() {
+        return;
+    }
+    let _timer = sess.prof.generic_activity("incr_comp_resident_graph_unavailable");
+    CACHE.lock().unwrap_or_else(|e| e.into_inner()).unavailable();
+}
+
 // Only one capture can consume the transient half of the process budget.
 pub(super) struct CapturePermit;
 impl CapturePermit {
@@ -203,6 +224,33 @@ mod tests {
         assert!(cache.lookup(&ns, &[1, 2, 3]).is_none());
         assert!(cache.lookup(&ns, &[1, 2, 4]).is_some());
         assert_eq!(cache.stats.snapshots, 2);
+    }
+
+    #[test]
+    fn unavailable_graph_counts_fallback_without_bypassing_exact_lookup() {
+        let mut cache = Cache::new();
+        let ns = namespace("crate-unavailable", 1);
+        cache.publish(ns.clone(), vec![1, 2, 3], Arc::default(), 100);
+        let bytes = cache.stats.retained_bytes;
+        cache.unavailable(); // absent artifact
+        cache.unavailable(); // incompatible header/options artifact
+        assert_eq!(cache.stats.misses, 2);
+        assert_eq!(cache.stats.hits, 0);
+        assert_eq!(cache.stats.snapshots, 1);
+        assert_eq!(cache.stats.retained_bytes, bytes);
+        assert!(cache.lookup(&ns, &[1, 2, 4]).is_none());
+        assert_eq!(cache.stats.misses, 3);
+        assert!(cache.lookup(&ns, &[1, 2, 3]).is_some());
+        assert_eq!(cache.stats.hits, 1);
+    }
+
+    #[test]
+    fn deleted_incremental_root_still_scopes_unavailable_graph() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("resident-test-deleted-root")
+            .join("absent-incremental");
+        assert_eq!(incremental_root(&root), Some(root));
     }
 
     #[test]
