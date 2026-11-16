@@ -383,7 +383,7 @@ pub struct Config {
 
 // JUSTIFICATION: before session exists, only config
 #[allow(rustc::bad_opt_access)]
-pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Send) -> R {
+pub fn run_compiler<R: Send>(mut config: Config, f: impl FnOnce(&Compiler) -> R + Send) -> R {
     trace!("run_compiler");
 
     // Set parallel mode before thread pool creation, which will create `Lock`s.
@@ -407,167 +407,36 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         config.opts.sysroot.path(),
         config.opts.unstable_opts.unstable_options,
     );
-    let file_loader = config.file_loader.unwrap_or_else(|| Box::new(RealFileLoader));
+    let file_loader = config.file_loader.take().unwrap_or_else(|| Box::new(RealFileLoader));
     let path_mapping = config.opts.file_path_mapping();
     let hash_kind = config.opts.unstable_opts.src_hash_algorithm(&target);
     let checksum_hash_kind = config.opts.unstable_opts.checksum_hash_algorithm();
+    let extra_symbols = std::mem::take(&mut config.extra_symbols);
+    let make_frontend_admission = config.make_frontend_admission.take();
 
     let mut query_admission_root = config.query_admission.clone();
     let result = util::run_in_thread_pool_with_globals(
         &early_dcx,
         config.opts.edition,
         jobs,
-        &config.extra_symbols,
+        &extra_symbols,
         SourceMapInputs { file_loader, path_mapping, hash_kind, checksum_hash_kind },
-        config.make_frontend_admission,
+        make_frontend_admission,
         |current_gcx, admission_attachment, resource_capture| {
-            // The previous `early_dcx` can't be reused here because it doesn't
-            // impl `Send`. Creating a new one is fine.
-            let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
-
-            let temps_dir = config.opts.unstable_opts.temps_dir.as_deref().map(PathBuf::from);
-
-            let early_sess =
-                rustc_session::build_early_session(config.opts, target, config.ice_file);
-
-            let mut codegen_backend = match config.make_codegen_backend {
-                None => util::get_codegen_backend(
-                    &early_dcx,
-                    &early_sess.opts.sysroot,
-                    early_sess.opts.unstable_opts.codegen_backend.as_deref(),
-                    &early_sess.target,
-                ),
-                Some(make_codegen_backend) => {
-                    // N.B. `make_codegen_backend` takes precedence over
-                    // `target.default_codegen_backend`, which is ignored in this case.
-                    make_codegen_backend(&early_sess)
-                }
-            };
-            let codegen_backend_init = codegen_backend.init(&early_sess);
-
-            let mut sess = rustc_session::build_session(
-                early_sess,
-                codegen_backend_init,
-                CompilerIO {
-                    input: config.input,
-                    output_dir: config.output_dir,
-                    output_file: config.output_file,
-                    temps_dir,
-                },
-                config.lint_caps,
-                util::rustc_version_str().unwrap_or("unknown"),
-                config.using_internal_features,
-            );
-            if config.query_admission.is_some() {
-                sess.query_admission = config.query_admission;
-            }
-            if let Some(observer) = &sess.query_admission {
-                if sess.opts.jobs.frontend.is_some() {
-                    observer.attach_current_pool();
-                    observer.bind_admission_attachment(admission_attachment);
-                }
-                // Local resource-prefix publication does not require a valid
-                // query/pool/resource endorsement triple, only a real sink.
-                if let Some(capture) = &resource_capture {
-                    attach_resource_capture(observer, admission_attachment, capture);
-                }
-            }
-            // Own this actual interface invocation, not merely its inner joins.
-            // The guard lives on this worker through drop(compiler) and finishes
-            // before the outer pool/interface seal. Opaque dispatched work still
-            // suspends its context rather than inheriting fabricated ancestry.
-            let _frontend_scope = if sess.opts.jobs.frontend.is_some() {
-                sess.query_admission.as_ref().and_then(|observer| observer.enter_frontend_scope())
-            } else {
-                None
-            };
-
-            // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
-            sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();
-
-            let target_config = codegen_backend.target_config(&sess);
-
-            // Store all of the target features in the session.
-            // Needs to be done before `parse_cfg` because it checks this list.
-            sess.internal_target_features
-                .extend(target_config.internal_target_features.to_sorted_stable_ord());
-
-            sess.config = parse_cfg(&sess, config.crate_cfg);
-            let is_nightly_build = sess.is_nightly_build();
-            let is_crt_static = sess.crt_static(None);
-            util::add_configuration(
-                &mut sess.config,
-                &target_config,
-                &sess.early_sess.target,
-                is_nightly_build,
-                is_crt_static,
-            );
-
-            sess.check_config = parse_check_cfg(&sess, config.crate_check_cfg);
-
-            if let Some(psess_created) = config.psess_created {
-                psess_created(&mut sess.psess);
-            }
-
-            if let Some(track_state) = config.track_state {
-                track_state(&sess);
-            }
-
-            // Even though the session holds the lint store, we can't build the
-            // lint store until after the session exists. And we wait until now
-            // so that `register_lints` sees the fully initialized session.
-            let mut lint_store = rustc_lint::new_lint_store(sess.enable_internal_lints());
-            if let Some(register_lints) = config.register_lints.as_deref() {
-                register_lints(&sess, &mut lint_store);
-            }
-            sess.lint_store = Some(Arc::new(lint_store));
-
-            util::check_abi_required_features(&sess);
-
-            let compiler = Compiler {
-                sess,
-                codegen_backend,
-                override_queries: config.override_queries,
+            with_owned_compiler(
+                config,
+                target,
                 current_gcx,
-            };
-
-            // There are two paths out of `f`.
-            // - Normal exit.
-            // - Panic, e.g. triggered by `abort_if_errors` or a fatal error.
-            //
-            // We must run `finish_diagnostics` in both cases.
-            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&compiler)));
-
-            compiler.sess.finish_diagnostics();
-
-            // If error diagnostics have been emitted, we can't return an
-            // error directly, because the return type of this function
-            // is `R`, not `Result<R, E>`. But we need to communicate the
-            // errors' existence to the caller, otherwise the caller might
-            // mistakenly think that no errors occurred and return a zero
-            // exit code. So we abort (panic) instead, similar to if `f`
-            // had panicked.
-            if res.is_ok() {
-                compiler.sess.dcx().abort_if_errors();
-            }
-
-            // Also make sure to flush delayed bugs as if we panicked, the
-            // bugs would be flushed by the Drop impl of DiagCtxt while
-            // unwinding, which would result in an abort with
-            // "panic in a destructor during cleanup".
-            compiler.sess.dcx().flush_delayed();
-
-            let res = match res {
-                Ok(res) => res,
-                // Resume unwinding if a panic happened.
-                Err(err) => std::panic::resume_unwind(err),
-            };
-
-            query_admission_root = compiler.sess.query_admission.clone();
-            let prof = compiler.sess.prof.clone();
-            prof.generic_activity("drop_compiler").run(move || drop(compiler));
-
-            res
+                admission_attachment,
+                resource_capture,
+                |compiler| {
+                    let res = execute_compiler(&compiler, f);
+                    query_admission_root = compiler.sess.query_admission.clone();
+                    let prof = compiler.sess.prof.clone();
+                    prof.generic_activity("drop_compiler").run(move || drop(compiler));
+                    res
+                },
+            )
         },
     );
     // Neither callback return nor tcx/Session Drop seals capture. Diagnostics, compiler
@@ -576,6 +445,174 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         observer.finalize_interface_returned();
     }
     result
+}
+
+/// Construct an owned compiler inside the current interface worker and global scope.
+///
+/// Unlike `run_compiler`'s borrowed callback, the continuation can place the compiler
+/// in its own typed arena and borrow it for multiple operations. That arena and all
+/// retained compiler state must be dropped before the continuation returns, while
+/// the frontend invocation scope and the caller's thread-pool globals are active.
+/// This does not itself retain queries or permit reuse of a completed invocation.
+///
+/// Pool-only configuration has already been consumed by the caller. Construction
+/// retains the ordinary frontend-scope entry point, and the continuation must keep
+/// compiler teardown inside that scope and the caller's thread-pool globals.
+// JUSTIFICATION: before session exists, only config
+#[allow(rustc::bad_opt_access)]
+pub(crate) fn with_owned_compiler<R>(
+    config: Config,
+    target: rustc_target::spec::Target,
+    current_gcx: CurrentGcx,
+    admission_attachment: Option<rustc_thread_pool::admission::AdmissionAttachmentId>,
+    resource_capture: Option<util::FrontendResourceCapture>,
+    f: impl FnOnce(Compiler) -> R,
+) -> R {
+    // The previous `early_dcx` can't be reused here because it doesn't
+    // impl `Send`. Creating a new one is fine.
+    let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
+
+    let temps_dir = config.opts.unstable_opts.temps_dir.as_deref().map(PathBuf::from);
+
+    let early_sess = rustc_session::build_early_session(config.opts, target, config.ice_file);
+
+    let mut codegen_backend = match config.make_codegen_backend {
+        None => util::get_codegen_backend(
+            &early_dcx,
+            &early_sess.opts.sysroot,
+            early_sess.opts.unstable_opts.codegen_backend.as_deref(),
+            &early_sess.target,
+        ),
+        Some(make_codegen_backend) => {
+            // N.B. `make_codegen_backend` takes precedence over
+            // `target.default_codegen_backend`, which is ignored in this case.
+            make_codegen_backend(&early_sess)
+        }
+    };
+    let codegen_backend_init = codegen_backend.init(&early_sess);
+
+    let mut sess = rustc_session::build_session(
+        early_sess,
+        codegen_backend_init,
+        CompilerIO {
+            input: config.input,
+            output_dir: config.output_dir,
+            output_file: config.output_file,
+            temps_dir,
+        },
+        config.lint_caps,
+        util::rustc_version_str().unwrap_or("unknown"),
+        config.using_internal_features,
+    );
+    if config.query_admission.is_some() {
+        sess.query_admission = config.query_admission;
+    }
+    if let Some(observer) = &sess.query_admission {
+        if sess.opts.jobs.frontend.is_some() {
+            observer.attach_current_pool();
+            observer.bind_admission_attachment(admission_attachment);
+        }
+        // Local resource-prefix publication does not require a valid
+        // query/pool/resource endorsement triple, only a real sink.
+        if let Some(capture) = &resource_capture {
+            attach_resource_capture(observer, admission_attachment, capture);
+        }
+    }
+    // Own this actual interface invocation, not merely its inner joins.
+    // The guard lives on this worker through drop(compiler) and finishes
+    // before the outer pool/interface seal. Opaque dispatched work still
+    // suspends its context rather than inheriting fabricated ancestry.
+    let _frontend_scope = if sess.opts.jobs.frontend.is_some() {
+        sess.query_admission.as_ref().and_then(|observer| observer.enter_frontend_scope())
+    } else {
+        None
+    };
+
+    // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
+    sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();
+
+    let target_config = codegen_backend.target_config(&sess);
+
+    // Store all of the target features in the session.
+    // Needs to be done before `parse_cfg` because it checks this list.
+    sess.internal_target_features
+        .extend(target_config.internal_target_features.to_sorted_stable_ord());
+
+    sess.config = parse_cfg(&sess, config.crate_cfg);
+    let is_nightly_build = sess.is_nightly_build();
+    let is_crt_static = sess.crt_static(None);
+    util::add_configuration(
+        &mut sess.config,
+        &target_config,
+        &sess.early_sess.target,
+        is_nightly_build,
+        is_crt_static,
+    );
+
+    sess.check_config = parse_check_cfg(&sess, config.crate_check_cfg);
+
+    if let Some(psess_created) = config.psess_created {
+        psess_created(&mut sess.psess);
+    }
+
+    if let Some(track_state) = config.track_state {
+        track_state(&sess);
+    }
+
+    // Even though the session holds the lint store, we can't build the
+    // lint store until after the session exists. And we wait until now
+    // so that `register_lints` sees the fully initialized session.
+    let mut lint_store = rustc_lint::new_lint_store(sess.enable_internal_lints());
+    if let Some(register_lints) = config.register_lints.as_deref() {
+        register_lints(&sess, &mut lint_store);
+    }
+    sess.lint_store = Some(Arc::new(lint_store));
+
+    util::check_abi_required_features(&sess);
+
+    let compiler =
+        Compiler { sess, codegen_backend, override_queries: config.override_queries, current_gcx };
+
+    f(compiler)
+}
+
+/// Execute a compiler operation and complete its diagnostics without taking
+/// ownership of its storage. A scoped owner can therefore allocate the compiler
+/// before lending it to this execution lifecycle, and destroy it afterwards.
+/// Finishing diagnostics is invocation finalization, not a resident-cache hit or
+/// a promise that arbitrary compiler operations can be repeated safely.
+pub(crate) fn execute_compiler<R>(compiler: &Compiler, f: impl FnOnce(&Compiler) -> R) -> R {
+    // There are two paths out of `f`.
+    // - Normal exit.
+    // - Panic, e.g. triggered by `abort_if_errors` or a fatal error.
+    //
+    // We must run `finish_diagnostics` in both cases.
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(compiler)));
+
+    compiler.sess.finish_diagnostics();
+
+    // If error diagnostics have been emitted, we can't return an
+    // error directly, because the return type of this function
+    // is `R`, not `Result<R, E>`. But we need to communicate the
+    // errors' existence to the caller, otherwise the caller might
+    // mistakenly think that no errors occurred and return a zero
+    // exit code. So we abort (panic) instead, similar to if `f`
+    // had panicked.
+    if res.is_ok() {
+        compiler.sess.dcx().abort_if_errors();
+    }
+
+    // Also make sure to flush delayed bugs as if we panicked, the
+    // bugs would be flushed by the Drop impl of DiagCtxt while
+    // unwinding, which would result in an abort with
+    // "panic in a destructor during cleanup".
+    compiler.sess.dcx().flush_delayed();
+
+    match res {
+        Ok(res) => res,
+        // Resume unwinding if a panic happened.
+        Err(err) => std::panic::resume_unwind(err),
+    }
 }
 
 /// Prepare and register independent participant authorities during Session
