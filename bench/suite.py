@@ -150,10 +150,14 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-clipboard-path-lock-v1.patch":
+                "81106479f16b0649ddbad378a7388c78ff25d95d2464962eaa08f8b5e4ab9372",
             "bench/patches/jcode-scroll-render-fixture-state.patch":
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-tui/src/tui/app/helpers/clipboard_helper.rs":
+                "8a185f4bba814ba2050b2e9b4dccf1169160ca66725a9f1a96107b5e3102b7ae",
             "jcode/crates/jcode-tui/src/tui/app/tests/scroll_copy_03.rs":
                 "a50c9fb4c0675bf1b39d41a191c3834064d93991d21e6b455097d6c1ea207a66",
         },
@@ -182,6 +186,7 @@ SNAPSHOTS = {
             # writers, including aggregate HOME restore-before-unlock ordering.
             ("jcode", "bench/patches/jcode-hosted-tui-prerequisites.patch"),
             ("jcode", "bench/patches/jcode-scroll-render-fixture-state.patch"),
+            ("jcode", "bench/patches/jcode-clipboard-path-lock-v1.patch"),
         ],
     },
     "justrust": {

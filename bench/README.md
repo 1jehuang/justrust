@@ -243,6 +243,33 @@ participate in snapshot/cache/report fingerprints. `test_scroll_render_fixture.p
 proves the exact scope-only transform, preserves every assertion, and detects
 removal of any reader guard, not only the observed failing test.
 
+The versioned `jcode-clipboard-path-lock-v1.patch` adds exactly four acquisitions
+of the existing `crate::storage::lock_test_env` guard to the clipboard helper
+PATH readers (cat, false, missing binary, sleep). Their sibling ordering tests
+already hold that same guard while installing and restoring `StubPath`. Without
+reader cooperation, a successful cat spawn can race the temporary stub-only
+PATH and incorrectly return false. Assertions, test names/counts, timeout
+checks, production code, and test parallelism are unchanged. The sleep timing
+assertion begins after acquiring the guard, preserving its spawn-only scope.
+Both pristine source and patch SHA256 are pinned in `suite.py`, checked before
+snapshot reuse/extraction, and included in the shared snapshot fingerprint.
+Apply this fixture identically to baseline and candidate. Earlier failures are
+invalid comparisons, not evidence of a performance regression or a passed gate.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_clipboard_fixture
+python3 bench/test_clipboard_fixture.py --accept "$JCODE_SCRATCH_DIR/clipboard-lock-v1"
+```
+
+The disposable hosted diagnostic compiles the exact corrected pinned helper and
+all eight original tests, plus a deterministic lock-cooperation test. For each
+reader, the writer owns the shared mutex and installs an empty PATH, reproduces
+the original cat failure, observes the reader attempt that exact mutex, confirms
+it cannot finish, restores PATH before unlocking, and joins the successful
+reader. Only the disposable diagnostic adds lock instrumentation/visibility.
+Complete pinned TUI acceptance and a fresh full 40-point seed-1 before/after
+comparison remain separate required gates, not replaced by this diagnostic.
+
 The credited patches currently restore Desktop's visible reload camera position
 (`764e429`, retaining the original viewport assertion) and import Jcode's existing
 description-consent/schema repair (`2474a4f81`, without removing consent text or
