@@ -33,6 +33,7 @@ jobs:
     outputs:
       sha: ${{ steps.tag.outputs.sha }}
       tag: ${{ steps.tag.outputs.tag }}
+      policy_sha256: ${{ steps.policy.outputs.policy_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +54,23 @@ jobs:
           version=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$RUNNER_TEMP/release-Cargo.toml")
           [[ "$TAG" == "v$version" ]] || { echo "Tag $TAG does not match package version $version" >&2; exit 1; }
           printf 'sha=%s\ntag=%s\n' "$sha" "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Freeze service-selected release compiler once
+        id: policy
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git show "$SHA:src/toolchain_policy.rs" > "$RUNNER_TEMP/release-toolchain-policy.rs"
+          python3 ci/release-policy.py freeze --protocol-source "$RUNNER_TEMP/release-toolchain-policy.rs" --output "$RUNNER_TEMP/release-policy.json" >> "$GITHUB_OUTPUT"
+          cp ci/release-policy.py "$RUNNER_TEMP/release-policy.py"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-policy
+          path: |
+            ${{ runner.temp }}/release-policy.json
+            ${{ runner.temp }}/release-policy.py
 
   build:
     needs: preflight
@@ -84,19 +102,55 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.preflight.outputs.sha }}
+          # Client Cargo package excludes these separately built source trees.
+          # Do not mirror a vendored compiler just to build the client.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/toolchain/
+            !/.wrangler/
 
-      - name: Install Rust
-        if: ${{ !matrix.zig }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-policy
+          path: ${{ runner.temp }}/release-policy
+
+      - name: Apply immutable release compiler selection
+        shell: bash
+        env:
+          POLICY_SHA256: ${{ needs.preflight.outputs.policy_sha256 }}
         run: |
-          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
-          rustup default stable
+          set -euo pipefail
+          python "$RUNNER_TEMP/release-policy/release-policy.py" env \
+            --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
+            --sha256 "$POLICY_SHA256" --protocol-source src/toolchain_policy.rs --target "${{ matrix.target }}" --output "$RUNNER_TEMP/release.env"
+          cat "$RUNNER_TEMP/release.env" >> "$GITHUB_ENV"
+
+      # Owned bundles are published only for Linux x86_64 hosts today. No
+      # service-owned Darwin/MSVC implementation is claimed. The snapshot
+      # contains exact service-selected stock compatibility compilers there.
+      - name: Install pinned compatibility Rust
+        if: ${{ !matrix.zig }}
+        shell: bash
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "${{ matrix.target }}"
 
       - name: Build
         if: ${{ !matrix.zig }}
         shell: bash
         run: |
+          set -euo pipefail
+          export RUSTC
+          RUSTC=$(rustup which --toolchain "$RUSTUP_TOOLCHAIN" rustc)
           # shellcheck disable=SC2086
-          cargo build --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
+          cargo +"$RUSTUP_TOOLCHAIN" build --release --locked --target "${{ matrix.target }}" $DIST_FLAGS
+          mkdir -p dist
+          cargo +"$RUSTUP_TOOLCHAIN" --version > "dist/compiler-${{ matrix.target }}.txt"
+          "$RUSTC" -vV >> "dist/compiler-${{ matrix.target }}.txt"
+          printf 'compiler_path=%s\nmode=stock-compatibility\npolicy_sha256=%s\nsource_revision=%s\n' "$RUSTC" '${{ needs.preflight.outputs.policy_sha256 }}' '${{ needs.preflight.outputs.sha }}' >> "dist/compiler-${{ matrix.target }}.txt"
 
       - name: Require hosted Linux credentials
         if: ${{ matrix.zig }}
@@ -107,8 +161,8 @@ jobs:
       - name: Install hosted Linux prerequisites
         if: ${{ matrix.zig }}
         run: |
+          # Bootstrap compiler only. The release compiler is the frozen policy.
           rustup toolchain install 1.99.0 --profile minimal
-          rustup default 1.99.0
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
           git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
@@ -120,13 +174,29 @@ jobs:
         if: ${{ matrix.zig }}
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
-          JUSTRUST_TOOLCHAIN: 1.99.0
-          JUSTRUST_TOOLCHAIN_REQUIRED: "1"
           JUSTRUST_REMOTE_REQUIRED: "1"
+          POLICY_SHA256: ${{ needs.preflight.outputs.policy_sha256 }}
         run: |
+          set -euo pipefail
+          since=$(date +%s)
           justrust remote use hosted
+          # Owned bundles contain matching Rust sources, not foreign target std
+          # or target C startup objects. Build Rust libraries with the selected
+          # compiler and let pinned Zig own musl libc/startup, not upstream std.
+          build_std=()
+          build_command=build
+          if [[ "$JUSTRUST_TOOLCHAIN" == jr-* ]]; then
+            build_command=zigbuild
+            build_std=(-Zbuild-std --config 'target.${{ matrix.target }}.rustflags=["-Clink-self-contained=no"]')
+          fi
           # shellcheck disable=SC2086
-          justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust $DIST_FLAGS
+          justrust "$build_command" --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
+          mkdir -p dist
+          python3 "$RUNNER_TEMP/release-policy/release-policy.py" attest \
+            --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
+            --sha256 "$POLICY_SHA256" --protocol-source src/toolchain_policy.rs --target "${{ matrix.target }}" \
+            --source-sha '${{ needs.preflight.outputs.sha }}' \
+            --since "$since" --binary "target/${{ matrix.target }}/release/justrust" --output "dist/compiler-${{ matrix.target }}.json"
           version=$(cargo +1.99.0 metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "justrust") | .version')
           bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
 
@@ -154,6 +224,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.sha256
+            dist/compiler-*
 
   release:
     needs: [preflight, build]
@@ -161,6 +232,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: justrust-*
           path: dist
           merge-multiple: true
 
