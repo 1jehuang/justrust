@@ -34,6 +34,7 @@ class FakeGH:
         self.race_name = None
         self.race_mismatch = False
         self.release_missing = False
+        self.release_id = 42
 
     def run(self, command, capture_output):
         assert command[0] == "gh"
@@ -64,7 +65,7 @@ class FakeGH:
         elif args[:2] == ["release", "view"]:
             if self.release_missing:
                 return subprocess.CompletedProcess(command, 1, b"", b"release not found")
-            output = json.dumps({"databaseId": 42}).encode()
+            output = json.dumps({"databaseId": self.release_id}).encode()
         elif args[:2] == ["release", "upload"]:
             path = Path(args[3])
             name = path.name
@@ -159,6 +160,14 @@ class PublisherTests(unittest.TestCase):
         self.publish()
         self.assertTrue(any(c[1:3] == ["release", "view"] for c in self.fake.calls))
         self.assertFalse(any("/releases/tags/" in part for c in self.fake.calls for part in c))
+
+    def test_invalid_release_identity_fails_without_mutation(self):
+        for value in (None, True, 0, -1, "42", {}, []):
+            with self.subTest(value=value):
+                self.fake.release_id = value
+                self.assert_rejected("invalid release database id")
+                self.assertEqual(self.fake.uploads, [])
+                self.assertTrue(self.fake.draft)
 
     def test_public_release_append_preserves_other_platform(self):
         self.fake.draft = False
