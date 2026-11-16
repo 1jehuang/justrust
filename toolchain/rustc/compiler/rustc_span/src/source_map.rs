@@ -9,7 +9,7 @@
 //! within the `SourceMap`, which upon request can be converted to line and column
 //! information, source code snippets, etc.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, BorrowedBuf, Read};
 use std::{fs, path};
@@ -173,11 +173,14 @@ impl FileLoader for RealFileLoader {
 struct SourceMapFiles {
     source_files: monotonic::MonotonicVec<Arc<SourceFile>>,
     stable_id_to_source_file: UnhashMap<StableSourceFileId, Arc<SourceFile>>,
+    // Present only during a native resident guard. Indices always refer to the
+    // all-history vector, never to a compacted revision-local numbering.
+    active_source_files: Option<BTreeSet<usize>>,
 }
 
 impl std::fmt::Debug for SourceMapFiles {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let SourceMapFiles { source_files, stable_id_to_source_file: _ } = self;
+        let SourceMapFiles { source_files, .. } = self;
 
         f.debug_list()
             .entries(
@@ -327,6 +330,7 @@ impl Drop for ResidentSourceRevision<'_> {
     fn drop(&mut self) {
         let mut resident = self.source_map.resident_source.lock();
         resident.active = false;
+        self.source_map.files.borrow_mut().active_source_files = None;
     }
 }
 
@@ -380,6 +384,132 @@ mod revision_loader_tests {
             .unwrap()
             .contents
             .insert(std::env::current_dir().unwrap().join(name), text.to_string());
+    }
+
+    #[test]
+    fn native_active_view_excludes_deleted_and_unloaded_history_without_reindexing() {
+        let (sm, disk) = setup();
+        for name in ["changed.rs", "unchanged.rs", "deleted.rs", "unloaded.rs"] {
+            write(&disk, name, "old");
+        }
+        let old = {
+            let _revision = sm.begin_resident_source_revision(4, 64, 2).unwrap();
+            for name in ["changed.rs", "unchanged.rs", "deleted.rs", "unloaded.rs"] {
+                sm.load_file(Path::new(name)).unwrap();
+            }
+            sm.active_source_files().unwrap().unwrap()
+        };
+        assert_eq!(old.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1, 2, 3]);
+        assert!(sm.active_source_files().is_err());
+        disk.lock().unwrap().contents.remove(&std::env::current_dir().unwrap().join("deleted.rs"));
+        write(&disk, "changed.rs", "new");
+        let _revision = sm.begin_resident_source_revision(4, 64, 2).unwrap();
+        assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+        // Neither lookup mechanism makes historical source current.
+        sm.source_file_by_stable_id(old[2].1.stable_id).unwrap();
+        sm.lookup_source_file(old[3].1.start_pos);
+        assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+        let changed = sm.load_file(Path::new("changed.rs")).unwrap();
+        let unchanged = sm.load_file(Path::new("unchanged.rs")).unwrap();
+        assert!(Arc::ptr_eq(&unchanged, &old[1].1));
+        assert!(Arc::ptr_eq(&unchanged, &sm.load_file(Path::new("unchanged.rs")).unwrap()));
+        let active = sm.active_source_files().unwrap().unwrap();
+        assert_eq!(active.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [1, 4]);
+        assert!(Arc::ptr_eq(&active[0].1, &unchanged));
+        assert!(Arc::ptr_eq(&active[1].1, &changed));
+        assert_eq!(sm.files().len(), 5);
+        for (index, file) in &old {
+            assert!(Arc::ptr_eq(&sm.files()[*index], file));
+            assert!(Arc::ptr_eq(&sm.lookup_source_file(file.start_pos), file));
+            let span = Span::new(file.start_pos, file.end_position(), SyntaxContext::root(), None);
+            assert_eq!(sm.span_to_snippet(span).unwrap(), "old");
+        }
+        for (index, file) in &active {
+            assert!(Arc::ptr_eq(&sm.files()[*index], file));
+        }
+    }
+
+    #[test]
+    fn native_active_view_includes_new_generated_and_imported_registrations() {
+        let (sm, _) = setup();
+        let historical = sm.new_source_file(FileName::anon_source_code("history"), "old".into());
+        {
+            let _revision = sm.begin_resident_source_revision(0, 0, 2).unwrap();
+            let generated =
+                sm.new_source_file(FileName::anon_source_code("generated"), "gen".into());
+            let source = SourceFile::new(
+                FileName::anon_source_code("imported"),
+                "foreign".into(),
+                sm.hash_kind,
+                sm.checksum_hash_kind,
+            )
+            .unwrap();
+            let imported = sm.new_imported_source_file(
+                source.name,
+                source.src_hash,
+                source.checksum_hash,
+                source.stable_id,
+                source.normalized_source_len.to_u32(),
+                source.unnormalized_source_len,
+                CrateNum::ZERO,
+                FreezeLock::new(source.lines.read().clone()),
+                source.multibyte_chars,
+                source.normalized_pos,
+                0,
+            );
+            let active = sm.active_source_files().unwrap().unwrap();
+            assert_eq!(active.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [1, 2]);
+            assert!(Arc::ptr_eq(&active[0].1, &generated));
+            assert!(Arc::ptr_eq(&active[1].1, &imported));
+            // A snapshot is independent of later registrations.
+            sm.new_source_file_version(FileName::anon_source_code("later"), "later".into())
+                .unwrap();
+            assert_eq!(active.len(), 2);
+            assert_eq!(sm.active_source_files().unwrap().unwrap().len(), 3);
+        }
+        let _revision = sm.begin_resident_source_revision(0, 0, 2).unwrap();
+        assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+        assert!(Arc::ptr_eq(&sm.files()[0], &historical));
+        assert_eq!(sm.files().len(), 4);
+    }
+
+    #[test]
+    fn native_active_view_fails_closed_during_load_and_after_poison() {
+        let (sm, disk) = setup();
+        write(&disk, "present.rs", "x");
+        {
+            let _revision = sm.begin_resident_source_revision(2, 8, 2).unwrap();
+            sm.load_file(Path::new("present.rs")).unwrap();
+            // The dispatch temporarily removes state across FileLoader callbacks.
+            let state = sm.resident_source.lock().state.take();
+            assert!(sm.active_source_files().is_err());
+            sm.resident_source.lock().state = state;
+            assert_eq!(sm.active_source_files().unwrap().unwrap().len(), 1);
+            assert!(sm.load_file(Path::new("missing.rs")).is_err());
+            assert!(sm.active_source_files().is_err());
+        }
+        assert!(sm.active_source_files().is_err());
+        let _revision = sm.begin_resident_source_revision(2, 8, 2).unwrap();
+        assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+        sm.load_file(Path::new("present.rs")).unwrap();
+        assert_eq!(sm.active_source_files().unwrap().unwrap()[0].0, 0);
+    }
+
+    #[test]
+    fn native_active_view_is_disabled_for_fresh_and_standalone_loading() {
+        let (sm, disk) = setup();
+        assert!(sm.active_source_files().unwrap().is_none());
+        write(&disk, "ordinary.rs", "old");
+        let path = std::env::current_dir().unwrap().join("ordinary.rs");
+        let old = sm.load_file(&path).unwrap();
+        assert!(sm.active_source_files().unwrap().is_none());
+        let mut loader = sm.source_revision_loader(1, 8, 1).unwrap();
+        loader.begin_revision().unwrap().load_file(&path).unwrap();
+        assert!(sm.active_source_files().unwrap().is_none());
+        assert_eq!(sm.files().len(), 2);
+        assert!(Arc::ptr_eq(&sm.files()[0], &old));
+        assert!(sm.begin_resident_source_revision(1, 8, 0).is_err());
+        assert!(sm.active_source_files().is_err());
     }
 
     #[test]
@@ -726,6 +856,14 @@ impl SourceMap {
                     io::Error::other("resident source revision ended or was poisoned during load")
                 }));
             }
+            // This also marks an unchanged or already-frozen file, for which no
+            // registration occurred. Use exact arena identity, not stable IDs.
+            if let Ok(file) = &result {
+                let mut files = self.files.borrow_mut();
+                let index = files.source_files.partition_point(|f| f.start_pos < file.start_pos);
+                assert!(Arc::ptr_eq(&files.source_files[index], file));
+                files.active_source_files.as_mut().unwrap().insert(index);
+            }
             return result;
         }
         drop(resident);
@@ -815,6 +953,7 @@ impl SourceMap {
             return Err(io::Error::other("source revision budget exhausted"));
         }
         state.revision += 1;
+        self.files.borrow_mut().active_source_files = Some(BTreeSet::new());
         resident.active = true;
         resident.failed = false;
         Ok(ResidentSourceRevision { source_map: self })
@@ -852,6 +991,44 @@ impl SourceMap {
         ReadGuard::map(self.files.borrow(), |files| &files.source_files)
     }
 
+    /// Snapshot the source files observed so far in the active native resident
+    /// revision, paired with their original indices in [`Self::files`]. The
+    /// snapshot is ordered by those indices and does not renumber or remove
+    /// historical files or change any `BytePos` lookup.
+    ///
+    /// `Ok(None)` means native revision dispatch has never been enabled. Once
+    /// enabled, an inactive, poisoned, or currently loading revision returns an
+    /// error, never a historical fallback. A healthy new guard starts empty.
+    /// Successful native `load_file` calls mark even unchanged/frozen files;
+    /// files newly registered during the guard (including generated/imported
+    /// files) are also marked. Merely looking up an old file by stable ID or
+    /// byte position does not mark it. Deleted or otherwise unloaded files are
+    /// absent unless explicitly registered again during this guard.
+    ///
+    /// This is a point-in-time observation, not a completion or validity token:
+    /// later loads can add files or poison the revision. Do not reuse a snapshot
+    /// across guards or treat it as permission to reuse compiler/metadata state.
+    /// The standalone `SourceRevisionLoader` does not establish a native guard.
+    pub fn active_source_files(&self) -> io::Result<Option<Vec<(usize, Arc<SourceFile>)>>> {
+        // Keep the same resident -> files lock order as activation and loading.
+        let resident = self.resident_source.lock();
+        if !resident.enabled {
+            return Ok(None);
+        }
+        if !resident.active || resident.failed || resident.state.is_none() {
+            return Err(io::Error::other(
+                "resident source revision is inactive, loading or poisoned",
+            ));
+        }
+        let files = self.files.borrow();
+        let active = files.active_source_files.as_ref().ok_or_else(|| {
+            io::Error::other("resident source revision has no active source-file view")
+        })?;
+        Ok(Some(
+            active.iter().map(|&index| (index, Arc::clone(&files.source_files[index]))).collect(),
+        ))
+    }
+
     pub fn source_file_by_stable_id(
         &self,
         stable_id: StableSourceFileId,
@@ -875,8 +1052,12 @@ impl SourceMap {
         });
 
         let file = Arc::new(file);
+        let index = files.source_files.len();
         files.source_files.push(Arc::clone(&file));
         files.stable_id_to_source_file.insert(file_id, Arc::clone(&file));
+        if let Some(active) = &mut files.active_source_files {
+            active.insert(index);
+        }
 
         Ok(file)
     }
