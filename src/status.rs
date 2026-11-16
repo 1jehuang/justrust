@@ -442,6 +442,18 @@ fn recent_run_ids(runs: &Path) -> Vec<String> {
     ids
 }
 
+/// Partition away historical entries before sorting the small visible suffix.
+/// Both ID families have unique keys, so ties cannot change their ordering.
+fn newest_run_entries<T: Ord>(mut entries: Vec<T>) -> Vec<T> {
+    if entries.len() > SCAN_RUNS {
+        let discard = entries.len() - SCAN_RUNS;
+        entries.select_nth_unstable(discard);
+        entries.drain(..discard);
+    }
+    entries.sort_unstable_by(|a, b| b.cmp(a));
+    entries
+}
+
 fn scan_run_ids(runs: &Path) -> Vec<String> {
     let mut ids = Vec::new();
     let mut overrides = Vec::new();
@@ -461,18 +473,9 @@ fn scan_run_ids(runs: &Path) -> Vec<String> {
     // Normal IDs sort by date without a stat per historical run. Imports and
     // explicit ID overrides get their own bounded pool so neither family can
     // hide the other (for example old readme-* fixtures sorting above dates).
-    ids.sort();
-    overrides.sort();
-    ids.into_iter()
-        .rev()
-        .take(SCAN_RUNS)
-        .chain(
-            overrides
-                .into_iter()
-                .rev()
-                .take(SCAN_RUNS)
-                .map(|(_, id)| id),
-        )
+    newest_run_entries(ids)
+        .into_iter()
+        .chain(newest_run_entries(overrides).into_iter().map(|(_, id)| id))
         .collect()
 }
 
@@ -1616,6 +1619,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn newest_run_entries_matches_full_sort() {
+        for len in [0, 1, SCAN_RUNS - 1, SCAN_RUNS, SCAN_RUNS + 1, 1000, 53_000] {
+            let entries: Vec<_> = (0..len)
+                .map(|i| (i.wrapping_mul(48271) % 104729, format!("run-{i}")))
+                .collect();
+            let mut expected = entries.clone();
+            expected.sort();
+            expected.reverse();
+            expected.truncate(SCAN_RUNS);
+            assert_eq!(newest_run_entries(entries), expected, "length {len}");
+        }
+        assert_eq!(
+            newest_run_entries(vec!["same"; 100]),
+            vec!["same"; SCAN_RUNS]
+        );
+    }
+
+    #[test]
+    #[ignore = "focused directory-ID selection diagnostic"]
+    fn newest_run_entries_diagnostic() {
+        use std::hint::black_box;
+        let entries: Vec<_> = (0u64..53_000)
+            .map(|i| format!("20261116-{:09}-{i:06}", i.wrapping_mul(48271) % 104729))
+            .collect();
+        let mut expected = entries.clone();
+        expected.sort();
+        expected.reverse();
+        expected.truncate(SCAN_RUNS);
+        assert_eq!(newest_run_entries(entries.clone()), expected);
+        let mut full = Vec::new();
+        let mut bounded = Vec::new();
+        for _ in 0..21 {
+            // Cloning is intentionally outside each timed selection.
+            let mut old = entries.clone();
+            let new = entries.clone();
+            let start = std::time::Instant::now();
+            old.sort();
+            let old: Vec<_> = old.into_iter().rev().take(SCAN_RUNS).collect();
+            black_box(old);
+            full.push(start.elapsed().as_nanos());
+            let start = std::time::Instant::now();
+            black_box(newest_run_entries(new));
+            bounded.push(start.elapsed().as_nanos());
+        }
+        full.sort();
+        bounded.sort();
+        eprintln!(
+            "newest 64 of 53000 IDs: full-sort median={}ns, partition median={}ns (21 samples)",
+            full[10], bounded[10]
+        );
     }
 
     #[test]
