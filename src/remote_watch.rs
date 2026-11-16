@@ -17,6 +17,8 @@
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -33,6 +35,25 @@ use unwatched as sys;
 struct Watches {
     by_wd: HashMap<i32, PathBuf>,
     by_path: HashMap<PathBuf, i32>,
+}
+
+/// Only notifications are coalesced. Every event must still update the watch
+/// set, and each kernel read starts fresh so a later edit invalidates again.
+#[cfg(unix)]
+#[derive(Default)]
+struct ChangedBatch {
+    sent: HashSet<PathBuf>,
+}
+
+#[cfg(unix)]
+impl ChangedBatch {
+    fn send(&mut self, tx: &Sender<PathBuf>, dir: PathBuf) -> bool {
+        if self.sent.contains(&dir) {
+            return true;
+        }
+        self.sent.insert(dir.clone());
+        tx.send(dir).is_ok()
+    }
 }
 
 pub struct Watcher {
@@ -183,54 +204,133 @@ mod inotify {
             if n <= 0 {
                 return;
             }
-            let mut off = 0usize;
-            let hdr = std::mem::size_of::<libc::inotify_event>();
-            while off + hdr <= n as usize {
-                // SAFETY: the kernel wrote a whole event at `off`.
-                let ev: libc::inotify_event =
-                    unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off).cast()) };
-                let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
-                let name = std::ffi::OsStr::from_bytes(
-                    name_bytes.split(|b| *b == 0).next().unwrap_or_default(),
-                );
-                off += hdr + ev.len as usize;
-                if ev.mask & libc::IN_Q_OVERFLOW != 0 {
-                    // Lost events: every root gets rescanned.
-                    let all: Vec<PathBuf> = w.lock().unwrap().by_wd.values().cloned().collect();
-                    for d in all {
-                        let _ = tx.send(d);
-                    }
-                    continue;
-                }
-                if ev.mask & libc::IN_IGNORED != 0 {
-                    // The directory is gone (or unmounted): forget it, so a
-                    // directory re-created at the same path is watched again.
-                    let mut g = w.lock().unwrap();
-                    if let Some(p) = g.by_wd.remove(&ev.wd) {
-                        g.by_path.remove(&p);
-                    }
-                    continue;
-                }
-                let dir = w.lock().unwrap().by_wd.get(&ev.wd).cloned();
-                let Some(d) = dir else { continue };
-                if ev.mask & libc::IN_ISDIR != 0
-                    && ev.mask & libc::IN_MOVED_FROM != 0
-                    && !name.is_empty()
-                {
-                    remove_tree(fd, &w, &d.join(name));
-                }
-                if ev.mask & libc::IN_ISDIR != 0
-                    && ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
-                    && !name.is_empty()
-                    && !ignored(name)
-                {
-                    add_tree(fd, &w, &d.join(name));
-                }
-                // Our own editors' temp files still trigger a scan; cheap.
-                if tx.send(d).is_err() {
-                    return;
-                }
+            if !process_batch(fd, &w, &tx, &buf[..n as usize]) {
+                return;
             }
+        }
+    }
+
+    fn process_batch(fd: i32, w: &Mutex<Watches>, tx: &Sender<PathBuf>, buf: &[u8]) -> bool {
+        let mut changed = ChangedBatch::default();
+        let mut off = 0usize;
+        let hdr = std::mem::size_of::<libc::inotify_event>();
+        while off + hdr <= buf.len() {
+            // SAFETY: the kernel wrote a whole event at `off`.
+            let ev: libc::inotify_event =
+                unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off).cast()) };
+            let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
+            let name = std::ffi::OsStr::from_bytes(
+                name_bytes.split(|b| *b == 0).next().unwrap_or_default(),
+            );
+            off += hdr + ev.len as usize;
+            if ev.mask & libc::IN_Q_OVERFLOW != 0 {
+                // Lost events: every root gets rescanned.
+                let all: Vec<PathBuf> = w.lock().unwrap().by_wd.values().cloned().collect();
+                for d in all {
+                    if !changed.send(tx, d) {
+                        return false;
+                    }
+                }
+                continue;
+            }
+            if ev.mask & libc::IN_IGNORED != 0 {
+                // The directory is gone (or unmounted): forget it, so a
+                // directory re-created at the same path is watched again.
+                let mut g = w.lock().unwrap();
+                if let Some(p) = g.by_wd.remove(&ev.wd) {
+                    g.by_path.remove(&p);
+                }
+                continue;
+            }
+            let dir = w.lock().unwrap().by_wd.get(&ev.wd).cloned();
+            let Some(d) = dir else { continue };
+            if ev.mask & libc::IN_ISDIR != 0
+                && ev.mask & libc::IN_MOVED_FROM != 0
+                && !name.is_empty()
+            {
+                remove_tree(fd, w, &d.join(name));
+            }
+            if ev.mask & libc::IN_ISDIR != 0
+                && ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
+                && !name.is_empty()
+                && !ignored(name)
+            {
+                add_tree(fd, w, &d.join(name));
+            }
+            // Our own editors' temp files still trigger a scan; cheap.
+            if !changed.send(tx, d) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        fn event(buf: &mut Vec<u8>, wd: i32, mask: u32, name: &str) {
+            let len = if name.is_empty() { 0 } else { name.len() + 1 };
+            buf.extend_from_slice(&wd.to_ne_bytes());
+            buf.extend_from_slice(&mask.to_ne_bytes());
+            buf.extend_from_slice(&0u32.to_ne_bytes()); // cookie
+            buf.extend_from_slice(&(len as u32).to_ne_bytes());
+            if len != 0 {
+                buf.extend_from_slice(name.as_bytes());
+                buf.push(0);
+            }
+        }
+
+        #[test]
+        fn kernel_batch_coalesces_without_skipping_watch_updates() {
+            let root = std::env::temp_dir().join(format!("jr-watch-batch-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("new/child")).unwrap();
+            std::fs::create_dir_all(root.join("other")).unwrap();
+            std::fs::create_dir_all(root.join("target/ignored")).unwrap();
+            // SAFETY: init returns a fresh descriptor owned by this test.
+            let owned_fd = unsafe { OwnedFd::from_raw_fd(init().unwrap()) };
+            let fd = owned_fd.as_raw_fd();
+            let w = Mutex::new(Watches::default());
+            assert!(add(fd, &w, &root));
+            let wd = w.lock().unwrap().by_path[&root];
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut batch = Vec::new();
+            event(&mut batch, wd, libc::IN_CLOSE_WRITE, "file.rs");
+            event(&mut batch, wd, libc::IN_ISDIR | libc::IN_CREATE, "new");
+            event(&mut batch, wd, libc::IN_ISDIR | libc::IN_CREATE, "other");
+            event(&mut batch, wd, libc::IN_ISDIR | libc::IN_CREATE, "target");
+            event(&mut batch, wd, libc::IN_ISDIR | libc::IN_MOVED_FROM, "new");
+            assert!(process_batch(fd, &w, &tx, &batch));
+            assert_eq!(
+                rx.try_iter().collect::<Vec<_>>().as_slice(),
+                std::slice::from_ref(&root)
+            );
+            {
+                let g = w.lock().unwrap();
+                assert!(!g.by_path.contains_key(&root.join("new")));
+                assert!(!g.by_path.contains_key(&root.join("new/child")));
+                assert!(!g.by_path.contains_key(&root.join("target")));
+                assert!(g.by_path.contains_key(&root.join("other")));
+            }
+
+            let other_wd = w.lock().unwrap().by_path[&root.join("other")];
+            batch.clear();
+            event(&mut batch, wd, libc::IN_ATTRIB, "file.rs");
+            event(&mut batch, other_wd, libc::IN_CLOSE_WRITE, "nested.rs");
+            event(&mut batch, -1, libc::IN_Q_OVERFLOW, "");
+            event(&mut batch, -1, libc::IN_Q_OVERFLOW, "");
+            event(&mut batch, other_wd, libc::IN_IGNORED, "");
+            assert!(process_batch(fd, &w, &tx, &batch));
+            // A new read invalidates root again. Overflow preserves every
+            // watched path but does not repeat earlier notifications.
+            assert_eq!(
+                rx.try_iter().collect::<Vec<_>>(),
+                [root.clone(), root.join("other")]
+            );
+            assert!(!w.lock().unwrap().by_path.contains_key(&root.join("other")));
+            std::fs::remove_dir_all(&root).unwrap();
         }
     }
 }
@@ -331,6 +431,7 @@ mod kqueue {
                     })
                     .collect()
             };
+            let mut changed = ChangedBatch::default();
             for (wd, fflags, d) in batch {
                 if fflags & (libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE) != 0 {
                     // Gone or moved: forget it and everything below, so a
@@ -342,7 +443,7 @@ mod kqueue {
                         remove_tree(kq, &w, &d);
                     }
                     if let Some(p) = d.parent()
-                        && tx.send(p.to_path_buf()).is_err()
+                        && !changed.send(&tx, p.to_path_buf())
                     {
                         return;
                     }
@@ -351,7 +452,7 @@ mod kqueue {
                 if fflags & libc::NOTE_WRITE != 0 {
                     sync_children(kq, &w, &d);
                 }
-                if tx.send(d).is_err() {
+                if !changed.send(&tx, d) {
                     return;
                 }
             }
@@ -390,6 +491,50 @@ mod kqueue {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn changed_batch_sends_each_exact_path_once() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut changed = ChangedBatch::default();
+        for path in ["root", "root/a", "root", "root/a/b", "root/a"] {
+            assert!(changed.send(&tx, PathBuf::from(path)));
+        }
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            ["root", "root/a", "root/a/b"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn changed_batch_does_not_suppress_later_invalidations() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let mut changed = ChangedBatch::default();
+            assert!(changed.send(&tx, PathBuf::from("root")));
+            assert!(changed.send(&tx, PathBuf::from("root")));
+        }
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            ["root", "root"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn changed_batch_overflow_keeps_all_watched_paths() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut changed = ChangedBatch::default();
+        assert!(changed.send(&tx, PathBuf::from("root/a")));
+        // Overflow resends the whole watch set, including paths already seen.
+        for path in ["root", "root/a", "root/b", "root"] {
+            assert!(changed.send(&tx, PathBuf::from(path)));
+        }
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            ["root/a", "root", "root/b"].map(PathBuf::from)
+        );
+        drop(rx);
+        assert!(!changed.send(&tx, PathBuf::from("root/c")));
+    }
 
     #[test]
     fn new_directories_are_watched() {
