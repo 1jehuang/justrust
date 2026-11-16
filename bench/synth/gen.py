@@ -274,6 +274,8 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
         r = subprocess.run([STOCK_CARGO, "check", "-p", p.name, *targets, "--message-format=json"],
                            cwd=home.cwd, env=env, capture_output=True, text=True)
         live, broken, bad = set(), set(), set()
+        unrelated = []
+        edited = {f.resolve() for f in by_file}
         for line in r.stdout.splitlines():
             try:
                 m = json.loads(line)
@@ -282,20 +284,37 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
             if m.get("reason") != "compiler-message" or m["message"]["level"] not in ("error", "error: internal compiler error"):
                 continue
             rendered = m["message"].get("rendered") or ""
+            if m["message"]["level"] == "error: internal compiler error":
+                unrelated.append(rendered or m["message"].get("message", "internal compiler error"))
+                continue
             ids = {int(x) for x in re.findall(r"jrprobe_(\d+)", rendered)}
             for sp in m["message"].get("spans", []):
                 for t in sp.get("text", []):
                     ids |= {int(x) for x in re.findall(r"jrprobe_(\d+)", t.get("text", ""))}
+            ids &= probes.keys()
             if ids:
                 if (m["message"].get("code") or {}).get("code") == "E0308":
                     live |= ids
                 else:
                     broken |= ids
-            elif m["message"].get("code") or "aborting" not in rendered:
-                for sp in m["message"].get("spans", []):
-                    bad.add((home.cwd / sp["file_name"]).resolve())
-        if r.returncode != 0 and not live and not bad and not broken and "error: could not compile" not in r.stderr:
-            sys.exit(f"synth: probe of {p.name} failed before compiling:\n{r.stderr[-2000:]}")
+            else:
+                message = m["message"]
+                if message.get("message", "").startswith("aborting due to"):
+                    continue
+                files = {(home.cwd / sp["file_name"]).resolve()
+                         for sp in message.get("spans", [])}
+                # An inserted statement can break parsing without appearing in
+                # the diagnostic. Only these local, uncoded errors are safe to
+                # retry. Dependency/type/environment errors are not dead code.
+                if (files and files <= edited and not message.get("code")
+                        and message["level"] == "error"):
+                    bad |= files
+                else:
+                    unrelated.append(rendered or message.get("message", str(message)))
+        if unrelated or (r.returncode != 0 and not live and not bad and not broken):
+            detail = "\n".join(unrelated)
+            sys.exit(f"synth: probe of {p.name} failed: prerequisite or unrelated errors; "
+                     f"cannot determine live locations (exit {r.returncode}):\n{detail}\n{r.stderr}")
         return live, broken, bad
     finally:
         for f, s in saved.items():
@@ -313,7 +332,10 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
     p = ws.pkgs[name]
     cache = WORK / "probe" / suite.snapshot_dir(ws.snap).name / f"{name}.json"
     if cache.exists() and not force:
-        return json.loads(cache.read_text())
+        cached = json.loads(cache.read_text())
+        if any(v.get("body") or v.get("test") for v in cached.values()):
+            return cached
+        print(f"synth: ignoring empty probe cache for {name}: {cache}", file=sys.stderr)
     _locked()  # candidate lines must come from unedited sources
     rng = random.Random(name)
     cands = [(f, line) for f in rs_files(p, ws) for line in candidates(f)]
@@ -333,7 +355,7 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
             # did not insert), then retry: the rest may have been hidden.
             probes = {i: c for i, c in probes.items() if i not in broken and c[0].resolve() not in bad}
         else:
-            live = set()
+            sys.exit(f"synth: probe of {name} did not converge after 6 attempts; no locations cached")
         found[tests] = {probes[i] for i in live if i in probes}
     for (f, line) in found[False] | found[True]:
         rel = str(f.relative_to(ws.root))
@@ -342,6 +364,9 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
     for v in result.values():
         v["body"].sort()
         v["test"].sort()
+    if not result:
+        sys.exit(f"synth: probe of {name} found no live locations among {len(cands)} candidates; "
+                 "check probe compiler, targets, and diagnostics; no locations cached")
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(result, indent=0) + "\n")
     nb = sum(len(v["body"]) for v in result.values())
