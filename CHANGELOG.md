@@ -11,6 +11,8 @@ All notable changes. Versions follow [semver](https://semver.org); while in
   survive the daemon-to-client disconnect path. Operator run summaries include
   those bounded labels. No source, raw error text, paths, or compiler output is
   uploaded, and existing telemetry opt-out remains authoritative.
+- Fixed speculative `-pre` run IDs being silently rejected by the client
+  telemetry validator, dropping their lifecycle heartbeats and summaries.
 
 ## 0.1.0-alpha.28
 

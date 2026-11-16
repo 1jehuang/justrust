@@ -588,6 +588,9 @@ fn valid_toolchain_pin(pin: &str) -> bool {
 }
 
 fn valid_run_id(id: &str) -> bool {
+    // The speculative build daemon appends only this fixed suffix. Accept it
+    // without opening telemetry IDs to arbitrary project names or paths.
+    let id = id.strip_suffix("-pre").unwrap_or(id);
     let parts: Vec<_> = id.split('-').collect();
     parts.len() == 3
         && parts[0].len() == 8
@@ -1545,6 +1548,26 @@ mod tests {
     }
 
     #[test]
+    fn speculative_run_lifecycle_is_not_silently_dropped() {
+        let id = "20261116-185118312-1459018-pre";
+        for (state, exit) in [
+            ("queued", None),
+            ("running", None),
+            ("done", Some(0)),
+            ("abandoned", None),
+        ] {
+            let data = lifecycle_data(id, "test", "remote", state, exit, false).unwrap();
+            assert_eq!(data["run_id"], id);
+            assert_eq!(data["state"], state);
+        }
+        let summary = crate::summary::Summary {
+            id: id.into(),
+            ..Default::default()
+        };
+        assert_eq!(run_data(&summary, true)["run_id"], id);
+    }
+
+    #[test]
     fn lifecycle_never_delivers_in_anonymous_or_rotated_scope() {
         assert!(lifecycle_scope_matches(Some("old"), Some("old")));
         assert!(!lifecycle_scope_matches(Some("old"), Some("new")));
@@ -1659,6 +1682,8 @@ mod tests {
         ] {
             assert_eq!(d[key], value, "{key}");
         }
+        assert!(valid_run_id("20261116-185118312-1459018-pre"));
+        assert!(!valid_run_id("20261116-185118312-1459018-pre-pre"));
         assert!(!valid_run_id("20261014-104956974-private"));
     }
 
