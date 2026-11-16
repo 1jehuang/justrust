@@ -145,11 +145,9 @@ impl<'tcx> LiveQueryState<'tcx> {
                 return None;
             }
             let budget = state.identity_budget?;
-            let (old, next) = state.values.revision_identities()?;
-            let authorization = old.authorize_reuse(next, budget).ok()?;
             state
                 .values
-                .typeck(ResidentKey { dep_node, value_fingerprint: fingerprint }, &authorization)
+                .typeck_checked(ResidentKey { dep_node, value_fingerprint: fingerprint }, budget)
         })();
         if value.is_some() {
             state.stats.typeck_hits += 1;
@@ -170,11 +168,9 @@ impl<'tcx> LiveQueryState<'tcx> {
                 return None;
             }
             let budget = state.identity_budget?;
-            let (old, next) = state.values.revision_identities()?;
-            let authorization = old.authorize_reuse(next, budget).ok()?;
             state
                 .values
-                .mir(ResidentKey { dep_node, value_fingerprint: fingerprint }, &authorization)
+                .mir_checked(ResidentKey { dep_node, value_fingerprint: fingerprint }, budget)
         })();
         if value.is_some() {
             state.stats.mir_hits += 1;

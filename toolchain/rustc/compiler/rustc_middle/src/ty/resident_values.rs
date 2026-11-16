@@ -11,7 +11,9 @@
 use rustc_data_structures::fingerprint::Fingerprint;
 
 use super::TypeckResults;
-use super::resident_identity::{IdentityBudget, ResetReason, ReuseAuthorization, RevisionIdentity};
+use super::resident_identity::{
+    Compatibility, IdentityBudget, ResetReason, ReuseAuthorization, RevisionIdentity,
+};
 use crate::dep_graph::DepNode;
 use crate::mir;
 
@@ -71,6 +73,21 @@ pub struct ResidentValues<'domain, 'identity> {
     domain: &'identity ResidentDomain,
     generations: Generations<RevisionIdentity, (ResidentKey, ValueKind), TypedValue<'domain>>,
     pending_identity_budget: Option<IdentityBudget>,
+    checked_identity: Option<CheckedIdentity>,
+    #[cfg(test)]
+    identity_checks: usize,
+}
+
+/// Private facts computed from the actual stored snapshots, never supplied by a caller.
+/// Numbers alone are insufficient when analysis replaces the pending identity, so every
+/// identity replacement also clears this memo. No references or extended lifetimes live here.
+#[derive(Clone, Copy)]
+struct CheckedIdentity {
+    published: u64,
+    pending: u64,
+    budget: IdentityBudget,
+    compatibility: Compatibility,
+    leaf: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,7 +98,14 @@ enum ValueKind {
 
 impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     pub fn new(domain: &'identity ResidentDomain, budget: RetentionBudget) -> Self {
-        Self { domain, generations: Generations::new(budget), pending_identity_budget: None }
+        Self {
+            domain,
+            generations: Generations::new(budget),
+            pending_identity_budget: None,
+            checked_identity: None,
+            #[cfg(test)]
+            identity_checks: 0,
+        }
     }
 
     pub fn begin_revision(
@@ -95,6 +119,7 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
         }
         identity.check_budget(identity_budget).map_err(RetentionError::IdentityBudget)?;
         self.generations.begin(generation, identity)?;
+        self.checked_identity = None;
         self.pending_identity_budget = Some(identity_budget);
         Ok(())
     }
@@ -117,6 +142,7 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
         }
         identity.check_budget(identity_budget).map_err(RetentionError::IdentityBudget)?;
         self.generations.pending.as_mut().unwrap().identity = identity;
+        self.checked_identity = None;
         Ok(())
     }
 
@@ -126,11 +152,13 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
         value: &'domain TypeckResults<'domain>,
         estimated_bytes: usize,
     ) -> Result<(), RetentionError> {
-        self.generations.insert(
+        let result = self.generations.insert(
             (key, ValueKind::Typeck),
             TypedValue::Typeck(value),
             estimated_bytes,
-        )
+        );
+        self.invalidate_if_evicted();
+        result
     }
 
     pub fn retain_mir(
@@ -139,7 +167,10 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
         value: &'domain mir::Body<'domain>,
         estimated_bytes: usize,
     ) -> Result<(), RetentionError> {
-        self.generations.insert((key, ValueKind::Mir), TypedValue::Mir(value), estimated_bytes)
+        let result =
+            self.generations.insert((key, ValueKind::Mir), TypedValue::Mir(value), estimated_bytes);
+        self.invalidate_if_evicted();
+        result
     }
 
     /// Borrow the exact published/current snapshots for the caller's explicit identity
@@ -179,13 +210,14 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     /// `mir_leaf_with_proof` before returning it to a query. This path does not
     /// change or issue the ordinary same-source authorization token.
     pub(crate) fn mir_leaf_candidate(
-        &self,
+        &mut self,
         key: ResidentKey,
         budget: IdentityBudget,
     ) -> Option<&'domain mir::Body<'domain>> {
-        let value = self
-            .generations
-            .get(&(key, ValueKind::Mir), |old, next| leaf_identity_compatible(old, next, budget))?;
+        if !self.checked_identity(budget)?.leaf {
+            return None;
+        }
+        let value = self.generations.get(&(key, ValueKind::Mir), |_, _| true)?;
         match value {
             TypedValue::Mir(body) => Some(*body),
             TypedValue::Typeck(_) => None,
@@ -196,7 +228,7 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     /// after inspecting its native closure. The opaque proof is bound to this
     /// body allocation and must still describe the current source-map view.
     pub(crate) fn mir_leaf_with_proof(
-        &self,
+        &mut self,
         key: ResidentKey,
         budget: IdentityBudget,
         proof: &super::resident_mir_leaf::LeafProof<'_, 'domain>,
@@ -204,6 +236,75 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     ) -> Option<&'domain mir::Body<'domain>> {
         let body = self.mir_leaf_candidate(key, budget)?;
         (proof.is_for(body) && proof.is_current_for(source_map)).then_some(body)
+    }
+
+    /// Owner-local fast path. This cannot accept caller-created compatibility facts.
+    pub(crate) fn typeck_checked(
+        &mut self,
+        key: ResidentKey,
+        budget: IdentityBudget,
+    ) -> Option<&'domain TypeckResults<'domain>> {
+        match self.lookup_checked((key, ValueKind::Typeck), budget)? {
+            TypedValue::Typeck(value) => Some(value),
+            TypedValue::Mir(_) => None,
+        }
+    }
+
+    pub(crate) fn mir_checked(
+        &mut self,
+        key: ResidentKey,
+        budget: IdentityBudget,
+    ) -> Option<&'domain mir::Body<'domain>> {
+        match self.lookup_checked((key, ValueKind::Mir), budget)? {
+            TypedValue::Mir(value) => Some(value),
+            TypedValue::Typeck(_) => None,
+        }
+    }
+
+    fn lookup_checked(
+        &mut self,
+        key: (ResidentKey, ValueKind),
+        budget: IdentityBudget,
+    ) -> Option<TypedValue<'domain>> {
+        if self.checked_identity(budget)?.compatibility != Compatibility::Reusable {
+            return None;
+        }
+        self.generations.get(&key, |_, _| true).copied()
+    }
+
+    fn checked_identity(&mut self, budget: IdentityBudget) -> Option<CheckedIdentity> {
+        let old = self.generations.published.as_ref()?;
+        let next = self.generations.pending.as_ref()?;
+        if old.number >= next.number || self.pending_identity_budget != Some(budget) {
+            return None;
+        }
+        if let Some(checked) = self.checked_identity
+            && checked.published == old.number
+            && checked.pending == next.number
+            && checked.budget == budget
+        {
+            return Some(checked);
+        }
+        #[cfg(test)]
+        {
+            self.identity_checks += 1;
+        }
+        let compatibility = old.identity.compatibility(&next.identity, budget);
+        let checked = CheckedIdentity {
+            published: old.number,
+            pending: next.number,
+            budget,
+            compatibility,
+            leaf: leaf_compatible_after_check(&old.identity, &next.identity, compatibility),
+        };
+        self.checked_identity = Some(checked);
+        Some(checked)
+    }
+
+    fn invalidate_if_evicted(&mut self) {
+        if self.generations.published.is_none() {
+            self.checked_identity = None;
+        }
     }
 
     fn lookup(
@@ -217,12 +318,14 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
     /// Call only after the complete revision has succeeded, including diagnostics.
     pub fn publish_success(&mut self) -> Result<(), RetentionError> {
         self.generations.publish()?;
+        self.checked_identity = None;
         self.pending_identity_budget = None;
         Ok(())
     }
 
     pub fn abort_revision(&mut self) {
         self.generations.pending = None;
+        self.checked_identity = None;
         self.pending_identity_budget = None;
     }
 
@@ -236,16 +339,23 @@ impl<'domain, 'identity> ResidentValues<'domain, 'identity> {
 /// Complete numeric mappings must agree, and body/semantic inputs other than the
 /// active source snapshot must be byte-identical. A source difference alone is
 /// not authorization: the exact selected native body still needs `LeafProof`.
+#[cfg(test)]
 fn leaf_identity_compatible(
     old: &RevisionIdentity,
     next: &RevisionIdentity,
     budget: IdentityBudget,
 ) -> bool {
-    use super::resident_identity::{Compatibility, RevisionGate};
-    matches!(
-        old.compatibility(next, budget),
-        Compatibility::IdentityOnly(RevisionGate::SourceChanged)
-    ) && old.namespace == b"justrust-local-same-source-v1"
+    leaf_compatible_after_check(old, next, old.compatibility(next, budget))
+}
+
+fn leaf_compatible_after_check(
+    old: &RevisionIdentity,
+    next: &RevisionIdentity,
+    compatibility: Compatibility,
+) -> bool {
+    use super::resident_identity::RevisionGate;
+    matches!(compatibility, Compatibility::IdentityOnly(RevisionGate::SourceChanged))
+        && old.namespace == b"justrust-local-same-source-v1"
         && old.crates.len() == 1
         && old.crates[0].crate_index == 0
         && old.definitions.iter().all(|definition| definition.crate_index == 0)
@@ -344,6 +454,146 @@ mod tests {
 
     fn cache(entries: usize, bytes: usize) -> Generations<&'static str, u32, &'static str> {
         Generations::new(RetentionBudget { max_entries: entries, max_estimated_bytes: bytes })
+    }
+
+    fn memo_identity() -> RevisionIdentity {
+        use super::super::resident_identity::{CrateIdentity, DefinitionIdentity};
+        RevisionIdentity {
+            namespace: b"justrust-local-same-source-v1".to_vec(),
+            options: b"options".to_vec(),
+            crates: vec![CrateIdentity { stable: b"local".to_vec(), crate_index: 0 }],
+            definitions: vec![DefinitionIdentity {
+                stable: b"root".to_vec(),
+                crate_index: 0,
+                def_index: 0,
+                owner_index: Some(0),
+            }],
+            source: b"source".to_vec(),
+            body_revision: b"body".to_vec(),
+        }
+    }
+
+    const MEMO_BUDGET: IdentityBudget =
+        IdentityBudget { max_crates: 2, max_definitions: 8, max_identity_bytes: 4096 };
+
+    #[test]
+    fn memo_checks_once_and_rechecks_replaced_identity_in_the_same_generation() {
+        use super::{Compatibility, ResidentDomain, ResidentValues};
+        let identity = memo_identity();
+        let domain = ResidentDomain::new(identity.namespace.clone());
+        let mut values = ResidentValues::new(
+            &domain,
+            RetentionBudget { max_entries: 8, max_estimated_bytes: 4096 },
+        );
+        assert!(values.checked_identity(MEMO_BUDGET).is_none());
+        values.begin_revision(1, identity.clone(), MEMO_BUDGET).unwrap();
+        assert!(values.checked_identity(MEMO_BUDGET).is_none());
+        values.publish_success().unwrap();
+        values.begin_revision(2, identity.clone(), MEMO_BUDGET).unwrap();
+        for _ in 0..128 {
+            let checked = values.checked_identity(MEMO_BUDGET).unwrap();
+            assert_eq!(checked.compatibility, Compatibility::Reusable);
+            assert!(!checked.leaf);
+            assert_eq!((checked.published, checked.pending), (1, 2));
+        }
+        assert_eq!(values.identity_checks, 1);
+        let wrong_budget = IdentityBudget { max_identity_bytes: 1, ..MEMO_BUDGET };
+        assert!(values.checked_identity(wrong_budget).is_none());
+        assert_eq!(values.identity_checks, 1);
+
+        let mut changed = identity.clone();
+        changed.source.push(0);
+        values.finish_pending_identity(changed.clone(), MEMO_BUDGET).unwrap();
+        assert!(values.checked_identity.is_none());
+        for _ in 0..128 {
+            let checked = values.checked_identity(MEMO_BUDGET).unwrap();
+            assert!(checked.leaf);
+            assert_ne!(checked.compatibility, Compatibility::Reusable);
+        }
+        assert_eq!(values.identity_checks, 2);
+        changed.body_revision.push(0);
+        values.finish_pending_identity(changed, MEMO_BUDGET).unwrap();
+        assert!(!values.checked_identity(MEMO_BUDGET).unwrap().leaf);
+        assert_eq!(values.identity_checks, 3);
+        values.finish_pending_identity(identity.clone(), MEMO_BUDGET).unwrap();
+        assert_eq!(
+            values.checked_identity(MEMO_BUDGET).unwrap().compatibility,
+            Compatibility::Reusable
+        );
+        values.abort_revision();
+        assert!(values.checked_identity.is_none());
+        assert!(values.checked_identity(MEMO_BUDGET).is_none());
+        values.begin_revision(3, identity, MEMO_BUDGET).unwrap();
+        assert!(values.checked_identity.is_none());
+        assert_eq!(values.checked_identity(MEMO_BUDGET).unwrap().pending, 3);
+        values.publish_success().unwrap();
+        assert!(values.checked_identity.is_none());
+        assert!(values.checked_identity(MEMO_BUDGET).is_none());
+    }
+
+    #[test]
+    fn memo_caches_rejection_and_never_accepts_equal_malformed_snapshots() {
+        use super::{Compatibility, ResidentDomain, ResidentValues};
+        for mutation in 0..5 {
+            let mut identity = memo_identity();
+            match mutation {
+                0 => identity.crates.push(identity.crates[0].clone()),
+                1 => identity.definitions.push(identity.definitions[0].clone()),
+                2 => identity.definitions[0].crate_index = 9,
+                _ => {}
+            }
+            let domain = ResidentDomain::new(identity.namespace.clone());
+            let mut values = ResidentValues::new(
+                &domain,
+                RetentionBudget { max_entries: 8, max_estimated_bytes: 4096 },
+            );
+            values.begin_revision(1, identity.clone(), MEMO_BUDGET).unwrap();
+            values.publish_success().unwrap();
+            let mut next = identity;
+            match mutation {
+                3 => next.options.push(0),
+                4 => next.definitions[0].def_index += 1,
+                _ => {}
+            }
+            next.source.push(0);
+            values.begin_revision(2, next, MEMO_BUDGET).unwrap();
+            for _ in 0..128 {
+                let checked = values.checked_identity(MEMO_BUDGET).unwrap();
+                assert!(matches!(checked.compatibility, Compatibility::Reset(_)));
+                assert!(!checked.leaf);
+            }
+            assert_eq!(values.identity_checks, 1);
+        }
+    }
+
+    #[test]
+    fn memo_invalidation_after_publication_eviction_prevents_all_lookup_paths() {
+        use super::{ResidentDomain, ResidentKey, ResidentValues, ValueKind};
+        use crate::dep_graph::{DepKind, DepNode};
+        let identity = memo_identity();
+        let domain = ResidentDomain::new(identity.namespace.clone());
+        let mut values = ResidentValues::new(
+            &domain,
+            RetentionBudget { max_entries: 1, max_estimated_bytes: 4096 },
+        );
+        // The generic pressure test below covers actual insert-driven eviction.
+        // Here exercise the post-eviction memo invalidator without fake typed values.
+        values.begin_revision(1, identity.clone(), MEMO_BUDGET).unwrap();
+        values.publish_success().unwrap();
+        values.begin_revision(2, identity, MEMO_BUDGET).unwrap();
+        assert!(values.checked_identity(MEMO_BUDGET).is_some());
+        let key = ResidentKey {
+            dep_node: DepNode {
+                kind: DepKind::typeck_root,
+                key_fingerprint: super::Fingerprint::new(1, 2).into(),
+            },
+            value_fingerprint: super::Fingerprint::new(3, 4),
+        };
+        values.generations.published = None;
+        values.invalidate_if_evicted();
+        assert!(values.checked_identity.is_none());
+        assert!(values.lookup_checked((key, ValueKind::Typeck), MEMO_BUDGET).is_none());
+        assert!(values.mir_leaf_candidate(key, MEMO_BUDGET).is_none());
     }
 
     #[test]
@@ -536,6 +786,21 @@ mod tests {
                                 changed.source.push(b' ');
                                 assert!(old.authorize_reuse(&changed, identity_budget).is_err());
                             }
+                            for _ in 0..128 {
+                                assert!(std::ptr::eq(
+                                    cache.typeck_checked(key, identity_budget).unwrap(),
+                                    actual,
+                                ));
+                                assert!(cache.mir_checked(key, identity_budget).is_none());
+                            }
+                            assert_eq!(cache.identity_checks, 1);
+                            let (old, next) = cache.revision_identities().unwrap();
+                            let external_old = old.clone();
+                            let external_next = next.clone();
+                            let external_token = external_old
+                                .authorize_reuse(&external_next, identity_budget)
+                                .unwrap();
+                            assert!(cache.typeck(key, &external_token).is_none());
                             cache.abort_revision();
                             let mut changed =
                                 cache.generations.published.as_ref().unwrap().identity.clone();
@@ -543,6 +808,15 @@ mod tests {
                             cache.begin_revision(3, changed, identity_budget).unwrap();
                             let (old, next) = cache.revision_identities().unwrap();
                             assert!(old.authorize_reuse(next, identity_budget).is_err());
+                            assert!(cache.typeck_checked(key, identity_budget).is_none());
+                            assert!(cache.checked_identity.is_some());
+                            cache.generations.budget.max_entries = 1;
+                            cache
+                                .retain_typeck(key, actual, std::mem::size_of_val(actual))
+                                .unwrap();
+                            assert!(cache.generations.published.is_none());
+                            assert!(cache.checked_identity.is_none());
+                            assert!(cache.typeck_checked(key, identity_budget).is_none());
                         });
                     });
                 })
