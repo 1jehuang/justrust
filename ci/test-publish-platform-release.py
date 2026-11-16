@@ -22,6 +22,7 @@ class FakeGH:
         self.args = args
         self.assets = {}
         self.draft = True
+        self.latest = "v0.1.0-alpha.29"
         self.immutable = False
         self.sha = args.sha
         self.calls = []
@@ -74,7 +75,12 @@ class FakeGH:
                 self.sha = "b" * 40
             output = b""
         elif args[:2] == ["release", "edit"]:
-            assert args == ["release", "edit", self.args.tag, "--draft=false", "--repo", self.args.repo]
+            base = ["release", "edit", self.args.tag, "--draft=false"]
+            assert args in (base + ["--repo", self.args.repo],
+                            base + ["--latest=false", "--repo", self.args.repo])
+            # GitHub defaults a newly published draft to make_latest=true.
+            if "--latest=false" not in args:
+                self.latest = self.args.tag
             self.draft = False
             output = b""
         else:
@@ -129,6 +135,21 @@ class PublisherTests(unittest.TestCase):
                         self.assertFalse(self.fake.draft)
                         self.publish()
                         self.assertEqual(self.fake.uploads, self.order)
+
+    def test_partial_draft_publication_preserves_global_latest(self):
+        # Neither an older draft finishing late nor a newer partial release may
+        # change latest/download until the all-platform summary promotes it.
+        for tag in ("v0.1.0-alpha.28", "v0.1.0-alpha.30"):
+            with self.subTest(tag=tag):
+                self.args.tag = tag
+                self.fake = FakeGH(self.args)
+                with patch.object(publisher.subprocess, "run", self.fake.run):
+                    self.publish()
+                self.assertFalse(self.fake.draft)
+                self.assertEqual(self.fake.latest, "v0.1.0-alpha.29")
+                edits = [c for c in self.fake.calls if c[1:3] == ["release", "edit"]]
+                self.assertEqual(len(edits), 1)
+                self.assertIn("--latest=false", edits[0])
 
     def test_public_release_append_preserves_other_platform(self):
         self.fake.draft = False

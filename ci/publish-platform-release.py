@@ -165,7 +165,10 @@ def publish(args):
         raise PublishError("platform asset set incomplete")
     if data["draft"]:
         check_tag(args)
-        gh("release", "edit", args.tag, "--draft=false", "--repo", args.repo)
+        # Partial releases must not become global Latest: legacy installers use
+        # releases/latest/download and need every target. The all-platform
+        # summary owns promotion only after verifying the complete release.
+        gh("release", "edit", args.tag, "--draft=false", "--latest=false", "--repo", args.repo)
     check_tag(args)
     if release(args)["draft"]:
         raise PublishError("release remains draft after publication")
