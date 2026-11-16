@@ -66,19 +66,92 @@ def observable(record):
     return {key: record[key] for key in ('status', 'stdout_b64', 'stderr_b64')}
 
 
+def artifact_identity(path):
+    """Hash stable file bytes, failing closed if a file changes while read."""
+    path = Path(path)
+    before = path.stat()
+    sha256 = digest(path)
+    after = path.stat()
+    fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if any(getattr(before, key) != getattr(after, key) for key in fields):
+        raise AssertionError('Toolchain artifact changed while hashing: ' + str(path))
+    return dict(path=str(path.resolve(strict=True)), bytes=after.st_size, sha256=sha256)
+
+
+def sysroot_identity(sysroot, target_libdir):
+    """Inventory all installed artifact files, not linked compiler source trees.
+
+    Directory symlinks are recorded but not traversed. The installed source links
+    point at the entire checkout and are not native inputs for this fixture.
+    File symlinks include both their literal link target and resolved byte hash.
+    This is artifact identity, not proof of loaded mappings or system C tools.
+    """
+    sysroot = Path(sysroot).resolve(strict=True)
+    target_libdir = Path(target_libdir).resolve(strict=True)
+    if not target_libdir.is_relative_to(sysroot):
+        raise AssertionError('Target library directory is outside the compiler sysroot')
+    files, directory_links = [], []
+
+    def fail_walk(error):
+        raise error
+
+    for parent, directories, names in os.walk(sysroot, followlinks=False, onerror=fail_walk):
+        for name in sorted(directories):
+            path = Path(parent) / name
+            if path.is_symlink():
+                directory_links.append(dict(relative_path=str(path.relative_to(sysroot)),
+                                            target=os.readlink(path)))
+                # Only compiler-source symlinks may escape file-byte inventory.
+                if path.relative_to(sysroot).as_posix() not in (
+                        'lib/rustlib/src/rust', 'lib/rustlib/rustc-src/rust'):
+                    raise AssertionError('Unhashed sysroot directory symlink: ' + str(path))
+        for name in sorted(names):
+            path = Path(parent) / name
+            if not path.is_file():
+                raise AssertionError('Non-file sysroot artifact: ' + str(path))
+            entry = dict(relative_path=str(path.relative_to(sysroot)), **artifact_identity(path))
+            if path.is_symlink():
+                entry['symlink_target'] = os.readlink(path)
+            files.append(entry)
+    files.sort(key=lambda entry: entry['relative_path'])
+    directory_links.sort(key=lambda entry: entry['relative_path'])
+    target_prefix = str(target_libdir.relative_to(sysroot)) + '/'
+    target = [entry for entry in files if entry['relative_path'].startswith(target_prefix)]
+    for crate in ('core', 'std'):
+        if not any(Path(entry['relative_path']).name.startswith('lib' + crate + '-')
+                   and entry['relative_path'].endswith('.rlib') for entry in target):
+            raise AssertionError('Missing target sysroot ' + crate + ' rlib')
+    llvm = [entry for entry in files if Path(entry['relative_path']).name.startswith('libLLVM')]
+    if not llvm:
+        raise AssertionError('Missing native LLVM library byte identity')
+    manifest = dict(files=files, directory_symlinks_not_traversed=directory_links)
+    return dict(path=str(sysroot), target_libdir=str(target_libdir),
+                manifest_sha256=hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
+                llvm_libraries=llvm, **manifest)
+
+
 def identity(compiler):
+    executable = artifact_identity(compiler)
     version = run([compiler, '-vV'])
     sysroot = run([compiler, '--print', 'sysroot'])
-    if version['status'] or sysroot['status']:
+    target_libdir = run([compiler, '--print', 'target-libdir'])
+    if version['status'] or sysroot['status'] or target_libdir['status']:
         raise AssertionError('Compiler identity query failed')
-    drivers = sorted((Path(base64.b64decode(sysroot['stdout_b64']).decode().strip()) / 'lib').glob('*rustc_driver*'))
-    drivers = [dict(path=str(p.resolve()), sha256=digest(p)) for p in drivers if p.is_file()]
+    sysroot_path = Path(base64.b64decode(sysroot['stdout_b64']).decode().strip())
+    target_path = Path(base64.b64decode(target_libdir['stdout_b64']).decode().strip())
+    artifacts = sysroot_identity(sysroot_path, target_path)
+    drivers = [entry for entry in artifacts['files']
+               if Path(entry['relative_path']).name.startswith('librustc_driver')]
     if not drivers:
         raise AssertionError('No driver library found')
     if b'LLVM version:' not in base64.b64decode(version['stdout_b64']):
         raise AssertionError('Compiler does not identify its LLVM version')
-    return dict(path=str(compiler), sha256=digest(compiler), drivers=drivers,
-                version=observable(version), sysroot=observable(sysroot))
+    if executable != artifact_identity(compiler):
+        raise AssertionError('Compiler executable changed during identity capture')
+    return dict(**executable, drivers=drivers,
+                identity_scope='installed-sysroot-artifact-bytes-not-loaded-memory-or-system-linker',
+                sysroot_artifacts=artifacts, version=observable(version),
+                sysroot=observable(sysroot), target_libdir=observable(target_libdir))
 
 
 def fixture(items):
@@ -153,7 +226,7 @@ def summarize(observations):
 
 
 def capture(compiler, root, repetitions=4, items=32):
-    report = dict(schema=1, scope='local-controlled-frozen-LLVM-disk-retention-not-hosted-not-end-to-end',
+    report = dict(schema=2, scope='local-controlled-frozen-LLVM-disk-retention-not-hosted-not-end-to-end',
                   local_reason='Direct native incremental protocol acceptance must force unchanged recompilation',
                   ram_tier='not-implemented', flags=list(FLAGS), verify_ich=True,
                   repetitions=repetitions, items=items, verdict='incomplete', observations=[])
@@ -191,7 +264,7 @@ def capture(compiler, root, repetitions=4, items=32):
             report['identity_after'] = identity(compiler)
             if report.get('identity_before') != report['identity_after']:
                 report['verdict'] = 'failed'
-                report['identity_error'] = 'Compiler executable/driver identity changed during experiment'
+                report['identity_error'] = 'Compiler executable/driver/sysroot/LLVM identity changed during experiment'
         except Exception as error:
             report['verdict'] = 'failed'
             report['identity_error'] = str(error)

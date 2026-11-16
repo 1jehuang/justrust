@@ -95,6 +95,148 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual([r['order'] for r in receipt['observations']], [['off', 'on'], ['on', 'off']])
             self.assertEqual(len(receipt['observations']), 2)
 
+    def make_toolchain(self, root):
+        sysroot = root / 'toolchain'
+        target = sysroot / 'lib/rustlib/x86_64-test-linux-gnu/lib'
+        target.mkdir(parents=True)
+        compiler = sysroot / 'bin/rustc'
+        compiler.parent.mkdir()
+        compiler.write_bytes(b'compiler')
+        for name in ('libstd-test.rlib', 'libcore-test.rlib'):
+            (target / name).write_bytes(name.encode())
+        (sysroot / 'lib/libLLVM-test.so').write_bytes(b'llvm')
+        (sysroot / 'lib/librustc_driver-test.so').write_bytes(b'driver')
+        return compiler, target
+
+    def identity_query(self, compiler, target, command):
+        if command[-1] == '-vV':
+            return record(stdout=b'rustc test\nLLVM version: 23.1.3\n')
+        if command[-1] == 'sysroot':
+            return record(stdout=(str(compiler.parent.parent) + '\n').encode())
+        if command[-1] == 'target-libdir':
+            return record(stdout=(str(target) + '\n').encode())
+        raise AssertionError('Unexpected identity command: ' + repr(command))
+
+    def test_all_artifact_byte_mutations_reject_capture(self):
+        for kind in ('compiler', 'driver', 'llvm', 'std', 'core'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                compiler, target = self.make_toolchain(base)
+                paths = dict(compiler=compiler, driver=compiler.parent.parent / 'lib/librustc_driver-test.so',
+                             llvm=compiler.parent.parent / 'lib/libLLVM-test.so',
+                             std=target / 'libstd-test.rlib', core=target / 'libcore-test.rlib')
+                output = base / 'acceptance'
+                output.mkdir()
+                actual_identity = bench.identity
+                identities = []
+
+                def capture_identity(path):
+                    if identities:
+                        paths[kind].write_bytes(paths[kind].read_bytes() + b'-mutated')
+                    result = actual_identity(path)
+                    identities.append(result)
+                    return result
+
+                def fake_run(command, rss_file=None):
+                    if len(command) > 1 and (command[-1] == '-vV' or command[1] == '--print'):
+                        return self.identity_query(compiler, target, command)
+                    if len(command) == 1:
+                        return record(stdout=b'10\n')
+                    (output / 'fixture').write_bytes(b'fixture')
+                    return record()
+
+                with patch.object(bench, 'identity', side_effect=capture_identity), \
+                        patch.object(bench, 'run', side_effect=fake_run), \
+                        patch.object(bench, 'cases', return_value=[('warm', 'fn main() {}', '10\n')]):
+                    with self.assertRaisesRegex(AssertionError, 'identity changed'):
+                        bench.capture(compiler, output, repetitions=2, items=1)
+                receipt = json.loads((output / 'acceptance.json').read_text())
+                self.assertEqual(receipt['schema'], 2)
+                self.assertEqual(receipt['verdict'], 'failed')
+                self.assertNotEqual(receipt['identity_before'], receipt['identity_after'])
+                self.assertIn('sysroot_artifacts', receipt['identity_before'])
+
+    def test_sysroot_inventory_add_remove_and_symlink_mutations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler, target = self.make_toolchain(Path(tmp))
+            sysroot = compiler.parent.parent
+            initial = bench.sysroot_identity(sysroot, target)
+            self.assertEqual(initial, bench.sysroot_identity(sysroot, target))
+            added = target / 'new.rmeta'
+            added.write_bytes(b'new')
+            self.assertNotEqual(initial, bench.sysroot_identity(sysroot, target))
+            added.unlink()
+            self.assertEqual(initial, bench.sysroot_identity(sysroot, target))
+            alias = sysroot / 'lib/libLLVM-alias.so'
+            alias.symlink_to('libLLVM-test.so')
+            linked = bench.sysroot_identity(sysroot, target)
+            entry = next(e for e in linked['files'] if e['relative_path'].endswith('libLLVM-alias.so'))
+            self.assertEqual(entry['symlink_target'], 'libLLVM-test.so')
+            alias.unlink()
+            alias.symlink_to(str(sysroot / 'lib/libLLVM-test.so'))
+            self.assertNotEqual(linked, bench.sysroot_identity(sysroot, target))
+            (target / 'libcore-test.rlib').unlink()
+            with self.assertRaisesRegex(AssertionError, 'core rlib'):
+                bench.sysroot_identity(sysroot, target)
+
+    def test_sysroot_rejects_missing_llvm_and_unhashed_artifact_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler, target = self.make_toolchain(Path(tmp))
+            sysroot = compiler.parent.parent
+            llvm = sysroot / 'lib/libLLVM-test.so'
+            llvm.unlink()
+            with self.assertRaisesRegex(AssertionError, 'LLVM library'):
+                bench.sysroot_identity(sysroot, target)
+            llvm.write_bytes(b'llvm')
+            outside = Path(tmp) / 'outside'
+            outside.mkdir()
+            with self.assertRaisesRegex(AssertionError, 'outside'):
+                bench.sysroot_identity(sysroot, outside)
+            (sysroot / 'lib/other').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(AssertionError, 'directory symlink'):
+                bench.sysroot_identity(sysroot, target)
+
+    def test_source_symlink_boundary_is_explicit_not_traversed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler, target = self.make_toolchain(Path(tmp))
+            sysroot = compiler.parent.parent
+            source = Path(tmp) / 'source'
+            source.mkdir()
+            (source / 'code.rs').write_bytes(b'not a native input')
+            link = sysroot / 'lib/rustlib/src/rust'
+            link.parent.mkdir()
+            link.symlink_to(source, target_is_directory=True)
+            before = bench.sysroot_identity(sysroot, target)
+            (source / 'code.rs').write_bytes(b'changed source, identical installed artifacts')
+            self.assertEqual(before, bench.sysroot_identity(sysroot, target))
+            self.assertEqual(before['directory_symlinks_not_traversed'],
+                             [dict(relative_path='lib/rustlib/src/rust', target=str(source))])
+
+    def test_sysroot_walk_errors_are_not_silently_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            compiler, target = self.make_toolchain(Path(tmp))
+
+            def denied_walk(path, followlinks, onerror):
+                onerror(PermissionError('unreadable artifact directory'))
+
+            with patch.object(bench.os, 'walk', side_effect=denied_walk):
+                with self.assertRaisesRegex(PermissionError, 'unreadable'):
+                    bench.sysroot_identity(compiler.parent.parent, target)
+
+    def test_hash_rejects_file_mutation_during_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'artifact'
+            path.write_bytes(b'before')
+            actual_digest = bench.digest
+
+            def mutate(p):
+                path.write_bytes(b'after-and-longer')
+                return actual_digest(p)
+
+            with patch.object(bench, 'digest', side_effect=mutate):
+                with self.assertRaisesRegex(AssertionError, 'changed while hashing'):
+                    bench.artifact_identity(path)
+
     def test_compile_failure_receipt_survives(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
