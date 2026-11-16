@@ -10,11 +10,12 @@
 //! the completeness of caller-owned material.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use rustc_hir::definitions::DefPathData;
-use rustc_session::config::CrateType;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_span::{FileName, RemapPathScopeComponents};
+use rustc_structures::CrateType;
 
 use super::TyCtxt;
 use super::resident_identity::{
@@ -35,16 +36,17 @@ pub enum CompilerIdentityError {
     Budget(ResetReason),
     UnsupportedExternalCrates,
     ActiveSourceViewUnavailable,
-    /// SourceFile exposes normalized text, not the original BOM/CRLF bytes.
-    UnsupportedNormalizedSource,
-    MissingSourceText,
+    /// An active file has no exact frozen native-loader raw input.
+    UnfrozenSource,
     InvalidBodyOwner,
 }
 
 /// Capture real numeric IDs and canonical local definition paths in allocation order.
 ///
-/// Initial safe subset: no external crates and no source normalization. Normalized
-/// sources are rejected rather than reread from disk or guessed from normalized text.
+/// Initial safe subset: no external crates and only files covered by the native
+/// loader's exact frozen raw snapshot. Input strings and generated/imported files
+/// without frozen raw inputs are rejected, never reread or guessed from normalized
+/// text. BOM and CRLF bytes are retained unchanged.
 /// `active_source_files` is mandatory: disabled, loading and poisoned views all fail.
 /// Source version indices and BytePos allocation are retained, so equivalent source
 /// maps with different numeric assignments intentionally do not compare reusable.
@@ -135,22 +137,58 @@ pub fn build_revision_identity(
         .active_source_files()
         .map_err(|_| Error::ActiveSourceViewUnavailable)?
         .ok_or(Error::ActiveSourceViewUnavailable)?;
+    // The source-map API bounds path + raw-text copies before allocating them.
+    // Its snapshot is not a coverage guarantee: check every active Arc explicitly.
+    let mut raw_files = tcx
+        .sess
+        .source_map()
+        .resident_raw_source_files(remaining)
+        .map_err(|_| Error::ActiveSourceViewUnavailable)?
+        .ok_or(Error::ActiveSourceViewUnavailable)?;
+    if raw_files.len() != files.len() {
+        return Err(Error::UnfrozenSource);
+    }
     let mut source = Bytes::new(&mut remaining);
-    source.bytes(b"resident-active-sources-v1")?;
+    source.bytes(b"resident-active-raw-sources-v2")?;
     source.u64(files.len() as u64)?;
-    for (version, file) in files {
+    for (version, file) in &files {
         if file.cnum != LOCAL_CRATE {
             return Err(Error::UnsupportedExternalCrates);
         }
-        let text = file.src.as_ref().ok_or(Error::MissingSourceText)?;
-        if !file.normalized_pos.is_empty() || text.len() != file.unnormalized_source_len as usize {
-            return Err(Error::UnsupportedNormalizedSource);
-        }
-        source.u64(version as u64)?;
+        let raw_index = raw_files
+            .iter()
+            .position(|raw| Arc::ptr_eq(&raw.file, file))
+            .ok_or(Error::UnfrozenSource)?;
+        // Consume each matching entry exactly once. Equal names, hashes, contents
+        // or BytePos values cannot substitute for the actual active SourceFile.
+        let raw = raw_files.swap_remove(raw_index);
+        source.u64(*version as u64)?;
         source.u32(file.start_pos.0)?;
         source.u32(file.normalized_source_len.0)?;
+        source.u32(file.unnormalized_source_len)?;
         encode_file_name(&mut source, &file.name)?;
-        source.bytes(text.as_bytes())?;
+        source.bytes(raw.path.as_os_str().as_encoded_bytes())?;
+        source.bytes(raw.raw.as_bytes())?;
+    }
+    if !raw_files.is_empty() {
+        return Err(Error::UnfrozenSource);
+    }
+    // Detect loads/poisoning during capture. This remains only a point-in-time
+    // prerequisite, not permission to use a snapshot across native guards.
+    let current_files = tcx
+        .sess
+        .source_map()
+        .active_source_files()
+        .map_err(|_| Error::ActiveSourceViewUnavailable)?
+        .ok_or(Error::ActiveSourceViewUnavailable)?;
+    if files.len() != current_files.len()
+        || !files.iter().zip(&current_files).all(
+            |((index, file), (current_index, current_file))| {
+                index == current_index && Arc::ptr_eq(file, current_file)
+            },
+        )
+    {
+        return Err(Error::UnfrozenSource);
     }
     let identity = RevisionIdentity {
         namespace,
@@ -348,6 +386,20 @@ mod tests {
         }
         assert_ne!(name(&FileName::Custom("a".into())), name(&FileName::Custom("a\0".into())));
         assert_ne!(name(&FileName::Custom("a".into())), name(&FileName::DocTest("a".into(), 0)));
+    }
+
+    #[test]
+    fn raw_source_framing_preserves_bom_and_crlf() {
+        fn raw(text: &str) -> Vec<u8> {
+            let mut budget = 100;
+            let mut bytes = Bytes::new(&mut budget);
+            bytes.bytes(b"/crate/source.rs").unwrap();
+            bytes.bytes(text.as_bytes()).unwrap();
+            bytes.finish()
+        }
+        assert_ne!(raw("fn f() {}\n"), raw("fn f() {}\r\n"));
+        assert_ne!(raw("fn f() {}\n"), raw("\u{feff}fn f() {}\n"));
+        assert!(raw("\u{feff}fn f() {}\r\n").ends_with("\u{feff}fn f() {}\r\n".as_bytes()));
     }
 
     #[test]
