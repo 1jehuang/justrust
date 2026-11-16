@@ -109,7 +109,7 @@ use rustc_data_structures::{base_n, flock};
 use rustc_fs_util::try_canonicalize;
 use rustc_middle::dep_graph::WorkProduct;
 use rustc_session::config::OutputType;
-use rustc_session::{IncrCompSession, Session, StableCrateId};
+use rustc_session::{IncrCompSession, IncrCompSessionPaths, Session, StableCrateId};
 use rustc_span::{Symbol, bug};
 use tracing::debug;
 
@@ -131,12 +131,12 @@ const QUERY_CACHE_FILENAME: &str = "query-cache.bin";
 const INT_ENCODE_BASE: usize = base_n::CASE_INSENSITIVE;
 
 /// Returns the path to a previous session's dependency graph.
-pub(crate) fn old_dep_graph_path(incr_comp_session: &IncrCompSession) -> Option<PathBuf> {
+pub(crate) fn old_dep_graph_path(incr_comp_session: &IncrCompSessionPaths) -> Option<PathBuf> {
     in_old_incr_comp_dir_sess(incr_comp_session, DEP_GRAPH_FILENAME)
 }
 
 /// Returns the path to a session's dependency graph.
-pub(crate) fn dep_graph_path(incr_comp_session: &IncrCompSession) -> PathBuf {
+pub(crate) fn dep_graph_path(incr_comp_session: &IncrCompSessionPaths) -> PathBuf {
     in_incr_comp_dir_sess(incr_comp_session, DEP_GRAPH_FILENAME)
 }
 
@@ -144,25 +144,25 @@ pub(crate) fn dep_graph_path(incr_comp_session: &IncrCompSession) -> PathBuf {
 ///
 /// On the difference between dep-graph and staging dep-graph,
 /// see `build_dep_graph`.
-pub(crate) fn staging_dep_graph_path(incr_comp_session: &IncrCompSession) -> PathBuf {
+pub(crate) fn staging_dep_graph_path(incr_comp_session: &IncrCompSessionPaths) -> PathBuf {
     in_incr_comp_dir_sess(incr_comp_session, STAGING_DEP_GRAPH_FILENAME)
 }
 
-pub(crate) fn old_work_products_path(incr_comp_session: &IncrCompSession) -> Option<PathBuf> {
+pub(crate) fn old_work_products_path(incr_comp_session: &IncrCompSessionPaths) -> Option<PathBuf> {
     in_old_incr_comp_dir_sess(incr_comp_session, WORK_PRODUCTS_FILENAME)
 }
 
-pub(crate) fn work_products_path(incr_comp_session: &IncrCompSession) -> PathBuf {
+pub(crate) fn work_products_path(incr_comp_session: &IncrCompSessionPaths) -> PathBuf {
     in_incr_comp_dir_sess(incr_comp_session, WORK_PRODUCTS_FILENAME)
 }
 
 /// Returns the path to a previous session's query cache.
-pub(crate) fn old_query_cache_path(incr_comp_session: &IncrCompSession) -> Option<PathBuf> {
+pub(crate) fn old_query_cache_path(incr_comp_session: &IncrCompSessionPaths) -> Option<PathBuf> {
     in_old_incr_comp_dir_sess(incr_comp_session, QUERY_CACHE_FILENAME)
 }
 
 /// Returns the path to a session's query cache.
-pub(crate) fn query_cache_path(incr_comp_session: &IncrCompSession) -> PathBuf {
+pub(crate) fn query_cache_path(incr_comp_session: &IncrCompSessionPaths) -> PathBuf {
     in_incr_comp_dir_sess(incr_comp_session, QUERY_CACHE_FILENAME)
 }
 
@@ -191,7 +191,7 @@ fn lock_file_path(session_dir: &Path) -> PathBuf {
 /// Returns the path for a given filename within the incremental compilation directory
 /// in the previous session.
 pub fn in_old_incr_comp_dir_sess(
-    incr_comp_session: &IncrCompSession,
+    incr_comp_session: &IncrCompSessionPaths,
     file_name: &str,
 ) -> Option<PathBuf> {
     incr_comp_session.old_session_directory.as_ref().map(|dir| dir.join(file_name))
@@ -199,7 +199,7 @@ pub fn in_old_incr_comp_dir_sess(
 
 /// Returns the path for a given filename within the incremental compilation directory
 /// in the current session.
-pub fn in_incr_comp_dir_sess(incr_comp_session: &IncrCompSession, file_name: &str) -> PathBuf {
+pub fn in_incr_comp_dir_sess(incr_comp_session: &IncrCompSessionPaths, file_name: &str) -> PathBuf {
     incr_comp_session.new_session_directory.join(file_name)
 }
 
@@ -272,7 +272,11 @@ pub(crate) fn prepare_session_directory(
         None
     };
 
-    IncrCompSession { old_session_directory, new_session_directory }
+    let paths = IncrCompSessionPaths {
+        old_session_directory: old_session_directory.as_ref().map(|dir| (**dir).to_owned()),
+        new_session_directory: (*new_session_directory).to_owned(),
+    };
+    IncrCompSession { old_session_directory, new_session_directory, paths }
 }
 
 /// This function finalizes and thus 'publishes' the session directory by
@@ -329,7 +333,7 @@ pub fn finalize_session_directory(
         // rename to succeed.
         // See https://github.com/rust-lang/rust/issues/151181
         if let Err(err) = replace_hard_link_with_copy(&in_incr_comp_dir_sess(
-            &incr_comp_session,
+            &incr_comp_session.paths,
             &format!(
                 "{}.{}",
                 WorkProduct::METADATA_WORKPRODUCT_CGU_NAME,
@@ -356,11 +360,13 @@ pub fn finalize_session_directory(
 
     // Unlock the old session directory now that we will no longer read from it.
     incr_comp_session.old_session_directory = None;
+    incr_comp_session.paths.old_session_directory = None;
 
     let _ = garbage_collect_session_directories(sess, &incr_comp_session);
 }
 
 pub(crate) fn invalidate_old_session_dir(sess: &Session, incr_comp_session: &mut IncrCompSession) {
+    incr_comp_session.paths.old_session_directory = None;
     if let Some(old_incr_comp_session_dir) = incr_comp_session.old_session_directory.take() {
         let res = try {
             let sess_dir_iterator = old_incr_comp_session_dir.read_dir()?;

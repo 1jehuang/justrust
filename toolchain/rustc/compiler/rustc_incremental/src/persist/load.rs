@@ -11,7 +11,7 @@ use rustc_middle::query::on_disk_cache::OnDiskCache;
 use rustc_serialize::opaque::{FileEncoder, MemDecoder};
 use rustc_serialize::{Decodable, Encodable};
 use rustc_session::config::IncrementalStateAssertion;
-use rustc_session::{IncrCompSession, Session, StableCrateId};
+use rustc_session::{IncrCompSession, IncrCompSessionPaths, Session, StableCrateId};
 use rustc_span::Symbol;
 use tracing::{debug, warn};
 
@@ -32,7 +32,7 @@ enum LoadResult {
     IoError { path: PathBuf, err: io::Error },
 }
 
-fn load_dep_graph(sess: &Session, incr_comp_session: &IncrCompSession) -> LoadResult {
+fn load_dep_graph(sess: &Session, incr_comp_session: &IncrCompSessionPaths) -> LoadResult {
     assert!(sess.opts.incremental.is_some());
 
     let _timer = sess.prof.generic_activity("incr_comp_prepare_load_dep_graph");
@@ -131,7 +131,7 @@ fn load_dep_graph(sess: &Session, incr_comp_session: &IncrCompSession) -> LoadRe
 /// creating an empty cache if it could not be loaded.
 pub fn load_query_result_cache(
     sess: &Session,
-    incr_comp_session: Option<&IncrCompSession>,
+    incr_comp_session: Option<&IncrCompSessionPaths>,
 ) -> Option<OnDiskCache> {
     if sess.opts.incremental.is_none() {
         return None;
@@ -202,7 +202,7 @@ pub fn setup_dep_graph(
     // `load_dep_graph` can only be called after `prepare_session_directory`.
     let mut incr_comp_session = prepare_session_directory(sess, crate_name, stable_crate_id);
     // Try to load the previous session's dep graph and work products.
-    let load_result = load_dep_graph(sess, &incr_comp_session);
+    let load_result = load_dep_graph(sess, &incr_comp_session.paths);
     if !matches!(&load_result, LoadResult::Ok { .. }) {
         // No validated backing graph reached the resident lookup. Record this
         // reuse opportunity as a miss without bypassing the ordinary fallback.
@@ -235,7 +235,7 @@ pub fn setup_dep_graph(
     };
 
     // Stream the dep-graph to an alternate file, to avoid overwriting anything in case of errors.
-    let path_buf = staging_dep_graph_path(&incr_comp_session);
+    let path_buf = staging_dep_graph_path(&incr_comp_session.paths);
 
     let mut encoder = FileEncoder::new(&path_buf).unwrap_or_else(|err| {
         // We're in incremental mode but couldn't set up streaming output of the dep graph.

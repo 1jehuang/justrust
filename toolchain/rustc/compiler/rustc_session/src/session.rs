@@ -1965,13 +1965,28 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
     }
 }
 
-/// Holds data on the current incremental compilation session, if there is one.
+/// Immutable directory snapshot for incremental compilation readers.
+///
+/// This contains no filesystem locks. Keeping a snapshot alive does not keep its
+/// directories locked or guarantee that they still exist after finalization.
+#[derive(Clone, Debug)]
+pub struct IncrCompSessionPaths {
+    /// The directory from which cached data of a previous session can be read.
+    pub old_session_directory: Option<PathBuf>,
+    /// The working directory to which the current session writes cached data.
+    pub new_session_directory: PathBuf,
+}
+
+/// Owns the filesystem locks for the current incremental compilation session.
 pub struct IncrCompSession {
     /// The directory from which cached data of a previous session can be read.
     pub old_session_directory: Option<flock::LockedDir>,
     /// The directory to which cached data for the current session can be
     /// written to.
     pub new_session_directory: flock::LockedDir,
+    /// Lock-free paths exposed to compilation contexts. Clone this snapshot
+    /// rather than retaining this lock owner when retaining a context.
+    pub paths: IncrCompSessionPaths,
 }
 
 /// A wrapper around an [`DiagCtxt`] that is used for early error emissions.
