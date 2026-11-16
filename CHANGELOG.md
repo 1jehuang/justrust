@@ -5,6 +5,13 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+- Hosted failure telemetry now correlates failures with their run ID, including
+  speculative `-pre` runs, and reports a fixed transport cause and last reached
+  phase instead of only `remote_transport`. Typed I/O and malformed-frame causes
+  survive the daemon-to-client disconnect path. Operator run summaries include
+  those bounded labels. No source, raw error text, paths, or compiler output is
+  uploaded, and existing telemetry opt-out remains authoritative.
+
 ## 0.1.0-alpha.28
 
 - Background peer-cache warmup now yields between complete cache entries when

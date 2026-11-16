@@ -1265,8 +1265,8 @@ pub fn run_remote(
             &mut hosted_run,
         );
         let disconnected = matches!(&result, Err(e) if e.is::<RemoteConnectionLost>())
-            || matches!(&result, Ok(Err(Infra(msg))) if matches!(msg.as_str(),
-                "sync daemon closed the connection" | "connection to the remote machine was lost"));
+            || matches!(&result, Ok(Err(Infra(msg))) if msg == "sync daemon closed the connection"
+                || msg.starts_with("connection to the remote machine was lost"));
         if !disconnected
             || !matches!(
                 remote_backend::load(),
@@ -1321,6 +1321,13 @@ pub fn run_remote(
         lifecycle.done(code, logs);
     }
     if !matches!(&result, Ok(Ok(_))) {
+        if diagnostic.failure_kind == "unknown" {
+            diagnostic.failure_kind = match &result {
+                Ok(Err(Infra(msg))) => transport_failure_kind(msg),
+                Err(error) => transport_error_kind(error),
+                _ => "unknown",
+            };
+        }
         // An admitted run that never produced an exit status died on our
         // side. Say where, instead of leaving a bare "abandoned" row.
         if let Some(run) = hosted_run.as_mut() {
@@ -1332,7 +1339,10 @@ pub fn run_remote(
                 crate::failure::Class::Infra,
                 match refused {
                     Some(cause) => format!("hosted service refused the run: {cause}"),
-                    None => format!("hosted attempt failed at {}", diagnostic.stage),
+                    None => format!(
+                        "hosted attempt failed at {}: {} ({})",
+                        diagnostic.stage, diagnostic.failure_kind, diagnostic.transport_phase
+                    ),
                 },
             );
             run.finish("abandoned", None, Some(&why));
@@ -1388,6 +1398,9 @@ struct RemoteDiagnostic {
     stage: &'static str,
     may_have_started: bool,
     exit: Option<i32>,
+    run_id: Option<String>,
+    transport_phase: &'static str,
+    failure_kind: &'static str,
 }
 
 impl Default for RemoteDiagnostic {
@@ -1396,6 +1409,9 @@ impl Default for RemoteDiagnostic {
             stage: "remote_setup",
             may_have_started: false,
             exit: None,
+            run_id: None,
+            transport_phase: "daemon_connect",
+            failure_kind: "unknown",
         }
     }
 }
@@ -1418,12 +1434,80 @@ fn service_refusal(msg: &str) -> Option<&'static str> {
     }
 }
 
+// Classify locally, upload only a fixed label. Never upload the input text:
+// daemon errors can contain tenant paths, command arguments and credentials.
+pub(crate) fn transport_failure_kind(message: &str) -> &'static str {
+    if let Some(kind) = message.strip_prefix("connection to the remote machine was lost: ") {
+        return match kind {
+            "connection_closed" => "connection_closed",
+            "connection_reset" => "connection_reset",
+            "timeout" => "timeout",
+            "protocol" => "protocol",
+            "io" => "io",
+            "connection_refused" => "connection_refused",
+            "authentication" => "authentication",
+            _ => "unknown",
+        };
+    }
+    if service_refusal(message).is_some() {
+        return "service_refused";
+    }
+    let message = message.to_ascii_lowercase();
+    if message.contains("timed out") || message.contains("timeout") {
+        "timeout"
+    } else if message.contains("connection refused") {
+        "connection_refused"
+    } else if message.contains("connection reset") || message.contains("broken pipe") {
+        "connection_reset"
+    } else if message.contains("closed the connection")
+        || message.contains("connection to the remote machine was lost")
+        || message.contains("unexpected eof")
+    {
+        "connection_closed"
+    } else if message.contains("permission denied") || message.contains("authentication") {
+        "authentication"
+    } else if message.contains("resolve hostname") || message.contains("name resolution") {
+        "dns"
+    } else if message.contains("protocol") {
+        "protocol"
+    } else if message.contains("connection_closed") {
+        "connection_closed"
+    } else if message.contains("connection_reset") {
+        "connection_reset"
+    } else {
+        "unknown"
+    }
+}
+
+pub(crate) fn transport_error_kind(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error.downcast_ref::<std::io::Error>() {
+        return match error.kind() {
+            std::io::ErrorKind::ConnectionRefused => "connection_refused",
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe => {
+                "connection_reset"
+            }
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionAborted => {
+                "connection_closed"
+            }
+            std::io::ErrorKind::TimedOut => "timeout",
+            std::io::ErrorKind::PermissionDenied => "authentication",
+            _ => "io",
+        };
+    }
+    if error.downcast_ref::<serde_json::Error>().is_some() {
+        return "protocol";
+    }
+    transport_failure_kind(&format!("{error:#}"))
+}
+
 fn remote_failure_data(sub: &str, d: &RemoteDiagnostic, elapsed: f64) -> serde_json::Value {
     let sub = match sub {
         "check" | "test" | "build" | "clippy" | "run" | "bench" | "doc" | "rustc" => sub,
         _ => "other",
     };
-    serde_json::json!({ "schema_version": 2, "sub": sub, "stage": d.stage,
+    serde_json::json!({ "schema_version": 3, "sub": sub, "stage": d.stage,
+        "run_id": d.run_id, "transport_phase": d.transport_phase,
+        "failure_kind": d.failure_kind,
         "may_have_started": d.may_have_started,
         "exit": d.exit, "elapsed_s": (elapsed * 100.0).round() / 100.0 })
 }
@@ -1442,6 +1526,7 @@ fn run_remote_inner(
     lifecycle: &mut crate::telemetry::BuildLifecycle,
     admitted: &mut Option<HostedRun>,
 ) -> Result<std::result::Result<Outcome, Infra>> {
+    diagnostic.run_id = Some(run_id.to_owned());
     let total = Instant::now();
     let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
     crate::e2e::mark("routed");
@@ -1580,6 +1665,7 @@ fn run_remote_inner(
     } else {
         full.clone()
     };
+    diagnostic.transport_phase = "request_send";
     write_frame(
         &mut w,
         &Msg::RunSync {
@@ -1593,6 +1679,7 @@ fn run_remote_inner(
         },
         &[],
     )?;
+    diagnostic.transport_phase = "source_sync";
     let mut sync = None;
     let mut remote_prefix = String::new();
     let mut sync_timing = None;
@@ -1605,11 +1692,19 @@ fn run_remote_inner(
     loop {
         let frame = match read_frame(&mut r) {
             Ok(Some(f)) => f,
-            Ok(None) | Err(_) if fallback_safe(sync.is_some(), submitted) => {
-                return infra("sync daemon closed the connection".into());
-            }
-            Ok(None) | Err(_) => {
-                // Output already started: a local rerun would duplicate it.
+            failure => {
+                diagnostic.failure_kind = match &failure {
+                    Ok(None) => "connection_closed",
+                    Err(error) => {
+                        let kind = transport_error_kind(error);
+                        if kind == "unknown" { "protocol" } else { kind }
+                    }
+                    _ => unreachable!(),
+                };
+                if fallback_safe(sync.is_some(), submitted) {
+                    return infra("sync daemon closed the connection".into());
+                }
+                // Preserve the no-duplicate-execution policy after submission.
                 return Err(RemoteConnectionLost.into());
             }
         };
@@ -1627,6 +1722,7 @@ fn run_remote_inner(
                     live.phase(&phase, "");
                 }
                 if may_have_started {
+                    diagnostic.transport_phase = "remote_execution";
                     lifecycle.running();
                     hosted_run.running();
                 }
@@ -1659,6 +1755,7 @@ fn run_remote_inner(
                     live.phase("building", &machine);
                 }
                 sync = Some((files, ms, machine));
+                diagnostic.transport_phase = "remote_execution";
                 diagnostic.may_have_started = true;
             }
             (Msg::Out { stream, .. }, data) => {
@@ -1671,6 +1768,7 @@ fn run_remote_inner(
                     continue;
                 }
                 diagnostic.may_have_started = true;
+                diagnostic.transport_phase = "remote_execution";
                 if trace && !first_out {
                     first_out = true;
                     mark("first output");
@@ -1723,6 +1821,7 @@ fn run_remote_inner(
                     if code == 0 && !crate::buildd::is_guess() {
                         compile_stdout.require_success()?;
                         diagnostic.stage = "remote_artifacts";
+                        diagnostic.transport_phase = "artifact_download";
                         let (line, artifacts) = crate::remote_artifacts::fetch_tests(
                             &full, started_at, run_id,
                         )
@@ -1761,6 +1860,7 @@ fn run_remote_inner(
                 // the client wall the router compares against local.
                 if code == 0 && matches!(sub, "build" | "zigbuild") {
                     diagnostic.stage = "remote_artifacts";
+                    diagnostic.transport_phase = "artifact_download";
                     match crate::remote_artifacts::fetch(&full, started_at) {
                         Ok(line) => eprintln!("justrust remote: {line}"),
                         Err(e) => {
@@ -1774,6 +1874,7 @@ fn run_remote_inner(
                 crate::e2e::mark("artifacts");
                 mark("recording");
                 diagnostic.stage = "remote_summary";
+                diagnostic.transport_phase = "summary_download";
                 if !record_remote(
                     run_id,
                     &summary,
@@ -1814,7 +1915,8 @@ fn run_remote_inner(
                 return infra(msg);
             }
             (Msg::Error { msg, .. }, _) => {
-                if msg == "connection to the remote machine was lost" {
+                diagnostic.failure_kind = transport_failure_kind(&msg);
+                if msg.starts_with("connection to the remote machine was lost") {
                     return Err(RemoteConnectionLost.into());
                 }
                 bail!("remote build failed mid-run: {msg}")
@@ -2347,6 +2449,7 @@ mod tests {
             stage: "remote_artifacts",
             may_have_started: true,
             exit: Some(0),
+            ..RemoteDiagnostic::default()
         };
         let data = remote_failure_data("private-subcommand", &d, 1.234);
         assert_eq!(data["sub"], "other");
@@ -2356,6 +2459,65 @@ mod tests {
         assert_eq!(data["may_have_started"], true);
         assert!(!data.to_string().contains("private"));
         assert!(data.get("fallback_safe").is_none());
+    }
+
+    #[test]
+    fn transport_error_labels_preserve_typed_causes_through_context() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::ConnectionReset, "connection_reset"),
+            (std::io::ErrorKind::ConnectionRefused, "connection_refused"),
+            (std::io::ErrorKind::UnexpectedEof, "connection_closed"),
+            (std::io::ErrorKind::TimedOut, "timeout"),
+            (std::io::ErrorKind::Other, "io"),
+        ] {
+            let error = anyhow::Error::new(std::io::Error::new(kind, "private/path token=secret"))
+                .context("private endpoint");
+            assert_eq!(transport_error_kind(&error), expected);
+        }
+        let error =
+            serde_json::from_str::<serde_json::Value>("private malformed data").unwrap_err();
+        assert_eq!(transport_error_kind(&error.into()), "protocol");
+        assert_eq!(
+            transport_failure_kind("connection to the remote machine was lost: connection_reset"),
+            "connection_reset"
+        );
+        assert_eq!(
+            transport_failure_kind("connection to the remote machine was lost: secret"),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn transport_failure_labels_never_include_private_error_text() {
+        for (message, expected) in [
+            (
+                "ssh /home/private/token: Connection refused",
+                "connection_refused",
+            ),
+            (
+                "read: Connection reset by peer secret=abc",
+                "connection_reset",
+            ),
+            ("write: Broken pipe /private/workspace", "connection_reset"),
+            ("connect timed out to private.example", "timeout"),
+            ("ssh: Could not resolve hostname private.example", "dns"),
+            ("Permission denied (publickey) secret", "authentication"),
+            ("sync daemon closed the connection", "connection_closed"),
+            ("unrecognized error with source and secrets", "unknown"),
+        ] {
+            assert_eq!(transport_failure_kind(message), expected);
+            let diagnostic = RemoteDiagnostic {
+                run_id: Some("20261116-185118312-1459018-pre".into()),
+                failure_kind: transport_failure_kind(message),
+                transport_phase: "source_sync",
+                ..RemoteDiagnostic::default()
+            };
+            let data = remote_failure_data("test", &diagnostic, 64.48);
+            assert_eq!(data["run_id"], "20261116-185118312-1459018-pre");
+            assert_eq!(data["failure_kind"], expected);
+            assert_eq!(data["transport_phase"], "source_sync");
+            assert!(!data.to_string().contains(message));
+        }
     }
 
     #[test]

@@ -1122,7 +1122,15 @@ fn read_agent(
     mut stdout: BufReader<std::process::ChildStdout>,
     status_hint: Option<std::sync::mpsc::SyncSender<()>>,
 ) {
-    while let Ok(Some((msg, payload))) = read_frame(&mut stdout) {
+    let disconnect_kind = loop {
+        let (msg, payload) = match read_frame(&mut stdout) {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break "connection_closed",
+            Err(error) => {
+                let kind = crate::remote_build::transport_error_kind(&error);
+                break if kind == "unknown" { "protocol" } else { kind };
+            }
+        };
         if link.peer.on_frame(&msg, &payload) {
             continue;
         }
@@ -1164,7 +1172,7 @@ fn read_agent(
             Msg::Error { msg, .. } => log(&format!("agent: {msg}")),
             _ => {}
         }
-    }
+    };
     // Connection lost: fail every waiter so clients fall back or stop.
     link.peer.close();
     let mut r = link.routes.lock().unwrap();
@@ -1181,12 +1189,12 @@ fn read_agent(
         let _ = tx.send((
             Msg::Error {
                 id,
-                msg: "connection to the remote machine was lost".into(),
+                msg: format!("connection to the remote machine was lost: {disconnect_kind}"),
             },
             Vec::new(),
         ));
     }
-    log("agent connection closed");
+    log(&format!("agent connection closed: {disconnect_kind}"));
 }
 
 fn update_root_info(d: &Daemon, st: &Sync) {
@@ -2433,6 +2441,53 @@ mod tests {
         for value in ["1", "on", "true", "require"] {
             assert!(hosted_mirror_isolation(Some(value)));
             assert_eq!(isolated, identity(Some(value)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_disconnect_retains_bounded_cause_for_waiting_run() {
+        for (script, expected) in [
+            ("exit 0", "connection_closed"),
+            ("printf '\\377\\377\\377\\377'", "protocol"),
+        ] {
+            let mut child = Command::new("sh")
+                .args(["-c", script])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let stdin = Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap())));
+            let stdout = BufReader::new(child.stdout.take().unwrap());
+            let link = Link {
+                child: Mutex::new(child),
+                stdin,
+                routes: Mutex::default(),
+                peer: peercache::Relay::new(true, |_, _| true),
+                checkpoint: false,
+                mirror: Mirror {
+                    target: None,
+                    prefix: String::new(),
+                },
+            };
+            let (tx, rx) = channel();
+            link.routes.lock().unwrap().runs.insert(77, tx);
+            read_agent(&link, stdout, None);
+            let (message, payload) = rx.recv().unwrap();
+            match message {
+                Msg::Error { id, msg } => {
+                    assert_eq!(id, 77);
+                    assert_eq!(
+                        msg,
+                        format!("connection to the remote machine was lost: {expected}")
+                    );
+                    assert_eq!(crate::remote_build::transport_failure_kind(&msg), expected);
+                }
+                other => panic!("unexpected disconnect message: {other:?}"),
+            }
+            assert!(payload.is_empty());
+            assert!(link.routes.lock().unwrap().dead);
+            link.child.lock().unwrap().wait().unwrap();
         }
     }
 
