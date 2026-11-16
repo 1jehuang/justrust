@@ -43,6 +43,11 @@ class ReleaseOrderTests(unittest.TestCase):
         self.assertIn("gh release create", release)
 
     def test_postpublication_workflow_uses_exact_published_client(self):
+        caller = self.job("production-tests")
+        self.assertIn("needs: [preflight, release]", caller)
+        self.assertIn("uses: ./.github/workflows/client-production-tests.yml", caller)
+        self.assertIn("tag: ${{ needs.preflight.outputs.tag }}", caller)
+        self.assertIn("sha: ${{ needs.preflight.outputs.sha }}", caller)
         workflow = (ROOT / ".github/workflows/client-production-tests.yml").read_text()
         self.assertIn("workflow_call:", workflow)
         self.assertNotRegex(workflow, re.compile(r"^  (?:release|workflow_run):", re.MULTILINE))

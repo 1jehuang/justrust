@@ -181,3 +181,11 @@ jobs:
           else
             gh release create "$TAG" dist/* --generate-notes --repo "$GITHUB_REPOSITORY"
           fi
+
+  production-tests:
+    needs: [preflight, release]
+    uses: ./.github/workflows/client-production-tests.yml
+    with:
+      tag: ${{ needs.preflight.outputs.tag }}
+      sha: ${{ needs.preflight.outputs.sha }}
+    secrets: inherit
