@@ -50,6 +50,42 @@ use crate::diagnostics::{FailCreateFileEncoder, FailWriteFile};
 use crate::eii::EiiMapEncodedKeyValue;
 use crate::rmeta::*;
 
+// The active view uses sorted historical SourceMap indices, not dense current-revision
+// indices. Ordinary (non-resident) SourceMaps have no active-view restriction.
+fn source_file_is_active<T>(active: Option<&[(usize, T)]>, historical_index: usize) -> bool {
+    active.is_none_or(|files| {
+        files.binary_search_by_key(&historical_index, |(index, _)| *index).is_ok()
+    })
+}
+
+#[cfg(test)]
+mod active_source_tests {
+    use super::source_file_is_active;
+
+    #[test]
+    fn ordinary_source_maps_allow_all_historical_indices() {
+        assert!(source_file_is_active::<()>(None, 0));
+        assert!(source_file_is_active::<()>(None, usize::MAX));
+    }
+
+    #[test]
+    fn resident_source_maps_use_historical_not_dense_indices() {
+        let active = [(2, ()), (7, ()), (19, ())];
+        for index in [2, 7, 19] {
+            assert!(source_file_is_active(Some(&active), index));
+        }
+        // Includes the historical initial span-cache seed and dense-view indices.
+        for index in [0, 1, 3, 6, 8, 18, 20, usize::MAX] {
+            assert!(!source_file_is_active(Some(&active), index));
+        }
+    }
+
+    #[test]
+    fn empty_resident_view_does_not_fall_back_to_history() {
+        assert!(!source_file_is_active::<()>(Some(&[]), 0));
+    }
+}
+
 pub(super) struct EncodeContext<'a, 'tcx> {
     opaque: FileEncoder<'a>,
     metadata_hasher: Arc<Mutex<XxHash3_128>>,
@@ -661,6 +697,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         &mut self,
     ) -> LazyTable<u32, u32, Option<LazyValue<rustc_span::SourceFile>>> {
         let source_map = self.tcx.sess.source_map();
+        let active_source_files = source_map.active_source_files().unwrap_or_else(|err| {
+            self.tcx.dcx().fatal(format!(
+                "cannot encode crate metadata source map: active resident source files are unavailable: {err}"
+            ))
+        });
         let all_source_files = source_map.files();
 
         // By replacing the `Option` with `None`, we ensure that we can't
@@ -678,6 +719,15 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // `Span` contains the index of the corresponding `SourceFile`.
         for (on_disk_index, &source_file_index) in required_source_files.iter().enumerate() {
             let source_file = &all_source_files[source_file_index];
+            // Span lookup and its cache must retain all-history indices. In particular,
+            // the initial cache entry may be historical: reject it here if encoding a
+            // span made it a required export, rather than silently exporting old source.
+            if !source_file_is_active(active_source_files.as_deref(), source_file_index) {
+                self.tcx.dcx().fatal(format!(
+                    "cannot encode crate metadata: required source file {:?} (historical source-map index {}) is inactive in the current resident source revision",
+                    source_file.name, source_file_index
+                ));
+            }
             // Don't serialize imported `SourceFile`s, unless we're in a proc-macro crate.
             assert!(!source_file.is_imported() || self.is_proc_macro);
 
