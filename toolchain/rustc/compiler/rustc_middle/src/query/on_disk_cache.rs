@@ -233,6 +233,13 @@ impl OnDiskCache {
         resident::stats()
     }
 
+    /// Record a missing or incompatible archive rejected before calling new().
+    /// Do not call this for new() errors: new() records its miss before decoding
+    /// the footer, including when that decoding cannot construct a cache.
+    pub fn resident_unavailable(sess: &Session) {
+        resident::unavailable(resident::key(sess));
+    }
+
     /// Called by the query engine only after a green, cacheable query value was
     /// successfully decoded. Counting here retains the query name without
     /// changing green validation or counting speculative/failed loads twice.

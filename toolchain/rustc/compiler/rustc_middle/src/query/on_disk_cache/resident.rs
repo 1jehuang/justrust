@@ -121,6 +121,13 @@ struct Cache {
 }
 
 impl Cache {
+    fn unavailable(&mut self, key: Option<Key>) {
+        // None means this process/session/namespace is not enabled or eligible.
+        if key.is_some() {
+            self.stats.misses += 1;
+        }
+    }
+
     fn charge(key: &Key, archive: &Archive) -> u64 {
         (archive.bytes.len()
             + archive.indexes.retained_bytes()
@@ -175,6 +182,15 @@ fn cache() -> &'static Mutex<Cache> {
 
 pub(super) fn lookup(key: &Key, bytes: &[u8], start_pos: usize) -> Option<Arc<Archive>> {
     cache().lock().ok()?.lookup(key, bytes, start_pos)
+}
+
+pub(super) fn unavailable(key: Option<Key>) {
+    if key.is_none() {
+        return;
+    }
+    if let Ok(mut cache) = cache().lock() {
+        cache.unavailable(key);
+    }
 }
 
 pub(super) fn admit(
@@ -336,6 +352,24 @@ mod tests {
         assert_eq!(stats.value_loads, 4);
         assert_eq!(stats.typeck_loads, 1);
         assert_eq!(stats.mir_loads, 2);
+    }
+
+    #[test]
+    fn unavailable_counts_only_eligible_attempts_without_evicting_archives() {
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive(b"abcdefgh"));
+        let bytes = cache.stats.current_bytes;
+        cache.unavailable(None);
+        assert_eq!(cache.stats.misses, 0);
+        cache.unavailable(Some(key(0)));
+        assert_eq!(cache.stats.misses, 1);
+        assert_eq!(cache.stats.current_bytes, bytes);
+        assert_eq!(cache.stats.value_loads, 0);
+        assert!(cache.lookup(&key(0), b"abcdefgh", 8).is_some());
+        // A corrupt artifact reaching new() already misses in lookup, before
+        // decoding can fail. Its caller must not report unavailable again.
+        assert!(cache.lookup(&key(0), b"invalid!", 8).is_none());
+        assert_eq!(cache.stats.misses, 2);
     }
 
     #[test]
