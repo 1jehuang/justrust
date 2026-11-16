@@ -284,19 +284,39 @@ impl OnDiskCache {
         // Serializing the `DepGraph` should not modify it.
         tcx.dep_graph.with_ignore(|| {
             // Allocate `SourceFileIndex`es.
+            let active_files =
+                tcx.sess.source_map().active_source_files().unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!("resident cache source enumeration refused: {error}"))
+                });
+            let active_sources_only = active_files.is_some();
             let (file_to_file_index, file_index_to_stable_id) = {
+                // Keep ordinary compilation's enumeration and indices unchanged. A resident
+                // revision instead exposes only live files, with their historical indices:
+                // BytePos and the source map's append-only address space are not rebased.
                 let files = tcx.sess.source_map().files();
+                let len = active_files.as_ref().map_or(files.len(), Vec::len);
                 let mut file_to_file_index =
-                    FxHashMap::with_capacity_and_hasher(files.len(), Default::default());
+                    FxHashMap::with_capacity_and_hasher(len, Default::default());
                 let mut file_index_to_stable_id =
-                    FxHashMap::with_capacity_and_hasher(files.len(), Default::default());
-
-                for (index, file) in files.iter().enumerate() {
+                    FxHashMap::with_capacity_and_hasher(len, Default::default());
+                let mut insert = |index, file: &Arc<SourceFile>| {
                     let index = SourceFileIndex(index as u32);
                     let file_ptr: *const SourceFile = &raw const **file;
                     file_to_file_index.insert(file_ptr, index);
                     let source_file_id = EncodedSourceFileId::new(tcx, file);
                     file_index_to_stable_id.insert(index, source_file_id);
+                };
+                match &active_files {
+                    Some(active) => {
+                        for (index, file) in active {
+                            insert(*index, file);
+                        }
+                    }
+                    None => {
+                        for (index, file) in files.iter().enumerate() {
+                            insert(index, file);
+                        }
+                    }
                 }
 
                 (file_to_file_index, file_index_to_stable_id)
@@ -310,6 +330,7 @@ impl OnDiskCache {
                 interpret_allocs: Default::default(),
                 caching_source_map_view: CachingSourceMapView::new(tcx.sess.source_map()),
                 file_to_file_index,
+                active_sources_only,
                 hygiene_context: Default::default(),
                 symbol_index_table: Default::default(),
                 source_span_cache: Default::default(),
@@ -829,6 +850,7 @@ pub struct CacheEncoder<'tcx> {
     interpret_allocs: FxIndexSet<interpret::AllocId>,
     caching_source_map_view: CachingSourceMapView<'tcx>,
     file_to_file_index: FxHashMap<*const SourceFile, SourceFileIndex>,
+    active_sources_only: bool,
     hygiene_context: Rc<RefCell<HygieneEncodeContext>>,
     // Used for both `Symbol`s and `ByteSymbol`s.
     symbol_index_table: FxHashMap<u32, usize>,
@@ -848,6 +870,15 @@ impl<'tcx> fmt::Debug for CacheEncoder<'tcx> {
 impl<'tcx> CacheEncoder<'tcx> {
     #[inline]
     fn source_file_index(&mut self, source_file: Arc<SourceFile>) -> SourceFileIndex {
+        if self.active_sources_only {
+            return self
+                .file_to_file_index
+                .get(&(&raw const *source_file))
+                .copied()
+                .unwrap_or_else(|| {
+                    self.tcx.dcx().fatal("resident cache encoding refused an inactive source file")
+                });
+        }
         self.file_to_file_index[&(&raw const *source_file)]
     }
 
@@ -927,6 +958,17 @@ impl<'tcx> SpanEncoder for CacheEncoder<'tcx> {
 
         if span_data.is_dummy() {
             return TAG_PARTIAL_SPAN.encode(self);
+        }
+
+        // Check before either relative-span shortcut or the partial-span fallback.
+        // Neither may hide a reference into a previous resident revision. Imported
+        // spans keep their normal encoding rules, but full spans still need an
+        // entry in this revision's source-file table.
+        if self.active_sources_only {
+            let file = self.tcx.sess.source_map().lookup_source_file(span_data.lo);
+            if !file.is_imported() {
+                self.source_file_index(file);
+            }
         }
 
         let parent = span_data
