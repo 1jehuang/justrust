@@ -1488,6 +1488,13 @@ impl Summary {
                 .map(|r| format!(". Rebuilt because: {r}"))
                 .unwrap_or_default()
         );
+        if u.compiled > u.with_pass_timings {
+            let _ = writeln!(
+                o,
+                "  phases  compiler timings for {}/{} compiled units; missing phase data is not zero compiler work. `justrust show {}` explains coverage",
+                u.with_pass_timings, u.compiled, self.id
+            );
+        }
         for t in self
             .top_units
             .iter()
@@ -1956,6 +1963,40 @@ mod tests {
         assert!(footer.contains("build environment fault"), "{footer}");
         assert!(footer.contains("disk full"), "{footer}");
         assert!(!footer.contains("0 errors"), "{footer}");
+    }
+
+    #[test]
+    fn agent_report_exposes_missing_compiler_phase_coverage() {
+        let units = [Unit {
+            crate_name: "example".into(),
+            start: 0.1,
+            end: 1.0,
+            wall: 0.9,
+            ..Default::default()
+        }];
+        let mut s = build(
+            &Meta::default(),
+            GitInfo::default(),
+            0.0,
+            1.0,
+            0,
+            0.0,
+            &[],
+            &[],
+            &[],
+            &units,
+        );
+        let hidden = crate::agent_output::Hidden::default();
+        let report = s.agent_report("ok", &hidden);
+        assert!(
+            report.contains("compiler timings for 0/1 compiled units"),
+            "{report}"
+        );
+        s.units.with_pass_timings = 1;
+        assert!(!s.agent_report("ok", &hidden).contains("  phases  "));
+        s.units.compiled = 0;
+        s.units.with_pass_timings = 0;
+        assert!(!s.agent_report("ok", &hidden).contains("  phases  "));
     }
 
     #[test]
