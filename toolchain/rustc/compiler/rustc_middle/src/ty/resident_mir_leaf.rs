@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use rustc_hir::def::DefKind;
+use rustc_hir::def_id::LocalDefId;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{SourceFile, Span, SyntaxContext};
 
@@ -160,8 +161,15 @@ fn inspect_body_closure<'body, 'tcx>(
         return Err(LeafError::Limit);
     }
     inspect_shape(body, limits)?;
+    let ty::InstanceKind::Item(def) = body.source.instance else {
+        return Err(LeafError::Item);
+    };
+    let Some(owner) = def.as_local() else {
+        return Err(LeafError::Item);
+    };
     let mut visitor = SpanClosure {
         source_map,
+        owner,
         files: &files,
         limit: limits.spans,
         spans: Vec::new(),
@@ -309,6 +317,7 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
 
 struct SpanClosure<'a> {
     source_map: &'a SourceMap,
+    owner: LocalDefId,
     files: &'a [(usize, Arc<SourceFile>)],
     limit: usize,
     spans: Vec<Span>,
@@ -320,8 +329,11 @@ impl SpanClosure<'_> {
         if self.spans.len() >= self.limit {
             return Err(LeafError::Limit);
         }
+        // Incremental HIR lowering attaches the current item as Span::parent.
+        // It is dependency bookkeeping, not hygiene expansion. Only the same
+        // already-reviewed source Item is allowed, never another definition.
         if span.is_dummy()
-            || span.parent().is_some()
+            || span.parent().is_some_and(|parent| parent != self.owner)
             || span.from_expansion()
             || span.ctxt() != SyntaxContext::root()
             || span.lo() > span.hi()
@@ -429,6 +441,8 @@ mod tests {
     }
 
     fn leaf<'tcx>(ty: Ty<'tcx>, span: Span) -> mir::Body<'tcx> {
+        // Match incremental SpanLowerer::lower's native owner-parent metadata.
+        let span = span.with_parent(Some(rustc_hir::def_id::CRATE_DEF_ID));
         let info = mir::SourceInfo::outermost(span);
         let constant = mir::Operand::Constant(Box::new(mir::ConstOperand {
             span,
@@ -504,6 +518,7 @@ mod tests {
             assert!(!proof.spans().is_empty());
             let mut visitor = SpanClosure {
                 source_map: &sm,
+                owner: rustc_hir::def_id::CRATE_DEF_ID,
                 files: proof.active_files(),
                 limit: 1,
                 spans: Vec::new(),
@@ -520,6 +535,11 @@ mod tests {
             );
             visitor.limit = 8;
             assert_eq!(visitor.check(rustc_span::DUMMY_SP), Err(LeafError::Span));
+            assert_eq!(
+                visitor
+                    .check(rustc_span::DUMMY_SP.with_parent(Some(rustc_hir::def_id::CRATE_DEF_ID))),
+                Err(LeafError::Span)
+            );
             let past_eof = rustc_span::BytePos(file.end_position().0 + 1);
             assert_eq!(
                 visitor.check(Span::new(file.start_pos, past_eof, SyntaxContext::root(), None)),
@@ -533,6 +553,7 @@ mod tests {
             let wrong = vec![(proof.active_files()[0].0, impostor)];
             let mut wrong_view = SpanClosure {
                 source_map: &sm,
+                owner: rustc_hir::def_id::CRATE_DEF_ID,
                 files: &wrong,
                 limit: 8,
                 spans: Vec::new(),
@@ -622,6 +643,24 @@ mod tests {
                 mir::ClearCrossCrate::Clear
             ));
             assert!(inspect_body_closure(&body, &sm, LeafLimits::default()).is_ok());
+            let proof = inspect_body_closure(&body, &sm, LeafLimits::default()).unwrap();
+            assert!(
+                proof
+                    .spans()
+                    .iter()
+                    .all(|span| span.parent() == Some(rustc_hir::def_id::CRATE_DEF_ID))
+            );
+            drop(proof);
+            // Foreign definition parents are not merely discarded as metadata.
+            let original_span = body.local_decls[mir::RETURN_PLACE].source_info.span;
+            let foreign = LocalDefId { local_def_index: rustc_hir::def_id::DefIndex::from_u32(1) };
+            body.local_decls[mir::RETURN_PLACE].source_info.span =
+                original_span.with_parent(Some(foreign));
+            assert!(matches!(
+                inspect_body_closure(&body, &sm, LeafLimits::default()),
+                Err(LeafError::Span)
+            ));
+            body.local_decls[mir::RETURN_PLACE].source_info.span = original_span;
             // Preserve the already reviewed pre-cleanup metadata and explicit
             // no-retag forms, but never admit arbitrary retained local metadata.
             body.local_decls[mir::RETURN_PLACE].local_info =
