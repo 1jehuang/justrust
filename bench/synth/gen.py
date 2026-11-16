@@ -73,6 +73,11 @@ def stock_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("JUSTRUST_", "CARGO_", "RUSTC", "RUSTFLAGS"))}
     env["PATH"] = ":".join(p for p in env.get("PATH", "").split(":")
                            if not (Path(p) / "cargo").resolve().name.startswith("justrust"))
+    # Match versus.stack_env: registry rust-toolchain.toml files must not
+    # switch a rustup proxy to an incompatible compiler midway through probing.
+    for key, tool in (("RUSTC", "/usr/bin/rustc"), ("RUSTDOC", "/usr/bin/rustdoc")):
+        if Path(tool).exists():
+            env[key] = tool
     return env
 
 
@@ -342,6 +347,11 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
     rng.shuffle(cands)
     cands = cands[:PROBES_PER_CRATE]
     print(f"synth: probing {name} ({len(cands)} locations)", file=sys.stderr)
+    if not cands:
+        # Declaration-only packages legitimately have no editable function
+        # bodies. Do not persist an empty cache: always verify candidates on
+        # the next call, unlike failed discovery with nonzero candidates.
+        return {}
     result: dict[str, dict[str, list[int]]] = {}
     found = {}
     for tests in (False, True):

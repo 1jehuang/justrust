@@ -94,6 +94,36 @@ class ProbeTests(unittest.TestCase):
                 gen.probe(self.ws, 'fixture')
         self.assertFalse((gen.WORK / 'probe/snapshot/fixture.json').exists())
 
+    def test_declaration_only_zero_candidates_skip_compiler_and_cache(self):
+        self.source.write_text('pub struct DeclarationOnly;\n')
+        with mock.patch.object(gen, '_probe_run') as run:
+            self.assertEqual(gen.probe(self.ws, 'fixture'), {})
+        run.assert_not_called()
+        self.assertFalse((gen.WORK / 'probe/snapshot/fixture.json').exists())
+
+    def test_empty_cache_does_not_hide_new_candidates(self):
+        cache = gen.WORK / 'probe/snapshot/fixture.json'
+        cache.parent.mkdir(parents=True)
+        cache.write_text('{}')
+        self.source.write_text('pub struct DeclarationOnly;\n')
+        with mock.patch.object(gen, '_probe_run') as run:
+            self.assertEqual(gen.probe(self.ws, 'fixture'), {})
+        run.assert_not_called()
+        self.source.write_text(self.original)
+        with mock.patch.object(gen, '_probe_run', return_value=(set(), set(), set())):
+            with self.assertRaisesRegex(SystemExit, 'no live locations among 1 candidates'):
+                gen.probe(self.ws, 'fixture')
+
+    def test_stock_env_pins_compiler_and_rustdoc(self):
+        with mock.patch.dict(gen.os.environ, {'RUSTC': '/bad/rustc',
+                                              'RUSTDOC': '/bad/rustdoc',
+                                              'RUSTC_WRAPPER': '/bad/wrapper'}):
+            with mock.patch.object(gen.Path, 'exists', return_value=True):
+                env = gen.stock_env()
+        self.assertEqual(env['RUSTC'], '/usr/bin/rustc')
+        self.assertEqual(env['RUSTDOC'], '/usr/bin/rustdoc')
+        self.assertNotIn('RUSTC_WRAPPER', env)
+
     def test_empty_cache_is_reprobed(self):
         cache = gen.WORK / 'probe/snapshot/fixture.json'
         cache.parent.mkdir(parents=True)
