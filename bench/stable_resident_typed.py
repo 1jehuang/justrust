@@ -236,11 +236,19 @@ def capture_mode(compiler, root, mode, timeout):
             (root / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
 
 
+def observed_hit_kinds(modes):
+    """Name only real enabled-session query counters, never aggregate MIR as Typeck."""
+    return [key.removesuffix('_hits') for key in HITS if any(
+        mode.get('mode') == '1' and type(mode.get('live', {}).get(key)) is int
+        and mode['live'][key] > 0 for mode in modes)]
+
+
 def capture(compiler, root, timeout=180):
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
     report = dict(schema=1, scope='native-owned-live-typed-same-source-correctness',
-        verdict='incomplete', modes=[], claim='Actual retained Typeck/MIR hit acceptance '
-        'for controlled local same-source compilation only. No speed, hosted, general '
+        verdict='incomplete', modes=[], claim='Retained native query acceptance '
+        '(Typeck or MIR, not necessarily both) for controlled local same-source '
+        'compilation only. See observed_hit_kinds. No speed, hosted, general '
         'cross-edit reuse or arbitrary artifact equivalence claim.')
     try:
         report['mode_receipts'] = [str(root / name / 'receipt.json')
@@ -251,6 +259,7 @@ def capture(compiler, root, timeout=180):
         report['identity_after'] = shared.identity(compiler)
         if report['identity_before'] != report['identity_after']:
             raise AssertionError('Frozen compiler identity changed')
+        report['observed_hit_kinds'] = observed_hit_kinds(report['modes'])
         report['verdict'] = 'passed'
         return report
     except BaseException as error:
@@ -273,7 +282,8 @@ def main():
     print('Private original evidence: ' + str(args.output.resolve()), flush=True)
     try:
         report = capture(args.compiler, args.output, args.timeout)
-        print(json.dumps(dict(verdict=report['verdict'], claim=report['claim']), indent=2))
+        print(json.dumps(dict(verdict=report['verdict'], claim=report['claim'],
+                              observed_hit_kinds=report['observed_hit_kinds']), indent=2))
     finally:
         receipt = args.output.resolve() / 'receipt.json'
         if receipt.exists():

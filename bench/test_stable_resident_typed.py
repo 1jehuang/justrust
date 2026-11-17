@@ -24,6 +24,18 @@ def ir(width=8, value=7):
 
 
 class TypedValidationTests(unittest.TestCase):
+    def test_observed_query_kinds_do_not_label_mir_as_typeck(self):
+        self.assertEqual(typed.observed_hit_kinds([
+            dict(mode='control', live=dict(typeck_hits=99, mir_hits=99)),
+            dict(mode='1', live=dict(typeck_hits=0, mir_hits=15)),
+        ]), ['mir'])
+        self.assertEqual(typed.observed_hit_kinds([
+            dict(mode='1', live=dict(typeck_hits=2, mir_hits=15)),
+        ]), ['typeck', 'mir'])
+        self.assertEqual(typed.observed_hit_kinds([
+            dict(mode='1', live=dict(typeck_hits=True, mir_hits='15')),
+        ]), [])
+
     def test_environment_is_dedicated_and_strips_other_resident_gates(self):
         with patch.dict(os.environ, {'JUSTRUST_RUSTC_RESIDENT_VALUES': '1',
                         'JUSTRUST_RUSTC_RESIDENT_TYPED': 'bad'}):
