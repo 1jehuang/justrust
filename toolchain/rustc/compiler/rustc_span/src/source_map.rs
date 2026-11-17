@@ -214,6 +214,8 @@ pub struct SourceRevisionLoader<'sm> {
 struct SourceRevisionState {
     working_directory: PathBuf,
     entries: BTreeMap<PathBuf, RevisionSourceFile>,
+    generated: UnhashMap<StableSourceFileId, RevisionGeneratedSourceFile>,
+    generated_versions: usize,
     raw_bytes: usize,
     max_files: usize,
     max_raw_bytes: usize,
@@ -228,6 +230,11 @@ pub struct ResidentRawSourceFile {
     pub path: PathBuf,
     pub file: Arc<SourceFile>,
     pub raw: String,
+}
+
+struct RevisionGeneratedSourceFile {
+    raw: String,
+    file: Arc<SourceFile>,
 }
 
 struct RevisionSourceFile {
@@ -294,7 +301,7 @@ impl SourceRevisionState {
             if entry.loaded_revision == loader.revision && entry.file.name == filename {
                 return Ok(Arc::clone(&entry.file));
             }
-        } else if loader.entries.len() == loader.max_files {
+        } else if loader.entries.len() + loader.generated.len() == loader.max_files {
             return Err(io::Error::other("source revision file budget exhausted"));
         }
 
@@ -522,7 +529,7 @@ mod revision_loader_tests {
         let (sm, _) = setup();
         let historical = sm.new_source_file(FileName::anon_source_code("history"), "old".into());
         {
-            let _revision = sm.begin_resident_source_revision(0, 0, 2).unwrap();
+            let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
             let generated =
                 sm.new_source_file(FileName::anon_source_code("generated"), "gen".into());
             let source = SourceFile::new(
@@ -555,10 +562,169 @@ mod revision_loader_tests {
             assert_eq!(active.len(), 2);
             assert_eq!(sm.active_source_files().unwrap().unwrap().len(), 3);
         }
-        let _revision = sm.begin_resident_source_revision(0, 0, 2).unwrap();
+        let _revision = sm.begin_resident_source_revision(1, 8, 2).unwrap();
         assert!(sm.active_source_files().unwrap().unwrap().is_empty());
         assert!(Arc::ptr_eq(&sm.files()[0], &historical));
         assert_eq!(sm.files().len(), 4);
+    }
+
+    #[test]
+    fn native_direct_virtual_sources_validate_text_and_reactivate_unchanged_versions() {
+        let (sm, _) = setup();
+        let name = FileName::Custom("generated.rs".into());
+        let historical = sm.new_source_file(name.clone(), "old".into());
+        // Ordinary stable-ID deduplication deliberately ignores supplied text.
+        assert!(Arc::ptr_eq(&historical, &sm.new_source_file(name.clone(), "ignored".into())));
+        let first = {
+            let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+            let file = sm.new_source_file(name.clone(), "old".into());
+            // Pre-resident source has no exact raw-text validation record.
+            assert!(!Arc::ptr_eq(&file, &historical));
+            assert!(Arc::ptr_eq(&file, &sm.new_source_file(name.clone(), "old".into())));
+            let active = sm.active_source_files().unwrap().unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].0, 1);
+            assert!(Arc::ptr_eq(&active[0].1, &file));
+            file
+        };
+        {
+            let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+            assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+            let unchanged = sm.new_source_file(name.clone(), "old".into());
+            assert!(Arc::ptr_eq(&first, &unchanged));
+            let active = sm.active_source_files().unwrap().unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].0, 1);
+            assert!(Arc::ptr_eq(&active[0].1, &first));
+        }
+        let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+        let changed = sm.new_source_file(name, "new".into());
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.stable_id, first.stable_id);
+        assert_eq!(changed.src.as_deref().unwrap(), "new");
+        assert_eq!(first.src.as_deref().unwrap(), "old");
+        assert!(changed.start_pos > first.end_position());
+        assert!(Arc::ptr_eq(&sm.source_file_by_stable_id(changed.stable_id).unwrap(), &changed));
+        let active = sm.active_source_files().unwrap().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].0, 2);
+        assert!(Arc::ptr_eq(&active[0].1, &changed));
+        assert!(Arc::ptr_eq(&sm.lookup_source_file(first.start_pos), &first));
+        assert_eq!(sm.files().len(), 3);
+    }
+
+    #[test]
+    fn native_direct_real_include_source_reactivates_exact_unchanged_text() {
+        let (sm, disk) = setup();
+        let path = Path::new("src/../scripts/sign-release.py");
+        let name = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, path));
+        let first = {
+            let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+            sm.new_source_file(name.clone(), "print('release')\n".into())
+        };
+        {
+            let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+            assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+            let unchanged = sm.new_source_file(name.clone(), "print('release')\n".into());
+            assert!(Arc::ptr_eq(&first, &unchanged));
+            let active = sm.active_source_files().unwrap().unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].0, 0);
+            assert!(Arc::ptr_eq(&active[0].1, &first));
+            assert_eq!(first.name, name);
+        }
+        let _revision = sm.begin_resident_source_revision(1, 32, 3).unwrap();
+        let changed = sm.new_source_file(name.clone(), "print('changed')\n".into());
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed.name, name);
+        assert_eq!(changed.stable_id, first.stable_id);
+        let active = sm.active_source_files().unwrap().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].0, 1);
+        assert!(Arc::ptr_eq(&active[0].1, &changed));
+        // include_str-style callers supply bytes directly, without FileLoader reads.
+        assert_eq!(disk.lock().unwrap().reads, 0);
+    }
+
+    #[test]
+    fn native_direct_virtual_sources_compare_raw_not_normalized_text() {
+        let (sm, _) = setup();
+        let name = FileName::Custom("normalized.rs".into());
+        let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+        let crlf = sm.new_source_file(name.clone(), "x\r\n".into());
+        let lf = sm.new_source_file(name.clone(), "x\n".into());
+        let bom = sm.new_source_file(name.clone(), "\u{feff}x\n".into());
+        assert_eq!(crlf.src, lf.src);
+        assert_eq!(lf.src, bom.src);
+        assert!(!Arc::ptr_eq(&crlf, &lf));
+        assert!(!Arc::ptr_eq(&lf, &bom));
+        assert!(Arc::ptr_eq(&bom, &sm.new_source_file(name, "\u{feff}x\n".into())));
+        assert_eq!(sm.active_source_files().unwrap().unwrap().len(), 3);
+    }
+
+    fn direct_source_fails_closed(sm: &SourceMap, name: &str, text: &str) {
+        let count = sm.files().len();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sm.new_source_file(FileName::Custom(name.into()), text.into());
+        }));
+        assert!(result.is_err());
+        assert_eq!(sm.files().len(), count);
+        assert!(sm.active_source_files().is_err());
+    }
+
+    #[test]
+    fn native_direct_sources_reject_inactive_loading_and_poisoned_guards() {
+        let (sm, _) = setup();
+        {
+            let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+            sm.new_source_file(FileName::Custom("generated.rs".into()), "x".into());
+        }
+        direct_source_fails_closed(&sm, "generated.rs", "x");
+        {
+            let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+            let state = sm.resident_source.lock().state.take();
+            direct_source_fails_closed(&sm, "generated.rs", "x");
+            sm.resident_source.lock().state = state;
+            direct_source_fails_closed(&sm, "generated.rs", "x");
+        }
+        let _revision = sm.begin_resident_source_revision(1, 8, 3).unwrap();
+        assert!(sm.load_file(Path::new("missing.rs")).is_err());
+        direct_source_fails_closed(&sm, "generated.rs", "x");
+    }
+
+    #[test]
+    fn native_direct_sources_share_input_budgets_and_bound_repeated_versions() {
+        let (sm, disk) = setup();
+        write(&disk, "disk.rs", "disk");
+        let _revision = sm.begin_resident_source_revision(2, 5, 1).unwrap();
+        sm.load_file(Path::new("disk.rs")).unwrap();
+        let name = FileName::Custom("generated.rs".into());
+        sm.new_source_file(name.clone(), "x".into());
+        sm.new_source_file(name, "y".into());
+        // Updating the same name cannot allocate unbounded arena history.
+        direct_source_fails_closed(&sm, "generated.rs", "z");
+
+        let (sm, _) = setup();
+        let _revision = sm.begin_resident_source_revision(1, 1, 1).unwrap();
+        sm.new_source_file(FileName::Custom("one.rs".into()), "x".into());
+        direct_source_fails_closed(&sm, "two.rs", "");
+
+        let (sm, _) = setup();
+        let _revision = sm.begin_resident_source_revision(1, 1, 1).unwrap();
+        direct_source_fails_closed(&sm, "large.rs", "xx");
+
+        let (sm, disk) = setup();
+        write(&disk, "disk.rs", "x");
+        let _revision = sm.begin_resident_source_revision(1, 8, 1).unwrap();
+        sm.new_source_file(FileName::Custom("one.rs".into()), "x".into());
+        // Generated names consume the same file budget as subsequent disk loads.
+        assert!(sm.load_file(Path::new("disk.rs")).is_err());
+
+        for limits in [(0, 8, 1), (1, 0, 1), (1, 8, 0)] {
+            let (sm, _) = setup();
+            let _revision = sm.begin_resident_source_revision(limits.0, limits.1, limits.2);
+            direct_source_fails_closed(&sm, "zero.rs", "x");
+        }
     }
 
     #[test]
@@ -1028,7 +1194,7 @@ impl SourceMap {
             return Err(io::Error::other("resident source revisions enabled during ordinary load"));
         }
         let filename = FileName::Real(self.path_mapping.to_real_filename(&self.working_dir, path));
-        let file = self.new_source_file(filename, src);
+        let file = self.new_source_file_ordinary(filename, src);
         drop(resident);
         Ok(file)
     }
@@ -1057,6 +1223,8 @@ impl SourceMap {
             state: SourceRevisionState {
                 working_directory,
                 entries: BTreeMap::new(),
+                generated: UnhashMap::default(),
+                generated_versions: 0,
                 raw_bytes: 0,
                 max_files,
                 max_raw_bytes,
@@ -1066,10 +1234,14 @@ impl SourceMap {
         })
     }
 
-    /// Permanently opt this map into native revision dispatch through `load_file`.
-    /// Limits are fixed on initialization. Paths and current exact raw
-    /// text are bounded, not total arena bytes. The revision limit bounds retained
-    /// source-version count for these loads (at most `file_limit * revision_limit`);
+    /// Permanently opt this map into native revision dispatch through `load_file`
+    /// and exact supplied-text validation through `new_source_file`.
+    /// Limits are fixed on initialization. Loaded paths and generated stable IDs
+    /// share the file limit and current exact raw-text budget. Generated versions
+    /// additionally share a lifetime allocation cap of `file_limit * revision_limit`.
+    /// These limits bound retained inputs, not total arena bytes. The revision
+    /// limit bounds retained source-version count for filesystem loads
+    /// (at most `file_limit * revision_limit`);
     /// `files()` continues to include every historical file, including other inputs.
     /// Errors poison the current scope. Nested/concurrent scopes are rejected.
     /// Concurrent or reentrant loads are rejected and poison the active scope,
@@ -1305,8 +1477,9 @@ impl SourceMap {
     }
 
     /// Creates a new `SourceFile`.
-    /// If a file already exists in the `SourceMap` with the same ID, that file is returned
-    /// unmodified.
+    /// Ordinary maps return the existing file with the same ID unmodified.
+    /// Native resident maps require a healthy active guard and compare exact
+    /// supplied text before reusing a generated source, marking it current.
     pub fn new_source_file(&self, filename: FileName, src: String) -> Arc<SourceFile> {
         self.try_new_source_file(filename, src).unwrap_or_else(|OffsetOverflowError| {
             eprintln!(
@@ -1325,8 +1498,7 @@ impl SourceMap {
     /// `files()` still includes all historical versions. A scoped executor must
     /// supply active-revision file views and bound or retire the owning source
     /// universe before enabling multi-revision compilation. `new_source_file`
-    /// retains its deduplication behavior, as does `load_file` until resident
-    /// source revisions are enabled.
+    /// retains ordinary deduplication until resident source revisions are enabled.
     pub fn new_source_file_version(
         &self,
         filename: FileName,
@@ -1336,7 +1508,83 @@ impl SourceMap {
         self.register_source_file(file.stable_id, file)
     }
 
+    // The ordinary filesystem path already holds resident_source while
+    // registering. Do not recursively acquire that lock through the public API.
+    fn new_source_file_ordinary(&self, filename: FileName, src: String) -> Arc<SourceFile> {
+        self.try_new_source_file_ordinary(filename, src).unwrap_or_else(|OffsetOverflowError| {
+            eprintln!(
+                "fatal error: rustc does not support text files larger than {} bytes",
+                SourceFile::MAX_FILE_SIZE
+            );
+            crate::fatal_error::FatalError.raise()
+        })
+    }
+
     fn try_new_source_file(
+        &self,
+        filename: FileName,
+        src: String,
+    ) -> Result<Arc<SourceFile>, OffsetOverflowError> {
+        // Keep resident -> files lock order and serialize validation, allocation
+        // and activation against guard transitions. There are no loader callbacks.
+        let mut resident = self.resident_source.lock();
+        if !resident.enabled {
+            return self.try_new_source_file_ordinary(filename, src);
+        }
+        if !resident.active || resident.failed || resident.state.is_none() {
+            resident.failed = true;
+            drop(resident);
+            eprintln!("fatal error: generated source requires an active healthy resident revision");
+            crate::fatal_error::FatalError.raise()
+        }
+        let state = resident.state.as_mut().unwrap();
+        let stable_id = StableSourceFileId::from_filename_in_current_crate(&filename);
+        let previous = state.generated.get(&stable_id);
+        let raw_bytes = state
+            .raw_bytes
+            .checked_sub(previous.map_or(0, |entry| entry.raw.len()))
+            .and_then(|bytes| bytes.checked_add(src.len()))
+            .filter(|&bytes| bytes <= state.max_raw_bytes);
+        let unchanged = previous.is_some_and(|entry| entry.raw == src && entry.file.name == filename);
+        // A caller may supply multiple different versions of one virtual name in
+        // a single guard. Bound those allocations too, not just retained names.
+        let version_limit = state.max_files.saturating_mul(state.max_revisions);
+        if raw_bytes.is_none()
+            || (previous.is_none() && state.entries.len() + state.generated.len() >= state.max_files)
+            || (!unchanged && state.generated_versions >= version_limit)
+        {
+            resident.failed = true;
+            drop(resident);
+            eprintln!("fatal error: resident generated source budget exhausted");
+            crate::fatal_error::FatalError.raise()
+        }
+        let file = if unchanged {
+            Arc::clone(&previous.unwrap().file)
+        } else {
+            match self.new_source_file_version(filename, src.clone()) {
+                Ok(file) => file,
+                Err(error) => {
+                    resident.failed = true;
+                    return Err(error);
+                }
+            }
+        };
+        let state = resident.state.as_mut().unwrap();
+        state.generated_versions += usize::from(!unchanged);
+        state.raw_bytes = raw_bytes.unwrap();
+        state.generated.insert(
+            stable_id,
+            RevisionGeneratedSourceFile { raw: src, file: Arc::clone(&file) },
+        );
+        let mut files = self.files.borrow_mut();
+        let index = files.source_files.partition_point(|f| f.start_pos < file.start_pos);
+        assert!(Arc::ptr_eq(&files.source_files[index], &file));
+        files.stable_id_to_source_file.insert(stable_id, Arc::clone(&file));
+        files.active_source_files.as_mut().unwrap().insert(index);
+        Ok(file)
+    }
+
+    fn try_new_source_file_ordinary(
         &self,
         filename: FileName,
         src: String,
