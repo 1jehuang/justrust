@@ -404,6 +404,16 @@ external typed reuse still rejects. Ten native metadata tests and this native
 cross-context acceptance pass. Matching std was rebuilt normally after an initial
 incompatible-sysroot rejection, without a version override.
 
+The native decoder now owns its imported-source map and `HygieneDecodeContext`
+in one `Arc`-owned `ExternalDecoderIdentityState`. Both actual span importing and
+syntax-context decoding use this bundle. Every `CrateMetadata` still constructs
+fresh storage, so ordinary semantics and external rejection remain unchanged.
+Storage tests prove fresh bundles are independent and a cloned bundle preserves
+both source entries and the actual hygiene decoder identity. The complete native
+interface suite (21 tests), metadata suite (15 tests plus two doctests), and
+loaded-std source-universe acceptance pass. This supplies an ownership unit, not
+cross-context binding or authorization.
+
 The next ownership work must handle imported source translations and decoder
 hygiene together. Globally interning sources by stable ID alone is insufficient:
 external source-text caches and diagnostics must retain correct revision behavior.
