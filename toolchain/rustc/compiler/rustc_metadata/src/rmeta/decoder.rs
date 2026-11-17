@@ -108,14 +108,12 @@ pub(crate) struct CrateMetadata {
     incoherent_impls: FxIndexMap<SimplifiedType, LazyArray<DefIndex>>,
     /// Proc macro function pointers for this crate, if it's a proc macro crate.
     raw_proc_macros: Option<&'static [ProcMacroClient]>,
-    /// Actual source translations and hygiene decoder, selected before decoding.
+    /// Actual source, hygiene, and allocation decoder storage, selected before decoding.
     decoder_identity: Arc<ExternalDecoderIdentityState>,
     /// For every definition in this crate, maps its `DefPathHash` to its `DefIndex`.
     def_path_hash_map: DefPathHashMapRef<'static>,
     /// Likewise for ExpnHash.
     expn_hash_map: OnceLock<UnhashMap<ExpnHash, ExpnIndex>>,
-    /// Used for decoding interpret::AllocIds in a cached & thread-safe manner.
-    alloc_decoding_state: AllocDecodingState,
     /// Caches decoded `DefKey`s.
     def_key_cache: Lock<FxHashMap<DefIndex, DefKey>>,
 
@@ -281,7 +279,13 @@ impl<'a, 'tcx> MetaDecoder for (&'a CrateMetadata, TyCtxt<'tcx>) {
             blob_decoder: self.0.blob().decoder(pos),
             cdata: self.0,
             tcx: self.1,
-            alloc_decoding_session: self.0.alloc_decoding_state.new_decoding_session(),
+            alloc_decoding_session: self
+                .0
+                .decoder_identity
+                .alloc_decoding_state
+                .get()
+                .expect("allocation decoder initialized before constructing CrateMetadata")
+                .new_decoding_session(),
         }
     }
 }
@@ -2012,8 +2016,9 @@ impl CrateMetadata {
             .decode(&blob)
             .map(|trait_impls| (trait_impls.trait_id, trait_impls.impls))
             .collect();
-        let alloc_decoding_state =
-            AllocDecodingState::new(root.interpret_alloc_index.decode(&blob).collect());
+        decoder_identity.alloc_decoding_state.get_or_init(|| {
+            AllocDecodingState::new(root.interpret_alloc_index.decode(&blob).collect())
+        });
 
         // Pre-decode the DefPathHash->DefIndex table. This is a cheap operation
         // that does not copy any data. It just does some data verification.
@@ -2029,7 +2034,6 @@ impl CrateMetadata {
             decoder_identity,
             def_path_hash_map,
             expn_hash_map: Default::default(),
-            alloc_decoding_state,
             cnum,
             cnum_map,
             dep_kind,

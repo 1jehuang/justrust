@@ -6,6 +6,7 @@
 
 use crate::creader::CStore;
 use rustc_data_structures::sync::Lock;
+use rustc_middle::mir::interpret::AllocDecodingState;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::CrateNum;
 use rustc_span::hygiene::HygieneDecodeContext;
@@ -13,7 +14,7 @@ use rustc_span::source_map::SourceMap;
 use rustc_span::{ExternalSource, ExternalSourceKind, Pos, SourceFile};
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExternalDecoderCacheStats {
@@ -354,6 +355,9 @@ pub(crate) struct ExternalDecoderIdentityState {
     /// SyntaxContext IDs are crate-local, so their decoding cache must remain
     /// paired with the actual source translations for that crate metadata.
     pub(crate) hygiene_context: HygieneDecodeContext,
+    /// Actual decoded allocation identities, initialized from this bundle's exact
+    /// metadata before a native decoding session can be created.
+    pub(crate) alloc_decoding_state: OnceLock<AllocDecodingState>,
 }
 
 /// Limits apply across all loaded crates. Source bytes are declared lengths,
@@ -674,6 +678,26 @@ mod tests {
             },
             states: vec![(1, state)],
         }
+    }
+
+    #[test]
+    fn allocation_decoder_storage_is_retained_with_the_selected_native_owner() {
+        let p = published();
+        let owner = p.state(1).unwrap();
+        assert!(owner.alloc_decoding_state.get().is_none());
+        let original = owner.alloc_decoding_state.get_or_init(|| AllocDecodingState::new(vec![17]));
+        let selected =
+            p.candidate(1, &[1, 2, 3], [1].into_iter(), &p.source_map, true, false).unwrap();
+        let retained = selected
+            .alloc_decoding_state
+            .get_or_init(|| panic!("retained allocation decoder must not be reinitialized"));
+        assert!(std::ptr::eq(original, retained));
+
+        let fresh = ExternalDecoderIdentityState::default();
+        assert!(fresh.alloc_decoding_state.get().is_none());
+        let fresh_state =
+            fresh.alloc_decoding_state.get_or_init(|| AllocDecodingState::new(vec![17]));
+        assert!(!std::ptr::eq(original, fresh_state));
     }
 
     #[test]
