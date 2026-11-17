@@ -150,6 +150,8 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-login-event-fixture-v1.patch":
+                "2ffae183df7ced327ad3135a9c54f105f0be8b9aa37891d94fe99c178653dd26",
             "bench/patches/jcode-base-global-fixtures-v1.patch":
                 "dc01947969e4f58fb00cf6979fe43486371a8b20e3f4e0b1ebe03949679cc3cc",
             "bench/patches/jcode-openai-endpoint-fixture-lock-v1.patch":
@@ -164,6 +166,10 @@ SNAPSHOTS = {
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-base/src/bus.rs":
+                "d24da766f8270ae942cfcf9bb0ade536d61a46df816d49883674610d2221fa65",
+            "jcode/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs":
+                "c041aa0d61cd8398b67cb502f614388e573e32ca6417823e25bf9cbf3cdb8969",
             "jcode/crates/jcode-base/src/compaction_tests.rs":
                 "4971c62d9cdeec94a6f41538a743df9a97398547c420b8a02f201a3751fbd82d",
             "jcode/crates/jcode-base/src/provider/catalog_scheduler.rs":
@@ -209,6 +215,7 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-openai-endpoint-fixture-lock-v1.patch"),
             ("jcode", "bench/patches/jcode-clipboard-path-lock-v1.patch"),
             ("jcode", "bench/patches/jcode-base-global-fixtures-v1.patch"),
+            ("jcode", "bench/patches/jcode-login-event-fixture-v1.patch"),
         ],
     },
     "justrust": {

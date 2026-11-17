@@ -313,6 +313,59 @@ must run the exact disposable binary. These controls are fixture correctness
 evidence, not performance evidence or a substitute for normal-parallel full
 base/workspace tests and the comprehensive comparison gate.
 
+### Pinned Cerebras lifecycle event ownership correction
+
+Run `44032964275`, attempt 2, candidate point 15 failed the unchanged
+`test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages` at
+`state_model_poke_03.rs:918`. Its process-global bus subscription received an
+unrelated `grok-build` failed `LoginCompleted` event from a cancelled device-login
+DNS request. The environment mutex cannot isolate delayed async event producers.
+This is fixture cross-contamination, not a degraded Cerebras success to ignore.
+
+`jcode-login-event-fixture-v1.patch` gives only that fixture a private event bus.
+A test-support-only thread-local override routes the owning test thread and its
+explicitly owned Tokio runtime workers to the same bus. A non-Send RAII guard
+restores the test thread's prior routing even on unwind. Worker overrides live
+only as long as their runtime threads. The private bus is intentionally retained
+for the test process lifetime so `Bus::global()` keeps its existing static-reference
+contract. There is no production override without test support, no provider/event
+filtering, no reduced thread count, no skipped tests, and no discarded failure.
+All original lifecycle handling, assertions, event counts, late-failure checks,
+and rendering checks are byte-identical. Original pins and the live Jcode checkout
+are unchanged. Strict original-file and patch SHA256 entries in `suite.py` make
+this a new snapshot identity shared by both comparison arms. Prior records cannot
+be compared to this identity.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_login_event_fixture
+python3 bench/test_login_event_fixture.py --accept "$JCODE_SCRATCH_DIR/login-event-controls" --full
+```
+
+The disposable stock-1.99 controls invoke the real `start_grok_build_login`
+producer on an unowned thread after the Cerebras receiver subscribes. The real
+producer's deterministic no-runtime failure uses the same unscoped event variant
+as the observed cancelled-DNS failure, without relying on network scheduling.
+The uncorrected fixture must fail its original assertion, and the corrected
+fixture must pass every original assertion with identical unrelated contamination.
+A second control publishes a failed Cerebras login from an owned runtime worker:
+the corrected fixture must still fail the original assertion. Diagnostics are
+then removed before two full pinned TUI runs and two full runs of each pinned
+workspace (`jcode` and `jcode-desktop`) at normal parallelism. Local execution has
+an explicit controlled-fixture reason so the exact disposable binaries run. These
+are correctness/preflight results,
+not performance measurements or permission to promote a compiler default.
+
+Validated stock-1.99 controls on November 17, 2026: original contamination fails
+at the original assertion (`20261117-025947531-3708425`), the isolated fixture
+passes with the same real unrelated producer (`20261117-030035999-3721010`), and
+an owned runtime worker's failed Cerebras login still fails that assertion
+(`20261117-030113071-3724441`). Full TUI repetition exposed a separate existing
+`test_unicode_math_copy_badge_copies_latex_to_clipboard` failure: the first run
+passed only after its automatic single-test retry (`20261117-030124219-3725442`),
+and the second failed (`20261117-030156663-3771915`). Neither is evidence of a
+clean repeated full-TUI acceptance. That unrelated blocker remains visible and
+must be corrected separately before the comprehensive comparison can pass.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in

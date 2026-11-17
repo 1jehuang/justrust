@@ -1,0 +1,74 @@
+diff --git a/crates/jcode-base/src/bus.rs b/crates/jcode-base/src/bus.rs
+--- a/crates/jcode-base/src/bus.rs
++++ b/crates/jcode-base/src/bus.rs
+@@ -1,3 +1,34 @@
++// Pinned benchmark fixture v1: opt-in, thread-owned event routing only.
++// Runtime workers inherit the fixture bus explicitly, never by event filtering.
++#[cfg(any(test, feature = "test-support"))]
++thread_local! {
++    static TEST_GLOBAL_BUS: std::cell::Cell<Option<&'static Bus>> = const {
++        std::cell::Cell::new(None)
++    };
++}
++
++#[cfg(any(test, feature = "test-support"))]
++pub struct TestGlobalBusGuard {
++    previous: Option<&'static Bus>,
++    // A thread-local override must be restored on its installing thread.
++    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
++}
++
++#[cfg(any(test, feature = "test-support"))]
++impl Drop for TestGlobalBusGuard {
++    fn drop(&mut self) {
++        TEST_GLOBAL_BUS.with(|slot| slot.set(self.previous));
++    }
++}
++
++#[cfg(any(test, feature = "test-support"))]
++pub fn install_test_global_bus(bus: &'static Bus) -> TestGlobalBusGuard {
++    TestGlobalBusGuard {
++        previous: TEST_GLOBAL_BUS.with(|slot| slot.replace(Some(bus))),
++        _thread_bound: std::marker::PhantomData,
++    }
++}
++
+ use crate::message::ToolCall;
+ use crate::side_panel::SidePanelSnapshot;
+ use crate::todo::TodoItem;
+@@ -823,5 +854,9 @@
+ impl Bus {
+     pub fn global() -> &'static Bus {
++        #[cfg(any(test, feature = "test-support"))]
++        if let Some(bus) = TEST_GLOBAL_BUS.with(|slot| slot.get()) {
++            return bus;
++        }
+         static INSTANCE: OnceLock<Bus> = OnceLock::new();
+         INSTANCE.get_or_init(Bus::new)
+     }
+diff --git a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+--- a/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
++++ b/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs
+@@ -804,3 +804,9 @@
+ #[test]
+ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
++    // Own the complete event stream, including failures, on this test and its
++    // runtime workers. Other apps' delayed logins belong to their own streams.
++    let bus: &'static std::sync::Arc<crate::bus::Bus> =
++        Box::leak(Box::new(crate::bus::Bus::new_isolated_for_tests()));
++    let bus: &'static crate::bus::Bus = bus.as_ref();
++    let _bus_guard = crate::bus::install_test_global_bus(bus);
+     let _env_lock = crate::storage::lock_test_env();
+@@ -841,4 +847,11 @@
+     let set_model_requests = fake_provider.set_model_requests.clone();
+     let provider: Arc<dyn Provider> = Arc::new(fake_provider);
+-    let rt = tokio::runtime::Runtime::new().unwrap();
++    let rt = tokio::runtime::Builder::new_multi_thread()
++        .enable_all()
++        .on_thread_start(move || {
++            // Worker TLS dies with its thread. No guard resources are retained.
++            std::mem::forget(crate::bus::install_test_global_bus(bus));
++        })
++        .build()
++        .unwrap();
+     let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
