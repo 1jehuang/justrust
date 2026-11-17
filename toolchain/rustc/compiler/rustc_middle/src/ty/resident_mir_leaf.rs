@@ -850,7 +850,7 @@ mod tests {
                 local_data: mir::ClearCrossCrate::Clear,
             });
             body.var_debug_info.push(mir::VarDebugInfo {
-                name: rustc_span::Symbol::intern("x"),
+                name: rustc_span::sym::value,
                 source_info: info,
                 composite: None,
                 value: mir::VarDebugInfoContents::Place(argument.into()),
@@ -922,9 +922,13 @@ mod tests {
             body.var_debug_info[0].argument_index = Some(2);
             assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
             body.var_debug_info[0].argument_index = Some(1);
-            body.var_debug_info[0].name = rustc_span::Symbol::intern("not a plain name");
+            // Deliberately malformed debug-name text has no predefined symbol.
+            // Keep the interning allowance local to this negative test fixture.
+            #[allow(rustc::symbol_intern_string_literal)]
+            let malformed_name = rustc_span::Symbol::intern("not a plain name");
+            body.var_debug_info[0].name = malformed_name;
             assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
-            body.var_debug_info[0].name = rustc_span::Symbol::intern("x");
+            body.var_debug_info[0].name = rustc_span::sym::value;
             body.var_debug_info[0].value = mir::VarDebugInfoContents::Const(mir::ConstOperand {
                 span: info.span,
                 user_ty: None,
