@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Offline path-dependency fallback correctness, never external reuse or performance.
+"""Offline path-dependency correctness with optional required resident root admission.
 
 Only run after the coordinator freezes native candidates and authorizes idle use.
-Root Cargo units carry --extern and remain unsupported by resident admission.
+Default mode checks conservative fallback. --require-resident-root instead requires
+positive root RPC identity, same-worker edits/recovery, and dependency invalidation.
+Neither mode establishes retained typed external state or a performance claim.
 """
 import argparse
 import base64
@@ -16,7 +18,7 @@ import uuid
 import stable_resident_cargo as shared
 import stable_resident_cargo_suite as safety
 
-SCHEMA = 'stable-resident-cargo-dependency/v1'
+SCHEMA = 'stable-resident-cargo-dependency/v2'
 ERROR = 'JR_CARGO_DELIBERATE_ERROR'
 MANIFEST = '''[package]
 name="dependency_fallback_root"
@@ -130,18 +132,85 @@ def validate_artifacts(stage, observations):
         raise AssertionError('Root-only edit must leave path dependency Cargo-fresh')
 
 
-def validate_trace(stage, events, mode):
+def validate_dependency_transition(stage, observations, previous):
+    if stage['name'] == 'dependency-error':
+        return previous
+    current = {}
+    for row in observations:
+        if row.get('target', {}).get('name') == 'fixture_dep':
+            for artifact in row.get('artifacts', []):
+                if Path(artifact['path']).suffix in ('.rlib', '.rmeta'):
+                    if (artifact.get('exists') is not True or
+                            not isinstance(artifact.get('sha256'), str) or
+                            not re.fullmatch(r'[0-9a-f]{64}', artifact['sha256'])):
+                        raise AssertionError('Missing dependency artifact content identity')
+                    current[artifact['path']] = artifact['sha256']
+    if not current:
+        raise AssertionError('No dependency Rust artifact content identity observed')
+    if previous is not None:
+        if stage['root_only'] and current != previous:
+            raise AssertionError('Root-only edit changed dependency artifact identity')
+        if stage['name'] in ('dependency-signature', 'dependency-const', 'dependency-body'):
+            common = current.keys() & previous.keys()
+            if not any(current[path] != previous[path] for path in common):
+                raise AssertionError('No same-path dependency artifact content replacement observed')
+    return current
+
+
+def validate_trace(stage, events, mode, require_resident_root=False):
     complete = [event for event in events if event.get('event') == 'complete']
-    if complete and (mode == 'off' or stage['root_only']):
-        raise AssertionError('Root --extern fallback or normal-off unexpectedly completed resident RPC')
-    # On dependency edits a std-only dependency may use the worker. This is NOT
-    # evidence of root admission, retained external typed state, or external reuse.
+    if mode == 'off' and complete:
+        raise AssertionError('normal-off unexpectedly completed resident RPC')
+    if require_resident_root and mode == 'on':
+        # Attribute the root explicitly, never infer it from event ordering or
+        # mistake an admitted dependency for an admitted --extern root unit.
+        roots = [event for event in complete
+                 if event.get('crate_name') == 'dependency_fallback_root']
+        if stage['name'] == 'dependency-error':
+            if roots:
+                raise AssertionError('Dependency compile failure unexpectedly compiled the root')
+            return dict(complete_events=len(complete), root=None,
+                        interpretation='dependency error prevented root compilation')
+        if not roots:
+            raise AssertionError('Required resident root completion missing')
+        if len(roots) != 1 or (stage['root_only'] and len(complete) != 1):
+            raise AssertionError('Stage requires exactly one root completion')
+        root = roots[0]
+        result = root.get('result', {})
+        key, pid, request = root.get('key'), result.get('pid'), result.get('id')
+        expected_status = 1 if stage['expectation'] == 'error' else 0
+        if (not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', key) or
+                type(pid) is not int or pid <= 0 or type(request) is not int or request < 0 or
+                type(result.get('status')) is not int or result['status'] != expected_status):
+            raise AssertionError('Malformed root resident identity or completion status')
+        return dict(complete_events=len(complete), root=dict(key=key, pid=pid, request=request),
+                    interpretation='root resident RPC, not retained external typed-state evidence')
+    if complete and stage['root_only']:
+        raise AssertionError('Root --extern fallback unexpectedly completed resident RPC')
     return dict(complete_events=len(complete), interpretation=(
         'std-only dependency compilation permitted, not external reuse' if complete
         else 'no resident complete events'))
 
 
-def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner):
+def validate_root_transition(stage, residency, previous):
+    """Require stable worker generations on root-only changes, new keys on dep changes."""
+    current = residency.get('root')
+    if current is None:
+        return previous
+    if previous is not None:
+        if stage['root_only']:
+            if (current['key'], current['pid']) != (previous['key'], previous['pid']):
+                raise AssertionError('Root-only edit/error/recovery replaced the resident worker')
+            if current['request'] <= previous['request']:
+                raise AssertionError('Root resident request id did not advance')
+        elif stage['name'] in ('dependency-signature', 'dependency-const', 'dependency-body'):
+            if current['key'] == previous['key']:
+                raise AssertionError('Dependency content change did not invalidate root identity')
+    return current
+
+
+def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
+                require_resident_root=False):
     arm.mkdir(mode=0o700)
     workers = shared.private_directory(arm / 'workers')
     trace = arm / 'trace.jsonl'
@@ -149,6 +218,8 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner):
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
         previous_dependency = None
+        previous_root = None
+        previous_artifacts = None
         for index, stage in enumerate(workload):
             source = fixture / 'dep/src/lib.rs'
             # Never rewrite an unchanged dependency. This is crucial for proving
@@ -173,7 +244,11 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner):
             row['metadata'] = metadata(row['cargo'])
             row['semantics'] = semantics(row['cargo'], stage)
             validate_artifacts(stage, row['metadata'])
-            row['residency'] = validate_trace(stage, row['trace'], mode)
+            if require_resident_root:
+                previous_artifacts = validate_dependency_transition(stage, row['metadata'], previous_artifacts)
+            row['residency'] = validate_trace(stage, row['trace'], mode, require_resident_root)
+            if require_resident_root and mode == 'on':
+                previous_root = validate_root_transition(stage, row['residency'], previous_root)
         report['verdict'] = 'passed'
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')
@@ -184,7 +259,7 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner):
 
 
 def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorized=False,
-            timeout=180, justrust=None, expected_compiler_sha256=None,
+            timeout=180, justrust=None, require_resident_root=False, expected_compiler_sha256=None,
             expected_driver_sha256=None, expected_cargo_sha256=None, expected_client_sha256=None,
             runner=None):
     if root_native_frozen is not True or idle_authorized is not True:
@@ -198,12 +273,14 @@ def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorize
                     cargo_sha256=expected_cargo_sha256, client_sha256=expected_client_sha256)
     attestation = safety.attest(compiler, cargo, client, expected)
     root = shared.private_directory(output)
-    report = dict(schema=SCHEMA, verdict='incomplete', claim='Dependency fallback correctness only. '
+    report = dict(schema=SCHEMA, verdict='incomplete', claim=(
+                  'Dependency resident root RPC correctness and identity invalidation only. '
+                  if require_resident_root else 'Dependency fallback correctness only. ') +
                   'No retained external typed reuse or performance claim.', arms={},
                   provenance=dict(attestation=attestation, expected=expected,
                                   root_native_frozen=True, idle_authorized=True,
                                   manifest=MANIFEST, dependency_manifest=DEP_MANIFEST,
-                                  timeout=timeout,
+                                  timeout=timeout, require_resident_root=require_resident_root,
                                   helpers={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
                                            for module in (shared, safety, shared.native, shared.dogfood)},
                                   harness_sha256=shared.native.digest(Path(__file__))))
@@ -226,7 +303,8 @@ def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorize
             arm = root / ('000-' + mode)
             try:
                 report['arms'][mode] = capture_arm(compiler, cargo, fixture, arm,
-                                                   mode, workload, timeout, invoke)
+                                                   mode, workload, timeout, invoke,
+                                                   require_resident_root=require_resident_root)
             finally:
                 # Include failed-arm raw evidence in the top-level receipt too.
                 receipt = arm / 'receipt.json'
@@ -255,6 +333,7 @@ def main():
         parser.add_argument('--expected-' + name + '-sha256')
     parser.add_argument('--root-native-frozen', action='store_true')
     parser.add_argument('--idle-authorized', action='store_true')
+    parser.add_argument('--require-resident-root', action='store_true')
     parser.add_argument('--timeout', type=float, default=180)
     report = capture(**vars(parser.parse_args()))
     print(json.dumps(dict(verdict=report['verdict'], claim=report['claim'])))
