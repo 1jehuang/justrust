@@ -51,6 +51,39 @@ mod cstore_impl;
 /// so that later constructions are guaranteed to succeed.
 pub(crate) struct MetadataBlob(OwnedSlice);
 
+#[cfg(test)]
+mod resident_owned_metadata_tests {
+    use super::*;
+    use crate::resident_metadata::same_owned_bytes;
+    use rustc_data_structures::owned_slice::slice_owned;
+
+    #[test]
+    fn fresh_blob_keeps_its_original_allocation() {
+        let original = Arc::<[u8]>::from([1, 2, 3]);
+        let blob = MetadataBlob(slice_owned(Arc::clone(&original), |bytes| bytes.as_ref()));
+        let decoder = ExternalDecoderIdentityState::default();
+        let blob = blob.with_resident_owned(&decoder);
+        assert!(same_owned_bytes(&original, &blob));
+        assert!(decoder.metadata.get().is_none());
+    }
+
+    #[test]
+    fn selected_blob_reads_and_retains_the_published_immutable_allocation() {
+        let original = Arc::<[u8]>::from([1, 2, 3]);
+        let published = Arc::<[u8]>::from([1, 2, 3]);
+        let blob = MetadataBlob(slice_owned(Arc::clone(&original), |bytes| bytes.as_ref()));
+        let decoder = ExternalDecoderIdentityState::default();
+        decoder.metadata.set(Arc::clone(&published)).unwrap();
+        assert!(!same_owned_bytes(&published, &blob));
+        let blob = blob.with_resident_owned(&decoder);
+        assert!(same_owned_bytes(&published, &blob));
+        assert!(!same_owned_bytes(&original, &blob));
+        drop(decoder);
+        assert!(same_owned_bytes(&published, &blob));
+        assert_eq!(&*blob, &[1, 2, 3]);
+    }
+}
+
 impl std::ops::Deref for MetadataBlob {
     type Target = [u8];
 
@@ -61,6 +94,19 @@ impl std::ops::Deref for MetadataBlob {
 }
 
 impl MetadataBlob {
+    /// Selection already established exact current-artifact equality. Never
+    /// invoke this on an unselected owner or use its bytes to skip that check.
+    fn with_resident_owned(self, decoder: &ExternalDecoderIdentityState) -> Self {
+        match decoder.metadata.get() {
+            Some(bytes) => {
+                Self(rustc_data_structures::owned_slice::slice_owned(Arc::clone(bytes), |bytes| {
+                    bytes.as_ref()
+                }))
+            }
+            None => self,
+        }
+    }
+
     /// Runs the [`MemDecoder`] validation and if it passes, constructs a new [`MetadataBlob`].
     pub(crate) fn new(slice: OwnedSlice) -> Result<Self, ()> {
         if MemDecoder::new(&slice, 0).is_ok() { Ok(Self(slice)) } else { Err(()) }
@@ -1037,9 +1083,20 @@ impl CrateMetadata {
     }
 
     /// Borrow the exact loaded decoder input and its numeric crate translation.
-    /// Resident capture copies these bytes rather than reopening artifact paths.
+    /// Resident capture owns exact bytes, retaining an immutable allocation only
+    /// when this blob actually reads it, rather than reopening artifact paths.
     pub(crate) fn resident_metadata_inputs(&self) -> (&[u8], &CrateNumMap) {
         (&self.blob, &self.cnum_map)
+    }
+
+    /// The bundle may own an earlier copy while this decoder still reads a
+    /// mapped artifact. Retain it without copying only when the actual blob
+    /// reads the very same live immutable allocation.
+    pub(crate) fn resident_owned_metadata(&self) -> Option<&Arc<[u8]>> {
+        self.decoder_identity
+            .metadata
+            .get()
+            .filter(|owned| crate::resident_metadata::same_owned_bytes(owned, &self.blob))
     }
 
     /// Inspect only imports already performed by ordinary decoding. In particular,
@@ -2011,6 +2068,10 @@ impl CrateMetadata {
         private_dep: bool,
         host_hash: Option<Svh>,
     ) -> CrateMetadata {
+        // Owner selection has already compared the current artifact bytes and
+        // root offsets exactly. Only selected, successfully published bundles
+        // have immutable bytes. Fresh decoders retain the original blob.
+        let blob = blob.with_resident_owned(&decoder_identity);
         let trait_impls = root
             .impls
             .decode(&blob)

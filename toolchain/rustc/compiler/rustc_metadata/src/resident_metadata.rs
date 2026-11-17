@@ -135,6 +135,28 @@ impl DecoderCache {
                 return Err(error);
             }
         };
+        // Do not initialize any native bundle until the entire publication has
+        // passed its byte, mapping, source, translation and allocation gates.
+        // A populated bundle must never silently change its metadata universe.
+        for entry in &published.snapshot.metadata.crates {
+            let Some(state) = published.state(entry.current_crate) else {
+                self.retire();
+                return Err(ExternalSourceSnapshotError::IncompleteImports);
+            };
+            if state.metadata.get().is_some_and(|bytes| !entry.matches_bytes(bytes)) {
+                self.retire();
+                return Err(ExternalSourceSnapshotError::Metadata(
+                    MetadataSnapshotError::UnsupportedMapping,
+                ));
+            }
+        }
+        for entry in &published.snapshot.metadata.crates {
+            published
+                .state(entry.current_crate)
+                .unwrap()
+                .metadata
+                .get_or_init(|| Arc::clone(&entry.metadata));
+        }
         self.stats.retained_entries = published.states.len();
         self.stats.publications += 1;
         self.published = Some(published);
@@ -249,7 +271,7 @@ impl PublishedDecoders {
 
     fn entry_matches(&self, cnum: u32, bytes: &[u8], map: impl Iterator<Item = u32>) -> bool {
         self.snapshot.metadata.crates.iter().find(|entry| entry.current_crate == cnum).is_some_and(
-            |entry| entry.metadata == bytes && entry.crate_num_map.iter().copied().eq(map),
+            |entry| entry.matches_bytes(bytes) && entry.crate_num_map.iter().copied().eq(map),
         )
     }
 
@@ -427,6 +449,9 @@ pub(crate) struct ImportedSourceFile {
 /// one explicit scoped owner only after exact metadata/source validation.
 #[derive(Default)]
 pub(crate) struct ExternalDecoderIdentityState {
+    /// Immutable heap bytes installed only after a complete successful native
+    /// publication. A fresh decoder continues to read its original blob.
+    pub(crate) metadata: OnceLock<Arc<[u8]>>,
     pub(crate) source_map_import_info: Lock<Vec<Option<ImportedSourceFile>>>,
     /// SyntaxContext IDs are crate-local, so their decoding cache must remain
     /// paired with the actual source translations for that crate metadata.
@@ -668,9 +693,21 @@ pub struct ExternalMetadataSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 struct ExternalCrateMetadata {
     current_crate: u32,
-    metadata: Vec<u8>,
+    metadata: Arc<[u8]>,
     /// Index is the encoded crate number, value is this session's crate number.
     crate_num_map: Vec<u32>,
+}
+
+impl ExternalCrateMetadata {
+    fn matches_bytes(&self, bytes: &[u8]) -> bool {
+        // This allocation is strongly retained, so its address cannot be reused
+        // by a different artifact. Never memoize a pointer into a mutable mmap.
+        same_owned_bytes(&self.metadata, bytes) || self.metadata.as_ref() == bytes
+    }
+}
+
+pub(crate) fn same_owned_bytes(owned: &Arc<[u8]>, bytes: &[u8]) -> bool {
+    owned.len() == bytes.len() && owned.as_ptr() == bytes.as_ptr()
 }
 
 impl CStore {
@@ -782,10 +819,12 @@ impl CStore {
         Ok(ExternalSourceSnapshot { metadata, files })
     }
 
-    /// Copy the bytes actually held by each loaded `CrateMetadata`, never reopen
-    /// an artifact. The caller must capture after loading is complete and compare
-    /// again if loading can occur later. Proc macros require additional executable
-    /// identity and state support, so they are deliberately rejected.
+    /// Own the bytes actually held by each loaded `CrateMetadata`, never reopen
+    /// an artifact. Immutable heap bytes may be retained only when the decoder
+    /// reads that exact owned allocation. All other inputs are copied. The caller
+    /// must capture after loading is complete and compare again if loading can
+    /// occur later. Proc macros require additional executable identity and state
+    /// support, so they are deliberately rejected.
     pub fn capture_external_metadata(
         &self,
         limits: MetadataSnapshotLimits,
@@ -796,7 +835,12 @@ impl CStore {
                 return Err(MetadataSnapshotError::ProcMacro);
             }
             let (bytes, map) = data.resident_metadata_inputs();
-            builder.push(cnum.as_u32(), bytes, map.iter().map(|n| n.as_u32()))?;
+            builder.push_owned(
+                cnum.as_u32(),
+                bytes,
+                map.iter().map(|n| n.as_u32()),
+                data.resident_owned_metadata(),
+            )?;
         }
         builder.finish()
     }
@@ -814,11 +858,35 @@ impl SnapshotBuilder {
         Self { limits, bytes: 0, mappings: 0, crates: Vec::new() }
     }
 
+    #[cfg(test)]
     fn push(
         &mut self,
         current_crate: u32,
         bytes: &[u8],
         map: impl ExactSizeIterator<Item = u32>,
+    ) -> Result<(), MetadataSnapshotError> {
+        self.push_owned(current_crate, bytes, map, None)
+    }
+
+    fn push_owned(
+        &mut self,
+        current_crate: u32,
+        bytes: &[u8],
+        map: impl ExactSizeIterator<Item = u32>,
+        owned: Option<&Arc<[u8]>>,
+    ) -> Result<(), MetadataSnapshotError> {
+        self.push_with(current_crate, bytes, map, owned, |bytes| {
+            Arc::try_clone_from_ref(bytes).map_err(|_| MetadataSnapshotError::Allocation)
+        })
+    }
+
+    fn push_with(
+        &mut self,
+        current_crate: u32,
+        bytes: &[u8],
+        map: impl ExactSizeIterator<Item = u32>,
+        owned: Option<&Arc<[u8]>>,
+        copy: impl FnOnce(&[u8]) -> Result<Arc<[u8]>, MetadataSnapshotError>,
     ) -> Result<(), MetadataSnapshotError> {
         use MetadataSnapshotError::*;
         if self.crates.len() >= self.limits.max_crates {
@@ -835,9 +903,6 @@ impl SnapshotBuilder {
         if current_crate == 0 || bytes.is_empty() {
             return Err(UnsupportedMapping);
         }
-        let mut metadata = Vec::new();
-        metadata.try_reserve_exact(bytes.len()).map_err(|_| Allocation)?;
-        metadata.extend_from_slice(bytes);
         let mut crate_num_map = Vec::new();
         crate_num_map.try_reserve_exact(map.len()).map_err(|_| Allocation)?;
         crate_num_map.extend(map);
@@ -846,6 +911,10 @@ impl SnapshotBuilder {
             return Err(UnsupportedMapping);
         }
         self.crates.try_reserve(1).map_err(|_| Allocation)?;
+        let metadata = match owned.filter(|owned| same_owned_bytes(owned, bytes)) {
+            Some(owned) => Arc::clone(owned),
+            None => copy(bytes)?,
+        };
         self.crates.push(ExternalCrateMetadata { current_crate, metadata, crate_num_map });
         self.bytes = new_bytes;
         self.mappings = new_mappings;
@@ -1435,6 +1504,144 @@ mod tests {
         assert_ne!(owned, snapshot(&bytes, &[1]));
         assert_eq!(owned, snapshot(&[1, 2, 3], &[1]));
         assert_ne!(owned, snapshot(&[1, 2, 3], &[1, 1]));
+    }
+
+    #[test]
+    fn immutable_owned_metadata_is_retained_only_for_the_actual_blob_allocation() {
+        let original = snapshot(&[1, 2, 3], &[1]);
+        let owned = &original.crates[0].metadata;
+        let mut builder = SnapshotBuilder::new(limits());
+        builder
+            .push_with(1, owned, [1].into_iter(), Some(owned), |_| {
+                panic!("actual immutable bytes must not be copied")
+            })
+            .unwrap();
+        let retained = builder.finish().unwrap();
+        assert!(Arc::ptr_eq(owned, &retained.crates[0].metadata));
+        assert!(same_owned_bytes(owned, owned));
+        assert!(!same_owned_bytes(owned, &owned[..2]));
+
+        // A different allocation still needs copying, even with equal bytes.
+        let mut current = vec![1, 2, 3];
+        assert!(!same_owned_bytes(owned, &current));
+        let mut builder = SnapshotBuilder::new(limits());
+        let mut copied = false;
+        builder
+            .push_with(1, &current, [1].into_iter(), Some(owned), |bytes| {
+                copied = true;
+                Arc::try_clone_from_ref(bytes).map_err(|_| MetadataSnapshotError::Allocation)
+            })
+            .unwrap();
+        assert!(copied);
+        let separate = builder.finish().unwrap();
+        assert!(!Arc::ptr_eq(owned, &separate.crates[0].metadata));
+        assert_eq!(original, separate);
+        current[0] = 9;
+        assert!(!separate.crates[0].matches_bytes(&current));
+        assert_eq!(separate.crates[0].metadata.as_ref(), &[1, 2, 3]);
+        let mut builder = SnapshotBuilder::new(limits());
+        builder.push_owned(1, &current, [1].into_iter(), Some(owned)).unwrap();
+        let changed = builder.finish().unwrap();
+        assert_eq!(changed.crates[0].metadata.as_ref(), &[9, 2, 3]);
+        assert_ne!(changed, original);
+    }
+
+    #[test]
+    fn immutable_identity_does_not_bypass_numeric_or_source_mapping_checks() {
+        let p = published();
+        let bytes = &p.snapshot.metadata.crates[0].metadata;
+        let owner = p.state(1).unwrap();
+        assert!(p.loaded_matches(1, bytes, [1].into_iter(), owner, false));
+        assert!(!p.loaded_matches(1, bytes, [2].into_iter(), owner, false));
+        assert!(!p.loaded_matches(1, bytes, [1, 1].into_iter(), owner, false));
+        assert!(p.candidate(1, bytes, [1].into_iter(), &p.source_map, true, false).is_some());
+        owner.source_map_import_info.lock()[0].as_mut().unwrap().original_start_pos.0 += 1;
+        assert!(p.candidate(1, bytes, [1].into_iter(), &p.source_map, true, false).is_none());
+    }
+
+    #[test]
+    fn metadata_budget_rejection_precedes_retaining_or_copying_immutable_bytes() {
+        let owned = snapshot(&[1, 2, 3], &[1]).crates.remove(0).metadata;
+        let count = Arc::strong_count(&owned);
+        for limit in [
+            MetadataSnapshotLimits { max_crates: 0, ..limits() },
+            MetadataSnapshotLimits { max_metadata_bytes: 2, ..limits() },
+            MetadataSnapshotLimits { max_mapping_entries: 0, ..limits() },
+        ] {
+            let mut builder = SnapshotBuilder::new(limit);
+            assert!(
+                builder
+                    .push_with(1, &owned, [1].into_iter(), Some(&owned), |_| {
+                        panic!("budget rejection must precede metadata allocation")
+                    })
+                    .is_err()
+            );
+            assert!(builder.crates.is_empty());
+            assert_eq!(Arc::strong_count(&owned), count);
+        }
+    }
+
+    #[test]
+    fn failed_immutable_allocation_leaves_no_partial_snapshot_entry() {
+        let mut builder = SnapshotBuilder::new(limits());
+        assert_eq!(
+            builder.push_with(1, &[1, 2, 3], [1].into_iter(), None, |_| {
+                Err(MetadataSnapshotError::Allocation)
+            }),
+            Err(MetadataSnapshotError::Allocation)
+        );
+        assert!(builder.crates.is_empty());
+        assert_eq!(builder.bytes, 0);
+        assert_eq!(builder.mappings, 0);
+    }
+
+    #[test]
+    fn immutable_bytes_are_installed_only_after_successful_publication() {
+        let p = published();
+        let state = Arc::clone(p.state(1).unwrap());
+        let bytes = Arc::clone(&p.snapshot.metadata.crates[0].metadata);
+        assert!(state.metadata.get().is_none());
+        let mut cache = DecoderCache::default();
+        cache.publish(|| Ok(p)).unwrap();
+        assert!(Arc::ptr_eq(state.metadata.get().unwrap(), &bytes));
+        cache.published = None;
+        assert!(Arc::ptr_eq(state.metadata.get().unwrap(), &bytes));
+
+        let rejected = published();
+        let rejected_state = Arc::clone(rejected.state(1).unwrap());
+        let mut cache = DecoderCache::default();
+        assert_eq!(
+            cache.publish(|| {
+                drop(rejected);
+                Err(ExternalSourceSnapshotError::Allocation)
+            }),
+            Err(ExternalSourceSnapshotError::Allocation)
+        );
+        assert!(rejected_state.metadata.get().is_none());
+        assert!(cache.published.is_none());
+        assert!(cache.stats.retired);
+    }
+
+    #[test]
+    fn conflicting_immutable_bundle_rejects_before_any_bundle_is_initialized() {
+        let mut p = published();
+        let first = Arc::clone(p.state(1).unwrap());
+        let second = Arc::new(ExternalDecoderIdentityState::default());
+        second.metadata.set(Arc::from([9u8])).unwrap();
+        p.states.push((2, second));
+        p.snapshot.metadata.crates.push(ExternalCrateMetadata {
+            current_crate: 2,
+            metadata: Arc::from([2u8]),
+            crate_num_map: vec![2],
+        });
+        let mut cache = DecoderCache::default();
+        assert_eq!(
+            cache.publish(|| Ok(p)),
+            Err(ExternalSourceSnapshotError::Metadata(MetadataSnapshotError::UnsupportedMapping))
+        );
+        assert!(first.metadata.get().is_none());
+        assert!(cache.published.is_none());
+        assert!(cache.stats.retired);
     }
 
     #[test]
