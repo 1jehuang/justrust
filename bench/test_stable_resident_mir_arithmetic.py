@@ -48,7 +48,7 @@ class MockNative:
         expected = case[2]
         if expected is None:
             return record(1, stderr=b"exact type error\n")
-        for name in ("fixture.ll", "fixture.mir", "libarithmetic_fixture.rlib"):
+        for name in ("fixture.ll", "fixture.mir", "fixture.o"):
             (self.root / name).write_bytes(b"original artifact " + name.encode())
         return record()
 
@@ -90,10 +90,12 @@ class MockNative:
             ):
                 output = arithmetic.expected_output(7, 11)
             return record(stdout=output)
-        if str(cwd / "consumer.rs") in argv:
+        if str(cwd / "consumer.c") in argv:
             if self.fault == "consumer-compile":
                 return record(1, stderr=b"consumer compile failure\n")
             (cwd / "consumer").write_bytes(b"original executable")
+            if self.fault == "consumer-diagnostics" and self.last_engine == "resident":
+                return record(stderr=b"different consumer diagnostics\n")
             return record()
         self.last_engine = "fresh"
         return self.producer()
@@ -127,9 +129,21 @@ class ArithmeticTests(unittest.TestCase):
 
     def test_fixture_and_flags(self):
         files = arithmetic.sources()
-        self.assertIn(b"#![no_std]", files["fixture.rs"])
-        self.assertNotIn(b"no_core", b"".join(files.values()))
+        self.assertIn(b"#![no_core]", files["fixture.rs"])
+        self.assertNotIn(b"#![no_std]", b"".join(files.values()))
         self.assertNotIn(b"extern crate", b"".join(files.values()))
+        self.assertNotIn(b"use core", b"".join(files.values()))
+        self.assertIn(b'pub extern "C" fn leaf_a', files["module_a.rs"])
+        self.assertIn(b'pub extern "C" fn leaf_b', files["module_b.rs"])
+        self.assertIn(b"impl Add for u32", files["fixture.rs"])
+        self.assertIn(b"impl Copy for u32", files["fixture.rs"])
+        self.assertIn(
+            "--emit=obj=/work/fixture.o", arithmetic.arguments(Path("/work"))[-1]
+        )
+        consumer = arithmetic.consumer_source()
+        self.assertIn(b"extern uint32_t leaf_a(uint32_t, uint32_t);", consumer)
+        self.assertIn(rb'PRIu32 "\n"', consumer)
+        self.assertNotIn(b"arithmetic_fixture", consumer)
         self.assertIn(b"x: u32, y: u32", files["module_a.rs"])
         self.assertIn("-Coverflow-checks=off", arithmetic.arguments(Path("/work")))
         cases = arithmetic.cases()
@@ -149,7 +163,7 @@ class ArithmeticTests(unittest.TestCase):
             arithmetic.expected_output(13, 11), arithmetic.expected_output(13, 15)
         )
         self.assertEqual(
-            arithmetic.consumer_source().count(b"println!"), len(arithmetic.INPUTS)
+            arithmetic.consumer_source().count(b"printf("), len(arithmetic.INPUTS)
         )
 
     def test_exact_consumer_rejects_wrong_output_status_timeout_stderr(self):
@@ -197,6 +211,7 @@ class ArithmeticTests(unittest.TestCase):
             ("diagnostics", "leaf"),
             ("stale-output", "leaf"),
             ("consumer-compile", "leaf"),
+            ("consumer-diagnostics", "leaf"),
         ]:
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)

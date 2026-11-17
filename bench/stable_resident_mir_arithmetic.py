@@ -2,9 +2,10 @@
 """Frozen native arithmetic leaf acceptance, not a benchmark or general reuse claim.
 
 Run only after the coordinator freezes the compiler and approves an idle native
-window. Producers use ordinary no_std with identical overflow-checks=off flags.
-Every successful producer artifact is linked into a newly compiled, fresh
-consumer. Exact output is independently calculated with Python u32 arithmetic.
+window. Producers use no_core with identical overflow-checks=off flags, retaining
+zero external Rust crates under the current identity gate. Every successful
+producer object is linked into a newly compiled, fresh C consumer.
+Exact output is independently calculated with Python u32 arithmetic.
 Raw JSONL, diagnostic streams, artifacts and failure receipts are preserved.
 """
 
@@ -25,7 +26,28 @@ CLAIM = (
     "positive cross-unrelated-edit mir_leaf_hits and exact fresh consumer "
     "outputs. No general reuse, Typeck or speed claim."
 )
-ROOT = b"#![no_std]\nmod module_a;\nmod module_b;\npub use module_a::leaf_a;\npub use module_b::leaf_b;\n"
+ROOT = b"""#![feature(no_core, lang_items)]
+#![no_core]
+#![allow(internal_features, dead_code)]
+#[lang = "pointee_sized"] pub trait PointeeSized {}
+#[lang = "meta_sized"] pub trait MetaSized: PointeeSized {}
+#[lang = "sized"] pub trait Sized: MetaSized {}
+#[lang = "copy"] pub trait Copy {}
+impl Copy for u32 {}
+#[lang = "add"] pub trait Add<Rhs = Self> { type Output; fn add(self, rhs: Rhs) -> Self::Output; }
+impl Add for u32 { type Output = u32; fn add(self, rhs: u32) -> u32 { self + rhs } }
+#[lang = "sub"] pub trait Sub<Rhs = Self> { type Output; fn sub(self, rhs: Rhs) -> Self::Output; }
+impl Sub for u32 { type Output = u32; fn sub(self, rhs: u32) -> u32 { self - rhs } }
+#[lang = "mul"] pub trait Mul<Rhs = Self> { type Output; fn mul(self, rhs: Rhs) -> Self::Output; }
+impl Mul for u32 { type Output = u32; fn mul(self, rhs: u32) -> u32 { self * rhs } }
+#[lang = "bitxor"] pub trait BitXor<Rhs = Self> { type Output; fn bitxor(self, rhs: Rhs) -> Self::Output; }
+impl BitXor for u32 { type Output = u32; fn bitxor(self, rhs: u32) -> u32 { self ^ rhs } }
+#[lang = "bitand"] pub trait BitAnd<Rhs = Self> { type Output; fn bitand(self, rhs: Rhs) -> Self::Output; }
+impl BitAnd for u32 { type Output = u32; fn bitand(self, rhs: u32) -> u32 { self & rhs } }
+mod module_a;
+mod module_b;
+"""
+CC = Path("/usr/bin/cc")
 INPUTS = (
     (0, 0),
     (1, 2),
@@ -42,12 +64,16 @@ def sources(a=7, b=9, error=False):
     return {
         "fixture.rs": ROOT,
         "module_a.rs": (
-            "pub fn leaf_a(x: u32, y: u32) -> u32 { " "((x + y) ^ %d) * 3 }\n" % a
+            '#[unsafe(no_mangle)]\npub extern "C" fn leaf_a(x: u32, y: u32) -> u32 { '
+            "((x + y) ^ %d) * 3 }\n" % a
         ).encode(),
         "module_b.rs": (
-            ("pub fn leaf_b(x: u32) -> u32 { true }\n")
+            ('#[unsafe(no_mangle)]\npub extern "C" fn leaf_b(x: u32) -> u32 { true }\n')
             if error
-            else ("pub fn leaf_b(x: u32) -> u32 { (x - %d) & 65535 }\n" % b)
+            else (
+                '#[unsafe(no_mangle)]\npub extern "C" fn leaf_b(x: u32) -> u32 { (x - %d) & 65535 }\n'
+                % b
+            )
         ).encode(),
     }
 
@@ -77,7 +103,7 @@ def arguments(root):
     return [
         str(root / "fixture.rs"),
         "--crate-name=arithmetic_fixture",
-        "--crate-type=rlib",
+        "--crate-type=lib",
         "--edition=2024",
         "-Zcodegen-backend=llvm",
         "-Copt-level=0",
@@ -85,8 +111,8 @@ def arguments(root):
         "-Cpanic=abort",
         "-Coverflow-checks=off",
         "-Cincremental=" + str(root / "incremental"),
-        "--emit=link="
-        + str(root / "libarithmetic_fixture.rlib")
+        "--emit=obj="
+        + str(root / "fixture.o")
         + ",llvm-ir="
         + str(root / "fixture.ll")
         + ",mir="
@@ -96,11 +122,17 @@ def arguments(root):
 
 def consumer_source():
     calls = "".join(
-        'println!("{} {}", arithmetic_fixture::leaf_a(%du32, %du32), '
-        "arithmetic_fixture::leaf_b(%du32));\n" % (x, y, x)
+        'printf("%%" PRIu32 " %%" PRIu32 "\\n", leaf_a(UINT32_C(%d), UINT32_C(%d)), '
+        "leaf_b(UINT32_C(%d)));\n" % (x, y, x)
         for x, y in INPUTS
     )
-    return ("fn main() {\n" + calls + "}\n").encode()
+    return (
+        "#include <stdint.h>\n#include <inttypes.h>\n#include <stdio.h>\n"
+        '_Static_assert(sizeof(uint32_t) == 4, "u32 ABI");\n'
+        "extern uint32_t leaf_a(uint32_t, uint32_t);\n"
+        "extern uint32_t leaf_b(uint32_t);\n"
+        "int main(void) {\n" + calls + "return 0;\n}\n"
+    ).encode()
 
 
 def validate_consumer(record, expected):
@@ -112,20 +144,20 @@ def validate_consumer(record, expected):
         raise AssertionError("Fresh consumer exact arithmetic output mismatch")
 
 
-def run_consumer(compiler, root, evidence, prefix, expected, timeout, env, record):
-    source, binary = root / "consumer.rs", root / "consumer"
+def run_consumer(root, evidence, prefix, expected, timeout, env, record):
+    source, binary = root / "consumer.c", root / "consumer"
     source.write_bytes(consumer_source())
-    (evidence / (prefix + ".consumer.rs")).write_bytes(source.read_bytes())
+    (evidence / (prefix + ".consumer.c")).write_bytes(source.read_bytes())
     binary.unlink(missing_ok=True)
     argv = [
-        str(compiler),
+        str(CC),
+        "-std=c11",
+        "-O0",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
         str(source),
-        "--edition=2024",
-        "-Copt-level=0",
-        "-Cpanic=abort",
-        "-Coverflow-checks=off",
-        "-Zcodegen-backend=llvm",
-        "--extern=arithmetic_fixture=" + str(root / "libarithmetic_fixture.rlib"),
+        str(root / "fixture.o"),
         "-o",
         str(binary),
     ]
@@ -192,7 +224,7 @@ def capture_mode(compiler, root, evidence, mode, timeout):
                 )
                 if bank.exists():
                     bank.rename(active)
-                artifacts = ("fixture.ll", "fixture.mir", "libarithmetic_fixture.rlib")
+                artifacts = ("fixture.ll", "fixture.mir", "fixture.o")
                 for artifact in artifacts:
                     (root / artifact).unlink(missing_ok=True)
                 try:
@@ -219,7 +251,6 @@ def capture_mode(compiler, root, evidence, mode, timeout):
                                     "Empty producer artifact: " + artifact
                                 )
                         run_consumer(
-                            compiler,
                             root,
                             evidence,
                             "%02d-%s" % (index, engine),
@@ -287,6 +318,10 @@ def capture(compiler, root, timeout=180):
     )
     try:
         report["identity_before"] = shared.identity(compiler)
+        report["consumer_compiler"] = dict(
+            path=str(CC.resolve()),
+            sha256=hashlib.sha256(CC.resolve().read_bytes()).hexdigest(),
+        )
         workspace = root / "workspace"
         workspace.mkdir(mode=0o700)
         for name, data in sources().items():
@@ -309,6 +344,11 @@ def capture(compiler, root, timeout=180):
                             raise AssertionError(
                                 "Exact control/leaf consumer observables differ"
                             )
+        if (
+            report["consumer_compiler"]["sha256"]
+            != hashlib.sha256(CC.resolve().read_bytes()).hexdigest()
+        ):
+            raise AssertionError("C consumer compiler identity changed")
         report["identity_after"] = shared.identity(compiler)
         if report["identity_before"] != report["identity_after"]:
             raise AssertionError("Frozen compiler identity changed")
