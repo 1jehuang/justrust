@@ -387,6 +387,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                     // The batch has now finished native execution, linker work and
                     // diagnostics. No failed or unfinished revision can publish.
                     batch.finish_live_revision(status == 0);
+                    batch.finish_decoder_revision(status == 0);
                     if let Some(format) = callbacks.time_passes {
                         rustc_data_structures::profiling::print_time_passes_entry(
                             "total",

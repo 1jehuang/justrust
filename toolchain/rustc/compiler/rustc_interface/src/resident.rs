@@ -116,6 +116,13 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         }
     }
 
+    /// Also covers preparation failures outside `run` in a managed transport.
+    pub fn finish_decoder_revision(&self, success: bool) {
+        if self.external_decoders && !success {
+            rustc_metadata::resident_metadata::retire_after_failed_revision();
+        }
+    }
+
     pub fn decoder_stats(&self) -> rustc_metadata::resident_metadata::ExternalDecoderCacheStats {
         rustc_metadata::resident_metadata::stats()
     }
@@ -534,6 +541,7 @@ mod tests {
                     assert!(failed.is_err());
                     assert_eq!(batch.decoder_stats().retired, enabled);
                     assert_eq!(batch.decoder_stats().retained_entries, 0);
+                    batch.finish_decoder_revision(false);
                     if enabled {
                         assert!(
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
