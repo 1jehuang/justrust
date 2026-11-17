@@ -80,8 +80,14 @@ impl MacroHelper {
             return Err(io::Error::other("shared proc-macro transport requires Linux x86-64"));
         }
         #[cfg(target_arch = "x86_64")]
-        let shared =
-            if use_shm { Some(rustc_data_structures::resident_macro_shm::create()?) } else { None };
+        let shared = if use_shm {
+            let options = rustc_data_structures::resident_macro_shm::Options::with_spin_argument(
+                std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SPINS").as_deref(),
+            )?;
+            Some(rustc_data_structures::resident_macro_shm::create_with_options(options)?)
+        } else {
+            None
+        };
         let (parent, endpoint) = UnixStream::pair()?;
         let fd = endpoint.as_raw_fd();
         #[cfg(target_arch = "x86_64")]

@@ -114,10 +114,16 @@ pub unsafe fn run(argument: &str, shared_argument: Option<&str>) -> ExitCode {
                 // descriptor. The authenticated Unix socket remains owned until
                 // the shared session exits. Attachment checks the creator too.
                 let shared_fd = unsafe { OwnedFd::from_raw_fd(shared_fd) };
+                let options =
+                    rustc_data_structures::resident_macro_shm::Options::with_spin_argument(
+                        std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SPINS").as_deref(),
+                    )?;
                 let endpoint =
-                    rustc_data_structures::resident_macro_shm::attach_child(shared_fd, unsafe {
-                        libc::getppid()
-                    })?;
+                    rustc_data_structures::resident_macro_shm::attach_child_with_options(
+                        shared_fd,
+                        unsafe { libc::getppid() },
+                        options,
+                    )?;
                 let result = rustc_metadata::resident_proc_macro_helper::run(endpoint);
                 drop(stream);
                 return result;

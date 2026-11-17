@@ -571,10 +571,24 @@ fn serve_requests(
         owned,
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref(),
     )?;
-    macro_shm_selection(
+    let shared_macros = macro_shm_selection(
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SHM").as_deref(),
         macro_helpers,
     )?;
+    #[cfg(not(target_arch = "x86_64"))]
+    if shared_macros {
+        return Err("shared macro transport requires Linux x86-64".into());
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let options = rustc_data_structures::resident_macro_shm::Options::with_spin_argument(
+            std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SPINS").as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+        if options.spin_iterations != 0 && !shared_macros {
+            return Err("macro spin budget requires shared macro transport".into());
+        }
+    }
     let mut frozen = None;
     let watch_enabled = std::env::var_os("JUSTRUST_CARGO_RESIDENT_EVICT").as_deref()
         == Some(std::ffi::OsStr::new("1"));

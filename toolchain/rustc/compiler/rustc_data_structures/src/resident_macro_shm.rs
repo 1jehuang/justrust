@@ -59,6 +59,33 @@ impl Default for Options {
     }
 }
 
+impl Options {
+    /// Selects an explicit bounded spin budget without changing the default timeout.
+    pub fn with_spin_argument(value: Option<&std::ffi::OsStr>) -> io::Result<Options> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        let invalid = || {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shared transport spin argument must be a canonical decimal integer in 0..=256",
+            )
+        };
+        let value = value.to_str().ok_or_else(invalid)?;
+        if value.is_empty()
+            || (value.len() > 1 && value.starts_with('0'))
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(invalid());
+        }
+        let spin_iterations = value.parse::<u32>().map_err(|_| invalid())?;
+        if spin_iterations > MAX_SPINS {
+            return Err(invalid());
+        }
+        Ok(Self { spin_iterations, ..Self::default() })
+    }
+}
+
 #[repr(C, align(64))]
 struct Ring {
     // Monotonically wrapping byte counts. The distance is always <= CAPACITY.
@@ -488,6 +515,58 @@ mod tests {
     fn pair() -> (Endpoint, Endpoint) {
         let (parent, fd) = create().unwrap();
         (parent, attach(fd, Role::Child).unwrap())
+    }
+
+    #[test]
+    fn spin_argument_accepts_only_canonical_bounded_decimals() {
+        use std::ffi::OsStr;
+
+        let absent = Options::with_spin_argument(None).unwrap();
+        assert_eq!(absent.spin_iterations, 0);
+        assert_eq!(absent.wait_timeout, DEFAULT_TIMEOUT);
+        assert_eq!(Options::default().spin_iterations, 0);
+        for expected in 0..=MAX_SPINS {
+            let value = expected.to_string();
+            let options = Options::with_spin_argument(Some(OsStr::new(&value))).unwrap();
+            assert_eq!(options.spin_iterations, expected);
+            assert_eq!(options.wait_timeout, DEFAULT_TIMEOUT);
+        }
+    }
+
+    #[test]
+    fn spin_argument_rejects_invalid_values() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        for value in [
+            "",
+            "00",
+            "01",
+            "0256",
+            " 1",
+            "1 ",
+            "\t1",
+            "1\n",
+            "+1",
+            "-1",
+            "1.0",
+            "1e2",
+            "0x10",
+            "1_0",
+            "１",
+            "١",
+            "257",
+            "4294967295",
+            "4294967296",
+            "999999999999999999999999999999999999",
+            "\0",
+            "1\0",
+        ] {
+            let error = Options::with_spin_argument(Some(OsStr::new(value))).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{value:?}");
+        }
+        let error = Options::with_spin_argument(Some(OsStr::from_bytes(b"\xff"))).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
