@@ -54,6 +54,15 @@ use crate::{diagnostics, limits, util};
 pub fn parse<'a>(sess: &'a Session) -> ast::Crate {
     let mut krate = sess
         .time("parse_crate", || {
+            if rustc_parse::resident_ast::enabled()
+                && let Input::File(file) = &sess.io.input
+            {
+                return rustc_parse::resident_ast::parse_crate_from_file(
+                    &sess.psess,
+                    file,
+                    StripTokens::ShebangAndFrontmatter,
+                );
+            }
             let mut parser = unwrap_or_emit_fatal(match &sess.io.input {
                 Input::File(file) => new_parser_from_file(
                     &sess.psess,

@@ -256,6 +256,15 @@ fn typed_selection(value: Option<&std::ffi::OsStr>) -> Result<(bool, bool, bool)
     }
 }
 
+fn ast_selection(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(_) => Err("invalid native AST experiment selection".into()),
+    }
+}
+
 /// Actual common native owners. Persistence and typed queries require separate
 /// explicit development selections, never a production compiler default change.
 fn serve_owned(mut response: File) -> Result<(), String> {
@@ -267,6 +276,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
         Some(value) if value == "1" => true,
         Some(_) => return Err("invalid native lexer experiment selection".into()),
     };
+    let ast_cache = ast_selection(std::env::var_os("JUSTRUST_RUSTC_RESIDENT_AST").as_deref())?;
     for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
         if std::env::var_os(name).is_some_and(|value| value == "1") {
             return Err(format!("{name} cannot be combined with the native owned batch"));
@@ -300,7 +310,9 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                 live_queries,
                 incremental_control,
                 selective_leaf,
-                lexer_cache,            },
+                lexer_cache,
+                ast_cache,
+            },
             move |batch, config| {
                 let mut first = Some((config, first_callbacks, registered_lints));
                 let mut id = first_id;
@@ -394,6 +406,14 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                         "retained_entries": live.retained_entries,
                         "retained_estimated_bytes": live.retained_estimated_bytes,
                     });
+                    let ast = batch.ast_stats();
+                    reply["ast"] = json!({
+                        "hits": ast.hits,
+                        "misses": ast.misses,
+                        "rejected": ast.rejected,
+                        "retained_entries": ast.retained_entries,
+                        "retained_estimated_bytes": ast.retained_estimated_bytes,
+                    });
                     let lexer = batch.lexer_stats();
                     reply["lexer"] = json!({
                         "hits": lexer.hits,
@@ -443,8 +463,20 @@ fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OWNED_RSS_BUDGET_BYTES, owned_completion, owned_retirement, request, typed_selection,
+        OWNED_RSS_BUDGET_BYTES, ast_selection, owned_completion, owned_retirement, request,
+        typed_selection,
     };
+
+    #[test]
+    fn ast_selection_is_explicit_and_defaults_off() {
+        use std::ffi::OsStr;
+        assert!(!ast_selection(None).unwrap());
+        assert!(!ast_selection(Some(OsStr::new("0"))).unwrap());
+        assert!(ast_selection(Some(OsStr::new("1"))).unwrap());
+        for invalid in ["", "true", "control", "leaf", "2"] {
+            assert!(ast_selection(Some(OsStr::new(invalid))).is_err());
+        }
+    }
 
     #[test]
     fn typed_selection_is_explicit_and_separates_leaf_authorization() {
