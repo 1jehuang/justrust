@@ -376,8 +376,15 @@ The separate strict Typeck receipt remains failed and unchanged.
 
 ## Native Cargo routing boundary
 
-The current resident protocol freezes compiler arguments, cwd and environment
-for the lifetime of each worker. It is not yet a managed per-crate Cargo pool.
+**Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
+routing now pass three-repeat hosted edit/error/recovery acceptance. See
+[Native resident Cargo integration](resident-cargo-integration.md) for exact
+candidate hashes, receipts and remaining limitations. The boundary analysis
+below records the prerequisites that motivated that implementation, not a claim
+that routing is still entirely unimplemented. No default promotion follows.
+
+The original resident protocol freezes compiler arguments, cwd and environment
+for the lifetime of each worker. It is not by itself a managed per-crate Cargo pool.
 Native routing must live in `jr-cargo`, with a separate ordinary-toolchain path.
 
 A worker cannot be safely keyed only by the text of its command line and reused
