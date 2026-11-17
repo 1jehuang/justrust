@@ -21,7 +21,7 @@ import stable_resident as native
 import stable_resident_dogfood as dogfood
 
 SOURCE = Path(__file__).resolve().parents[1] / 'src/remote_sync_queue.rs'
-FLAGS = '--jobs-backend=1 --jobs-linker=1'
+FLAGS = '-Zunstable-options --jobs-backend=1 --jobs-linker=1'
 PROBE = 'cargo_nonce_probe'
 
 
@@ -37,6 +37,14 @@ def private_directory(path):
     return path
 
 
+def check_socket_path(output, repetitions):
+    # Linux sockaddr_un.sun_path includes its trailing NUL. Cargo uses a
+    # 32-hex digest plus '.sock', below this per-arm private directory.
+    socket = Path(output).absolute() / f'{repetitions - 1:03d}-on/workers' / ('0' * 32 + '.sock')
+    if len(os.fsencode(socket)) >= 108:
+        raise ValueError('--output is too long for native Unix sockets; use a short private path')
+
+
 def environment(compiler, fixture, mode, resident, trace):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('JUSTRUST_', 'CARGO_', 'RUST'))
@@ -46,10 +54,12 @@ def environment(compiler, fixture, mode, resident, trace):
                CARGO_INCREMENTAL='1', CARGO_TERM_COLOR='never',
                JUSTRUST_RUSTC_RESIDENT_FRONTEND='1',
                JUSTRUST_CARGO_RESIDENT_TRACE=str(trace))
-    if mode == 'on':
-        env['JUSTRUST_CARGO_RESIDENT_DIR'] = str(resident)
-    elif mode != 'off':
+    if mode not in ('off', 'on'):
         raise ValueError('Unknown mode')
+    # Keep direct compiler identity and optional query-launch admission matched.
+    # Only the RPC execution switch changes between the two arms.
+    env['JUSTRUST_CARGO_RESIDENT_DIR'] = str(resident)
+    env['JUSTRUST_CARGO_RESIDENT'] = 'serial' if mode == 'on' else 'off'
     return env
 
 
@@ -236,6 +246,7 @@ def capture_mode(compiler, cargo, fixture, root, mode, original, nonce, timeout,
 def capture(compiler, cargo, output, repetitions=1, timeout=180):
     if repetitions < 1 or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('Positive repetitions and finite positive timeout required')
+    check_socket_path(output, repetitions)
     compiler, cargo = Path(compiler).resolve(strict=True), Path(cargo).resolve(strict=True)
     root = private_directory(output)
     original = SOURCE.read_bytes()
@@ -300,6 +311,10 @@ def main():
         parser.error('Positive -n and finite positive --timeout required')
     if args.output.exists() or args.output.is_symlink():
         parser.error('--output must be a new private directory')
+    try:
+        check_socket_path(args.output, args.n)
+    except ValueError as error:
+        parser.error(str(error))
     os.umask(0o077)
     try:
         report = capture(args.compiler, args.cargo, args.output, args.n, args.timeout)

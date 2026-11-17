@@ -48,7 +48,7 @@ class FakeCargo:
         nonce = re.search(r'fn edited_value\(\) -> &\x27static str \{ "([^"]+)"', lib).group(1)
         error = 'compile_error!' in lib
         fresh = self.index == 2
-        if 'JUSTRUST_CARGO_RESIDENT_DIR' in env and not fresh and 'RUSTC_WRAPPER' not in env:
+        if env.get('JUSTRUST_CARGO_RESIDENT') == 'serial' and not fresh and 'RUSTC_WRAPPER' not in env:
             with Path(env['JUSTRUST_CARGO_RESIDENT_TRACE']).open('a') as trace:
                 trace.write(json.dumps(response(int(error), self.index)) + '\n')
         return cargo_record(nonce, error)
@@ -79,11 +79,22 @@ class CargoAcceptanceTests(unittest.TestCase):
             on = harness.environment(*args, 'on', Path('/workers'), Path('/trace'))
         for env in (off, on):
             self.assertEqual(env['RUSTFLAGS'], harness.FLAGS)
+            self.assertIn('-Zunstable-options', env['RUSTFLAGS'].split())
             self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], '1')
             for key in ('RUSTC_WRAPPER', 'CARGO_ENCODED_RUSTFLAGS', 'JUSTRUST_RUSTC_RESIDENT_FD', 'MAKEFLAGS'):
                 self.assertNotIn(key, env)
-        self.assertNotIn('JUSTRUST_CARGO_RESIDENT_DIR', off)
+        self.assertEqual(off['JUSTRUST_CARGO_RESIDENT_DIR'], '/workers')
         self.assertEqual(on['JUSTRUST_CARGO_RESIDENT_DIR'], '/workers')
+        self.assertEqual(off['JUSTRUST_CARGO_RESIDENT'], 'off')
+        self.assertEqual(on['JUSTRUST_CARGO_RESIDENT'], 'serial')
+
+    def test_socket_length_is_checked_before_any_compilation(self):
+        harness.check_socket_path(Path('/short'), 1)
+        with self.assertRaisesRegex(ValueError, 'too long'):
+            harness.check_socket_path(Path('/') / ('x' * 90), 1)
+        # Count encoded bytes, not Python Unicode codepoints.
+        with self.assertRaisesRegex(ValueError, 'too long'):
+            harness.check_socket_path(Path('/') / ('é' * 35), 1)
 
     def test_private_output_rejects_existing_and_symlink_parent(self):
         with tempfile.TemporaryDirectory() as temp:
