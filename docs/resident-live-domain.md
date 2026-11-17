@@ -415,13 +415,22 @@ late acquisitions fail, and the base token stays held until that ownership is
 destroyed. Clearing a request map cannot bypass this boundary. The API exposes
 no conversion to raw clients or raw acquired tokens.
 
-This is not compiler routing: today's codegen helpers, frontend proxies and
-linker token paths still use the ordinary client. They must be migrated to
-tracked ownership before a dispatcher can use the new primitive to execute a
-resident compilation. Request-scoped cancellation, pipe/descriptor transfer,
-diagnostic forwarding, hosted admission and exact invocation/toolchain identity
-remain separate required integrations. No production compiler default changes
-follow from adding the ownership primitive.
+LLVM codegen helpers and linker token paths now use a request-aware
+`CompilerClient` facade. Without an explicitly selected request it preserves the
+ordinary client and helper behavior. Selected requests retain ownership through
+helper callbacks and queued tokens. Helper destruction observes callback
+retirement for up to one second after the underlying platform's shutdown
+operation; that operation can itself block. Unretired callbacks or outstanding
+tokens prevent clean request completion. A resident linker uses one thread when
+nonblocking token acquisition is unsupported, rather than inventing parallel
+capacity. The ordinary linker's historical fallback remains unchanged.
+
+This is still not compiler routing. Parallel frontend proxies remain on the
+ordinary path, and owned resident batches still require a serial frontend.
+Request-scoped cancellation, pipe/descriptor transfer, diagnostic forwarding,
+hosted admission and exact invocation/toolchain identity remain separate required
+integrations. No production compiler default changes follow from adding the
+ownership primitive or migrating codegen token acquisition.
 
 ## Bounded arithmetic retention and ordinary-work control
 
@@ -470,8 +479,8 @@ external-crate identity authorization. It is not an AST/HIR cache: each request
 still parses, creates fresh attribute IDs, performs gates and runs diagnostics.
 
 The cache key requires the exact retained SourceMap and SourceFile Arc identities,
-edition and stripping mode, and never admits override spans. Conservative ASCII
-eligibility rejects comments, attributes, strings, lifetimes, raw/forced
+edition and stripping mode, and never admits override spans. Initial frozen-0200
+ASCII eligibility rejects comments, attributes, strings, lifetimes, raw/forced
 identifiers, Unicode and unsupported numeric forms. Only successful token-tree
 construction enters the cache. Its otherwise skipped session effect, identifier
 SymbolGallery insertion, is replayed in lexical order while preserving existing
@@ -531,3 +540,34 @@ environment fingerprints. Those originals, the failed `0217-diagnostic`
 incremental-control configuration and the corrected passing `0219-diagnostic`
 are separately stored and verified unchanged. No comparison gate or failed
 receipt was rewritten to make the result pass.
+
+### Non-doc comments and ordinary attributes
+
+The frozen `stable-resident-jobserver-20261117-0231-sysroot` extends eligibility
+to ASCII non-doc line comments, terminated non-doc block comments (including
+nested comments), and ordinary `#` attribute tokens. Doc comments, shebangs,
+frontmatter, strings, raw identifiers, Unicode and other previously excluded
+side-effectful forms still reject admission. Attribute parsing and validation
+remain fresh. The replay regression verifies that comment text never enters
+the identifier gallery and that cached tokens preserve exact gallery contents.
+
+This candidate was produced by the coordinated shared native gate, not a second
+competing compiler build. Driver/codegen checks, all 75 parser tests and two
+doctests passed (11 doctests ignored), followed by a complete matching compiler
+and standard-library build. Driver SHA256 is
+`832fd82045f9b25fbf4a60727c8e41ed263049e72c4afb60f96bb3f4167abcf5`.
+
+Strict ordinary-object acceptance passes 23 transitions per arm, including
+comment/attribute unchanged repeats, edits, errors/recovery and rejected syntax.
+The enabled arm ends with 25 lexer hits, 42 misses and 29 rejections, retaining
+12 entries with 5,799 estimated bytes. Disabled lexer counters and every typed
+retention counter remain zero. Exact fresh diagnostics and unique-nonce C
+consumer outputs match throughout. Lexer-enabled native guards and real
+shipping-module dogfood (`n=3`) also pass with source/compiler identities intact.
+
+The generated originals are stored as
+`bench/stable-resident-lexer-common-20261117-0236-{native,guard,dogfood}`,
+with authenticated exact JSON readback verified against each unchanged original.
+This is expanded syntax correctness coverage only. It establishes neither a
+speedup nor general AST/HIR/Typeck retention, managed Cargo routing or production
+default readiness; the ordinary rlib timing limitations above still apply.
