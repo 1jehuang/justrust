@@ -29,6 +29,25 @@ class StableNativeDispatchTests(unittest.TestCase):
                 suite.cmd_compare(args)
         return module.compare
 
+    def test_cargo_dispatch_requires_identical_components(self):
+        a = {'schema': 'stable_native_cargo/v1'}
+        b = {'schema': 'stable_native_cargo/v1'}
+        compare = self.invoke(a, b, module_name='stable_resident_cargo_suite')
+        compare.assert_called_once_with(a, b, 10)
+        with self.assertRaisesRegex(SystemExit, 'identical component'):
+            self.invoke(a, b, allow_compiler_change=True,
+                        module_name='stable_resident_cargo_suite')
+        with self.assertRaisesRegex(SystemExit, 'only synthetic'):
+            self.invoke(a, b, require_valid=True,
+                        module_name='stable_resident_cargo_suite')
+
+    def test_cargo_cannot_mix_with_other_native_workloads(self):
+        for other in ('leaf', 'arithmetic', 'lexer', 'ast'):
+            for first, second in (('cargo', other), (other, 'cargo')):
+                with self.assertRaisesRegex(SystemExit, 'different stable native workloads'):
+                    self.invoke({'schema': f'stable_native_{first}/v1'},
+                                {'schema': f'stable_native_{second}/v1'})
+
     def test_exact_stable_native_dispatch(self):
         a = {'schema': 'stable_native_leaf/v1', 'arm': 'control'}
         b = {'schema': 'stable_native_leaf/v1', 'arm': 'leaf'}
@@ -82,6 +101,21 @@ class StableNativeDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'only stable native leaf'):
             self.invoke({'schema': 'other'}, {'schema': 'other'},
                         allow_compiler_change=True)
+
+    def test_root_cargo_cli_requires_component_hashes_and_uses_callback(self):
+        import stable_resident_cargo_suite as adapter
+        argv = ['suite.py', 'stable-native-cargo', '--compiler', '/fixture/rustc',
+                '--cargo', '/fixture/cargo', '--output', '/fixture/output', '-n', '2',
+                '--expected-driver-sha256', '1' * 64,
+                '--expected-compiler-sha256', '2' * 64,
+                '--expected-cargo-sha256', '3' * 64]
+        with patch.object(adapter, 'run') as run, patch.object(sys, 'argv', argv):
+            suite.main()
+        run.assert_called_once()
+        args = run.call_args.args[0]
+        self.assertEqual(args.compiler, Path('/fixture/rustc'))
+        self.assertEqual(args.cargo, Path('/fixture/cargo'))
+        self.assertEqual(args.expected_cargo_sha256, '3' * 64)
 
     def test_root_cli_uses_shared_fn_callback_contract(self):
         import stable_resident_leaf_suite as adapter

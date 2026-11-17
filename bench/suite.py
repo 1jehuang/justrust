@@ -1777,12 +1777,17 @@ def cmd_compare(args) -> None:
     arithmetic_receipt = any(str(result.get("schema", "")).startswith("stable_native_arithmetic/") for result in (a, b))
     lexer_receipt = any(str(result.get("schema", "")).startswith("stable_native_lexer/") for result in (a, b))
     ast_receipt = any(str(result.get("schema", "")).startswith("stable_native_ast/") for result in (a, b))
-    if leaf_receipt or arithmetic_receipt or lexer_receipt or ast_receipt:
+    cargo_receipt = any(str(result.get("schema", "")).startswith("stable_native_cargo/") for result in (a, b))
+    if leaf_receipt or arithmetic_receipt or lexer_receipt or ast_receipt or cargo_receipt:
         if getattr(args, "require_valid", False):
             sys.exit("bench: --require-valid supports only synthetic comparisons")
-        if sum((leaf_receipt, arithmetic_receipt, lexer_receipt, ast_receipt)) > 1:
+        if sum((leaf_receipt, arithmetic_receipt, lexer_receipt, ast_receipt, cargo_receipt)) > 1:
             sys.exit("bench: comparison refuses different stable native workloads")
-        if ast_receipt:
+        if cargo_receipt:
+            if getattr(args, "allow_compiler_change", False):
+                sys.exit("bench: Cargo comparison requires identical component candidates")
+            from stable_resident_cargo_suite import compare
+        elif ast_receipt:
             if getattr(args, "allow_compiler_change", False):
                 sys.exit("bench: AST comparison requires an identical compiler")
             from stable_resident_ast_suite import compare
@@ -1936,6 +1941,8 @@ def main() -> None:
     add_stable_lexer_parser(sub)
     from stable_resident_ast_suite import add_parser as add_stable_ast_parser
     add_stable_ast_parser(sub)
+    from stable_resident_cargo_suite import add_parser as add_stable_cargo_parser
+    add_stable_cargo_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     sub.add_parser("preflight", help="check pinned test runtime prerequisites without building").set_defaults(fn=cmd_preflight)
     r = sub.add_parser("run")
