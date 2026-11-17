@@ -35,6 +35,8 @@ use crate::lexer::StripTokens;
 pub mod lexer;
 
 pub mod resident;
+pub mod resident_ast;
+mod resident_ast_eligibility;
 mod resident_eligibility;
 
 mod diagnostics;
@@ -117,8 +119,13 @@ pub fn new_parser_from_file<'a>(
     strip_tokens: StripTokens,
     sp: Option<Span>,
 ) -> Result<Parser<'a>, Vec<Diag<'a>>> {
+    let source_file = file_to_source_file(psess, path, sp);
+    new_parser_from_source_file(psess, source_file, strip_tokens)
+}
+
+fn file_to_source_file(psess: &ParseSess, path: &Path, sp: Option<Span>) -> Arc<SourceFile> {
     let sm = psess.source_map();
-    let source_file = sm.load_file(path).unwrap_or_else(|e| {
+    sm.load_file(path).unwrap_or_else(|e| {
         use std::io::ErrorKind;
 
         let msg = match e.kind() {
@@ -164,8 +171,7 @@ pub fn new_parser_from_file<'a>(
             err.span(sp);
         }
         err.emit_fatal()
-    });
-    new_parser_from_source_file(psess, source_file, strip_tokens)
+    })
 }
 
 pub fn utf8_error(
