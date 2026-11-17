@@ -443,7 +443,14 @@ mod tests {
             max_files: 128 * 1024,
             max_declared_source_bytes: 1024 * 1024 * 1024,
         };
-        for (cache_enabled, retire_by_budget) in [(false, false), (true, true), (true, false)] {
+        for (cache_enabled, retire_by_budget, force_imports) in [
+            (false, false, true),
+            (true, true, true),
+            (true, false, true),
+            (false, false, false),
+            (true, true, false),
+            (true, false, false),
+        ] {
             with_resident_compiler_batch(make_config(), |batch, first| {
                 with_resident_external_decoder_cache(cache_enabled, || {
                     let mut snapshots = Vec::new();
@@ -525,47 +532,37 @@ mod tests {
                                     Err(ExternalSourceSnapshotError::IncompleteImports)
                                 );
                             }
-                            // Explicit test setup imports every metadata source. Do not hold
-                            // a CStore guard across the hook, which acquires its own guard.
-                            for &cnum in tcx.crates(()) {
-                                tcx.import_source_files(cnum);
+                            // Keep complete-universe capture coverage separate from the
+                            // decoder-only observation path. Ordinary decoding must not
+                            // import untouched files simply to publish a cache entry.
+                            if force_imports {
+                                for &cnum in tcx.crates(()) {
+                                    tcx.import_source_files(cnum);
+                                }
+                                let cstore = CStore::from_tcx(tcx);
+                                let complete = cstore.capture_external_sources(source_limits)
+                                    .expect("complete actual imported source universe");
+                                assert_eq!(complete, cstore.capture_external_sources(source_limits).unwrap());
+                                for (bounded, error) in [
+                                    (ExternalSourceSnapshotLimits { max_files: 0, ..source_limits },
+                                        ExternalSourceSnapshotError::FileBudget),
+                                    (ExternalSourceSnapshotLimits { max_declared_source_bytes: 0, ..source_limits },
+                                        ExternalSourceSnapshotError::SourceByteBudget),
+                                ] {
+                                    assert_eq!(cstore.capture_external_sources(bounded), Err(error));
+                                }
+                                assert_eq!(complete, cstore.capture_external_sources(source_limits).unwrap());
+                            } else {
+                                assert_eq!(CStore::from_tcx(tcx).capture_external_sources(source_limits),
+                                    Err(ExternalSourceSnapshotError::IncompleteImports));
                             }
                             let sources = {
                                 let cstore = CStore::from_tcx(tcx);
-                                let sources = cstore
-                                    .capture_external_sources(source_limits)
-                                    .expect("complete actual imported source universe");
-                                assert_eq!(
-                                    sources,
-                                    cstore.capture_external_sources(source_limits).unwrap()
-                                );
-                                for (bounded, error) in [
-                                    (
-                                        ExternalSourceSnapshotLimits {
-                                            max_files: 0,
-                                            ..source_limits
-                                        },
-                                        ExternalSourceSnapshotError::FileBudget,
-                                    ),
-                                    (
-                                        ExternalSourceSnapshotLimits {
-                                            max_declared_source_bytes: 0,
-                                            ..source_limits
-                                        },
-                                        ExternalSourceSnapshotError::SourceByteBudget,
-                                    ),
-                                ] {
-                                    assert_eq!(
-                                        cstore.capture_external_sources(bounded),
-                                        Err(error)
-                                    );
-                                }
-                                assert_eq!(
-                                    sources,
-                                    cstore.capture_external_sources(source_limits).unwrap(),
-                                    "budget rejection must not mutate imported sources"
-                                );
-                                sources
+                                let observed = cstore.capture_observed_external_sources(source_limits)
+                                    .expect("bounded actual decoder source observations");
+                                assert!(observed.file_count() > 0, "std macro must naturally decode source spans");
+                                assert_eq!(observed, cstore.capture_observed_external_sources(source_limits).unwrap());
+                                observed
                             };
                             assert!(matches!(
                                 build_revision_identity(
@@ -585,8 +582,13 @@ mod tests {
                             ));
                             if cache_enabled {
                                 let cstore = CStore::from_tcx(tcx);
-                                cstore.publish_external_decoders(tcx, source_limits)
-                                    .expect("bounded complete source and metadata publication");
+                                let publish = |limits| if force_imports {
+                                    cstore.publish_external_decoders(tcx, limits)
+                                } else {
+                                    cstore.publish_observed_external_decoders(tcx, limits)
+                                };
+                                publish(source_limits)
+                                    .expect("bounded source and metadata publication");
                                 let stats = rustc_metadata::resident_metadata::stats();
                                 assert_eq!(stats.publications, revision + 1);
                                 if revision == 0 {
@@ -594,7 +596,7 @@ mod tests {
                                 } else {
                                     assert!(stats.hits > 0, "actual constructor must select retained decoder storage");
                                     if retire_by_budget {
-                                        assert_eq!(cstore.publish_external_decoders(tcx,
+                                        assert_eq!(publish(
                                             ExternalSourceSnapshotLimits { max_files: 0, ..source_limits }),
                                             Err(ExternalSourceSnapshotError::FileBudget));
                                     }

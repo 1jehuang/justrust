@@ -204,7 +204,32 @@ impl PublishedDecoders {
         {
             return None;
         }
-        self.state(cnum).cloned()
+        let state = self.state(cnum)?;
+        // Observations are not a complete metadata source universe. They must,
+        // however, cover every populated native decoder slot at selection time.
+        // Reject post-publication mutations instead of activating a stale subset.
+        let imports = state.source_map_import_info.lock();
+        let mut files = self.snapshot.files.iter().filter(|file| file.current_crate == cnum);
+        for (index, import) in imports.iter().enumerate() {
+            let Some(import) = import else { continue };
+            let file = files.next()?;
+            let source = &import.translated_source_file;
+            if file.metadata_index as usize != index
+                || file.original_start != import.original_start_pos.0
+                || file.original_end != import.original_end_pos.0
+                || file.current_start != source.start_pos.0
+                || file.current_end
+                    != source.start_pos.0.checked_add(source.normalized_source_len.to_u32())?
+                || file.declared_bytes != source.unnormalized_source_len
+                || !Arc::ptr_eq(&file.source, source)
+            {
+                return None;
+            }
+        }
+        if files.next().is_some() {
+            return None;
+        }
+        Some(Arc::clone(state))
     }
 
     fn entry_matches(&self, cnum: u32, bytes: &[u8], map: impl Iterator<Item = u32>) -> bool {
@@ -239,6 +264,26 @@ impl CStore {
         tcx: TyCtxt<'_>,
         limits: ExternalSourceSnapshotLimits,
     ) -> Result<(), ExternalSourceSnapshotError> {
+        self.publish_external_decoder_inputs(tcx, limits, false)
+    }
+
+    /// Retain only source slots populated by ordinary native decoding. This is
+    /// decoder-owner publication, never a complete external typed identity proof.
+    /// Untouched metadata source entries remain undecoded.
+    pub fn publish_observed_external_decoders(
+        &self,
+        tcx: TyCtxt<'_>,
+        limits: ExternalSourceSnapshotLimits,
+    ) -> Result<(), ExternalSourceSnapshotError> {
+        self.publish_external_decoder_inputs(tcx, limits, true)
+    }
+
+    fn publish_external_decoder_inputs(
+        &self,
+        tcx: TyCtxt<'_>,
+        limits: ExternalSourceSnapshotLimits,
+        observed: bool,
+    ) -> Result<(), ExternalSourceSnapshotError> {
         DECODERS.with(|slot| {
             let mut slot = slot.borrow_mut();
             let cache = slot.as_mut().ok_or(ExternalSourceSnapshotError::Disabled)?;
@@ -251,7 +296,11 @@ impl CStore {
             }
             cache.allocation_universe = Some(universe);
             cache.publish(|| {
-                let snapshot = self.capture_external_sources(limits)?;
+                let snapshot = if observed {
+                    self.capture_observed_external_sources(limits)?.snapshot
+                } else {
+                    self.capture_external_sources(limits)?
+                };
                 if snapshot.files.iter().any(|file| !absent_text(&file.source)) {
                     return Err(ExternalSourceSnapshotError::CachedSourceText);
                 }
@@ -412,6 +461,13 @@ pub struct ExternalSourceSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ObservedExternalSourceSnapshot {
     snapshot: ExternalSourceSnapshot,
+}
+
+impl ObservedExternalSourceSnapshot {
+    /// Number of populated decoder source slots, not total metadata source files.
+    pub fn file_count(&self) -> usize {
+        self.snapshot.files.len()
+    }
 }
 
 #[derive(Debug)]
@@ -865,6 +921,28 @@ mod tests {
     }
 
     #[test]
+    fn candidate_requires_every_populated_source_slot_in_its_observation() {
+        let mut p = published();
+        let state = Arc::clone(p.state(1).unwrap());
+        let select = |p: &PublishedDecoders| {
+            p.candidate(1, &[1, 2, 3], [1].into_iter(), &p.source_map, true, false)
+        };
+        state.source_map_import_info.lock().push(None);
+        assert!(select(&p).is_some(), "undecoded holes carry no source identity");
+        state.source_map_import_info.lock()[1] = Some(imported(1));
+        assert!(select(&p).is_none(), "new unobserved populated slot must reject");
+        let added = state.source_map_import_info.lock()[1].as_ref().unwrap().clone();
+        let mut added_mapping = mapping(&added);
+        added_mapping.metadata_index = 1;
+        p.snapshot.files.push(added_mapping);
+        assert!(select(&p).is_some());
+        state.source_map_import_info.lock()[0] = None;
+        assert!(select(&p).is_none(), "removed populated slot must reject");
+        state.source_map_import_info.lock()[0] = Some(imported(0));
+        assert!(select(&p).is_none(), "replacement source Arc must reject");
+    }
+
+    #[test]
     fn loaded_dependency_requires_exact_bytes_map_and_actual_owner() {
         let p = published();
         let owner = p.state(1).unwrap();
@@ -1234,12 +1312,14 @@ mod tests {
             max_declared_source_bytes: usize::MAX,
             ..source_limits()
         };
+        let mut maximum = usize::MAX;
         assert_eq!(
-            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut usize::MAX, &mut 0),
+            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut maximum, &mut 0),
             Err(FileBudget)
         );
+        maximum = usize::MAX;
         assert_eq!(
-            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut 0, &mut usize::MAX),
+            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut 0, &mut maximum),
             Err(SourceByteBudget)
         );
         let mut long = imported(1);
