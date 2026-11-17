@@ -8,7 +8,9 @@ use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::sync::Lock;
 
 use super::resident_identity::{IdentityBudget, RevisionIdentity};
-use super::resident_values::{ResidentDomain, ResidentKey, ResidentValues, RetentionBudget};
+use super::resident_values::{
+    ResidentDomain, ResidentKey, ResidentValues, RetentionBudget, RetentionError,
+};
 use super::{TyCtxt, TypeckResults};
 use crate::dep_graph::DepNode;
 use crate::mir;
@@ -16,8 +18,61 @@ use crate::mir;
 /// Exact namespace of the factory-owned, controlled local-only first milestone.
 pub const LIVE_QUERY_NAMESPACE: &[u8] = b"justrust-local-same-source-v1";
 
+/// Fixed-size accounting, with no query names, keys, or compiler-owned values.
+/// Reasons describe the first guard that refused an operation, not speculation
+/// about why a provider ran. All counters saturate rather than overflowing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LiveQueryRefusals {
+    pub disabled: u64,
+    pub identity_absent: u64,
+    pub dependency: u64,
+    pub diagnostic: u64,
+    pub ineligible: u64,
+    pub retention: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveQueryRefusal {
+    Disabled,
+    IdentityAbsent,
+    Dependency,
+    Diagnostic,
+    Ineligible,
+    Retention,
+}
+
+impl LiveQueryRefusals {
+    fn record(&mut self, reason: LiveQueryRefusal) {
+        let counter = match reason {
+            LiveQueryRefusal::Disabled => &mut self.disabled,
+            LiveQueryRefusal::IdentityAbsent => &mut self.identity_absent,
+            LiveQueryRefusal::Dependency => &mut self.dependency,
+            LiveQueryRefusal::Diagnostic => &mut self.diagnostic,
+            LiveQueryRefusal::Ineligible => &mut self.ineligible,
+            LiveQueryRefusal::Retention => &mut self.retention,
+        };
+        *counter = counter.saturating_add(1);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveQueryKind {
+    Typeck,
+    Mir,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LiveQueryStats {
+    pub typeck_admitted: u64,
+    pub mir_admitted: u64,
+    pub typeck_admission_refusals: LiveQueryRefusals,
+    pub mir_admission_refusals: LiveQueryRefusals,
+    /// Exact last storage error, never synthesized from a cache miss.
+    pub last_retention_error: Option<RetentionError>,
+    pub publication_disabled: u64,
+    pub publication_transport_failed: u64,
+    pub publication_incomplete: u64,
+    pub publication_storage_failed: u64,
     /// Revision-level gates, distinct from per-query cache misses.
     pub identity_begin_rejections: u64,
     pub identity_complete_rejections: u64,
@@ -134,10 +189,28 @@ impl<'tcx> LiveQueryState<'tcx> {
     /// Missing completion, cancellation, or any failure aborts staging.
     pub fn finish(&self, transport_success: bool) -> bool {
         let mut state = self.state.lock();
-        let published = transport_success
-            && state.enabled
-            && state.completed
-            && state.values.publish_success().is_ok();
+        let published = if !transport_success {
+            state.stats.publication_transport_failed =
+                state.stats.publication_transport_failed.saturating_add(1);
+            false
+        } else if !state.enabled {
+            state.stats.publication_disabled = state.stats.publication_disabled.saturating_add(1);
+            false
+        } else if !state.completed {
+            state.stats.publication_incomplete =
+                state.stats.publication_incomplete.saturating_add(1);
+            false
+        } else {
+            match state.values.publish_success() {
+                Ok(()) => true,
+                Err(error) => {
+                    state.stats.publication_storage_failed =
+                        state.stats.publication_storage_failed.saturating_add(1);
+                    state.stats.last_retention_error = Some(error);
+                    false
+                }
+            }
+        };
         if !published {
             state.values.abort_revision();
         }
@@ -256,16 +329,24 @@ impl<'tcx> LiveQueryState<'tcx> {
         estimated_bytes: usize,
     ) -> bool {
         let mut state = self.state.lock();
-        state.enabled
-            && state.identity_budget.is_some()
-            && state
+        let result = if !state.enabled {
+            Err(LiveQueryRefusal::Disabled)
+        } else if state.identity_budget.is_none() {
+            Err(LiveQueryRefusal::IdentityAbsent)
+        } else {
+            state
                 .values
                 .retain_typeck(
                     ResidentKey { dep_node, value_fingerprint: fingerprint },
                     value,
                     estimated_bytes,
                 )
-                .is_ok()
+                .map_err(|error| {
+                    state.stats.last_retention_error = Some(error);
+                    LiveQueryRefusal::Retention
+                })
+        };
+        state.record_admission(LiveQueryKind::Typeck, result)
     }
 
     /// Only optimized_mir bodies belong in this namespace.
@@ -277,21 +358,106 @@ impl<'tcx> LiveQueryState<'tcx> {
         estimated_bytes: usize,
     ) -> bool {
         let mut state = self.state.lock();
-        state.enabled
-            && state.identity_budget.is_some()
-            && state
+        let result = if !state.enabled {
+            Err(LiveQueryRefusal::Disabled)
+        } else if state.identity_budget.is_none() {
+            Err(LiveQueryRefusal::IdentityAbsent)
+        } else {
+            state
                 .values
                 .retain_mir(
                     ResidentKey { dep_node, value_fingerprint: fingerprint },
                     value,
                     estimated_bytes,
                 )
-                .is_ok()
+                .map_err(|error| {
+                    state.stats.last_retention_error = Some(error);
+                    LiveQueryRefusal::Retention
+                })
+        };
+        state.record_admission(LiveQueryKind::Mir, result)
+    }
+
+    /// For native query hooks that refuse before calling insert. The caller must
+    /// report an actually evaluated guard, not infer a cause from a cache miss.
+    pub fn record_admission_refusal(&self, kind: LiveQueryKind, reason: LiveQueryRefusal) {
+        self.state.lock().record_admission(kind, Err(reason));
+    }
+
+    /// Clear telemetry only. Retained values, opt-ins, and revision gates survive.
+    pub fn reset_stats(&self) {
+        self.state.lock().stats = LiveQueryStats::default();
     }
 
     pub fn stats(&self) -> LiveQueryStats {
         let state = self.state.lock();
         let (retained_entries, retained_estimated_bytes) = state.values.retained_usage();
         LiveQueryStats { retained_entries, retained_estimated_bytes, ..state.stats }
+    }
+}
+
+impl LiveState<'_> {
+    fn record_admission(
+        &mut self,
+        kind: LiveQueryKind,
+        result: Result<(), LiveQueryRefusal>,
+    ) -> bool {
+        let (admitted, refusals) = match kind {
+            LiveQueryKind::Typeck => {
+                (&mut self.stats.typeck_admitted, &mut self.stats.typeck_admission_refusals)
+            }
+            LiveQueryKind::Mir => {
+                (&mut self.stats.mir_admitted, &mut self.stats.mir_admission_refusals)
+            }
+        };
+        match result {
+            Ok(()) => *admitted = admitted.saturating_add(1),
+            Err(reason) => refusals.record(reason),
+        }
+        result.is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusal_accounting_is_separate_saturating_and_resettable() {
+        let domain = ResidentDomain::new(LIVE_QUERY_NAMESPACE.to_vec());
+        let state = LiveQueryState::new(
+            &domain,
+            RetentionBudget { max_entries: 1, max_estimated_bytes: 1024 },
+        );
+        for reason in [
+            LiveQueryRefusal::Disabled,
+            LiveQueryRefusal::IdentityAbsent,
+            LiveQueryRefusal::Dependency,
+            LiveQueryRefusal::Diagnostic,
+            LiveQueryRefusal::Ineligible,
+            LiveQueryRefusal::Retention,
+        ] {
+            state.record_admission_refusal(LiveQueryKind::Typeck, reason);
+        }
+        assert_eq!(
+            state.stats().typeck_admission_refusals,
+            LiveQueryRefusals {
+                disabled: 1,
+                identity_absent: 1,
+                dependency: 1,
+                diagnostic: 1,
+                ineligible: 1,
+                retention: 1,
+            }
+        );
+        assert_eq!(state.stats().mir_admission_refusals, LiveQueryRefusals::default());
+        state.state.lock().stats.mir_admission_refusals.dependency = u64::MAX;
+        state.record_admission_refusal(LiveQueryKind::Mir, LiveQueryRefusal::Dependency);
+        assert_eq!(state.stats().mir_admission_refusals.dependency, u64::MAX);
+        assert!(!state.enabled());
+        state.enable(true);
+        state.reset_stats();
+        assert_eq!(state.stats(), LiveQueryStats::default());
+        assert!(state.enabled());
     }
 }

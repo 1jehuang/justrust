@@ -153,7 +153,8 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             checkout=None, edit_mode='body', commands=('check', 'build'), root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
             expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
-            diagnostic_on_only=False, macro_shm=False, macro_spins=0, profile_phases=False, lexer_cache=False):
+            diagnostic_on_only=False, macro_shm=False, macro_spins=0, profile_phases=False,
+            profile_queries=False, lexer_cache=False):
     commands = selected_commands(commands)
     if type(lexer_cache) is not bool:
         raise ValueError('Lexer cache mode must be boolean')
@@ -168,6 +169,10 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
         raise ValueError('Phase profiling flag must be boolean')
     if profile_phases and not diagnostic_on_only:
         raise ValueError('Phase profiling requires diagnostic on-only mode')
+    if type(profile_queries) is not bool:
+        raise ValueError('Query profiling flag must be boolean')
+    if profile_queries and not diagnostic_on_only:
+        raise ValueError('Query profiling requires diagnostic on-only mode')
     if diagnostic_on_only:
         if type(repetitions) is not int or repetitions < 1:
             raise ValueError('Positive diagnostic repetition count required')
@@ -203,7 +208,8 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                                   original_sha256=digest_bytes(original), manifest_b64=shared.native.encoded(manifest),
                                   host=safety.host(), repetitions=repetitions, timeout=timeout, edit_mode=edit_mode,
                                   commands=list(commands), macro_shm=macro_shm, macro_spins=macro_spins,
-                                  profile_phases=profile_phases, lexer_cache=lexer_cache,
+                                  profile_phases=profile_phases, profile_queries=profile_queries,
+                                  lexer_cache=lexer_cache,
                                   root_native_frozen=True, idle_authorized=True,
                                   harness_sha256=shared.native.digest(Path(__file__)),
                                   helper_sha256={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
@@ -224,6 +230,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 env.update(STRICT_ENV)
                 env['RUSTFLAGS'] = shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
                 # Always override inherited transport settings in both arms.
+                env['JUSTRUST_CARGO_RESIDENT_QUERY_COST'] = '1' if profile_queries else '0'
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = '1' if macro_shm else '0'
                 env['JUSTRUST_CARGO_RESIDENT_LEXER'] = '1' if lexer_cache else '0'
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = str(macro_spins)
@@ -300,6 +307,11 @@ def _validate(report, *, diagnostic):
         raise ValueError('Invalid phase profiling provenance')
     if profile_phases and not diagnostic:
         raise ValueError('Phase profiling requires diagnostic on-only mode')
+    profile_queries = provenance.get('profile_queries', False)
+    if type(profile_queries) is not bool:
+        raise ValueError('Invalid query profiling provenance')
+    if profile_queries and not diagnostic:
+        raise ValueError('Query profiling requires diagnostic on-only mode')
     if type(provenance.get('macro_shm')) is not bool:
         raise ValueError('Missing or invalid macro SHM provenance')
     validate_macro_spins(provenance.get('macro_spins'), provenance['macro_shm'])
@@ -349,6 +361,7 @@ def _validate(report, *, diagnostic):
                             or env['JUSTRUST_REAL_CARGO'] != provenance['attestation']['cargo']['path']
                             or env['JUSTRUST_CARGO_RESIDENT'] != ('serial' if mode == 'on' else 'off')
                             or env['RUSTFLAGS'] != shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
+                            or env.get('JUSTRUST_CARGO_RESIDENT_QUERY_COST', '0' if 'profile_queries' not in provenance else None) != ('1' if profile_queries else '0')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SHM') != ('1' if provenance['macro_shm'] else '0')
                             or env.get('JUSTRUST_CARGO_RESIDENT_LEXER', '0' if 'lexer_cache' not in provenance else None) != ('1' if lexer_cache else '0')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS') != str(provenance['macro_spins'])
@@ -356,6 +369,7 @@ def _validate(report, *, diagnostic):
                             or safety.safe_environment(env) != env):
                         raise ValueError('Candidate environment mismatch')
                     normalized_env = dict(env)
+                    normalized_env.setdefault('JUSTRUST_CARGO_RESIDENT_QUERY_COST', '0')
                     normalized_env.setdefault('JUSTRUST_CARGO_RESIDENT_LEXER', '0')
                     for key in ('CARGO_TARGET_DIR', 'JUSTRUST_CARGO_RESIDENT_DIR', 'JUSTRUST_CARGO_RESIDENT_TRACE'):
                         normalized_env.pop(key)
@@ -421,6 +435,7 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
         provenance = json.loads(json.dumps(report['provenance']))
         # Historical receipts predate profiling and lexer-cache selection. Normalize only this copy.
         provenance['lexer_cache'] = provenance.get('lexer_cache', False)
+        provenance['profile_queries'] = provenance.get('profile_queries', False)
         provenance['profile_phases'] = provenance.get('profile_phases', False)
         if explicit_spins:
             validate_macro_spins(spins, provenance['macro_shm'])
@@ -451,6 +466,7 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
                 environments = []
                 for row in (first, second):
                     env = dict(row['cargo']['invocation']['environment'])
+                    env.setdefault('JUSTRUST_CARGO_RESIDENT_QUERY_COST', '0')
                     env.setdefault('JUSTRUST_CARGO_RESIDENT_LEXER', '0')
                     for key in ('CARGO_TARGET_DIR', 'JUSTRUST_CARGO_RESIDENT_DIR', 'JUSTRUST_CARGO_RESIDENT_TRACE'):
                         env.pop(key)
@@ -498,6 +514,8 @@ def main():
                         help='Canonical decimal spin count 0..256, nonzero requires --macro-shm')
     parser.add_argument('--diagnostic-on-only', action='store_true',
                         help='Run only resident-on as a correctness diagnostic, never performance evidence')
+    parser.add_argument('--profile-queries', action='store_true',
+                        help='Enable resident query cost diagnostics, requires --diagnostic-on-only')
     parser.add_argument('--profile-phases', action='store_true',
                         help='Append -Ztime-passes to RUSTFLAGS, requires --diagnostic-on-only')
     parser.add_argument('--repetitions', type=int, default=2)

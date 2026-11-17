@@ -68,11 +68,12 @@ class OwnLoopTests(unittest.TestCase):
         return run, calls
 
     def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
-                repetitions=2, macro_shm=False, macro_spins=0, profile_phases=False, lexer_cache=False, **runner_options):
+                repetitions=2, macro_shm=False, macro_spins=0, profile_phases=False,
+                profile_queries=False, lexer_cache=False, **runner_options):
         source, options, attestation = self.prepare(root)
         options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions,
                        macro_shm=macro_shm, macro_spins=macro_spins, profile_phases=profile_phases,
-                       lexer_cache=lexer_cache)
+                       profile_queries=profile_queries, lexer_cache=lexer_cache)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -143,6 +144,120 @@ class OwnLoopTests(unittest.TestCase):
                 with self.subTest(repetitions=value), self.assertRaisesRegex(ValueError, 'Positive diagnostic'):
                     suite.capture(**options, runner=runner)
             self.assertEqual(calls, [])
+
+    def test_profile_queries_cli_defaults_false(self):
+        required = ['own-loop', '--compiler', '/compiler', '--cargo', '/cargo',
+                    '--justrust', '/client', '--output', '/output',
+                    '--root-native-frozen', '--idle-authorized']
+        for name in ('compiler', 'driver', 'cargo', 'client'):
+            required.extend(['--expected-' + name + '-sha256', 'a' * 64])
+        for flags, enabled in (([], False), (['--profile-queries'], True)):
+            with self.subTest(flags=flags), patch('sys.argv', required + flags), \
+                    patch.object(suite, 'capture', return_value={}) as capture, \
+                    patch.object(suite, 'console_summary', return_value={}), patch('builtins.print'):
+                suite.main()
+                self.assertIs(capture.call_args.kwargs['profile_queries'], enabled)
+
+    def test_profile_queries_requires_diagnostic_and_strict_boolean_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, options, _ = self.prepare(Path(directory))
+            runner, calls = self.runner()
+            with self.assertRaisesRegex(ValueError, 'requires diagnostic'):
+                suite.capture(**options, profile_queries=True, runner=runner)
+            for value in (None, 0, 1, 'true', [], 1.0):
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'must be boolean'):
+                    suite.capture(**options, diagnostic_on_only=True, profile_queries=value, runner=runner)
+            self.assertEqual(calls, [])
+            self.assertFalse(options['output'].exists())
+
+    def test_profile_queries_actual_environment_and_raw_evidence(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, JUSTRUST_CARGO_RESIDENT_QUERY_COST='0' if enabled else '1'):
+                    report, calls, options = self.capture(
+                        Path(directory), diagnostic_on_only=enabled,
+                        repetitions=1 if enabled else 2, profile_queries=enabled)
+                self.assertIs(report['provenance']['profile_queries'], enabled)
+                self.assertEqual({env['JUSTRUST_CARGO_RESIDENT_QUERY_COST']
+                                  for _, _, _, env in calls}, {'1' if enabled else '0'})
+                self.assertEqual({env['JUSTRUST_CARGO_RESIDENT'] for _, _, _, env in calls},
+                                 {'serial'} if enabled else {'off', 'serial'})
+                suite._validate(report, diagnostic=enabled)
+                for pair in report['repetitions']:
+                    for mode, arm in pair['arms'].items():
+                        for row in arm['observations']:
+                            self.assertEqual(base64.b64decode(row['cargo']['stderr_b64']), b'raw stderr\xff\x00\n')
+                            self.assertEqual(bool(row['trace']), mode == 'on' and not row['semantics']['fresh'])
+                self.assertEqual(json.loads((options['output'] / 'receipt.json').read_text()), report)
+                if enabled:
+                    with self.assertRaises(ValueError):
+                        suite.validate(report)
+                    with self.assertRaises(ValueError):
+                        suite.compare(report, report)
+                    forged = copy.deepcopy(report)
+                    forged.update(schema=suite.SCHEMA, verdict='passed')
+                    with self.assertRaisesRegex(ValueError, 'requires diagnostic'):
+                        suite.validate(forged)
+                    with self.assertRaises(ValueError):
+                        suite.compare(forged, forged)
+
+    def test_profile_queries_provenance_and_environment_tampering(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as directory:
+                report, _, _ = self.capture(Path(directory), diagnostic_on_only=enabled,
+                                            repetitions=1 if enabled else 2, profile_queries=enabled)
+                for value in (None, 0, 1, 'false', not enabled):
+                    bad = copy.deepcopy(report)
+                    bad['provenance']['profile_queries'] = value
+                    with self.subTest(provenance=value), self.assertRaises(ValueError):
+                        suite._validate(bad, diagnostic=enabled)
+                if enabled:
+                    bad = copy.deepcopy(report)
+                    bad['provenance'].pop('profile_queries')
+                    with self.assertRaises(ValueError):
+                        suite._validate(bad, diagnostic=True)
+                for mode in report['repetitions'][0]['arms']:
+                    for value in (None, 0, 1, True, '', 'false', '01', '0' if enabled else '1'):
+                        bad = copy.deepcopy(report)
+                        env = bad['repetitions'][0]['arms'][mode]['observations'][0]['cargo']['invocation']['environment']
+                        if value is None:
+                            env.pop('JUSTRUST_CARGO_RESIDENT_QUERY_COST')
+                        else:
+                            env['JUSTRUST_CARGO_RESIDENT_QUERY_COST'] = value
+                        with self.subTest(mode=mode, environment=value), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                            suite._validate(bad, diagnostic=enabled)
+                        if not enabled:
+                            with self.assertRaises(ValueError):
+                                suite.compare(report, bad)
+
+    def test_profile_queries_historical_compatibility_and_nonmutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            current, _, _ = self.capture(Path(directory))
+            current_original = copy.deepcopy(current)
+            expected = suite.compare(current, current)
+            for missing_env in (False, True):
+                historical = copy.deepcopy(current)
+                historical['provenance'].pop('profile_queries')
+                if missing_env:
+                    for pair in historical['repetitions']:
+                        for arm in pair['arms'].values():
+                            for row in arm['observations']:
+                                row['cargo']['invocation']['environment'].pop('JUSTRUST_CARGO_RESIDENT_QUERY_COST')
+                original = copy.deepcopy(historical)
+                self.assertEqual(suite.validate(historical), suite.validate(current))
+                self.assertEqual(suite.compare(historical, current), expected)
+                self.assertEqual(suite.compare(current, historical), expected)
+                self.assertEqual(suite.compare(historical, historical), expected)
+                self.assertEqual(historical, original)
+                self.assertEqual(current, current_original)
+                for mode in ('off', 'on'):
+                    for value in ('1', 0, None, 'false'):
+                        bad = copy.deepcopy(historical)
+                        bad['repetitions'][0]['arms'][mode]['observations'][0]['cargo']['invocation']['environment']['JUSTRUST_CARGO_RESIDENT_QUERY_COST'] = value
+                        with self.subTest(mode=mode, value=value), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                            suite.validate(bad)
+                        with self.assertRaises(ValueError):
+                            suite.compare(current, bad)
 
     def test_profile_phases_requires_diagnostic_before_execution(self):
         with tempfile.TemporaryDirectory() as directory:

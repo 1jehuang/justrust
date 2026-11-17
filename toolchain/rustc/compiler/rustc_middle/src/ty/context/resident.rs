@@ -240,6 +240,8 @@ mod tests {
                 };
                 let fingerprint = Fingerprint::new(3, 4);
                 let value = domain.alloc_typeck(TypeckResults::new(CRATE_OWNER_ID));
+                assert!(!state.insert_typeck(dep, fingerprint, value, 128));
+                assert_eq!(state.stats().typeck_admission_refusals.identity_absent, 1);
                 assert!(state.begin(1, Some(identity.clone()), budget));
                 assert!(state.insert_typeck(dep, fingerprint, value, 128));
                 assert!(state.get_typeck(dep, fingerprint).is_none());
@@ -281,14 +283,20 @@ mod tests {
                 assert_eq!(state.stats().identity_complete_rejections, 1);
                 assert_eq!(state.stats().published_revisions, 1);
                 assert_eq!(state.stats().aborted_revisions, 5);
+                assert_eq!(state.stats().typeck_admitted, 2);
+                assert_eq!(state.stats().publication_incomplete, 2);
+                assert_eq!(state.stats().publication_transport_failed, 3);
                 domain.enable_live_queries(false);
                 assert!(domain.live_query_state().is_none());
                 assert!(domain.context_resources().resident_live_queries.is_none());
                 assert!(state.get_typeck(dep, fingerprint).is_none());
-                let stats = state.stats();
+                assert!(!state.insert_typeck(dep, fingerprint, value, 128));
+                assert_eq!(state.stats().typeck_admission_refusals.disabled, 1);
+                let mut stats = state.stats();
                 assert!(!state.begin(8, None, budget));
                 assert!(!state.complete(None, budget));
                 assert!(!state.finish(false));
+                stats.publication_transport_failed += 1;
                 assert_eq!(state.stats(), stats);
             })
         });
@@ -323,6 +331,12 @@ mod tests {
                 let body = domain.alloc_mir(crate::mir::Body::new_cfg_only(Default::default()));
                 assert!(state.begin(1, Some(identity.clone()), budget));
                 assert!(state.insert_mir(dep, fingerprint, body, 256));
+                assert!(!state.insert_mir(dep, fingerprint, body, 256));
+                assert_eq!(state.stats().mir_admission_refusals.retention, 1);
+                assert_eq!(
+                    state.stats().last_retention_error,
+                    Some(crate::ty::resident_values::RetentionError::DuplicateKey)
+                );
                 assert!(state.complete(Some(identity.clone()), budget));
                 assert!(state.finish(true));
                 assert!(state.begin(2, Some(identity.clone()), budget));
@@ -335,6 +349,14 @@ mod tests {
                 assert_eq!(state.stats().mir_misses, 2);
                 assert_eq!(state.stats().retained_entries, 1);
                 assert_eq!(state.stats().retained_estimated_bytes, 256);
+                assert_eq!(state.stats().mir_admitted, 1);
+                state.reset_stats();
+                assert_eq!(state.stats().mir_hits, 0);
+                assert_eq!(state.stats().mir_admission_refusals, Default::default());
+                assert_eq!(state.stats().last_retention_error, None);
+                assert_eq!(state.stats().retained_entries, 1);
+                assert!(state.enabled());
+                assert!(std::ptr::eq(state.get_mir(dep, fingerprint).unwrap(), body));
                 state.finish(false);
             })
         });

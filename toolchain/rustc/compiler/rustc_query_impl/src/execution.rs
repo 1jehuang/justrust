@@ -726,6 +726,7 @@ fn execute_job_non_incr<'tcx, C: QueryCache>(
     let prof_timer = tcx.prof.query_provider();
     // Call the query provider.
     let value = start_query(tcx, job_id, query.depth_limit, query.name, || {
+        let _provider_timer = crate::provider_stats::provider(query.name, false);
         (query.invoke_provider_fn)(tcx, key)
     });
     let dep_node_index = tcx.dep_graph.next_virtual_depnode_index();
@@ -782,7 +783,10 @@ fn execute_job_incr<'tcx, C: QueryCache>(
         dep_graph_data.with_task(
             dep_node,
             tcx,
-            || (query.invoke_provider_fn)(tcx, key),
+            || {
+                let _provider_timer = crate::provider_stats::provider(query.name, false);
+                (query.invoke_provider_fn)(tcx, key)
+            },
             query.hash_value_fn,
         )
     });
@@ -882,7 +886,10 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
             let _reuse_timer =
                 tcx.prof.generic_activity_with_arg("jr_incremental_green_recompute", query.name);
             let prof_timer = tcx.prof.query_provider();
-            let value = tcx.dep_graph.with_ignore(|| (query.invoke_provider_fn)(tcx, key));
+            let value = tcx.dep_graph.with_ignore(|| {
+                let _provider_timer = crate::provider_stats::provider(query.name, true);
+                (query.invoke_provider_fn)(tcx, key)
+            });
             prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
             (value, true)

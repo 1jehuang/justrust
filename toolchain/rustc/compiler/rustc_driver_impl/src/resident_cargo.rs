@@ -541,6 +541,28 @@ fn shared_transport_selection_is_strict_and_requires_helpers() {
     }
 }
 
+fn query_cost_selection(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        _ => Err("resident query cost profiling requires explicit 0 or 1".into()),
+    }
+}
+
+#[test]
+fn query_cost_selection_is_strict_and_default_off() {
+    use std::ffi::OsStr;
+    assert_eq!(query_cost_selection(None), Ok(false));
+    assert_eq!(query_cost_selection(Some(OsStr::new("0"))), Ok(false));
+    assert_eq!(query_cost_selection(Some(OsStr::new("1"))), Ok(true));
+    for value in ["", "01", "true", "2", " 1"] {
+        assert!(query_cost_selection(Some(OsStr::new(value))).is_err());
+    }
+    use std::os::unix::ffi::OsStrExt;
+    assert!(query_cost_selection(Some(OsStr::from_bytes(&[0xff]))).is_err());
+}
+
 fn owned_capacity_exhausted(counts: Option<(usize, usize)>) -> bool {
     counts.is_some_and(|(revisions, contexts)| revisions >= 64 || contexts >= 64)
 }
@@ -566,6 +588,8 @@ fn serve_requests(
     mut pending: Option<PreparedRequest>,
     owned: bool,
 ) -> Result<(), String> {
+    let query_cost_enabled =
+        query_cost_selection(std::env::var_os("JUSTRUST_CARGO_RESIDENT_QUERY_COST").as_deref())?;
     let macro_helpers = macro_selection(
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref(),
         owned,
@@ -748,6 +772,7 @@ fn serve_requests(
         let mut argv = vec!["jr-rustc-resident-cargo".to_owned()];
         argv.extend(args);
         let start = Instant::now();
+        let query_cost = rustc_query_impl::provider_stats::begin(query_cost_enabled);
         let mut callbacks = crate::TimePassesCallbacks::default();
         let (result, macro_stats) = lease
             .with_current(|| -> Result<_, String> {
@@ -861,6 +886,21 @@ fn serve_requests(
             "frontend":{"graph_hits":graph.hits,"graph_misses":graph.misses,"graph_bytes":graph.retained_bytes,
                 "archive_hits":archive.hits,"archive_misses":archive.misses,"archive_bytes":archive.current_bytes,
                 "value_loads":archive.value_loads,"typeck_loads":archive.typeck_loads,"mir_loads":archive.mir_loads}});
+        if query_cost_enabled {
+            let rows: Vec<_> = query_cost
+                .snapshot()
+                .into_iter()
+                .map(|row| {
+                    json!({"name":row.name,"provider_count":row.provider_count,
+                    "provider_nanos":row.provider_nanos,
+                    "green_recompute_count":row.green_recompute_count,
+                    "green_recompute_nanos":row.green_recompute_nanos,
+                    "provider_exclusive_nanos":row.provider_exclusive_nanos,
+                    "green_recompute_exclusive_nanos":row.green_recompute_exclusive_nanos})
+                })
+                .collect();
+            reply["query_cost"] = json!({"enabled":true,"rows":rows});
+        }
         if let Some(stats) = macro_stats {
             let callback_wire_tags: Vec<_> = stats
                 .callback_wire_tags

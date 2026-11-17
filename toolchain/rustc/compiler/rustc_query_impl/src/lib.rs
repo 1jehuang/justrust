@@ -23,6 +23,7 @@ mod execution;
 mod handle_cycle_error;
 mod incremental;
 mod job;
+pub mod provider_stats;
 mod query_vtables;
 pub mod resident;
 mod self_profile;
