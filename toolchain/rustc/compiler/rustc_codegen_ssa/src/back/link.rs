@@ -2921,7 +2921,7 @@ fn linker_with_args(
     metadata: &EncodedMetadata,
     self_contained_components: LinkSelfContainedComponents,
     codegen_backend: &'static str,
-) -> (Command, Vec<jobserver::Acquired>) {
+) -> (Command, Vec<jobserver::CompilerAcquired>) {
     let self_contained_crt_objects = self_contained_components.is_crt_objects_enabled();
     let cmd = &mut *super::linker::get_linker(
         sess,
@@ -3212,7 +3212,7 @@ fn linker_with_args(
     {
         // Try obtaining as many jobserver tokens as possible (within the limit) to run parallel
         // linking. One token is available implicitly since we are running on the main thread.
-        let client = jobserver::client();
+        let client = jobserver::compiler_client();
 
         let mut unsupported = false;
         for _ in 0..limit.get() - 1 {
@@ -3232,7 +3232,11 @@ fn linker_with_args(
         // Error on the side of oversubscription if non-blocking token acquiring is unsupported.
         // Linking is typically the last step in a multi-crate project build,
         // so the resources should usually be free.
-        let threads = if unsupported { limit.get() } else { 1 + tokens.len() };
+        // Preserve the ordinary compiler's historical fallback. A resident
+        // request may not invent unaccounted parallel capacity when pipe-based
+        // jobservers cannot acquire tokens nonblockingly.
+        let threads =
+            if unsupported && !client.is_resident() { limit.get() } else { 1 + tokens.len() };
         cmd.link_arg(format!("{prefix}{threads}"));
     }
 

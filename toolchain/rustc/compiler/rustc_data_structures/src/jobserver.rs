@@ -87,6 +87,109 @@ pub fn client() -> Client {
     CLIENT.get().expect("uninitialized jobserver client").clone()
 }
 
+/// Codegen and linker access to the current request's scheduler. Ordinary
+/// compilation retains the process-scoped client and its existing behavior.
+/// This does not install a resident request or authorize managed routing.
+pub fn compiler_client() -> CompilerClient {
+    match resident::current_client() {
+        Some(client) => CompilerClient::Resident(client),
+        None => CompilerClient::Ordinary(client()),
+    }
+}
+
+pub enum CompilerClient {
+    Ordinary(Client),
+    Resident(resident::RequestClient),
+}
+
+impl CompilerClient {
+    pub fn is_resident(&self) -> bool {
+        matches!(self, Self::Resident(_))
+    }
+
+    pub fn try_acquire(&self) -> std::io::Result<Option<CompilerAcquired>> {
+        match self {
+            Self::Ordinary(client) => client.try_acquire().map(|token| {
+                token.map(|token| CompilerAcquired {
+                    _token: CompilerToken::Ordinary { _token: token },
+                })
+            }),
+            Self::Resident(client) => client.try_acquire().map(|token| {
+                token.map(|token| CompilerAcquired {
+                    _token: CompilerToken::Resident { _token: token },
+                })
+            }),
+        }
+    }
+
+    pub fn into_helper_thread<F>(self, mut callback: F) -> std::io::Result<CompilerHelper>
+    where
+        F: FnMut(std::io::Result<CompilerAcquired>) + Send + 'static,
+    {
+        let helper = match self {
+            Self::Ordinary(client) => {
+                CompilerHelperKind::Ordinary(client.into_helper_thread(move |token| {
+                    callback(token.map(|token| CompilerAcquired {
+                        _token: CompilerToken::Ordinary { _token: token },
+                    }));
+                })?)
+            }
+            Self::Resident(client) => {
+                CompilerHelperKind::Resident(client.into_helper_thread(move |token| {
+                    callback(token.map(|token| CompilerAcquired {
+                        _token: CompilerToken::Resident { _token: token },
+                    }));
+                })?)
+            }
+        };
+        Ok(CompilerHelper(Some(helper)))
+    }
+}
+
+/// An acquired codegen/linker token. No raw-token conversion is available:
+/// resident tokens retain their request owner until normal destruction.
+pub struct CompilerAcquired {
+    _token: CompilerToken,
+}
+
+enum CompilerToken {
+    Ordinary { _token: Acquired },
+    Resident { _token: resident::RequestToken },
+}
+
+pub struct CompilerHelper(Option<CompilerHelperKind>);
+
+enum CompilerHelperKind {
+    Ordinary(HelperThread),
+    Resident(resident::RequestHelper),
+}
+
+impl CompilerHelper {
+    pub fn request_token(&self) {
+        match self.0.as_ref().expect("retired compiler helper") {
+            CompilerHelperKind::Ordinary(helper) => helper.request_token(),
+            CompilerHelperKind::Resident(helper) => helper
+                .request_token()
+                .expect("codegen requested a token after its resident request ended"),
+        }
+    }
+}
+
+impl Drop for CompilerHelper {
+    fn drop(&mut self) {
+        if let Some(CompilerHelperKind::Resident(helper)) = self.0.take() {
+            // Returning from codegen must not race a detached helper's owner
+            // destruction. A timeout leaves the real owner tracked, so request
+            // completion fails closed rather than reusing an active worker.
+            let _ = helper.retire().wait_timeout(std::time::Duration::from_secs(1));
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "jobserver_compiler_tests.rs"]
+mod compiler_tests;
+
 struct ProxyData {
     /// The number of tokens assigned to actively working threads,
     /// possibly including the single permanently held token.

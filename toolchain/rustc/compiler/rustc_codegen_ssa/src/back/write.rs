@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{assert_matches, fs, io, str, thread};
 
 use rustc_abi::Size;
-use rustc_data_structures::jobserver::{self, Acquired};
+use rustc_data_structures::jobserver::{self, CompilerAcquired as Acquired};
 use rustc_data_structures::profiling::{SelfProfilerRef, VerboseTimingGuard};
 use rustc_errors::emitter::Emitter;
 use rustc_errors::{
@@ -1014,7 +1014,7 @@ fn do_thin_lto<B: WriteBackendMethods>(
     // permanently held by rustc process.
     let jobserver_helper = cgcx.parallel.map(|_| {
         let coordinator_send2 = coordinator_send.clone();
-        jobserver::client()
+        jobserver::compiler_client()
             .into_helper_thread(move |token| {
                 drop(coordinator_send2.send(ThinLtoMessage::Token(token)));
             })
@@ -1232,7 +1232,7 @@ fn start_executing_work<B: WriteBackendMethods>(
     };
     let jobserver_helper = parallel.map(|_| {
         let coordinator_send2 = coordinator_send.clone();
-        jobserver::client()
+        jobserver::compiler_client()
             .into_helper_thread(move |token| {
                 drop(coordinator_send2.send(Message::Token::<B>(token)));
             })
