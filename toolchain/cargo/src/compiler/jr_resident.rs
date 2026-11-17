@@ -594,8 +594,29 @@ mod linux {
         drop((out_writer, err_writer));
         let mut ready = [0];
         prepared.stream.read_exact(&mut ready)?;
-        ensure!(ready == *b"R", "resident refused request before commit");
+        ensure!(
+            ready == *b"R",
+            "resident refused request before commit: {}",
+            refusal_reason(ready[0])
+        );
         Ok((prepared, out, err, id))
+    }
+
+    // One byte only, no peer-controlled strings or follow-up reads. Old F and
+    // unknown replies remain precommit fallback, never permission to send C.
+    fn refusal_reason(code: u8) -> &'static str {
+        match code {
+            b'1' => "receive: invalid request framing or output descriptors",
+            b'2' => "decode_request: invalid or ineligible request, or initial external manifest verification failed",
+            b'3' => "frozen_mismatch: argv or external inputs differ from committed worker identity",
+            b'4' => "rss: worker memory unavailable or at retirement limit",
+            b'5' => "owned_environment: unsupported owned compiler environment",
+            b'6' => "prepared_admission: compiler preparation failed or unsupported prepared configuration",
+            b'7' => "external_recapture_error: could not recapture actual inputs immediately before commit",
+            b'8' => "external_recapture_changed: actual inputs differ from request manifest immediately before commit",
+            b'F' => "legacy refusal (no stage supplied)",
+            _ => "unknown precommit response",
+        }
     }
 
     fn trace(cmd: &ProcessBuilder, mut value: serde_json::Value) {
@@ -720,6 +741,27 @@ mod linux {
             });
             assert!(handshake(&test_command(), prepared(client)).is_err());
             server.join().unwrap();
+        }
+
+        #[test]
+        fn bounded_stage_refusals_never_commit() {
+            for code in b"12345678F?C" {
+                let (client, mut peer) = UnixStream::pair().unwrap();
+                let code = *code;
+                let server = std::thread::spawn(move || {
+                    let (_, _writers) = receive(&mut peer);
+                    peer.write_all(&[code]).unwrap();
+                    let mut byte = [0];
+                    assert_eq!(peer.read(&mut byte).unwrap(), 0);
+                });
+                let error = match handshake(&test_command(), prepared(client)) {
+                    Ok(_) => panic!("refusal must not be admitted"),
+                    Err(error) => error,
+                };
+                assert!(error.to_string().contains(refusal_reason(code)));
+                assert!(refusal_reason(code).len() < 160);
+                server.join().unwrap();
+            }
         }
 
         #[test]

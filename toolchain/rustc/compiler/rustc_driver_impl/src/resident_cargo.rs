@@ -20,6 +20,37 @@ const MAX_REQUEST: usize = 1024 * 1024;
 const IDLE_MS: i32 = 60_000;
 const RSS_LIMIT: usize = 2 * 1024 * 1024 * 1024;
 
+// Single-byte precommit refusals. Keep in sync with Cargo's refusal_reason.
+// Old clients reject any non-R byte and fall back, without sending C.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum Refusal {
+    Receive = b'1',
+    DecodeRequest = b'2',
+    FrozenMismatch = b'3',
+    Rss = b'4',
+    OwnedEnvironment = b'5',
+    PreparedAdmission = b'6',
+    ExternalRecaptureError = b'7',
+    ExternalRecaptureChanged = b'8',
+}
+
+impl From<String> for Refusal {
+    fn from(_: String) -> Self {
+        Self::Receive
+    }
+}
+
+impl From<&str> for Refusal {
+    fn from(_: &str) -> Self {
+        Self::Receive
+    }
+}
+
+fn refuse(peer: &mut UnixStream, reason: Refusal) -> Result<(), String> {
+    peer.write_all(&[reason as u8]).map_err(|e| e.to_string())
+}
+
 fn error() -> String {
     io::Error::last_os_error().to_string()
 }
@@ -168,7 +199,7 @@ fn decode_request(
     Ok((id, args, external, nanos))
 }
 
-fn receive(stream: &mut UnixStream) -> Result<Request, String> {
+fn receive(stream: &mut UnixStream) -> Result<Request, Refusal> {
     let mut first = [0u8];
     let mut iov = libc::iovec { iov_base: first.as_mut_ptr().cast(), iov_len: 1 };
     let mut control = [0usize; 32];
@@ -233,7 +264,8 @@ fn receive(stream: &mut UnixStream) -> Result<Request, String> {
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref()
             == Some(std::ffi::OsStr::new("1")),
         &std::env::current_dir().map_err(|e| e.to_string())?,
-    )?;
+    )
+    .map_err(|_| Refusal::DecodeRequest)?;
     Ok(Request { id, args, outputs: fds, external, external_verify_nanos })
 }
 
@@ -535,25 +567,28 @@ fn serve_requests(
                 let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
                 peer.set_read_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
                 peer.set_write_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
-                let Ok(request) = receive(&mut peer) else {
-                    let _ = peer.write_all(b"F");
-                    continue;
+                let request = match receive(&mut peer) {
+                    Ok(request) => request,
+                    Err(reason) => {
+                        let _ = refuse(&mut peer, reason);
+                        continue;
+                    }
                 };
                 (peer, request, None)
             };
         let Request { id, args, outputs: fds, external, mut external_verify_nanos } = request;
         if frozen.as_ref().is_some_and(|(old, inputs)| old != &args || inputs != &external) {
-            peer.write_all(b"F").map_err(|e| e.to_string())?;
+            refuse(&mut peer, Refusal::FrozenMismatch)?;
             continue;
         }
         let rss = rustc_data_structures::profiling::get_resident_set_size();
         if rss.is_none_or(|rss| rss >= RSS_LIMIT) {
-            let _ = peer.write_all(b"F");
+            let _ = refuse(&mut peer, Refusal::Rss);
             return Ok(());
         }
         if owned {
             if !owned_environment_supported() {
-                peer.write_all(b"F").map_err(|e| e.to_string())?;
+                refuse(&mut peer, Refusal::OwnedEnvironment)?;
                 continue;
             }
             if prepared.is_none() {
@@ -570,7 +605,7 @@ fn serve_requests(
                         prepared = Some((candidate, callbacks));
                     }
                     _ => {
-                        peer.write_all(b"F").map_err(|e| e.to_string())?;
+                        refuse(&mut peer, Refusal::PreparedAdmission)?;
                         continue;
                     }
                 }
@@ -641,7 +676,14 @@ fn serve_requests(
                 u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             );
             if actual.as_ref().ok() != Some(&external) {
-                peer.write_all(b"F").map_err(|e| e.to_string())?;
+                refuse(
+                    &mut peer,
+                    if actual.is_err() {
+                        Refusal::ExternalRecaptureError
+                    } else {
+                        Refusal::ExternalRecaptureChanged
+                    },
+                )?;
                 return Ok(());
             }
         }
@@ -1094,6 +1136,28 @@ mod tests {
     fn missing_rights_are_refused() {
         let (mut a, mut b) = UnixStream::pair().unwrap();
         a.write_all(b"{\"id\":1,\"args\":[] }\n").unwrap();
-        assert!(receive(&mut b).is_err());
+        assert!(matches!(receive(&mut b), Err(Refusal::Receive)));
+    }
+
+    #[test]
+    fn precommit_refusals_are_unique_single_bytes() {
+        let reasons = [
+            Refusal::Receive,
+            Refusal::DecodeRequest,
+            Refusal::FrozenMismatch,
+            Refusal::Rss,
+            Refusal::OwnedEnvironment,
+            Refusal::PreparedAdmission,
+            Refusal::ExternalRecaptureError,
+            Refusal::ExternalRecaptureChanged,
+        ];
+        for (index, reason) in reasons.into_iter().enumerate() {
+            let (mut sender, mut receiver) = UnixStream::pair().unwrap();
+            refuse(&mut sender, reason).unwrap();
+            drop(sender);
+            let mut bytes = Vec::new();
+            receiver.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, [b'1' + index as u8]);
+        }
     }
 }
