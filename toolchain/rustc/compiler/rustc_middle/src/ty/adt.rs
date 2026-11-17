@@ -159,23 +159,26 @@ impl Hash for AdtDefData {
 impl StableHash for AdtDefData {
     fn stable_hash<Hcx: StableHashCtxt>(&self, hcx: &mut Hcx, hasher: &mut StableHasher) {
         thread_local! {
-            static CACHE: RefCell<FxHashMap<(usize, StableHashControls), Fingerprint>> = Default::default();
+            static CACHE: RefCell<(u64, FxHashMap<(usize, StableHashControls), Fingerprint>)> = Default::default();
         }
 
         let hash: Fingerprint = CACHE.with(|cache| {
+            let generation = super::impls_ty::hash_generation();
             let addr = self as *const AdtDefData as usize;
             let stable_hash_controls = hcx.stable_hash_controls();
-            *cache.borrow_mut().entry((addr, stable_hash_controls)).or_insert_with(|| {
-                let ty::AdtDefData { did, ref variants, ref flags, ref repr } = *self;
+            *super::impls_ty::cache_for_generation(&mut cache.borrow_mut(), generation)
+                .entry((addr, stable_hash_controls))
+                .or_insert_with(|| {
+                    let ty::AdtDefData { did, ref variants, ref flags, ref repr } = *self;
 
-                let mut hasher = StableHasher::new();
-                did.stable_hash(hcx, &mut hasher);
-                variants.stable_hash(hcx, &mut hasher);
-                flags.stable_hash(hcx, &mut hasher);
-                repr.stable_hash(hcx, &mut hasher);
+                    let mut hasher = StableHasher::new();
+                    did.stable_hash(hcx, &mut hasher);
+                    variants.stable_hash(hcx, &mut hasher);
+                    flags.stable_hash(hcx, &mut hasher);
+                    repr.stable_hash(hcx, &mut hasher);
 
-                hasher.finish()
-            })
+                    hasher.finish()
+                })
         });
 
         hash.stable_hash(hcx, hasher);

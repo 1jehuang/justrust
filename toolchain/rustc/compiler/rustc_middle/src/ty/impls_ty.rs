@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
@@ -13,6 +14,30 @@ use tracing::trace;
 
 use crate::{mir, ty};
 
+pub(super) fn fresh_hash_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .expect("stable hash context generation exhausted")
+}
+
+pub(super) fn hash_generation() -> u64 {
+    ty::tls::with_opt(|tcx| tcx.map_or(0, |tcx| tcx.stable_hash_generation))
+}
+
+/// Arena addresses and crate numbers are only identities inside one GCX.
+/// Lazily clear each worker's memo table when its context changes. Generation
+/// zero means there is no current GCX, so no previous entry may be reused.
+pub(super) fn cache_for_generation<K: Eq + std::hash::Hash, V>(
+    cache: &mut (u64, FxHashMap<K, V>),
+    generation: u64,
+) -> &mut FxHashMap<K, V> {
+    if generation == 0 || cache.0 != generation {
+        cache.1.clear();
+        cache.0 = generation;
+    }
+    &mut cache.1
+}
+
 impl<'tcx, H, T> StableHash for &'tcx ty::list::RawList<H, T>
 where
     T: StableHash,
@@ -22,13 +47,15 @@ where
         // without it, compiling `diesel-2.2.10` can be 74% slower, and compiling
         // `deeply-nested-multi` can be ~4,000x slower(!)
         thread_local! {
-            static CACHE: RefCell<FxHashMap<(*const (), StableHashControls), Fingerprint>> =
+            static CACHE: RefCell<(u64, FxHashMap<(*const (), StableHashControls), Fingerprint>)> =
                 RefCell::new(Default::default());
         }
 
         let hash = CACHE.with(|cache| {
+            let generation = hash_generation();
             let key = (ptr::from_ref(*self).cast::<()>(), hcx.stable_hash_controls());
-            if let Some(&hash) = cache.borrow().get(&key) {
+            if let Some(&hash) = cache_for_generation(&mut cache.borrow_mut(), generation).get(&key)
+            {
                 return hash;
             }
 
@@ -36,11 +63,35 @@ where
             self[..].stable_hash(hcx, &mut hasher);
 
             let hash: Fingerprint = hasher.finish();
-            cache.borrow_mut().insert(key, hash);
+            cache_for_generation(&mut cache.borrow_mut(), generation).insert(key, hash);
             hash
         });
 
         hash.stable_hash(hcx, hasher);
+    }
+}
+
+#[cfg(test)]
+mod resident_hash_tests {
+    use super::*;
+
+    #[test]
+    fn reused_arena_address_cannot_reuse_previous_context_hash() {
+        let mut cache = (0, FxHashMap::default());
+        let first = fresh_hash_generation();
+        let second = fresh_hash_generation();
+        cache_for_generation(&mut cache, first).insert(123usize, 456usize);
+        assert_eq!(cache_for_generation(&mut cache, first).get(&123), Some(&456));
+        assert!(cache_for_generation(&mut cache, second).get(&123).is_none());
+        cache_for_generation(&mut cache, second).insert(123, 789);
+        assert!(cache_for_generation(&mut cache, first).get(&123).is_none());
+    }
+
+    #[test]
+    fn hashing_without_a_context_never_reuses_pointer_entries() {
+        let mut cache = (0, FxHashMap::default());
+        cache_for_generation(&mut cache, 0).insert(123usize, 456usize);
+        assert!(cache_for_generation(&mut cache, 0).get(&123).is_none());
     }
 }
 

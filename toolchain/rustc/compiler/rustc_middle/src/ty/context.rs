@@ -786,6 +786,8 @@ impl<'tcx> GlobalCtxtResources<'tcx> {
 
 /// See [TyCtxt] for details about this type.
 pub struct GlobalCtxt<'tcx> {
+    /// Process-unique identity for pointer-keyed stable hash memo tables.
+    pub(crate) stable_hash_generation: u64,
     pub resident_live_queries: Option<&'tcx super::resident_live::LiveQueryState<'tcx>>,
     pub arena: &'tcx WorkerLocal<Arena<'tcx>>,
     pub hir_arena: &'tcx WorkerLocal<hir::Arena<'tcx>>,
@@ -1024,6 +1026,7 @@ impl<'tcx> TyCtxt<'tcx> {
         let common_consts = CommonConsts::new(interners, &common_types);
 
         let gcx = gcx_cell.get_or_init(|| GlobalCtxt {
+            stable_hash_generation: super::impls_ty::fresh_hash_generation(),
             resident_live_queries: resources.resident_live_queries,
             sess,
             crate_types,
