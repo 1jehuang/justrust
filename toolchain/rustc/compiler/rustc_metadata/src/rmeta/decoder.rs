@@ -17,6 +17,7 @@ use rustc_data_structures::sync::Lock;
 use rustc_data_structures::unhash::UnhashMap;
 use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 use rustc_expand::proc_macro::{AttrProcMacro, BangProcMacro, DeriveProcMacro};
+use rustc_expand::proc_macro_client::ProcMacroClient;
 use rustc_hir::Safety;
 use rustc_hir::def::Res;
 use rustc_hir::def_id::{CRATE_DEF_INDEX, LOCAL_CRATE};
@@ -26,7 +27,6 @@ use rustc_middle::middle::lib_features::LibFeatures;
 use rustc_middle::mir::interpret::{AllocDecodingSession, AllocDecodingState};
 use rustc_middle::ty::codec::{TyDecoder, forward_all_decoder_methods_to};
 use rustc_middle::ty::{RestrictionKind, Visibility};
-use rustc_proc_macro::bridge::client::Client as ProcMacroClient;
 use rustc_serialize::opaque::MemDecoder;
 use rustc_serialize::{Decodable, Decoder};
 use rustc_session::config::TargetModifier;
@@ -153,7 +153,7 @@ pub(crate) struct CrateMetadata {
     /// or `#[rustc_allow_incoherent_impl]`.
     incoherent_impls: FxIndexMap<SimplifiedType, LazyArray<DefIndex>>,
     /// Proc macro function pointers for this crate, if it's a proc macro crate.
-    raw_proc_macros: Option<&'static [ProcMacroClient]>,
+    raw_proc_macros: Option<Vec<ProcMacroClient>>,
     /// Actual source, hygiene, and allocation decoder storage, selected before decoding.
     decoder_identity: Arc<ExternalDecoderIdentityState>,
     /// For every definition in this crate, maps its `DefPathHash` to its `DefIndex`.
@@ -1126,7 +1126,7 @@ impl CrateMetadata {
             .enumerate()
             .find(|(_pos, (i, _))| *i == id)
             .unwrap();
-        (self.raw_proc_macros.unwrap()[pos], kind.decode((self, tcx)))
+        (self.raw_proc_macros.as_ref().unwrap()[pos], kind.decode((self, tcx)))
     }
 
     fn opt_item_name(&self, item_index: DefIndex) -> Option<Symbol> {
@@ -1190,9 +1190,7 @@ impl CrateMetadata {
                     attributes.into_iter().map(|attr| Symbol::intern(&attr)).collect();
                 (
                     trait_name,
-                    SyntaxExtensionKind::Derive(Arc::new(DeriveProcMacro {
-                        client: client.into(),
-                    })),
+                    SyntaxExtensionKind::Derive(Arc::new(DeriveProcMacro { client })),
                     helper_attrs,
                 )
             }
@@ -2065,7 +2063,7 @@ impl CrateMetadata {
         blob: MetadataBlob,
         root: CrateRoot,
         unhashed: CrateRootUnhashed,
-        raw_proc_macros: Option<&'static [ProcMacroClient]>,
+        raw_proc_macros: Option<Vec<ProcMacroClient>>,
         decoder_identity: Arc<ExternalDecoderIdentityState>,
         cnum: CrateNum,
         cnum_map: CrateNumMap,

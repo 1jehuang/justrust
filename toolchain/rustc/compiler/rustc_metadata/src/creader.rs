@@ -15,6 +15,7 @@ use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::{self, FreezeReadGuard, FreezeWriteGuard};
 use rustc_data_structures::unord::UnordMap;
 use rustc_expand::base::SyntaxExtension;
+use rustc_expand::proc_macro_client::ProcMacroClient;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE, LocalDefId, StableCrateId};
 use rustc_hir::definitions::{DefPathData, Definitions};
 use rustc_index::IndexVec;
@@ -22,7 +23,6 @@ use rustc_lint_defs as lint;
 use rustc_lint_defs::builtin::UNUSED_CRATE_DEPENDENCIES;
 use rustc_middle::ty::data_structures::IndexSet;
 use rustc_middle::ty::{TyCtxt, TyCtxtFeed};
-use rustc_proc_macro::bridge::client::Client as ProcMacroClient;
 use rustc_session::Session;
 use rustc_session::config::mitigation_coverage::DeniedPartialMitigationLevel;
 use rustc_session::config::{
@@ -619,7 +619,14 @@ impl CStore {
 
         let Library { source, metadata } = lib;
         let crate_root = metadata.get_root();
-        if crate_root.is_proc_macro_crate() && rustc_session::resident::is_process() {
+        #[cfg(target_os = "linux")]
+        let request_macros = crate::resident_proc_macro_request::active();
+        #[cfg(not(target_os = "linux"))]
+        let request_macros = false;
+        if crate_root.is_proc_macro_crate()
+            && rustc_session::resident::is_process()
+            && !request_macros
+        {
             // A returned loader error can be suppressed during speculative name
             // resolution and degrade into "can't find crate". This is an explicit
             // worker capability refusal, so report it before registering/loading
@@ -1036,8 +1043,20 @@ impl CStore {
         &self,
         path: &Path,
         stable_crate_id: StableCrateId,
-    ) -> Result<&'static [ProcMacroClient], CrateError> {
-        Ok(crate::host_dylib::dlsym_proc_macros(path, stable_crate_id)?)
+    ) -> Result<Vec<ProcMacroClient>, CrateError> {
+        #[cfg(target_os = "linux")]
+        if crate::resident_proc_macro_request::active() {
+            let symbol = rustc_session::generate_proc_macro_decls_symbol(stable_crate_id);
+            return crate::resident_proc_macro_request::load(path, &symbol).map_err(|error| {
+                crate::host_dylib::DylibError::DlOpen(path.display().to_string(), error.to_string())
+                    .into()
+            });
+        }
+        Ok(crate::host_dylib::dlsym_proc_macros(path, stable_crate_id)?
+            .iter()
+            .copied()
+            .map(ProcMacroClient::from)
+            .collect())
     }
 
     fn inject_panic_runtime(&mut self, tcx: TyCtxt<'_>, krate: &ast::Crate) {

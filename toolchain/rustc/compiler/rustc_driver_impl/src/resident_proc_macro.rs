@@ -1,5 +1,9 @@
 //! Native fresh-process proc-macro endpoint. Never enables resident mode.
 
+#[cfg(test)]
+#[path = "resident_proc_macro_acceptance.rs"]
+mod acceptance;
+
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;

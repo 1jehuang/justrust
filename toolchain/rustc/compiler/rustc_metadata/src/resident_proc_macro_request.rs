@@ -74,6 +74,10 @@ fn helper(owner: &mut Owner) -> io::Result<&mut MacroHelper> {
     Ok(owner.helper.as_mut().unwrap())
 }
 
+pub fn active() -> bool {
+    selected().is_ok_and(|owner| owner.is_some())
+}
+
 pub fn load(path: &Path, symbol: &str) -> io::Result<Vec<ProcMacroClient>> {
     let mut current = selected()?;
     let owner = current.as_mut().ok_or_else(|| io::Error::other("no proc-macro request owner"))?;
