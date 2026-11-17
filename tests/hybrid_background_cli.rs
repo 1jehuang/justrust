@@ -18,6 +18,22 @@ use std::time::{Duration, Instant};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const DEADLINE: Duration = Duration::from_secs(20);
 
+// The production ready-only decision has a two-second deadline. macOS's system
+// Python can take longer to start under parallel CI load, so the fake handshake
+// uses shell builtins and reserves Python for the untimed background workload.
+const ENGINE_LAUNCHER: &str = r#"#!/bin/bash
+if [ "$1" = cargo ] && [ "$2" = hybrid-ready ]; then
+    printf '%s\n' ready-probe >> "$PROBE_ROOT/events"
+    if [ "${COMMITTED_STATUS+x}" = x ]; then
+        eval 'printf "committed\n" >&'"$JR_HYBRID_DECISION_FD"
+        exit "$COMMITTED_STATUS"
+    fi
+    eval 'printf "miss\n" >&'"$JR_HYBRID_DECISION_FD"
+    exit 0
+fi
+exec /usr/bin/python3 "$PROBE_ROOT/fake-engine.py" "$@"
+"#;
+
 const ENGINE: &str = r#"#!/usr/bin/python3
 import os, pathlib, sys, time
 root = pathlib.Path(os.environ['PROBE_ROOT'])
@@ -25,13 +41,6 @@ def event(value):
     fd = os.open(root / 'events', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try: os.write(fd, (value + '\n').encode())
     finally: os.close(fd)
-if sys.argv[1:3] == ['cargo', 'hybrid-ready']:
-    event('ready-probe')
-    fd = int(os.environ['JR_HYBRID_DECISION_FD'])
-    committed = 'COMMITTED_STATUS' in os.environ
-    os.write(fd, b'committed\n' if committed else b'miss\n')
-    os.close(fd)
-    sys.exit(int(os.environ.get('COMMITTED_STATUS', '0')))
 assert sys.argv[1:4] == ['cargo', 'hybrid-prewarm', '--'], repr(sys.argv)
 assert 'JR_HYBRID_DECISION_FD' not in os.environ
 assert os.environ['RUSTC'] == str(root / 'toolchain/bin/rustc')
@@ -114,7 +123,8 @@ impl Fixture {
         }
         let engine = root.join("fake-engine");
         let fallback = root.join("fake-fallback");
-        for (path, content) in [(&engine, ENGINE), (&fallback, FALLBACK)] {
+        fs::write(root.join("fake-engine.py"), ENGINE).unwrap();
+        for (path, content) in [(&engine, ENGINE_LAUNCHER), (&fallback, FALLBACK)] {
             fs::write(path, content).unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -614,6 +624,8 @@ fn simultaneous_foregrounds_do_not_wait_for_each_other_or_background_compile() {
 fn committed_native_success_or_error_never_schedules_background_work() {
     for status in ["0", "101"] {
         let fixture = Fixture::new();
+        // Readiness must not start the Python workload or depend on its startup.
+        fs::remove_file(fixture.root.join("fake-engine.py")).unwrap();
         let result = output(
             fixture
                 .command()

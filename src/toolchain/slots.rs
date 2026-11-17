@@ -207,7 +207,7 @@ fn usage_path(root: &Path, name: &str) -> PathBuf {
 
 /// An inherited shared descriptor keeps compiler usage admitted until all holders exit.
 pub struct Lease {
-    file: File,
+    _file: File,
 }
 
 impl Lease {
@@ -216,7 +216,7 @@ impl Lease {
         {
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
-            let fd = self.file.as_raw_fd();
+            let fd = self._file.as_raw_fd();
             // SAFETY: this child-only hook performs only async-signal-safe fcntl.
             unsafe {
                 command.pre_exec(move || {
@@ -256,7 +256,7 @@ fn lease_at(root: &Path, tc: &Toolchain) -> Result<Option<Lease>> {
             tc.id
         );
     }
-    Ok(Some(Lease { file }))
+    Ok(Some(Lease { _file: file }))
 }
 
 pub(crate) fn reject_retired(root: &Path, name: &str) -> Result<()> {
@@ -321,7 +321,10 @@ fn response(state: Option<&State>, status: &str) -> serde_json::Value {
 // Caller holds both lifecycle and installer locks. False means safely retained.
 fn delete_unused(root: &Path, slot: &Slot) -> Result<bool> {
     #[cfg(not(unix))]
-    bail!("cleanup requires inheritable usage leases on this platform");
+    {
+        let _ = (root, slot);
+        bail!("cleanup requires inheritable usage leases on this platform");
+    }
     #[cfg(unix)]
     {
         let usage = open_lock(&usage_path(root, &slot.id))?;
@@ -832,7 +835,7 @@ mod tests {
         let path = usage_path(&f.0, "jr-aaaaaaa");
         let file = open_lock(&path).unwrap();
         file.lock_shared().unwrap();
-        let lease = Lease { file };
+        let lease = Lease { _file: file };
         // The child blocks on stdin after proving exec completed, with no sleep race.
         let mut cmd = Process::new("sh");
         cmd.args(["-c", "echo ready; read line"]);
