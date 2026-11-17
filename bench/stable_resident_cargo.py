@@ -126,7 +126,9 @@ def semantics(record, nonce, expectation):
         if not any(d.get('level') == 'error' for d in diagnostics):
             raise AssertionError('Missing ordinary Cargo compiler error diagnostic')
         return dict(status=101, diagnostics=diagnostics, tests={})
-    pairs = re.findall(r'^test (\S+) \.\.\. (ok|FAILED|ignored)$', stdout, re.MULTILINE)
+    # Owned libtest may append its measured per-test duration. Admit only the
+    # numeric duration suffix, not arbitrary text that could mask a failure.
+    pairs = re.findall(r'^test (\S+) \.\.\. (ok|FAILED|ignored)(?: <\d+(?:\.\d+)?s>)?$', stdout, re.MULTILINE)
     expected = {name: 'ok' for name in (*dogfood.ORIGINAL_TESTS, PROBE)}
     if record['status'] != 0 or len(pairs) != len(expected) or dict(pairs) != expected:
         raise AssertionError('Ordinary Cargo named tests/status mismatch: ' + repr(pairs))

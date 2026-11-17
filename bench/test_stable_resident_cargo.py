@@ -88,6 +88,15 @@ class CargoAcceptanceTests(unittest.TestCase):
         self.assertEqual(off['JUSTRUST_CARGO_RESIDENT'], 'off')
         self.assertEqual(on['JUSTRUST_CARGO_RESIDENT'], 'serial')
 
+    def test_owned_libtest_duration_suffix_is_strictly_numeric(self):
+        record = cargo_record('nonce')
+        plain = harness.base64.b64decode(record['stdout_b64'])
+        record['stdout_b64'] = harness.native.encoded(plain.replace(b' ... ok\n', b' ... ok <0.003s>\n'))
+        self.assertEqual(harness.semantics(record, 'nonce', 'pass')['status'], 0)
+        record['stdout_b64'] = harness.native.encoded(plain.replace(b' ... ok\n', b' ... ok <FAILED>\n'))
+        with self.assertRaisesRegex(AssertionError, 'named tests'):
+            harness.semantics(record, 'nonce', 'pass')
+
     def test_real_client_adapter_preserves_inputs_and_uses_explicit_components(self):
         calls = []
         def run(command, timeout, cwd, env):
