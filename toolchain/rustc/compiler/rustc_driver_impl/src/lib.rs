@@ -105,6 +105,8 @@ mod signal_handler {
 
 #[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
 mod resident;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod resident_cargo;
 
 use crate::diagnostics::{
     CantEmitMIR, RLinkEmptyVersionNumber, RLinkEncodingVersionMismatch, RLinkRustcVersionMismatch,
@@ -1880,6 +1882,20 @@ pub unsafe fn main() -> ExitCode {
     install_ctrlc_handler();
 
     let raw_args = args::raw_args(&early_dcx);
+    if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident-cargo") {
+        if raw_args.len() != 2 || query_admission.is_some() {
+            eprintln!("jr-rustc Cargo resident: requires a dedicated unbound worker");
+            return ExitCode::FAILURE;
+        }
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        // SAFETY: native main owns the launcher's inherited listener.
+        return unsafe { resident_cargo::run() };
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        {
+            eprintln!("jr-rustc Cargo resident: unsupported platform");
+            return ExitCode::FAILURE;
+        }
+    }
     if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident" || arg == "--jr-resident-owned") {
         if raw_args.len() != 2 || query_admission.is_some() {
             eprintln!(

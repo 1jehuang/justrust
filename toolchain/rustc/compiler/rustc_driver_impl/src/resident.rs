@@ -49,7 +49,7 @@ fn owned_completion(
     })
 }
 
-fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
+pub(super) fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
     let value: Value = serde_json::from_slice(line).map_err(|e| e.to_string())?;
     let object = value.as_object().ok_or("request must be an object")?;
     if object.len() != 2 || !object.contains_key("id") || !object.contains_key("args") {
