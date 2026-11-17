@@ -582,10 +582,22 @@ mod linux {
         Ok((prepared, out, err, id))
     }
 
-    fn trace(cmd: &ProcessBuilder, value: serde_json::Value) {
+    fn trace(cmd: &ProcessBuilder, mut value: serde_json::Value) {
         let Some(path) = cmd.get_env("JUSTRUST_CARGO_RESIDENT_TRACE") else {
             return;
         };
+        let args = cmd.get_args().collect::<Vec<_>>();
+        let crate_name = args.iter().enumerate().find_map(|(index, arg)| {
+            if *arg == "--crate-name" {
+                args.get(index + 1).and_then(|name| name.to_str())
+            } else {
+                arg.to_str()
+                    .and_then(|arg| arg.strip_prefix("--crate-name="))
+            }
+        });
+        if let Some(crate_name) = crate_name {
+            value["crate_name"] = crate_name.into();
+        }
         if let Ok(mut file) = OpenOptions::new()
             .append(true)
             .create(true)
@@ -603,6 +615,19 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn trace_attributes_actual_crate_name() {
+            for args in [vec!["--crate-name", "root"], vec!["--crate-name=root"]] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("trace");
+                let mut cmd = ProcessBuilder::new("rustc");
+                cmd.args(&args).env("JUSTRUST_CARGO_RESIDENT_TRACE", &path);
+                trace(&cmd, serde_json::json!({"event":"complete"}));
+                let value: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                assert_eq!(value["crate_name"], "root");
+            }
+        }
         fn test_command() -> ProcessBuilder {
             let mut cmd = ProcessBuilder::new("/owned/bin/rustc");
             cmd.jr_native_compiler(true);
