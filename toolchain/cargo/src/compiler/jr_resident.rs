@@ -309,6 +309,7 @@ mod linux {
                 Ok(())
             });
         }
+        worker_process_group(&mut child);
         let mut child = child.spawn()?;
         drop(listener);
         // Reap the eventual worker exit without waiting for its persistent life.
@@ -322,6 +323,12 @@ mod linux {
             _lock: lock,
             key,
         })
+    }
+
+    fn worker_process_group(command: &mut Command) {
+        // The native server owns cancellation of its entire linker/descendant
+        // process group. Never let it share Cargo's or the invoking agent's group.
+        command.process_group(0);
     }
 
     fn pipe() -> io::Result<(File, OwnedFd)> {
@@ -725,6 +732,29 @@ mod linux {
             let link = temp.path().join("link");
             std::os::unix::fs::symlink(temp.path(), &link).unwrap();
             assert!(private_dir(&link).is_err());
+        }
+
+        #[test]
+        fn worker_process_group_child() {
+            if ProcessBuilder::new("unused")
+                .get_env("JUSTRUST_TEST_RESIDENT_GROUP_CHILD")
+                .is_some()
+            {
+                assert_eq!(unsafe { libc::getpgrp() }, unsafe { libc::getpid() });
+            }
+        }
+
+        #[test]
+        fn worker_starts_in_dedicated_process_group() {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "compiler::jr_resident::linux::tests::worker_process_group_child",
+                ])
+                .env("JUSTRUST_TEST_RESIDENT_GROUP_CHILD", "1");
+            worker_process_group(&mut command);
+            assert!(command.status().unwrap().success());
         }
 
         #[test]
