@@ -68,10 +68,10 @@ class OwnLoopTests(unittest.TestCase):
         return run, calls
 
     def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
-                repetitions=2, macro_shm=False, macro_spins=0, **runner_options):
+                repetitions=2, macro_shm=False, macro_spins=0, profile_phases=False, **runner_options):
         source, options, attestation = self.prepare(root)
         options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions,
-                       macro_shm=macro_shm, macro_spins=macro_spins)
+                       macro_shm=macro_shm, macro_spins=macro_spins, profile_phases=profile_phases)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -142,6 +142,129 @@ class OwnLoopTests(unittest.TestCase):
                 with self.subTest(repetitions=value), self.assertRaisesRegex(ValueError, 'Positive diagnostic'):
                     suite.capture(**options, runner=runner)
             self.assertEqual(calls, [])
+
+    def test_profile_phases_requires_diagnostic_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, options, _ = self.prepare(Path(directory))
+            runner, calls = self.runner()
+            with self.assertRaisesRegex(ValueError, 'requires diagnostic'):
+                suite.capture(**options, profile_phases=True, runner=runner)
+            for value in (None, 0, 1, 'true'):
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'must be boolean'):
+                    suite.capture(**options, diagnostic_on_only=True, profile_phases=value, runner=runner)
+            self.assertEqual(calls, [])
+            self.assertFalse(options['output'].exists())
+
+    def test_profile_phases_actual_commands_environment_and_raw_stderr(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, RUSTFLAGS='inherited flags must not leak'):
+                    report, calls, options = self.capture(
+                        Path(directory), diagnostic_on_only=True, repetitions=1,
+                        profile_phases=enabled)
+                self.assertEqual(len(calls), 10)
+                self.assertIs(report['provenance']['profile_phases'], enabled)
+                self.assertEqual(report['verdict'], 'diagnostic-passed')
+                expected = suite.shared.FLAGS + (' -Ztime-passes' if enabled else '')
+                for command, _, _, env in calls:
+                    self.assertEqual(command[:2], [options['justrust'], 'cargo'])
+                    self.assertIn(command[2], ('check', 'build'))
+                    self.assertEqual(command[3:], ['--lib', '--message-format=json'])
+                    self.assertEqual(env['RUSTFLAGS'], expected)
+                suite._validate(report, diagnostic=True)
+                self.assertNotIn('summary', report)
+                for row in report['repetitions'][0]['arms']['on']['observations']:
+                    self.assertEqual(base64.b64decode(row['cargo']['stderr_b64']), b'raw stderr\xff\x00\n')
+                self.assertEqual(json.loads((options['output'] / 'receipt.json').read_text()), report)
+                with self.assertRaises(ValueError):
+                    suite.validate(report)
+                with self.assertRaises(ValueError):
+                    suite.compare(report, report)
+
+    def test_profile_phases_provenance_and_environment_tampering_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report, _, _ = self.capture(Path(directory), diagnostic_on_only=True,
+                                        repetitions=1, profile_phases=True)
+            for value in (None, 0, 1, 'true', False):
+                bad = copy.deepcopy(report)
+                if value is None:
+                    bad['provenance'].pop('profile_phases')
+                else:
+                    bad['provenance']['profile_phases'] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    suite._validate(bad, diagnostic=True)
+            for flags in (suite.shared.FLAGS, suite.shared.FLAGS + ' -Ztime-passes -Ztime-passes',
+                          suite.shared.FLAGS + ' -Ztime-passes=on'):
+                bad = copy.deepcopy(report)
+                bad['repetitions'][0]['arms']['on']['observations'][0]['cargo']['invocation']['environment']['RUSTFLAGS'] = flags
+                with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                    suite._validate(bad, diagnostic=True)
+            forged = copy.deepcopy(report)
+            forged.update(schema=suite.SCHEMA, verdict='passed')
+            with self.assertRaisesRegex(ValueError, 'requires diagnostic'):
+                suite.validate(forged)
+            with self.assertRaises(ValueError):
+                suite.compare(forged, forged)
+
+    def test_profile_phases_cannot_be_enabled_in_performance_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report, _, _ = self.capture(Path(directory))
+            self.assertIs(report['provenance']['profile_phases'], False)
+            for pair in report['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        self.assertEqual(row['cargo']['invocation']['environment']['RUSTFLAGS'], suite.shared.FLAGS)
+            bad = copy.deepcopy(report)
+            bad['provenance']['profile_phases'] = True
+            with self.assertRaisesRegex(ValueError, 'requires diagnostic'):
+                suite.validate(bad)
+            bad = copy.deepcopy(report)
+            bad['repetitions'][0]['arms']['off']['observations'][0]['cargo']['invocation']['environment']['RUSTFLAGS'] += ' -Ztime-passes'
+            with self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                suite.validate(bad)
+
+    def test_historical_missing_profile_flag_validates_and_compares_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            current, _, _ = self.capture(Path(directory))
+            historical = copy.deepcopy(current)
+            historical['provenance'].pop('profile_phases')
+            original = copy.deepcopy(historical)
+            current_original = copy.deepcopy(current)
+            self.assertEqual(suite.validate(historical), suite.validate(current))
+            expected = suite.compare(current, current)
+            self.assertEqual(suite.compare(historical, historical), expected)
+            self.assertEqual(suite.compare(historical, current), expected)
+            self.assertEqual(suite.compare(current, historical), expected)
+            self.assertEqual(historical, original)
+            self.assertEqual(current, current_original)
+            for value in (None, 0, 1, 'false'):
+                bad = copy.deepcopy(historical)
+                bad['provenance']['profile_phases'] = value
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'profiling provenance'):
+                    suite.validate(bad)
+            for mode in ('off', 'on'):
+                bad = copy.deepcopy(historical)
+                bad['repetitions'][0]['arms'][mode]['observations'][0]['cargo']['invocation']['environment']['RUSTFLAGS'] += ' -Ztime-passes'
+                with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                    suite.validate(bad)
+                with self.assertRaises(ValueError):
+                    suite.compare(historical, bad)
+
+    def test_historical_missing_profile_flag_does_not_relax_diagnostic_claims(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report, _, _ = self.capture(Path(directory), diagnostic_on_only=True, repetitions=1)
+            report['provenance'].pop('profile_phases')
+            original = copy.deepcopy(report)
+            suite._validate(report, diagnostic=True)
+            with self.assertRaises(ValueError):
+                suite.validate(report)
+            with self.assertRaises(ValueError):
+                suite.compare(report, report)
+            self.assertEqual(report, original)
+            profiled = copy.deepcopy(report)
+            profiled['repetitions'][0]['arms']['on']['observations'][0]['cargo']['invocation']['environment']['RUSTFLAGS'] += ' -Ztime-passes'
+            with self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                suite._validate(profiled, diagnostic=True)
 
     def test_diagnostic_failure_restores_and_preserves_raw_receipt(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -153,7 +153,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             checkout=None, edit_mode='body', commands=('check', 'build'), root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
             expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
-            diagnostic_on_only=False, macro_shm=False, macro_spins=0):
+            diagnostic_on_only=False, macro_shm=False, macro_spins=0, profile_phases=False):
     commands = selected_commands(commands)
     if type(macro_shm) is not bool:
         raise ValueError('Macro SHM mode must be boolean')
@@ -162,6 +162,10 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
         raise ValueError('Root native freeze and idle authorization required')
     if type(diagnostic_on_only) is not bool:
         raise ValueError('Diagnostic on-only flag must be boolean')
+    if type(profile_phases) is not bool:
+        raise ValueError('Phase profiling flag must be boolean')
+    if profile_phases and not diagnostic_on_only:
+        raise ValueError('Phase profiling requires diagnostic on-only mode')
     if diagnostic_on_only:
         if type(repetitions) is not int or repetitions < 1:
             raise ValueError('Positive diagnostic repetition count required')
@@ -197,6 +201,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                                   original_sha256=digest_bytes(original), manifest_b64=shared.native.encoded(manifest),
                                   host=safety.host(), repetitions=repetitions, timeout=timeout, edit_mode=edit_mode,
                                   commands=list(commands), macro_shm=macro_shm, macro_spins=macro_spins,
+                                  profile_phases=profile_phases,
                                   root_native_frozen=True, idle_authorized=True,
                                   harness_sha256=shared.native.digest(Path(__file__)),
                                   helper_sha256={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
@@ -215,6 +220,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 trace = arm_root / 'trace.jsonl'
                 env = shared.environment(compiler, checkout, mode, workers, trace)
                 env.update(STRICT_ENV)
+                env['RUSTFLAGS'] = shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
                 # Always override inherited transport settings in both arms.
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = '1' if macro_shm else '0'
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = str(macro_spins)
@@ -283,6 +289,11 @@ def _validate(report, *, diagnostic):
     if report.get('schema') != schema or report.get('verdict') != verdict:
         raise ValueError('Not a passed own-source loop receipt')
     provenance = report['provenance']
+    profile_phases = provenance.get('profile_phases', False)
+    if type(profile_phases) is not bool:
+        raise ValueError('Invalid phase profiling provenance')
+    if profile_phases and not diagnostic:
+        raise ValueError('Phase profiling requires diagnostic on-only mode')
     if type(provenance.get('macro_shm')) is not bool:
         raise ValueError('Missing or invalid macro SHM provenance')
     validate_macro_spins(provenance.get('macro_spins'), provenance['macro_shm'])
@@ -331,7 +342,7 @@ def _validate(report, *, diagnostic):
                     if (env['RUSTC'] != provenance['attestation']['compiler']['path']
                             or env['JUSTRUST_REAL_CARGO'] != provenance['attestation']['cargo']['path']
                             or env['JUSTRUST_CARGO_RESIDENT'] != ('serial' if mode == 'on' else 'off')
-                            or env['RUSTFLAGS'] != shared.FLAGS
+                            or env['RUSTFLAGS'] != shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SHM') != ('1' if provenance['macro_shm'] else '0')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS') != str(provenance['macro_spins'])
                             or any(env.get(key) != value for key, value in STRICT_ENV.items())
@@ -400,6 +411,8 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
     normalized = []
     for report, hashes, transport, spins in zip((before, after), expected, transports, spin_counts):
         provenance = json.loads(json.dumps(report['provenance']))
+        # Historical v1 receipts predate profiling. Normalize only this copy.
+        provenance['profile_phases'] = provenance.get('profile_phases', False)
         if explicit_spins:
             validate_macro_spins(spins, provenance['macro_shm'])
             if provenance['macro_spins'] != spins:
@@ -473,6 +486,8 @@ def main():
                         help='Canonical decimal spin count 0..256, nonzero requires --macro-shm')
     parser.add_argument('--diagnostic-on-only', action='store_true',
                         help='Run only resident-on as a correctness diagnostic, never performance evidence')
+    parser.add_argument('--profile-phases', action='store_true',
+                        help='Append -Ztime-passes to RUSTFLAGS, requires --diagnostic-on-only')
     parser.add_argument('--repetitions', type=int, default=2)
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--root-native-frozen', action='store_true', required=True)
