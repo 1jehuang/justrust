@@ -53,6 +53,38 @@ class DecoderTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'Disabled decoder'):
             harness.validate_stats(record, None, '0', 'cold')
 
+    def test_optional_native_phase_timing_is_strict_and_monotonic(self):
+        first = response()
+        first['decoder'].update(selection_nanos=10, publication_nanos=20)
+        previous = harness.validate_stats(first, None, '1', 'cold')
+        later = response(kind='hit', previous=previous)
+        later['decoder'].update(selection_nanos=11, publication_nanos=21)
+        harness.validate_stats(later, previous, '1', 'hit')
+        for key in ('selection_nanos', 'publication_nanos'):
+            for invalid in (True, -1, 1.5, None, 2**64):
+                bad = copy.deepcopy(first)
+                bad['decoder'][key] = invalid
+                with self.assertRaisesRegex(AssertionError, 'phase timing'):
+                    harness.validate_stats(bad, None, '1', 'cold')
+            bad = copy.deepcopy(later)
+            bad['decoder'][key] = previous[key] - 1
+            with self.assertRaisesRegex(AssertionError, 'phase timing'):
+                harness.validate_stats(bad, previous, '1', 'hit')
+            del bad['decoder'][key]
+            with self.assertRaisesRegex(AssertionError, 'phase timing'):
+                harness.validate_stats(bad, previous, '1', 'hit')
+        absent = response(kind='hit', previous=previous)
+        absent['decoder'].pop('selection_nanos')
+        absent['decoder'].pop('publication_nanos')
+        with self.assertRaisesRegex(AssertionError, 'phase timing disappeared'):
+            harness.validate_stats(absent, previous, '1', 'hit')
+        disabled = response(mode='0')
+        disabled['decoder'].update(selection_nanos=0, publication_nanos=0)
+        harness.validate_stats(disabled, None, '0', 'cold')
+        disabled['decoder']['selection_nanos'] = 1
+        with self.assertRaisesRegex(AssertionError, 'Disabled decoder'):
+            harness.validate_stats(disabled, None, '0', 'cold')
+
     def test_bad_telemetry(self):
         for key in harness.COUNTERS:
             for bad in (True, -1, 1.5, None):

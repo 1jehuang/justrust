@@ -412,6 +412,8 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                         "retained_entries": decoder.retained_entries,
                         "retired": decoder.retired,
                         "retirement_requests": decoder.retirement_requests,
+                        "selection_nanos": decoder.selection_nanos,
+                        "publication_nanos": decoder.publication_nanos,
                     });
                     if decoder.retired && reply["owned"]["retirement_reason"].is_null() {
                         reply["owned"]["retirement_reason"] = json!("external_decoder");

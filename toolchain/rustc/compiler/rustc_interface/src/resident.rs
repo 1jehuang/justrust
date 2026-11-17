@@ -533,6 +533,8 @@ mod tests {
                     assert_eq!(stats.publications, if enabled { 2 } else { 0 });
                     assert_eq!(stats.hits > 0, enabled);
                     assert_eq!(stats.retained_entries > 0, enabled);
+                    assert_eq!(stats.selection_nanos > 0, enabled);
+                    assert_eq!(stats.publication_nanos > 0, enabled);
                     // Simulate failure after successful context finalization,
                     // such as an ordinary linker failure. No failed owner retry.
                     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

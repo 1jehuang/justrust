@@ -15,6 +15,7 @@ use rustc_span::{ExternalSource, ExternalSourceKind, Pos, SourceFile};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExternalDecoderCacheStats {
@@ -25,6 +26,14 @@ pub struct ExternalDecoderCacheStats {
     pub retained_entries: usize,
     pub retired: bool,
     pub retirement_requests: usize,
+    /// Diagnostic wall time only. Never participates in admission or cache keys.
+    pub selection_nanos: u64,
+    /// Includes successful and rejected enabled publication attempts.
+    pub publication_nanos: u64,
+}
+
+fn add_elapsed_nanos(total: &mut u64, elapsed: Duration) {
+    *total = total.saturating_add(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX));
 }
 
 #[derive(PartialEq, Eq)]
@@ -120,6 +129,16 @@ impl DecoderCache {
     }
 
     fn publish(
+        &mut self,
+        capture: impl FnOnce() -> Result<PublishedDecoders, ExternalSourceSnapshotError>,
+    ) -> Result<(), ExternalSourceSnapshotError> {
+        let started = Instant::now();
+        let result = self.publish_inner(capture);
+        add_elapsed_nanos(&mut self.stats.publication_nanos, started.elapsed());
+        result
+    }
+
+    fn publish_inner(
         &mut self,
         capture: impl FnOnce() -> Result<PublishedDecoders, ExternalSourceSnapshotError>,
     ) -> Result<(), ExternalSourceSnapshotError> {
@@ -374,6 +393,7 @@ impl CStore {
             if cache.stats.retired {
                 return None;
             }
+            let started = Instant::now();
             let selected = cache.published.as_ref().and_then(|published| {
                 if cache.allocation_universe != Some(tcx.allocation_universe_id()) {
                     return None;
@@ -415,6 +435,7 @@ impl CStore {
                 tcx.sess.source_map().activate_resident_imported_sources(&sources).ok()?;
                 Some(candidate)
             });
+            add_elapsed_nanos(&mut cache.stats.selection_nanos, started.elapsed());
             if selected.is_some() {
                 cache.stats.hits += 1;
             } else {
@@ -943,6 +964,22 @@ mod tests {
     use rustc_data_structures::sync::FreezeLock;
     use rustc_span::def_id::CrateNum;
     use rustc_span::{BytePos, ExternalSourceKind, FileName, SourceFileHashAlgorithm};
+
+    #[test]
+    fn phase_elapsed_accounting_is_saturating_and_zero_initialized() {
+        let stats = ExternalDecoderCacheStats::default();
+        assert_eq!(stats.selection_nanos, 0);
+        assert_eq!(stats.publication_nanos, 0);
+        let mut total = 7;
+        add_elapsed_nanos(&mut total, Duration::ZERO);
+        assert_eq!(total, 7);
+        add_elapsed_nanos(&mut total, Duration::from_nanos(11));
+        assert_eq!(total, 18);
+        add_elapsed_nanos(&mut total, Duration::MAX);
+        assert_eq!(total, u64::MAX);
+        add_elapsed_nanos(&mut total, Duration::from_nanos(1));
+        assert_eq!(total, u64::MAX);
+    }
 
     fn published() -> PublishedDecoders {
         let import = imported(0);

@@ -88,6 +88,16 @@ def validate_stats(response, previous, mode, kind):
     if (not isinstance(stats, dict) or type(stats.get('retired')) is not bool or
             any(type(stats.get(k)) is not int or stats[k] < 0 for k in COUNTERS)):
         raise AssertionError('Missing or invalid decoder telemetry')
+    timing_keys = ('selection_nanos', 'publication_nanos')
+    if any(key in stats for key in timing_keys):
+        if any(type(stats.get(key)) is not int or not 0 <= stats[key] <= 2**64 - 1
+               for key in timing_keys):
+            raise AssertionError('Invalid decoder phase timing')
+        if previous and any(type(previous.get(key)) is not int or stats[key] < previous[key]
+                            for key in timing_keys):
+            raise AssertionError('Cumulative decoder phase timing decreased or changed schema')
+    elif previous and any(key in previous for key in timing_keys):
+        raise AssertionError('Decoder phase timing disappeared')
     delta = {k: stats[k] - (previous[k] if previous else 0) for k in COUNTERS if k != 'retained_entries'}
     if any(v < 0 for v in delta.values()):
         raise AssertionError('Cumulative decoder counter decreased')
