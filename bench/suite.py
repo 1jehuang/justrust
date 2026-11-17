@@ -150,6 +150,8 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-sdk-spawn-fixture-v1.patch":
+                "797bab34b91444588b08b9337f10dd3d7ef78f1377214ad26d88ffa978f394cd",
             "bench/patches/jcode-unicode-math-fixture-v1.patch":
                 "edf0e48b23c7191908bde3532e90fb1e14b3f4c35cfb3762676ff8e243eba11b",
             "bench/patches/jcode-catalog-fixtures-v1.patch":
@@ -174,6 +176,8 @@ SNAPSHOTS = {
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-sdk/src/auth/tests.rs":
+                "511d39606994fecea02614f4ecb8dfccf4d538a85902603ecd6775d5ed1d5e31",
             "jcode/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs":
                 "9d43eab940f2f5bcaaaab6b3a03360a93828d4145fc74a915fac6686a9165775",
             "jcode/crates/jcode-base/src/provider/tests/catalog_subscription.rs":
@@ -238,6 +242,7 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-auth-reader-fixtures-v1.patch"),
             ("jcode", "bench/patches/jcode-catalog-fixtures-v1.patch"),
             ("jcode", "bench/patches/jcode-unicode-math-fixture-v1.patch"),
+            ("jcode", "bench/patches/jcode-sdk-spawn-fixture-v1.patch"),
         ],
     },
     "justrust": {

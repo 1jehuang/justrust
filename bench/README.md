@@ -534,6 +534,25 @@ independent blocker. Thus the Unicode and login fixture corrections have clean
 repeated TUI acceptance, but this run does not establish clean repeated full
 workspace acceptance or a valid performance comparison.
 
+### Pinned SDK executable fixture publication
+
+`jcode-sdk-spawn-fixture-v1.patch` moves the exact Python script bytes from
+`auth/tests.rs` into a test-only, executable source fixture. Each invocation
+retains its private temporary `JCODE_HOME`, mode files, arguments, timeouts and
+original assertions. It does not change SDK production spawning or retry it.
+The registered overlay includes the original Rust input digest and patch digest;
+Git applies the new script with mode `100755`.
+
+Whole parallel SDK diagnostic run `20261117-041541910-1970698` exposed the raw
+spawn error behind `JcodeNotFound`: OS error 26, `ExecutableFileBusy` / `Text file
+busy`, for the generated `fixture.py`. A retained writable handle reproduced
+that original failure in `20261117-041854626-1985882`; the immutable script passed
+the real OAuth callback flow under the same control in
+`20261117-041855609-1986274`. Disposable production instrumentation was diagnostic
+only and must not enter the registered snapshot. These controls do not establish
+clean whole-workspace acceptance or a valid performance comparison; exact-stack
+SDK and workspace acceptance remain separate gates.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in
