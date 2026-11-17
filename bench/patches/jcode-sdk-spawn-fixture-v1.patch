@@ -1,0 +1,113 @@
+diff --git a/crates/jcode-sdk/src/auth/tests.rs b/crates/jcode-sdk/src/auth/tests.rs
+--- a/crates/jcode-sdk/src/auth/tests.rs
++++ b/crates/jcode-sdk/src/auth/tests.rs
+@@ -89,59 +89,14 @@ fn legacy_validation_report_is_only_accepted_after_authenticated_completion() {
+ #[cfg(unix)]
+ mod processes {
+     use super::*;
+-    use std::os::unix::fs::PermissionsExt;
+     use std::thread;
+ 
+     fn fixture(mode: &str) -> (tempfile::TempDir, AuthClient) {
+         let dir = tempfile::tempdir().unwrap();
+-        let binary = dir.path().join("fixture.py");
+-        std::fs::write(
+-            &binary,
+-            r#"#!/usr/bin/env python3
+-import json, os, sys, time
+-from pathlib import Path
+-home = Path(os.environ['JCODE_HOME'])
+-args = sys.argv[1:]
+-provider = args[args.index('--provider') + 1]
+-flow = args[args.index('--flow-id') + 1]
+-mode = (home / 'mode').read_text()
+-(home / 'argv').write_text(json.dumps(args))
+-if '--cancel' in args:
+-    (home / ('cancel-' + flow)).write_text('cancelled')
+-    print(json.dumps(dict(status='cancelled', provider=provider)))
+-    sys.exit(0)
+-if '--print-auth-url' in args:
+-    if mode == 'oversized':
+-        print('X' * 70000)
+-        sys.exit(0)
+-    if mode == 'bad-json':
+-        print('private-fixture-secret')
+-        sys.exit(1)
+-    print(json.dumps(dict(status='pending', provider=provider,
+-        auth_url=(home / 'auth-url').read_text() if (home / 'auth-url').exists() else 'https://example.com/oauth?state=private-fixture-secret',
+-        input_kind='complete' if provider == 'copilot' else 'callback_url',
+-        user_code='ABCD-1234', expires_at_ms=9999999999999)))
+-    sys.exit(0)
+-if mode == 'hang':
+-    (home / 'pid').write_text(str(os.getpid()))
+-    time.sleep(60)
+-    sys.exit(1)
+-if mode == 'exchange-error':
+-    print('Error: Token exchange failed: private-fixture-secret', file=sys.stderr)
+-    sys.exit(1)
+-payload = sys.stdin.read()
+-(home / 'callback-input').write_text(payload)
+-(home / 'stdin-ok').write_text(str(payload == 'private-fixture-secret'))
+-print('private-fixture-secret', file=sys.stderr)
+-print(json.dumps(dict(status='authenticated', provider=provider)))
+-if mode.startswith('legacy-'):
+-    print('=== auth-test: Fixture ===')
+-    print('result: FAIL' if mode == 'legacy-warning' else 'result: PASS')
+-sys.exit(1 if mode in ('warning', 'legacy-warning') else 0)
+-"#,
+-        )
+-        .unwrap();
+-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
++        // Never write an executable while sibling tests can fork: their children
++        // can transiently inherit a writer and make exec fail with ETXTBSY.
++        // Only per-flow data is mutable. The executable is a prepared fixture.
++        let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/auth/fixture.py");
+         std::fs::write(dir.path().join("mode"), mode).unwrap();
+         let client = AuthClient::new(AuthOptions {
+             binary,
+diff --git a/crates/jcode-sdk/src/auth/fixture.py b/crates/jcode-sdk/src/auth/fixture.py
+new file mode 100755
+--- /dev/null
++++ b/crates/jcode-sdk/src/auth/fixture.py
+@@ -0,0 +1,41 @@
++#!/usr/bin/env python3
++import json, os, sys, time
++from pathlib import Path
++home = Path(os.environ['JCODE_HOME'])
++args = sys.argv[1:]
++provider = args[args.index('--provider') + 1]
++flow = args[args.index('--flow-id') + 1]
++mode = (home / 'mode').read_text()
++(home / 'argv').write_text(json.dumps(args))
++if '--cancel' in args:
++    (home / ('cancel-' + flow)).write_text('cancelled')
++    print(json.dumps(dict(status='cancelled', provider=provider)))
++    sys.exit(0)
++if '--print-auth-url' in args:
++    if mode == 'oversized':
++        print('X' * 70000)
++        sys.exit(0)
++    if mode == 'bad-json':
++        print('private-fixture-secret')
++        sys.exit(1)
++    print(json.dumps(dict(status='pending', provider=provider,
++        auth_url=(home / 'auth-url').read_text() if (home / 'auth-url').exists() else 'https://example.com/oauth?state=private-fixture-secret',
++        input_kind='complete' if provider == 'copilot' else 'callback_url',
++        user_code='ABCD-1234', expires_at_ms=9999999999999)))
++    sys.exit(0)
++if mode == 'hang':
++    (home / 'pid').write_text(str(os.getpid()))
++    time.sleep(60)
++    sys.exit(1)
++if mode == 'exchange-error':
++    print('Error: Token exchange failed: private-fixture-secret', file=sys.stderr)
++    sys.exit(1)
++payload = sys.stdin.read()
++(home / 'callback-input').write_text(payload)
++(home / 'stdin-ok').write_text(str(payload == 'private-fixture-secret'))
++print('private-fixture-secret', file=sys.stderr)
++print(json.dumps(dict(status='authenticated', provider=provider)))
++if mode.startswith('legacy-'):
++    print('=== auth-test: Fixture ===')
++    print('result: FAIL' if mode == 'legacy-warning' else 'result: PASS')
++sys.exit(1 if mode in ('warning', 'legacy-warning') else 0)
