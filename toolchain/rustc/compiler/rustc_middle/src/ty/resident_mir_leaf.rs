@@ -1,4 +1,4 @@
-//! Conservative closure evidence for one optimized constant-return MIR leaf.
+//! Conservative closure evidence for bounded straight-line primitive MIR.
 //!
 //! This is NOT changed-source authorization, query reuse permission, or evidence
 //! about callers/HIR/attributes/ABI. It does not consult or modify reuse gates.
@@ -24,11 +24,22 @@ pub struct LeafLimits {
     pub active_files: usize,
     pub spans: usize,
     pub statements: usize,
+    pub locals: usize,
+    pub scopes: usize,
+    pub debug_entries: usize,
 }
 
 impl Default for LeafLimits {
     fn default() -> Self {
-        Self { historical_files: 4096, active_files: 64, spans: 32, statements: 8 }
+        Self {
+            historical_files: 4096,
+            active_files: 64,
+            spans: 512,
+            statements: 64,
+            locals: 32,
+            scopes: 16,
+            debug_entries: 32,
+        }
     }
 }
 
@@ -121,6 +132,9 @@ pub fn inspect<'body, 'tcx>(
     {
         return Err(LeafError::Item);
     }
+    if body.source_scopes.len() > limits.scopes {
+        return Err(LeafError::Limit);
+    }
     check_lint_root(body, tcx.local_def_id_to_hir_id(def.expect_local()))?;
     inspect_body_closure(body, source_map, limits)
 }
@@ -128,18 +142,18 @@ pub fn inspect<'body, 'tcx>(
 // The MIR visitor deliberately skips scope local_data. Review this retained HIR
 // identifier separately rather than silently treating it as transitively closed.
 fn check_lint_root(body: &mir::Body<'_>, expected: rustc_hir::HirId) -> Result<(), LeafError> {
-    let Some(scope) = body.source_scopes.get(mir::OUTERMOST_SOURCE_SCOPE) else {
+    if body.source_scopes.is_empty() {
         return Err(LeafError::Scope);
-    };
-    match &scope.local_data {
-        mir::ClearCrossCrate::Clear => Ok(()),
-        mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root })
-            if *lint_root == expected =>
-        {
-            Ok(())
-        }
-        mir::ClearCrossCrate::Set(_) => Err(LeafError::Scope),
     }
+    for scope in &body.source_scopes {
+        match &scope.local_data {
+            mir::ClearCrossCrate::Clear => {}
+            mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root })
+                if *lint_root == expected => {}
+            mir::ClearCrossCrate::Set(_) => return Err(LeafError::Scope),
+        }
+    }
+    Ok(())
 }
 
 // Only `inspect` can expose this evidence outside this module. Separating the
@@ -213,9 +227,8 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
     if *phase != mir::MirPhase::Runtime(mir::RuntimePhase::Optimized)
         || coroutine.is_some()
         || !user_type_annotations.is_empty()
-        || *arg_count != 0
+        || *arg_count >= local_decls.len()
         || spread_arg.is_some()
-        || !var_debug_info.is_empty()
         || *is_polymorphic
         || injection_phase.is_some()
         || tainted_by_errors.is_some()
@@ -224,35 +237,68 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
         || !matches!(required_consts, Some(c) if c.is_empty())
         || !matches!(mentioned_items, Some(c) if c.is_empty())
         || basic_blocks.len() != 1
-        || local_decls.len() != 1
-        || source_scopes.len() != 1
+        || local_decls.is_empty()
+        || source_scopes.is_empty()
     {
         return Err(LeafError::Body);
     }
-    let local = &local_decls[mir::RETURN_PLACE];
-    let mir::LocalDecl { mutability: _, local_info, ty, user_ty, source_info } = local;
-    // run_runtime_cleanup_passes clears borrowck-only local metadata before
-    // optimized_mir. Clear retains no hidden types/IDs/spans to close over.
-    let boring_or_cleared = match local_info {
-        mir::ClearCrossCrate::Clear => true,
-        mir::ClearCrossCrate::Set(info) => matches!(**info, mir::LocalInfo::Boring),
-    };
-    if !primitive(*ty)
-        || user_ty.is_some()
-        || !boring_or_cleared
-        || source_info.scope != mir::OUTERMOST_SOURCE_SCOPE
+    if local_decls.len() > limits.locals
+        || source_scopes.len() > limits.scopes
+        || var_debug_info.len() > limits.debug_entries
     {
-        return Err(LeafError::Local);
+        return Err(LeafError::Limit);
     }
-    let mir::SourceScopeData {
-        span: _,
-        parent_scope,
-        inlined,
-        inlined_parent_scope,
-        local_data: _,
-    } = &source_scopes[mir::OUTERMOST_SOURCE_SCOPE];
-    if parent_scope.is_some() || inlined.is_some() || inlined_parent_scope.is_some() {
-        return Err(LeafError::Scope);
+    for local in local_decls {
+        let mir::LocalDecl { mutability: _, local_info, ty, user_ty, source_info } = local;
+        // run_runtime_cleanup_passes clears borrowck-only local metadata before
+        // optimized_mir. Clear retains no hidden types/IDs/spans to close over.
+        let boring_or_cleared = match local_info {
+            mir::ClearCrossCrate::Clear => true,
+            mir::ClearCrossCrate::Set(info) => matches!(**info, mir::LocalInfo::Boring),
+        };
+        if !primitive(*ty)
+            || user_ty.is_some()
+            || !boring_or_cleared
+            || source_scopes.get(source_info.scope).is_none()
+        {
+            return Err(LeafError::Local);
+        }
+    }
+    for (index, scope) in source_scopes.iter_enumerated() {
+        let mir::SourceScopeData {
+            span: _,
+            parent_scope,
+            inlined,
+            inlined_parent_scope,
+            local_data: _,
+        } = scope;
+        // Strictly earlier parents bound and close the lexical scope tree.
+        if (index == mir::OUTERMOST_SOURCE_SCOPE && parent_scope.is_some())
+            || (index != mir::OUTERMOST_SOURCE_SCOPE
+                && !parent_scope.is_some_and(|parent| parent.index() < index.index()))
+            || inlined.is_some()
+            || inlined_parent_scope.is_some()
+        {
+            return Err(LeafError::Scope);
+        }
+    }
+    for debug in var_debug_info {
+        let mir::VarDebugInfo { name, source_info, composite, value, argument_index } = debug;
+        // Symbols contain no definition identity. Bound even their text inspection.
+        let name = name.as_str();
+        if name.len() > 128
+            || name.is_empty()
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            || composite.is_some()
+            || source_scopes.get(source_info.scope).is_none()
+            || argument_index.is_some_and(|index| index == 0 || usize::from(index) > *arg_count)
+        {
+            return Err(LeafError::Local);
+        }
+        let mir::VarDebugInfoContents::Place(place) = value else {
+            return Err(LeafError::Local);
+        };
+        plain_place_ty(body, *place)?;
     }
     let mir::BasicBlockData { statements, after_last_stmt_debuginfos, terminator, is_cleanup } =
         &basic_blocks[mir::START_BLOCK];
@@ -262,44 +308,22 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
     if *is_cleanup || !after_last_stmt_debuginfos.is_empty() {
         return Err(LeafError::Body);
     }
-    // Exactly one write. Even storage/noop statements are excluded initially:
-    // admitting them is unnecessary for optimized constant leaves.
-    if statements.len() != 1 {
+    if statements.is_empty() {
         return Err(LeafError::Statement);
     }
-    let mir::Statement { source_info, kind, debuginfos } = &statements[0];
-    if !debuginfos.is_empty() {
-        return Err(LeafError::Statement);
-    }
-    if source_info.scope != mir::OUTERMOST_SOURCE_SCOPE {
-        return Err(LeafError::Scope);
-    }
-    let mir::StatementKind::Assign(assign) = kind else {
-        return Err(LeafError::Statement);
-    };
-    let (place, value) = &**assign;
-    if place.local != mir::RETURN_PLACE || !place.projection.is_empty() {
-        return Err(LeafError::Statement);
-    }
-    // Literal lowering emits WithRetag::Yes. Both reviewed flags are closure-
-    // neutral here: the sole local and literal must be pointer-free primitives,
-    // and the constant below must be Scalar::Int, never a pointer/allocation.
-    let mir::Rvalue::Use(
-        mir::Operand::Constant(constant),
-        mir::WithRetag::No | mir::WithRetag::Yes,
-    ) = value
-    else {
-        return Err(LeafError::Constant);
-    };
-    let mir::ConstOperand { span: _, user_ty, const_ } = &**constant;
-    if user_ty.is_some() {
-        return Err(LeafError::Constant);
-    }
-    let mir::Const::Val(mir::ConstValue::Scalar(Scalar::Int(_)), const_ty) = const_ else {
-        return Err(LeafError::Constant);
-    };
-    if const_ty != ty {
-        return Err(LeafError::Constant);
+    for mir::Statement { source_info, kind, debuginfos } in statements {
+        if !debuginfos.is_empty() {
+            return Err(LeafError::Statement);
+        }
+        if source_scopes.get(source_info.scope).is_none() {
+            return Err(LeafError::Scope);
+        }
+        let mir::StatementKind::Assign(assign) = kind else {
+            return Err(LeafError::Statement);
+        };
+        let (place, value) = &**assign;
+        let destination = plain_place_ty(body, *place)?;
+        check_rvalue(body, value, destination)?;
     }
     let Some(mir::Terminator { source_info, kind: mir::TerminatorKind::Return, loop_hint_attrs }) =
         terminator
@@ -309,8 +333,94 @@ fn inspect_shape(body: &mir::Body<'_>, limits: LeafLimits) -> Result<(), LeafErr
     if !loop_hint_attrs.is_empty() {
         return Err(LeafError::Terminator);
     }
-    if source_info.scope != mir::OUTERMOST_SOURCE_SCOPE {
+    if source_scopes.get(source_info.scope).is_none() {
         return Err(LeafError::Scope);
+    }
+    Ok(())
+}
+
+fn plain_place_ty<'tcx>(
+    body: &mir::Body<'tcx>,
+    place: mir::Place<'tcx>,
+) -> Result<Ty<'tcx>, LeafError> {
+    if !place.projection.is_empty() {
+        return Err(LeafError::Local);
+    }
+    let local = body.local_decls.get(place.local).ok_or(LeafError::Local)?;
+    if !primitive(local.ty) {
+        return Err(LeafError::Local);
+    }
+    Ok(local.ty)
+}
+
+fn operand_ty<'tcx>(
+    body: &mir::Body<'tcx>,
+    operand: &mir::Operand<'tcx>,
+) -> Result<Ty<'tcx>, LeafError> {
+    match operand {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => plain_place_ty(body, *place),
+        mir::Operand::Constant(constant) => {
+            let mir::ConstOperand { span: _, user_ty, const_ } = &**constant;
+            if user_ty.is_some() {
+                return Err(LeafError::Constant);
+            }
+            match const_ {
+                mir::Const::Val(mir::ConstValue::Scalar(Scalar::Int(_)), ty) if primitive(*ty) => {
+                    Ok(*ty)
+                }
+                _ => Err(LeafError::Constant),
+            }
+        }
+        _ => Err(LeafError::Statement),
+    }
+}
+
+// This is a closure proof over valid optimized MIR, not a second MIR validator
+// or an evaluator. No accepted operation can carry a hidden DefId/allocation.
+// Keep the whitelist finite: overflow tuple results, division/remainder guards,
+// unchecked operations, comparisons, casts and pointer metadata remain excluded.
+fn check_rvalue<'tcx>(
+    body: &mir::Body<'tcx>,
+    value: &mir::Rvalue<'tcx>,
+    destination: Ty<'tcx>,
+) -> Result<(), LeafError> {
+    let integer = |ty: Ty<'tcx>| matches!(ty.kind(), ty::Int(_) | ty::Uint(_));
+    let result = match value {
+        mir::Rvalue::Use(operand, mir::WithRetag::No | mir::WithRetag::Yes) => {
+            operand_ty(body, operand)?
+        }
+        mir::Rvalue::BinaryOp(op, operands) => {
+            let left = operand_ty(body, &operands.0)?;
+            let right = operand_ty(body, &operands.1)?;
+            if !integer(left) || !integer(right) {
+                return Err(LeafError::Statement);
+            }
+            match op {
+                mir::BinOp::Add
+                | mir::BinOp::Sub
+                | mir::BinOp::Mul
+                | mir::BinOp::BitXor
+                | mir::BinOp::BitAnd
+                | mir::BinOp::BitOr
+                    if left == right => {}
+                mir::BinOp::Shl | mir::BinOp::Shr => {}
+                _ => return Err(LeafError::Statement),
+            }
+            left
+        }
+        mir::Rvalue::UnaryOp(op, operand) => {
+            let ty = operand_ty(body, operand)?;
+            match op {
+                mir::UnOp::Not if integer(ty) => {}
+                mir::UnOp::Neg if matches!(ty.kind(), ty::Int(_)) => {}
+                _ => return Err(LeafError::Statement),
+            }
+            ty
+        }
+        _ => return Err(LeafError::Statement),
+    };
+    if result != destination {
+        return Err(LeafError::Constant);
     }
     Ok(())
 }
@@ -716,6 +826,135 @@ mod tests {
             let mut body = leaf(bool_ty, span(&file));
             body.is_polymorphic = true;
             assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Body));
+        });
+    }
+
+    #[test]
+    fn straight_line_native_arguments_temporaries_and_debug_are_closed() {
+        native_test(|| {
+            let (sm, _) = setup();
+            let _revision = sm.begin_resident_source_revision(2, 1024, 2).unwrap();
+            let file = sm.load_file(Path::new("leaf.rs")).unwrap();
+            let int_cached = cached(ty::Int(ty::IntTy::I32));
+            let ty = Ty(Interned::new_unchecked(&int_cached));
+            let mut body = leaf(ty, span(&file));
+            let info = body.local_decls[mir::RETURN_PLACE].source_info;
+            let argument = body.local_decls.push(body.local_decls[mir::RETURN_PLACE].clone());
+            let temporary = body.local_decls.push(body.local_decls[mir::RETURN_PLACE].clone());
+            body.arg_count = 1;
+            let scope = body.source_scopes.push(mir::SourceScopeData {
+                span: info.span,
+                parent_scope: Some(mir::OUTERMOST_SOURCE_SCOPE),
+                inlined: None,
+                inlined_parent_scope: None,
+                local_data: mir::ClearCrossCrate::Clear,
+            });
+            body.var_debug_info.push(mir::VarDebugInfo {
+                name: rustc_span::Symbol::intern("x"),
+                source_info: info,
+                composite: None,
+                value: mir::VarDebugInfoContents::Place(argument.into()),
+                argument_index: Some(1),
+            });
+            let copy = || mir::Operand::Copy(argument.into());
+            let moved = || mir::Operand::Move(temporary.into());
+            let assign = |place, value| {
+                mir::Statement::new(info, mir::StatementKind::Assign(Box::new((place, value))))
+            };
+            body.basic_blocks.as_mut()[mir::START_BLOCK].statements = vec![
+                assign(
+                    temporary.into(),
+                    mir::Rvalue::BinaryOp(mir::BinOp::BitXor, Box::new((copy(), copy()))),
+                ),
+                assign(mir::Place::return_place(), mir::Rvalue::UnaryOp(mir::UnOp::Not, moved())),
+            ];
+            body.local_decls[temporary].source_info.scope = scope;
+            assert!(inspect_body_closure(&body, &sm, LeafLimits::default()).is_ok());
+            for op in [
+                mir::BinOp::Add,
+                mir::BinOp::Sub,
+                mir::BinOp::Mul,
+                mir::BinOp::BitXor,
+                mir::BinOp::BitAnd,
+                mir::BinOp::BitOr,
+                mir::BinOp::Shl,
+                mir::BinOp::Shr,
+            ] {
+                assert_eq!(
+                    check_rvalue(&body, &mir::Rvalue::BinaryOp(op, Box::new((copy(), copy()))), ty),
+                    Ok(())
+                );
+            }
+            assert_eq!(
+                check_rvalue(&body, &mir::Rvalue::UnaryOp(mir::UnOp::Neg, copy()), ty),
+                Ok(())
+            );
+            assert_eq!(
+                check_rvalue(&body, &mir::Rvalue::Use(copy(), mir::WithRetag::No), ty),
+                Ok(())
+            );
+            for op in [
+                mir::BinOp::Div,
+                mir::BinOp::Rem,
+                mir::BinOp::AddWithOverflow,
+                mir::BinOp::AddUnchecked,
+                mir::BinOp::Cmp,
+                mir::BinOp::Offset,
+                mir::BinOp::Eq,
+            ] {
+                assert_eq!(
+                    check_rvalue(&body, &mir::Rvalue::BinaryOp(op, Box::new((copy(), copy()))), ty),
+                    Err(LeafError::Statement)
+                );
+            }
+            assert_eq!(
+                check_rvalue(&body, &mir::Rvalue::UnaryOp(mir::UnOp::PtrMetadata, copy()), ty),
+                Err(LeafError::Statement)
+            );
+            for limits in [
+                LeafLimits { locals: 2, ..LeafLimits::default() },
+                LeafLimits { scopes: 1, ..LeafLimits::default() },
+                LeafLimits { debug_entries: 0, ..LeafLimits::default() },
+                LeafLimits { statements: 1, ..LeafLimits::default() },
+            ] {
+                assert!(matches!(inspect_body_closure(&body, &sm, limits), Err(LeafError::Limit)));
+            }
+            body.var_debug_info[0].argument_index = Some(2);
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
+            body.var_debug_info[0].argument_index = Some(1);
+            body.var_debug_info[0].name = rustc_span::Symbol::intern("not a plain name");
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
+            body.var_debug_info[0].name = rustc_span::Symbol::intern("x");
+            body.var_debug_info[0].value = mir::VarDebugInfoContents::Const(mir::ConstOperand {
+                span: info.span,
+                user_ty: None,
+                const_: mir::Const::Val(mir::ConstValue::Scalar(Scalar::from_u32(7)), ty),
+            });
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Local));
+            body.var_debug_info[0].value = mir::VarDebugInfoContents::Place(argument.into());
+            let expected = rustc_hir::CRATE_HIR_ID;
+            body.source_scopes[scope].local_data =
+                mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root: expected });
+            assert_eq!(check_lint_root(&body, expected), Ok(()));
+            let foreign_root = rustc_hir::HirId {
+                owner: expected.owner,
+                local_id: rustc_hir::ItemLocalId::from_u32(1),
+            };
+            body.source_scopes[scope].local_data =
+                mir::ClearCrossCrate::Set(mir::SourceScopeLocalData { lint_root: foreign_root });
+            assert_eq!(check_lint_root(&body, expected), Err(LeafError::Scope));
+            body.source_scopes[scope].local_data = mir::ClearCrossCrate::Clear;
+            let invalid = mir::Local::from_usize(body.local_decls.len());
+            assert_eq!(
+                operand_ty(&body, &mir::Operand::Copy(invalid.into())),
+                Err(LeafError::Local)
+            );
+            body.source_scopes[scope].parent_scope = Some(scope);
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Scope));
+            body.source_scopes[scope].parent_scope = Some(mir::OUTERMOST_SOURCE_SCOPE);
+            body.basic_blocks.as_mut()[mir::START_BLOCK].statements[0].kind =
+                mir::StatementKind::Nop;
+            assert_eq!(inspect_shape(&body, LeafLimits::default()), Err(LeafError::Statement));
         });
     }
 
