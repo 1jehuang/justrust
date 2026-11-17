@@ -499,3 +499,35 @@ flag-selection failure is preserved separately. Default compiler/client behavior
 and production installation are unchanged. General frontend retention, broad
 Rust-source coverage, managed Cargo routing and representative performance
 acceptance remain unfinished.
+
+### Ordinary rlib timing diagnostic
+
+The suite now exposes `stable-native-lexer`, using ordinary rlib output and
+incremental banks isolated per arm. Every produced library is linked into a
+fresh Rust consumer that checks all generated functions with unique nonces.
+Only producer invocation time is measured. Native typed `control` enables the
+incremental active-source lifecycle, but all typed retention counters must
+remain zero. This is not forced MIR/LLVM-output timing.
+
+Two CPU-3-affinity captures in one unchanged parent environment, using the
+same frozen 0200 compiler, boot and workload (`n=3`, 64 items per module,
+six edits), passed correctness and strict suite comparison. Medians were:
+
+| Capture | Fresh | Resident control | Lexer enabled | Lexer/control |
+| --- | ---: | ---: | ---: | ---: |
+| 0225-fixed-a | 31.495 ms | 18.575 ms | 23.536 ms | 1.2671x |
+| 0225-fixed-b | 29.174 ms | 17.538 ms | 17.309 ms | 0.9870x |
+
+These repetitions do not establish an added lexer-cache speedup. The apparent
+26.45% lexer-time reduction between identical-compiler repetitions is variation,
+not an optimization result. The machine was not globally idle. The command
+`bench/suite.py compare` accepted the matching inputs and printed both within-run
+ratios; no general, hosted, Cargo or production-default performance claim follows.
+
+Exact original JSON readback is verified for
+`bench/stable-resident-lexer-suite-20261117-0225-fixed-{a,b}`. Earlier captures
+`0222-{a,b}` passed correctness but strict comparison refused their differing
+environment fingerprints. Those originals, the failed `0217-diagnostic`
+incremental-control configuration and the corrected passing `0219-diagnostic`
+are separately stored and verified unchanged. No comparison gate or failed
+receipt was rewritten to make the result pass.
