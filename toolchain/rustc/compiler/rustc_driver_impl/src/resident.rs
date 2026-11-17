@@ -261,6 +261,12 @@ fn typed_selection(value: Option<&std::ffi::OsStr>) -> Result<(bool, bool, bool)
 fn serve_owned(mut response: File) -> Result<(), String> {
     let mode = std::env::var_os("JUSTRUST_RUSTC_RESIDENT_TYPED");
     let (live_queries, incremental_control, selective_leaf) = typed_selection(mode.as_deref())?;
+    let lexer_cache = match std::env::var_os("JUSTRUST_RUSTC_RESIDENT_LEXER") {
+        None => false,
+        Some(value) if value == "0" => false,
+        Some(value) if value == "1" => true,
+        Some(_) => return Err("invalid native lexer experiment selection".into()),
+    };
     for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
         if std::env::var_os(name).is_some_and(|value| value == "1") {
             return Err(format!("{name} cannot be combined with the native owned batch"));
@@ -294,7 +300,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                 live_queries,
                 incremental_control,
                 selective_leaf,
-            },
+                lexer_cache,            },
             move |batch, config| {
                 let mut first = Some((config, first_callbacks, registered_lints));
                 let mut id = first_id;
@@ -387,6 +393,14 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                         "mir_misses": live.mir_misses,
                         "retained_entries": live.retained_entries,
                         "retained_estimated_bytes": live.retained_estimated_bytes,
+                    });
+                    let lexer = batch.lexer_stats();
+                    reply["lexer"] = json!({
+                        "hits": lexer.hits,
+                        "misses": lexer.misses,
+                        "rejected": lexer.rejected,
+                        "retained_entries": lexer.retained_entries,
+                        "retained_estimated_bytes": lexer.retained_estimated_bytes,
                     });
                     reply["id"] = json!(id);
                     reply["pid"] = json!(std::process::id());

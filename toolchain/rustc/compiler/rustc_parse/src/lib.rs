@@ -34,6 +34,9 @@ use crate::lexer::StripTokens;
 
 pub mod lexer;
 
+pub mod resident;
+mod resident_eligibility;
+
 mod diagnostics;
 
 // Make sure that the Unicode version of the dependencies is the same.
@@ -270,7 +273,29 @@ fn source_file_to_stream<'psess>(
         ));
     });
 
-    lexer::lex_token_trees(psess, src.as_str(), source_file.start_pos, override_span, strip_tokens)
+    if override_span.is_none()
+        && let Some(stream) = resident::lookup(psess, &source_file, &strip_tokens)
+    {
+        return Ok(stream);
+    }
+    let capture = override_span.is_none() && resident::should_capture(src.as_str());
+    let cache_strip = match strip_tokens {
+        StripTokens::Nothing => StripTokens::Nothing,
+        StripTokens::Shebang => StripTokens::Shebang,
+        StripTokens::ShebangAndFrontmatter => StripTokens::ShebangAndFrontmatter,
+    };
+    let result = lexer::lex_token_trees(
+        psess,
+        src.as_str(),
+        source_file.start_pos,
+        override_span,
+        strip_tokens,
+    );
+    // Reconstruct the strip key without changing ownership of the lexer input.
+    if capture && let Ok(stream) = &result {
+        resident::insert(psess, source_file, &cache_strip, stream);
+    }
+    result
 }
 
 /// Runs the given subparser `f` on the tokens of the given `attr`'s item.

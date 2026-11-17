@@ -47,6 +47,8 @@ pub struct ResidentBatchOptions {
     pub live_queries: bool,
     /// Separately gated primitive MIR leaf closure experiment.
     pub selective_leaf: bool,
+    /// Separately gated clean ASCII token retention, never a default.
+    pub lexer_cache: bool,
 }
 
 impl<'domain> ResidentCompilerBatch<'domain> {
@@ -59,6 +61,10 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         if let Some(state) = self.domain.live_query_state() {
             state.finish(success);
         }
+    }
+
+    pub fn lexer_stats(&self) -> rustc_parse::resident::LexerCacheStats {
+        rustc_parse::resident::stats()
     }
 
     pub fn live_stats(&self) -> rustc_middle::ty::resident_live::LiveQueryStats {
@@ -217,23 +223,25 @@ pub fn with_resident_compiler_batch_options<R: Send>(
                 globals: RefCell::new(globals),
                 current_gcx: CurrentGcx::new(),
             };
-            with_resident_type_domain_and_owner(owners, |domain, owners| {
-                domain.enable_live_queries(options.live_queries);
-                if let Some(state) = domain.live_query_state() {
-                    state.enable_leaf(options.selective_leaf);
-                }
-                f(
-                    ResidentCompilerBatch {
-                        domain,
-                        owners,
-                        initial_options,
-                        target,
-                        extra_symbols: extra_symbols.clone(),
-                        invocations: Cell::new(0),
-                        options,
-                    },
-                    config,
-                )
+            rustc_parse::resident::with_resident_lexer_cache(options.lexer_cache, || {
+                with_resident_type_domain_and_owner(owners, |domain, owners| {
+                    domain.enable_live_queries(options.live_queries);
+                    if let Some(state) = domain.live_query_state() {
+                        state.enable_leaf(options.selective_leaf);
+                    }
+                    f(
+                        ResidentCompilerBatch {
+                            domain,
+                            owners,
+                            initial_options,
+                            target,
+                            extra_symbols: extra_symbols.clone(),
+                            invocations: Cell::new(0),
+                            options,
+                        },
+                        config,
+                    )
+                })
             })
         },
     )

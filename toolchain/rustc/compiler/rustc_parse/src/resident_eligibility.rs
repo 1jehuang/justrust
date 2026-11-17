@@ -33,7 +33,7 @@ pub(super) fn eligible_source(src: &str, max_bytes: usize) -> bool {
         return false;
     }
 
-    let mut offset = 0;
+    let mut offset = 0usize;
     // Use Yes even for fragments: rejecting possible document frontmatter is
     // conservative across all StripTokens modes of the real lexer.
     for token in rustc_lexer::tokenize(src, FrontmatterAllowed::Yes) {
