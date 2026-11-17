@@ -910,9 +910,15 @@ fn record(
     if let Some(p) = &pool {
         cmd.env(crate::test_pool::POOL_ENV, p.sock());
     }
+    let recording_rustc = resident_recording_compiler(
+        std::env::var_os("JUSTRUST_CARGO_RESIDENT_DIR").as_deref(),
+        pinned.as_ref().map(|tc| tc.id.as_str()),
+        &real_rustc,
+        &shim,
+    )?;
     cmd.args(&cargo_args)
         .env_remove("JUSTRUST_RECORD_PHASE_TRACE")
-        .env("RUSTC", &shim)
+        .env("RUSTC", recording_rustc)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
         .env("JUSTRUST_RUN_DIR", &run_dir)
         .env("JUSTRUST_RUN_ID", id)
@@ -1807,8 +1813,53 @@ fn unify_features(cmd: &mut Command) {
     }
 }
 
+/// The resident experiment must enter the owned compiler directly. Its native
+/// Cargo path owns transport and lifetime accounting, so the one-process shim
+/// must not add per-invocation phase files or wrap the resident worker. This is
+/// deliberately opt-in and does not change stock-toolchain recording.
+fn resident_recording_compiler<'a>(
+    directory: Option<&std::ffi::OsStr>,
+    toolchain: Option<&str>,
+    compiler: &'a Path,
+    shim: &'a Path,
+) -> Result<&'a Path> {
+    let Some(directory) = directory else {
+        return Ok(shim);
+    };
+    anyhow::ensure!(
+        !directory.is_empty() && Path::new(directory).is_absolute(),
+        "JUSTRUST_CARGO_RESIDENT_DIR requires an absolute private guest-side directory"
+    );
+    anyhow::ensure!(
+        toolchain.is_some_and(|id| id.starts_with("jr-")),
+        "the native Cargo resident experiment requires an explicitly selected owned jr toolchain"
+    );
+    Ok(compiler)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resident_recording_is_explicit_and_owned_only() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+
+        let compiler = Path::new("/candidate/bin/rustc");
+        let shim = Path::new("/production/rustc-shim");
+        let select = |directory, toolchain| {
+            super::resident_recording_compiler(directory, toolchain, compiler, shim)
+        };
+        assert_eq!(select(None, None).unwrap(), shim);
+        assert_eq!(select(None, Some("jr-release")).unwrap(), shim);
+        assert!(select(Some(OsStr::new("")), Some("jr-candidate")).is_err());
+        assert!(select(Some(OsStr::new("relative")), Some("jr-candidate")).is_err());
+        assert!(select(Some(OsStr::new("/private")), None).is_err());
+        assert!(select(Some(OsStr::new("/private")), Some("nightly-2026-10-08")).is_err());
+        assert_eq!(
+            select(Some(OsStr::new("/private")), Some("jr-candidate")).unwrap(),
+            compiler
+        );
+    }
     #[test]
     fn workspace_feature_unification_requires_explicit_opt_in() {
         // A no-default-features path dependency must not acquire its parent
