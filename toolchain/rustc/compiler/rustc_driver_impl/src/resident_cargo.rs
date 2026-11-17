@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 use jr_resident_inputs::Manifest;
 use serde_json::json;
 
+#[path = "resident_cargo_watch.rs"]
+mod input_watch;
+use input_watch::InputWatch;
+
 const MAX_REQUEST: usize = 1024 * 1024;
 const IDLE_MS: i32 = 60_000;
 const RSS_LIMIT: usize = 2 * 1024 * 1024 * 1024;
@@ -68,15 +72,45 @@ fn eligible(args: &[String], external: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn poll_read(fd: i32, timeout: i32) -> Result<bool, String> {
-    let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+// Watches only request retirement. A quiet watch never replaces full manifest
+// recapture before commit or verification after compilation.
+fn poll_request(listener: i32, watch: Option<&InputWatch>) -> Result<bool, String> {
+    let deadline = Instant::now() + Duration::from_millis(IDLE_MS as u64);
     loop {
-        let n = unsafe { libc::poll(&mut p, 1, timeout) };
-        if n >= 0 {
-            return Ok(n != 0);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
         }
-        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+        let mut fds = [
+            libc::pollfd { fd: listener, events: libc::POLLIN, revents: 0 },
+            libc::pollfd {
+                fd: watch.map_or(-1, AsRawFd::as_raw_fd),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let timeout = i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX).max(1);
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout) };
+        if result < 0 {
+            if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
             return Err(error());
+        }
+        if result == 0 {
+            return Ok(false);
+        }
+        if fds[1].revents != 0
+            && (fds[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+                || watch.is_some_and(|watch| watch.changed().unwrap_or(true)))
+        {
+            return Ok(false);
+        }
+        if fds[0].revents & libc::POLLIN != 0 {
+            return Ok(true);
+        }
+        if fds[0].revents != 0 {
+            return Err("resident listener became unavailable".into());
         }
     }
 }
@@ -435,13 +469,17 @@ fn serve_requests(
     owned: bool,
 ) -> Result<(), String> {
     let mut frozen = None;
+    let watch_enabled = std::env::var_os("JUSTRUST_CARGO_RESIDENT_EVICT").as_deref()
+        == Some(std::ffi::OsStr::new("1"));
+    let mut watch_attempted = false;
+    let mut watch: Option<InputWatch> = None;
     let mut revision = 0;
     loop {
         let (mut peer, request, mut prepared) =
             if let Some((peer, request, prepared, callbacks)) = pending.take() {
                 (peer, request, Some((prepared, callbacks)))
             } else {
-                if !poll_read(listener.as_raw_fd(), IDLE_MS)? {
+                if !poll_request(listener.as_raw_fd(), watch.as_ref())? {
                     return Ok(());
                 }
                 let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
@@ -531,6 +569,12 @@ fn serve_requests(
                 })
                 .map_err(|_| "Cargo owned batch construction failed".to_owned())?;
             }
+        }
+        if watch_enabled && !watch_attempted {
+            if let Some(inputs) = &external {
+                watch = InputWatch::new(inputs.files(), inputs.directories()).ok();
+            }
+            watch_attempted = true;
         }
         // Batch construction and preparation can be lengthy. Re-capture the
         // complete actual invocation immediately before offering commit, not
@@ -625,8 +669,10 @@ fn serve_requests(
                 u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             );
         }
+        let watch_changed = watch.as_ref().is_some_and(|watch| watch.changed().unwrap_or(true));
         let owned_counts = batch.map(|batch| batch.counts());
         let retire = revision == 64
+            || watch_changed
             || external_changed
             || rss.is_none_or(|rss| rss >= RSS_LIMIT)
             || owned_capacity_exhausted(owned_counts);
@@ -640,6 +686,8 @@ fn serve_requests(
         });
         let mut reply = json!({"id":id,"status":status,"pid":std::process::id(),
             "external_inputs_verified":external.is_some(),"external_inputs_changed":external_changed,
+            "input_watch_enabled":watch_enabled,"input_watch_active":watch.is_some(),
+            "input_watch_changed":watch_changed,
             "external_verify_nanos":external_verify_nanos,
             "elapsed_seconds":start.elapsed().as_secs_f64(),"resident_hits":hits,
             "resident_misses":misses,"resident_entries":entries,"rss_bytes":rss,"retire":retire,
@@ -708,6 +756,25 @@ mod tests {
         // A custom source owner is not admitted merely because argv was serial.
         prepared.config.file_loader = Some(Box::new(rustc_span::source_map::RealFileLoader));
         assert!(!owned_supported(&prepared));
+    }
+
+    #[test]
+    fn idle_input_watch_retires_before_accepting_ready_request() {
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let path = std::env::temp_dir().join(format!("jr-idle-watch-{}", std::process::id()));
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
+        let watch = InputWatch::new(std::iter::once(path.as_path()), std::iter::empty()).unwrap();
+        file.write_all(b"changed").unwrap();
+        writer.write_all(b"request").unwrap();
+        assert!(!poll_request(reader.as_raw_fd(), Some(&watch)).unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn idle_without_input_watch_accepts_ready_request() {
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        writer.write_all(b"request").unwrap();
+        assert!(poll_request(reader.as_raw_fd(), None).unwrap());
     }
 
     #[test]

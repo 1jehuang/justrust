@@ -228,8 +228,16 @@ def validate_owned_batch(stage, events, previous):
         raise AssertionError('Owned compiler revision did not advance')
 
 
+def validate_input_watch(trace):
+    for event in trace:
+        result = event.get('result', {})
+        if event.get('event') == 'complete' and result.get('external_inputs_verified'):
+            if result.get('input_watch_enabled') is not True or result.get('input_watch_active') is not True:
+                raise AssertionError('External worker eviction watch was not active')
+
+
 def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
-                require_resident_root=False, owned_batch=False):
+                require_resident_root=False, owned_batch=False, evict_inputs=False):
     arm.mkdir(mode=0o700)
     workers = shared.private_directory(arm / 'workers')
     trace = arm / 'trace.jsonl'
@@ -241,6 +249,7 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
         # The owned compiler's lifecycle is separate from the snapshot-only
         # frontend experiment. Compare the same disabled setting in both arms.
         env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] = '0'
+    env['JUSTRUST_CARGO_RESIDENT_EVICT'] = '1' if evict_inputs else '0'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
         previous_dependency = None
@@ -273,6 +282,8 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
             if require_resident_root:
                 previous_artifacts = validate_dependency_transition(stage, row['metadata'], previous_artifacts)
             row['residency'] = validate_trace(stage, row['trace'], mode, require_resident_root)
+            if evict_inputs and mode == 'on':
+                validate_input_watch(row['trace'])
             if owned_batch and mode == 'on':
                 validate_owned_batch(stage, row['trace'], previous_root)
             if require_resident_root and mode == 'on':

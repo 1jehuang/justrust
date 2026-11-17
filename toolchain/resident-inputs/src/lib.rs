@@ -29,6 +29,15 @@ struct Input {
 }
 
 impl Manifest {
+    /// Paths are eviction hints only, never proof that inputs remain unchanged.
+    pub fn files(&self) -> impl Iterator<Item = &Path> {
+        self.files.iter().map(|input| input.path.as_path())
+    }
+
+    pub fn directories(&self) -> impl Iterator<Item = &Path> {
+        self.directories.iter().map(PathBuf::as_path)
+    }
+
     /// Returns a content identity only after validating this manifest against disk.
     pub fn key(&self) -> Result<String, String> {
         self.verify()?;

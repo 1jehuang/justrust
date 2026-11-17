@@ -288,6 +288,35 @@ This is fallback correctness evidence only. It is not dependency-bearing
 resident acceleration, unrestricted external metadata compatibility, or a
 performance result.
 
+## Idle external-owner retirement (2026-11-17)
+
+The real hosted dependency fixture exposed obsolete worker generations retaining
+about 1.06 GB after dependency changes. `JUSTRUST_CARGO_RESIDENT_EVICT=1`
+now installs nonblocking inotify hints for exact external files and relevant
+`.rlib`/`.rmeta` directory membership. Changed or lost watches retire idle
+workers, without signaling unrelated processes or interrupting active builds.
+Full content-manifest verification before request commit and after compilation
+remains authoritative. Watch installation failure retains the existing bounded
+idle lifetime and content checks. The option remains off by default.
+
+Matching native compiler/Cargo bytes and the exact published alpha.36 client
+passed 37 hosted Python tests, native check/build, 28 driver tests, and both
+counterbalanced n=2 dependency suites. At the final fixture stage, aggregate
+post-invocation RSS of all known live worker generations was
+1,060,716,544 / 1,060,687,872 bytes without eviction and
+361,451,520 / 361,582,592 bytes with eviction. Confirmed exited processes count
+zero, unreadable processes remain unknown. This is fixture RSS, not peak memory
+or retained heap. Timings are retained but no eviction speedup is claimed.
+
+Exact originals: `bench/stable-resident-watch-20261117-1346-off` and
+`bench/stable-resident-watch-20261117-1346-on`. Driver SHA256
+`3c96114707c2212c6f445c932d643f2949f9b8254eb6026d6c060152848d84d5`,
+Cargo SHA256
+`4d8fcac842a3d47322903ef9df703cebde9b05d720bf682194689bbe17c27f1e`.
+The comprehensive published baseline stopped at point 8 because remote CPU
+samples were too short for its provenance gate. That result is invalid for a
+general speed comparison, and the tenfold target remains unmet.
+
 ## Performance status and next gate
 
 The focused gate above adds actual-client timing evidence, but no tenfold,

@@ -82,6 +82,27 @@ class DependencyCostTests(unittest.TestCase):
         self.assertEqual(receipt['verdict'], 'failed')
         self.assertTrue((self.root / 'o/original.rs').exists())
 
+    def test_watch_requires_actual_native_confirmation(self):
+        trace = [dict(event='complete', result=dict(external_inputs_verified=True,
+                      input_watch_enabled=True, input_watch_active=True))]
+        subject.acceptance.validate_input_watch(trace)
+        for name in ('input_watch_enabled', 'input_watch_active'):
+            invalid = copy.deepcopy(trace)
+            invalid[0]['result'][name] = False
+            with self.assertRaisesRegex(AssertionError, 'watch'):
+                subject.acceptance.validate_input_watch(invalid)
+
+    def test_confirmed_exits_count_zero_live_rss(self):
+        observed = subject.observed_runner
+        def instrument(runner):
+            return observed(runner, sampler=lambda pid: dict(pid=pid, available=False,
+                            exited=True, reason='process-exited', source='local-/proc',
+                            kind='post-invocation-live-rss'))
+        with patch.object(subject, 'observed_runner', side_effect=instrument):
+            report = self.capture()
+        totals = report['summary']['worker_rss']['stage_total_live_bytes']
+        self.assertEqual(totals['root-only-final']['on'], [0, 0])
+
     def test_actual_client_mandatory(self):
         with self.assertRaisesRegex(ValueError, 'Actual justrust'):
             subject.capture(None, None, self.root / 'o', None,
@@ -101,9 +122,13 @@ class WorkerRssTests(unittest.TestCase):
             self.assertEqual(result['rss_bytes'], 17 * 1024)
             self.assertEqual(result['starttime_ticks'], 1234)
             self.assertFalse(subject.worker_rss(43, proc)['available'])
+            self.assertTrue(subject.worker_rss(43, proc)['exited'])
             self.assertFalse(subject.worker_rss(True, proc)['available'])
             (worker / 'status').write_text('VmRSS: 17 MB\n')
             self.assertFalse(subject.worker_rss(42, proc)['available'])
+            self.assertNotIn('exited', subject.worker_rss(42, proc))
+            (worker / 'stat').write_text('42 (worker) ' + ' '.join(['Z'] + ['0'] * 18 + ['1234']))
+            self.assertTrue(subject.worker_rss(42, proc)['exited'])
 
     def test_sampler_includes_earlier_resident_generations_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -30,7 +30,10 @@ def worker_rss(pid, proc=Path('/proc')):
         return dict(result, reason='invalid-pid')
     try:
         directory = proc / str(pid)
-        before = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+        before_fields = (directory / 'stat').read_text().rsplit(')', 1)[1].split()
+        before = before_fields[19]
+        if before_fields[0] == 'Z':
+            return dict(result, reason='process-exited', exited=True, starttime_ticks=int(before))
         status = (directory / 'status').read_text()
         after = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[19]
         if before != after:
@@ -41,6 +44,10 @@ def worker_rss(pid, proc=Path('/proc')):
             raise ValueError('invalid VmRSS')
         return dict(result, available=True, rss_bytes=int(rss[0]) * 1024,
                     starttime_ticks=int(before))
+    except FileNotFoundError:
+        # A retired generation contributes zero live RSS, not an unknown sample.
+        # Distinguish this from unreadable status or malformed /proc records.
+        return dict(result, reason='process-exited', exited=True)
     except (OSError, ValueError, KeyError, IndexError) as error:
         return dict(result, reason=type(error).__name__)
 
@@ -64,7 +71,8 @@ def observed_runner(runner, sampler=worker_rss):
 def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
-            expected_cargo_sha256=None, expected_client_sha256=None, runner=None):
+            expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
+            evict_inputs=False):
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required before execution')
     if type(repetitions) is not int or repetitions < 2 or repetitions % 2:
@@ -90,7 +98,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
     report = dict(schema=SCHEMA, verdict='incomplete', claim=CLAIM,
                   provenance=dict(attestation=attested, expected=expected, host=host,
                                   root_native_frozen=True, idle_authorized=True,
-                                  repetitions=repetitions, timeout=timeout,
+                                  repetitions=repetitions, timeout=timeout, evict_inputs=evict_inputs,
                                   original_b64=shared.native.encoded(original),
                                   helpers={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
                                            for module in (acceptance, shared, safety, shared.native, shared.dogfood)},
@@ -110,7 +118,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 try:
                     pair['arms'][mode] = acceptance.capture_arm(
                         compiler, cargo, fixture, arm, mode, workload, timeout, invoke,
-                        require_resident_root=True, owned_batch=True)
+                        require_resident_root=True, owned_batch=True, evict_inputs=evict_inputs)
                 finally:
                     receipt = arm / 'receipt.json'
                     if receipt.exists():
@@ -193,6 +201,8 @@ def validate(report):
                 previous_artifacts = acceptance.validate_dependency_transition(stage, row['metadata'], previous_artifacts)
                 residency = acceptance.validate_trace(stage, row['trace'], mode, True)
                 if mode == 'on':
+                    if provenance.get('evict_inputs', False):
+                        acceptance.validate_input_watch(row['trace'])
                     acceptance.validate_owned_batch(stage, row['trace'], previous_root)
                     previous_root = acceptance.validate_root_transition(stage, residency, previous_root)
                     if previous_root is not None and stage['name'] != 'dependency-error':
@@ -215,7 +225,9 @@ def validate(report):
                         or env.get('RUSTFLAGS') != shared.FLAGS
                         or env.get('JUSTRUST_RUSTC_RESIDENT_FRONTEND') != '0'
                         or env.get('JUSTRUST_CARGO_RESIDENT_OWNED') != '1'
-                        or env.get('JUSTRUST_CARGO_RESIDENT_EXTERNAL') != '1'):
+                        or env.get('JUSTRUST_CARGO_RESIDENT_EXTERNAL') != '1'
+                        or env.get('JUSTRUST_CARGO_RESIDENT_EVICT', '0') != (
+                            '1' if provenance.get('evict_inputs', False) else '0')):
                     raise ValueError('Invocation environment mismatch')
                 samples.setdefault(stage['name'], dict(off=[], on=[]))[mode].append(wall)
                 known_pids.update(e['result']['pid'] for e in row['trace']
@@ -235,9 +247,14 @@ def validate(report):
                         if type(rss['rss_bytes']) is not int or rss['rss_bytes'] < 0:
                             raise ValueError('Invalid worker RSS')
                         rss_samples.append(rss['rss_bytes'])
+                    elif rss.get('exited') is not None:
+                        if (rss['exited'] is not True or rss.get('reason') != 'process-exited'
+                                or 'rss_bytes' in rss):
+                            raise ValueError('Invalid exited worker evidence')
                 rss_rows = cargo['resident_worker_rss']
-                total = (sum(rss['rss_bytes'] for rss in rss_rows)
-                         if all(rss.get('available') is True for rss in rss_rows) else None)
+                total = (sum(rss['rss_bytes'] for rss in rss_rows if rss.get('available') is True)
+                         if all(rss.get('available') is True or rss.get('exited') is True
+                                for rss in rss_rows) else None)
                 rss_totals.setdefault(stage['name'], dict(off=[], on=[]))[mode].append(total)
         if semantics['off'] != semantics['on']:
             raise ValueError('Exact off/on semantics differ')
@@ -247,7 +264,7 @@ def validate(report):
                         for name, modes in samples.items()},
                 worker_rss=dict(available_samples=len(rss_samples),
                                 stage_total_live_bytes=rss_totals,
-                                total_interpretation='sum of known worker generations when all readable, null if incomplete',
+                                total_interpretation='sum of readable live generations, confirmed exits count zero, null if incomplete',
                                 max_observed_bytes=max(rss_samples) if rss_samples else None,
                                 interpretation='post-invocation live worker RSS, not peak or retained heap'))
 
@@ -262,6 +279,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--root-native-frozen', action='store_true')
     parser.add_argument('--idle-authorized', action='store_true')
+    parser.add_argument('--evict-inputs', action='store_true')
     print(json.dumps(capture(**vars(parser.parse_args()))['summary']))
 
 

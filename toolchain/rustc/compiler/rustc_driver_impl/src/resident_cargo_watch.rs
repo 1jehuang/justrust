@@ -5,7 +5,7 @@
 //! races. Watch failures should disable residency, not fail a compilation.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use rustc_data_structures::fx::FxHashMap;
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -28,7 +28,7 @@ const LOST_EVENTS: u32 = libc::IN_Q_OVERFLOW | libc::IN_IGNORED | libc::IN_UNMOU
 pub(super) struct InputWatch {
     fd: OwnedFd,
     // inotify shares a descriptor for repeated paths and inode aliases.
-    watches: HashMap<i32, bool>, // true if this inode is also an explicit file input
+    watches: FxHashMap<i32, bool>, // true if this inode is also an explicit file input
     changed: Cell<bool>,
 }
 
@@ -44,7 +44,7 @@ impl InputWatch {
         }
         let mut watch = Self {
             fd: unsafe { OwnedFd::from_raw_fd(fd) },
-            watches: HashMap::new(),
+            watches: FxHashMap::default(),
             changed: Cell::new(false),
         };
         for path in files {
@@ -249,6 +249,8 @@ mod tests {
         fs::rename(&directory, temp.0.join("moved")).unwrap();
         assert!(watch.changed().unwrap());
         let watch = InputWatch::new(std::iter::empty(), std::iter::once(temp.0.as_path())).unwrap();
+        // This fixture installs exactly one watch, so iteration order cannot matter.
+        #[allow(rustc::potential_query_instability)]
         let wd = *watch.watches.keys().next().unwrap();
         assert_eq!(unsafe { libc::inotify_rm_watch(watch.as_raw_fd(), wd) }, 0);
         assert!(watch.changed().unwrap());
