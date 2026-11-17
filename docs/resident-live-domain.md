@@ -373,3 +373,26 @@ either-kind acceptance cannot be mistaken for Typeck-specific acceptance.
 The fresh report `bench/stable-resident-metadata-20261117-0100-observed-kinds`
 passes and names only `mir`; its exact original JSON readback is verified.
 The separate strict Typeck receipt remains failed and unchanged.
+
+## Native Cargo routing boundary
+
+The current resident protocol freezes compiler arguments, cwd and environment
+for the lifetime of each worker. It is not yet a managed per-crate Cargo pool.
+Native routing must live in `jr-cargo`, with a separate ordinary-toolchain path.
+
+A worker cannot be safely keyed only by the text of its command line and reused
+across Cargo invocations. `rustc_data_structures::jobserver` initializes its
+inherited client in a process-global `OnceLock`. `BuildRunner::new` creates
+Cargo's build jobserver after the existing `jr_daemon::park` snapshot. Therefore
+two children of that parked Cargo server do not automatically share the same
+jobserver lifetime. Keeping the old compiler alive can retain the previous
+build's descriptors and its assumption that Cargo holds an implicit token.
+
+Before enabling cross-Cargo routing, the native protocol needs explicit
+request-scoped jobserver and implicit-token ownership, cancellation and client
+liveness, completion/retirement handoff, and exact invocation/environment and
+toolchain keys. Merely dropping jobserver variables, reusing descriptor numbers,
+or bypassing token accounting is not a valid integration. Unsupported requests
+must take the ordinary path without replaying an already executed failing
+compilation or losing diagnostics. No Cargo routing or production default has
+been enabled by this inspection.
