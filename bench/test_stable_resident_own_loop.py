@@ -68,10 +68,11 @@ class OwnLoopTests(unittest.TestCase):
         return run, calls
 
     def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
-                repetitions=2, macro_shm=False, macro_spins=0, profile_phases=False, **runner_options):
+                repetitions=2, macro_shm=False, macro_spins=0, profile_phases=False, lexer_cache=False, **runner_options):
         source, options, attestation = self.prepare(root)
         options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions,
-                       macro_shm=macro_shm, macro_spins=macro_spins, profile_phases=profile_phases)
+                       macro_shm=macro_shm, macro_spins=macro_spins, profile_phases=profile_phases,
+                       lexer_cache=lexer_cache)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -500,6 +501,80 @@ class OwnLoopTests(unittest.TestCase):
                     bad['provenance']['attestation'][change]['sha256'] = 'c' * 64
                 with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
                     suite.compare(before, bad, **approval)
+
+    def test_lexer_cache_cli_flag_defaults_false(self):
+        required = ['own-loop', '--compiler', '/compiler', '--cargo', '/cargo',
+                    '--justrust', '/client', '--output', '/output',
+                    '--root-native-frozen', '--idle-authorized']
+        for name in ('compiler', 'driver', 'cargo', 'client'):
+            required.extend(['--expected-' + name + '-sha256', 'a' * 64])
+        for flags, enabled in (([], False), (['--lexer-cache'], True)):
+            with self.subTest(flags=flags), patch('sys.argv', required + flags), \
+                    patch.object(suite, 'capture', return_value={}) as capture, \
+                    patch.object(suite, 'console_summary', return_value={}), patch('builtins.print'):
+                suite.main()
+                self.assertIs(capture.call_args.kwargs['lexer_cache'], enabled)
+
+    def test_lexer_cache_strict_boolean_and_both_arm_override(self):
+        for mode in (False, True):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, JUSTRUST_CARGO_RESIDENT_LEXER='0' if mode else '1'):
+                    report, calls, _ = self.capture(Path(directory), lexer_cache=mode)
+                self.assertIs(report['provenance']['lexer_cache'], mode)
+                self.assertEqual({env['JUSTRUST_CARGO_RESIDENT_LEXER']
+                                  for _, _, _, env in calls}, {'1' if mode else '0'})
+                self.assertEqual(set(suite.validate(report)), {'check', 'build'})
+                suite.compare(report, report)
+        for value in (None, 0, 1, '1', '0', [], 1.0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'Lexer cache'):
+                suite.capture(None, None, None, None, lexer_cache=value)
+
+    def test_lexer_cache_provenance_and_environment_tampering_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report, _, _ = self.capture(Path(directory))
+            for value in (None, 0, 1, '1', '0'):
+                bad = copy.deepcopy(report)
+                bad['provenance']['lexer_cache'] = value
+                with self.subTest(provenance=value), self.assertRaisesRegex(ValueError, 'lexer cache provenance'):
+                    suite.validate(bad)
+            for value in (None, 0, 1, '1', '', 'false'):
+                bad = copy.deepcopy(report)
+                env = bad['repetitions'][0]['arms']['off']['observations'][0]['cargo']['invocation']['environment']
+                if value is None:
+                    env.pop('JUSTRUST_CARGO_RESIDENT_LEXER')
+                else:
+                    env['JUSTRUST_CARGO_RESIDENT_LEXER'] = value
+                with self.subTest(environment=value), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                    suite.validate(bad)
+
+    def test_lexer_cache_historical_default_and_strict_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            current, _, _ = self.capture(Path(directory))
+            historical = copy.deepcopy(current)
+            historical['provenance'].pop('lexer_cache')
+            for pair in historical['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment'].pop('JUSTRUST_CARGO_RESIDENT_LEXER')
+            original = copy.deepcopy(historical)
+            suite.validate(historical)
+            suite.compare(historical, current)
+            suite.compare(current, historical)
+            self.assertEqual(historical, original)
+            enabled = copy.deepcopy(current)
+            enabled['provenance']['lexer_cache'] = True
+            for pair in enabled['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['JUSTRUST_CARGO_RESIDENT_LEXER'] = '1'
+            suite.validate(enabled)
+            suite.compare(enabled, enabled)
+            for before, after in ((current, enabled), (enabled, current), (historical, enabled)):
+                with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                    suite.compare(before, after)
+            historical['repetitions'][0]['arms']['off']['observations'][0]['cargo']['invocation']['environment']['JUSTRUST_CARGO_RESIDENT_LEXER'] = '1'
+            with self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                suite.validate(historical)
 
     def test_macro_shm_mode_is_explicit_and_overrides_inheritance_in_both_arms(self):
         for mode in (False, True):

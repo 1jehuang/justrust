@@ -153,8 +153,10 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             checkout=None, edit_mode='body', commands=('check', 'build'), root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
             expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
-            diagnostic_on_only=False, macro_shm=False, macro_spins=0, profile_phases=False):
+            diagnostic_on_only=False, macro_shm=False, macro_spins=0, profile_phases=False, lexer_cache=False):
     commands = selected_commands(commands)
+    if type(lexer_cache) is not bool:
+        raise ValueError('Lexer cache mode must be boolean')
     if type(macro_shm) is not bool:
         raise ValueError('Macro SHM mode must be boolean')
     validate_macro_spins(macro_spins, macro_shm)
@@ -201,7 +203,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                                   original_sha256=digest_bytes(original), manifest_b64=shared.native.encoded(manifest),
                                   host=safety.host(), repetitions=repetitions, timeout=timeout, edit_mode=edit_mode,
                                   commands=list(commands), macro_shm=macro_shm, macro_spins=macro_spins,
-                                  profile_phases=profile_phases,
+                                  profile_phases=profile_phases, lexer_cache=lexer_cache,
                                   root_native_frozen=True, idle_authorized=True,
                                   harness_sha256=shared.native.digest(Path(__file__)),
                                   helper_sha256={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
@@ -223,6 +225,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 env['RUSTFLAGS'] = shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
                 # Always override inherited transport settings in both arms.
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = '1' if macro_shm else '0'
+                env['JUSTRUST_CARGO_RESIDENT_LEXER'] = '1' if lexer_cache else '0'
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = str(macro_spins)
                 # Both commands use the same per-arm target, but check and build
                 # have distinct native worker identities and validation groups.
@@ -289,6 +292,9 @@ def _validate(report, *, diagnostic):
     if report.get('schema') != schema or report.get('verdict') != verdict:
         raise ValueError('Not a passed own-source loop receipt')
     provenance = report['provenance']
+    lexer_cache = provenance.get('lexer_cache', False)
+    if type(lexer_cache) is not bool:
+        raise ValueError('Invalid lexer cache provenance')
     profile_phases = provenance.get('profile_phases', False)
     if type(profile_phases) is not bool:
         raise ValueError('Invalid phase profiling provenance')
@@ -344,11 +350,13 @@ def _validate(report, *, diagnostic):
                             or env['JUSTRUST_CARGO_RESIDENT'] != ('serial' if mode == 'on' else 'off')
                             or env['RUSTFLAGS'] != shared.FLAGS + (' -Ztime-passes' if profile_phases else '')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SHM') != ('1' if provenance['macro_shm'] else '0')
+                            or env.get('JUSTRUST_CARGO_RESIDENT_LEXER', '0' if 'lexer_cache' not in provenance else None) != ('1' if lexer_cache else '0')
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS') != str(provenance['macro_spins'])
                             or any(env.get(key) != value for key, value in STRICT_ENV.items())
                             or safety.safe_environment(env) != env):
                         raise ValueError('Candidate environment mismatch')
                     normalized_env = dict(env)
+                    normalized_env.setdefault('JUSTRUST_CARGO_RESIDENT_LEXER', '0')
                     for key in ('CARGO_TARGET_DIR', 'JUSTRUST_CARGO_RESIDENT_DIR', 'JUSTRUST_CARGO_RESIDENT_TRACE'):
                         normalized_env.pop(key)
                     normalized_env.pop('JUSTRUST_CARGO_RESIDENT')
@@ -411,7 +419,8 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
     normalized = []
     for report, hashes, transport, spins in zip((before, after), expected, transports, spin_counts):
         provenance = json.loads(json.dumps(report['provenance']))
-        # Historical v1 receipts predate profiling. Normalize only this copy.
+        # Historical receipts predate profiling and lexer-cache selection. Normalize only this copy.
+        provenance['lexer_cache'] = provenance.get('lexer_cache', False)
         provenance['profile_phases'] = provenance.get('profile_phases', False)
         if explicit_spins:
             validate_macro_spins(spins, provenance['macro_shm'])
@@ -442,6 +451,7 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
                 environments = []
                 for row in (first, second):
                     env = dict(row['cargo']['invocation']['environment'])
+                    env.setdefault('JUSTRUST_CARGO_RESIDENT_LEXER', '0')
                     for key in ('CARGO_TARGET_DIR', 'JUSTRUST_CARGO_RESIDENT_DIR', 'JUSTRUST_CARGO_RESIDENT_TRACE'):
                         env.pop(key)
                     if explicit:
@@ -480,6 +490,8 @@ def main():
     parser.add_argument('--checkout', type=Path)
     parser.add_argument('--commands', nargs='+', choices=('check', 'build'), default=['check', 'build'])
     parser.add_argument('--edit-mode', choices=('body', 'comment'), default='body')
+    parser.add_argument('--lexer-cache', action='store_true',
+                        help='Explicitly enable resident lexer caching in both arms')
     parser.add_argument('--macro-shm', action='store_true',
                         help='Explicitly use shared-memory macro RPC instead of Unix sockets in both arms')
     parser.add_argument('--macro-spins', type=parse_macro_spins, default=0,
