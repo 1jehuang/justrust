@@ -27,7 +27,27 @@ files must start with the self-contained ar magic. Thin archives and linker
 scripts disguised as archives are rejected because they can reference inputs
 outside the closure. Empty native directories are retained too.
 
-The safe subset rejects unresolved externs, conflicting extern names,
+Schema 3 adds the separately selected `capture_with_macros(args, cwd, environment)`
+policy for Linux x86_64. Its environment must be the compiler command's effective
+environment, not just Cargo's parent environment. This mode includes regular `.so`
+Rust dependency files, structurally validates bounded ELF dynamic tables without
+loading them, rejects custom loader directives/dependencies, and includes the
+content of recursively required allowlisted runtime libraries actually mapped
+in the host process. Mapped device/inode identity must match disk. Loader search
+paths must not shadow those mapped runtime libraries. Native dynamic libraries
+and custom runtime dependencies still require ordinary fallback. The default
+`capture` policy continues to reject all dynamic Rust inputs.
+
+This policy is usable only with fresh request-owned macro subprocesses and fresh
+per-request metadata clients, with retained external decoders, cached expansions,
+and live typed query reuse disabled. It is not independent authorization to cache
+macro effects or imported typed state. Changed macro/library/runtime bytes,
+including restored-mtime changes, invalidate the manifest. The worker must
+independently recapture its actual invocation and loader environment, then verify
+again before execution and after completion. Experimental sequential helper
+transport does not yet support nested invocation and is not a production default.
+
+The default safe subset rejects unresolved externs, conflicting extern names,
 symlink path components or directory entries, dynamic-library entries (`.so`,
 versioned `.so.*`, `.dylib`, `.dll`), `.lib` import libraries, nested directories
 or other nonregular native entries, and search kinds other than dependency or

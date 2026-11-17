@@ -127,6 +127,14 @@ struct Request {
 
 /// An external manifest must describe the actual invocation, not just a
 /// caller-selected subset of dependency files. Recapture before admission.
+fn capture_external(args: &[String], cwd: &std::path::Path) -> Result<Option<Manifest>, String> {
+    if owned_selection(std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref()) {
+        jr_resident_inputs::capture_with_macros(args, cwd, &std::env::vars_os().collect())
+    } else {
+        jr_resident_inputs::capture(args, cwd)
+    }
+}
+
 fn decode_request(
     line: &[u8],
     external_enabled: bool,
@@ -148,7 +156,7 @@ fn decode_request(
         if !external_enabled {
             return Err("external resident inputs require explicit selection".into());
         }
-        if jr_resident_inputs::capture(&args, cwd)?.as_ref() != Some(expected) {
+        if capture_external(&args, cwd)?.as_ref() != Some(expected) {
             return Err("external manifest does not match actual compiler inputs".into());
         }
     }
@@ -628,7 +636,7 @@ fn serve_requests(
             let verify_start = Instant::now();
             let actual = std::env::current_dir()
                 .map_err(|e| e.to_string())
-                .and_then(|cwd| jr_resident_inputs::capture(&args, &cwd));
+                .and_then(|cwd| capture_external(&args, &cwd));
             external_verify_nanos = external_verify_nanos.saturating_add(
                 u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             );

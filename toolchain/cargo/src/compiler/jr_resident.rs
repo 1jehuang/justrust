@@ -226,23 +226,39 @@ mod linux {
         } else {
             cwd.join(sysroot)
         })?;
+        let env = effective_env(cmd);
         let external = if cmd.get_env("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref()
             == Some(OsStr::new("1"))
         {
-            jr_resident_inputs::capture(
-                &args
-                    .iter()
-                    .map(|a| a.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>(),
-                &cwd,
-            )
+            let args = args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            if cmd.get_env("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref() == Some(OsStr::new("1")) {
+                ensure!(
+                    cmd.get_env("JUSTRUST_CARGO_RESIDENT_OWNED").as_deref()
+                        == Some(OsStr::new("1")),
+                    "macro helpers require the owned compiler batch"
+                );
+                ensure!(
+                    cmd.get_env("JUSTRUST_CARGO_RESIDENT_DECODERS")
+                        .as_deref()
+                        .is_none_or(|value| value == OsStr::new("0")),
+                    "macro helpers cannot retain external decoders"
+                );
+                jr_resident_inputs::capture_with_macros(&args, &cwd, &env)
+            } else {
+                jr_resident_inputs::capture(&args, &cwd)
+            }
             .map_err(anyhow::Error::msg)?
         } else {
             None
         };
-        let env = effective_env(cmd);
         let mut hash = blake3::Hasher::new();
-        field(&mut hash, b"jr-cargo-resident-v2-exact-external-inputs");
+        field(
+            &mut hash,
+            b"jr-cargo-resident-v3-fresh-macro-runtime-closure",
+        );
         if let Some(inputs) = &external {
             // capture already validated bounded content. Hash the canonical
             // serialized manifest, not file timestamps or a caller's stale key.

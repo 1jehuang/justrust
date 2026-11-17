@@ -136,7 +136,11 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
     env = safety.safe_environment(shared.environment(
         compiler, fixture, mode, shared.private_directory(arm / 'workers'), trace))
     if require_resident_root:
-        env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'] = '1'
+        env.update(JUSTRUST_CARGO_RESIDENT_EXTERNAL='1',
+                   JUSTRUST_CARGO_RESIDENT_OWNED='1',
+                   JUSTRUST_CARGO_RESIDENT_MACROS='1',
+                   JUSTRUST_CARGO_RESIDENT_DECODERS='0',
+                   JUSTRUST_RUSTC_RESIDENT_FRONTEND='0')
     report = dict(mode=mode, verdict='incomplete', observations=[])
     previous_macro = previous_root = None
     previous_environment = object()

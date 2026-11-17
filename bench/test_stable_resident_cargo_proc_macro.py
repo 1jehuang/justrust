@@ -107,6 +107,10 @@ class ProcMacroOracleTests(unittest.TestCase):
             self.assertEqual((cwd / 'src/lib.rs').read_bytes(), stage['root'])
             self.assertEqual(env.get('JR_PM_VALUE'), stage['env'])
             self.assertNotIn('JR_PM_NONCE', env)
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'], '1')
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_OWNED'], '1')
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_MACROS'], '1')
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_DECODERS'], '0')
             path = Path(env['JR_PM_FILE'])
             self.assertEqual(path.read_text() if path.exists() else None, stage['file'])
             return record(stage)
@@ -120,7 +124,8 @@ class ProcMacroOracleTests(unittest.TestCase):
                         artifact(fresh=len(calls) != 1),
                         dict(target=dict(name='dependency_fallback_root'), fresh=False)]):
                 report = subject.capture_arm(root / 'compiler', root / 'cargo', fixture,
-                                             root / 'arm', 'off', rows, 10, invoke)
+                                             root / 'arm', 'off', rows, 10, invoke,
+                                             require_resident_root=True)
             self.assertEqual(report['verdict'], 'passed')
             self.assertEqual(len(calls), len(rows))
             self.assertEqual(len(report['observations']), len(rows))

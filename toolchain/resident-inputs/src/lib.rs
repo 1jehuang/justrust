@@ -1,12 +1,18 @@
 //! Exact, conservative external Rust dependency snapshots for resident compilation.
 //! Unsupported inputs are errors so callers can fall back to ordinary compilation.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-pub const SCHEMA: u32 = 2;
+/// Structural screening only, never independent runtime admission.
+pub mod proc_macro;
+mod procfs;
+
+pub const SCHEMA: u32 = 3;
 pub const MAX_FILES: usize = 2048;
 pub const MAX_TOTAL_BYTES: u64 = 1 << 30;
 pub const MAX_MANIFEST_BYTES: usize = 1 << 20;
@@ -18,6 +24,7 @@ pub struct Manifest {
     externs: Vec<PathBuf>,
     directories: Vec<PathBuf>,
     native_directories: Vec<PathBuf>,
+    macro_loader_paths: Option<Vec<PathBuf>>,
     files: Vec<Input>,
 }
 
@@ -58,6 +65,7 @@ impl Manifest {
             self.externs.clone(),
             self.directories.clone(),
             self.native_directories.clone(),
+            self.macro_loader_paths.clone(),
         )? != *self
         {
             return Err("dependency inputs changed".into());
@@ -90,6 +98,45 @@ impl Manifest {
 /// Capture explicit extern files and every Rust artifact in dependency search paths.
 /// Bare/name-only extern resolution is deliberately unsupported.
 pub fn capture(args: &[String], cwd: &Path) -> Result<Option<Manifest>, String> {
+    capture_inner(args, cwd, None)
+}
+
+/// Explicit fresh-helper policy. This does not authorize retaining typed queries,
+/// macro expansions, or external metadata decoders. The caller must enforce those
+/// lifetime gates and supply the compiler command's effective environment.
+pub fn capture_with_macros(
+    args: &[String],
+    cwd: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<Option<Manifest>, String> {
+    for (key, value) in environment {
+        if key
+            .to_str()
+            .is_some_and(|name| name.starts_with("LD_") && name != "LD_LIBRARY_PATH")
+            && !value.is_empty()
+        {
+            return Err("unsupported dynamic loader environment".into());
+        }
+    }
+    let mut paths = Vec::new();
+    if let Some(value) = environment.get(std::ffi::OsStr::new("LD_LIBRARY_PATH"))
+        && !value.is_empty()
+    {
+        for path in std::env::split_paths(value) {
+            if paths.len() >= 128 {
+                return Err("loader path budget exceeded".into());
+            }
+            paths.push(normalize(&cwd.join(path))?);
+        }
+    }
+    capture_inner(args, cwd, Some(paths))
+}
+
+fn capture_inner(
+    args: &[String],
+    cwd: &Path,
+    macro_loader_paths: Option<Vec<PathBuf>>,
+) -> Result<Option<Manifest>, String> {
     let mut externs = Vec::new();
     let mut searches = Vec::new();
     let mut i = 0;
@@ -168,7 +215,7 @@ pub fn capture(args: &[String], cwd: &Path) -> Result<Option<Manifest>, String> 
         }
         target.push(normalize(&cwd.join(path))?);
     }
-    snapshot(paths, dirs, native_dirs).map(Some)
+    snapshot(paths, dirs, native_dirs, macro_loader_paths).map(Some)
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, String> {
@@ -206,7 +253,11 @@ fn rust_artifact(path: &Path) -> bool {
     )
 }
 
-fn membership(dirs: &[PathBuf], native_dirs: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+fn membership(
+    dirs: &[PathBuf],
+    native_dirs: &[PathBuf],
+    macros: bool,
+) -> Result<BTreeSet<PathBuf>, String> {
     let mut paths = BTreeSet::new();
     let mut entries = 0usize;
     for (dir, native) in dirs
@@ -232,14 +283,18 @@ fn membership(dirs: &[PathBuf], native_dirs: &[PathBuf]) -> Result<BTreeSet<Path
                 .file_name()
                 .and_then(|s| s.to_str())
                 .ok_or("non UTF-8 directory entry")?;
-            if matches!(
+            if (matches!(
                 path.extension().and_then(|s| s.to_str()),
                 Some("so" | "dylib" | "dll" | "lib")
-            ) || name.contains(".so.")
+            ) || name.contains(".so."))
+                && (native || !macros || path.extension().is_none_or(|ext| ext != "so"))
             {
                 return Err("dynamic/proc-macro dependency closure unsupported".into());
             }
-            if native || rust_artifact(&path) {
+            if native
+                || rust_artifact(&path)
+                || macros && path.extension().is_some_and(|ext| ext == "so")
+            {
                 if !kind.is_file() {
                     return Err("nonregular Rust artifact".into());
                 }
@@ -277,6 +332,7 @@ fn snapshot(
     mut externs: Vec<PathBuf>,
     mut directories: Vec<PathBuf>,
     mut native_directories: Vec<PathBuf>,
+    macro_loader_paths: Option<Vec<PathBuf>>,
 ) -> Result<Manifest, String> {
     externs.sort();
     externs.dedup();
@@ -287,10 +343,23 @@ fn snapshot(
     if externs.len() > MAX_FILES || directories.len() + native_directories.len() > MAX_FILES {
         return Err("input budget exceeded".into());
     }
-    let members = membership(&directories, &native_directories)?;
+    let macros = macro_loader_paths.is_some();
+    if let Some(loader_paths) = &macro_loader_paths {
+        if loader_paths.len() > 128 {
+            return Err("loader path budget exceeded".into());
+        }
+        for path in loader_paths {
+            if normalize(path)? != *path {
+                return Err("invalid loader path".into());
+            }
+        }
+    }
+    let members = membership(&directories, &native_directories, macros)?;
     let mut paths = members.clone();
     for path in &externs {
-        if !rust_artifact(path) || normalize(path)? != *path {
+        if !(rust_artifact(path) || macros && path.extension().is_some_and(|ext| ext == "so"))
+            || normalize(path)? != *path
+        {
             return Err("invalid direct external artifact".into());
         }
         paths.insert(path.clone());
@@ -298,10 +367,26 @@ fn snapshot(
     if paths.len() > MAX_FILES {
         return Err("file budget exceeded".into());
     }
+    if macros {
+        paths.insert(procfs::loader_configuration()?);
+    }
     let mut total = 0u64;
     let mut files = Vec::new();
     let mut observed = Vec::new();
-    for path in paths {
+    let runtime_paths = if macros {
+        procfs::runtime_paths()?
+    } else {
+        BTreeMap::new()
+    };
+    let mut runtime = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    while let Some(path) = paths.pop_first() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        if visited.len() > MAX_FILES {
+            return Err("file budget exceeded".into());
+        }
         normalize(&path)?;
         let before = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         if !before.is_file() || before.file_type().is_symlink() {
@@ -331,6 +416,12 @@ fn snapshot(
         }
         let mut hasher = blake3::Hasher::new();
         let mut bytes = 0u64;
+        let dynamic =
+            macros && (path.extension().is_some_and(|ext| ext == "so") || runtime.contains(&path));
+        let mut object = Vec::new();
+        if dynamic && before.len() > 64 * 1024 * 1024 {
+            return Err("macro object budget exceeded".into());
+        }
         let mut buffer = [0u8; 65536];
         loop {
             let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
@@ -342,12 +433,34 @@ fn snapshot(
                 return Err("byte budget exceeded".into());
             }
             hasher.update(&buffer[..n]);
+            if dynamic {
+                if object.len().saturating_add(n) > 64 * 1024 * 1024 {
+                    return Err("macro object budget exceeded".into());
+                }
+                object.extend_from_slice(&buffer[..n]);
+            }
         }
         let after = file.metadata().map_err(|e| e.to_string())?;
         if bytes != before.len() || !unchanged(&before, &after) {
             return Err("input changed during read".into());
         }
         total += bytes;
+        if dynamic {
+            for needed in proc_macro::validate_proc_macro_elf(&object).map_err(|e| e.to_string())? {
+                let selected = runtime_paths
+                    .get(&needed)
+                    .ok_or("runtime dependency is not mapped in compiler host")?;
+                procfs::validate_loader_paths(
+                    macro_loader_paths.as_ref().unwrap(),
+                    &needed,
+                    selected,
+                )?;
+                runtime.insert(selected.clone());
+                if !visited.contains(selected) {
+                    paths.insert(selected.clone());
+                }
+            }
+        }
         files.push(Input {
             path: path.clone(),
             bytes,
@@ -355,7 +468,7 @@ fn snapshot(
         });
         observed.push((path, after));
     }
-    if membership(&directories, &native_directories)? != members {
+    if membership(&directories, &native_directories, macros)? != members {
         return Err("dependency membership changed during capture".into());
     }
     for (path, metadata) in observed {
@@ -367,11 +480,13 @@ fn snapshot(
             return Err("input changed during capture".into());
         }
     }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
     let manifest = Manifest {
         schema: SCHEMA,
         externs,
         directories,
         native_directories,
+        macro_loader_paths,
         files,
     };
     manifest.encoded()?;
