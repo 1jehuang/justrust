@@ -508,7 +508,8 @@ enum Command {
         #[arg(long, hide = true)]
         quiet: bool,
     },
-    /// Subscribe for hosted builds (first month of $20 free with a card), or
+    /// Subscribe for hosted builds (7 days or 500 trial builds with a card, then
+    /// $20/month for 2,000 builds), or
     /// switch an existing plan: to the next tier, or to `--plan N`.
     Upgrade {
         /// Plan in USD per month (multiples of $10, $20 to $1,000). Default:

@@ -268,9 +268,9 @@ main() {
             echo
             echo "Installed: $BIN"
             if [ -n "$url" ]; then
-                echo "Ask your user to open $url to sign in. Remote builds need a card: free first month, then \$20/mo (justrust upgrade)"
+                echo "Ask your user to open $url to sign in. Remote builds need a card: free trial (7 days or 500 builds, whichever comes first), then \$20/mo (justrust upgrade)"
             else
-                echo "Ask your user to run: $BIN login, then $BIN upgrade (remote builds need a card: free first month, then \$20/mo)"
+                echo "Ask your user to run: $BIN login, then $BIN upgrade (remote builds need a card: free trial (7 days or 500 builds, whichever comes first), then \$20/mo)"
             fi
             echo "Then just use justrust check/test"
         else

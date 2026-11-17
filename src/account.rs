@@ -468,7 +468,7 @@ pub fn logout() -> Result<()> {
 /// What `justrust upgrade --plan N` does for this account.
 #[derive(Debug, PartialEq)]
 enum UpgradeAction {
-    /// No subscription: Stripe checkout (the free first month when eligible).
+    /// No subscription: Stripe checkout (the free trial (7 days or 500 builds, whichever comes first) when eligible).
     Checkout { trial: bool },
     /// Subscribed: switch the existing subscription to `to`.
     ChangePlan { from: u32, to: u32 },
@@ -560,9 +560,14 @@ fn change_plan(c: &Creds, from: u32, to: u32) -> Result<()> {
         .unwrap_or_default();
     println!(
         "justrust: plan changed ${from}/month -> ${new}/month ({} builds a month{limit}). It is billed from your next monthly payment, on the card already on file.",
-        thousands(new / 10 * 2500)
+        thousands(paid_build_allowance(new))
     );
     Ok(())
+}
+
+/// Paid subscriptions include 1,000 builds per $10, at $0.01 per build.
+fn paid_build_allowance(plan_usd: u64) -> u64 {
+    plan_usd * 100
 }
 
 /// 5000 -> "5,000".
@@ -609,7 +614,7 @@ fn checkout(c: &Creds, plan: u32, trial: bool, no_wait: bool) -> Result<()> {
     }
     show_url(
         &if trial {
-            "start the free first month (card required, $20/mo after)".to_string()
+            "start the free trial (7 days or 500 builds, whichever comes first) (card required, $20/mo after)".to_string()
         } else {
             format!("subscribe (${plan}/mo)")
         },
@@ -627,7 +632,7 @@ fn checkout(c: &Creds, plan: u32, trial: bool, no_wait: bool) -> Result<()> {
     Ok(())
 }
 
-/// `POST billing/subscribe` body. `trial` asks for the free first month
+/// `POST billing/subscribe` body. `trial` asks for the free trial (7 days or 500 builds, whichever comes first)
 /// (card collected now, the plan renews after it).
 fn checkout_body(plan: u32, trial: bool) -> Value {
     if trial {
@@ -877,6 +882,13 @@ mod tests {
         assert_eq!(thousands(5000), "5,000");
         assert_eq!(thousands(250000), "250,000");
         assert_eq!(thousands(500), "500");
+    }
+
+    #[test]
+    fn paid_allowances_are_one_cent_per_build() {
+        for (usd, builds) in [(20, 2000), (50, 5000), (100, 10000)] {
+            assert_eq!(paid_build_allowance(usd), builds);
+        }
     }
 
     #[test]

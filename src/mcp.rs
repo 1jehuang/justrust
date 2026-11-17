@@ -109,7 +109,7 @@ fn tools() -> Value {
         },
         {
             "name": "login",
-            "description": "Sign in for hosted Rust builds. Returns a link: give it to the user to open and approve. Remote builds then need a card on file: the free first month ($20/mo after) starts with the `upgrade` link. Does not wait; any later justrust command finishes the sign-in once approved.",
+            "description": "Sign in for hosted Rust builds. Returns a link: give it to the user to open and approve. Remote builds then need a card on file: the free trial (7 days or 500 builds, whichever comes first, then $20/mo for 2,000 builds) starts with the `upgrade` link. Does not wait; any later justrust command finishes the sign-in once approved.",
             "inputSchema": none,
         },
         {
@@ -339,6 +339,9 @@ mod tests {
                 "billing_link"
             ]
         );
+        let login = l["result"]["tools"][1]["description"].as_str().unwrap();
+        assert!(login.contains("7 days or 500 builds"));
+        assert!(login.contains("$20/mo for 2,000 builds"));
         let u = handle(&f, &json!({ "jsonrpc": "2.0", "id": 3, "method": "nope" })).unwrap();
         assert_eq!(u["error"]["code"], -32601);
     }

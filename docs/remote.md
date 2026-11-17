@@ -109,7 +109,7 @@ routing) only needs an ssh-reachable machine with a shell.
 | backend | what | set up with | status |
 |---|---|---|---|
 | `aws` | one machine in your own AWS account, created and controlled through the `aws` CLI | `justrust remote up` | built |
-| `hosted` | justrust's own build fleet, billed per build (card required: first month of $20 free, then from $20/mo for 5,000, 2,500 per $10) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
+| `hosted` | justrust's own build fleet, billed per build (card required: 7 days or 500 trial builds, then from $20/mo for 2,000, 1,000 per $10; API and overage $0.01/build) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
 | none | every build is local | `justrust remote use off` | |
 
 A machine created before `backend.json` existed counts as `aws`.

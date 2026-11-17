@@ -230,8 +230,9 @@ the router and automatic local fallback, `justrust local off` refuses every
 local compile. `--remote` and `--auto` (remote only when predicted faster)
 choose per command.
 
-Local builds are free. Hosted plans start at $20/month for 5,000 builds,
-with the first month free and a card required. See [pricing](https://jcode.sh/rust#pricing).
+Local builds are free. Hosted plans start at $20/month for 2,000 builds ($0.01 per build).
+The free trial lasts 7 days or 500 builds, whichever comes first, with a card required.
+API and overage builds cost $0.01 each. See [pricing](https://jcode.sh/rust#pricing).
 For agents without a browser, `justrust login --no-wait` prints a sign-in link.
 For CI, set `JCODE_API_KEY` from your [account](https://jcode.sh/account).
 More setup details: [remote builds](docs/remote.md).

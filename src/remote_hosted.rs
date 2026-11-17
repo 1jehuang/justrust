@@ -57,9 +57,9 @@ fn connect_timeout(windows: bool) -> Duration {
 const RECENT_READY_S: u64 = 60;
 
 pub const SIGNED_OUT: &str = "not signed in for hosted builds. Run `justrust login --no-wait` and ask your user to open the URL it prints (builds stay local until then).";
-pub const SUBSCRIBE: &str = "remote builds need a plan ($20/mo, 5,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
-pub const START_TRIAL: &str = "remote builds need a card on file: run `justrust upgrade --no-wait` and ask your user to open the URL it prints to start the free trial (card required, 7 days or 500 builds, whichever comes first, then $20/mo with 5,000 builds a month). Builds run locally until then.";
-pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (5,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
+pub const SUBSCRIBE: &str = "remote builds need a plan ($20/mo, 2,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const START_TRIAL: &str = "remote builds need a card on file: run `justrust upgrade --no-wait` and ask your user to open the URL it prints to start the free trial (card required, 7 days or 500 builds, whichever comes first, then $20/mo with 2,000 builds a month). Builds run locally until then.";
+pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (2,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const END_TRIAL: &str = "free trial builds used up: ask your user to start their plan now at https://jcode.sh/account (it starts on its own when the trial ends). Builds run locally until then.";
 pub const NO_CREDITS: &str = "out of Jcode cloud-compute credits (shared with cloud agents). Builds run locally until credits renew. There are no automatic top-ups.";
@@ -722,13 +722,13 @@ impl Builds {
         let n = self.left();
         let mut s = format!("{n} build{} left", if n == 1 { "" } else { "s" });
         if n == 0 && self.can_build {
-            let p = self.overage_price_usd.unwrap_or(0.10);
+            let p = self.overage_price_usd.unwrap_or(0.01);
             s.push_str(&format!(", then ${p:.2} per build"));
         }
         match self.next_step.as_deref() {
             Some("subscribe") => s.push_str(". Subscribe: `justrust upgrade`"),
             Some("start_trial") => s.push_str(
-                ". Remote builds need a card: `justrust upgrade` starts the free first month",
+                ". Remote builds need a card: `justrust upgrade` starts the free trial (7 days or 500 builds, whichever comes first)",
             ),
             Some("raise_limit") => s.push_str(". Raise the limit at https://jcode.sh/account"),
             Some("end_trial") => {
@@ -3198,6 +3198,31 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_allowance_displays_one_cent_default_and_server_override() {
+        let mut builds = Builds {
+            can_build: true,
+            ..Builds::default()
+        };
+        assert_eq!(builds.describe(), "0 builds left, then $0.01 per build");
+        builds.overage_price_usd = Some(0.02);
+        assert_eq!(builds.describe(), "0 builds left, then $0.02 per build");
+        assert!(START_TRIAL.contains("7 days or 500 builds"));
+        assert!(START_TRIAL.contains("$20/mo with 2,000 builds"));
+        assert!(UPGRADE_PLAN.contains("2,000 builds a month"));
+        assert!(
+            Builds {
+                next_step: Some("start_trial".into()),
+                ..Builds::default()
+            }
+            .describe()
+            .contains("7 days or 500 builds")
+        );
+        let installer = include_str!("../scripts/install.sh");
+        assert!(installer.contains("7 days or 500 builds"));
+        assert!(!installer.contains("free first month"));
+    }
+
+    #[test]
     fn charge_run_and_402_lines() {
         let (mut c, seen) = mock(vec![
             (
@@ -3230,7 +3255,7 @@ mod tests {
         c.set_build_base(format!("{api}/fleet")).unwrap();
         assert_eq!(charge_run(&c, "r1").unwrap().unwrap().left(), 24);
         let sub = charge_run(&c, "r2").unwrap_err();
-        assert!(sub.starts_with("remote builds need a plan ($20/mo, 5,000 builds)"));
+        assert!(sub.starts_with("remote builds need a plan ($20/mo, 2,000 builds)"));
         assert!(
             sub.contains("justrust upgrade") && !sub.contains('\n'),
             "{sub}"
