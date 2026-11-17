@@ -441,8 +441,9 @@ makes the next compile refuse the retired owner, as required. External typed-que
 identity still rejects in both modes. All 70 span tests, 23 metadata tests plus two
 doctests, and 21 interface tests pass against matching standard libraries.
 
-This is actual source/hygiene decoder reuse, not external typed-query reuse. It is
-not wired into the resident transport or Cargo defaults. Full external typed
+This is actual source/hygiene decoder reuse, not external typed-query reuse. At
+this validation stage it was not wired into the resident transport or Cargo
+defaults. Full external typed
 ownership and query identity, ordinary demand-driven bounded
 publication, mutation/error fallback acceptance and representative performance
 remain separate gates. Globally interning sources by stable ID alone is still not
@@ -524,9 +525,67 @@ fresh maps or publication failures retire the owner. All 22 interface tests and
 28 metadata tests plus two metadata doctests pass against matching standard
 libraries. The separate real dependency-replacement test still passes.
 
-This removes forced source importing from the decoder-only publication path. It
-is not external typed-query admission, driver/Cargo routing, representative
-performance evidence or a production-default promotion.
+This removes forced source importing from the decoder-only publication path. The
+following managed transport milestone remains separate from external typed-query
+admission, representative performance or production-default promotion.
+
+## Explicit managed decoder transport
+
+`JUSTRUST_RUSTC_RESIDENT_DECODERS=1` now enables native decoder retention only in
+`--jr-resident-owned`. Missing or `0` leaves it disabled; other values reject
+selection. Cargo/server routing and the default published compiler/client are
+unchanged. AST, lexer and typed-query retention remain independently selected.
+The interface entry point is
+`with_resident_compiler_batch_options_and_decoders(config, options, enabled, f)`.
+It establishes the decoder scope on the serial worker inside fresh batch-owned
+globals, rather than around the caller's thread or a pre-existing global owner.
+
+After native `tcx.finish`, ordinary demand-driven decoder storage is published
+with aggregate limits of 256 crates, 256 MiB metadata, 65,536 mapping entries,
+16,384 observed source entries and 256 MiB declared source bytes. These are
+admission limits, not a hard process peak-memory cap. Publication rejection
+requests retirement without changing an otherwise successful compilation result.
+Any failed invocation, including an unwind or later linking failure, clears the
+publication and retires the owner. A subsequent direct interface invocation is
+refused. The transport flushes the actual executed status and decoder counters,
+then closes without reading another request when retirement is requested.
+Recovery requires a new process/global owner, never a masked fresh decoder in the
+old `SessionGlobals`.
+
+Native validation passed driver checking, nine owned transport tests, a complete
+matching compiler/std build, all 23 interface tests and all 28 metadata tests plus
+two doctests. The added managed interface test proves automatic publication,
+default-off zero state, std decoder hits, unwind retirement, refused retries and
+scope cleanup. Expected negative diagnostics remain visible.
+
+The frozen local candidate has launcher SHA256
+`8cb4b7089e2e70cbd4832fdf53a24ef2e27db676dcc3632c2501134e6f3dd567`
+and driver SHA256
+`f9fc5ad2224d03be12054cda7b98a36838f7d207454832092027ecb9fa624dac`.
+Strict actual executable acceptance uses ordinary std macros and the OS string,
+nonce-verified fresh/native runtime outputs, exact compilation diagnostics and
+separate error/new-owner recovery stages. Controls remain zero throughout. The
+enabled process initially misses 19 decoder owners, then records 19 additional
+hits on both unchanged and unrelated-local-edit revisions. An error preserves its
+failure status, clears retained entries, reports one retirement request and exits
+autonomously. The recovery process starts cold and succeeds.
+
+The unchanged original is archived with exact authenticated JSON readback as
+`bench/stable-resident-managed-decoder-20261117-0613-native`. Ordinary default-off
+proc-macro/target/backend/incremental guards and real shipping-module error/recovery
+dogfood also pass, with unchanged original readback under
+`bench/stable-resident-managed-decoder-20261117-0616-default-{guard,dogfood}`.
+
+A follow-up explicitly retires caught preparation failures outside the batch's
+`run` closure too. It preserves idempotent retirement accounting. Driver checks,
+the nine transport tests, matching std and the actual managed interface test pass.
+The final frozen driver SHA256 is
+`4289362d41b6bff5df8caa0c95bad6311fbccd6b7f82422c32a7f6d3b9c2d598`
+with the same launcher identity. Strict executable acceptance passes again as
+`bench/stable-resident-managed-decoder-20261117-0620-native`, archived with exact
+original readback. This is native decoder correctness and telemetry only. It does
+not prove external typed-query reuse, natural Typeck hits, hosted acceptance, a
+speedup or default readiness.
 
 ## Native Cargo routing boundary
 
