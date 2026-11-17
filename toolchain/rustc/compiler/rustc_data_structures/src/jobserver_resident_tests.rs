@@ -5,6 +5,59 @@ fn admission() -> &'static Admission {
     Box::leak(Box::new(Admission::new()))
 }
 
+#[test]
+fn scoped_selection_tracks_cross_thread_clients_and_cleans_up() {
+    let _serial = SELECTION_TEST_LOCK.lock().unwrap();
+    assert!(current_client().is_none());
+    let admission = admission();
+    for capacity in [2, 3] {
+        let supplied = Client::new(capacity).unwrap();
+        let request = admission.begin(supplied.clone()).unwrap();
+        request
+            .with_current(|| {
+                assert_eq!(request.with_current(|| ()), Err(SelectionError::OverlappingSelection));
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            assert_eq!(
+                                request.with_current(|| ()),
+                                Err(SelectionError::OverlappingSelection)
+                            );
+                            let client = current_client().unwrap();
+                            let token = client.acquire().unwrap();
+                            assert_eq!(supplied.available().unwrap(), capacity - 2);
+                            drop(token);
+                        })
+                        .join()
+                        .unwrap();
+                });
+            })
+            .unwrap();
+        assert!(current_client().is_none());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = request.with_current(|| panic!("selected request failed"));
+            }))
+            .is_err()
+        );
+        assert!(current_client().is_none());
+        assert_eq!(
+            request.with_current(|| Err::<(), _>("request error")).unwrap(),
+            Err("request error")
+        );
+        assert!(current_client().is_none());
+        request.finish().unwrap();
+        assert_eq!(supplied.available().unwrap(), capacity);
+    }
+
+    let request = admission.begin(Client::new(1).unwrap()).unwrap();
+    let escaped = request.with_current(|| current_client().unwrap()).unwrap();
+    assert!(current_client().is_none());
+    assert!(matches!(request.finish(), Err(BeginError::OutstandingHandles)));
+    assert!(escaped.acquire().is_err());
+    drop(escaped);
+}
+
 fn available(client: &Client) -> usize {
     client.available().unwrap()
 }

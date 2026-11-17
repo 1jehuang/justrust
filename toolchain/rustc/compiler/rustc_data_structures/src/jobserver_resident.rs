@@ -1,16 +1,42 @@
-//! Ownership prerequisite only: this does not route `super::client()` or compiler workers.
+//! Request ownership and explicit scoped selection. This never changes `super::client()` and
+//! does not itself enable managed compiler routing.
 //!
 //! A future dispatcher must migrate raw clients, helper threads, proxies, and returned tokens to
-//! tracked request ownership before using this API to run a compiler request. In particular, merely
-//! installing a lease around today's compiler entry point is NOT sufficient.
+//! tracked request ownership before using this API to run a compiler request. Merely installing a
+//! lease around a compiler entry point is NOT sufficient: every scheduler consumer must use the
+//! coordinated tracked facade, with helpers retired and delivered tokens returned before finish.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
-use jobserver_crate::{Acquired, Client};
+use jobserver_crate::{Acquired, Client, HelperThread};
 
 static ADMISSION: Admission = Admission::new();
+static CURRENT: Mutex<Option<RequestClient>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(super) static SELECTION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Returns a tracked clone for compiler workers only while a request explicitly selects it.
+pub(super) fn current_client() -> Option<RequestClient> {
+    CURRENT.lock().unwrap().clone()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SelectionError {
+    OverlappingSelection,
+}
+
+struct SelectionGuard;
+
+impl Drop for SelectionGuard {
+    fn drop(&mut self) {
+        let mut current = CURRENT.lock().unwrap();
+        drop(current.take());
+    }
+}
 
 struct Admission(Mutex<State>);
 
@@ -97,6 +123,20 @@ pub struct RequestLease {
 }
 
 impl RequestLease {
+    /// Selects this request for compiler workers on all threads, only for the closure's duration.
+    /// Nested or concurrent selections are rejected. Unwinding clears the selection. Escaped
+    /// tracked clients still prevent clean lease completion after this scope returns.
+    pub fn with_current<R>(&self, f: impl FnOnce() -> R) -> Result<R, SelectionError> {
+        let mut current = CURRENT.lock().unwrap();
+        if current.is_some() {
+            return Err(SelectionError::OverlappingSelection);
+        }
+        *current = Some(self.client());
+        drop(current);
+        let _selection = SelectionGuard;
+        Ok(f())
+    }
+
     /// Acquires a real token from the supplied client. This can block until that client has a
     /// token available. The dispatcher must arrange explicit capacity, independently of Cargo's
     /// process-lifetime implicit token. Other begin calls are rejected while acquisition waits.
@@ -132,13 +172,37 @@ impl Drop for RequestLease {
     }
 }
 
-/// A tracked client with deliberately no raw-client, raw-token, or helper-thread escape hatch.
+/// A tracked client with deliberately no raw-client, raw-token, or raw-helper escape hatch.
 #[derive(Clone)]
 pub struct RequestClient {
     inner: Arc<RequestInner>,
 }
 
 impl RequestClient {
+    /// Creates a tracked worker. Tokens sent to other threads remain request-owned.
+    ///
+    /// Dropping the helper requests shutdown, but does not prove worker retirement. Use the
+    /// receipt returned by `RequestHelper::retire` to observe callback destruction before ending
+    /// the lease. The callback must not form an ownership cycle with its helper.
+    pub fn into_helper_thread<F>(self, callback: F) -> io::Result<RequestHelper>
+    where
+        F: FnMut(io::Result<RequestToken>) + Send + 'static,
+    {
+        self.check_active()?;
+        let retired = Arc::new(RetirementState::default());
+        let mut callback = TrackedCallback {
+            callback,
+            owner: Arc::clone(&self.inner),
+            _completion: RetirementNotifier(Arc::clone(&retired)),
+        };
+        let helper = self.inner.client.clone().into_helper_thread(move |token| {
+            // Capture the whole object, not disjoint fields: user callback destruction must
+            // precede ownership release and publication of retirement.
+            callback.deliver(token);
+        })?;
+        Ok(RequestHelper { helper: Some(helper), owner: self.inner, retired })
+    }
+
     /// May block. Ending the request with this handle outstanding permanently closes admission.
     pub fn acquire(&self) -> io::Result<RequestToken> {
         self.check_active()?;
@@ -164,6 +228,94 @@ impl RequestClient {
     }
 }
 
+struct TrackedCallback<F> {
+    // Field order is significant even if the callback panics or the worker detaches.
+    callback: F,
+    owner: Arc<RequestInner>,
+    _completion: RetirementNotifier,
+}
+
+impl<F: FnMut(io::Result<RequestToken>)> TrackedCallback<F> {
+    fn deliver(&mut self, token: io::Result<Acquired>) {
+        if !self.owner.active.load(Ordering::Acquire) {
+            // Release late tokens without entering user code after observing request end.
+            return;
+        }
+        (self.callback)(
+            token.map(|token| RequestToken { _token: token, _owner: Arc::clone(&self.owner) }),
+        );
+    }
+}
+
+#[derive(Default)]
+struct RetirementState {
+    done: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl RetirementState {
+    fn is_retired(&self) -> bool {
+        *self.done.lock().unwrap()
+    }
+}
+
+struct RetirementNotifier(Arc<RetirementState>);
+
+impl Drop for RetirementNotifier {
+    fn drop(&mut self) {
+        *self.0.done.lock().unwrap() = true;
+        self.0.wake.notify_all();
+    }
+}
+
+/// A tracked helper producer. Its worker independently owns the request until callback destruction.
+/// Field order stops the raw helper before releasing producer ownership. Raw helper Drop may
+/// detach, so worker ownership and queued tokens are deliberately independent of this wrapper.
+#[must_use]
+pub struct RequestHelper {
+    helper: Option<HelperThread>,
+    owner: Arc<RequestInner>,
+    retired: Arc<RetirementState>,
+}
+
+impl RequestHelper {
+    pub fn request_token(&self) -> io::Result<()> {
+        if !self.owner.active.load(Ordering::Acquire) {
+            return Err(io::Error::other("resident jobserver request has ended"));
+        }
+        self.helper.as_ref().unwrap().request_token();
+        Ok(())
+    }
+
+    /// Requests shutdown and returns a non-owning retirement observation, not a join guarantee.
+    /// May block according to the underlying platform's shutdown behavior. If it detaches,
+    /// `is_retired()` remains false until the callback and worker ownership are destroyed.
+    pub fn retire(mut self) -> HelperRetirement {
+        drop(self.helper.take());
+        HelperRetirement { retired: Arc::clone(&self.retired) }
+    }
+}
+
+/// Does not keep the request alive. Retirement does not imply queued tokens have been returned.
+#[must_use]
+pub struct HelperRetirement {
+    retired: Arc<RetirementState>,
+}
+
+impl HelperRetirement {
+    pub fn is_retired(&self) -> bool {
+        self.retired.is_retired()
+    }
+
+    /// Waits without spinning for callback destruction and worker ownership release. A true result
+    /// says nothing about tokens already delivered to queues, which retain separate ownership.
+    pub fn wait_timeout(&self, timeout: Duration) -> bool {
+        let done = self.retired.done.lock().unwrap();
+        let (done, _) = self.retired.wake.wait_timeout_while(done, timeout, |done| !*done).unwrap();
+        *done
+    }
+}
+
 /// Drops the acquired token before releasing its tracked request ownership.
 /// There is intentionally no `drop_without_releasing` or conversion to a raw token.
 #[must_use]
@@ -175,3 +327,7 @@ pub struct RequestToken {
 #[cfg(test)]
 #[path = "jobserver_resident_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jobserver_resident_helper_tests.rs"]
+mod helper_tests;
