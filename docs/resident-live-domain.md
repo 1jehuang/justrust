@@ -668,6 +668,36 @@ Exact original JSON is stored and authenticated readback verified for
 Raw compiler frames, consumer oracles and original timing values remain intact.
 External typed admission and production defaults remain unchanged.
 
+### Native attribution of the remaining overhead
+
+`a0da9c293` adds cumulative `selection_nanos` and `publication_nanos` directly
+inside the native enabled owner. They are saturating diagnostic counters only,
+never admission inputs, compiler options or cache keys. Disabled owners remain
+exactly zero. The actual managed std test checks enabled positive and disabled
+zero timing, while unit tests cover duration overflow. Driver checking, 37
+metadata tests plus two doctests, the managed std retirement test and a matching
+compiler/std build pass (`494264gpf1`). Strict executable/error-EOF/recovery
+acceptance also passes on frozen driver
+`fe980777c5c0262e5b43a319013417b8297ce81c31f0a0110fbffd0d1ba15e44`.
+
+A CPU-pinned 32-item/six-edit/three-repeat capture has producer medians of
+25.543 ms fresh, 16.055 ms process control and 22.950 ms decoder enabled. The
+18 timed enabled invocations have median native selection time of 6.519476 ms
+and publication time of 0.009328 ms; both disabled medians are zero. These are
+individual phase medians, not an additive wall-time decomposition. Selection
+includes exact incoming metadata comparison, mapping/source checks and source
+activation, so it does not isolate byte comparison alone. It locates the next
+optimization boundary without authorizing a mutable-file pointer/mtime shortcut.
+
+Exact original readback is verified for
+`bench/stable-resident-decoder-phases-20261117-0657-native` and
+`bench/stable-resident-decoder-phases-suite-20261117-0659-a`. The preceding
+`0657-a` suite failure remains separately preserved: the strict adapter initially
+rejected the newly added timing fields. `d1e84589f` accepts exactly the optional
+pair, validates numeric/monotonic/disabled-zero semantics and still rejects unknown
+fields. All 27 combined Python tests pass. No general performance or default
+promotion claim follows from this diagnostic.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
