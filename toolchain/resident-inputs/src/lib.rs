@@ -117,11 +117,21 @@ pub fn capture(args: &[String], cwd: &Path) -> Result<Option<Manifest>, String> 
             return Err("malformed extern input".into());
         }
         let path = normalize(&cwd.join(path))?;
-        if names
-            .insert(name, path.clone())
-            .is_some_and(|old| old != path)
-        {
-            return Err("ambiguous extern name".into());
+        if let Some(old) = names.insert(name, path.clone()) {
+            // Native Cargo can pass a matching rlib/rmeta pair when metadata
+            // is not embedded. Both files are owned inputs, not ambiguity.
+            let paired = old.parent() == path.parent()
+                && old.file_stem() == path.file_stem()
+                && matches!(
+                    (
+                        old.extension().and_then(|s| s.to_str()),
+                        path.extension().and_then(|s| s.to_str())
+                    ),
+                    (Some("rlib"), Some("rmeta")) | (Some("rmeta"), Some("rlib"))
+                );
+            if old != path && !paired {
+                return Err("ambiguous extern name".into());
+            }
         }
         paths.push(path);
     }

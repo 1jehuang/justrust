@@ -33,6 +33,21 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn matching_rlib_rmeta_pair_is_owned_and_both_contents_verified() {
+    let f = Fixture::new();
+    f.file("direct.rmeta", b"metadata");
+    let args = ["--extern=direct=direct.rmeta"];
+    let original = f.get(&args).unwrap().unwrap();
+    f.file("direct.rmeta", b"changed!");
+    assert!(original.verify().is_err());
+    let current = f.get(&args).unwrap().unwrap();
+    f.file("direct.rlib", b"different");
+    assert!(current.verify().is_err());
+    f.file("other.rmeta", b"other");
+    assert!(f.get(&["--extern=direct=other.rmeta"]).is_err());
+}
+
+#[test]
 fn content_identity_restored_mtime_and_touch() {
     let f = Fixture::new();
     let old = f.get(&[]).unwrap().unwrap();
