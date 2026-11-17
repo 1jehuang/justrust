@@ -41,6 +41,7 @@ use tracing::debug;
 
 use crate::creader::CStore;
 use crate::eii::EiiMapEncodedKeyValue;
+use crate::resident_metadata::ImportedSourceFile;
 use crate::rmeta::table::IsDefault;
 use crate::rmeta::*;
 
@@ -156,18 +157,6 @@ pub(crate) struct CrateMetadata {
     /// Information about the `extern crate` item or path that caused this crate to be loaded.
     /// If this is `None`, then the crate was injected (e.g., by the allocator).
     extern_crate: Option<ExternCrate>,
-}
-
-/// Holds information about a rustc_span::SourceFile imported from another crate.
-/// See `imported_source_file()` for more information.
-#[derive(Clone)]
-struct ImportedSourceFile {
-    /// This SourceFile's byte-offset within the source_map of its original crate
-    original_start_pos: rustc_span::BytePos,
-    /// The end of this SourceFile within the source_map of its original crate
-    original_end_pos: rustc_span::BytePos,
-    /// The imported SourceFile's representation within the local source_map
-    translated_source_file: Arc<rustc_span::SourceFile>,
 }
 
 /// Decode context used when we just have a blob of metadata from which we have to decode a header
@@ -1047,6 +1036,16 @@ impl CrateMetadata {
     /// Resident capture copies these bytes rather than reopening artifact paths.
     pub(crate) fn resident_metadata_inputs(&self) -> (&[u8], &CrateNumMap) {
         (&self.blob, &self.cnum_map)
+    }
+
+    /// Inspect only imports already performed by ordinary decoding. In particular,
+    /// this must not call `imported_source_file` or decode additional metadata.
+    pub(crate) fn with_resident_source_inputs<R>(
+        &self,
+        inspect: impl FnOnce(usize, &[Option<ImportedSourceFile>]) -> R,
+    ) -> R {
+        let imports = self.source_map_import_info.lock();
+        inspect(self.root.source_map.size(), &imports)
     }
 
     fn missing(&self, descr: &str, id: DefIndex) -> ! {
