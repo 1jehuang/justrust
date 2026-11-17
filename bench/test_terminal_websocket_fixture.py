@@ -105,6 +105,35 @@ class TerminalWebsocketFixture(unittest.TestCase):
                 spec, patches=[item for item in spec["patches"] if item[1] != prefix_patch])}):
             self.assertNotEqual(identity, suite.snapshot_fingerprint("desktop"))
 
+    def test_default_endpoint_fixture_only_adds_scoped_environment_exclusion(self):
+        name = "bench/patches/jcode-openai-endpoint-fixture-lock-v1.patch"
+        source = "crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs"
+        spec = suite.SNAPSHOTS["desktop"]
+        repo, revision = spec["repos"]["jcode"]
+        original = subprocess.check_output(
+            ["git", "-C", str(repo), "show", f"{revision}:{source}"], text=True)
+        self.assertIn(("jcode", name), spec["patches"])
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+                         spec["fixture_input_sha256"]["jcode/" + source])
+        self.assertEqual(hashlib.sha256((suite.ROOT / name).read_bytes()).hexdigest(),
+                         spec["fixture_patch_sha256"][name])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / source
+            destination.parent.mkdir(parents=True)
+            destination.write_text(original)
+            subprocess.run(["git", "apply", "--check", str(suite.ROOT / name)],
+                           cwd=root, check=True)
+            subprocess.run(["git", "apply", str(suite.ROOT / name)], cwd=root, check=True)
+            corrected = destination.read_text()
+        added = ('    let _guard = jcode_base::storage::lock_test_env();\n'
+                 '    let _base = EnvVarGuard::remove("JCODE_OPENAI_API_BASE");\n'
+                 '    let _openai_base = EnvVarGuard::remove("OPENAI_BASE_URL");\n'
+                 '    let _legacy_base = EnvVarGuard::remove("OPENAI_API_BASE");\n')
+        self.assertEqual(corrected.count(added), 1)
+        self.assertEqual(corrected.replace(added, ""), original)
+        self.assertLess(added.index("lock_test_env"), added.index("EnvVarGuard"))
+
 
 if __name__ == "__main__":
     unittest.main()

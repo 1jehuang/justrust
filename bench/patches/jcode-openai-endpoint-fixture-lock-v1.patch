@@ -1,0 +1,13 @@
+--- a/crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs
++++ b/crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs
+@@ -355,6 +355,10 @@
+ /// endpoints. If these ever diverge, OpenAI returns 401.
+ #[test]
+ fn openai_catalog_and_chat_endpoints_agree_on_credential_shape() {
++    let _guard = jcode_base::storage::lock_test_env();
++    let _base = EnvVarGuard::remove("JCODE_OPENAI_API_BASE");
++    let _openai_base = EnvVarGuard::remove("OPENAI_BASE_URL");
++    let _legacy_base = EnvVarGuard::remove("OPENAI_API_BASE");
+     // API-key-shaped credential: no refresh token, no id token.
+     let api_key_creds = CodexCredentials {
+         access_token: "sk-platform-key".to_string(),

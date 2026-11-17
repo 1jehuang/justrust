@@ -305,7 +305,14 @@ the terminal correction (`20261116-163611844-1234319`). This follow-up changes
 only those accepts: every prefix/input assertion, response frame, test body,
 and deadline is byte-for-byte unchanged after reversing the three substitutions.
 Its pristine input and overlay have separate pinned digests and contribute to
-the shared snapshot identity. Integrity and exact preservation tests run with:
+the shared snapshot identity. `jcode-openai-endpoint-fixture-lock-v1.patch`
+protects the default endpoint assertion in `models_state.rs` with the same
+existing environment mutex used by override writers. It removes the three API
+base override variables only within that test and restores them before unlocking.
+This fixes the preflight failure in workflow `43990941413` without changing any
+endpoint, credential-shape assertion, or production request routing. Its input
+and patch bytes are separately pinned as well.
+Integrity and exact preservation tests run with:
 
 ```sh
 PYTHONPATH=bench python3 -m unittest test_terminal_websocket_fixture test_source_sync_gate

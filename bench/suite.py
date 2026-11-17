@@ -150,6 +150,8 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-openai-endpoint-fixture-lock-v1.patch":
+                "3a6d64182c456aa0ec1d091d733bc7224da710906f3ff8a5e2ad0242cf424f21",
             "bench/patches/jcode-prefix-websocket-catalog-v1.patch":
                 "e38b682fad60363543b8587e3b1a252a594160b0cfedec043a202c0ba8d76a39",
             "bench/patches/jcode-terminal-websocket-catalog-v1.patch":
@@ -160,6 +162,8 @@ SNAPSHOTS = {
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs":
+                "0374e630b9496d9244206ffe4897da47f8fed1c704c0d5c03a73d00270e39a7f",
             "jcode/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_prefix.rs":
                 "25eebd68f6661e7239b66008c87ed69b05afda4c2fcf4d325b6f95af5484b945",
             "jcode/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_terminal.rs":
@@ -196,6 +200,7 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-scroll-render-fixture-state.patch"),
             ("jcode", "bench/patches/jcode-terminal-websocket-catalog-v1.patch"),
             ("jcode", "bench/patches/jcode-prefix-websocket-catalog-v1.patch"),
+            ("jcode", "bench/patches/jcode-openai-endpoint-fixture-lock-v1.patch"),
             ("jcode", "bench/patches/jcode-clipboard-path-lock-v1.patch"),
         ],
     },
