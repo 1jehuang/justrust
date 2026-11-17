@@ -270,6 +270,49 @@ reader. Only the disposable diagnostic adds lock instrumentation/visibility.
 Complete pinned TUI acceptance and a fresh full 40-point seed-1 before/after
 comparison remain separate required gates, not replaced by this diagnostic.
 
+### Pinned base global-state fixtures
+
+`jcode-base-global-fixtures-v1.patch` repairs two independent test-global
+isolation bugs exposed by candidate point 13 in workflow `44011633084`.
+The context-usage estimate fixture constructed its manager while the adjacent
+context-cap reload fixture temporarily set the global cap to 10,000 tokens.
+Its 12,535-token estimate then reported 1.2535 utilization instead of the
+expected low utilization. The estimate fixture now holds the existing
+`lock_test_env` guard, uses an empty temporary `JCODE_HOME`, and invalidates
+configuration both after switching homes and after restoring the original
+home. Restoration runs before releasing the environment lock. The manager
+construction, messages, observed usage updates, and every original assertion
+are unchanged.
+
+The scheduler's `OnceLock` belongs to the whole process. Unrelated async route
+builders legitimately start it, so locking just the two scheduler tests cannot
+isolate their initial state. Both original scheduler tests now re-execute their
+exact test name in a fresh child of the current test executable. The child runs
+the complete original test body and assertions. The parent requires successful
+exit and exactly one passing test. No scheduler implementation, timing constant,
+production configuration behavior, test selection, ignore status, or suite
+parallelism changes. Only test code is patched.
+
+Patch bytes and both original input files are SHA256-checked and included in
+snapshot identity. Existing runtime-v4, PTY, scroll, clipboard, and catalog
+fixture overlays remain in force, and both comparison arms use this overlay.
+Earlier records are not comparable with the corrected fixture identity.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_base_global_fixtures
+python3 bench/test_base_global_fixtures.py --accept "$JCODE_SCRATCH_DIR/base-global-controls" --full
+```
+
+The acceptance command adds diagnostic callers only in disposable copies. It
+reproduces the 10,000-token-cap failure and an already-started scheduler failure
+before the patch, then requires the same original assertions to pass after it.
+`--full` then removes those diagnostic callers, runs the complete base binary
+twice with ordinary parallelism, and runs the full pinned Jcode workspace.
+Local execution has an explicit controlled-fixture reason because self-exec
+must run the exact disposable binary. These controls are fixture correctness
+evidence, not performance evidence or a substitute for normal-parallel full
+base/workspace tests and the comprehensive comparison gate.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in

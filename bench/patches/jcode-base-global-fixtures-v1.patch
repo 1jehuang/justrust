@@ -1,0 +1,70 @@
+--- a/crates/jcode-base/src/compaction_tests.rs
++++ b/crates/jcode-base/src/compaction_tests.rs
+@@ -949,6 +949,22 @@
+ 
+ #[test]
+ fn test_context_usage_with_both_estimate_and_observed() {
++    let _lock = crate::storage::lock_test_env();
++    struct RestoreHome(Option<std::ffi::OsString>);
++    impl Drop for RestoreHome {
++        fn drop(&mut self) {
++            if let Some(home) = &self.0 {
++                crate::env::set_var("JCODE_HOME", home);
++            } else {
++                crate::env::remove_var("JCODE_HOME");
++            }
++            crate::config::Config::invalidate_cache();
++        }
++    }
++    let home = tempfile::tempdir().unwrap();
++    let _restore = RestoreHome(std::env::var_os("JCODE_HOME"));
++    crate::env::set_var("JCODE_HOME", home.path());
++    crate::config::Config::invalidate_cache();
+     let mut manager = CompactionManager::new().with_budget(200_000);
+     // Build messages totalling ~50k chars = ~12.5k token estimate
+     let mut messages = Vec::new();
+--- a/crates/jcode-base/src/provider/catalog_scheduler.rs
++++ b/crates/jcode-base/src/provider/catalog_scheduler.rs
+@@ -132,8 +132,32 @@
+ mod tests {
+     use super::*;
+ 
++    // Route builders in unrelated async tests also start this process-global
++    // OnceLock. Each scheduler contract needs a fresh process, not a mutex
++    // covering only these two callers. The child executes the original body.
++    fn in_fresh_scheduler_process(name: &str) -> bool {
++        const CHILD: &str = "JCODE_BENCH_SCHEDULER_FIXTURE_CHILD";
++        if std::env::var(CHILD).as_deref() == Ok(name) {
++            return false;
++        }
++        let full_name = format!("provider::catalog_scheduler::tests::{name}");
++        let output = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", &full_name, "--nocapture"])
++            .env(CHILD, name)
++            .output()
++            .expect("run isolated scheduler fixture");
++        let stdout = String::from_utf8_lossy(&output.stdout);
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        assert!(output.status.success(), "{full_name}: {stdout}\n{stderr}");
++        assert!(stdout.contains("1 passed; 0 failed"), "fixture was not selected: {stdout}");
++        true
++    }
++
+     #[test]
+     fn ensure_started_is_a_noop_without_a_runtime() {
++        if in_fresh_scheduler_process("ensure_started_is_a_noop_without_a_runtime") {
++            return;
++        }
+         // Must not panic when called from a synchronous context.
+         ensure_started();
+         assert!(SCHEDULER_STARTED.get().is_none());
+@@ -141,6 +165,9 @@
+ 
+     #[tokio::test]
+     async fn ensure_started_is_idempotent_under_a_runtime() {
++        if in_fresh_scheduler_process("ensure_started_is_idempotent_under_a_runtime") {
++            return;
++        }
+         ensure_started();
+         // A second call must not spawn another sweeper.
+         ensure_started();
