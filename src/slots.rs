@@ -1844,7 +1844,7 @@ mod tests {
         let cargo = format!(
             "#!/bin/sh\n[ \"$RUSTC\" = '{}' ] || exit 9\nprintf '%s' '{}'\n",
             tc.join("bin/rustc").display(),
-            serde_json::json!({"target_directory": expected}).to_string(),
+            serde_json::json!({"target_directory": expected}),
         );
         for (name, body) in [("cargo", cargo.as_str()), ("rustc", "#!/bin/sh\nexit 0\n")] {
             let path = tc.join("bin").join(name);
