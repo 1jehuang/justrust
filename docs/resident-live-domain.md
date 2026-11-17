@@ -442,11 +442,48 @@ identity still rejects in both modes. All 70 span tests, 23 metadata tests plus 
 doctests, and 21 interface tests pass against matching standard libraries.
 
 This is actual source/hygiene decoder reuse, not external typed-query reuse. It is
-not wired into the resident transport or Cargo defaults. Allocation-decoder state,
-full external typed ownership and query identity, ordinary demand-driven bounded
+not wired into the resident transport or Cargo defaults. Full external typed
+ownership and query identity, ordinary demand-driven bounded
 publication, mutation/error fallback acceptance and representative performance
 remain separate gates. Globally interning sources by stable ID alone is still not
 a valid replacement, and no speed improvement follows from this native test.
+
+## Native allocation decoder ownership
+
+The same native decoder bundle now owns `AllocDecodingState`, initialized once
+from the exact selected metadata's allocation index. Actual metadata decoder
+sessions use that storage, rather than constructing a fresh per-context allocation
+cache. Retention is bound to the actual `AllocMap` universe as well as the existing
+exact metadata, dependency, source and hygiene checks.
+
+Every new allocation map receives an opaque process-local monotonic identity.
+Shared domain resource views preserve it; independent maps do not. The identity
+is not a raw address, cannot be recycled by allocator address reuse, and is not a
+serialized artifact key or sufficient reuse authorization. Published decoder state
+cannot be selected or republished with a different allocation universe. A mismatch
+retires the whole scoped owner before metadata decoding, even when source-map
+ownership and metadata bytes are unchanged.
+
+The native loaded-std test demands `std::env::consts::OS` through real constant
+evaluation, checks its decoded allocation bytes against the host OS name, and
+keeps the result across two fresh compiler contexts. Enabled decoding preserves
+both the actual `AllocId` and native allocation pointer. The disabled control uses
+the same allocation map but decodes distinct allocation IDs. A third context with
+an independent allocation map is refused, and publication-budget retirement still
+refuses a third compile. These are actual decoded external allocations, not only
+synthetic bundle pointer tests.
+
+Native validation passes all 21 interface tests, 24 metadata tests and two
+metadata doctests, plus 70 middle resident tests and two lifetime doctests. Matching
+standard libraries were rebuilt normally after compiler source identity changes.
+The expected retired-owner diagnostics are caught by the negative acceptance
+checks, not suppressed or converted into successful compilations.
+
+This closes the native allocation-decoder ownership prerequisite only. External
+typed-query admission remains rejected, and default compiler/client selection is
+unchanged. No speed improvement or broad external typed reuse follows from these
+tests. Demand-driven bounded publication, complete typed identity, mutation/error
+acceptance and representative performance remain separate gates.
 
 ## Native Cargo routing boundary
 

@@ -420,15 +420,21 @@ pub struct AllocationUniverseId(u64);
 
 impl AllocationUniverseId {
     fn fresh() -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        Self(
-            NEXT.try_update(
+        // Use the compiler's portable counter for hosts without native u64 atomics.
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let mut next = NEXT.load(std::sync::atomic::Ordering::Relaxed);
+        loop {
+            let following = next.checked_add(1).expect("allocation universe identity exhausted");
+            match NEXT.compare_exchange_weak(
+                next,
+                following,
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
-                |next| next.checked_add(1),
-            )
-            .expect("allocation universe identity exhausted"),
-        )
+            ) {
+                Ok(_) => return Self(next),
+                Err(current) => next = current,
+            }
+        }
     }
 }
 
