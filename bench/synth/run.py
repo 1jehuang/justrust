@@ -46,6 +46,35 @@ def _target(st: versus.Stack, snap: str) -> Path:
     return versus.WORK / "target" / snap / st.name
 
 
+def _verified_test_time(summary, rid, cmd, cwd, measured_wall):
+    """A slow test run is not a cache miss. Unknown evidence stays suspect."""
+    if type(measured_wall) not in (int, float) or not math.isfinite(measured_wall) or measured_wall < 0:
+        return None
+    if (not isinstance(summary, dict) or not cmd or cmd[0] != "test"
+            or "--no-run" in cmd or summary.get("id") != rid
+            or summary.get("args") != cmd or summary.get("cwd") != str(cwd)
+            or summary.get("place") != "local" or type(summary.get("exit")) is not int
+            or summary["exit"] != 0):
+        return None
+    units, phases, tests = (summary.get(key) for key in ("units", "phases", "tests"))
+    if not all(isinstance(value, dict) for value in (units, phases, tests)):
+        return None
+    if (type(units.get("compiled")) is not int or units["compiled"] != 0
+            or type(units.get("fresh")) is not int or units["fresh"] <= 0
+            or type(tests.get("passed")) is not int or tests["passed"] <= 0
+            or type(tests.get("failed")) is not int or tests["failed"] != 0):
+        return None
+    values = [summary.get("wall"), *(phases.get(key) for key in
+              ("startup", "lock_wait", "compile", "build_gaps", "test_run", "tail"))]
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values):
+        return None
+    wall, startup, lock, compile_time, gaps, test_time, tail = values
+    if (compile_time != 0 or test_time > wall or abs(wall - measured_wall) > 1
+            or abs(startup + lock + compile_time + gaps + test_time + tail - wall) > 1):
+        return None
+    return test_time
+
+
 def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=None) -> dict:
     root = gen.snapshot_root(plan.snap)
     rid = suite.new_id()
@@ -68,8 +97,13 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=No
     passed = sum(int(m) for m in re.findall(r"test result: \w+\. (\d+) passed", out))
     summ = suite.JR_HOME / "runs" / rid / "summary.json"
     if st.justrust and summ.exists():  # quiet mode prints no libtest lines
-        t = json.loads(summ.read_text()).get("tests", {})
+        recorded = json.loads(summ.read_text())
+        t = recorded.get("tests", {})
         passed, r["tests_failed"] = t.get("passed", passed), t.get("failed", r["tests_failed"])
+        test_time = _verified_test_time(recorded, rid, cmd, root / plan.cwd, r["wall"])
+        if test_time is not None:
+            r["warm_rerun_evidence"] = {"record_id": rid, "compiled": 0,
+                                        "fresh": recorded["units"]["fresh"], "test_secs": test_time}
     r.update({"id": rid if st.justrust else None, "tests_passed": passed, "load_before": load,
               "foreign_rustc_before": rustc, "noisy": versus.sample_noisy(r, rustc), "log": str(log)})
     versus._mark_remote(st, r, out)
@@ -141,11 +175,17 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None, evidence=
     keep(r)
     r["pre_wall"] = pre["wall"]
     # The pre-build leaves the target dir warm for exactly these sources, so a
-    # rerun (same command, nothing edited) must be near a no-op. If it is not,
+    # rerun's BUILD (same sources, nothing edited) must be near a no-op. Tests
+    # still execute: subtract their time only when this exact local record proves
+    # zero compiled units and a complete, consistent phase accounting. Unknown,
+    # stale, remote, malformed or genuine rebuild evidence retains the strict
+    # original wall-time heuristic. The measured wall/statistics are unchanged.
+    # If the build is not near a no-op,
     # this stack's cache was invalidated by something outside the edit (the
     # synth2 run saw stock rebuild 70 s on a `build` rerun): flag the point
     # so the report can leave it out instead of crediting the other stacks.
-    if plan.point.shape.get("change") == "rerun" and not plan.edits and r["wall"] > max(5.0, 0.5 * pre["wall"]):
+    rerun_wall = r["wall"] - r.get("warm_rerun_evidence", {}).get("test_secs", 0)
+    if plan.point.shape.get("change") == "rerun" and not plan.edits and rerun_wall > max(5.0, 0.5 * pre["wall"]):
         r["suspect"] = f"rerun took {r['wall']:.1f}s after a {pre['wall']:.1f}s pre-build (cache invalidated?)"
     return r
 
