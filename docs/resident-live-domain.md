@@ -396,3 +396,40 @@ or bypassing token accounting is not a valid integration. Unsupported requests
 must take the ordinary path without replaying an already executed failing
 compilation or losing diagnostics. No Cargo routing or production default has
 been enabled by this inspection.
+
+## Bounded arithmetic retention and ordinary-work control
+
+The frozen `stable-resident-arithmetic-20261117-0124-sysroot` driver
+`7f99d546fbfea59000f1f90b02ca1b027151d831bb25560d24c19efdf8c9fdd4`
+passes the bounded one-block primitive argument/temporary arithmetic proof,
+70 native resident middle tests, and literal, same-source, guard and shipping
+module regressions. Actual cross-unrelated-file edits retain eligible arithmetic
+MIR while fresh C consumers verify the independently calculated outputs. This
+still excludes general Typeck, external crates, arbitrary control flow and
+managed Cargo routing.
+
+The positive arithmetic acceptance requests object, LLVM IR and MIR outputs.
+The separate ordinary object-only control compiles and executes correctly but
+fails strict unchanged-reuse acceptance with zero retained-query hits. Its
+original failed receipt and nested leaf receipt are preserved as
+`bench/stable-resident-arithmetic-20261117-0137-object-demand` and
+`bench/stable-resident-arithmetic-20261117-0137-object-demand-leaf-original`.
+No hit requirement was weakened and no extra query demand was added to make
+this ordinary-work control pass.
+
+Two fixed-CPU diagnostic repetitions, each `n3/items64/edits6`, retain the forced
+object/LLVM/MIR demand and rotate fresh, process-only and retained arms. Medians:
+
+| Original record suffix | Fresh | Process-only | Retained arithmetic | Retained/process-only |
+| --- | ---: | ---: | ---: | ---: |
+| `0141-a` | 22.435 ms | 12.886 ms | 13.271 ms | 1.0299x |
+| `0141-b` | 22.821 ms | 12.957 ms | 13.144 ms | 1.0145x |
+
+The original records are
+`bench/stable-resident-arithmetic-suite-20261117-0141-{a,b}`. Exact authenticated
+JSON readback, including floats, matches both unchanged originals and the
+object-only failure evidence. `bench/suite.py compare` reports fresh +1.72%,
+process-only +0.55% and retained -0.96% between repetitions, all below its 10%
+floor. Retention is 1.45–2.99% slower than process-only here, not an additional
+speedup. These are forced-output diagnostic timings, not ordinary Cargo,
+real-project, hosted, comprehensive synthetic or production-default evidence.
