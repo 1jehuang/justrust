@@ -678,6 +678,229 @@ mod tests {
     }
 
     #[test]
+    fn resident_external_decoder_retires_on_actual_dependency_mutation() {
+        use rustc_metadata::creader::CStore;
+        use rustc_metadata::resident_metadata::{
+            ExternalSourceSnapshotLimits, MetadataSnapshotLimits,
+            with_resident_external_decoder_cache,
+        };
+        use rustc_session::config::{ExternEntry, ExternLocation, Externs};
+        use rustc_session::utils::CanonicalizedPath;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                // Only this test's newly created private directory is owned here.
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let executable = std::env::current_exe().expect("native test executable");
+        let sysroot = executable
+            .ancestors()
+            .find_map(|path| {
+                let stage = path.file_name()?.to_str()?.strip_suffix("-rustc")?;
+                let number = stage.strip_prefix("stage")?;
+                if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return None;
+                }
+                Some(path.with_file_name(stage))
+            })
+            .expect("run the metadata-mutation acceptance with bootstrap x test");
+        assert!(sysroot.join("lib/rustlib").is_dir(), "build matching bootstrap libraries first");
+        let directory = std::env::temp_dir().join(format!(
+            "resident_metadata_mutation_{}_{}",
+            std::process::id(),
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir(&directory).expect("create private mutation fixture");
+        let fixture = Fixture(directory);
+        let source = fixture.0.join("dependency.rs");
+        let artifact = fixture.0.join("libresident_mutation_dep.rlib");
+        let rebuild = |revision: usize| {
+            let input = match revision {
+                0 => {
+                    "pub const TEXT: &str = \"first external allocation\"; pub fn signature() -> u8 { 1 }"
+                }
+                1 => {
+                    "pub const TEXT: &str = \"replacement external allocation is different\"; pub fn signature() -> u16 { 2 }"
+                }
+                _ => unreachable!(),
+            };
+            std::fs::write(&source, input).expect("write dependency revision");
+            let pending = fixture.0.join("replacement.rlib");
+            let stdout_path = fixture.0.join("rustc.stdout");
+            let stderr_path = fixture.0.join("rustc.stderr");
+            let mut command = Command::new(sysroot.join("bin/rustc"));
+            command
+                .current_dir(&fixture.0)
+                .arg("--sysroot")
+                .arg(&sysroot)
+                .args(["--crate-name", "resident_mutation_dep", "--crate-type", "rlib"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&pending)
+                .env("RUSTC_BOOTSTRAP", "1")
+                .stdout(Stdio::from(std::fs::File::create(&stdout_path).expect("compiler stdout")))
+                .stderr(Stdio::from(std::fs::File::create(&stderr_path).expect("compiler stderr")));
+            let description = format!("{command:?}");
+            let mut child = command.spawn().unwrap_or_else(|error| {
+                panic!("dependency compiler spawn failed: {description}: {error}")
+            });
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let timed_out = loop {
+                if child.try_wait().expect("poll dependency compiler").is_some() {
+                    break false;
+                }
+                if Instant::now() >= deadline {
+                    child.kill().expect("kill timed-out dependency compiler");
+                    break true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let status = child.wait().expect("reap dependency compiler");
+            let stdout = std::fs::read(&stdout_path).expect("read dependency compiler stdout");
+            let stderr = std::fs::read(&stderr_path).expect("read dependency compiler stderr");
+            assert!(
+                !timed_out && status.success(),
+                "dependency compiler failed: {description}\nrevision: {revision}, timeout: {timed_out}, status: {status}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            // Replace the directory entry, never truncate a still-mapped old artifact.
+            std::fs::rename(pending, &artifact).expect("replace configured extern artifact");
+        };
+        rebuild(0);
+        let make_config = || {
+            let mut config = config(0);
+            config.opts.sysroot = rustc_session::config::Sysroot::new(Some(sysroot.clone()));
+            config.opts.externs = Externs::new(std::collections::BTreeMap::from([(
+                "resident_mutation_dep".into(),
+                ExternEntry {
+                    location: ExternLocation::ExactPaths(
+                        [CanonicalizedPath::new(artifact.clone())].into_iter().collect(),
+                    ),
+                    is_private_dep: false,
+                    add_prelude: true,
+                    nounused_dep: false,
+                    force: false,
+                },
+            )]));
+            config.input = Input::Str {
+                name: FileName::Custom("resident-metadata-mutation.rs".into()),
+                input: "extern crate resident_mutation_dep; pub fn value() -> &'static str { resident_mutation_dep::TEXT }".into(),
+            };
+            config
+        };
+        let source_limits = ExternalSourceSnapshotLimits {
+            metadata: MetadataSnapshotLimits {
+                max_crates: 1024,
+                max_metadata_bytes: 512 * 1024 * 1024,
+                max_mapping_entries: 1024 * 1024,
+            },
+            max_files: 128 * 1024,
+            max_declared_source_bytes: 1024 * 1024 * 1024,
+        };
+        let decode_and_publish = |tcx: rustc_middle::ty::TyCtxt<'_>, expected: &[u8]| {
+            tcx.ensure_ok().analysis(());
+            let dependency = tcx
+                .crates(())
+                .iter()
+                .copied()
+                .find(|&cnum| tcx.crate_name(cnum).as_str() == "resident_mutation_dep")
+                .expect("loaded actual dependency");
+            let constant = tcx
+                .module_children(dependency.as_def_id())
+                .iter()
+                .find(|child| child.ident.name.as_str() == "TEXT")
+                .and_then(|child| child.res.opt_def_id())
+                .expect("exported TEXT constant");
+            let rustc_middle::mir::ConstValue::Slice { alloc_id, meta } =
+                tcx.const_eval_poly(constant).expect("actual dependency constant")
+            else {
+                panic!("TEXT must decode actual external slice memory")
+            };
+            let memory = tcx.global_alloc(alloc_id).unwrap_memory();
+            let bytes =
+                memory.inner().get_bytes_unchecked(rustc_middle::mir::interpret::alloc_range(
+                    rustc_abi::Size::ZERO,
+                    rustc_abi::Size::from_bytes(meta),
+                ));
+            assert_eq!(bytes, expected);
+            for &cnum in tcx.crates(()) {
+                tcx.import_source_files(cnum);
+            }
+            CStore::from_tcx(tcx)
+                .publish_external_decoders(tcx, source_limits)
+                .expect("publish only after importing all external sources");
+        };
+        with_resident_compiler_batch(make_config(), |batch, first| {
+            with_resident_external_decoder_cache(true, || {
+                batch.run(first, |compiler, domain| {
+                    let krate = crate::passes::parse(&compiler.sess);
+                    crate::passes::create_and_enter_global_ctxt_in_domain(
+                        compiler,
+                        domain,
+                        krate,
+                        |tcx| decode_and_publish(tcx, b"first external allocation"),
+                    )
+                    .expect("available context storage");
+                });
+                assert_eq!(rustc_metadata::resident_metadata::stats().publications, 1);
+                rebuild(1);
+                let reached_decode = std::cell::Cell::new(false);
+                let refusal = rustc_errors::catch_fatal_errors(|| {
+                    batch.run(make_config(), |compiler, domain| {
+                        let krate = crate::passes::parse(&compiler.sess);
+                        crate::passes::create_and_enter_global_ctxt_in_domain(
+                            compiler,
+                            domain,
+                            krate,
+                            |tcx| {
+                                tcx.ensure_ok().analysis(());
+                                reached_decode.set(true);
+                                decode_and_publish(
+                                    tcx,
+                                    b"replacement external allocation is different",
+                                );
+                            },
+                        )
+                        .expect("available context storage");
+                    });
+                });
+                assert!(refusal.is_err(), "changed external metadata must fatal in the same owner");
+                assert!(
+                    !reached_decode.get(),
+                    "reject mutation before decoding stale constant memory"
+                );
+                assert!(rustc_metadata::resident_metadata::stats().retired);
+            });
+        });
+        // A new SessionGlobals/domain owner may safely load the replacement metadata.
+        with_resident_compiler_batch(make_config(), |batch, first| {
+            with_resident_external_decoder_cache(true, || {
+                batch.run(first, |compiler, domain| {
+                    let krate = crate::passes::parse(&compiler.sess);
+                    crate::passes::create_and_enter_global_ctxt_in_domain(
+                        compiler,
+                        domain,
+                        krate,
+                        |tcx| {
+                            decode_and_publish(tcx, b"replacement external allocation is different")
+                        },
+                    )
+                    .expect("available context storage");
+                });
+                let stats = rustc_metadata::resident_metadata::stats();
+                assert_eq!(stats.publications, 1);
+                assert_eq!(stats.hits, 0);
+                assert!(!stats.retired);
+            });
+        });
+    }
+
+    #[test]
     fn resident_batch_keeps_project_typeck_alive_across_fresh_contexts() {
         let first = config(0);
         let second = config(1);
