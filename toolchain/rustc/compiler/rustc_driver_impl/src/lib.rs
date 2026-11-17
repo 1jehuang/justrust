@@ -107,6 +107,8 @@ mod signal_handler {
 mod resident;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod resident_cargo;
+#[cfg(target_os = "linux")]
+mod resident_proc_macro;
 
 use crate::diagnostics::{
     CantEmitMIR, RLinkEmptyVersionNumber, RLinkEncodingVersionMismatch, RLinkRustcVersionMismatch,
@@ -1882,6 +1884,20 @@ pub unsafe fn main() -> ExitCode {
     install_ctrlc_handler();
 
     let raw_args = args::raw_args(&early_dcx);
+    if raw_args.get(1).is_some_and(|arg| arg == "--jr-proc-macro-helper") {
+        if raw_args.len() != 3 || query_admission.is_some() {
+            eprintln!("jr-rustc proc-macro helper: requires one dedicated unbound socket");
+            return ExitCode::FAILURE;
+        }
+        #[cfg(target_os = "linux")]
+        // SAFETY: native main exclusively owns the validated inherited endpoint.
+        return unsafe { resident_proc_macro::run(&raw_args[2]) };
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("jr-rustc proc-macro helper: unsupported platform");
+            return ExitCode::FAILURE;
+        }
+    }
     if raw_args.get(1).is_some_and(|arg| arg == "--jr-resident-cargo") {
         if raw_args.len() != 2 || query_admission.is_some() {
             eprintln!("jr-rustc Cargo resident: requires a dedicated unbound worker");
