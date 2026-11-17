@@ -17,7 +17,13 @@ The exact driver is
 `9e42043aeb23abaa57678b3eaf40d4c0dcdd2a065b8b450f828b87842a5a1d6b`.
 Hosted gates also passed 71 source-map tests, 23 interface tests and 21 driver
 tests. A real diagnostic mismatch found by acceptance was fixed in the native
-source map, not hidden by normalizing the oracle.
+source map, not hidden by normalizing the oracle. In that correctness run the
+root worker reported RSS of 151,265,280 bytes after its first revision and
+261,533,696 bytes after its fourth. These are per-worker post-compile RSS
+observations, not retained-heap size, peak memory, or aggregate fleet memory.
+The control owner retains fresh revision contexts despite having no live typed
+cache entries yet. Resource growth is therefore an optimization requirement,
+not evidence that retained ownership alone provides useful query reuse.
 
 Build the matching stage1 compiler and standard library before interface tests
 that load external metadata. Testing a new compiler identity against the prior
