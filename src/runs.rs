@@ -230,13 +230,19 @@ pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<
 }
 
 fn resolve_id(id: Option<&str>) -> Result<String> {
-    let index = load_index();
     match id {
-        None | Some("last") => index
-            .last()
-            .map(|r| r.id.clone())
-            .context("no recorded runs"),
+        None | Some("last") => {
+            let cwd = std::env::current_dir()?;
+            let session = std::env::var("JCODE_SESSION_ID").ok();
+            let mut file = std::fs::File::open(paths::index_file()?).context("no recorded runs")?;
+            latest_in_context(&mut file, &cwd, session.as_deref())?.context(format!(
+                "no recorded runs in workspace {}{}; use `justrust runs` and an explicit run ID to inspect another context",
+                selection_workspace(&cwd).display(),
+                session.as_ref().map(|s| format!(" for session {s}")).unwrap_or_default()
+            ))
+        }
         Some(prefix) => {
+            let index = load_index();
             let m: Vec<&IndexEntry> = index.iter().filter(|r| r.id.starts_with(prefix)).collect();
             match m.len() {
                 0 => {
@@ -252,6 +258,27 @@ fn resolve_id(id: Option<&str>) -> Result<String> {
             }
         }
     }
+}
+
+fn selection_workspace(cwd: &std::path::Path) -> std::path::PathBuf {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    crate::early::workspace_root(&cwd).unwrap_or(cwd)
+}
+
+/// Implicit lookup must never report another workspace or agent's result.
+/// Explicit IDs remain global, including for old runs without session metadata.
+fn latest_in_context(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+    cwd: &std::path::Path,
+    session: Option<&str>,
+) -> std::io::Result<Option<String>> {
+    let workspace = selection_workspace(cwd);
+    Ok(read_recent_entries(reader, 1, |r| {
+        session.is_none_or(|s| r.agent_session.as_deref() == Some(s))
+            && selection_workspace(std::path::Path::new(&r.cwd)) == workspace
+    })?
+    .pop()
+    .map(|r| r.id))
 }
 
 /// Print the full saved output of a run, optionally only lines matching `grep`.
@@ -713,6 +740,57 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tail_tests {
     use super::*;
+
+    #[test]
+    fn latest_run_is_scoped_to_workspace_and_session() {
+        let dir = std::env::temp_dir().join(format!("jr-selection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("project");
+        let member = root.join("member");
+        let sibling = dir.join("project-other");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(member.join("Cargo.toml"), "[package]\n").unwrap();
+        let mut data = String::new();
+        for (id, cwd, session) in [
+            ("ours", &member, Some("agent-a")),
+            ("other-agent", &root, Some("agent-b")),
+            ("legacy", &root, None),
+            ("other-workspace", &sibling, Some("agent-a")),
+        ] {
+            data.push_str(
+                &serde_json::to_string(&IndexEntry {
+                    id: id.into(),
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    agent_session: session.map(str::to_owned),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+            data.push('\n');
+        }
+        data.push_str("incomplete concurrent append");
+        let select = |cwd: &std::path::Path, session| {
+            latest_in_context(&mut std::io::Cursor::new(data.as_bytes()), cwd, session).unwrap()
+        };
+        assert_eq!(select(&root, Some("agent-a")).as_deref(), Some("ours"));
+        assert_eq!(select(&member, Some("agent-a")).as_deref(), Some("ours"));
+        assert_eq!(
+            select(&root, Some("agent-b")).as_deref(),
+            Some("other-agent")
+        );
+        assert_eq!(select(&root, None).as_deref(), Some("legacy"));
+        assert_eq!(select(&root, Some("missing-session")), None);
+        assert_eq!(select(&dir, None), None);
+        #[cfg(unix)]
+        {
+            let alias = dir.join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert_eq!(select(&alias, Some("agent-a")).as_deref(), Some("ours"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn show_phase_coverage_explains_recorded_reasons() {
