@@ -282,6 +282,8 @@ def compare(a, b, floor=10.0, allow_compiler_change=False):
     print(CLAIM)
     for label, report in (('before', a), ('after', b)):
         print(label, json.dumps(report['expected_identity'], sort_keys=True))
+    for label, value in zip(('before', 'after'), values):
+        print(f"{label} leaf/control: {value['leaf']['median_seconds'] / value['control']['median_seconds']:.4f}x")
     for arm in ARMS:
         old, new = (v[arm]['median_seconds'] for v in values)
         delta = (new / old - 1) * 100

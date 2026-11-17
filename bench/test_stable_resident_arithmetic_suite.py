@@ -156,8 +156,13 @@ class ArithmeticSuiteTests(unittest.TestCase):
     def test_comparison_invariants_and_explicit_driver_change(self):
         with tempfile.TemporaryDirectory() as directory:
             a = self.synthetic(Path(directory))
-            with contextlib.redirect_stdout(io.StringIO()):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
                 suite.compare(a, copy.deepcopy(a))
+            for arm in suite.ARMS:
+                self.assertIn(f'{arm}: 0.010000s -> 0.010000s', output.getvalue())
+            self.assertIn('before leaf/control: 1.0000x', output.getvalue())
+            self.assertIn('after leaf/control: 1.0000x', output.getvalue())
             for key in ('boot_id', 'affinity', 'execution'):
                 b = copy.deepcopy(a)
                 b['host'][key] = 'different'
