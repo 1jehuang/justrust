@@ -668,7 +668,7 @@ fn serve_requests(
         argv.extend(args);
         let start = Instant::now();
         let mut callbacks = crate::TimePassesCallbacks::default();
-        let result = lease
+        let (result, macro_stats) = lease
             .with_current(|| -> Result<_, String> {
                 // This owner is destroyed before restoring stdio or finishing
                 // the request scheduler, including ordinary fatal diagnostics.
@@ -704,8 +704,10 @@ fn serve_requests(
                         crate::compiler_entrypoint(&argv, &mut callbacks);
                     }
                 });
+                // Observation must not change compiler diagnostics or status.
+                let macro_stats = macros.as_ref().and_then(|owner| owner.stats().ok());
                 drop(macros);
-                Ok(result)
+                Ok((result, macro_stats))
             })
             .map_err(|e| format!("scheduler selection failed: {e:?}"))??;
         let status = if result.is_ok() { 0 } else { 1 };
@@ -768,6 +770,15 @@ fn serve_requests(
             "frontend":{"graph_hits":graph.hits,"graph_misses":graph.misses,"graph_bytes":graph.retained_bytes,
                 "archive_hits":archive.hits,"archive_misses":archive.misses,"archive_bytes":archive.current_bytes,
                 "value_loads":archive.value_loads,"typeck_loads":archive.typeck_loads,"mir_loads":archive.mir_loads}});
+        if let Some(stats) = macro_stats {
+            reply["proc_macro_phases"] = json!({
+                "helper_spawns":stats.helper_spawn_count,"spawn_nanos":stats.helper_spawn_ns,
+                "loads":stats.load_count,"load_nanos":stats.load_ns,
+                "expansions":stats.expand_count,"expansion_nanos":stats.expand_ns,
+                "callbacks":stats.callback_count,"callback_input_bytes":stats.callback_input_bytes,
+                "callback_output_bytes":stats.callback_output_bytes,
+                "callback_nanos":stats.callback_ns});
+        }
         if let Some(stats) = decoder {
             reply["decoder"] = json!({"enabled":decoder_enabled,"hits":stats.hits,
                 "misses":stats.misses,"rejected":stats.rejected,

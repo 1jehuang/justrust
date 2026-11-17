@@ -111,6 +111,7 @@ class ProcMacroOracleTests(unittest.TestCase):
             self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_OWNED'], '1')
             self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_MACROS'], '1')
             self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_DECODERS'], '0')
+            self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], '0')
             path = Path(env['JR_PM_FILE'])
             self.assertEqual(path.read_text() if path.exists() else None, stage['file'])
             return record(stage)
