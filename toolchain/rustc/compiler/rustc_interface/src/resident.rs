@@ -443,7 +443,7 @@ mod tests {
             max_files: 128 * 1024,
             max_declared_source_bytes: 1024 * 1024 * 1024,
         };
-        for cache_enabled in [false, true] {
+        for (cache_enabled, retire_by_budget) in [(false, false), (true, true), (true, false)] {
             with_resident_compiler_batch(make_config(), |batch, first| {
                 with_resident_external_decoder_cache(cache_enabled, || {
                     let mut snapshots = Vec::new();
@@ -456,6 +456,26 @@ mod tests {
                         krate,
                         |tcx| {
                             tcx.ensure_ok().analysis(());
+                            // Demand an actual external allocation, not just a bundle
+                            // pointer. OS is encoded as a slice in std metadata.
+                            let std_crate = tcx.crates(()).iter().copied()
+                                .find(|&cnum| tcx.crate_name(cnum) == rustc_span::sym::std)
+                                .expect("loaded std");
+                            let mut constant = std_crate.as_def_id();
+                            for component in ["env", "consts", "OS"] {
+                                constant = tcx.module_children(constant).iter()
+                                    .find(|child| child.ident.name.as_str() == component)
+                                    .and_then(|child| child.res.opt_def_id())
+                                    .expect("std::env::consts::OS");
+                            }
+                            let rustc_middle::mir::ConstValue::Slice { alloc_id, meta } =
+                                tcx.const_eval_poly(constant).expect("external OS constant")
+                            else { panic!("OS must decode an actual slice allocation") };
+                            let memory = tcx.global_alloc(alloc_id).unwrap_memory();
+                            let bytes = memory.inner().get_bytes_unchecked(
+                                rustc_middle::mir::interpret::alloc_range(
+                                    rustc_abi::Size::ZERO, rustc_abi::Size::from_bytes(meta)));
+                            assert_eq!(bytes, std::env::consts::OS.as_bytes());
                             assert!(
                                 tcx.crates(())
                                     .iter()
@@ -573,14 +593,16 @@ mod tests {
                                     assert_eq!(stats.hits, 0);
                                 } else {
                                     assert!(stats.hits > 0, "actual constructor must select retained decoder storage");
-                                    assert_eq!(cstore.publish_external_decoders(tcx,
-                                        ExternalSourceSnapshotLimits { max_files: 0, ..source_limits }),
-                                        Err(ExternalSourceSnapshotError::FileBudget));
+                                    if retire_by_budget {
+                                        assert_eq!(cstore.publish_external_decoders(tcx,
+                                            ExternalSourceSnapshotLimits { max_files: 0, ..source_limits }),
+                                            Err(ExternalSourceSnapshotError::FileBudget));
+                                    }
                                 }
                             } else {
                                 assert_eq!(rustc_metadata::resident_metadata::stats().hits, 0);
                             }
-                            (snapshot, sources)
+                            (snapshot, sources, tcx.allocation_universe_id(), alloc_id, memory)
                         },
                     )
                     .expect("available context storage");
@@ -597,25 +619,54 @@ mod tests {
                             snapshots[0].1, snapshots[1].1,
                             "explicit native cache must preserve actual imported source allocations"
                         );
+                        assert_eq!(snapshots[0].2, snapshots[1].2);
+                        assert_eq!(
+                            snapshots[0].3, snapshots[1].3,
+                            "retained decoder must preserve actual external allocation IDs"
+                        );
+                        assert!(std::ptr::eq(snapshots[0].4.inner(), snapshots[1].4.inner()));
                         let refusal = rustc_errors::catch_fatal_errors(|| {
                             batch.run(make_config(), |compiler, domain| {
                                 let krate = crate::passes::parse(&compiler.sess);
-                                crate::passes::create_and_enter_global_ctxt_in_domain(
-                                    compiler,
-                                    domain,
-                                    krate,
-                                    |tcx| {
-                                        tcx.ensure_ok().analysis(());
-                                    },
-                                )
-                                .expect("available context storage");
+                                if retire_by_budget {
+                                    crate::passes::create_and_enter_global_ctxt_in_domain(
+                                        compiler,
+                                        domain,
+                                        krate,
+                                        |tcx| {
+                                            tcx.ensure_ok().analysis(());
+                                        },
+                                    )
+                                    .expect("available context storage");
+                                } else {
+                                    // Same SessionGlobals and SourceMap, identical std bytes,
+                                    // but an independent AllocMap. Reject before decoding an
+                                    // old allocation ID into that fresh map.
+                                    crate::passes::create_and_enter_global_ctxt(
+                                        compiler,
+                                        krate,
+                                        |tcx| {
+                                            assert_ne!(
+                                                snapshots[0].2,
+                                                tcx.allocation_universe_id()
+                                            );
+                                            tcx.ensure_ok().analysis(());
+                                        },
+                                    );
+                                }
                             })
                         });
                         assert!(
                             refusal.is_err(),
-                            "publication failure must retire the native foreign hygiene owner, not silently decode fresh"
+                            "publication failure or allocation-universe change must retire the owner, not decode stale IDs"
                         );
+                        assert!(rustc_metadata::resident_metadata::stats().retired);
                     } else {
+                        assert_eq!(snapshots[0].2, snapshots[1].2);
+                        assert_ne!(
+                            snapshots[0].3, snapshots[1].3,
+                            "disabled decoder cache must decode a fresh allocation ID"
+                        );
                         assert_ne!(
                             snapshots[0].1, snapshots[1].1,
                             "equal external metadata alone does not imply shared source allocations"

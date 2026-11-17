@@ -109,6 +109,7 @@ struct PublishedDecoders {
 #[derive(Default)]
 struct DecoderCache {
     published: Option<PublishedDecoders>,
+    allocation_universe: Option<rustc_middle::mir::interpret::AllocationUniverseId>,
     stats: ExternalDecoderCacheStats,
 }
 
@@ -241,6 +242,14 @@ impl CStore {
         DECODERS.with(|slot| {
             let mut slot = slot.borrow_mut();
             let cache = slot.as_mut().ok_or(ExternalSourceSnapshotError::Disabled)?;
+            let universe = tcx.allocation_universe_id();
+            if cache.allocation_universe.is_some_and(|retained| retained != universe) {
+                cache.published = None;
+                cache.stats.retained_entries = 0;
+                cache.retire();
+                return Err(ExternalSourceSnapshotError::Retired);
+            }
+            cache.allocation_universe = Some(universe);
             cache.publish(|| {
                 let snapshot = self.capture_external_sources(limits)?;
                 if snapshot.files.iter().any(|file| !absent_text(&file.source)) {
@@ -280,6 +289,9 @@ impl CStore {
                 return None;
             }
             let selected = cache.published.as_ref().and_then(|published| {
+                if cache.allocation_universe != Some(tcx.allocation_universe_id()) {
+                    return None;
+                }
                 let candidate = published.candidate(
                     cnum.as_u32(),
                     bytes,

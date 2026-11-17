@@ -446,6 +446,7 @@ mod tests {
                 let memory = interpret::ConstAllocation(Interned::new_unchecked(allocation));
                 let id = first.alloc_map.insert_for_test(interpret::GlobalAlloc::Memory(memory));
                 let next = domain.context_resources();
+                assert_eq!(first.alloc_map.universe_id(), next.alloc_map.universe_id());
                 drop(domain);
                 let recovered = next.alloc_map.get_for_test(id).unwrap().unwrap_memory();
                 assert!(std::ptr::eq(memory.inner(), recovered.inner()));
@@ -464,6 +465,7 @@ mod tests {
             let hir_arena = WorkerLocal::new(|_| rustc_hir::Arena::default());
             let first = GlobalCtxtResources::fresh(&arena, &hir_arena);
             let second = GlobalCtxtResources::fresh(&arena, &hir_arena);
+            assert_ne!(first.alloc_map.universe_id(), second.alloc_map.universe_id());
             let first_ty = first.interners.intern_ty(crate::ty::TyKind::Bool);
             let id =
                 first.alloc_map.insert_for_test(interpret::GlobalAlloc::TypeId { ty: first_ty });

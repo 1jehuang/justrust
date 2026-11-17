@@ -410,7 +410,30 @@ impl<'tcx> GlobalAlloc<'tcx> {
 
 pub const CTFE_ALLOC_SALT: usize = 0;
 
+/// Process-local identity of the owner that gives native `AllocId`s their meaning.
+///
+/// Equality is necessary, but not sufficient, for retaining allocation decoder state.
+/// This is deliberately not an address, so dropping and reallocating a map cannot
+/// accidentally authorize a different universe. It is not an artifact/cache key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllocationUniverseId(u64);
+
+impl AllocationUniverseId {
+    fn fresh() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(
+            NEXT.try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |next| next.checked_add(1),
+            )
+            .expect("allocation universe identity exhausted"),
+        )
+    }
+}
+
 pub(crate) struct AllocMap<'tcx> {
+    universe: AllocationUniverseId,
     /// Maps `AllocId`s to their corresponding allocations.
     // Note that this map on rustc workloads seems to be rather dense, but in miri workloads should
     // be pretty sparse. In #136105 we considered replacing it with a (dense) Vec-based map, but
@@ -432,8 +455,13 @@ pub(crate) struct AllocMap<'tcx> {
 }
 
 impl<'tcx> AllocMap<'tcx> {
+    pub(crate) fn universe_id(&self) -> AllocationUniverseId {
+        self.universe
+    }
+
     pub(crate) fn new() -> Self {
         AllocMap {
+            universe: AllocationUniverseId::fresh(),
             to_alloc: Default::default(),
             dedup: Default::default(),
             next_id: AtomicU64::new(1),
@@ -461,6 +489,12 @@ impl<'tcx> AllocMap<'tcx> {
 }
 
 impl<'tcx> TyCtxt<'tcx> {
+    /// Identifies the actual map backing native allocation IDs in this context.
+    /// Shared domain resource views return the same identity, fresh maps do not.
+    pub fn allocation_universe_id(self) -> AllocationUniverseId {
+        self.alloc_map.universe_id()
+    }
+
     /// Obtains a new allocation ID that can be referenced but does not
     /// yet have an allocation backing it.
     ///
