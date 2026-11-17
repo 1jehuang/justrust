@@ -17,7 +17,8 @@ def main():
     parser.add_argument("binary", type=Path)
     parser.add_argument("work", type=Path)
     args = parser.parse_args()
-    root = suite.prepare("desktop") / "jcode"
+    snapshot = suite.prepare("desktop")
+    root = snapshot / "jcode"
     env = dict(os.environ)
     env.update(JUSTRUST_LOCAL="1", JUSTRUST_NO_UPDATE="1",
                JUSTRUST_LOCAL_REASON="Controlled clean runner pinned runtime preflight",
@@ -38,10 +39,14 @@ def main():
         ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
         ["test", "--workspace"],
     ]
+    # Desktop has independent integration tests, including real Git fixture
+    # commits. The jcode workspace cannot substitute for Desktop acceptance.
+    commands.append(["test", "--workspace"])
     for index, command in enumerate(commands):
+        cwd = snapshot / "jcode-desktop" if index == len(commands) - 1 else root
         log = args.work / "evidence" / f"runtime-preflight-{index}.log"
         result = versus.run_counted(
-            [str(args.binary.resolve()), *command], root, env, log)
+            [str(args.binary.resolve()), *command], cwd, env, log)
         print(log.read_text(), end="", flush=True)
         if result["exit"]:
             raise SystemExit(result["exit"])

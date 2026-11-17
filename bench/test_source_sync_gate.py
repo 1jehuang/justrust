@@ -31,10 +31,12 @@ class PinnedRuntimePrerequisiteTests(unittest.TestCase):
                     ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
                     ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
                     ["test", "--workspace"],
+                    ["test", "--workspace"],
                 ]
-                self.assertEqual(argv[1:], expected[int(log.stem.rsplit("-", 1)[1])])
+                index = int(log.stem.rsplit("-", 1)[1])
+                self.assertEqual(argv[1:], expected[index])
+                self.assertEqual(cwd, work / "snapshot" / ("jcode-desktop" if index == 5 else "jcode"))
                 self.assertFalse(any("test-threads" in arg for arg in argv))
-                self.assertEqual(cwd, work / "snapshot" / "jcode")
                 self.assertEqual(env["CARGO_TARGET_DIR"], str(target))
                 self.assertEqual(env["JUSTRUST_LOCAL"], "1")
                 self.assertNotIn("JUSTRUST_REMOTE_REQUIRED", env)
@@ -53,14 +55,14 @@ class PinnedRuntimePrerequisiteTests(unittest.TestCase):
                     self.assertTrue(target.exists())
                 else:
                     runtime_check.main()
-                    self.assertEqual(execute.call_count, 5)
+                    self.assertEqual(execute.call_count, 6)
                     self.assertFalse(target.exists())
 
     def test_success_runs_whole_provider_binaries_and_workspace_before_comparison(self):
         self.exercise(0)
 
     def test_failure_blocks_measurements_and_preserves_diagnostics(self):
-        for fail_at in range(5):
+        for fail_at in range(6):
             with self.subTest(fail_at=fail_at):
                 self.exercise(101, fail_at)
 
