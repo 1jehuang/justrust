@@ -397,6 +397,32 @@ must take the ordinary path without replaying an already executed failing
 compilation or losing diagnostics. No Cargo routing or production default has
 been enabled by this inspection.
 
+### Guarded request jobserver ownership prerequisite
+
+`rustc_data_structures::jobserver::resident::RequestLease` now provides a
+separate, opt-in ownership primitive for a supplied native jobserver client.
+It reserves serial admission before acquiring an actual base token, without
+holding the admission mutex while acquisition waits. It never reconstructs a
+client from inherited environment descriptor numbers and never replaces the
+ordinary process-global client. Token acquisition may block, so the eventual
+dispatcher must arrange explicit capacity rather than treating Cargo's existing
+implicit token as a second available token.
+
+Request clients and acquired tokens retain their owner. Clean completion,
+errors and unwinding release the base token and permit another request. Ending
+a request with outstanding tracked ownership permanently closes admission;
+late acquisitions fail, and the base token stays held until that ownership is
+destroyed. Clearing a request map cannot bypass this boundary. The API exposes
+no conversion to raw clients or raw acquired tokens.
+
+This is not compiler routing: today's codegen helpers, frontend proxies and
+linker token paths still use the ordinary client. They must be migrated to
+tracked ownership before a dispatcher can use the new primitive to execute a
+resident compilation. Request-scoped cancellation, pipe/descriptor transfer,
+diagnostic forwarding, hosted admission and exact invocation/toolchain identity
+remain separate required integrations. No production compiler default changes
+follow from adding the ownership primitive.
+
 ## Bounded arithmetic retention and ordinary-work control
 
 The frozen `stable-resident-arithmetic-20261117-0124-sysroot` driver
