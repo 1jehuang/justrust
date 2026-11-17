@@ -145,6 +145,19 @@ class StatsTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             ast.validate_stats(response(warmed), initial, '1', 'miss')
 
+    def test_recovery_respects_exact_source_identity(self):
+        previous = dict(hits=2, misses=2, rejected=1, retained_entries=2, retained_estimated_bytes=160)
+        ast.validate_stats(response(dict(previous, hits=3)), previous, '1', 'recover')
+        ast.validate_stats(response(dict(previous, misses=3)), previous, '1', 'recover')
+        for update in ({}, dict(hits=3, misses=3), dict(hits=4), dict(misses=4), dict(misses=3, rejected=2)):
+            with self.subTest(update=update), self.assertRaises(AssertionError):
+                ast.validate_stats(response(dict(previous, **update)), previous, '1', 'recover')
+        kinds = {row[0]: row[-1] for row in ast.cases()}
+        self.assertEqual(kinds['unrelated-helper-edit'], 'hit')
+        self.assertEqual(kinds['unchanged'], 'hit')
+        self.assertEqual(kinds['recovery'], 'recover')
+        self.assertEqual(kinds['final-recovery'], 'recover')
+
     def test_root_only_no_helper_misses(self):
         initial = dict(hits=0, misses=1, rejected=0, retained_entries=1, retained_estimated_bytes=80)
         with self.assertRaises(AssertionError):

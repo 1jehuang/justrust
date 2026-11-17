@@ -79,14 +79,14 @@ def cases():
         ('root-body-edit', changed, helper, 19, 23, 'miss'),
         ('repeat-new-root', changed, helper, 19, 23, 'hit'),
         ('root-delimiter-error', bad, helper, None, None, 'reject'),
-        ('recovery', changed, helper, 19, 23, 'hit'),
+        ('recovery', changed, helper, 19, 23, 'recover'),
         ('root-type-error', typed_bad, helper, None, None, 'miss'),
         ('repeat-type-error', typed_bad, helper, None, None, 'hit'),
         ('root-macro-fallback', 'macro_rules! identity { ($x:expr) => { $x }; }\n' +
          changed.replace('(x ^ 19) & 255', 'identity!((x ^ 19) & 255)'), helper, 19, 23, 'reject'),
         ('root-item-attribute-fallback', changed.replace('pub fn', '#[inline] pub fn'), helper, 19, 23, 'reject'),
         ('root-attribute-fallback', '#![allow(dead_code)]\n' + changed, helper, 19, 23, 'reject'),
-        ('final-recovery', changed, helper, 19, 23, 'hit'),
+        ('final-recovery', changed, helper, 19, 23, 'recover'),
     ]
 
 
@@ -152,7 +152,13 @@ def validate_stats(response, previous, mode, kind):
             raise AssertionError('Disabled AST telemetry must be all zero')
     elif mode == '1':
         expected = 1 if kind == 'hit' else 0
-        if delta['hits'] != expected:
+        if kind == 'recover':
+            # Restoring bytes after a changed root can allocate a new SourceFile.
+            # Exact-Arc cache identity therefore permits a fresh miss or one hit,
+            # never rejection, double accounting, or skipping the root parse.
+            if delta['hits'] not in (0, 1) or delta['misses'] != 1 - delta['hits'] or delta['rejected']:
+                raise AssertionError('Recovery requires exactly one root lookup and no rejection')
+        elif delta['hits'] != expected:
             raise AssertionError('Exact root AST hit delta required: ' + str(expected))
         if kind in ('cold', 'miss') and delta['misses'] != 1:
             raise AssertionError('New root parse requires exactly one AST miss')
