@@ -520,7 +520,9 @@ fn rustc(
 
         #[cfg(target_os = "linux")]
         if let Some(launch) = compiler_unit
-            .filter(|_| !jr_resident::eligible(&rustc))
+            // Matched off/on experiments retain the same direct compiler path
+            // and suppress per-process query tickets on both candidate paths.
+            .filter(|_| !jr_resident::candidate(&rustc))
             .and_then(|id| compiler_registry.launch(&id, direct_native, receipt_schema))
         {
             rustc.jr_query_launch(launch);

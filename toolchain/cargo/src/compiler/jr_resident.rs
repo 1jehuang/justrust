@@ -4,10 +4,10 @@
 use crate::CargoResult;
 use cargo_util::ProcessBuilder;
 
-pub(super) fn eligible(cmd: &ProcessBuilder) -> bool {
+pub(super) fn candidate(cmd: &ProcessBuilder) -> bool {
     #[cfg(target_os = "linux")]
     {
-        linux::eligible(cmd)
+        linux::candidate(cmd)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -68,7 +68,7 @@ mod linux {
     ];
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-    pub(super) fn eligible(cmd: &ProcessBuilder) -> bool {
+    pub(super) fn candidate(cmd: &ProcessBuilder) -> bool {
         cmd.get_env("JUSTRUST_CARGO_RESIDENT_DIR").is_some()
             && Path::new(cmd.get_program()).is_absolute()
             && cmd.is_jr_native_compiler()
@@ -373,7 +373,11 @@ mod linux {
         stdout: &mut dyn FnMut(&str) -> CargoResult<()>,
         stderr: &mut dyn FnMut(&str) -> CargoResult<()>,
     ) -> Option<CargoResult<()>> {
-        if !eligible(cmd) {
+        if !candidate(cmd) {
+            return None;
+        }
+        if cmd.get_env("JUSTRUST_CARGO_RESIDENT").as_deref() == Some(OsStr::new("off")) {
+            trace(cmd, serde_json::json!({"event":"disabled"}));
             return None;
         }
         let started = Instant::now();
@@ -724,14 +728,36 @@ mod linux {
         }
 
         #[test]
+        fn off_control_retains_candidate_without_attempting_rpc() {
+            let mut cmd = test_command();
+            cmd.env_remove("JUSTRUST_CARGO_RESIDENT_TRACE");
+            let args = cmd.get_args().cloned().collect::<Vec<_>>();
+            let program = cmd.get_program().clone();
+            cmd.env("JUSTRUST_CARGO_RESIDENT", "off");
+            assert!(candidate(&cmd));
+            // /private intentionally does not exist. Off must not even prepare
+            // a namespace, lock, listener or worker, nor touch output callbacks.
+            assert!(
+                execute(&cmd, &mut |_| panic!("unexpected stdout"), &mut |_| panic!(
+                    "unexpected stderr"
+                ))
+                .is_none()
+            );
+            cmd.env("JUSTRUST_CARGO_RESIDENT", "on");
+            assert!(candidate(&cmd));
+            assert_eq!(cmd.get_program(), &program);
+            assert_eq!(cmd.get_args().cloned().collect::<Vec<_>>(), args);
+        }
+
+        #[test]
         fn arbitrary_compiler_launchers_are_not_probed() {
             let mut cmd = test_command();
-            assert!(eligible(&cmd));
+            assert!(candidate(&cmd));
             cmd.jr_native_compiler(false);
-            assert!(!eligible(&cmd));
+            assert!(!candidate(&cmd));
             cmd.jr_native_compiler(true);
             cmd.program("/launcher/bin/rustc");
-            assert!(!eligible(&cmd));
+            assert!(!candidate(&cmd));
         }
 
         #[test]
@@ -739,14 +765,14 @@ mod linux {
             let mut cmd = test_command();
             cmd.env("JUSTRUST_RUN_DIR", "/run/one")
                 .env("JUSTRUST_RUN_ID", "one");
-            assert!(eligible(&cmd));
+            assert!(candidate(&cmd));
             let before = effective_env(&cmd);
             cmd.env("JUSTRUST_RUN_DIR", "/run/two")
                 .env("JUSTRUST_RUN_ID", "two");
             assert_eq!(before, effective_env(&cmd));
             for variable in RECORDING {
                 cmd.env(variable, "present");
-                assert!(!eligible(&cmd), "{variable}");
+                assert!(!candidate(&cmd), "{variable}");
                 cmd.env_remove(variable);
             }
         }
@@ -784,7 +810,7 @@ mod linux {
             cmd.env("JUSTRUST_CARGO_RESIDENT_DIR", "/private");
             cmd.args(&["--jobs-backend=1", "--jobs-linker=1", "main.rs"]);
             let cmd = cmd.wrapped(Some("wrapper"));
-            assert!(!eligible(&cmd));
+            assert!(!candidate(&cmd));
         }
         #[test]
         fn effective_environment_preserves_overrides_and_removals() {
