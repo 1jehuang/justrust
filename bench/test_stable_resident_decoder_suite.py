@@ -221,7 +221,7 @@ class DecoderSuiteTests(unittest.TestCase):
             for arm in suite.ARMS:
                 self.assertIn(arm + ': ', output.getvalue())
             self.assertEqual(output.getvalue().count('decoder/processcontrol:'), 2)
-            with self.assertRaises(TypeError):
+            with self.assertRaisesRegex(ValueError, 'distinct driver SHAs'):
                 suite.compare(report, report, allow_compiler_change=True)
 
     def test_unsafe_offline_mutations_rejected(self):
@@ -283,6 +283,73 @@ class DecoderSuiteTests(unittest.TestCase):
             for floor in (-1, float('nan'), True):
                 with self.assertRaises(ValueError):
                     suite.compare(report, report, floor)
+
+    def test_explicit_compiler_change_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            before = self.synthetic(Path(directory))
+            identity = before['identity_before']
+            identity['drivers'][0]['path'] = '/attested/lib/librustc_driver.so'
+            identity['version'] = dict(status=0, stdout_b64=suite.shared.encoded(b'fixed version\n'), stderr_b64='')
+            identity['sysroot'] = dict(status=0, stdout_b64=suite.shared.encoded(b'/attested\n'), stderr_b64='')
+            before['identity_after'] = copy.deepcopy(identity)
+            after = copy.deepcopy(before)
+            # Candidate paths occur in fresh producer/consumer/owner commands,
+            # but evidence and workload paths are intentionally unchanged.
+            def candidate(value):
+                if isinstance(value, dict):
+                    return {k: candidate(v) for k, v in value.items()}
+                if isinstance(value, list):
+                    return [candidate(v) for v in value]
+                return '/candidate/bin/rustc' if value == '/attested/bin/rustc' else value
+            after = candidate(after)
+            after['expected_identity']['driver_sha256'] = '3' * 64
+            for key in ('identity_before', 'identity_after'):
+                after[key]['drivers'][0].update(path='/candidate/lib/librustc_driver.so', sha256='3' * 64)
+                after[key]['sysroot']['stdout_b64'] = suite.shared.encoded(b'/candidate\n')
+            originals = copy.deepcopy((before, after))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                suite.compare(before, after, allow_compiler_change=True)
+            self.assertIn('2' * 64, output.getvalue())
+            self.assertIn('3' * 64, output.getvalue())
+            self.assertEqual((before, after), originals)
+            with self.assertRaisesRegex(ValueError, 'different identity_before'):
+                suite.compare(before, after)
+            for value in (1, None, 'true'):
+                with self.assertRaisesRegex(ValueError, 'invalid compiler-change'):
+                    suite.compare(before, after, allow_compiler_change=value)
+            mutations = [
+                lambda r: r['expected_identity'].update(driver_sha256='4' * 64),
+                lambda r: r['expected_identity'].update(compiler_sha256='4' * 64),
+                lambda r: r['identity_after'].update(sha256='4' * 64),
+                lambda r: r['host'].update(kernel='other'),
+                lambda r: r['host'].update(affinity=[1]),
+                lambda r: r['host'].update(boot_id='00000000-0000-0000-0000-000000000002'),
+                lambda r: r['execution']['adapter_sha256'].update(stable_resident_decoder_suite='4' * 64),
+                lambda r: r['workload'].update(items=3),
+            ]
+            for mutate in mutations:
+                changed = copy.deepcopy(after)
+                mutate(changed)
+                with self.assertRaises((ValueError, AssertionError)):
+                    suite.compare(before, changed, allow_compiler_change=True)
+            # Even internally consistent changes outside allowed identity fields
+            # must fail, including launcher, version, and sysroot diagnostics.
+            for field in ('launcher', 'version', 'sysroot', 'extra'):
+                changed = copy.deepcopy(after)
+                if field == 'launcher':
+                    changed['expected_identity']['compiler_sha256'] = '4' * 64
+                for key in ('identity_before', 'identity_after'):
+                    if field == 'launcher':
+                        changed[key]['sha256'] = '4' * 64
+                    elif field == 'version':
+                        changed[key]['version']['stdout_b64'] = suite.shared.encoded(b'changed\n')
+                    elif field == 'sysroot':
+                        changed[key]['sysroot']['stderr_b64'] = suite.shared.encoded(b'warning\n')
+                    else:
+                        changed[key]['unknown'] = 'extra'
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    suite.compare(before, changed, allow_compiler_change=True)
 
     def test_mock_full_capture(self):
         with tempfile.TemporaryDirectory() as directory:

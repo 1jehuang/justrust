@@ -417,12 +417,49 @@ def validate_sessions(report):
                     require(record.get(key) == value, 'original completion mismatch: ' + key)
 
 
-def compare(a, b, floor=10.0):
+def comparison_identity(identity):
+    """Remove only attested candidate paths and the single driver digest.
+
+    Version diagnostics and every other identity field remain exact. This is
+    comparison-only normalization, never a rewrite of original receipts.
+    """
+    normalized = dict(identity)
+    require(Path(normalized.pop('path')).is_absolute(), 'nonabsolute candidate path')
+    drivers = []
+    for driver in normalized['drivers']:
+        entry = dict(driver)
+        if 'path' in entry:
+            require(Path(entry.pop('path')).is_absolute(), 'nonabsolute driver path')
+        entry.pop('sha256')
+        drivers.append(entry)
+    normalized['drivers'] = drivers
+    if 'sysroot' in normalized:
+        sysroot = dict(normalized['sysroot'])
+        data = base64.b64decode(sysroot.pop('stdout_b64'), validate=True)
+        path = data.decode('utf-8')
+        require(path.endswith('\n') and path.count('\n') == 1 and
+                Path(path[:-1]).is_absolute(), 'invalid candidate sysroot path')
+        normalized['sysroot'] = sysroot
+    return normalized
+
+
+def compare(a, b, floor=10.0, allow_compiler_change=False):
+    require(type(allow_compiler_change) is bool, 'invalid compiler-change opt-in')
     require(type(floor) in (int, float) and math.isfinite(floor) and floor >= 0, 'invalid floor')
     values = [validate(r) for r in (a, b)]
-    keys = ('workload', 'workload_sha256', 'host', 'execution', 'identity_before', 'expected_identity')
+    keys = ('workload', 'workload_sha256', 'host', 'execution')
     for key in keys:
         require(a[key] == b[key], 'comparison refuses different ' + key)
+    if allow_compiler_change:
+        require(a['expected_identity']['driver_sha256'] != b['expected_identity']['driver_sha256'],
+                'compiler-change opt-in requires distinct driver SHAs')
+        require(a['expected_identity']['compiler_sha256'] == b['expected_identity']['compiler_sha256'],
+                'compiler-change opt-in requires same launcher SHA')
+        require(comparison_identity(a['identity_before']) == comparison_identity(b['identity_before']),
+                'comparison refuses changes beyond candidate paths and driver SHA')
+    else:
+        for key in ('identity_before', 'expected_identity'):
+            require(a[key] == b[key], 'comparison refuses different ' + key)
     print(CLAIM)
     for label, report, value in zip(('before', 'after'), (a, b), values):
         print(label, json.dumps(report['expected_identity'], sort_keys=True))
