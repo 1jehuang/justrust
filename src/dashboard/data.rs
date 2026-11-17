@@ -300,27 +300,72 @@ pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
     snapshot
 }
 
-/// At most two authenticated GETs, regardless of how many runs are listed.
-/// Errors propagate so the caller can keep its previous successful snapshot.
-pub(crate) fn fetch_hosted() -> Result<HostedSnapshot> {
+/// At most two concurrent authenticated GETs, regardless of the run count.
+/// Publish account information immediately, without waiting on run history.
+pub(crate) fn fetch_hosted(
+    account_ready: impl FnOnce(crate::remote_hosted::Me),
+) -> Result<HostedSnapshot> {
     let credentials = crate::remote_hosted::creds()?;
-    let account = crate::remote_hosted::me(&credentials)?;
-    let history = (|| -> Result<Vec<RunRow>> {
-        let records = get(&credentials, "build/records?kind=run&summary=1&limit=50")?;
-        let rows = records["records"]
-            .as_array()
-            .context("hosted records response is missing records array")?;
-        Ok(rows.iter().take(50).filter_map(hosted_row).collect())
-    })();
-    let (runs, history_error) = match history {
-        Ok(runs) => (runs, None),
-        Err(error) => (Vec::new(), Some(error.to_string())),
-    };
-    Ok(HostedSnapshot {
-        account,
-        runs,
-        history_error,
+    fetch_hosted_with(
+        || crate::remote_hosted::me(&credentials),
+        || {
+            let records = get(&credentials, "build/records?kind=run&summary=1&limit=50")?;
+            let rows = records["records"]
+                .as_array()
+                .context("hosted records response is missing records array")?;
+            Ok(rows.iter().take(50).filter_map(hosted_row).collect())
+        },
+        account_ready,
+    )
+}
+
+fn fetch_hosted_with(
+    account: impl FnOnce() -> Result<crate::remote_hosted::Me>,
+    history: impl FnOnce() -> Result<Vec<RunRow>> + Send,
+    account_ready: impl FnOnce(crate::remote_hosted::Me),
+) -> Result<HostedSnapshot> {
+    std::thread::scope(|scope| {
+        let history = scope.spawn(history);
+        let account = account()?;
+        account_ready(account.clone());
+        let (runs, history_error) = match history
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("dashboard history worker panicked")))
+        {
+            Ok(runs) => (runs, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        Ok(HostedSnapshot {
+            account,
+            runs,
+            history_error,
+        })
     })
+}
+
+#[test]
+#[ignore = "uses this machine's hosted account and real network requests"]
+fn hosted_dashboard_latency_probe() {
+    for sample in 1..=3 {
+        let start = std::time::Instant::now();
+        let snapshot = fetch_hosted(|_| {
+            eprintln!(
+                "dashboard sample={sample} account_ms={}",
+                start.elapsed().as_millis()
+            )
+        })
+        .expect("authenticated dashboard refresh");
+        assert!(
+            snapshot.history_error.is_none(),
+            "{:?}",
+            snapshot.history_error
+        );
+        eprintln!(
+            "dashboard sample={sample} complete_ms={} runs={}",
+            start.elapsed().as_millis(),
+            snapshot.runs.len()
+        );
+    }
 }
 
 fn get(credentials: &crate::remote_hosted::Creds, path: &str) -> Result<Value> {
@@ -769,6 +814,65 @@ pub(crate) fn fetch_versions(last: &Versions) -> Versions {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn hosted_requests_overlap_and_account_is_published_before_history() {
+        let (started, wait_started) = std::sync::mpsc::channel();
+        let (ready, wait_ready) = std::sync::mpsc::channel();
+        let timeout = std::time::Duration::from_secs(5);
+        let snapshot = fetch_hosted_with(
+            || {
+                wait_started
+                    .recv_timeout(timeout)
+                    .expect("history starts before account completes");
+                Ok(crate::remote_hosted::Me {
+                    email: Some("account".into()),
+                    ..Default::default()
+                })
+            },
+            move || {
+                started.send(()).unwrap();
+                wait_ready
+                    .recv_timeout(timeout)
+                    .expect("account is visible before history completes");
+                Ok(vec![RunRow {
+                    id: "history".into(),
+                    ..Default::default()
+                }])
+            },
+            |account| {
+                assert_eq!(account.email.as_deref(), Some("account"));
+                ready.send(()).unwrap();
+            },
+        )
+        .unwrap();
+        assert_eq!(snapshot.runs[0].id, "history");
+        assert!(snapshot.history_error.is_none());
+    }
+
+    #[test]
+    fn hosted_history_failure_still_publishes_account() {
+        let mut published = false;
+        let snapshot = fetch_hosted_with(
+            || Ok(Default::default()),
+            || bail!("history offline"),
+            |_| published = true,
+        )
+        .unwrap();
+        assert!(published);
+        assert!(snapshot.runs.is_empty());
+        assert_eq!(snapshot.history_error.as_deref(), Some("history offline"));
+    }
+
+    #[test]
+    fn hosted_account_failure_does_not_publish_unvalidated_account() {
+        let result = fetch_hosted_with(
+            || bail!("account offline"),
+            || Ok(Vec::new()),
+            |_| panic!("failed account must not be published"),
+        );
+        assert_eq!(result.unwrap_err().to_string(), "account offline");
+    }
 
     #[test]
     fn versions_compare_the_client_with_what_the_service_names() {

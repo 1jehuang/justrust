@@ -454,6 +454,7 @@ impl State {
 
 enum Update {
     Local(Snapshot),
+    Account(crate::remote_hosted::Me),
     Hosted(Result<data::HostedSnapshot>),
     Versions(data::Versions),
     Detail(u64, Result<String>),
@@ -472,7 +473,9 @@ fn hosted_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
     let (refresh, requests) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         loop {
-            let result = data::fetch_hosted();
+            let result = data::fetch_hosted(|account| {
+                let _ = tx.send(Update::Account(account));
+            });
             if tx.send(Update::Hosted(result)).is_err() {
                 break;
             }
@@ -507,6 +510,7 @@ fn versions_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
 fn apply_updates(state: &mut State, updates: &Receiver<Update>) {
     for update in updates.try_iter() {
         match update {
+            Update::Account(account) => state.snapshot.account = Some(account),
             Update::Local(local) => {
                 state.snapshot.active = local.active;
                 state.snapshot.runs = local.runs;
@@ -1056,6 +1060,29 @@ mod tests {
         assert!(s.snapshot.account.is_some());
         assert_eq!(s.hosted_runs.len(), 1);
         assert!(s.snapshot.hosted_at.is_none());
+    }
+
+    #[test]
+    fn progressive_account_update_preserves_history_and_refresh_state() {
+        let mut state = State {
+            refreshing: true,
+            ..Default::default()
+        };
+        state.hosted_runs.push(row("previous", 1.0));
+        let (tx, rx) = mpsc::channel();
+        tx.send(Update::Account(crate::remote_hosted::Me {
+            email: Some("ready".into()),
+            ..Default::default()
+        }))
+        .unwrap();
+        apply_updates(&mut state, &rx);
+        assert_eq!(
+            state.snapshot.account.as_ref().unwrap().email.as_deref(),
+            Some("ready")
+        );
+        assert_eq!(state.hosted_runs[0].id, "previous");
+        assert!(state.refreshing);
+        assert!(state.snapshot.hosted_at.is_none());
     }
 
     #[test]
