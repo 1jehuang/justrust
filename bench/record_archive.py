@@ -186,6 +186,8 @@ def upload(path, record_id, binary="justrust"):
     restored = fetch(record_id, envelope["original_sha256"], binary)
     if restored != original:
         raise ValueError("authenticated reconstruction differs from source")
+    if read_bounded(path, MAX_ORIGINAL_BYTES) != original:
+        raise ValueError("original source changed during archival")
     return {"kind": "bench", "id": record_id,
             "original_bytes": len(original), "original_sha256": envelope["original_sha256"],
             "verified_authenticated_reconstruction": True}

@@ -112,6 +112,21 @@ class ArchiveTests(unittest.TestCase):
             with patch.object(archive, "_command", return_value=b"{}"), self.assertRaises(ValueError):
                 archive.upload(source, "receipt")
 
+    def test_source_change_during_authenticated_readback_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "original.json"
+            source.write_bytes(self.original)
+
+            def changed_fetch(*args):
+                source.write_bytes(b"concurrently changed")
+                return self.original
+
+            with patch.object(archive, "_command", return_value=b""), \
+                    patch.object(archive, "fetch", side_effect=changed_fetch):
+                with self.assertRaisesRegex(ValueError, "source changed"):
+                    archive.upload(source, "receipt")
+            self.assertEqual(source.read_bytes(), b"concurrently changed")
+
     def test_output_is_exclusive_and_only_after_verification(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "receipt"
