@@ -6,7 +6,12 @@
 //! ASCII identifiers take `ident`: NFC is the identity, and the only session
 //! mutation is SymbolGallery insertion. Decimal, nonempty, suffix-free integers
 //! take the diagnostic-free arm of `cook_lexer_literal`; their ASCII spelling
-//! cannot trigger the text-flow lint. Interning identifiers and integer spellings
+//! cannot trigger the text-flow lint. Non-doc ASCII comments likewise cannot
+//! trigger that lint and are skipped with only local spacing/lifetime updates;
+//! block comments must be terminated. Doc comments remain excluded because
+//! they produce tokens and can diagnose bare CR. Pound maps directly to a token,
+//! but a possible leading shebang is excluded independently of StripTokens.
+//! Interning identifiers and integer spellings
 //! is part of producing those output tokens, not work performed by this scan.
 //! None of these classes touches gates, raw-identifier spans, bad-Unicode maps,
 //! buffered lints, or diagnostics. Lifetime-reset bookkeeping is local and inert
@@ -29,7 +34,13 @@ pub(super) fn eligible_source(src: &str, max_bytes: usize) -> bool {
     if src.len() > max_bytes || src.len() > u32::MAX as usize {
         return false;
     }
-    if src.bytes().any(|b| !b.is_ascii() || b == b'#') {
+    if !src.is_ascii() {
+        return false;
+    }
+    // StripTokens is part of the cache key, but reject shebang candidates anyway:
+    // only the immediate inner-attribute spelling is admitted at the start.
+    // This deliberately excludes even `#! /* comment */ [` attribute spellings.
+    if src.starts_with("#!") && !src.starts_with("#![") {
         return false;
     }
 
@@ -45,6 +56,8 @@ pub(super) fn eligible_source(src: &str, max_bytes: usize) -> bool {
         }
         let accepted = match token.kind {
             TokenKind::Ident => true, // ASCII was checked before lexing.
+            TokenKind::LineComment { doc_style: None }
+            | TokenKind::BlockComment { doc_style: None, terminated: true } => true,
             TokenKind::Whitespace => {
                 text.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
             }
@@ -56,7 +69,8 @@ pub(super) fn eligible_source(src: &str, max_bytes: usize) -> bool {
                     && text.as_bytes()[0].is_ascii_digit()
                     && text.bytes().all(|b| b.is_ascii_digit() || b == b'_')
             }
-            TokenKind::Semi
+            TokenKind::Pound
+            | TokenKind::Semi
             | TokenKind::Comma
             | TokenKind::Dot
             | TokenKind::OpenParen
@@ -82,9 +96,9 @@ pub(super) fn eligible_source(src: &str, max_bytes: usize) -> bool {
             | TokenKind::Slash
             | TokenKind::Caret
             | TokenKind::Percent => true,
-            // In particular: comments (including docs), frontmatter, every
+            // In particular: doc or unterminated comments, frontmatter, every
             // other literal, lifetimes, raw/forced/invalid identifiers,
-            // unknown prefixes, guarded strings, Pound, Unknown and Eof.
+            // unknown prefixes, guarded strings, Unknown and Eof.
             // A future lexer class is denied by default.
             _ => false,
         };
@@ -116,16 +130,83 @@ mod tests {
     }
 
     #[test]
-    fn omitted_syntax_and_lexical_errors() {
+    fn ordinary_comments_and_attributes() {
         for src in [
             "#",
-            "a#b",
-            "#[test]",
-            "#!/usr/bin/env rustx\nfn main() {}",
+            "#[test] fn f() {}",
+            "#![allow(dead_code)]\nfn f() {}",
+            "#[cfg(any(test, unix))] /* gap */ fn f() {}",
             "// comment",
+            "// comment\r\nfn f() {}",
+            "// bare\rCR",
+            "//// not documentation",
+            "////! also not documentation",
+            "/**/",
+            "/***/",
+            "/**** not documentation */",
+            "/* comment */",
+            "/* outer /* nested */ end */",
+            "/* outer /*! nested doc text */ */",
+            "/* outer /** nested doc text */ */",
+            "a/* gap */+// gap\nb",
+            "// r#name foo# #\"guarded\" \u{0}",
+            "/* r#name foo# #\"guarded\" \u{0} \r */",
+        ] {
+            assert!(eligible_source(src, src.len()), "rejected {src:?}");
+            for bound in 0..src.len() {
+                assert!(!eligible_source(src, bound), "accepted over bound {bound}: {src:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn comment_and_pound_hazards_remain_rejected() {
+        for src in [
+            "/// doc\rCR",
+            "//! doc\rCR",
+            "/** doc\rCR */",
+            "/*! doc\rCR */",
+            "///",
+            "//!",
+            "/** doc */",
+            "/*! doc */",
+            "/** unclosed",
+            "/*",
+            "/***",
+            "/* /* */",
+            "/* outer /* nested */",
+            "/*/",
+            "/* valid */ /* unclosed",
+            "// ok\n/// doc",
+            "/* ok */ /*! doc */",
+            "a#b",
+            "foo#",
+            "foo\"bar\"",
+            "r#name",
+            "k#fn",
+            "#\"guarded\"#",
+            "##",
+            "#!",
+            "#! [allow(dead_code)]",
+            "#!/* gap */[allow(dead_code)]",
+            "#!/bin/rust\n#[test] fn f() {}",
+            "// unicode \u{202e}",
+            "/* unicode \u{2066} */",
+            "---\nkey: value\n---\n#[test] fn f() {}",
+        ] {
+            for bound in 0..=src.len() + 1 {
+                assert!(!eligible_source(src, bound), "accepted at bound {bound}: {src:?}");
+            }
+            assert!(!eligible_source(src, usize::MAX), "accepted {src:?}");
+        }
+    }
+
+    #[test]
+    fn omitted_syntax_and_lexical_errors() {
+        for src in [
+            "#!/usr/bin/env rustx\nfn main() {}",
             "/// doc",
             "//! doc",
-            "/* comment */",
             "/** doc */",
             "/*! doc */",
             "/* unclosed",
