@@ -395,7 +395,10 @@ mod tests {
     #[test]
     fn resident_batch_captures_actual_loaded_external_metadata() {
         use rustc_metadata::creader::CStore;
-        use rustc_metadata::resident_metadata::{MetadataSnapshotError, MetadataSnapshotLimits};
+        use rustc_metadata::resident_metadata::{
+            ExternalSourceSnapshotError, ExternalSourceSnapshotLimits, MetadataSnapshotError,
+            MetadataSnapshotLimits,
+        };
         use rustc_middle::ty::resident_compiler_identity::{
             CompilerIdentityError, FrozenSemanticInvocation, build_revision_identity,
         };
@@ -433,6 +436,11 @@ mod tests {
             max_crates: 1024,
             max_metadata_bytes: 512 * 1024 * 1024,
             max_mapping_entries: 1024 * 1024,
+        };
+        let source_limits = ExternalSourceSnapshotLimits {
+            metadata: limits,
+            max_files: 128 * 1024,
+            max_declared_source_bytes: 1024 * 1024 * 1024,
         };
         with_resident_compiler_batch(make_config(), |batch, first| {
             let mut snapshots = Vec::new();
@@ -487,6 +495,53 @@ mod tests {
                                 );
                                 snapshot
                             };
+                            // Capture must inspect existing imports, never populate them.
+                            assert_eq!(
+                                CStore::from_tcx(tcx).capture_external_sources(source_limits),
+                                Err(ExternalSourceSnapshotError::IncompleteImports)
+                            );
+                            // Explicit test setup imports every metadata source. Do not hold
+                            // a CStore guard across the hook, which acquires its own guard.
+                            for &cnum in tcx.crates(()) {
+                                tcx.import_source_files(cnum);
+                            }
+                            let sources = {
+                                let cstore = CStore::from_tcx(tcx);
+                                let sources = cstore
+                                    .capture_external_sources(source_limits)
+                                    .expect("complete actual imported source universe");
+                                assert_eq!(
+                                    sources,
+                                    cstore.capture_external_sources(source_limits).unwrap()
+                                );
+                                for (bounded, error) in [
+                                    (
+                                        ExternalSourceSnapshotLimits {
+                                            max_files: 0,
+                                            ..source_limits
+                                        },
+                                        ExternalSourceSnapshotError::FileBudget,
+                                    ),
+                                    (
+                                        ExternalSourceSnapshotLimits {
+                                            max_declared_source_bytes: 0,
+                                            ..source_limits
+                                        },
+                                        ExternalSourceSnapshotError::SourceByteBudget,
+                                    ),
+                                ] {
+                                    assert_eq!(
+                                        cstore.capture_external_sources(bounded),
+                                        Err(error)
+                                    );
+                                }
+                                assert_eq!(
+                                    sources,
+                                    cstore.capture_external_sources(source_limits).unwrap(),
+                                    "budget rejection must not mutate imported sources"
+                                );
+                                sources
+                            };
                             assert!(matches!(
                                 build_revision_identity(
                                     tcx,
@@ -503,7 +558,7 @@ mod tests {
                                 ),
                                 Err(CompilerIdentityError::UnsupportedExternalCrates)
                             ));
-                            snapshot
+                            (snapshot, sources)
                         },
                     )
                     .expect("available context storage");
@@ -514,7 +569,11 @@ mod tests {
             }
             // These owned values survive their original contexts. Equal inputs do
             // not authorize external DefId/source/interner or typed query reuse.
-            assert_eq!(snapshots[0], snapshots[1]);
+            assert_eq!(snapshots[0].0, snapshots[1].0);
+            assert_ne!(
+                snapshots[0].1, snapshots[1].1,
+                "equal external metadata does not imply shared imported source allocations"
+            );
         });
     }
 

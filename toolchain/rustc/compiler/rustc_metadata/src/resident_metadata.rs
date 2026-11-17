@@ -442,12 +442,28 @@ mod tests {
             max_files: usize::MAX,
             max_declared_source_bytes: usize::MAX,
         };
+        let mut overflowing_files = usize::MAX;
+        let mut overflowing_bytes = usize::MAX;
         assert_eq!(
-            validate_source_inputs(1, 1, &[Some(imported(0))], unlimited, &mut usize::MAX, &mut 0),
+            validate_source_inputs(
+                1,
+                1,
+                &[Some(imported(0))],
+                unlimited,
+                &mut overflowing_files,
+                &mut 0
+            ),
             Err(FileBudget)
         );
         assert_eq!(
-            validate_source_inputs(1, 1, &[Some(imported(0))], unlimited, &mut 0, &mut usize::MAX),
+            validate_source_inputs(
+                1,
+                1,
+                &[Some(imported(0))],
+                unlimited,
+                &mut 0,
+                &mut overflowing_bytes
+            ),
             Err(SourceByteBudget)
         );
         let zero = ExternalSourceSnapshotLimits {
