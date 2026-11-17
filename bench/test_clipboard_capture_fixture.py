@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import suite
-from test_login_event_fixture import copy_acceptance_snapshot
+from test_login_event_fixture import copy_acceptance_snapshot, assert_registered_sources_match
 
 PATCH = 'bench/patches/jcode-clipboard-capture-fixture-v1.patch'
 SOURCE = 'crates/jcode-tui/src/tui/app/helpers.rs'
@@ -169,6 +169,8 @@ def acceptance(directory, full=False):
     (repo / TEST).write_text(test)
     (repo / SOURCE).write_text(helper)
     if full:
+        (repo / SOURCE).write_bytes((snapshot / 'jcode' / SOURCE).read_bytes())
+        assert_registered_sources_match(snapshot, diagnostics)
         for _ in range(2):
             print('FULL PINNED TUI ACCEPTANCE', flush=True)
             run(['-p', 'jcode-tui', '--lib'])

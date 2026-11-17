@@ -63,6 +63,19 @@ def copy_acceptance_snapshot(snapshot, diagnostics):
     shutil.copytree(snapshot, diagnostics, ignore=shutil.ignore_patterns('target'))
 
 
+def assert_registered_sources_match(snapshot, diagnostics):
+    """Reject additive controls, lost prior overlays, or a different pinned HEAD."""
+    for name in ('jcode', 'jcode-desktop'):
+        expected = snapshot / name
+        actual = diagnostics / name
+        paths = subprocess.check_output(['git', '-C', str(expected), 'ls-tree', '-r', '--name-only', 'HEAD'], text=True).splitlines()
+        mismatch = [path for path in paths if (expected / path).read_bytes() != (actual / path).read_bytes()]
+        if mismatch:
+            raise RuntimeError(f'acceptance source differs from registered {name}: {mismatch}')
+        if subprocess.check_output(['git', '-C', str(expected), 'rev-parse', 'HEAD']) != subprocess.check_output(['git', '-C', str(actual), 'rev-parse', 'HEAD']):
+            raise RuntimeError(f'acceptance pinned Git HEAD differs: {name}')
+
+
 class LoginEventFixture(unittest.TestCase):
     def test_diagnostic_snapshot_preserves_exact_git_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -206,6 +219,7 @@ def acceptance(directory, full=False):
     (repo / TEST).write_text(corrected_test)
     (repo / BUS).write_text(corrected_bus)
     if full:
+        assert_registered_sources_match(snapshot, diagnostics)
         for arguments in (['-p', 'jcode-tui', '--lib'], ['-p', 'jcode-tui', '--lib'], ['--workspace'], ['--workspace']):
             print('FULL PINNED FIXTURE ACCEPTANCE', arguments, flush=True)
             run(arguments)

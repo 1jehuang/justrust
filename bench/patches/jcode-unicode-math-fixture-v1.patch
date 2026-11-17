@@ -1,0 +1,12 @@
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs
+@@ -1590,3 +1590,4 @@
+ #[test]
+ fn test_unicode_math_copy_badge_copies_latex_to_clipboard() {
++    crate::tui::mermaid::with_image_protocol_override(Some(false), || {
+     let _render_lock = scroll_render_test_lock();
+@@ -1603,3 +1604,4 @@
+         Some("$$\n\\frac{\\partial L}{\\partial \\theta_{88}} = \\theta^\\top x\n$$")
+     );
++    });
+ }

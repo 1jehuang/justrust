@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import suite
-from test_login_event_fixture import copy_acceptance_snapshot
+from test_login_event_fixture import copy_acceptance_snapshot, assert_registered_sources_match
 
 PATCH = 'bench/patches/jcode-auth-reader-fixtures-v1.patch'
 PATCH_SHA = '03a6d99d68e201e5fca55bc11a363222c9f7bb55ebd20dfcb5828b7a978308fc'
@@ -170,6 +170,11 @@ fn CONTROL() {
         run(['-p', 'jcode-tui', '--lib', name], 101, assertion)
         (repo / source).write_text(after[source])
     if full:
+        # Full acceptance measures the entire registered overlay stack, not a
+        # raw-file reconstruction that could discard an earlier fixture fix.
+        for source in INPUTS:
+            (repo / source).write_bytes((snapshot / 'jcode' / source).read_bytes())
+        assert_registered_sources_match(snapshot, diagnostics)
         failures = []
         commands = [('jcode', ['-p', 'jcode-tui', '--lib'])] * 2
         commands += [(name, ['--workspace']) for name in ('jcode', 'jcode-desktop') for _ in range(2)]

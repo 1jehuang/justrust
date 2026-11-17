@@ -470,6 +470,70 @@ waited on another build's target lock, so these are correctness results, not
 performance evidence. The remaining badge contamination still blocks broad
 acceptance and is not concealed by these narrow ownership corrections.
 
+### Pinned Unicode-math terminal capability ownership
+
+The residual badge failure was not another clipboard mismatch. A disposable
+`catch_unwind` wrapper printed the original panic payload directly to stderr,
+without installing or modifying any global panic hook. Under the exact
+`jcode-isolated-v4` context, `20261117-035250804-1318635` failed the original first
+assertion, `math frame should get a badge`, and showed `↻ rendering math...`.
+The wrapper was removed after diagnosis. Earlier inherited-context diagnostic
+runs were not gate-equivalent evidence and do not establish new gate failures.
+
+Sibling pinned tests legitimately enable the process-global video-export image
+capability. With a real installed TeX toolchain and a cold private cache, the
+Unicode fixture then requests an asynchronous image instead of the Unicode math
+frame it intends to exercise. The original test never owned its terminal
+capability. `jcode-unicode-math-fixture-v1.patch` wraps only that one test in the
+already-existing thread-local `with_image_protocol_override(Some(false), ...)`
+helper. Every original statement and assertion is byte-identical inside that
+scope. No production renderer, scheduling, clipboard behavior, protocol helper,
+assertion, test count, or thread count changes. Strict original input and
+versioned patch hashes feed the shared snapshot identity.
+
+A real `set_video_export_mode(true)` call from a second thread deterministically
+causes the original missing-badge assertion (`20261117-035638741-1409204`). The
+identical global contamination passes all original assertions with the narrow
+scope (`20261117-035722823-1411251`). An incorrect clipboard write from the owning
+thread still fails the original exact LaTeX assertion
+(`20261117-035731416-1411725`). All three controls completed before registration.
+They run only in disposable snapshots, with pinned Git metadata preserved and
+stock Rust 1.99.0 under a verified isolated-v4 child HOME.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_unicode_math_fixture
+python3 bench/test_unicode_math_fixture.py --accept "$JCODE_SCRATCH_DIR/unicode-math-controls" --full
+```
+
+The full mode removes all additive controls and requires two clean normal-
+parallel TUI runs and two clean runs of each pinned workspace. It gathers every
+failure, rejects automatic isolated retries, and makes no speedup claim.
+
+A final tracked-source audit caught an acceptance-harness error before treating
+the first combined loop as valid: reconstructing this whole file from the raw
+pin had discarded earlier registered fixture wrappers in other tests. That loop
+is not exact registered-source acceptance, regardless of its individual passes.
+The corrected controls retain the prepared file and add/remove only the two
+Unicode capability scope lines. All owned full acceptance harnesses now restore
+the complete registered overlay stack and verify every tracked source byte and
+both pinned Git HEADs before full tests. Regressions reject a lost prior overlay
+or changed HEAD. Earlier auth-reading diagnostics likewise must not substitute
+for this final exact-stack verification.
+
+The corrected harness then verified every tracked source byte and both pinned
+HEADs before and after six stock-1.99.0 acceptance commands on registered
+snapshot `bf59101d35b8`. Both full TUI repeats passed cleanly with no retries
+(`20261117-040646055-1694119`, `20261117-040723904-1735753`). Both desktop workspace
+repeats passed all 1,755 tests without retries (`20261117-041151510-1932280`,
+`20261117-041242634-1958438`). The second full jcode workspace passed all 8,936
+tests without retries (`20261117-041109733-1873022`). The first
+(`20261117-040755830-1777054`) required isolated retries of two SDK authentication
+process fixtures: both had reported `JcodeNotFound` while starting their local
+login executable. The strict full harness returned failure for that remaining
+independent blocker. Thus the Unicode and login fixture corrections have clean
+repeated TUI acceptance, but this run does not establish clean repeated full
+workspace acceptance or a valid performance comparison.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in
