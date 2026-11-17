@@ -544,6 +544,71 @@ mod revision_loader_tests {
         assert_eq!(sm.active_source_files().unwrap().unwrap()[0].0, 0);
     }
 
+    fn imported_fixture(sm: &SourceMap, text: &str) -> Arc<SourceFile> {
+        let source = SourceFile::new(
+            FileName::anon_source_code(text),
+            text.into(),
+            sm.hash_kind,
+            sm.checksum_hash_kind,
+        )
+        .unwrap();
+        sm.new_imported_source_file(
+            source.name,
+            source.src_hash,
+            source.checksum_hash,
+            source.stable_id,
+            source.normalized_source_len.to_u32(),
+            source.unnormalized_source_len,
+            CrateNum::ZERO,
+            FreezeLock::new(source.lines.read().clone()),
+            source.multibyte_chars,
+            source.normalized_pos,
+            0,
+        )
+    }
+
+    #[test]
+    fn native_imported_activation_preserves_sparse_identity_and_is_atomic() {
+        let (sm, _) = setup();
+        let local = sm.new_source_file(FileName::anon_source_code("local"), "local".into());
+        let imported = imported_fixture(&sm, "foreign");
+        let (other, _) = setup();
+        let foreign_map = imported_fixture(&other, "foreign");
+        // Ordinary loading remains ordinary, but foreign ownership still rejects.
+        sm.activate_resident_imported_sources(&[imported.clone()]).unwrap();
+        assert!(sm.active_source_files().unwrap().is_none());
+        assert!(sm.activate_resident_imported_sources(&[foreign_map.clone()]).is_err());
+        {
+            let _revision = sm.begin_resident_source_revision(0, 0, 2).unwrap();
+            assert!(
+                sm.activate_resident_imported_sources(&[imported.clone(), foreign_map]).is_err()
+            );
+            assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+            assert!(sm.activate_resident_imported_sources(&[imported.clone(), local]).is_err());
+            assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+            sm.activate_resident_imported_sources(&[imported.clone(), imported.clone()]).unwrap();
+            let active = sm.active_source_files().unwrap().unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].0, 1);
+            assert!(Arc::ptr_eq(&active[0].1, &imported));
+            assert_eq!(sm.files().len(), 2);
+        }
+        assert!(sm.activate_resident_imported_sources(&[imported]).is_err());
+    }
+
+    #[test]
+    fn native_imported_activation_rejects_shadowed_and_poisoned_sources() {
+        let (sm, _) = setup();
+        let old = imported_fixture(&sm, "same");
+        let current = imported_fixture(&sm, "same");
+        assert_eq!(old.stable_id, current.stable_id);
+        let _revision = sm.begin_resident_source_revision(1, 8, 1).unwrap();
+        assert!(sm.activate_resident_imported_sources(&[old]).is_err());
+        assert!(sm.active_source_files().unwrap().unwrap().is_empty());
+        assert!(sm.load_file(Path::new("missing.rs")).is_err());
+        assert!(sm.activate_resident_imported_sources(&[current]).is_err());
+    }
+
     #[test]
     fn native_active_view_is_disabled_for_fresh_and_standalone_loading() {
         let (sm, disk) = setup();
@@ -1076,6 +1141,51 @@ impl SourceMap {
         Ok(Some(
             active.iter().map(|&index| (index, Arc::clone(&files.source_files[index]))).collect(),
         ))
+    }
+
+    /// Mark already-owned imported files as current without allocating replacements.
+    /// This only records activity after the decoder has independently validated
+    /// its exact metadata/dependency universe. It is not reuse authorization.
+    /// Validate the whole input before changing the active sparse index set.
+    pub fn activate_resident_imported_sources(
+        &self,
+        sources: &[Arc<SourceFile>],
+    ) -> io::Result<()> {
+        let resident = self.resident_source.lock();
+        if resident.enabled && (!resident.active || resident.failed || resident.state.is_none()) {
+            return Err(io::Error::other(
+                "resident source revision is inactive, loading or poisoned",
+            ));
+        }
+        let mut files = self.files.borrow_mut();
+        for source in sources {
+            let index =
+                files.source_files.partition_point(|file| file.start_pos < source.start_pos);
+            if !matches!(&*source.external_src.read(), ExternalSource::Foreign { .. })
+                || !files.source_files.get(index).is_some_and(|file| Arc::ptr_eq(file, source))
+                || !files
+                    .stable_id_to_source_file
+                    .get(&source.stable_id)
+                    .is_some_and(|file| Arc::ptr_eq(file, source))
+            {
+                return Err(io::Error::other(
+                    "imported source is not the current allocation in this source map",
+                ));
+            }
+        }
+        if resident.enabled {
+            if files.active_source_files.is_none() {
+                return Err(io::Error::other(
+                    "resident source revision has no active source-file view",
+                ));
+            }
+            for source in sources {
+                let index =
+                    files.source_files.partition_point(|file| file.start_pos < source.start_pos);
+                files.active_source_files.as_mut().unwrap().insert(index);
+            }
+        }
+        Ok(())
     }
 
     /// Copy exact frozen raw inputs, without rereading the filesystem. The byte
