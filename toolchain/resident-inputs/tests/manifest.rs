@@ -187,8 +187,108 @@ fn tampered_manifest_and_serialization_budget() {
     let invalid: Manifest = serde_json::from_value(value.clone()).unwrap();
     assert!(invalid.verify().is_err());
     assert!(invalid.key().is_err());
-    value["schema"] = 1.into();
+    value["schema"] = jr_resident_inputs::SCHEMA.into();
     value["files"][0]["hash"] = "x".repeat(1 << 20).into();
     let invalid: Manifest = serde_json::from_value(value).unwrap();
     assert!(invalid.verify().unwrap_err().contains("budget"));
+}
+
+#[test]
+fn native_static_content_and_membership_are_exact() {
+    let f = Fixture::new();
+    fs::create_dir(f.0.join("native")).unwrap();
+    f.file("native/libfoo.a", b"!<arch>\nbody-one");
+    f.file("native/build-note", b"one");
+    let args = ["-L", "native=native"];
+    let a = f.get(&args).unwrap().unwrap();
+    assert!(a.directories().any(|p| p == f.0.join("native")));
+    assert!(a.files().any(|p| p == f.0.join("native/libfoo.a")));
+    let key = a.key().unwrap();
+    let path = f.0.join("native/libfoo.a");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    f.file("native/libfoo.a", b"!<arch>\nbody-two");
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert!(a.verify().is_err());
+    assert_ne!(key, f.get(&args).unwrap().unwrap().key().unwrap());
+    let b = f.get(&args).unwrap().unwrap();
+    f.file("native/build-note", b"two");
+    assert!(b.verify().is_err());
+    let c = f.get(&args).unwrap().unwrap();
+    f.file("native/libadded.a", b"!<arch>\n");
+    assert!(c.verify().is_err());
+    let d = f.get(&args).unwrap().unwrap();
+    fs::remove_file(f.0.join("native/libadded.a")).unwrap();
+    assert!(d.verify().is_err());
+    let e = f.get(&args).unwrap().unwrap();
+    let decoded: Manifest = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+    decoded.verify().unwrap();
+    assert_eq!(e, decoded);
+}
+
+#[test]
+fn native_unsupported_inputs_fail_closed() {
+    for (name, bytes) in [
+        ("libfoo.so", b"dynamic".as_slice()),
+        ("libfoo.so.1", b"dynamic"),
+        ("libfoo.dylib", b"dynamic"),
+        ("libfoo.dll", b"dynamic"),
+        ("libfoo.lib", b"import"),
+        ("libfoo.a", b"!<thin>\nexternal"),
+        ("libfoo.a", b"INPUT(/outside/archive.a)"),
+    ] {
+        let f = Fixture::new();
+        fs::create_dir(f.0.join("native")).unwrap();
+        f.file(&format!("native/{name}"), bytes);
+        assert!(f.get(&["-Lnative=native"]).is_err(), "{name}");
+    }
+    let f = Fixture::new();
+    fs::create_dir_all(f.0.join("native/nested")).unwrap();
+    assert!(f.get(&["-Lnative=native"]).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_symlinks_and_post_capture_replacement_rejected() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    fs::create_dir(f.0.join("native")).unwrap();
+    f.file("native/libfoo.a", b"!<arch>\n");
+    let a = f.get(&["-Lnative=native"]).unwrap().unwrap();
+    fs::remove_file(f.0.join("native/libfoo.a")).unwrap();
+    symlink(f.0.join("direct.rlib"), f.0.join("native/libfoo.a")).unwrap();
+    assert!(a.verify().is_err());
+    assert!(f.get(&["-Lnative=native"]).is_err());
+    symlink(f.0.join("native"), f.0.join("alias")).unwrap();
+    assert!(f.get(&["-Lnative=alias"]).is_err());
+    assert!(f.get(&["-Lnative=alias/../native"]).is_err());
+}
+
+#[test]
+fn native_budgets_and_empty_directory_membership() {
+    let f = Fixture::new();
+    fs::create_dir(f.0.join("native")).unwrap();
+    let a = f.get(&["-Lnative=native"]).unwrap().unwrap();
+    f.file("native/note", b"");
+    assert!(a.verify().is_err());
+    let large = fs::File::create(f.0.join("native/large.o")).unwrap();
+    large.set_len(MAX_TOTAL_BYTES + 1).unwrap();
+    assert!(
+        f.get(&["-Lnative=native"])
+            .unwrap_err()
+            .contains("byte budget")
+    );
+    fs::remove_file(f.0.join("native/large.o")).unwrap();
+    for i in 0..MAX_FILES {
+        f.file(&format!("native/note{i}"), b"");
+    }
+    assert!(
+        f.get(&["-Lnative=native"])
+            .unwrap_err()
+            .contains("file budget")
+    );
 }

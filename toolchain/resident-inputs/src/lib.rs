@@ -6,7 +6,7 @@ use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 pub const MAX_FILES: usize = 2048;
 pub const MAX_TOTAL_BYTES: u64 = 1 << 30;
 pub const MAX_MANIFEST_BYTES: usize = 1 << 20;
@@ -17,6 +17,7 @@ pub struct Manifest {
     schema: u32,
     externs: Vec<PathBuf>,
     directories: Vec<PathBuf>,
+    native_directories: Vec<PathBuf>,
     files: Vec<Input>,
 }
 
@@ -35,7 +36,10 @@ impl Manifest {
     }
 
     pub fn directories(&self) -> impl Iterator<Item = &Path> {
-        self.directories.iter().map(PathBuf::as_path)
+        self.directories
+            .iter()
+            .chain(&self.native_directories)
+            .map(PathBuf::as_path)
     }
 
     /// Returns a content identity only after validating this manifest against disk.
@@ -50,7 +54,12 @@ impl Manifest {
             return Err("unsupported or empty manifest".into());
         }
         self.encoded()?;
-        if snapshot(self.externs.clone(), self.directories.clone())? != *self {
+        if snapshot(
+            self.externs.clone(),
+            self.directories.clone(),
+            self.native_directories.clone(),
+        )? != *self
+        {
             return Err("dependency inputs changed".into());
         }
         Ok(())
@@ -145,16 +154,21 @@ pub fn capture(args: &[String], cwd: &Path) -> Result<Option<Manifest>, String> 
         paths.push(path);
     }
     let mut dirs = Vec::new();
+    let mut native_dirs = Vec::new();
     for value in searches {
-        let path = value
-            .strip_prefix("dependency=")
-            .ok_or("unsupported library search kind")?;
+        let (path, target) = if let Some(path) = value.strip_prefix("dependency=") {
+            (path, &mut dirs)
+        } else if let Some(path) = value.strip_prefix("native=") {
+            (path, &mut native_dirs)
+        } else {
+            return Err("unsupported library search kind".into());
+        };
         if path.is_empty() {
-            return Err("empty dependency search path".into());
+            return Err("empty library search path".into());
         }
-        dirs.push(normalize(&cwd.join(path))?);
+        target.push(normalize(&cwd.join(path))?);
     }
-    snapshot(paths, dirs).map(Some)
+    snapshot(paths, dirs, native_dirs).map(Some)
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, String> {
@@ -192,23 +206,40 @@ fn rust_artifact(path: &Path) -> bool {
     )
 }
 
-fn membership(dirs: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+fn membership(dirs: &[PathBuf], native_dirs: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
     let mut paths = BTreeSet::new();
-    for dir in dirs {
+    let mut entries = 0usize;
+    for (dir, native) in dirs
+        .iter()
+        .map(|d| (d, false))
+        .chain(native_dirs.iter().map(|d| (d, true)))
+    {
         if normalize(dir)? != *dir || !fs::metadata(dir).map_err(|e| e.to_string())?.is_dir() {
             return Err("invalid dependency directory".into());
         }
         for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            entries += 1;
+            if entries > MAX_FILES {
+                return Err("file budget exceeded (directory entries)".into());
+            }
             let entry = entry.map_err(|e| e.to_string())?;
             let kind = entry.file_type().map_err(|e| e.to_string())?;
             if kind.is_symlink() {
                 return Err("symlink in dependency directory".into());
             }
             let path = entry.path();
-            if path.extension().is_some_and(|x| x == "so") {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or("non UTF-8 directory entry")?;
+            if matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("so" | "dylib" | "dll" | "lib")
+            ) || name.contains(".so.")
+            {
                 return Err("dynamic/proc-macro dependency closure unsupported".into());
             }
-            if rust_artifact(&path) {
+            if native || rust_artifact(&path) {
                 if !kind.is_file() {
                     return Err("nonregular Rust artifact".into());
                 }
@@ -242,15 +273,21 @@ fn unchanged(a: &Metadata, b: &Metadata) -> bool {
     }
 }
 
-fn snapshot(mut externs: Vec<PathBuf>, mut directories: Vec<PathBuf>) -> Result<Manifest, String> {
+fn snapshot(
+    mut externs: Vec<PathBuf>,
+    mut directories: Vec<PathBuf>,
+    mut native_directories: Vec<PathBuf>,
+) -> Result<Manifest, String> {
     externs.sort();
     externs.dedup();
     directories.sort();
     directories.dedup();
-    if externs.len() > MAX_FILES || directories.len() > MAX_FILES {
+    native_directories.sort();
+    native_directories.dedup();
+    if externs.len() > MAX_FILES || directories.len() + native_directories.len() > MAX_FILES {
         return Err("input budget exceeded".into());
     }
-    let members = membership(&directories)?;
+    let members = membership(&directories, &native_directories)?;
     let mut paths = members.clone();
     for path in &externs {
         if !rust_artifact(path) || normalize(path)? != *path {
@@ -276,6 +313,21 @@ fn snapshot(mut externs: Vec<PathBuf>, mut directories: Vec<PathBuf>) -> Result<
         let mut file = File::open(&path).map_err(|e| e.to_string())?;
         if !unchanged(&before, &file.metadata().map_err(|e| e.to_string())?) {
             return Err("input raced open".into());
+        }
+        // Thin archives and linker scripts can reference files outside the closure.
+        // Only self-contained ar archives are admitted as native static libraries.
+        if native_directories
+            .iter()
+            .any(|dir| path.parent() == Some(dir.as_path()))
+            && path.extension().is_some_and(|ext| ext == "a")
+        {
+            let mut magic = [0u8; 8];
+            file.read_exact(&mut magic).map_err(|e| e.to_string())?;
+            if &magic != b"!<arch>\n" {
+                return Err("non-self-contained native archive unsupported".into());
+            }
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         }
         let mut hasher = blake3::Hasher::new();
         let mut bytes = 0u64;
@@ -303,7 +355,7 @@ fn snapshot(mut externs: Vec<PathBuf>, mut directories: Vec<PathBuf>) -> Result<
         });
         observed.push((path, after));
     }
-    if membership(&directories)? != members {
+    if membership(&directories, &native_directories)? != members {
         return Err("dependency membership changed during capture".into());
     }
     for (path, metadata) in observed {
@@ -319,6 +371,7 @@ fn snapshot(mut externs: Vec<PathBuf>, mut directories: Vec<PathBuf>) -> Result<
         schema: SCHEMA,
         externs,
         directories,
+        native_directories,
         files,
     };
     manifest.encoded()?;
