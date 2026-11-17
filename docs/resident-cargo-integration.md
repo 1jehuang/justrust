@@ -133,12 +133,64 @@ inside an already selected worker. The ordinary recording path is unchanged.
 Shim per-invocation phase telemetry is unavailable in this experiment and must
 be reported as unavailable, not zero work.
 
+## Focused actual-client timing gate, 2026-11-17
+
+The new `bench/suite.py stable-native-cargo` adapter measures the actual explicit
+`justrust cargo test` invocation above, not a standalone compiler RPC. Component
+SHA-256 attestations are checked before executing the candidates. The adapter
+preserves the existing correctness helper and all its stage, nonce, worker,
+error-recovery and wrapper-fallback checks. It counterbalances off/on order,
+uses independent target directories, records effective credential-filtered
+invocation environments and hashes all transport helpers. Root suite dispatch
+rejects mixed workloads, changed component candidates and synthetic-gate claims.
+The integrated Python regression selection passed 45 tests.
+
+Two matched four-repetition captures ran on the authenticated guest with CPU
+affinity `[3]` and Linux boot ID `19c7b35b-caff-4dec-9124-7d476ae182cd`.
+The guest was checked for competing rustc/Cargo/Python processes before the
+initial diagnostic. No overlapping guest workload was started by this lane.
+Each successful stage executes six named tests: five shipping-module tests and
+the nonce probe already defined by the correctness helper. Timings include the real
+client, Cargo, compilation and test execution. They exclude the separate
+wrapper-fallback and initial/cached stages from the reported edit-stage medians.
+
+| Stage | Replica A off / on, ms | Replica B off / on, ms |
+| --- | --- | --- |
+| Body edit | 511.921 / 503.755 | 510.417 / 499.753 |
+| Recovery after error | 480.786 / 470.454 | 477.266 / 465.314 |
+| Forced same-source build | 476.866 / 469.394 | 476.247 / 464.606 |
+
+These are modest scoped observations: the enabled medians are approximately
+1.6–2.5% below their disabled counterparts. They do not establish a general
+compile-time speedup, statistical significance, or a tenfold improvement.
+The strict `bench/suite.py compare` accepted identical candidate, workload,
+helper, effective-environment, boot and affinity provenance. Enabled stage
+medians differed by about 0.8–1.1% between replicas, below the 10% comparison
+floor. This floor reports drift, not proof of benefit or a promotion threshold.
+
+Original account-private records:
+
+```text
+justrust records show bench stable-resident-cargo-suite-20261117-0428-diagnostic
+justrust records show bench stable-resident-cargo-suite-20261117-0428-a
+justrust records show bench stable-resident-cargo-suite-20261117-0428-b
+```
+
+The raw source snapshots, trace streams and receipts were transferred without
+rewriting the generated originals. Authenticated readback verified exact JSON
+equality, including floats, for all three records, with original bytes unchanged.
+Build artifacts remain on the guest rather
+than being included in the local evidence transfer. This remains the narrow
+std-only library fixture, not the dependency-heavy client crate or the complete
+session-weighted synthetic gate. No installed client or default was changed.
+
 ## Performance status and next gate
 
-No tenfold, whole-project, general compile-time or production-default speedup
-has been established. `rj0335` is correctness/integration evidence, not a pinned
-`bench/suite.py` performance comparison. Concurrent hosted correctness activity
-also makes it unsuitable for a performance claim. No default was promoted.
+The focused gate above adds actual-client timing evidence, but no tenfold,
+whole-project, general compile-time or production-default speedup has been
+established. `rj0335` remains correctness/integration evidence rather than a
+performance comparison. Concurrent hosted correctness activity also makes that
+older record unsuitable for a performance claim. No default was promoted.
 
 The next material boundary is dependency-bearing crates with exact external
 artifact identity and invalidation, followed by broader frontend retention.
