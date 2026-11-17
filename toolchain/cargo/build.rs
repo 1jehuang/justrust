@@ -148,6 +148,7 @@ fn commit_info() {
 
 pub(crate) fn source_fingerprint(root: &Path) -> String {
     let mut hasher = blake3::Hasher::new();
+    hasher.update(b"jr-cargo-owned-source-v2-shared-inputs\0");
     for relative in [
         "src",
         "crates",
@@ -160,10 +161,17 @@ pub(crate) fn source_fingerprint(root: &Path) -> String {
         ".cargo/config.toml",
         "etc/man",
         "doc/man/generated_txt",
+        "../resident-inputs/Cargo.toml",
+        "../resident-inputs/src",
     ] {
         let path = root.join(relative);
         println!("cargo:rerun-if-changed={}", path.display());
-        hash_source_path(root, &path, &mut hasher);
+        if path.exists() || !relative.starts_with("../resident-inputs/") {
+            hash_source_path(root, &path, &mut hasher);
+        } else {
+            hasher.update(b"missing");
+            hasher.update(relative.as_bytes());
+        }
     }
     hasher.finalize().to_hex()[..40].to_owned()
 }

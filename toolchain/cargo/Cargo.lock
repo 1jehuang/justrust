@@ -409,6 +409,7 @@ dependencies = [
  "itertools 0.15.0",
  "jiff",
  "jobserver",
+ "jr-resident-inputs",
  "libc",
  "libgit2-sys",
  "memchr",
@@ -2832,6 +2833,15 @@ checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
+]
+
+[[package]]
+name = "jr-resident-inputs"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

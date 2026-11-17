@@ -5,6 +5,27 @@ mod build_script;
 use std::fs;
 use tempfile::TempDir;
 
+#[test]
+fn shared_resident_sources_change_identity_but_build_outputs_do_not() {
+    let outer = TempDir::new().unwrap();
+    let fixture = fixture();
+    let root = outer.path().join("cargo");
+    fs::rename(fixture.path(), &root).unwrap();
+    let shared = outer.path().join("resident-inputs");
+    fs::create_dir_all(shared.join("src")).unwrap();
+    fs::write(shared.join("Cargo.toml"), "manifest").unwrap();
+    fs::write(shared.join("src/lib.rs"), "initial").unwrap();
+    let original = build_script::source_fingerprint(&root);
+    fs::write(shared.join("src/lib.rs"), "changed").unwrap();
+    assert_ne!(original, build_script::source_fingerprint(&root));
+    fs::write(shared.join("src/lib.rs"), "initial").unwrap();
+    fs::create_dir_all(shared.join("target")).unwrap();
+    fs::write(shared.join("target/artifact"), "generated").unwrap();
+    assert_eq!(original, build_script::source_fingerprint(&root));
+    fs::write(shared.join("Cargo.toml"), "changed manifest").unwrap();
+    assert_ne!(original, build_script::source_fingerprint(&root));
+}
+
 fn fixture() -> TempDir {
     let dir = TempDir::new().unwrap();
     for path in [

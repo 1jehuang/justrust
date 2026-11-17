@@ -161,10 +161,17 @@ const OWNED_SOURCE_DIRS: &[&str] = &[
     "src/build_helper",
     "src/shim_utils",
     "src/rustc-std-workspace",
+    "../resident-inputs/src",
 ];
 
-const OWNED_SOURCE_FILES: &[&str] =
-    &["src/version", "src/ci/channel", "Cargo.toml", "Cargo.lock", "justrust.bootstrap.toml"];
+const OWNED_SOURCE_FILES: &[&str] = &[
+    "src/version",
+    "src/ci/channel",
+    "Cargo.toml",
+    "Cargo.lock",
+    "justrust.bootstrap.toml",
+    "../resident-inputs/Cargo.toml",
+];
 
 /// The upstream import and CI artifact commit are provenance, not the identity
 /// of our current compiler. Include owned input bytes so dirty edits and source
@@ -175,7 +182,7 @@ fn owned_source_info(root: &Path) -> Info {
     use crate::utils::build_stamp::hash_source_tree;
 
     let mut hasher = Sha256::new();
-    hasher.update(b"justrust-rustc-owned-source-v1\0");
+    hasher.update(b"justrust-rustc-owned-source-v2-shared-inputs\0");
     for relative in OWNED_SOURCE_DIRS {
         hasher.update(relative.as_bytes());
         hasher.update([0]);

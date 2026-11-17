@@ -8,6 +8,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use jr_resident_inputs::Manifest;
 use serde_json::json;
 
 const MAX_REQUEST: usize = 1024 * 1024;
@@ -29,7 +30,7 @@ pub(super) unsafe fn run() -> ExitCode {
     }
 }
 
-fn eligible(args: &[String]) -> Result<(), String> {
+fn eligible(args: &[String], external: bool) -> Result<(), String> {
     // Reject aliases/duplicates as well as overrides. The private compiler pool
     // has one implicit token, while Cargo holds its scheduler slot for this RPC.
     for option in ["--jobs-backend", "--jobs-linker"] {
@@ -40,8 +41,7 @@ fn eligible(args: &[String]) -> Result<(), String> {
         }
     }
     for (i, arg) in args.iter().enumerate() {
-        if arg == "--extern"
-            || arg.starts_with("--extern=")
+        if (!external && (arg == "--extern" || arg.starts_with("--extern=")))
             || arg == "--target"
             || arg.starts_with("--target=")
             || arg == "--jobs"
@@ -82,7 +82,50 @@ fn poll_read(fd: i32, timeout: i32) -> Result<bool, String> {
 
 // recvmsg consumes exactly the first JSON byte, so ancillary rights cannot be
 // lost in a buffered reader. OwnedFd closes even malformed/truncated transfers.
-fn receive(stream: &mut UnixStream) -> Result<(u64, Vec<String>, Vec<OwnedFd>), String> {
+struct Request {
+    id: u64,
+    args: Vec<String>,
+    outputs: Vec<OwnedFd>,
+    external: Option<Manifest>,
+    external_verify_nanos: u64,
+}
+
+/// An external manifest must describe the actual invocation, not just a
+/// caller-selected subset of dependency files. Recapture before admission.
+fn decode_request(
+    line: &[u8],
+    external_enabled: bool,
+    cwd: &std::path::Path,
+) -> Result<(u64, Vec<String>, Option<Manifest>, u64), String> {
+    let mut value: serde_json::Value = serde_json::from_slice(line).map_err(|e| e.to_string())?;
+    let external = value
+        .as_object_mut()
+        .ok_or("request must be an object")?
+        .remove("external")
+        .map(serde_json::from_value::<Manifest>)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let (id, args) =
+        super::resident::request(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)?;
+    eligible(&args, external.is_some())?;
+    let start = Instant::now();
+    if let Some(expected) = &external {
+        if !external_enabled {
+            return Err("external resident inputs require explicit selection".into());
+        }
+        if jr_resident_inputs::capture(&args, cwd)?.as_ref() != Some(expected) {
+            return Err("external manifest does not match actual compiler inputs".into());
+        }
+    }
+    let nanos = if external.is_some() {
+        u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    } else {
+        0
+    };
+    Ok((id, args, external, nanos))
+}
+
+fn receive(stream: &mut UnixStream) -> Result<Request, String> {
     let mut first = [0u8];
     let mut iov = libc::iovec { iov_base: first.as_mut_ptr().cast(), iov_len: 1 };
     let mut control = [0usize; 32];
@@ -142,9 +185,13 @@ fn receive(stream: &mut UnixStream) -> Result<(u64, Vec<String>, Vec<OwnedFd>), 
         stream.read_exact(&mut b).map_err(|e| e.to_string())?;
         line.push(b[0]);
     }
-    let (id, args) = super::resident::request(&line)?;
-    eligible(&args)?;
-    Ok((id, args, fds))
+    let (id, args, external, external_verify_nanos) = decode_request(
+        &line,
+        std::env::var_os("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref()
+            == Some(std::ffi::OsStr::new("1")),
+        &std::env::current_dir().map_err(|e| e.to_string())?,
+    )?;
+    Ok(Request { id, args, outputs: fds, external, external_verify_nanos })
 }
 
 // Shutdown is explicit and joined. No detached thread can observe a reused fd.
@@ -341,11 +388,12 @@ unsafe fn serve() -> Result<(), String> {
         peer.set_read_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
         peer.set_write_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
         let request = receive(&mut peer);
-        let Ok((id, args, fds)) = request else {
+        let Ok(Request { id, args, outputs: fds, external, mut external_verify_nanos }) = request
+        else {
             let _ = peer.write_all(b"F");
             continue;
         };
-        if frozen.as_ref().is_some_and(|old| old != &args) {
+        if frozen.as_ref().is_some_and(|(old, inputs)| old != &args || inputs != &external) {
             peer.write_all(b"F").map_err(|e| e.to_string())?;
             continue;
         }
@@ -361,7 +409,7 @@ unsafe fn serve() -> Result<(), String> {
         }
         // All failures from here are committed failures, never fallback permission.
         revision += 1;
-        frozen.get_or_insert_with(|| args.clone());
+        frozen.get_or_insert_with(|| (args.clone(), external.clone()));
         let lease = rustc_data_structures::jobserver::resident::RequestLease::begin_serial()
             .map_err(|e| format!("could not reserve private scheduler: {e:?}"))?;
         let cancel = Cancellation::start(&peer)?;
@@ -393,8 +441,19 @@ unsafe fn serve() -> Result<(), String> {
         let graph = rustc_middle::dep_graph::resident_graph_stats();
         let archive = rustc_middle::query::on_disk_cache::OnDiskCache::resident_stats();
         let rss = rustc_data_structures::profiling::get_resident_set_size();
-        let retire = revision == 64 || rss.is_none_or(|rss| rss >= RSS_LIMIT);
+        let verify_start = Instant::now();
+        // A concurrent artifact replacement cannot seed a later revision. Keep
+        // the executed compiler's result, but retire this entire worker owner.
+        let external_changed = external.as_ref().is_some_and(|inputs| inputs.verify().is_err());
+        if external.is_some() {
+            external_verify_nanos = external_verify_nanos.saturating_add(
+                u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            );
+        }
+        let retire = revision == 64 || external_changed || rss.is_none_or(|rss| rss >= RSS_LIMIT);
         let reply = json!({"id":id,"status":status,"pid":std::process::id(),
+            "external_inputs_verified":external.is_some(),"external_inputs_changed":external_changed,
+            "external_verify_nanos":external_verify_nanos,
             "elapsed_seconds":start.elapsed().as_secs_f64(),"resident_hits":hits,
             "resident_misses":misses,"resident_entries":entries,"rss_bytes":rss,"retire":retire,
             "frontend":{"graph_hits":graph.hits,"graph_misses":graph.misses,"graph_bytes":graph.retained_bytes,
@@ -411,12 +470,40 @@ unsafe fn serve() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_manifest_is_opt_in_exact_and_content_verified() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "jr-resident-input-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let dependency = root.join("dep.rlib");
+        std::fs::write(&dependency, b"first").unwrap();
+        let mut args = args();
+        args.push(format!("--extern=dep={}", dependency.display()));
+        let manifest = jr_resident_inputs::capture(&args, &root).unwrap().unwrap();
+        let request = serde_json::json!({"id":1,"args":args,"external":manifest});
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert!(decode_request(&bytes, true, &root).is_ok());
+        assert!(decode_request(&bytes, false, &root).is_err());
+        let missing = serde_json::to_vec(&serde_json::json!({"id":1,"args":args})).unwrap();
+        assert!(decode_request(&missing, true, &root).is_err());
+        let mut unknown = request.clone();
+        unknown["unexpected"] = true.into();
+        assert!(decode_request(&serde_json::to_vec(&unknown).unwrap(), true, &root).is_err());
+        std::fs::write(&dependency, b"other").unwrap();
+        assert!(decode_request(&bytes, true, &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn args() -> Vec<String> {
         ["a.rs", "--jobs-backend=1", "--jobs-linker=1"].map(str::to_owned).to_vec()
     }
     #[test]
     fn serial_budget_is_explicit_and_unambiguous() {
-        assert!(eligible(&args()).is_ok());
+        assert!(eligible(&args(), false).is_ok());
         for extra in [
             "--jobs-backend=2",
             "--jobs-linker=1",
@@ -431,9 +518,9 @@ mod tests {
         ] {
             let mut a = args();
             a.push(extra.into());
-            assert!(eligible(&a).is_err(), "{extra}");
+            assert!(eligible(&a, false).is_err(), "{extra}");
         }
-        assert!(eligible(&args()[..2]).is_err());
+        assert!(eligible(&args()[..2], false).is_err());
     }
     #[test]
     fn watcher_normal_shutdown_is_joined() {
@@ -575,7 +662,9 @@ mod tests {
         let (_out_r, out_w) = pipe();
         let (_err_r, err_w) = pipe();
         send_request(&mut client, &[out_w.as_raw_fd(), err_w.as_raw_fd()]);
-        let (id, argv, rights) = receive(&mut server).unwrap();
+        let Request { id, args: argv, outputs: rights, external, .. } =
+            receive(&mut server).unwrap();
+        assert!(external.is_none());
         assert_eq!(id, 7);
         assert_eq!(argv, args());
         for fd in rights {

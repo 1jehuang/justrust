@@ -3,6 +3,8 @@
 
 use crate::CargoResult;
 use cargo_util::ProcessBuilder;
+#[cfg(target_os = "linux")]
+use jr_resident_inputs::Manifest;
 
 pub(super) fn candidate(cmd: &ProcessBuilder) -> bool {
     #[cfg(target_os = "linux")]
@@ -71,10 +73,11 @@ mod linux {
             && !cmd.has_jr_query_launch()
             && cmd.get_arg0().is_none()
             && RECORDING.iter().all(|k| cmd.get_env(k).is_none())
-            && args_allowed(
+            && args_allowed_with_external(
                 &cmd.get_args()
                     .map(|a| a.to_string_lossy().into_owned())
                     .collect::<Vec<_>>(),
+                cmd.get_env("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref() == Some(OsStr::new("1")),
             )
             && cmd.get_args().all(|a| a.to_str().is_some())
             && matches!(
@@ -85,18 +88,25 @@ mod linux {
             )
     }
 
+    #[cfg(test)]
     fn args_allowed(args: &[String]) -> bool {
+        args_allowed_with_external(args, false)
+    }
+
+    fn args_allowed_with_external(args: &[String], external: bool) -> bool {
         ["--jobs-backend=1", "--jobs-linker=1"]
             .iter()
             .all(|flag| args.iter().filter(|a| a.as_str() == *flag).count() == 1)
             && !args.iter().any(|a| {
                 a.starts_with('@')
-                    || a == "--extern"
-                    || a.starts_with("--extern=")
+                    || (!external && (a == "--extern" || a.starts_with("--extern=")))
                     || a == "--target"
                     || a.starts_with("--target=")
                     || (a.starts_with("--jobs-backend") && a != "--jobs-backend=1")
                     || (a.starts_with("--jobs-linker") && a != "--jobs-linker=1")
+                    || a == "--jobs"
+                    || a.starts_with("--jobs=")
+                    || a.starts_with("-j")
                     || a == "--jobs-frontend"
                     || a.starts_with("--jobs-frontend=")
                     || a == "-"
@@ -116,6 +126,7 @@ mod linux {
         stream: UnixStream,
         _lock: File,
         key: String,
+        external: Option<Manifest>,
     }
 
     fn private_dir(path: &Path) -> CargoResult<()> {
@@ -215,9 +226,28 @@ mod linux {
         } else {
             cwd.join(sysroot)
         })?;
+        let external = if cmd.get_env("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref()
+            == Some(OsStr::new("1"))
+        {
+            jr_resident_inputs::capture(
+                &args
+                    .iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                &cwd,
+            )
+            .map_err(anyhow::Error::msg)?
+        } else {
+            None
+        };
         let env = effective_env(cmd);
         let mut hash = blake3::Hasher::new();
-        field(&mut hash, b"jr-cargo-resident-v1");
+        field(&mut hash, b"jr-cargo-resident-v2-exact-external-inputs");
+        if let Some(inputs) = &external {
+            // capture already validated bounded content. Hash the canonical
+            // serialized manifest, not file timestamps or a caller's stale key.
+            field(&mut hash, &serde_json::to_vec(inputs)?);
+        }
         identity(&mut hash, &compiler)?;
         // Include runtime compiler libraries as well as the target libraries.
         let compiler_lib = compiler
@@ -272,6 +302,7 @@ mod linux {
                     stream,
                     _lock: lock,
                     key,
+                    external,
                 });
             }
             fs::remove_file(&socket)?;
@@ -315,6 +346,7 @@ mod linux {
             stream,
             _lock: lock,
             key,
+            external,
         })
     }
 
@@ -528,7 +560,15 @@ mod linux {
             .get_args()
             .map(|a| a.to_str().unwrap())
             .collect::<Vec<_>>();
-        let mut request = serde_json::to_vec(&serde_json::json!({"id":id,"args":args}))?;
+        let mut payload = serde_json::json!({"id":id,"args":args});
+        if let Some(inputs) = &prepared.external {
+            payload["external"] = serde_json::to_value(inputs)?;
+        }
+        let mut request = serde_json::to_vec(&payload)?;
+        ensure!(
+            request.len() < 1024 * 1024,
+            "resident request exceeds wire budget"
+        );
         request.push(b'\n');
         send_request(
             &mut prepared.stream,
@@ -579,6 +619,7 @@ mod linux {
                 stream,
                 _lock: tempfile::tempfile().unwrap(),
                 key: "test".into(),
+                external: None,
             }
         }
 
@@ -820,6 +861,12 @@ mod linux {
                 "main.rs".into(),
             ];
             assert!(args_allowed(&base));
+            let mut external = base.clone();
+            external.push("--extern=dep=dep.rlib".into());
+            assert!(!args_allowed_with_external(&external, false));
+            assert!(args_allowed_with_external(&external, true));
+            external.push("--target=other".into());
+            assert!(!args_allowed_with_external(&external, true));
             for bad in [
                 "--extern",
                 "--extern=x=y",

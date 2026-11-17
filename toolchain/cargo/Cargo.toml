@@ -196,6 +196,7 @@ indexmap.workspace = true
 itertools.workspace = true
 jiff = { workspace = true, features = ["serde", "std"] }
 jobserver.workspace = true
+jr-resident-inputs = { path = "../resident-inputs" }
 libgit2-sys.workspace = true
 memchr.workspace = true
 mimalloc.workspace = true

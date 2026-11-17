@@ -2191,6 +2191,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jr-resident-inputs"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3955,6 +3964,7 @@ dependencies = [
  "anstyle",
  "ctrlc",
  "jiff",
+ "jr-resident-inputs",
  "libc",
  "rustc_abi",
  "rustc_ast",
