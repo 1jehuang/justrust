@@ -110,6 +110,65 @@ class DependencyCostTests(unittest.TestCase):
 
 
 class WorkerRssTests(unittest.TestCase):
+    def proc_stat(self, start='1234', cpu=('11', '13', '17', '19'), state='S'):
+        fields = [state] + ['0'] * 18 + [start]
+        fields[11:15] = cpu
+        return '42 (worker ) name) ' + ' '.join(fields)
+
+    def test_cumulative_cpu_includes_worker_and_reaped_children(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)
+            worker = proc / '42'
+            worker.mkdir()
+            (worker / 'stat').write_text(self.proc_stat())
+            (worker / 'status').write_text('VmRSS: 17 kB\n')
+            with patch.object(subject.os, 'sysconf', return_value=100) as clock:
+                result = subject.worker_rss(42, proc)
+            clock.assert_called_once_with('SC_CLK_TCK')
+            self.assertTrue(result['available'])
+            self.assertEqual(result['cpu_ticks'], 60)
+            self.assertEqual(result['clock_ticks_per_second'], 100)
+            self.assertEqual(result['cpu_kind'], 'cumulative-worker-including-reaped-children')
+            self.assertEqual(result['starttime_ticks'], 1234)
+            subject.validate_worker_cpu(result)
+            self.assertNotIn('invocation_cpu_seconds', result)
+            for field, value in (('cpu_ticks', -1), ('cpu_ticks', True),
+                                 ('clock_ticks_per_second', 0), ('clock_ticks_per_second', True),
+                                 ('cpu_kind', 'invocation-total')):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    subject.validate_worker_cpu(dict(result, **{field: value}))
+            for cpu in (('bad', '1', '2', '3'), ('-1', '1', '2', '3')):
+                (worker / 'stat').write_text(self.proc_stat(cpu=cpu))
+                bad = subject.worker_rss(42, proc)
+                self.assertFalse(bad['available'])
+                self.assertNotIn('cpu_ticks', bad)
+
+    def test_cpu_and_rss_share_starttime_race_guard(self):
+        reads = [self.proc_stat(), 'VmRSS: 17 kB\n', self.proc_stat(start='9999')]
+        with patch.object(Path, 'read_text', side_effect=reads):
+            result = subject.worker_rss(42, Path('/fake-proc'))
+        self.assertEqual(result['reason'], 'pid-generation-changed')
+        self.assertFalse(result['available'])
+        self.assertNotIn('cpu_ticks', result)
+        self.assertNotIn('rss_bytes', result)
+        reads = [self.proc_stat(), 'VmRSS: 17 kB\n', self.proc_stat(state='Z')]
+        with patch.object(Path, 'read_text', side_effect=reads):
+            result = subject.worker_rss(42, Path('/fake-proc'))
+        self.assertTrue(result['exited'])
+        self.assertNotIn('cpu_ticks', result)
+
+    def test_cpu_uses_guarded_second_snapshot_and_valid_clock_rate(self):
+        for clock in (100, 0, -1):
+            reads = [self.proc_stat(cpu=('0', '0', '0', '0')),
+                     'VmRSS: 17 kB\n', self.proc_stat()]
+            with patch.object(Path, 'read_text', side_effect=reads), patch.object(subject.os, 'sysconf', return_value=clock):
+                result = subject.worker_rss(42, Path('/fake-proc'))
+            if clock > 0:
+                self.assertEqual(result['cpu_ticks'], 60)
+            else:
+                self.assertFalse(result['available'])
+                self.assertNotIn('cpu_ticks', result)
+
     def test_local_proc_units_and_missing_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             proc = Path(directory)
@@ -121,6 +180,8 @@ class WorkerRssTests(unittest.TestCase):
             self.assertTrue(result['available'])
             self.assertEqual(result['rss_bytes'], 17 * 1024)
             self.assertEqual(result['starttime_ticks'], 1234)
+            self.assertEqual(result['cpu_ticks'], 0)
+            self.assertGreater(result['clock_ticks_per_second'], 0)
             self.assertFalse(subject.worker_rss(43, proc)['available'])
             self.assertTrue(subject.worker_rss(43, proc)['exited'])
             self.assertFalse(subject.worker_rss(True, proc)['available'])

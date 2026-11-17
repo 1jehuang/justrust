@@ -37,6 +37,24 @@ def digest_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_macro_spins(value, macro_shm):
+    if type(value) is not int or not 0 <= value <= 256:
+        raise ValueError('Macro spins must be an integer in 0..256')
+    if value and macro_shm is not True:
+        raise ValueError('Nonzero macro spins require macro SHM')
+    return value
+
+
+def parse_macro_spins(value):
+    try:
+        parsed = int(value)
+        if str(parsed) != value or not 0 <= parsed <= 256:
+            raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError('Macro spins must be canonical decimal 0..256') from None
+    return parsed
+
+
 def stages(original, nonce, edit_mode='body'):
     if edit_mode == 'body':
         if original.count(BODY_ANCHOR) != 1:
@@ -135,10 +153,11 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             checkout=None, edit_mode='body', commands=('check', 'build'), root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
             expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
-            diagnostic_on_only=False, macro_shm=False):
+            diagnostic_on_only=False, macro_shm=False, macro_spins=0):
     commands = selected_commands(commands)
     if type(macro_shm) is not bool:
         raise ValueError('Macro SHM mode must be boolean')
+    validate_macro_spins(macro_spins, macro_shm)
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required')
     if type(diagnostic_on_only) is not bool:
@@ -177,7 +196,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                                   source_path=str(source), original_b64=shared.native.encoded(original),
                                   original_sha256=digest_bytes(original), manifest_b64=shared.native.encoded(manifest),
                                   host=safety.host(), repetitions=repetitions, timeout=timeout, edit_mode=edit_mode,
-                                  commands=list(commands), macro_shm=macro_shm,
+                                  commands=list(commands), macro_shm=macro_shm, macro_spins=macro_spins,
                                   root_native_frozen=True, idle_authorized=True,
                                   harness_sha256=shared.native.digest(Path(__file__)),
                                   helper_sha256={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
@@ -198,6 +217,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 env.update(STRICT_ENV)
                 # Always override inherited transport settings in both arms.
                 env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = '1' if macro_shm else '0'
+                env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = str(macro_spins)
                 # Both commands use the same per-arm target, but check and build
                 # have distinct native worker identities and validation groups.
                 env['CARGO_TARGET_DIR'] = str(arm_root / 'target')
@@ -265,6 +285,7 @@ def _validate(report, *, diagnostic):
     provenance = report['provenance']
     if type(provenance.get('macro_shm')) is not bool:
         raise ValueError('Missing or invalid macro SHM provenance')
+    validate_macro_spins(provenance.get('macro_spins'), provenance['macro_shm'])
     original = base64.b64decode(provenance['original_b64'], validate=True)
     if digest_bytes(original) != provenance['original_sha256']:
         raise ValueError('Original source mismatch')
@@ -312,6 +333,7 @@ def _validate(report, *, diagnostic):
                             or env['JUSTRUST_CARGO_RESIDENT'] != ('serial' if mode == 'on' else 'off')
                             or env['RUSTFLAGS'] != shared.FLAGS
                             or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SHM') != ('1' if provenance['macro_shm'] else '0')
+                            or env.get('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS') != str(provenance['macro_spins'])
                             or any(env.get(key) != value for key, value in STRICT_ENV.items())
                             or safety.safe_environment(env) != env):
                         raise ValueError('Candidate environment mismatch')
@@ -330,6 +352,7 @@ def _validate(report, *, diagnostic):
                     if [sample.get('pid') for sample in rss_rows] != worker_pids:
                         raise ValueError('RSS samples do not cover observed worker generations')
                     for sample in rss_rows:
+                        rss_helpers.validate_worker_cpu(sample)
                         if (type(sample.get('available')) is not bool or sample.get('source') != 'local-/proc'
                                 or sample.get('kind') != 'post-invocation-live-rss'):
                             raise ValueError('Invalid worker RSS sample provenance')
@@ -352,12 +375,14 @@ def _validate(report, *, diagnostic):
 def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
             expected_after_compiler_sha256=None, expected_before_driver_sha256=None,
             expected_after_driver_sha256=None, expected_before_macro_shm=None,
-            expected_after_macro_shm=None):
+            expected_after_macro_shm=None, expected_before_macro_spins=None,
+            expected_after_macro_spins=None):
     """Compare focused receipts, with explicit candidate and transport opt-ins.
 
     All four expected hashes are required to authorize different compiler or
     driver candidates. Both exact boolean transport expectations are required
     to authorize a macro RPC transport change, independently of those hashes.
+    Both exact integer spin expectations are required for spin count changes.
     Workload, host, client, Cargo and every other effective environment setting
     remain identical. Each receipt must independently validate. This remains
     focused real-source evidence, not a broad performance claim.
@@ -370,9 +395,16 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
     explicit = any(value is not None for pair in expected for value in pair)
     transports = (expected_before_macro_shm, expected_after_macro_shm)
     explicit_transport = any(value is not None for value in transports)
+    spin_counts = (expected_before_macro_spins, expected_after_macro_spins)
+    explicit_spins = any(value is not None for value in spin_counts)
     normalized = []
-    for report, hashes, transport in zip((before, after), expected, transports):
+    for report, hashes, transport, spins in zip((before, after), expected, transports, spin_counts):
         provenance = json.loads(json.dumps(report['provenance']))
+        if explicit_spins:
+            validate_macro_spins(spins, provenance['macro_shm'])
+            if provenance['macro_spins'] != spins:
+                raise ValueError('Explicit before/after macro spins mismatch')
+            provenance.pop('macro_spins')
         if explicit_transport:
             if type(transport) is not bool or provenance['macro_shm'] is not transport:
                 raise ValueError('Explicit before/after macro SHM mode mismatch')
@@ -403,6 +435,8 @@ def compare(before, after, floor=10, *, expected_before_compiler_sha256=None,
                         env.pop('RUSTC')
                     if explicit_transport:
                         env.pop('JUSTRUST_CARGO_RESIDENT_MACRO_SHM')
+                    if explicit_spins:
+                        env.pop('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS')
                     environments.append(env)
                 if environments[0] != environments[1]:
                     raise ValueError('Compared effective environment mismatch')
@@ -435,6 +469,8 @@ def main():
     parser.add_argument('--edit-mode', choices=('body', 'comment'), default='body')
     parser.add_argument('--macro-shm', action='store_true',
                         help='Explicitly use shared-memory macro RPC instead of Unix sockets in both arms')
+    parser.add_argument('--macro-spins', type=parse_macro_spins, default=0,
+                        help='Canonical decimal spin count 0..256, nonzero requires --macro-shm')
     parser.add_argument('--diagnostic-on-only', action='store_true',
                         help='Run only resident-on as a correctness diagnostic, never performance evidence')
     parser.add_argument('--repetitions', type=int, default=2)

@@ -3,6 +3,7 @@
 
 Execution requires frozen candidates and explicit coordinator idle authorization.
 RSS is a post-invocation live worker observation, not peak RSS or retained heap size.
+CPU ticks are cumulative worker CPU including reaped children, not invocation CPU.
 """
 import argparse
 import base64
@@ -10,6 +11,7 @@ import re
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import statistics
 import uuid
@@ -24,7 +26,7 @@ CLAIM = ('Focused dependency fixture actual-client wall time and live worker RSS
 
 
 def worker_rss(pid, proc=Path('/proc')):
-    """Read only the invoking host's /proc, rejecting PID exit/reuse races."""
+    """Read live RSS and cumulative CPU including reaped children, not peaks/deltas."""
     result = dict(pid=pid, available=False, source='local-/proc', kind='post-invocation-live-rss')
     if type(pid) is not int or pid <= 0:
         return dict(result, reason='invalid-pid')
@@ -35,21 +37,41 @@ def worker_rss(pid, proc=Path('/proc')):
         if before_fields[0] == 'Z':
             return dict(result, reason='process-exited', exited=True, starttime_ticks=int(before))
         status = (directory / 'status').read_text()
-        after = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+        after_fields = (directory / 'stat').read_text().rsplit(')', 1)[1].split()
+        after = after_fields[19]
         if before != after:
             return dict(result, reason='pid-generation-changed')
+        if after_fields[0] == 'Z':
+            return dict(result, reason='process-exited', exited=True, starttime_ticks=int(after))
+        cpu_fields = [int(value) for value in after_fields[11:15]]
+        clock_ticks = os.sysconf('SC_CLK_TCK')
+        if (len(cpu_fields) != 4 or any(value < 0 for value in cpu_fields)
+                or type(clock_ticks) is not int or clock_ticks <= 0):
+            raise ValueError('invalid cumulative CPU counters or clock rate')
         fields = dict(line.split(':', 1) for line in status.splitlines() if ':' in line)
         rss = fields['VmRSS'].split()
         if len(rss) != 2 or rss[1] != 'kB' or int(rss[0]) < 0:
             raise ValueError('invalid VmRSS')
         return dict(result, available=True, rss_bytes=int(rss[0]) * 1024,
-                    starttime_ticks=int(before))
+                    starttime_ticks=int(before), cpu_ticks=sum(cpu_fields),
+                    clock_ticks_per_second=clock_ticks,
+                    cpu_kind='cumulative-worker-including-reaped-children')
     except FileNotFoundError:
         # A retired generation contributes zero live RSS, not an unknown sample.
         # Distinguish this from unreadable status or malformed /proc records.
         return dict(result, reason='process-exited', exited=True)
     except (OSError, ValueError, KeyError, IndexError) as error:
         return dict(result, reason=type(error).__name__)
+
+
+def validate_worker_cpu(sample):
+    """Validate raw cumulative counters only. No per-invocation CPU claim."""
+    if sample.get('available'):
+        if (type(sample.get('cpu_ticks')) is not int or sample['cpu_ticks'] < 0
+                or type(sample.get('clock_ticks_per_second')) is not int
+                or sample['clock_ticks_per_second'] <= 0
+                or sample.get('cpu_kind') != 'cumulative-worker-including-reaped-children'):
+            raise ValueError('Invalid cumulative worker CPU observation')
 
 
 def observed_runner(runner, sampler=worker_rss):
@@ -245,6 +267,7 @@ def validate(report):
                 if [rss.get('pid') for rss in cargo['resident_worker_rss']] != expected_pids:
                     raise ValueError('RSS worker identities differ from original trace')
                 for rss in cargo['resident_worker_rss']:
+                    validate_worker_cpu(rss)
                     if (type(rss.get('available')) is not bool
                             or rss.get('source') != 'local-/proc'
                             or rss.get('kind') != 'post-invocation-live-rss'):

@@ -68,10 +68,10 @@ class OwnLoopTests(unittest.TestCase):
         return run, calls
 
     def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
-                repetitions=2, macro_shm=False, **runner_options):
+                repetitions=2, macro_shm=False, macro_spins=0, **runner_options):
         source, options, attestation = self.prepare(root)
         options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions,
-                       macro_shm=macro_shm)
+                       macro_shm=macro_shm, macro_spins=macro_spins)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -391,6 +391,76 @@ class OwnLoopTests(unittest.TestCase):
         for value in (None, 0, 1, '1'):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'Macro SHM'):
                 suite.capture(None, None, None, None, macro_shm=value)
+
+    def test_macro_spins_canonical_flags_and_shm_requirement(self):
+        for value in ('0', '1', '256'):
+            self.assertEqual(suite.parse_macro_spins(value), int(value))
+        for value in ('-1', '257', '+1', '01', ' 1', '1 ', '1.0', '', '١'):
+            with self.subTest(value=value), self.assertRaises(suite.argparse.ArgumentTypeError):
+                suite.parse_macro_spins(value)
+        for value in (None, True, False, -1, 257, 1.0, '1'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                suite.capture(None, None, None, None, macro_shm=True, macro_spins=value)
+        with self.assertRaisesRegex(ValueError, 'require macro SHM'):
+            suite.capture(None, None, None, None, macro_spins=1)
+
+    def test_macro_spins_capture_and_provenance_are_strict(self):
+        for count in (0, 256):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, JUSTRUST_CARGO_RESIDENT_MACRO_SPINS='17'):
+                    report, calls, _ = self.capture(Path(directory), macro_shm=True, macro_spins=count)
+                self.assertEqual(report['provenance']['macro_spins'], count)
+                self.assertEqual({env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] for _, _, _, env in calls}, {str(count)})
+                self.assertEqual(len(calls), 40)
+                if count:
+                    bad = copy.deepcopy(report)
+                    bad['provenance']['macro_shm'] = False
+                    with self.assertRaisesRegex(ValueError, 'require macro SHM'):
+                        suite.validate(bad)
+                for value in (None, True, -1, 257, '0', 1 if count == 0 else 0):
+                    bad = copy.deepcopy(report)
+                    if value is None:
+                        bad['provenance'].pop('macro_spins')
+                    else:
+                        bad['provenance']['macro_spins'] = value
+                    with self.subTest(value=value), self.assertRaises(ValueError):
+                        suite.validate(bad)
+                for mode in ('off', 'on'):
+                    for value in (None, '00', '+0', '257', 0):
+                        bad = copy.deepcopy(report)
+                        env = bad['repetitions'][0]['arms'][mode]['observations'][0]['cargo']['invocation']['environment']
+                        if value is None:
+                            env.pop('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS')
+                        else:
+                            env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = value
+                        with self.subTest(mode=mode, value=value), self.assertRaises(ValueError):
+                            suite.validate(bad)
+
+    def test_macro_spins_compare_requires_independent_exact_authorization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            before, _, _ = self.capture(Path(directory), macro_shm=True)
+            after = copy.deepcopy(before)
+            after['provenance']['macro_spins'] = 32
+            for pair in after['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'] = '32'
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                suite.compare(before, after)
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                suite.compare(before, after, expected_before_macro_shm=True, expected_after_macro_shm=True)
+            approval = dict(expected_before_macro_spins=0, expected_after_macro_spins=32)
+            self.assertEqual(set(suite.compare(before, after, **approval)), {'check', 'build'})
+            for overrides in (dict(expected_before_macro_spins=None), dict(expected_after_macro_spins=None),
+                              dict(expected_before_macro_spins=False), dict(expected_after_macro_spins='32'),
+                              dict(expected_before_macro_spins=1), dict(expected_after_macro_spins=33)):
+                with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                    suite.compare(before, after, **(approval | overrides))
+            bad = copy.deepcopy(after)
+            bad['provenance']['attestation']['compiler']['sha256'] = 'c' * 64
+            bad['provenance']['expected']['compiler_sha256'] = 'c' * 64
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                suite.compare(before, bad, **approval)
 
     def test_macro_shm_provenance_and_environment_tampering_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
